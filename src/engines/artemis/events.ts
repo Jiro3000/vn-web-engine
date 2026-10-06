@@ -31,7 +31,12 @@ export class ArtemisEvents {
       this.invoke(callback, args);
     } catch (error) {
       // Native frame/wait owners disable their failed frame or click-wait callback.
-      if (event === 'onEnterFrame' || event === 'onClickWaitIn' || event === 'onClickWaitOut')
+      if (
+        event === 'onEnterFrame' ||
+        event === 'onClickWaitIn' ||
+        event === 'onClickWaitOut' ||
+        event === 'onSave'
+      )
         this.handlers.set(event, '');
       throw error;
     }

@@ -1,3 +1,4 @@
+import type {WindowDisplayGeometry} from '../../platform/window-display.js';
 import type {AsbTag} from '../../formats/artemis/asb.js';
 
 const encoder = new TextEncoder();
@@ -10,11 +11,19 @@ function literal(name: string): void {
 export interface ArtemisVariableHost {
   /** Logical stage dimensions; supplied by the configuration/rendering owner. */
   stageSize(): {width: number; height: number};
+  windowDisplay?(): WindowDisplayGeometry;
 }
 
 /** Literal byte-string variables with current-local/global lookup; expressions require a separate evaluator. */
 export class ArtemisVariables {
   constructor(private readonly host?: ArtemisVariableHost) {}
+  private dirty = false;
+  get globalDirty(): boolean {
+    return this.dirty;
+  }
+  clearGlobalDirty(): void {
+    this.dirty = false;
+  }
   private readonly global = new Map<string, Uint8Array>();
   private readonly locals: Map<string, Uint8Array>[] = [];
   pushLocal(): void {
@@ -32,10 +41,28 @@ export class ArtemisVariables {
       throw new Error(`Unsupported native Artemis variable ${name}`);
     return (value ?? empty).slice();
   }
+  /** Literal expression leaf 0x140157fa0: absent names are created as integer zero. */
+  queryLiteral(name: string): Uint8Array {
+    literal(name);
+    if (!this.locals.at(-1)?.has(name) && !this.global.has(name)) {
+      if (name.startsWith('s.') || name.startsWith('ini.'))
+        throw new Error(`Unsupported native Artemis variable ${name}`);
+      this.write(name, '0');
+    }
+    return this.read(name);
+  }
   write(name: string, value: Uint8Array | string, local = false): void {
     literal(name);
     const target = local && this.locals.length ? this.locals.at(-1)! : this.global;
-    target.set(name, typeof value === 'string' ? encoder.encode(value) : value.slice());
+    const bytes = typeof value === 'string' ? encoder.encode(value) : value.slice();
+    const old = target.get(name);
+    if (
+      target === this.global &&
+      name.startsWith('sf') &&
+      (!old || old.length !== bytes.length || old.some((byte, index) => byte !== bytes[index]))
+    )
+      this.dirty = true;
+    target.set(name, bytes);
   }
   delete(name: string, local = false): void {
     literal(name);
@@ -53,7 +80,11 @@ export class ArtemisVariables {
     if (p.has('data')) this.write(name, p.get('data')!, local);
     else if (p.get('system') === 'delete') this.delete(name, local);
     else if (p.get('system') === 'os') this.write(name, 'windows', local);
-    else if (p.get('system') === 'screen_width' || p.get('system') === 'screen_height') {
+    else if (p.get('system') === 'fullscreen') {
+      if (!this.host?.windowDisplay)
+        throw new Error('Artemis window display provider is not configured');
+      this.write(name, this.host.windowDisplay().fullscreen ? '1' : '0', local);
+    } else if (p.get('system') === 'screen_width' || p.get('system') === 'screen_height') {
       if (!this.host) throw new Error('Artemis stage size provider is not configured');
       const size = this.host.stageSize();
       const value = p.get('system') === 'screen_width' ? size.width : size.height;

@@ -590,3 +590,206 @@ test('Stale dialog callbacks cannot complete a subsequent dialog', async () => {
     ['answer', '0'],
   ]);
 });
+
+test('Native save-gate tracks changed global sf bytes and orders scenario/global/system effects', async () => {
+  const {ArtemisVariables} = await import('../dist/engines/artemis/variables.js');
+  const {ArtemisSave} = await import('../dist/engines/artemis/save.js');
+  const variables = new ArtemisVariables(),
+    calls = [];
+  const save = new ArtemisSave(variables, {
+    beforeScenario: (file) => calls.push(['before', file]),
+    reportEventError: (error) => calls.push(['error', String(error)]),
+    writeScenario: (file, transient) => calls.push(['scenario', file, transient]),
+    writeGlobal: () => calls.push('global'),
+    writeSystem: () => calls.push('system'),
+  });
+  assert.equal(save.request(''), false);
+  assert.deepEqual(calls, []);
+  variables.write('sf.flag', Uint8Array.of(0, 255));
+  assert.equal(variables.globalDirty, true);
+  save.request('slot.dat', true);
+  assert.deepEqual(calls, [
+    ['before', 'slot.dat'],
+    ['scenario', 'slot.dat', true],
+    'global',
+    'system',
+  ]);
+  assert.equal(variables.globalDirty, false);
+  calls.length = 0;
+  variables.write('sf.flag', Uint8Array.of(0, 255));
+  assert.equal(variables.globalDirty, false);
+  variables.pushLocal();
+  variables.write('sf.flag', 'local', true);
+  assert.equal(variables.globalDirty, false);
+  variables.popLocal();
+  variables.delete('sf.flag');
+  assert.equal(variables.globalDirty, false);
+  variables.write('sf', '');
+  assert.equal(variables.globalDirty, true);
+  save.request('');
+  assert.deepEqual(calls, ['global', 'system']);
+});
+
+test('Timed wait preserves strict deadline, event/save/message ordering and zero sentinel', async () => {
+  const {ArtemisTimedWait} = await import('../dist/engines/artemis/wait.js');
+  const {ArtemisModes} = await import('../dist/engines/artemis/modes.js');
+  const {ArtemisSave} = await import('../dist/engines/artemis/save.js');
+  const {ArtemisVariables} = await import('../dist/engines/artemis/variables.js');
+  const calls = [];
+  let clock = 100;
+  const modes = new ArtemisModes({
+    writeStatus: () => {},
+    commandSkipChanged: () => {},
+    controlSkipChanged: () => {},
+    automodeChanged: () => {},
+    releaseScheduler: () => {},
+  });
+  modes.autosave = 2;
+  const save = new ArtemisSave(new ArtemisVariables(), {
+    reportEventError: (error) => calls.push(String(error)),
+    beforeScenario: (file) => calls.push(['saveEvent', file]),
+    writeScenario: (file) => calls.push(['save', file]),
+    writeGlobal: () => calls.push('global'),
+    writeSystem: () => calls.push('system'),
+  });
+  const wait = new ArtemisTimedWait(modes, save, {
+    now: () => clock,
+    debugSkipActive: () => false,
+    hasActiveMessage: () => false,
+    beginWait: (input, skip) => calls.push(['begin', input, skip]),
+    endWait: () => calls.push('end'),
+    clickWaitEvent: (kind) => calls.push(kind),
+    resumeMessageState: () => calls.push('message'),
+  });
+  const tag = (args) => ({
+    kind: 'tag',
+    name: 'wait',
+    sourceLine: -1,
+    args: new Map(Object.entries(args)),
+  });
+  wait.dispatch(tag({time: '10', input: '1'}));
+  assert.deepEqual(calls, [
+    ['begin', true, false],
+    'in',
+    ['saveEvent', 'autosave.dat'],
+    ['save', 'autosave.dat'],
+  ]);
+  assert.equal(wait.tick(110), false);
+  assert.equal(wait.tick(111), true);
+  assert.deepEqual(calls.slice(-3), ['end', 'out', 'message']);
+  assert.equal(wait.tick(112), false);
+  clock = 0;
+  calls.length = 0;
+  modes.autosave = 0;
+  wait.dispatch(tag({time: '0'}));
+  assert.equal(wait.tick(1), false);
+  assert.equal(wait.pending, true);
+});
+
+test('Input=2 skip bypasses setup; message/media wait paths fail before effects', async () => {
+  const {ArtemisTimedWait} = await import('../dist/engines/artemis/wait.js');
+  const {ArtemisModes} = await import('../dist/engines/artemis/modes.js');
+  const {ArtemisSave} = await import('../dist/engines/artemis/save.js');
+  const {ArtemisVariables} = await import('../dist/engines/artemis/variables.js');
+  const modes = new ArtemisModes({
+    writeStatus: () => {},
+    commandSkipChanged: () => {},
+    controlSkipChanged: () => {},
+    automodeChanged: () => {},
+    releaseScheduler: () => {},
+  });
+  const unexpected = () => assert.fail('unexpected effect');
+  const save = new ArtemisSave(new ArtemisVariables(), {
+    reportEventError: unexpected,
+    beforeScenario: unexpected,
+    writeScenario: unexpected,
+    writeGlobal: unexpected,
+    writeSystem: unexpected,
+  });
+  let message = false;
+  const wait = new ArtemisTimedWait(modes, save, {
+    now: () => 1,
+    debugSkipActive: () => false,
+    hasActiveMessage: () => message,
+    beginWait: unexpected,
+    endWait: unexpected,
+    clickWaitEvent: unexpected,
+    resumeMessageState: unexpected,
+  });
+  const tag = (args) => ({
+    kind: 'tag',
+    name: 'wait',
+    sourceLine: -1,
+    args: new Map(Object.entries(args)),
+  });
+  modes.setCommandSkip(true);
+  assert.equal(wait.dispatch(tag({input: '2', video: 'x'})), true);
+  assert.equal(wait.pending, false);
+  modes.setCommandSkip(false);
+  assert.throws(() => wait.dispatch(tag({video: 'x'})), /media\/scenario/);
+  message = true;
+  assert.throws(() => wait.dispatch(tag({time: '1'})), /message\/automode/);
+  assert.equal(wait.pending, false);
+});
+
+test('Save callback errors are reported before native save continues, and dirty clears before system failure', async () => {
+  const {ArtemisSave} = await import('../dist/engines/artemis/save.js');
+  const {ArtemisVariables} = await import('../dist/engines/artemis/variables.js');
+  const variables = new ArtemisVariables();
+  variables.write('sf.dirty', '1');
+  const calls = [];
+  const save = new ArtemisSave(variables, {
+    beforeScenario: () => {
+      throw Error('callback');
+    },
+    reportEventError: (error) => calls.push(error.message),
+    writeScenario: () => calls.push('scenario'),
+    writeGlobal: () => calls.push('global'),
+    writeSystem: () => {
+      assert.equal(variables.globalDirty, false);
+      throw Error('system failure');
+    },
+  });
+  assert.throws(() => save.request('slot'), /system failure/);
+  assert.deepEqual(calls, ['callback', 'scenario', 'global']);
+});
+
+test('Lua literal expression lookup creates absent zero variables and participates in sf dirty tracking', async () => {
+  const {ArtemisVariables} = await import('../dist/engines/artemis/variables.js');
+  const variables = new ArtemisVariables();
+  assert.equal(variables.read('g.config').length, 0);
+  assert.equal(luaText(variables.queryLiteral('g.config')), '0');
+  assert.equal(luaText(variables.read('g.config')), '0');
+  assert.equal(variables.globalDirty, false);
+  variables.pushLocal();
+  variables.write('g.config', 'local', true);
+  assert.equal(luaText(variables.queryLiteral('g.config')), 'local');
+  variables.popLocal();
+  assert.equal(luaText(variables.queryLiteral('sf.new')), '0');
+  assert.equal(variables.globalDirty, true);
+  assert.throws(() => variables.queryLiteral('s.unsupported'), /Unsupported/);
+});
+
+test('Fullscreen variable queries read the shared window geometry owner on every query', async () => {
+  const {ArtemisVariables} = await import('../dist/engines/artemis/variables.js');
+  let fullscreen = false;
+  const variables = new ArtemisVariables({
+    stageSize: () => ({width: 800, height: 600}),
+    windowDisplay: () => ({width: 800, height: 600, fullscreen}),
+  });
+  const tag = {
+    kind: 'tag',
+    name: 'var',
+    sourceLine: -1,
+    args: new Map([
+      ['name', 'mode'],
+      ['system', 'fullscreen'],
+    ]),
+  };
+  variables.dispatch(tag);
+  assert.equal(luaText(variables.read('mode')), '0');
+  fullscreen = true;
+  variables.dispatch(tag);
+  assert.equal(luaText(variables.read('mode')), '1');
+  assert.throws(() => new ArtemisVariables().dispatch(tag), /display provider/);
+});

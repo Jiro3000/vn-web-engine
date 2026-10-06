@@ -43,8 +43,10 @@ not a separately invented AST VM.
 `variables.ts` preserves byte strings and resolves only the current local scope
 before globals (`0x1400b0880`). An exact delete removes only that key; otherwise
 it removes keys starting with the name plus a dot (`0x1400af990`). Expressions,
-empty-name global clears, system-variable initialization and save dirty tracking
-are incomplete. Stage-size queries require a configuration/rendering provider.
+empty-name global clears and complete system-variable initialization remain incomplete.
+Global sf-prefix writes track changes in bytes; deletion preserves the native dirty-flag quirk.
+Literal Lua queries create missing variables as integer zero (0x140157fa0),
+while raw map reads preserve empty absence. Other expressions remain unsupported. Stage-size queries require a configuration/rendering provider.
 `revision.ts` initializes the confirmed static boot variables only after exact
 executable-hash selection. Host Windows-version failure produces native 0.0;
 platform identity/capabilities are never invented.
@@ -95,3 +97,23 @@ full IET compilation, AST story execution, text/media/save services and UI wirin
 The integration is not playable. Shared platform/media services must remain in
 the shared layers. Evidence and game resources are local-only and are not part of
 this source tree.
+
+## Timed waits and save requests
+
+`wait.ts` implements the empty-message timed subset of native wait, including
+input=2 skip/debug-skip bypass, strict absolute uint32 deadline comparison and the
+zero-deadline sentinel. Input=1 enters click-wait: the host receives scheduler/
+indicator state, In callback and the native save request. Completion releases the
+scheduler, emits Out and updates message state. Active message/automode progression,
+scenario, media and click-to-skip remain explicitly unsupported.
+
+`save.ts` preserves the native save gate: empty filename/force=false/clean sf state
+performs no writes. A nonempty filename emits onSave before the scenario snapshot;
+callback errors are reported and disable the callback before native save continues.
+Dirty/forced global saves write global state, clear dirty, then write system state.
+Actual serialization and persistence are required host effects and are not implemented
+by this gate. No JSON replacement for native save formats is provided.
+
+Probe `--advance-waits` advances its simulated clock beyond each timed deadline,
+up to 100 waits. It is separate from actual user input and production scheduling.
+The probe uses a windowed shared geometry fixture for fullscreen queries.

@@ -11,6 +11,8 @@ import {ArtemisScript} from '../dist/engines/artemis/script.js';
 import {ArtemisVariables} from '../dist/engines/artemis/variables.js';
 import {ArtemisDialog} from '../dist/engines/artemis/dialog.js';
 import {ArtemisMouse} from '../dist/engines/artemis/mouse.js';
+import {ArtemisSave} from '../dist/engines/artemis/save.js';
+import {ArtemisTimedWait} from '../dist/engines/artemis/wait.js';
 import {ArtemisModes} from '../dist/engines/artemis/modes.js';
 import {luaText} from '../dist/core/lua51/runtime.js';
 if (!process.argv[2]) throw new Error('Usage: node tools/probe-artemis.mjs GAME_DIRECTORY');
@@ -22,6 +24,9 @@ const simulatedDialogResult = dialogResultArgument
   : null;
 if (simulatedDialogResult !== null && ![0, 1].includes(simulatedDialogResult))
   throw new Error('Probe dialog result must be 0 or 1');
+const advanceWaits = process.argv.slice(3).includes('--advance-waits');
+let probeTick = 1,
+  advancedWaits = 0;
 const installation = await openArtemisInstallation(process.argv[2]);
 let lua, script;
 try {
@@ -65,7 +70,10 @@ try {
     if (entry?.[1] === 'HEIGHT') height = Number(entry[2]);
   }
   if (!width || !height) throw new Error('Probe needs explicit WINDOWS WIDTH and HEIGHT');
-  const variables = new ArtemisVariables({stageSize: () => ({width, height})});
+  const variables = new ArtemisVariables({
+    stageSize: () => ({width, height}),
+    windowDisplay: () => ({width, height, fullscreen: false}),
+  });
   const executablePaths = [...installation.paths].filter(
     (path) => /\.exe$/i.test(path) && !path.includes('/'),
   );
@@ -105,10 +113,45 @@ try {
       writeVariable: (name, value) => variables.write(name, value),
     },
   );
+  const save = new ArtemisSave(variables, {
+    beforeScenario: (file) => lua.events.emit('onSave', new Map([['file', file]])),
+    reportEventError: (error) => modeEffects.push({saveEventError: String(error)}),
+    writeScenario: () => {
+      throw new Error('Artemis scenario save serialization is not implemented');
+    },
+    writeGlobal: () => {
+      throw new Error('Artemis global save serialization is not implemented');
+    },
+    writeSystem: () => {
+      throw new Error('Artemis system save serialization is not implemented');
+    },
+  });
+  const wait = new ArtemisTimedWait(modes, save, {
+    now: () => probeTick,
+    debugSkipActive: () => false,
+    hasActiveMessage: () => false,
+    beginWait: (inputEnabled, skipIndicator) => {
+      modeEffects.push({wait: {inputEnabled, skipIndicator}});
+      script.pause();
+    },
+    endWait: () => {
+      modeEffects.push({waitEnd: true});
+      script.resume();
+    },
+    clickWaitEvent: (kind) => {
+      try {
+        lua.events.emit(kind === 'in' ? 'onClickWaitIn' : 'onClickWaitOut');
+      } catch (error) {
+        modeEffects.push({waitEventError: String(error)});
+      }
+    },
+    resumeMessageState: () => modeEffects.push({resumeMessageState: true}),
+  });
   const dispatch = (tag) => {
     nativeTags.push({name: tag.name, args: Object.fromEntries(tag.args)});
     if (dialog.dispatch(tag)) return;
-    if (modes.dispatch(tag) || variables.dispatch(tag) || mouse.dispatch(tag)) return;
+    if (modes.dispatch(tag) || variables.dispatch(tag) || mouse.dispatch(tag) || wait.dispatch(tag))
+      return;
     throw new Error(`Unsupported native Artemis tag ${tag.name}`);
   };
   lua = new ArtemisLua({
@@ -117,10 +160,10 @@ try {
       return readFile(path);
     },
     fileExists: (path) => installation.paths.has(path.replaceAll('\\', '/')),
-    now: () => 0, // Deterministic probe clock, not a production game clock.
+    now: () => probeTick, // Deterministic probe clock, not a production game clock.
     tag: (tag) => script.executeTag(tag),
     enqueueTag: (tag) => script.enqueue(tag),
-    variable: (name) => variables.read(name),
+    variable: (name) => variables.queryLiteral(name),
   });
   let compiled = 0;
   for (const [path, bytes] of prepared)
@@ -140,6 +183,12 @@ try {
   try {
     script.load('system/first.iet');
     script.run(1000);
+    while (advanceWaits && script.state === 'waiting' && wait.pending && advancedWaits < 100) {
+      probeTick = (wait.deadlineTick + 1) >>> 0;
+      advancedWaits++;
+      if (!wait.tick(probeTick)) break;
+      script.run(1000);
+    }
   } catch (error) {
     refusal = error.message;
   }
@@ -161,6 +210,9 @@ try {
         dialogRequests: dialogs,
         dialogPending: dialog.pending,
         simulatedDialogResult,
+        advanceWaits,
+        advancedWaits,
+        timedWaitPending: wait.pending,
         effectMode: 'record-only',
         preparedFiles: prepared.size,
         preparedBytes,
