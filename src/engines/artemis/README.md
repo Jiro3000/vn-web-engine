@@ -315,3 +315,32 @@ per-frame eviction behavior. Failed uploads delete their partial GPU allocation.
 actual shared WebGL alpha pixels, descending overlap order, retained resources and
 upload-error cleanup. It contains no game assets. Browser checks use explicit
 sampler/blend fixtures and do not establish native GPU equivalence.
+
+`stage.ts` supplies native `flip` through required stage effects. Nonzero script
+capture mode returns immediately. Transition state 2 clears the transition rule
+and resets the transition layer's virtual +0xe0 value to uint32 -1 before changing
+state. The adapter then writes transition state 0, marks the scene dirty, commits
+the actual layer/resource owner and changes a nonzero refresh state to 2. Refresh
+state is read after commit, preserving effects from resource release callbacks.
+Native entries: flip prefix `0x1400e10a0` and helper `0x14014f420`.
+
+The flip prefix is present as a Ghidra label rather than a canonical function;
+its saved raw bytes/instructions confirm the capture-mode branch and tail jump.
+Transition reset's stored field +0x168 is confirmed by `0x1400a4960`; its full
+transition rendering semantics are still host work. `flip` marks presentation
+pending; the scheduler/presenter decides when to draw. It does not bypass required
+transition effects or silently perform them with a scene commit alone.
+
+`layer-commands.ts` owns the native per-id command lists required by the raster
+services (`0x140144570`, called by `0x1400b9cd0`). Missing id does not record a
+command. Recording scans backward for the newest same-name command whose selected
+comparison keys exist and match in both argument maps. It merges incoming
+arguments into that record without replacing the earlier line/name; intervening
+commands do not prevent merging. Ordinary properties use an empty comparison-key
+set. Other registration owners can supply their native key sets.
+
+Lists preserve raw id strings, so numeric aliases remain separate registry keys.
+Reset creates an empty list; deletion removes exact selected ids. Returned history
+and UTF-8-byte-ordered snapshots copy argument maps. These data are inputs for the
+native save owner; the registry does not serialize them as a substitute save format.
+The browser fixture connects actual reset/clear/property recording to this registry.

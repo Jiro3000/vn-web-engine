@@ -721,3 +721,160 @@ test('Artemis raster layering paints the lower numeric id after the higher backg
     layers.close();
   }
 });
+
+test('Artemis flip commits real retained image resources, marks presentation dirty and promotes nonzero refresh state', async () => {
+  const {ArtemisStage} = await import('../dist/engines/artemis/stage.js');
+  const {graphics, layers, prepared, invalidated} = await rasterFixture();
+  const effects = [];
+  let transition = 0,
+    dirty = false,
+    refresh = 1,
+    capture = 0;
+  const stage = new ArtemisStage(revision, {
+    captureMode: () => capture,
+    transitionState: () => transition,
+    clearTransitionRule: () => {
+      throw new Error('unexpected transition cleanup');
+    },
+    resetTransitionLayerValue: () => {
+      throw new Error('unexpected transition cleanup');
+    },
+    setTransitionState: (value) => {
+      transition = value;
+      effects.push(['transition', value]);
+    },
+    markSceneDirty: () => {
+      dirty = true;
+      effects.push(['dirty']);
+    },
+    commitLayers: () => {
+      effects.push(['commit', dirty]);
+      layers.commit();
+    },
+    refreshState: () => refresh,
+    setRefreshState: (value) => {
+      refresh = value;
+      effects.push(['refresh', value]);
+    },
+  });
+  try {
+    await layers.dispatch(command('lyc', {id: '2', file: 'synthetic'}));
+    assert.equal(graphics.drawCommitted(layers.scene).commands.length, 0);
+    assert.equal(stage.dispatch(command('flip', {ignored: 'native ignores tag arguments'})), true);
+    assert.equal(graphics.drawCommitted(layers.scene).commands.length, 1);
+    assert.deepEqual(effects, [['transition', 0], ['dirty'], ['commit', true], ['refresh', 2]]);
+    await layers.dispatch(command('lyc', {id: '2', file: 'synthetic'}));
+    assert.equal(invalidated.length, 0);
+    stage.dispatch(command('flip'));
+    assert.equal(invalidated[0], prepared[0]);
+    capture = 1;
+    const before = effects.length;
+    await layers.dispatch(command('lydel', {id: '2'}));
+    stage.dispatch(command('flip'));
+    assert.equal(effects.length, before);
+    assert.equal(graphics.drawCommitted(layers.scene).commands.length, 1);
+    capture = 0;
+    refresh = 0;
+    stage.dispatch(command('flip'));
+    assert.equal(graphics.drawCommitted(layers.scene).commands.length, 0);
+    assert.equal(refresh, 0);
+  } finally {
+    layers.close();
+  }
+});
+
+test('Artemis flip clears transition rule/value before commit and reads refresh state after owner effects', async () => {
+  const {ArtemisStage} = await import('../dist/engines/artemis/stage.js');
+  const effects = [];
+  let transition = 2,
+    rule = 'mask',
+    value = 0,
+    refresh = 1;
+  const stage = new ArtemisStage(revision, {
+    captureMode: () => 0,
+    transitionState: () => transition,
+    clearTransitionRule: () => {
+      rule = null;
+      effects.push(['rule', rule]);
+    },
+    resetTransitionLayerValue: (next) => {
+      value = next;
+      effects.push(['value', value]);
+    },
+    setTransitionState: (next) => {
+      transition = next;
+      effects.push(['transition', next]);
+    },
+    markSceneDirty: () => effects.push(['dirty']),
+    commitLayers: () => {
+      effects.push(['commit', rule, value]);
+      refresh = 0;
+    },
+    refreshState: () => refresh,
+    setRefreshState: (next) => {
+      refresh = next;
+      effects.push(['refresh', next]);
+    },
+  });
+  assert.equal(stage.dispatch(command('not flip')), false);
+  assert.equal(stage.dispatch(command('flip')), true);
+  assert.deepEqual(effects, [
+    ['rule', null],
+    ['value', 0xffffffff],
+    ['transition', 0],
+    ['dirty'],
+    ['commit', null, 0xffffffff],
+  ]);
+  assert.equal(refresh, 0);
+});
+
+test('Artemis layer command history coalesces the newest matching name across intervening commands', async () => {
+  const {ArtemisLayerCommands} = await import('../dist/engines/artemis/layer-commands.js');
+  const store = new ArtemisLayerCommands(revision);
+  const first = command('lyprop', {id: '2', left: '10', alpha: '128'});
+  store.record(first);
+  first.args.set('left', 'external mutation');
+  store.record(command('lyevent', {id: '2', event: 'click', label: 'clicked'}));
+  store.record({...command('lyprop', {id: '2', top: '20'}), sourceLine: 99});
+  const history = store.commands('2');
+  assert.equal(history.length, 2);
+  assert.deepEqual(Object.fromEntries(history[0].args), {
+    id: '2',
+    left: '10',
+    alpha: '128',
+    top: '20',
+  });
+  assert.equal(history[0].sourceLine, 7);
+  assert.equal(history[1].name, 'lyevent');
+  history[0].args.set('left', 'returned snapshot mutation');
+  assert.equal(store.commands('2')[0].args.get('left'), '10');
+  store.record(command('lyprop', {top: 'missing id'}));
+  assert.equal(store.snapshot().size, 1);
+});
+
+test('Artemis keyed layer command coalescing requires every selected argument and preserves separate raw ids', async () => {
+  const {ArtemisLayerCommands} = await import('../dist/engines/artemis/layer-commands.js');
+  const store = new ArtemisLayerCommands(revision),
+    keys = new Set(['event', 'key']);
+  store.record(command('lyevent', {id: '2', event: 'click', key: '1', label: 'first'}), keys);
+  store.record(command('lyevent', {id: '2', event: 'click', key: '2', label: 'other'}), keys);
+  store.record(command('lyevent', {id: '2', event: 'click', key: '1', label: 'updated'}), keys);
+  assert.deepEqual(
+    store.commands('2').map((tag) => tag.args.get('label')),
+    ['updated', 'other'],
+  );
+  store.record(
+    command('lyevent', {id: '2', event: 'click', label: 'missing comparison key'}),
+    keys,
+  );
+  assert.equal(store.commands('2').length, 3);
+  store.record(command('lyprop', {id: '02', left: 'separate bucket'}));
+  store.clear(['02']);
+  assert.equal(store.commands('02'), undefined);
+  assert.equal(store.commands('2').length, 3);
+  store.reset('2');
+  assert.deepEqual(store.commands('2'), []);
+  store.reset('\u{10000}');
+  store.reset('\ue000');
+  assert.deepEqual([...store.snapshot().keys()], ['2', '\ue000', '\u{10000}']);
+});

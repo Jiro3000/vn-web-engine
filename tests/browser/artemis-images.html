@@ -10,6 +10,8 @@
   import {ARTEMIS_3179_EXECUTABLE_SHA256 as revision} from '../../dist/engines/artemis/revision.js';
   import {ArtemisLua} from '../../dist/engines/artemis/lua.js';
   import {ArtemisScript} from '../../dist/engines/artemis/script.js';
+  import {ArtemisStage} from '../../dist/engines/artemis/stage.js';
+  import {ArtemisLayerCommands} from '../../dist/engines/artemis/layer-commands.js';
   import {CanvasDrawTarget} from '../../dist/graphics/draw-list.js';
 
   const png = Uint8Array.from(
@@ -57,15 +59,25 @@
   let target, layers, lua;
   try {
     const canvas = document.querySelector('#frame');
+    const commandRegistry = new ArtemisLayerCommands(revision);
     target = new CanvasDrawTarget(canvas, 4, 2);
     const graphics = new ArtemisImageGraphics(
       revision,
       target,
       {
         creationMode: () => 0,
-        clearLayerCommands: (ids) => effects.push(['clear', ...ids]),
-        resetLayerCommands: (id) => effects.push(['reset', id]),
-        recordLayerProperties: (tag) => effects.push(['record', tag.args.get('id')]),
+        clearLayerCommands: (ids) => {
+          commandRegistry.clear(ids);
+          effects.push(['clear', ...ids]);
+        },
+        resetLayerCommands: (id) => {
+          commandRegistry.reset(id);
+          effects.push(['reset', id]);
+        },
+        recordLayerProperties: (tag) => {
+          commandRegistry.record(tag);
+          effects.push(['record', tag.args.get('id')]);
+        },
         imageLoadFailed: () => {
           throw new Error('synthetic image missing');
         },
@@ -86,8 +98,30 @@
       createArtemisImageLoader(revision, async (path) => (path === 'synthetic.png' ? png : null)),
       graphics,
     );
+    const stageState = {transition: 0, dirty: false, refresh: 0};
+    const stage = new ArtemisStage(revision, {
+      captureMode: () => 0,
+      transitionState: () => stageState.transition,
+      clearTransitionRule: () => {
+        throw new Error('unexpected transition cleanup');
+      },
+      resetTransitionLayerValue: () => {
+        throw new Error('unexpected transition cleanup');
+      },
+      setTransitionState: (value) => {
+        stageState.transition = value;
+      },
+      markSceneDirty: () => {
+        stageState.dirty = true;
+      },
+      commitLayers: () => layers.commit(),
+      refreshState: () => stageState.refresh,
+      setRefreshState: (value) => {
+        stageState.refresh = value;
+      },
+    });
     const source = new TextEncoder().encode(
-      `[lua]function prepare(e) e:tag{'lyc',id='2',file='synthetic'}; completed=true end[/lua][calllua function="prepare"][stop]`,
+      `[lua]function prepare(e) e:tag{'lyc',id='2',file='synthetic'}; completed=true end[/lua][calllua function="prepare"][flip][stop]`,
     );
     let script, pending;
     lua = new ArtemisLua({
@@ -106,6 +140,7 @@
           pending = layers.dispatch(tag);
           return 'suspended';
         }
+        if (stage.dispatch(tag)) return;
         if (tag.name === 'stop') return 'stopped';
         throw new Error('unexpected synthetic command');
       },
@@ -113,9 +148,6 @@
     script.load('synthetic boot');
     assert(script.run() === 'waiting', 'Lua did not wait for PNG resource');
     await pending;
-    script.resumeLua();
-    assert(script.run() === 'stopped', 'Lua did not resume');
-    assert(lua.vm.getGlobal('completed') === true, 'Lua local continuation lost');
     assert(uploads === 1, 'image was not prepared exactly once');
     assert(
       graphics.drawCommitted(layers.scene).commands.length === 0,
@@ -125,14 +157,17 @@
       [...tracked].every((texture) => !deleted.includes(texture)),
       'prepared image evicted by empty frame',
     );
-    layers.commit();
+    script.resumeLua();
+    assert(script.run() === 'stopped', 'Lua did not resume through native flip');
+    assert(lua.vm.getGlobal('completed') === true, 'Lua local continuation lost');
+    assert(stageState.dirty === true, 'native flip did not mark scene dirty');
     graphics.drawCommitted(layers.scene);
     const pixels = [...canvas.getContext('2d').getImageData(0, 0, 4, 2).data];
     assert(pixels.slice(0, 4).join(',') === '0,0,0,255', 'transparent red changed the frame');
     assert(pixels.slice(4, 8).join(',') === '0,128,0,255', 'shared GPU alpha/color mismatch');
     assert(uploads === 1, 'committed image was uploaded again');
     await layers.dispatch(command('lyprop', {id: '2', visible: '0'}));
-    layers.commit();
+    stage.dispatch(command('flip'));
     graphics.drawCommitted(layers.scene);
     assert(
       [...tracked].every((texture) => !deleted.includes(texture)),
@@ -149,17 +184,22 @@
     } catch (error) {
       refused = error.message.includes('Texture upload failed');
     }
+    assert(
+      commandRegistry.commands('2')[0].args.get('visible') === '0',
+      'property command registry was not updated',
+    );
     assert(refused, 'oversized texture was accepted');
     assert(
       created.length === before.created + 1 && deleted.length === before.deleted + 1,
       'failed upload leaked its texture',
     );
     await layers.dispatch(command('lydel', {id: '2'}));
-    layers.commit();
+    stage.dispatch(command('flip'));
     assert(
       [...tracked].every((texture) => deleted.filter((item) => item === texture).length === 1),
       'last actor did not release its texture once',
     );
+    assert(commandRegistry.commands('2') === undefined, 'deleted layer commands retained');
     assert(context.getError() === context.NO_ERROR, 'remaining WebGL error');
     await layers.dispatch(
       command('lyc', {id: '-1', file: 'missing', width: '4', height: '2', color: 'ff0000'}),
@@ -167,7 +207,7 @@
     await layers.dispatch(
       command('lyc', {id: '0', file: 'missing', width: '4', height: '2', color: '00ff00'}),
     );
-    layers.commit();
+    stage.dispatch(command('flip'));
     graphics.drawCommitted(layers.scene);
     const drawOrderPixel = [...canvas.getContext('2d').getImageData(0, 0, 1, 1).data];
     assert(drawOrderPixel.join(',') === '255,0,0,255', 'native descending draw order mismatch');
@@ -179,6 +219,8 @@
       preparedRetention: true,
       failedUploadReleased: true,
       luaResumed: true,
+      nativeFlip: stageState.dirty,
+      nativeCommandRegistry: true,
       serviceEffects: effects,
       drawOrderPixel,
     };
