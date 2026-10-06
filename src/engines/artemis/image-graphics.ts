@@ -32,6 +32,7 @@ interface Texture {
   readonly id: number;
   readonly image: TriangleImage;
   references: number;
+  readonly managed: boolean;
 }
 const identity = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
 const f = Math.fround;
@@ -45,6 +46,13 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisImageActor>
   private readonly textures = new Map<number, Texture>();
   private readonly images = new Map<TriangleImage, Texture>();
   private readonly actors = new Set<ArtemisImageActor>();
+  private readonly wrappers = new Map<
+    ArtemisImageActor['wrapper'],
+    {
+      references: number;
+      lease: ArtemisLoadedImage['lease'];
+    }
+  >();
   constructor(
     executableSha256: string,
     private readonly target: DrawListTarget,
@@ -103,14 +111,22 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisImageActor>
     )
       throw new Error('Invalid Artemis raster image');
     let texture = this.images.get(image);
+    if (texture && texture.managed !== (resource.lease !== undefined))
+      throw new Error('Artemis image cannot mix cached and unmanaged raster ownership');
     if (!texture) {
       this.target.prepareImage(image);
-      texture = {id: this.nextTexture++, image, references: 0};
+      texture = {
+        id: this.nextTexture++,
+        image,
+        references: 0,
+        managed: resource.lease !== undefined,
+      };
       this.images.set(image, texture);
       this.textures.set(texture.id, texture);
     }
     texture.references++;
     const actor = {texture: texture.id, display, wrapper: {alpha: 1}};
+    this.wrappers.set(actor.wrapper, {references: 1, lease: resource.lease});
     this.actors.add(actor);
     return actor;
   }
@@ -123,6 +139,7 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisImageActor>
     const texture = this.check(old);
     const actor = {...old, display: old.display.copy()};
     texture.references++;
+    this.wrappers.get(actor.wrapper)!.references++;
     this.actors.add(actor);
     return actor;
   }
@@ -141,7 +158,12 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisImageActor>
     if (--texture.references === 0) {
       this.textures.delete(texture.id);
       this.images.delete(texture.image);
-      this.target.invalidate(texture.image);
+      if (!texture.managed) this.target.invalidate(texture.image);
+    }
+    const wrapper = this.wrappers.get(actor.wrapper)!;
+    if (--wrapper.references === 0) {
+      this.wrappers.delete(actor.wrapper);
+      wrapper.lease?.release();
     }
   }
   image(id: number): TriangleImage {

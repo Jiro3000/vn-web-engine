@@ -14,6 +14,12 @@ export interface ArtemisLoadedImage {
   readonly image: TriangleImage;
   /** Present when the resource path explicitly determines a native surface format. */
   readonly surfaceFormat?: 1 | 2;
+  /** One native surface-manager loan; transfer to a successful outer layer wrapper. */
+  readonly lease?: {release(): void};
+}
+
+export interface ArtemisImageSource {
+  load(name: string): Promise<ArtemisLoadedImage | null>;
 }
 
 /** Native 0x1401756a0: extension preference, content sniffing, then appended candidates. */

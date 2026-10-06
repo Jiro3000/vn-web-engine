@@ -878,3 +878,220 @@ test('Artemis keyed layer command coalescing requires every selected argument an
   store.reset('\ue000');
   assert.deepEqual([...store.snapshot().keys()], ['2', '\ue000', '\u{10000}']);
 });
+
+async function surfaceFixture(budget = 16n, overrides = {}) {
+  const {ArtemisSurfaceCache} = await import('../dist/engines/artemis/surface-cache.js');
+  const {createSolidImage} = await import('../dist/graphics/solid-image.js');
+  const loaded = [],
+    prepared = [],
+    disposed = [];
+  const source = overrides.source ?? {
+    async load(name) {
+      loaded.push(name);
+      if (name === 'missing') return null;
+      return {path: `${name}.png`, image: createSolidImage(1, 1, [10, 20, 30, 255])};
+    },
+  };
+  const cache = new ArtemisSurfaceCache(revision, budget, source, {
+    storageBytes: () => 8, // Explicit native-size fixture, independent of four RGBA bytes.
+    prepare: (resource) => prepared.push(resource),
+    dispose: (resource) => disposed.push(resource),
+    ...overrides.owner,
+  });
+  return {cache, loaded, prepared, disposed};
+}
+
+test('Artemis surface loans share active and idle resources using exact requested names', async () => {
+  const {cache, loaded, prepared, disposed} = await surfaceFixture();
+  const a = await cache.load('日本/😀'),
+    b = await cache.load('日本/😀');
+  assert.equal(a.image, b.image);
+  assert.notEqual(a.lease, b.lease);
+  assert.equal(cache.bytesUsed, 8n);
+  a.lease.release();
+  a.lease.release();
+  assert.equal(disposed.length, 0);
+  const c = await cache.load('日本/😀');
+  assert.equal(c.image, b.image);
+  b.lease.release();
+  c.lease.release();
+  const revived = await cache.load('日本/😀');
+  assert.equal(revived.image, a.image);
+  assert.deepEqual(loaded, ['日本/😀']);
+  assert.equal(prepared.length, 1);
+  const explicit = await cache.load('日本/😀.png');
+  assert.notEqual(explicit.image, a.image); // Requested key, not decoder candidate path.
+  revived.lease.release();
+  explicit.lease.release();
+  cache.close();
+  cache.close();
+  assert.equal(disposed.length, 2);
+  assert.equal(cache.bytesUsed, 0n);
+  await assert.rejects(cache.load('later'), /closed/);
+});
+
+test('Artemis surface budget trims oldest idle entries before a miss, without reserving its size', async () => {
+  const {cache, loaded, disposed} = await surfaceFixture();
+  const a = await cache.load('a'),
+    b = await cache.load('b');
+  a.lease.release();
+  b.lease.release();
+  const promoted = await cache.load('a');
+  promoted.lease.release(); // FIFO now b, a.
+  const c = await cache.load('c');
+  assert.equal(cache.bytesUsed, 24n); // Native allows the new active resource to exceed budget.
+  assert.equal(disposed.length, 0);
+  const activeHit = await cache.load('c');
+  assert.equal(cache.bytesUsed, 24n); // Neither a hit nor promotion trims.
+  activeHit.lease.release();
+  const missing = await cache.load('missing');
+  assert.equal(missing, null);
+  assert.deepEqual(
+    disposed.map((x) => x.path),
+    ['b.png'],
+  );
+  assert.equal(cache.bytesUsed, 16n);
+  const idleHit = await cache.load('a');
+  assert.deepEqual(loaded, ['a', 'b', 'c', 'missing']);
+  c.lease.release();
+  idleHit.lease.release();
+  cache.close();
+  assert.equal(cache.bytesUsed, 0n);
+});
+
+test('Artemis releases the newly unloaned surface while over budget and preserves active borrowers on close', async () => {
+  const {cache, disposed} = await surfaceFixture(8n);
+  const a = await cache.load('a'),
+    b = await cache.load('b');
+  cache.trim(); // Both active; neither can be evicted.
+  assert.equal(cache.bytesUsed, 16n);
+  b.lease.release();
+  assert.deepEqual(
+    disposed.map((x) => x.path),
+    ['b.png'],
+  );
+  cache.close();
+  assert.equal(cache.bytesUsed, 8n);
+  assert.equal(a.image.pixels[0], 10);
+  a.lease.release();
+  a.lease.release();
+  assert.equal(cache.bytesUsed, 0n);
+  assert.deepEqual(
+    disposed.map((x) => x.path),
+    ['b.png', 'a.png'],
+  );
+});
+
+test('Artemis surface load failures, shutdown during decoding and unsupported names leave no loans', async () => {
+  const {ArtemisSurfaceCache} = await import('../dist/engines/artemis/surface-cache.js');
+  assert.throws(
+    () => new ArtemisSurfaceCache('unknown', 0n, {}, {}),
+    /Unsupported Artemis executable/,
+  );
+  assert.throws(() => new ArtemisSurfaceCache(revision, -1n, {}, {}), /budget/);
+  const failed = await surfaceFixture(0n, {
+    owner: {
+      prepare() {
+        throw Error('GPU failure');
+      },
+    },
+  });
+  await assert.rejects(failed.cache.load('a'), /GPU failure/);
+  assert.equal(failed.disposed.length, 1);
+  assert.equal(failed.cache.bytesUsed, 0n);
+  await assert.rejects(failed.cache.load('a'), /GPU failure/); // Failed resources are not cached.
+  assert.equal(failed.loaded.length, 2);
+  for (const name of ['nul\0', '\ud800', '\udc00'])
+    await assert.rejects(failed.cache.load(name), /surface name/);
+  assert.equal(failed.loaded.length, 2);
+  let finish;
+  const pending = await surfaceFixture(8n, {
+    source: {
+      load: () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    },
+  });
+  const loading = pending.cache.load('pending');
+  await assert.rejects(pending.cache.load('another'), /overlapping/);
+  pending.cache.close();
+  finish({path: 'pending', image: {width: 1, height: 1, pixels: new Uint8Array(4)}});
+  await assert.rejects(loading, /closed during load/);
+  assert.equal(pending.prepared.length, 0);
+  assert.equal(pending.disposed.length, 1);
+  assert.equal(pending.cache.bytesUsed, 0n);
+});
+
+async function cachedLayerFixture(budget = 0n, source) {
+  const {ArtemisImageGraphics} = await import('../dist/engines/artemis/image-graphics.js');
+  const {ArtemisLayers} = await import('../dist/engines/artemis/layers.js');
+  const f = await surfaceFixture(budget, source ? {source} : {});
+  const target = {width: 4, height: 2, prepareImage() {}, invalidate() {}, draw() {}};
+  const graphics = new ArtemisImageGraphics(
+    revision,
+    target,
+    {
+      creationMode: () => 0,
+      clearLayerCommands() {},
+      resetLayerCommands() {},
+      recordLayerProperties() {},
+      imageLoadFailed() {},
+      layerNotFound() {},
+    },
+    {filter: 'nearest', blend: straightBlend},
+  );
+  return {...f, graphics, layers: new ArtemisLayers(revision, f.cache, graphics)};
+}
+
+test('Artemis cache loans belong to outer wrappers across current/retained actor copies and multiple layers', async () => {
+  const {cache, layers, loaded, disposed} = await cachedLayerFixture();
+  await layers.dispatch(command('lyc', {id: '1', file: 'a'}));
+  layers.commit();
+  await layers.dispatch(command('lyprop', {id: '1', left: '2'}));
+  await layers.dispatch(command('lyc', {id: '2', file: 'a'}));
+  assert.equal(loaded.length, 1);
+  assert.equal(cache.bytesUsed, 8n);
+  await layers.dispatch(command('lydel', {id: '1'}));
+  assert.equal(disposed.length, 0);
+  layers.commit(); // Releases both versions of wrapper 1; wrapper 2 keeps its own loan.
+  assert.equal(disposed.length, 0);
+  await layers.dispatch(command('lydel', {id: '2'}));
+  assert.equal(disposed.length, 0);
+  layers.commit();
+  assert.equal(disposed.length, 1);
+  assert.equal(cache.bytesUsed, 0n);
+  layers.close();
+  cache.close();
+});
+
+test('Artemis cancelled and rejected layer creation releases the cache loan exactly once', async () => {
+  let finish;
+  const f = await cachedLayerFixture(0n, {
+    load: () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  });
+  const pending = f.layers.dispatch(command('lyc', {id: '1', file: 'pending'}));
+  f.layers.cancelPending();
+  finish({path: 'pending', image: {width: 1, height: 1, pixels: new Uint8Array(4)}});
+  await assert.rejects(pending, /cancelled/);
+  assert.equal(f.disposed.length, 1);
+  assert.equal(f.cache.bytesUsed, 0n);
+  f.layers.close();
+  f.cache.close();
+
+  const rejected = await cachedLayerFixture();
+  rejected.graphics.createImageLayer = () => {
+    throw Error('actor allocation failed');
+  };
+  await assert.rejects(
+    rejected.layers.dispatch(command('lyc', {id: '1', file: 'a'})),
+    /allocation failed/,
+  );
+  assert.equal(rejected.disposed.length, 1);
+  assert.equal(rejected.cache.bytesUsed, 0n);
+  rejected.layers.close();
+  rejected.cache.close();
+});

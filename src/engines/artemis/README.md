@@ -344,3 +344,29 @@ Reset creates an empty list; deletion removes exact selected ids. Returned histo
 and UTF-8-byte-ordered snapshots copy argument maps. These data are inputs for the
 native save owner; the registry does not serialize them as a substitute save format.
 The browser fixture connects actual reset/clear/property recording to this registry.
+
+`surface-cache.ts` supplies the ordinary native surface-manager loan policy
+(`0x140011a90`, `0x140012200`, `0x1400116b0`). Requested UTF-8 names are exact cache
+keys, independently of the loader's resolved extension/path. Active hits add a
+loan; idle hits remove the surface from its FIFO position and reuse it. Only a
+miss trims oldest idle surfaces, and only while the current total exceeds the
+budget. It does not reserve space for the new resource, so active surfaces can
+exceed the budget. The last loan disposes its surface immediately when over
+budget; otherwise it appends the surface to the idle FIFO. Active resources are
+never evicted by trimming.
+
+The host supplies the uint64 budget, native storage size and actual surface
+prepare/dispose effects. Decoded RGBA length is not assumed to be native GPU
+storage size. Idle resources retain their GPU binding through empty frames.
+Cache shutdown releases idle resources immediately and defers active disposal
+until the last loan returns. A decode completing after shutdown is disposed.
+Worker preloading and overlapping native load modes are explicitly unsupported.
+
+`ArtemisLoadedImage.lease` represents one load's loan. Successful layer creation
+transfers it to the outer image wrapper. Current/retained inner actor copies share
+that wrapper; they do not add surface-manager loans. Separate layers each retain
+their own loan even when sharing one texture. Cancellation, failed actor creation
+and blocked scene insertion release their unadopted resource. Ordinary unmanaged
+images keep the earlier last-actor invalidation behavior. Cached resources use the
+surface owner's disposal effect instead. Close layers before closing the cache
+and raster target at installation shutdown.

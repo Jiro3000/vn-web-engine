@@ -7,6 +7,7 @@
   import {ArtemisImageGraphics} from '../../dist/engines/artemis/image-graphics.js';
   import {ArtemisLayers} from '../../dist/engines/artemis/layers.js';
   import {createArtemisImageLoader} from '../../dist/engines/artemis/image-loader.js';
+  import {ArtemisSurfaceCache} from '../../dist/engines/artemis/surface-cache.js';
   import {ARTEMIS_3179_EXECUTABLE_SHA256 as revision} from '../../dist/engines/artemis/revision.js';
   import {ArtemisLua} from '../../dist/engines/artemis/lua.js';
   import {ArtemisScript} from '../../dist/engines/artemis/script.js';
@@ -56,7 +57,7 @@
     }
     return originalUpload.apply(this, args);
   };
-  let target, layers, lua;
+  let target, layers, lua, cache;
   try {
     const canvas = document.querySelector('#frame');
     const commandRegistry = new ArtemisLayerCommands(revision);
@@ -93,11 +94,21 @@
         },
       },
     );
-    layers = new ArtemisLayers(
+    let surfacePrepares = 0;
+    cache = new ArtemisSurfaceCache(
       revision,
+      8n,
       createArtemisImageLoader(revision, async (path) => (path === 'synthetic.png' ? png : null)),
-      graphics,
+      {
+        storageBytes: () => 8, // Explicit synthetic surface layout, not a native format guess.
+        prepare: (resource) => {
+          surfacePrepares++;
+          target.prepareImage(resource.image);
+        },
+        dispose: (resource) => target.invalidate(resource.image),
+      },
     );
+    layers = new ArtemisLayers(revision, cache, graphics);
     const stageState = {transition: 0, dirty: false, refresh: 0};
     const stage = new ArtemisStage(revision, {
       captureMode: () => 0,
@@ -195,12 +206,42 @@
     );
     await layers.dispatch(command('lydel', {id: '2'}));
     stage.dispatch(command('flip'));
+    graphics.drawCommitted(layers.scene);
+    assert(
+      [...tracked].every((texture) => !deleted.includes(texture)),
+      'idle cached surface lost its GPU binding',
+    );
+    assert(cache.bytesUsed === 8n, 'idle surface accounting lost');
+    await layers.dispatch(command('lyc', {id: '3', file: 'synthetic'}));
+    stage.dispatch(command('flip'));
+    graphics.drawCommitted(layers.scene);
+    assert(uploads === 1 && surfacePrepares === 1, 'idle promotion decoded or uploaded again');
+    assert(
+      [...canvas.getContext('2d').getImageData(1, 0, 1, 1).data].join(',') === '0,128,0,255',
+      'promoted cached surface did not render',
+    );
+    cache.close(); // Active layer must survive shutdown until its own release.
+    assert(
+      [...tracked].every((texture) => !deleted.includes(texture)),
+      'active loan invalidated on close',
+    );
+    graphics.drawCommitted(layers.scene);
+    await layers.dispatch(command('lydel', {id: '3'}));
+    stage.dispatch(command('flip'));
     assert(
       [...tracked].every((texture) => deleted.filter((item) => item === texture).length === 1),
       'last actor did not release its texture once',
     );
+    assert(cache.bytesUsed === 0n, 'closed cache retained released loan');
     assert(commandRegistry.commands('2') === undefined, 'deleted layer commands retained');
     assert(context.getError() === context.NO_ERROR, 'remaining WebGL error');
+    // The remaining solid fallback checks use a fresh ordinary loader after cache shutdown.
+    layers.close();
+    layers = new ArtemisLayers(
+      revision,
+      createArtemisImageLoader(revision, async () => null),
+      graphics,
+    );
     await layers.dispatch(
       command('lyc', {id: '-1', file: 'missing', width: '4', height: '2', color: 'ff0000'}),
     );
@@ -221,6 +262,9 @@
       luaResumed: true,
       nativeFlip: stageState.dirty,
       nativeCommandRegistry: true,
+      surfaceCacheIdleGpuRetention: true,
+      surfaceCachePromotionNoDecodeOrUpload: true,
+      surfaceCacheActiveCloseDeferred: true,
       serviceEffects: effects,
       drawOrderPixel,
     };
@@ -229,6 +273,7 @@
   } finally {
     lua?.close();
     layers?.close();
+    cache?.close();
     target?.dispose();
     prototype.texImage2D = originalUpload;
     prototype.createTexture = originalCreate;

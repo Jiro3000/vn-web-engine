@@ -1,5 +1,5 @@
 import type {AsbTag} from '../../formats/artemis/asb.js';
-import type {ArtemisImageLoader, ArtemisLoadedImage} from './image-loader.js';
+import type {ArtemisImageSource, ArtemisLoadedImage} from './image-loader.js';
 import {ArtemisScene} from './scene.js';
 import {artemisLayerProperties, type ArtemisLayerPropertyPatch} from './layer-properties.js';
 import {createSolidImage} from '../../graphics/solid-image.js';
@@ -36,7 +36,7 @@ function solidImage(tag: AsbTag): ArtemisLoadedImage {
 export interface ArtemisLayerHost<T extends object> {
   /** Native 0x1400d5930 has a separate nonzero capture-mode branch. */
   creationMode(): number;
-  /** Allocate a fresh owned image actor, including raster and default geometry effects. */
+  /** Allocate a fresh actor; success transfers the resource lease to its outer wrapper. */
   createImageLayer(
     resource: ArtemisLoadedImage,
     anchor: {readonly x: number; readonly y: number},
@@ -67,7 +67,7 @@ export class ArtemisLayers<T extends object> {
   private readonly owned = new Set<T>();
   constructor(
     executableSha256: string,
-    private readonly images: ArtemisImageLoader,
+    private readonly images: ArtemisImageSource,
     private readonly host: ArtemisLayerHost<T>,
   ) {
     this.scene = new ArtemisScene(executableSha256);
@@ -148,8 +148,9 @@ export class ArtemisLayers<T extends object> {
     if (tag.args.has('rule')) throw new Error('Unsupported Artemis rule surface format owner');
     const token = ++this.generation;
     this.pending = token;
+    let resource: ArtemisLoadedImage | null = null;
     try {
-      let resource = await this.images.load(tag.args.get('file') ?? '');
+      resource = await this.images.load(tag.args.get('file') ?? '');
       if (token !== this.generation) throw new Error('Artemis layer resource operation cancelled');
       if (resource === null) {
         if (['width', 'height', 'color'].every((key) => tag.args.has(key)))
@@ -163,6 +164,7 @@ export class ArtemisLayers<T extends object> {
         x: Math.fround(Math.fround(resource.image.width) * 0.5),
         y: Math.fround(Math.fround(resource.image.height) * 0.5),
       });
+      resource = null; // The successful layer owner now owns this loan.
       this.owned.add(layer);
       try {
         this.remove(id);
@@ -173,7 +175,11 @@ export class ArtemisLayers<T extends object> {
       }
       return true;
     } finally {
-      if (this.pending === token) this.pending = null;
+      try {
+        resource?.lease?.release();
+      } finally {
+        if (this.pending === token) this.pending = null;
+      }
     }
   }
 }
