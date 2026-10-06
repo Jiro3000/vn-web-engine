@@ -15,6 +15,7 @@ import {ArtemisSave} from '../dist/engines/artemis/save.js';
 import {ArtemisTimedWait} from '../dist/engines/artemis/wait.js';
 import {ArtemisTextControls} from '../dist/engines/artemis/text-controls.js';
 import {ArtemisKeyBindings} from '../dist/engines/artemis/key-bindings.js';
+import {ArtemisEventCommands} from '../dist/engines/artemis/event-commands.js';
 import {ArtemisModes} from '../dist/engines/artemis/modes.js';
 import {luaText} from '../dist/core/lua51/runtime.js';
 if (!process.argv[2]) throw new Error('Usage: node tools/probe-artemis.mjs GAME_DIRECTORY');
@@ -162,12 +163,14 @@ try {
       throw new Error('Artemis backlog collection storage is not implemented');
     },
   });
-  const keyBindings = new ArtemisKeyBindings();
+  const keyBindings = new ArtemisKeyBindings(() => script.currentFile);
+  const eventCommands = new ArtemisEventCommands(() => script.currentFile);
   const dispatch = (tag) => {
     nativeTags.push({name: tag.name, args: Object.fromEntries(tag.args)});
     if (dialog.dispatch(tag)) return;
     if (
       keyBindings.dispatch(tag) ||
+      eventCommands.dispatch(tag) ||
       textControls.dispatch(tag) ||
       modes.dispatch(tag) ||
       variables.dispatch(tag) ||

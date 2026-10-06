@@ -1035,3 +1035,38 @@ test('Event filters retain the function and preserve native numeric outcomes sep
     lua.close();
   }
 });
+
+test('Command event registrations capture label-only filenames and keep both push slots', async () => {
+  const {ArtemisEventCommands} = await import('../dist/engines/artemis/event-commands.js');
+  const {ArtemisKeyBindings} = await import('../dist/engines/artemis/key-bindings.js');
+  let current = 'system/first.iet';
+  const events = new ArtemisEventCommands(() => current);
+  const keys = new ArtemisKeyBindings(() => current);
+  const tag = (name, args = {}) => ({
+    kind: 'tag',
+    name,
+    args: new Map(Object.entries(args)),
+    sourceLine: -1,
+  });
+  const original = tag('setoncontrolskipin', {label: 'last'});
+  events.dispatch(original);
+  current = 'other.asb';
+  original.args.set('label', 'changed');
+  assert.equal(events.command('setoncontrolskipin').args.get('label'), 'last');
+  assert.equal(events.command('setoncontrolskipin').args.get('file'), 'system/first.iet');
+  events.dispatch(tag('setoncontrolskipout', {file: '', label: 'last'}));
+  assert.equal(events.command('setoncontrolskipout').args.get('file'), '');
+  events.dispatch(tag('setoncontrolskipin', {handler: 'calllua', function: 'callback'}));
+  assert.equal(events.command('setoncontrolskipin').args.has('file'), false);
+  keys.dispatch(tag('setonpush', {key: '13', label: 'enter'}));
+  keys.dispatch(tag('setonpush', {key: '13', keyrepeat: '00', label: 'repeat'}));
+  assert.equal(keys.pushHandler(13, 0).args.get('label'), 'enter');
+  assert.equal(keys.pushHandler(13, 1).args.get('label'), 'repeat');
+  assert.equal(keys.pushHandler(13, 1).args.get('file'), 'other.asb');
+  keys.dispatch(tag('setonpush', {key: '13', keyrepeat: '0', label: 'replace'}));
+  assert.equal(keys.pushHandler(13, 0).args.get('label'), 'replace');
+  assert.equal(keys.pushHandler(13, 1).args.get('label'), 'repeat');
+  keys.dispatch(tag('delonpush', {key: '13'}));
+  assert.equal(keys.pushHandler(13, 0), undefined);
+  assert.equal(keys.pushHandler(13, 1), undefined);
+});

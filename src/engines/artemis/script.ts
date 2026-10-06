@@ -35,6 +35,9 @@ export class ArtemisScript {
   private queueHead = 0;
   private running = false;
   state: ArtemisScriptState = 'ended';
+  get currentFile(): string {
+    return this.cursor?.file ?? '';
+  }
   constructor(
     private readonly lua: ArtemisLua,
     private readonly host: ArtemisScriptHost,

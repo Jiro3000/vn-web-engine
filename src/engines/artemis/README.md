@@ -156,7 +156,7 @@ codes 136/137 as separate flags. `keyconfig` clears the role first; missing keys
 leave it empty, while explicit empty keys add ordinary code 0. `delonpush` removes
 both native handler-map slots, using integer-zero for a missing key. Stored command
 arguments are copied. Physical input sampling, special-code interpretation,
-onpush registration and frame dispatch remain separate input-owner work.
+frame dispatch remain separate input-owner work.
 
 `setEventFilter` retains a live Lua function independently of the tag-filter table.
 `filterEvent` supplies the engine, event name and named arguments and preserves the
@@ -168,3 +168,9 @@ does. Default event actions and physical input dispatch remain unimplemented.
 `setUseMultiTouch` requires a numeric limit, truncates it toward zero and calls the
 input owner's contact-limit operation. It is bound only when that owner exists;
 the nonvisual probe records the configuration and does not simulate touch input.
+
+`event-commands.ts` copies mode/hide/backlog/directory event commands. Label-only
+registrations capture the current script filename; explicit empty filenames are
+preserved. `setonpush` replaces one of two per-key slots: missing/exact-zero
+keyrepeat chooses slot 0, other strings choose slot 1. Registering one slot keeps
+the other. These stores require mode/input owners to emit and dispatch events.

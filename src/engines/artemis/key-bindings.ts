@@ -1,4 +1,5 @@
 import type {AsbTag} from '../../formats/artemis/asb.js';
+import {captureEventCommand} from './event-commands.js';
 
 function integer(value: string): number {
   const token = /^[\t\n\v\f\r ]*([+-]?\d+)/.exec(value);
@@ -19,11 +20,16 @@ interface Role {
 }
 
 /** Native role configuration and deletion of both push-handler maps.
- * Frame sampling, special-code interpretation and onpush registration are separate input-owner work.
+ * Frame sampling and special-code interpretation are separate input-owner work.
  */
 export class ArtemisKeyBindings {
   private readonly roles = new Map<number, Role>();
   private readonly pushHandlers = [new Map<number, AsbTag>(), new Map<number, AsbTag>()] as const;
+  constructor(
+    private readonly currentFile: () => string = () => {
+      throw new Error('Artemis event registration requires the current script file');
+    },
+  ) {}
   role(id: number): ArtemisKeyRole | undefined {
     const role = this.roles.get(id);
     return role ? {...role, keys: new Set([...role.keys].sort((a, b) => a - b))} : undefined;
@@ -38,6 +44,13 @@ export class ArtemisKeyBindings {
   }
   dispatch(tag: AsbTag): boolean {
     const p = tag.args;
+    if (tag.name === 'setonpush') {
+      const command = captureEventCommand(tag, this.currentFile);
+      const key = integer(p.get('key') ?? '');
+      const slot = !p.has('keyrepeat') || p.get('keyrepeat') === '0' ? 0 : 1;
+      this.storePushHandler(key, slot, command);
+      return true;
+    }
     if (tag.name === 'delonpush') {
       const key = integer(p.get('key') ?? '');
       this.pushHandlers[0].delete(key);
