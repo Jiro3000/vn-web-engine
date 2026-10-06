@@ -206,3 +206,14 @@ The current tag/event filters and inline includes remain synchronous. Lua 5.1
 cannot yield across a protected C-call boundary; such asynchronous paths refuse.
 The default owner keeps the original synchronous callback path. Probe `--async-lua`
 checks the coroutine path through the actual boot without loading/rendering assets.
+
+`image-loader.ts` resolves resources asynchronously with native extension preference,
+then content sniffing of the exact file, then appended-extension candidates. Codec
+registration and extension order are preserved; Unicode names/aliases stay unchanged.
+The exact-hash factory selects PNG (`png`, `PNG`), JPEG (`jpg`, `jpeg`, `JPG`, `JPEG`),
+then PSD (`psd`, `PSD`), matching the stage initializer. PNG uses the shared straight
+RGBA decoder; JPEG and PSD require injected owners and refuse when selected without
+one. Decoder null means native failure/fallback; host and unsupported-format errors
+propagate. Corrupt PNGs are refused by the strict shared reader. Image loading is
+separate from cache eviction, layer geometry, property application and presentation.
+The pipeline is verified with synthetic PNGs through suspended Lua callbacks.

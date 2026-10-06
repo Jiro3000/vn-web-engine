@@ -1269,3 +1269,134 @@ test('Resource failures propagate through suspended callbacks and a new script c
     lua.close();
   }
 });
+
+test('Image loaders try exact case-sensitive extensions before native appended candidates', async () => {
+  const {ArtemisImageLoader} = await import('../dist/engines/artemis/image-loader.js');
+  const opened = [],
+    decoded = [];
+  const image = {width: 1, height: 1, pixels: new Uint8Array([1, 2, 3, 255])};
+  const files = new Map([
+    ['name.png', bytes('bad')],
+    ['name.png.jpg', bytes('good')],
+    ['name.PNG', bytes('good')],
+  ]);
+  const codecs = [
+    {
+      extensions: ['png'],
+      decode: async (value) => {
+        decoded.push(['png', luaText(value)]);
+        return null;
+      },
+    },
+    {
+      extensions: ['jpg', 'jpeg'],
+      decode: async (value) => {
+        decoded.push(['jpg', luaText(value)]);
+        return luaText(value) === 'good' ? image : null;
+      },
+    },
+  ];
+  const loader = new ArtemisImageLoader(async (path) => {
+    opened.push(path);
+    return files.get(path) ?? null;
+  }, codecs);
+  const loaded = await loader.load('name.png');
+  assert.equal(loaded.path, 'name.png.jpg');
+  assert.equal(loaded.image, image);
+  assert.deepEqual(opened, ['name.png', 'name.png.png', 'name.png.jpg']);
+  assert.deepEqual(decoded, [
+    ['png', 'bad'],
+    ['png', 'bad'],
+    ['jpg', 'bad'],
+    ['jpg', 'good'],
+  ]);
+  opened.length = 0;
+  decoded.length = 0;
+  assert.equal((await loader.load('name.PNG')).path, 'name.PNG');
+  assert.deepEqual(opened, ['name.PNG']);
+  assert.deepEqual(decoded, [
+    ['png', 'good'],
+    ['jpg', 'good'],
+  ]);
+  await assert.rejects(() => loader.load('bad\0name'), /NUL/);
+});
+
+test('Asynchronous image loading preserves Unicode aliases and stops on owner refusal', async () => {
+  const {ArtemisImageLoader} = await import('../dist/engines/artemis/image-loader.js');
+  const image = {width: 1, height: 1, pixels: new Uint8Array(4)},
+    opened = [];
+  const loader = new ArtemisImageLoader(
+    async (path) => {
+      opened.push(path);
+      return path === ':bg/雪.png' ? bytes('image') : null;
+    },
+    [{extensions: ['png'], decode: async () => image}],
+  );
+  assert.equal((await loader.load(':bg/雪')).path, ':bg/雪.png');
+  assert.deepEqual(opened, [':bg/雪', ':bg/雪.png']);
+  const refused = new ArtemisImageLoader(async () => {
+    throw new Error('unsupported root');
+  }, []);
+  await assert.rejects(() => refused.load('unknown'), /unsupported root/);
+});
+
+test('Revision-selected image pipeline decodes synthetic PNGs through suspended Lua work', async () => {
+  const {createArtemisImageLoader} = await import('../dist/engines/artemis/image-loader.js');
+  const {ARTEMIS_3179_EXECUTABLE_SHA256: sha} = await import('../dist/engines/artemis/revision.js');
+  const {png} = await import('./png-fixtures.mjs');
+  const encoded = png({width: 2, height: 1, raw: Buffer.from([0, 255, 0, 0, 0, 0, 255, 0, 128])});
+  const opened = [];
+  const loader = createArtemisImageLoader(sha, async (path) => {
+    opened.push(path);
+    await Promise.resolve();
+    return path === ':bg/synthetic.PNG' ? encoded : null;
+  });
+  assert.throws(
+    () => createArtemisImageLoader('0'.repeat(64), async () => null),
+    /Unsupported Artemis executable/,
+  );
+  let script, pending, loaded;
+  const source = bytes(
+    `[lua]function prepare(e) e:tag{'asset',file=':bg/synthetic'}; width=tonumber(e:var('width')) end[/lua][calllua function="prepare"][stop]`,
+  );
+  const lua = new ArtemisLua({
+    readFile: () => source,
+    fileExists: () => true,
+    now: () => 0,
+    variable: () => String(loaded?.image.width ?? 0),
+    suspendableTags: true,
+    tag: (tag) => script.executeTag(tag),
+    enqueueTag: () => {},
+  });
+  script = new ArtemisScript(lua, {
+    readFile: () => source,
+    dispatch: (tag) => {
+      if (tag.name === 'asset') {
+        pending = loader.load(tag.args.get('file')).then((result) => {
+          loaded = result;
+        });
+        return 'suspended';
+      }
+      if (tag.name === 'stop') return 'stopped';
+    },
+  });
+  try {
+    script.load('boot');
+    assert.equal(script.run(), 'waiting');
+    assert.equal(lua.vm.getGlobal('width'), null);
+    await pending;
+    assert.deepEqual(opened, [':bg/synthetic', ':bg/synthetic.png', ':bg/synthetic.PNG']);
+    assert.equal(loaded.image.width, 2);
+    assert.deepEqual([...loaded.image.pixels], [255, 0, 0, 0, 0, 255, 0, 128]);
+    script.resumeLua();
+    assert.equal(script.run(), 'stopped');
+    assert.equal(lua.vm.getGlobal('width'), 2);
+    const unsupported = createArtemisImageLoader(sha, async (path) =>
+      path === 'image.jpg' ? bytes('jpeg') : null,
+    );
+    await assert.rejects(() => unsupported.load('image'), /JPEG image decoder/);
+  } finally {
+    script.cancelLuaCalls();
+    lua.close();
+  }
+});
