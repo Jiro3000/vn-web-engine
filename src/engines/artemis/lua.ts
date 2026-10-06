@@ -243,9 +243,13 @@ export class ArtemisLuaCall {
 }
 
 export function artemisTagFilterResult(result: LuaValue | undefined): boolean {
-  if (typeof result !== 'number' || !Number.isFinite(result))
+  if (
+    typeof result !== 'number' ||
+    !Number.isFinite(result) ||
+    !Number.isSafeInteger(Math.trunc(result))
+  )
     throw new Error('Invalid Artemis tag filter result');
-  return Math.trunc(result) !== 0;
+  return (Math.trunc(result) | 0) !== 0;
 }
 
 /** CLua 0x1401304d0: name at [1], named strings and floorf numeric values. */

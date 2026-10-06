@@ -1457,6 +1457,13 @@ test('Suspended tag filters preserve original native arguments and first-result 
     assert.deepEqual(records, ['original', 'consumed']);
     lua.vm.execute(bytes(`engine:setEventFilter(function() return 2,function() end end)`));
     assert.equal(lua.filterEvent({kind: 'tag', name: 'event', args: new Map(), sourceLine: -1}), 2);
+    lua.vm.execute(
+      bytes(`engine:setTagFilter({event=function() return 4294967296,function() end end})`),
+    );
+    assert.equal(
+      lua.filterTag({kind: 'tag', name: 'event', args: new Map(), sourceLine: 0}),
+      false,
+    );
   } finally {
     script.cancelLuaCalls();
     lua.close();
