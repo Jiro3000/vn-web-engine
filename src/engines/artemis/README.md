@@ -220,3 +220,21 @@ one. Decoder null means native failure/fallback; host and unsupported-format err
 propagate. Corrupt PNGs are refused by the strict shared reader. Image loading is
 separate from cache eviction, layer geometry, property application and presentation.
 The pipeline is verified with synthetic PNGs through suspended Lua callbacks.
+
+`scene.ts` models the UTF-8 hierarchical child maps separately from image and
+rendering owners. Dots separate components, including empty components. Missing
+ancestors become empty groups; removing the last child keeps its parent group.
+Groups can carry an image payload and children. A node with a nonzero native type
+blocks child traversal. Mutations copy each affected current child map while
+retaining its previous structure; `commit()` recursively releases that structural
+version. Payload ownership, inner-actor versions and presentation timing remain
+separate work. Relevant native entries: `0x140185bf0`, `0x1400b3340`.
+
+Child order compares signed decimal keys numerically when both are numeric and
+otherwise compares UTF-8 bytes (`0x140185740`). Equivalent keys such as `2` and
+`02` preserve the first stored spelling. Native accepts a lone minus as numeric
+zero. Numeric overflow and numeric-looking nonnumeric components are refused:
+the latter can make the native comparator nontransitive, so a sorted-array model
+cannot reproduce their native tree behavior. This scene subset requires the
+exact executable hash. `entries()` exposes structural traversal for owners; it
+does not implement native selectors or layer-enumeration callbacks.
