@@ -1163,3 +1163,68 @@ test('Artemis layer modes refuse custom raster fixtures without their required m
     layers.close();
   }
 });
+
+test('Artemis color effects keep native flag spelling, hexadecimal prefixes and retained state', async () => {
+  const {createArtemisOrdinaryGpuRaster} = await import('../dist/engines/artemis/gpu-raster.js');
+  const {layers, graphics} = await rasterFixture(createArtemisOrdinaryGpuRaster(revision));
+  try {
+    await layers.dispatch(command('lyc', {id: '1', file: 'synthetic'}));
+    layers.commit();
+    const old = layers.scene.entry('1').value;
+    await layers.dispatch(
+      command('lyprop', {id: '1', negative: '00', grayscale: '', colormultiply: ' +0x4080c0tail'}),
+    );
+    assert.deepEqual(old.raster, {
+      layerMode: 'normal',
+      negative: false,
+      grayscale: false,
+      colorMultiply: 0xffffff,
+    });
+    assert.deepEqual(layers.scene.entry('1').value.raster, {
+      layerMode: 'normal',
+      negative: true,
+      grayscale: true,
+      colorMultiply: 0x4080c0,
+    });
+    assert.equal(graphics.drawCommitted(layers.scene).commands[0].fragment, undefined);
+    layers.commit();
+    const draw = graphics.drawCommitted(layers.scene).commands[0];
+    assert.deepEqual(
+      [...draw.vertices.slice(3, 6)],
+      [Math.fround(64 / 255), Math.fround(128 / 255), Math.fround(192 / 255)],
+    );
+    assert.ok(draw.fragment.indexOf('vec3(1.0)-s.rgb') < draw.fragment.indexOf('float gray'));
+    assert.ok(draw.fragment.indexOf('float gray') < draw.fragment.indexOf('s.rgb*=tint.rgb'));
+    await layers.dispatch(
+      command('lyprop', {id: '1', negative: '0', grayscale: '0', colormultiply: '100000000'}),
+    );
+    layers.commit();
+    assert.equal(layers.scene.entry('1').value.raster.colorMultiply, 0xffffffff);
+    await layers.dispatch(command('lyprop', {id: '1', colormultiply: '-1'}));
+    layers.commit();
+    assert.equal(layers.scene.entry('1').value.raster.colorMultiply, 0xffffffff);
+    await layers.dispatch(command('lyprop', {id: '1', colormultiply: 'ffffff'}));
+    layers.commit();
+    assert.equal(graphics.drawCommitted(layers.scene).commands[0].fragment, undefined);
+  } finally {
+    layers.close();
+  }
+});
+
+test('Artemis non-default image effects require an owner before changing geometry or wrapper state', async () => {
+  const {layers} = await rasterFixture();
+  try {
+    await layers.dispatch(command('lyc', {id: '1', file: 'synthetic'}));
+    layers.commit();
+    for (const properties of [{negative: '1'}, {grayscale: '1'}, {colormultiply: 'ff0000'}]) {
+      await assert.rejects(
+        layers.dispatch(command('lyprop', {id: '1', left: '2', alpha: '128', ...properties})),
+        /effects require/,
+      );
+      assert.equal(layers.scene.entry('1').value.display.properties.left, 0);
+      assert.equal(layers.scene.entry('1').value.wrapper.alpha, 1);
+    }
+  } finally {
+    layers.close();
+  }
+});

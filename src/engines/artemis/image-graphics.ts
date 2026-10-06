@@ -7,14 +7,18 @@ import type {ArtemisLoadedImage} from './image-loader.js';
 import type {ArtemisScene} from './scene.js';
 import {ArtemisDisplayObject, artemisDisplayPoint} from './display-object.js';
 import {artemisRevision} from './revision.js';
-import type {ArtemisRasterPolicy} from './gpu-raster.js';
+import {
+  artemisHasRasterEffects,
+  type ArtemisRasterPolicy,
+  type ArtemisRasterEffects,
+} from './gpu-raster.js';
 
 export interface ArtemisImageActor {
   readonly texture: number;
   readonly display: ArtemisDisplayObject;
   /** Outer wrapper metadata is shared by its retained/current inner actor copies. */
   readonly wrapper: {alpha: number};
-  readonly raster: {layerMode: ArtemisLayerMode};
+  readonly raster: {layerMode: ArtemisLayerMode} & ArtemisRasterEffects;
 }
 export type ArtemisLayerServices = Pick<
   ArtemisLayerHost<ArtemisImageActor>,
@@ -122,7 +126,7 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisImageActor>
       texture: texture.id,
       display,
       wrapper: {alpha: 1},
-      raster: {layerMode: 'normal'},
+      raster: {layerMode: 'normal', negative: false, grayscale: false, colorMultiply: 0xffffff},
     };
     this.wrappers.set(actor.wrapper, {references: 1, lease: resource.lease});
     this.actors.add(actor);
@@ -147,10 +151,36 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisImageActor>
     patch: ArtemisLayerPropertyPatch,
   ): void {
     this.check(actor);
+    if (
+      ![patch.negative, patch.grayscale].every(
+        (value) => value === undefined || typeof value === 'boolean',
+      )
+    )
+      throw new Error('Invalid Artemis image effect flag');
+    if (
+      patch.colormultiply !== undefined &&
+      (!Number.isInteger(patch.colormultiply) ||
+        patch.colormultiply < 0 ||
+        patch.colormultiply > 0xffffffff)
+    )
+      throw new Error('Invalid Artemis image color multiply');
+    if (
+      (patch.negative ||
+        patch.grayscale ||
+        (patch.colormultiply !== undefined && patch.colormultiply !== 0xffffff)) &&
+      !this.raster.effects
+    )
+      throw new Error('Artemis image effects require a raster policy owner');
     if (patch.layermode !== undefined && patch.layermode !== 'normal' && !this.raster.layerMode)
       throw new Error('Artemis layer mode requires a raster policy owner');
     actor.display.apply(patch);
     if (patch.layermode !== undefined) actor.raster.layerMode = patch.layermode;
+    // Raster state is immutable by contract to callers; only this owner updates it.
+    Object.assign(actor.raster, {
+      negative: patch.negative ?? actor.raster.negative,
+      grayscale: patch.grayscale ?? actor.raster.grayscale,
+      colorMultiply: patch.colormultiply ?? actor.raster.colorMultiply,
+    });
     if (patch.wrapperAlpha !== undefined) actor.wrapper.alpha = patch.wrapperAlpha;
   }
   releaseImageLayer(actor: ArtemisImageActor): void {
@@ -191,10 +221,21 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisImageActor>
       )
         continue;
       const matrix = actor.display.matrix(undefined, this.raster.trig);
-      const mode = this.raster.layerMode?.(actor.raster.layerMode);
+      const hasEffects = artemisHasRasterEffects(actor.raster);
+      if (hasEffects && !this.raster.effects)
+        throw new Error('Artemis image effects require a raster policy owner');
+      const mode = hasEffects
+        ? this.raster.effects!(actor.raster.layerMode, actor.raster)
+        : this.raster.layerMode?.(actor.raster.layerMode);
       const width = f(texture.image.width),
         height = f(texture.image.height);
       const vertices = new Float32Array(36);
+      const color = actor.raster.colorMultiply;
+      const tint = [
+        f(((color >>> 16) & 255) / 255),
+        f(((color >>> 8) & 255) / 255),
+        f((color & 255) / 255),
+      ];
       const corners: readonly (readonly [number, number])[] = [
         [0, 0],
         [width, 0],
@@ -205,7 +246,7 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisImageActor>
         const point = artemisDisplayPoint(matrix, x, y);
         const clipX = f(f(point[0] / f(f(this.target.width) * 0.5)) - 1);
         const clipY = f(1 - f(point[1] / f(f(this.target.height) * 0.5)));
-        vertices.set([clipX, clipY, 0, 1, 1, 1, p.alpha, f(x / width), f(y / height)], index * 9);
+        vertices.set([clipX, clipY, 0, ...tint, p.alpha, f(x / width), f(y / height)], index * 9);
       }
       commands.push({
         kind: 'triangles',

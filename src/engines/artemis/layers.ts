@@ -3,6 +3,7 @@ import type {ArtemisImageSource, ArtemisLoadedImage} from './image-loader.js';
 import {ArtemisScene} from './scene.js';
 import {artemisLayerProperties, type ArtemisLayerPropertyPatch} from './layer-properties.js';
 import {createSolidImage} from '../../graphics/solid-image.js';
+import {artemisHexUint32} from './numbers.js';
 
 function dimension(value: string): number {
   const token = /^[\t\n\v\f\r ]*([+-]?\d+)/.exec(value);
@@ -15,11 +16,7 @@ function solidImage(tag: AsbTag): ArtemisLoadedImage {
   const value = tag.args.get('color')!;
   const length = new TextEncoder().encode(value).length;
   const format = length === 6 || (length === 8 && /^0[xX]/.test(value)) ? 1 : 2;
-  const token = /^[\t\n\v\f\r ]*([+-]?)(?:0[xX])?([0-9a-fA-F]+)/.exec(value);
-  const digits = token?.[2]?.replace(/^0+/, '') ?? '';
-  const overflow = digits.length > 8;
-  const magnitude = overflow ? 0xffffffff : digits ? Number.parseInt(digits, 16) : 0;
-  const color = (overflow ? magnitude : token?.[1] === '-' ? -magnitude : magnitude) >>> 0;
+  const color = artemisHexUint32(value);
   const argb = format === 1 ? color | 0xff000000 : color;
   return {
     path: '',

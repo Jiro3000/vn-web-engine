@@ -1,3 +1,5 @@
+import {artemisHexUint32} from './numbers.js';
+
 export type ArtemisLayerMode = 'normal' | 'add' | 'screen' | 'multiply';
 export interface ArtemisLayerPropertyPatch {
   left?: number;
@@ -14,6 +16,9 @@ export interface ArtemisLayerPropertyPatch {
   reversey?: boolean;
   visible?: boolean;
   layermode?: ArtemisLayerMode;
+  negative?: boolean;
+  grayscale?: boolean;
+  colormultiply?: number;
 }
 const numeric = [
   'left',
@@ -25,8 +30,8 @@ const numeric = [
   'yscale',
   'rotate',
 ] as const;
-const flags = ['reversex', 'reversey', 'visible'] as const;
-const supported = new Set<string>(['id', 'layermode', ...numeric, ...flags]);
+const flags = ['reversex', 'reversey', 'visible', 'negative', 'grayscale'] as const;
+const supported = new Set<string>(['id', 'layermode', 'colormultiply', ...numeric, ...flags]);
 
 /** Decimal finite subset of native atof; preserve prefix parsing and float32 rounding. */
 function decimal(value: string): number {
@@ -64,5 +69,6 @@ export function artemisLayerProperties(
   if (mode === 'normal' || mode === 'add' || mode === 'screen' || mode === 'multiply')
     patch.layermode = mode;
   // Native 115650 leaves the prior mode unchanged for any other spelling.
+  if (args.has('colormultiply')) patch.colormultiply = artemisHexUint32(args.get('colormultiply')!);
   return patch;
 }

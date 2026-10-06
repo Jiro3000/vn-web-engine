@@ -381,8 +381,20 @@ Multiply's shader 48 interpolates foreground RGB toward white as effective alpha
 decreases, outputs alpha 1 and blends zero / source-color. Their distinct alpha
 outputs are preserved, including transparent texels in multiply. The browser
 fixture checks actual framebuffer RGBA for all four ordinary modes. Captured-back
-shader variants, color-key mode and effects such as negative/grayscale remain
-unsupported.
+shader variants and color-key mode remain unsupported.
+
+`negative`, `grayscale` and `colormultiply` belong to the same copied inner actor.
+Native setters `0x1400a46d0`, `0x1400a46f0` and `0x1400a4710` invalidate its
+shader state. The 24 recovered foreground shaders (indices 0–7, 24–31 and 48–55)
+apply negative, then grayscale, then RGB multiplication, before the mode's
+alpha expression. Grayscale uses weights 0.298912, 0.586611 and 0.114478.
+Color bytes are divided by 255 as float32; the high byte does not affect RGB.
+Boolean properties preserve the native exact `"0"` comparison, and hexadecimal
+colors preserve Windows uint32 prefix parsing and overflow saturation.
+Custom raster policies require an effects owner before any non-default effect
+is applied. The synthetic browser fixture checks framebuffer pixels for all
+32 combinations of four modes and three effect flags; these checks do not
+establish native GPU rounding equivalence.
 
 `surface-cache.ts` supplies the ordinary native surface-manager loan policy
 (`0x140011a90`, `0x140012200`, `0x1400116b0`). Requested UTF-8 names are exact cache

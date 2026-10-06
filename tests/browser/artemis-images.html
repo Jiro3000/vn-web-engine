@@ -307,6 +307,56 @@
       );
       nativeModePixels[mode] = [...modePixels];
     }
+    let nativeEffectsCases = 0;
+    for (const mode of ['normal', 'add', 'screen', 'multiply'])
+      for (let bits = 0; bits < 8; bits++) {
+        await layers.dispatch(
+          command('lyprop', {
+            id: '1',
+            layermode: mode,
+            negative: bits & 4 ? '1' : '0',
+            grayscale: bits & 2 ? '1' : '0',
+            colormultiply: bits & 1 ? 'ff4080c0' : 'ffffff',
+          }),
+        );
+        stage.dispatch(command('flip'));
+        nativeGraphics.drawCommitted(layers.scene);
+        const actual = new Uint8Array(16);
+        context.readPixels(0, 1, 4, 1, context.RGBA, context.UNSIGNED_BYTE, actual);
+        const expectedEffects = [];
+        for (const green of [0, 0.25, 0.75, 1]) {
+          let rgb = [1 - green, green, 0];
+          const alpha = (green * 128) / 255;
+          if (bits & 4) rgb = rgb.map((value) => 1 - value);
+          if (bits & 2) {
+            const gray = rgb[0] * 0.298912 + rgb[1] * 0.586611 + rgb[2] * 0.114478;
+            rgb = [gray, gray, gray];
+          }
+          if (bits & 1) rgb = rgb.map((value, i) => (value * [64, 128, 192][i]) / 255);
+          let out;
+          const back = [64 / 255, 0, 0],
+            backAlpha = 16 / 255;
+          if (mode === 'normal')
+            out = [
+              ...rgb.map((value, i) => value * alpha + back[i] * (1 - alpha)),
+              alpha * alpha + backAlpha,
+            ];
+          if (mode === 'add')
+            out = [...rgb.map((value, i) => value * alpha + back[i]), alpha * alpha + backAlpha];
+          if (mode === 'screen')
+            out = [...rgb.map((value, i) => value * alpha * (1 - back[i]) + back[i]), backAlpha];
+          if (mode === 'multiply')
+            out = [...rgb.map((value, i) => (value + (1 - value) * (1 - alpha)) * back[i]), 1];
+          expectedEffects.push(
+            ...out.map((value) => Math.round(Math.max(0, Math.min(1, value)) * 255)),
+          );
+        }
+        assert(
+          actual.every((value, i) => Math.abs(value - expectedEffects[i]) <= 1),
+          `native effects ${mode}/${bits} mismatch: ${actual}, expected: ${expectedEffects}`,
+        );
+        nativeEffectsCases++;
+      }
     const nativeEmpty = new Uint8Array(4);
     await layers.dispatch(command('lydel', {id: '10'}));
     await layers.dispatch(command('lydel', {id: '1'}));
@@ -333,6 +383,7 @@
       nativeLinearAlphaFramebuffer: [...nativeFramebuffer],
       nativeTransparentClear: true,
       nativeModePixels,
+      nativeEffectsCases,
       serviceEffects: effects,
       drawOrderPixel,
     };
