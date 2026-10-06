@@ -42,7 +42,7 @@ try {
       prepared.set(path, bytes);
     }
   const readFile = (path) => {
-    path = path.replaceAll('\\', '/');
+    path = installation.files.resolvePath(path);
     if (prepared.has(path)) return prepared.get(path);
     if (installation.paths.has(path))
       throw new Error(`Resource is not prepared for synchronous Lua: ${path}`);
@@ -73,6 +73,7 @@ try {
   const variables = new ArtemisVariables({
     stageSize: () => ({width, height}),
     windowDisplay: () => ({width, height, fullscreen: false}),
+    applicationArguments: {readApplicationArguments: () => new Map()},
   });
   const executablePaths = [...installation.paths].filter(
     (path) => /\.exe$/i.test(path) && !path.includes('/'),
@@ -159,7 +160,11 @@ try {
       includes.push(path);
       return readFile(path);
     },
-    fileExists: (path) => installation.paths.has(path.replaceAll('\\', '/')),
+    fileExists: (path) => installation.paths.has(installation.files.resolvePath(path)),
+    setMagicPath: (name, root) => {
+      installation.files.setMagicPath(name, root);
+      modeEffects.push({magicPath: {name, root}});
+    },
     now: () => probeTick, // Deterministic probe clock, not a production game clock.
     tag: (tag) => script.executeTag(tag),
     enqueueTag: (tag) => script.enqueue(tag),

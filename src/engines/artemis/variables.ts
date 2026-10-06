@@ -1,3 +1,4 @@
+import type {ApplicationArgumentsHost} from '../../platform/application-arguments.js';
 import type {WindowDisplayGeometry} from '../../platform/window-display.js';
 import type {AsbTag} from '../../formats/artemis/asb.js';
 
@@ -12,6 +13,7 @@ export interface ArtemisVariableHost {
   /** Logical stage dimensions; supplied by the configuration/rendering owner. */
   stageSize(): {width: number; height: number};
   windowDisplay?(): WindowDisplayGeometry;
+  applicationArguments?: ApplicationArgumentsHost;
 }
 
 /** Literal byte-string variables with current-local/global lookup; expressions require a separate evaluator. */
@@ -79,7 +81,12 @@ export class ArtemisVariables {
     // The native handler gives data precedence over system queries.
     if (p.has('data')) this.write(name, p.get('data')!, local);
     else if (p.get('system') === 'delete') this.delete(name, local);
-    else if (p.get('system') === 'os') this.write(name, 'windows', local);
+    else if (p.get('system') === 'get_exe_parameter') {
+      if (!this.host?.applicationArguments)
+        throw new Error('Artemis application argument provider is not configured');
+      for (const [key, value] of this.host.applicationArguments.readApplicationArguments())
+        this.write(`${name}.${key}`, value, local);
+    } else if (p.get('system') === 'os') this.write(name, 'windows', local);
     else if (p.get('system') === 'fullscreen') {
       if (!this.host?.windowDisplay)
         throw new Error('Artemis window display provider is not configured');

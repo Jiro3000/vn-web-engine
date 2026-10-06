@@ -13,8 +13,7 @@ reads and Web Crypto SHA-1. Payloads are lazy and XOR starts at the entry-relati
 position. `files.ts` mounts the base PFS and existing `.000` through `.999` packs
 in ascending order, including after gaps. Later archives replace earlier entries;
 a loose file, including an empty file, wins. Names preserve case and Unicode and
-normalize slash spelling only. The host supplies filesystem case rules. Magic
-paths, extra pack lists, embedded packs and other revisions are unsupported.
+normalize slash spelling only. The host supplies filesystem case rules. Extra pack lists, embedded packs and other revisions are unsupported.
 Relevant native entries: `0x14017fb10`, `0x14017e8d0`.
 
 ASB v0 carries tag arguments, source-line numbers and labels indexing the tag
@@ -117,3 +116,30 @@ by this gate. No JSON replacement for native save formats is provided.
 Probe `--advance-waits` advances its simulated clock beyond each timed deadline,
 up to 100 waits. It is separate from actual user input and production scheduling.
 The probe uses a windowed shared geometry fixture for fullscreen queries.
+
+## Virtual paths and application arguments
+
+`ArtemisFiles.setMagicPath(name, root)` stores one installation-relative alias;
+empty root removes it. `resolvePath` substitutes `:name` once, appending the
+literal suffix at its slash/backslash delimiter before loose/PFS lookup. Updates
+retain overlay keys, case, Unicode and empty loose-file precedence. Native CLua
+receives a tuple with numeric keys 1 and 2, copying only string values.
+
+The native unknown/empty-alias branch reports success without opening a file.
+This stateless ByteSource interface explicitly refuses that branch rather than
+inventing a source or retaining a stale handle. Absolute/traversal roots and
+nested alias roots are also outside its supported installation-relative subset.
+Known aliases with a trailing directory separator are not file sources.
+
+`get_exe_parameter` obtains the owner's already-parsed `ApplicationArguments`
+map and writes dotted `name.key` variables into the selected local/global scope.
+It preserves old keys absent from a later map, matching the native handler.
+The shared application argument interface does not inspect the harness process
+command line. The probe supplies an explicit empty application argument fixture.
+
+Recording flags and right-click configuration are kept in the mode owner:
+`alreadyread` treats a missing mode as enabled, while `writebacklog` disables on
+missing mode. Exact string `0` disables; `00` remains enabled. `rclick` preserves
+its script filename when omitted and replaces it even with an explicit empty value.
+These command flags do not implement history collection, backlog rendering or
+right-click dispatch by themselves.

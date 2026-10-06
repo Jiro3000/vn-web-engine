@@ -14,9 +14,10 @@ function segments(path: string): string[] {
   return parts;
 }
 
-/** Loose-first resolution and numeric PFS overlays; magic paths/additional packs are not implemented. */
+/** Loose-first resolution, numeric overlays and installation-relative native magic paths. */
 export class ArtemisFiles {
   readonly archives: {readonly name: string; readonly archive: PfsArchive}[] = [];
+  private readonly magicPaths = new Map<string, string>();
   private readonly entries = new Map<string, {archive: PfsArchive; entry: PfsEntry}>();
   private constructor(private readonly lookup: ArtemisFileLookup) {}
 
@@ -38,7 +39,36 @@ export class ArtemisFiles {
     return files;
   }
 
+  /** CLua 0x14012fa10: update one alias; an empty root deletes it. */
+  setMagicPath(name: string, root: string): void {
+    if (name.includes('\0') || root.includes('\0'))
+      throw new Error('Unsupported Artemis magic path NUL');
+    if (!root) {
+      this.magicPaths.delete(name);
+      return;
+    }
+    segments(root);
+    this.magicPaths.set(name, pfsPathKey(root));
+  }
+  /** CArtemisPackFile 0x1401193d0 applies a single literal substitution before base lookup. */
+  resolvePath(path: string): string {
+    if (path.startsWith(':')) {
+      const delimiter = path.slice(1).search(/[\\/]/);
+      const end = delimiter < 0 ? path.length : delimiter + 1;
+      const name = path.slice(1, end);
+      const root = this.magicPaths.get(name);
+      // Native reports success without opening for unknown/empty aliases. This
+      // stateless ByteSource interface cannot represent a stale/unopened native handle.
+      if (!name || root === undefined) throw new Error(`Unsupported Artemis magic path ${path}`);
+      path = root + path.slice(end);
+    }
+    path = pfsPathKey(path);
+    segments(path.endsWith('/') ? path.slice(0, -1) : path);
+    return path;
+  }
   async open(path: string): Promise<ByteSource | null> {
+    path = this.resolvePath(path);
+    if (path.endsWith('/')) return null;
     const loose = await this.lookup(segments(path));
     if (loose !== undefined) return loose;
     const found = this.entries.get(pfsPathKey(path));

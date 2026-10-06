@@ -16,6 +16,7 @@ export interface ArtemisLuaHost {
   tag(tag: AsbTag): void;
   enqueueTag(tag: AsbTag): void;
   variable(name: string): string | Uint8Array;
+  setMagicPath?(name: string, root: string): void;
 }
 
 /** Rev.3179 CLua's confirmed byte-string and tag bridge. Unbound methods fail. */
@@ -47,6 +48,20 @@ export class ArtemisLua {
       this.filter = next;
       return [];
     });
+    if (host.setMagicPath)
+      this.vm.bind('setMagicPath', (args) => {
+        const table = args[0];
+        if (!(table instanceof Map)) throw new Error('Expected Artemis magic path tuple');
+        let name = '',
+          root = '';
+        for (const [key, value] of table) {
+          if (typeof key !== 'number' || !(value instanceof Uint8Array)) continue;
+          if (Math.trunc(key) === 1) name = luaText(value);
+          if (Math.trunc(key) === 2) root = luaText(value);
+        }
+        host.setMagicPath!(name, root);
+        return [];
+      });
     this.vm.bind('now', () => [Math.trunc(host.now()) & 0x7fffffff]);
     this.vm.bind('file', (args) => [host.readFile(luaText(args[0]))]);
     this.vm.bind('isFileExists', (args) => [host.fileExists(luaText(args[0]))]);

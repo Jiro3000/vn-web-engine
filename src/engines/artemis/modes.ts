@@ -11,6 +11,11 @@ export interface ArtemisModeEffects {
 
 /** Rev.3179 mode command state. Rendering/input effects remain supplied platform services. */
 export class ArtemisModes {
+  /** Undefined until configured; full history collection/serialization is a separate owner. */
+  alreadyReadEnabled: boolean | undefined;
+  writeBacklog: boolean | undefined;
+  rightClickAllowed: boolean | undefined;
+  rightClickScript: string | undefined;
   skipAllowed = true;
   skipUnread = false;
   commandSkip = false;
@@ -46,6 +51,16 @@ export class ArtemisModes {
   dispatch(tag: AsbTag): boolean {
     const p = tag.args;
     switch (tag.name) {
+      case 'alreadyread':
+        this.alreadyReadEnabled = p.get('mode') !== '0';
+        return true;
+      case 'writebacklog':
+        this.writeBacklog = p.has('mode') && p.get('mode') !== '0';
+        return true;
+      case 'rclick':
+        this.rightClickAllowed = p.get('allow') !== '0';
+        if (p.has('file')) this.rightClickScript = p.get('file')!;
+        return true;
       case 'skip':
         if (p.get('allow') === '0') {
           this.setCommandSkip(false);

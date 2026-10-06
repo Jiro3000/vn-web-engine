@@ -793,3 +793,96 @@ test('Fullscreen variable queries read the shared window geometry owner on every
   assert.equal(luaText(variables.read('mode')), '1');
   assert.throws(() => new ArtemisVariables().dispatch(tag), /display provider/);
 });
+
+test('Lua magic-path tuples update the host in native numeric-key iteration order', () => {
+  const calls = [];
+  const lua = new ArtemisLua({
+    readFile: () => null,
+    fileExists: () => false,
+    now: () => 0,
+    tag: () => {},
+    enqueueTag: () => {},
+    variable: () => '',
+    setMagicPath: (name, root) => calls.push([name, root]),
+  });
+  try {
+    lua.vm.execute(
+      bytes(
+        `engine:setMagicPath{'ui','system/雪'}; engine:setMagicPath{'ui',''}; engine:setMagicPath{ignored='value'}`,
+      ),
+    );
+    assert.deepEqual(calls, [
+      ['ui', 'system/雪'],
+      ['ui', ''],
+      ['', ''],
+    ]);
+    assert.throws(() => lua.vm.execute(bytes(`engine:setMagicPath('bad')`)), /tuple/);
+  } finally {
+    lua.close();
+  }
+});
+
+test('Application argument query copies native dotted keys into the selected scope without clearing old entries', async () => {
+  const {ArtemisVariables} = await import('../dist/engines/artemis/variables.js');
+  let argumentsMap = new Map([
+    ['recovery', 'save'],
+    ['日本語', '雪'],
+  ]);
+  const variables = new ArtemisVariables({
+    stageSize: () => ({width: 800, height: 600}),
+    applicationArguments: {readApplicationArguments: () => argumentsMap},
+  });
+  const tag = {
+    kind: 'tag',
+    name: 'var',
+    sourceLine: -1,
+    args: new Map([
+      ['name', 'params'],
+      ['system', 'get_exe_parameter'],
+      ['writelocal', '1'],
+    ]),
+  };
+  variables.write('params.recovery', 'global');
+  variables.pushLocal();
+  variables.dispatch(tag);
+  assert.equal(luaText(variables.read('params.recovery')), 'save');
+  assert.equal(luaText(variables.read('params.日本語')), '雪');
+  argumentsMap = new Map();
+  variables.dispatch(tag);
+  assert.equal(luaText(variables.read('params.recovery')), 'save');
+  variables.popLocal();
+  assert.equal(luaText(variables.read('params.recovery')), 'global');
+  assert.throws(() => new ArtemisVariables().dispatch(tag), /argument provider/);
+});
+
+test('Recording/right-click controls preserve native missing-option and retained-script rules', async () => {
+  const {ArtemisModes} = await import('../dist/engines/artemis/modes.js');
+  const modes = new ArtemisModes({
+    writeStatus: () => {},
+    commandSkipChanged: () => {},
+    controlSkipChanged: () => {},
+    automodeChanged: () => {},
+    releaseScheduler: () => {},
+  });
+  const tag = (name, args = {}) => ({
+    kind: 'tag',
+    name,
+    sourceLine: -1,
+    args: new Map(Object.entries(args)),
+  });
+  modes.dispatch(tag('alreadyread'));
+  assert.equal(modes.alreadyReadEnabled, true);
+  modes.dispatch(tag('writebacklog'));
+  assert.equal(modes.writeBacklog, false);
+  modes.dispatch(tag('alreadyread', {mode: '0'}));
+  assert.equal(modes.alreadyReadEnabled, false);
+  modes.dispatch(tag('writebacklog', {mode: '00'}));
+  assert.equal(modes.writeBacklog, true);
+  modes.dispatch(tag('rclick', {file: 'menu.iet', allow: '0'}));
+  assert.equal(modes.rightClickAllowed, false);
+  modes.dispatch(tag('rclick'));
+  assert.equal(modes.rightClickAllowed, true);
+  assert.equal(modes.rightClickScript, 'menu.iet');
+  modes.dispatch(tag('rclick', {file: ''}));
+  assert.equal(modes.rightClickScript, '');
+});

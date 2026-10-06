@@ -1,5 +1,5 @@
 /** Read-only installation helper shared by nonvisual Artemis tools. */
-import {readdir} from 'node:fs/promises';
+import {readdir, stat} from 'node:fs/promises';
 import {resolve} from 'node:path';
 import {openSource} from './file-source.mjs';
 import {ArtemisFiles} from '../dist/engines/artemis/files.js';
@@ -17,7 +17,9 @@ export async function openArtemisInstallation(directory) {
     const path = parts.join('/');
     if (sources.has(path)) return sources.get(path);
     try {
-      const source = await openSource(resolve(root, ...parts));
+      const target = resolve(root, ...parts);
+      if (!(await stat(target)).isFile()) return undefined;
+      const source = await openSource(target);
       sources.set(path, source);
       return source;
     } catch (error) {

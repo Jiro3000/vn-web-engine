@@ -158,3 +158,30 @@ test('ASB refuses malformed records/strings and trailing bytes instead of return
   badString[badString.length - 1] = 1;
   assert.throws(() => parseAsb(badString), /terminator/);
 });
+
+test('Magic paths substitute one native alias and preserve overlay/empty loose precedence', async () => {
+  const archive = pfs([
+    ['system/auth.lua', Buffer.from('archive')],
+    ['script/雪.ast', Buffer.from('base')],
+  ]);
+  const overlay = pfs([['script/雪.ast', Buffer.from('overlay')]]);
+  const sources = new Map([
+    ['game.pfs', memory(archive)],
+    ['game.pfs.012', memory(overlay)],
+    ['system/auth.lua', memory(new Uint8Array())],
+  ]);
+  const files = await ArtemisFiles.mount('game.pfs', (parts) => sources.get(parts.join('/')));
+  files.setMagicPath('sys', 'system');
+  assert.equal((await files.read(':sys/auth.lua')).length, 0);
+  files.setMagicPath('脚本', 'script');
+  assert.equal(Buffer.from(await files.read(':脚本\\雪.ast')).toString(), 'overlay');
+  assert.equal(files.resolvePath(':sys'), 'system');
+  assert.equal(await files.open(':sys/'), null);
+  assert.throws(() => files.resolvePath(':SYS/auth.lua'), /Unsupported Artemis magic/);
+  files.setMagicPath('sys', 'script');
+  assert.equal(Buffer.from(await files.read(':sys/雪.ast')).toString(), 'overlay');
+  files.setMagicPath('sys', '');
+  assert.throws(() => files.resolvePath(':sys/a'), /Unsupported Artemis magic/);
+  assert.throws(() => files.setMagicPath('x', '../outside'), /Unsupported/);
+  assert.throws(() => files.setMagicPath('x', ':脚本'), /Unsupported/);
+});
