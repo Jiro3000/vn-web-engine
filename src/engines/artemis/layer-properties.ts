@@ -1,3 +1,4 @@
+export type ArtemisLayerMode = 'normal' | 'add' | 'screen' | 'multiply';
 export interface ArtemisLayerPropertyPatch {
   left?: number;
   top?: number;
@@ -12,6 +13,7 @@ export interface ArtemisLayerPropertyPatch {
   reversex?: boolean;
   reversey?: boolean;
   visible?: boolean;
+  layermode?: ArtemisLayerMode;
 }
 const numeric = [
   'left',
@@ -24,7 +26,7 @@ const numeric = [
   'rotate',
 ] as const;
 const flags = ['reversex', 'reversey', 'visible'] as const;
-const supported = new Set<string>(['id', ...numeric, ...flags]);
+const supported = new Set<string>(['id', 'layermode', ...numeric, ...flags]);
 
 /** Decimal finite subset of native atof; preserve prefix parsing and float32 rounding. */
 function decimal(value: string): number {
@@ -58,5 +60,9 @@ export function artemisLayerProperties(
     if (key === 'alpha') patch.wrapperAlpha = Math.fround(double / 255);
   }
   for (const key of flags) if (args.has(key)) patch[key] = args.get(key) !== '0';
+  const mode = args.get('layermode');
+  if (mode === 'normal' || mode === 'add' || mode === 'screen' || mode === 'multiply')
+    patch.layermode = mode;
+  // Native 115650 leaves the prior mode unchanged for any other spelling.
   return patch;
 }

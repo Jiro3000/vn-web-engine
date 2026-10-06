@@ -1123,3 +1123,43 @@ test('Artemis ordinary GPU policy preserves native alpha writes, transparent fra
     layers.close();
   }
 });
+
+test('Artemis layer mode updates preserve the retained raster state and ignore unknown native spellings', async () => {
+  const {createArtemisOrdinaryGpuRaster} = await import('../dist/engines/artemis/gpu-raster.js');
+  const {layers, graphics} = await rasterFixture(createArtemisOrdinaryGpuRaster(revision));
+  try {
+    await layers.dispatch(command('lyc', {id: '1', file: 'synthetic'}));
+    layers.commit();
+    const old = layers.scene.entry('1').value;
+    await layers.dispatch(command('lyprop', {id: '1', layermode: 'multiply'}));
+    assert.equal(old.raster.layerMode, 'normal');
+    assert.equal(layers.scene.entry('1').value.raster.layerMode, 'multiply');
+    assert.equal(graphics.drawCommitted(layers.scene).commands[0].fragment, undefined);
+    layers.commit();
+    assert.match(graphics.drawCommitted(layers.scene).commands[0].fragment, /1\.0-s\.a/);
+    await layers.dispatch(command('lyprop', {id: '1', layermode: 'MULTIPLY'}));
+    layers.commit();
+    assert.equal(layers.scene.entry('1').value.raster.layerMode, 'multiply');
+    await layers.dispatch(command('lyprop', {id: '1', layermode: 'normal'}));
+    layers.commit();
+    assert.equal(graphics.drawCommitted(layers.scene).commands[0].fragment, undefined);
+  } finally {
+    layers.close();
+  }
+});
+
+test('Artemis layer modes refuse custom raster fixtures without their required mode owner', async () => {
+  const {layers} = await rasterFixture();
+  try {
+    await layers.dispatch(command('lyc', {id: '1', file: 'synthetic'}));
+    layers.commit();
+    await assert.rejects(
+      layers.dispatch(command('lyprop', {id: '1', left: '10', layermode: 'add'})),
+      /raster policy owner/,
+    );
+    assert.equal(layers.scene.entry('1').value.display.properties.left, 0);
+    assert.equal(layers.scene.entry('1').value.raster.layerMode, 'normal');
+  } finally {
+    layers.close();
+  }
+});

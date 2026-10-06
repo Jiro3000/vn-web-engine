@@ -290,6 +290,23 @@
       nativeFramebuffer.every((value, i) => Math.abs(value - expected[i]) <= 1),
       `native linear/blend/transparent write mismatch: ${nativeFramebuffer}`,
     );
+    const nativeModePixels = {};
+    for (const [mode, expectedMode] of Object.entries({
+      add: [64, 0, 0, 16, 88, 8, 0, 20, 88, 72, 0, 52, 64, 128, 0, 80],
+      screen: [64, 0, 0, 16, 82, 8, 0, 16, 82, 72, 0, 16, 64, 128, 0, 16],
+      multiply: [64, 0, 0, 255, 62, 0, 0, 255, 46, 0, 0, 255, 32, 0, 0, 255],
+    })) {
+      await layers.dispatch(command('lyprop', {id: '1', layermode: mode}));
+      stage.dispatch(command('flip'));
+      nativeGraphics.drawCommitted(layers.scene);
+      const modePixels = new Uint8Array(16);
+      context.readPixels(0, 1, 4, 1, context.RGBA, context.UNSIGNED_BYTE, modePixels);
+      assert(
+        modePixels.every((value, i) => Math.abs(value - expectedMode[i]) <= 1),
+        `native ${mode} shader/blend mismatch: ${modePixels}`,
+      );
+      nativeModePixels[mode] = [...modePixels];
+    }
     const nativeEmpty = new Uint8Array(4);
     await layers.dispatch(command('lydel', {id: '10'}));
     await layers.dispatch(command('lydel', {id: '1'}));
@@ -315,6 +332,7 @@
       surfaceCacheActiveCloseDeferred: true,
       nativeLinearAlphaFramebuffer: [...nativeFramebuffer],
       nativeTransparentClear: true,
+      nativeModePixels,
       serviceEffects: effects,
       drawOrderPixel,
     };

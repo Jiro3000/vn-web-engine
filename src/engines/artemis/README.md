@@ -297,7 +297,7 @@ JS Math trigonometry is not silently substituted.
 `image-graphics.ts` implements ordinary unclipped straight-RGBA image actors
 through shared `DrawListTarget`. Native command/error services, sampler and blend
 selection remain explicit providers. `createArtemisOrdinaryGpuRaster()` supplies
-the confirmed mode-0 D3D11 policy for this exact revision's single-level image
+the confirmed ordinary D3D11 policy for this exact revision's single-level image
 subset. Actors prepare their images before scene
 insertion; copies share texture ownership and outer-wrapper metadata while copying
 inner display state. The last actor releases its image binding. Nonzero rotation,
@@ -364,8 +364,25 @@ The synthetic browser test reads actual framebuffer RGBA while scaling a
 transparent-red/half-alpha-green PNG over quarter-alpha red. It checks linear interpolation,
 independent alpha writes, transparent-fragment writes and transparent clear.
 This establishes the implemented WebGL behavior against the recovered equations;
-it is not a native GPU differential test. Other mode values, texture mip chains,
+it is not a native GPU differential test. Texture mip chains,
 custom shaders and alternate rendering backends remain outside this policy.
+
+`lyprop layermode` preserves the native exact spellings `normal`, `add`, `screen`
+and `multiply`; any other value leaves the old mode intact (`0x140115650`). Mode
+state belongs to the inner image actor and is copied independently of its shared
+outer-wrapper alpha. Retained rendering keeps the earlier mode until commit.
+Custom raster policies must supply their mode owner before non-normal modes can
+be applied. Native setter `0x1400a4680` changes field +0x100 and invalidates the
+blend state; the shared renderer selects each draw's blend explicitly.
+
+Add uses source-alpha / one for RGB. Screen's shader 24 premultiplies RGB by its
+effective alpha, outputs alpha 0 and blends inverse-destination-color / one.
+Multiply's shader 48 interpolates foreground RGB toward white as effective alpha
+decreases, outputs alpha 1 and blends zero / source-color. Their distinct alpha
+outputs are preserved, including transparent texels in multiply. The browser
+fixture checks actual framebuffer RGBA for all four ordinary modes. Captured-back
+shader variants, color-key mode and effects such as negative/grayscale remain
+unsupported.
 
 `surface-cache.ts` supplies the ordinary native surface-manager loan policy
 (`0x140011a90`, `0x140012200`, `0x1400116b0`). Requested UTF-8 names are exact cache

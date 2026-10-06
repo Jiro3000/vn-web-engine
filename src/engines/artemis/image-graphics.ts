@@ -2,7 +2,7 @@ import type {DrawList, DrawListTarget} from '../../graphics/draw-list.js';
 import type {TriangleDraw, TriangleImage} from '../../graphics/triangle-draw.js';
 import type {AsbTag} from '../../formats/artemis/asb.js';
 import type {ArtemisLayerHost} from './layers.js';
-import type {ArtemisLayerPropertyPatch} from './layer-properties.js';
+import type {ArtemisLayerPropertyPatch, ArtemisLayerMode} from './layer-properties.js';
 import type {ArtemisLoadedImage} from './image-loader.js';
 import type {ArtemisScene} from './scene.js';
 import {ArtemisDisplayObject, artemisDisplayPoint} from './display-object.js';
@@ -14,6 +14,7 @@ export interface ArtemisImageActor {
   readonly display: ArtemisDisplayObject;
   /** Outer wrapper metadata is shared by its retained/current inner actor copies. */
   readonly wrapper: {alpha: number};
+  readonly raster: {layerMode: ArtemisLayerMode};
 }
 export type ArtemisLayerServices = Pick<
   ArtemisLayerHost<ArtemisImageActor>,
@@ -117,7 +118,12 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisImageActor>
       this.textures.set(texture.id, texture);
     }
     texture.references++;
-    const actor = {texture: texture.id, display, wrapper: {alpha: 1}};
+    const actor: ArtemisImageActor = {
+      texture: texture.id,
+      display,
+      wrapper: {alpha: 1},
+      raster: {layerMode: 'normal'},
+    };
     this.wrappers.set(actor.wrapper, {references: 1, lease: resource.lease});
     this.actors.add(actor);
     return actor;
@@ -129,7 +135,7 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisImageActor>
   }
   copyImageLayer(old: ArtemisImageActor): ArtemisImageActor {
     const texture = this.check(old);
-    const actor = {...old, display: old.display.copy()};
+    const actor = {...old, display: old.display.copy(), raster: {...old.raster}};
     texture.references++;
     this.wrappers.get(actor.wrapper)!.references++;
     this.actors.add(actor);
@@ -141,7 +147,10 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisImageActor>
     patch: ArtemisLayerPropertyPatch,
   ): void {
     this.check(actor);
+    if (patch.layermode !== undefined && patch.layermode !== 'normal' && !this.raster.layerMode)
+      throw new Error('Artemis layer mode requires a raster policy owner');
     actor.display.apply(patch);
+    if (patch.layermode !== undefined) actor.raster.layerMode = patch.layermode;
     if (patch.wrapperAlpha !== undefined) actor.wrapper.alpha = patch.wrapperAlpha;
   }
   releaseImageLayer(actor: ArtemisImageActor): void {
@@ -182,6 +191,7 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisImageActor>
       )
         continue;
       const matrix = actor.display.matrix(undefined, this.raster.trig);
+      const mode = this.raster.layerMode?.(actor.raster.layerMode);
       const width = f(texture.image.width),
         height = f(texture.image.height);
       const vertices = new Float32Array(36);
@@ -206,7 +216,8 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisImageActor>
         transform: identity.slice(),
         depthClip: false,
         filter: this.raster.filter,
-        blendState: this.raster.blend,
+        blendState: mode?.blend ?? this.raster.blend,
+        fragment: mode?.fragment,
         discardTransparent: this.raster.discardTransparent,
       });
     }
