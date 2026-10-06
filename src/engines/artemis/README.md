@@ -174,3 +174,13 @@ registrations capture the current script filename; explicit empty filenames are
 preserved. `setonpush` replaces one of two per-key slots: missing/exact-zero
 keyrepeat chooses slot 0, other strings choose slot 1. Registering one slot keeps
 the other. These stores require mode/input owners to emit and dispatch events.
+
+`native-library.ts` implements the synchronous native string-call ABI through the
+shared `WindowsDynamicLibraryHost`. Modules are cached per owner after a successful
+load; failed loads are retried. Each export receives a NUL-terminated string and
+returns a native pointer. The owner copies the result before querying/calling
+`Delete`; absent module/export, null result and absent `Delete` produce an empty
+result, matching the native implementation. Browser DLL loading returns failure.
+Successful native hosts must supply `readCString`. The current tag adapter supports
+ASCII arguments only; legacy ANSI encoding and registry teardown remain unsupported.
+Returned bytes are published through the variable owner without UTF-8 conversion.

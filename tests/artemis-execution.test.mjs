@@ -1070,3 +1070,77 @@ test('Command event registrations capture label-only filenames and keep both pus
   assert.equal(keys.pushHandler(13, 0), undefined);
   assert.equal(keys.pushHandler(13, 1), undefined);
 });
+
+test('Native DLL strings are copied before Delete; missing modules, methods and Delete return empty', async () => {
+  const {ArtemisNativeLibrary} = await import('../dist/engines/artemis/native-library.js');
+  const {BrowserWindowsDynamicLibraryHost} =
+    await import('../dist/platform/windows-dynamic-library.js');
+  const output = [];
+  const browser = new ArtemisNativeLibrary(new BrowserWindowsDynamicLibraryHost(), (name, bytes) =>
+    output.push([name, luaText(bytes)]),
+  );
+  browser.dispatch({
+    kind: 'tag',
+    name: 'callnative',
+    sourceLine: -1,
+    args: new Map([
+      ['module', 'example.dll'],
+      ['method', 'Version'],
+      ['result', 't.result'],
+    ]),
+  });
+  assert.deepEqual(output, [['t.result', '']]);
+  const library = {},
+    procedure = {},
+    release = {},
+    calls = [],
+    returned = bytes('version');
+  let hasDelete = true;
+  const native = new ArtemisNativeLibrary(
+    {
+      loadLibraryA: (path) => {
+        calls.push(['load', luaText(path)]);
+        return library;
+      },
+      getProcAddress: (owner, name) => {
+        assert.equal(owner, library);
+        calls.push(['lookup', name]);
+        return name === 'Version' ? procedure : name === 'Delete' && hasDelete ? release : null;
+      },
+      invoke: (fn, args) => {
+        if (fn === procedure) {
+          assert.equal(args[0].kind, 'memory');
+          assert.deepEqual([...args[0].pointer.bytes], [...bytes('parameter'), 0]);
+          calls.push(['call']);
+          return 123n;
+        }
+        assert.equal(fn, release);
+        assert.equal(args[0].value, 123n);
+        calls.push(['delete']);
+        returned.fill(0);
+        return undefined;
+      },
+      readCString: (pointer) => {
+        assert.equal(pointer, 123n);
+        calls.push(['read']);
+        return returned;
+      },
+      freeLibrary: () => {
+        throw new Error('unexpected release');
+      },
+      mainWindowHandle: () => null,
+    },
+    () => {},
+  );
+  assert.equal(luaText(native.call('example.dll', 'Version', 'parameter')), 'version');
+  assert.deepEqual(
+    calls.map((c) => c[0]),
+    ['load', 'lookup', 'call', 'read', 'lookup', 'delete'],
+  );
+  assert.equal(native.call('example.dll', 'Absent', '').length, 0);
+  assert.equal(calls.filter((c) => c[0] === 'load').length, 1);
+  hasDelete = false;
+  assert.equal(native.call('example.dll', 'Version', 'parameter').length, 0);
+  assert.equal(calls.filter((c) => c[0] === 'delete').length, 1);
+  assert.throws(() => native.call('日本語.dll', 'Version', ''), /ANSI/);
+});
