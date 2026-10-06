@@ -1,0 +1,199 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>Artemis synthetic image pipeline</title>
+<canvas id="frame" style="width: 256px; height: 128px; image-rendering: pixelated"></canvas>
+<pre id="result">Running synthetic PNG / Lua / raster checks</pre>
+<script type="module">
+  import {ArtemisImageGraphics} from '../../dist/engines/artemis/image-graphics.js';
+  import {ArtemisLayers} from '../../dist/engines/artemis/layers.js';
+  import {createArtemisImageLoader} from '../../dist/engines/artemis/image-loader.js';
+  import {ARTEMIS_3179_EXECUTABLE_SHA256 as revision} from '../../dist/engines/artemis/revision.js';
+  import {ArtemisLua} from '../../dist/engines/artemis/lua.js';
+  import {ArtemisScript} from '../../dist/engines/artemis/script.js';
+  import {CanvasDrawTarget} from '../../dist/graphics/draw-list.js';
+
+  const png = Uint8Array.from(
+    atob(
+      'iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAAD0lEQVR4nGP4zwAE/xkaAAt+An+rqPSSAAAAAElFTkSuQmCC',
+    ),
+    (c) => c.charCodeAt(0),
+  );
+  const assert = (value, message) => {
+    if (!value) throw new Error(message);
+  };
+  const command = (name, args = {}) => ({
+    kind: 'tag',
+    name,
+    sourceLine: -1,
+    args: new Map(Object.entries(args)),
+  });
+  const effects = [];
+  const tracked = new Set(),
+    created = [],
+    deleted = [];
+  let uploads = 0,
+    context;
+  const prototype = WebGL2RenderingContext.prototype;
+  const originalUpload = prototype.texImage2D,
+    originalCreate = prototype.createTexture,
+    originalDelete = prototype.deleteTexture;
+  prototype.createTexture = function (...args) {
+    const texture = originalCreate.apply(this, args);
+    created.push(texture);
+    return texture;
+  };
+  prototype.deleteTexture = function (texture) {
+    deleted.push(texture);
+    return originalDelete.call(this, texture);
+  };
+  prototype.texImage2D = function (...args) {
+    context = this;
+    if (args[3] === 2 && args[4] === 1 && args[8] instanceof Uint8Array && args[8].length === 8) {
+      uploads++;
+      tracked.add(this.getParameter(this.TEXTURE_BINDING_2D));
+    }
+    return originalUpload.apply(this, args);
+  };
+  let target, layers, lua;
+  try {
+    const canvas = document.querySelector('#frame');
+    target = new CanvasDrawTarget(canvas, 4, 2);
+    const graphics = new ArtemisImageGraphics(
+      revision,
+      target,
+      {
+        creationMode: () => 0,
+        clearLayerCommands: (ids) => effects.push(['clear', ...ids]),
+        resetLayerCommands: (id) => effects.push(['reset', id]),
+        recordLayerProperties: (tag) => effects.push(['record', tag.args.get('id')]),
+        imageLoadFailed: () => {
+          throw new Error('synthetic image missing');
+        },
+        layerNotFound: () => {
+          throw new Error('synthetic layer missing');
+        },
+      },
+      {
+        filter: 'nearest',
+        blend: {
+          color: {source: 'source-alpha', destination: 'inverse-source-alpha', operation: 'add'},
+          alpha: {source: 'one', destination: 'inverse-source-alpha', operation: 'add'},
+        },
+      },
+    );
+    layers = new ArtemisLayers(
+      revision,
+      createArtemisImageLoader(revision, async (path) => (path === 'synthetic.png' ? png : null)),
+      graphics,
+    );
+    const source = new TextEncoder().encode(
+      `[lua]function prepare(e) e:tag{'lyc',id='2',file='synthetic'}; completed=true end[/lua][calllua function="prepare"][stop]`,
+    );
+    let script, pending;
+    lua = new ArtemisLua({
+      readFile: () => source,
+      fileExists: () => true,
+      now: () => 0,
+      variable: () => '0',
+      suspendableTags: true,
+      tag: (tag) => script.executeTag(tag),
+      enqueueTag: () => {},
+    });
+    script = new ArtemisScript(lua, {
+      readFile: () => source,
+      dispatch: (tag) => {
+        if (tag.name === 'lyc') {
+          pending = layers.dispatch(tag);
+          return 'suspended';
+        }
+        if (tag.name === 'stop') return 'stopped';
+        throw new Error('unexpected synthetic command');
+      },
+    });
+    script.load('synthetic boot');
+    assert(script.run() === 'waiting', 'Lua did not wait for PNG resource');
+    await pending;
+    script.resumeLua();
+    assert(script.run() === 'stopped', 'Lua did not resume');
+    assert(lua.vm.getGlobal('completed') === true, 'Lua local continuation lost');
+    assert(uploads === 1, 'image was not prepared exactly once');
+    assert(
+      graphics.drawCommitted(layers.scene).commands.length === 0,
+      'uncommitted layer presented',
+    );
+    assert(
+      [...tracked].every((texture) => !deleted.includes(texture)),
+      'prepared image evicted by empty frame',
+    );
+    layers.commit();
+    graphics.drawCommitted(layers.scene);
+    const pixels = [...canvas.getContext('2d').getImageData(0, 0, 4, 2).data];
+    assert(pixels.slice(0, 4).join(',') === '0,0,0,255', 'transparent red changed the frame');
+    assert(pixels.slice(4, 8).join(',') === '0,128,0,255', 'shared GPU alpha/color mismatch');
+    assert(uploads === 1, 'committed image was uploaded again');
+    await layers.dispatch(command('lyprop', {id: '2', visible: '0'}));
+    layers.commit();
+    graphics.drawCommitted(layers.scene);
+    assert(
+      [...tracked].every((texture) => !deleted.includes(texture)),
+      'hidden actor texture evicted',
+    );
+    const before = {created: created.length, deleted: deleted.length};
+    let refused = false;
+    try {
+      target.prepareImage({
+        width: context.getParameter(context.MAX_TEXTURE_SIZE) + 1,
+        height: 0,
+        pixels: new Uint8Array(),
+      });
+    } catch (error) {
+      refused = error.message.includes('Texture upload failed');
+    }
+    assert(refused, 'oversized texture was accepted');
+    assert(
+      created.length === before.created + 1 && deleted.length === before.deleted + 1,
+      'failed upload leaked its texture',
+    );
+    await layers.dispatch(command('lydel', {id: '2'}));
+    layers.commit();
+    assert(
+      [...tracked].every((texture) => deleted.filter((item) => item === texture).length === 1),
+      'last actor did not release its texture once',
+    );
+    assert(context.getError() === context.NO_ERROR, 'remaining WebGL error');
+    await layers.dispatch(
+      command('lyc', {id: '-1', file: 'missing', width: '4', height: '2', color: 'ff0000'}),
+    );
+    await layers.dispatch(
+      command('lyc', {id: '0', file: 'missing', width: '4', height: '2', color: '00ff00'}),
+    );
+    layers.commit();
+    graphics.drawCommitted(layers.scene);
+    const drawOrderPixel = [...canvas.getContext('2d').getImageData(0, 0, 1, 1).data];
+    assert(drawOrderPixel.join(',') === '255,0,0,255', 'native descending draw order mismatch');
+    window.result = {
+      passed: true,
+      syntheticOnly: true,
+      pixels,
+      uploads,
+      preparedRetention: true,
+      failedUploadReleased: true,
+      luaResumed: true,
+      serviceEffects: effects,
+      drawOrderPixel,
+    };
+  } catch (error) {
+    window.result = {passed: false, error: String(error), stack: error.stack};
+  } finally {
+    lua?.close();
+    layers?.close();
+    target?.dispose();
+    prototype.texImage2D = originalUpload;
+    prototype.createTexture = originalCreate;
+    prototype.deleteTexture = originalDelete;
+  }
+  document.querySelector('#result').textContent = JSON.stringify(window.result);
+  document.title = window.result.passed
+    ? 'Artemis synthetic checks passed'
+    : 'Artemis synthetic checks failed';
+</script>

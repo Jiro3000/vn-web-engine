@@ -477,3 +477,247 @@ test('Shared solid image allocation preserves straight transparent RGB and rejec
     assert.throws(() => createSolidImage(w, h, [0, 0, 0, 0]), /dimensions/);
   assert.throws(() => createSolidImage(1, 1, [256, 0, 0, 0]), /RGBA color/);
 });
+
+test('Artemis native display state applies centered scale/reversal and composes a parent matrix', async () => {
+  const {ArtemisDisplayObject, artemisDisplayPoint} =
+    await import('../dist/engines/artemis/display-object.js');
+  const object = new ArtemisDisplayObject(revision);
+  assert.deepEqual(object.properties, {
+    left: 0,
+    top: 0,
+    alpha: 1,
+    anchorx: 0,
+    anchory: 0,
+    xscale: 1,
+    yscale: 1,
+    rotate: 0,
+    reversex: false,
+    reversey: false,
+    visible: true,
+  });
+  object.apply({left: 10, top: 20, anchorx: 1, anchory: 2, xscale: 2, yscale: 0.5});
+  assert.deepEqual([...object.matrix()], [2, 0, 9, 0, 0.5, 21]);
+  assert.deepEqual(artemisDisplayPoint(object.matrix(), 2, 4), [13, 23]);
+  object.apply({reversex: true, reversey: true});
+  assert.deepEqual([...object.matrix()], [-2, 0, 13, 0, -0.5, 23]);
+  const copy = object.copy();
+  copy.apply({visible: false, alpha: 0.25});
+  assert.equal(object.properties.visible, true);
+  assert.equal(object.properties.alpha, 1);
+  assert.equal(copy.properties.visible, false);
+  assert.equal(copy.properties.alpha, 0.25);
+  const child = new ArtemisDisplayObject(revision);
+  child.apply({left: 1, top: 2});
+  assert.deepEqual([...child.matrix(new Float32Array([2, 3, 4, 5, 6, 7]))], [2, 3, 12, 5, 6, 24]);
+});
+
+test('Artemis matrix keeps native float32 cancellation and strictly snaps below FLT_EPSILON', async () => {
+  const {ArtemisDisplayObject} = await import('../dist/engines/artemis/display-object.js');
+  const object = new ArtemisDisplayObject(revision);
+  object.apply({left: 16777216, anchorx: 1});
+  assert.equal(object.matrix()[2], 16777215);
+  const small = new ArtemisDisplayObject(revision);
+  const epsilon = 2 ** -23;
+  assert.deepEqual(
+    [...small.matrix(new Float32Array([epsilon, epsilon / 2, 0, -epsilon / 2, 1, -0]))],
+    [epsilon, 0, 0, 0, 1, 0],
+  );
+  small.apply({xscale: 0.5});
+  assert.equal(small.matrix(new Float32Array([epsilon, 0, 0, 0, 1, 0]))[0], 0);
+  assert.throws(() => new ArtemisDisplayObject('unknown'), /executable/);
+  assert.throws(() => small.apply({left: Infinity}), /display value/);
+  assert.throws(() => small.matrix(new Float32Array(5)), /parent matrix/);
+});
+
+test('Artemis nonzero rotation requires native float trig and supplies float32 radians', async () => {
+  const {ArtemisDisplayObject, artemisDisplayPoint} =
+    await import('../dist/engines/artemis/display-object.js');
+  const object = new ArtemisDisplayObject(revision);
+  object.apply({rotate: 90, anchorx: 1, anchory: 1});
+  assert.throws(() => object.matrix(), /trigonometry owner/);
+  let radians;
+  const matrix = object.matrix(undefined, (angle) => {
+    radians = angle;
+    return {sin: 1, cos: 0};
+  });
+  assert.equal(radians, 1.5707963705062866);
+  assert.deepEqual([...matrix], [0, -1, 2, 1, 0, 0]);
+  assert.deepEqual(artemisDisplayPoint(matrix, 2, 0), [2, 2]);
+  assert.deepEqual(artemisDisplayPoint(matrix, 0, 2), [0, 0]);
+  assert.throws(() => object.matrix(undefined, () => ({sin: NaN, cos: 1})), /trigonometry/);
+});
+
+const straightBlend = {
+  color: {source: 'source-alpha', destination: 'inverse-source-alpha', operation: 'add'},
+  alpha: {source: 'one', destination: 'inverse-source-alpha', operation: 'add'},
+};
+async function rasterFixture() {
+  const {ArtemisImageGraphics} = await import('../dist/engines/artemis/image-graphics.js');
+  const {ArtemisLayers} = await import('../dist/engines/artemis/layers.js');
+  const {createArtemisImageLoader} = await import('../dist/engines/artemis/image-loader.js');
+  const image = await syntheticImage(),
+    prepared = [],
+    invalidated = [],
+    frames = [],
+    effects = [];
+  let rejectUpload = false;
+  const target = {
+    width: 4,
+    height: 2,
+    prepareImage(image) {
+      if (rejectUpload) throw new Error('synthetic upload failure');
+      prepared.push(image);
+    },
+    invalidate: (image) => invalidated.push(image),
+    draw(list, resolve) {
+      frames.push({list, images: list.commands.map((command) => resolve(command.texture))});
+    },
+  };
+  const graphics = new ArtemisImageGraphics(
+    revision,
+    target,
+    {
+      creationMode: () => 0,
+      clearLayerCommands: (ids) => effects.push(['clear', ...ids]),
+      resetLayerCommands: (id) => effects.push(['reset', id]),
+      recordLayerProperties: (tag) => effects.push(['record', tag.args.get('id')]),
+      imageLoadFailed: (tag) => effects.push(['missing image', tag.args.get('file')]),
+      layerNotFound: (tag) => effects.push(['missing layer', tag.args.get('id')]),
+    },
+    {filter: 'nearest', blend: straightBlend},
+  );
+  const layers = new ArtemisLayers(
+    revision,
+    createArtemisImageLoader(revision, async (path) => (path === 'synthetic.png' ? image : null)),
+    graphics,
+  );
+  return {
+    graphics,
+    layers,
+    prepared,
+    invalidated,
+    frames,
+    effects,
+    setRejectUpload: (value) => {
+      rejectUpload = value;
+    },
+  };
+}
+
+test('Artemis raster owner prepares real decoded images, shares actor copies and emits committed normalized quads', async () => {
+  const {graphics, layers, prepared, invalidated, frames} = await rasterFixture();
+  try {
+    await layers.dispatch(command('lyc', {id: '2', file: 'synthetic'}));
+    const old = layers.scene.entry('2').value;
+    assert.equal(prepared.length, 1);
+    assert.equal(graphics.drawCommitted(layers.scene).commands.length, 0);
+    layers.commit();
+    const initial = graphics.drawCommitted(layers.scene).commands[0];
+    assert.equal(initial.topology, 'triangle-strip');
+    assert.equal(initial.normalizedUV, true);
+    assert.deepEqual(
+      [...initial.vertices].filter((_, i) => i % 9 < 2),
+      [-1, 1, 0, 1, -1, 0, 0, 0],
+    );
+    assert.deepEqual(
+      [...initial.vertices].filter((_, i) => i % 9 >= 7),
+      [0, 0, 1, 0, 0, 1, 1, 1],
+    );
+    assert.deepEqual([...frames.at(-1).images[0].pixels], [255, 0, 0, 0, 0, 255, 0, 128]);
+    await layers.dispatch(
+      command('lyprop', {id: '02', left: '1', top: '1', alpha: '128.3', reversex: '1'}),
+    );
+    const edited = layers.scene.entry('2').value;
+    assert.equal(edited.texture, old.texture);
+    assert.equal(prepared.length, 1);
+    assert.equal(edited.wrapper, old.wrapper);
+    assert.equal(old.wrapper.alpha, 0.5031372308731079);
+    assert.equal(old.display.properties.alpha, 1);
+    assert.equal(graphics.drawCommitted(layers.scene).commands[0].vertices[6], 1);
+    layers.commit();
+    const visible = graphics.drawCommitted(layers.scene).commands[0];
+    assert.deepEqual(
+      [...visible.vertices].filter((_, i) => i % 9 < 2),
+      [0.5, 0, -0.5, 0, 0.5, -1, -0.5, -1],
+    );
+    assert.equal(visible.vertices[6], 0.5031372904777527);
+    assert.equal(invalidated.length, 0);
+    await layers.dispatch(command('lydel', {id: '2'}));
+    assert.equal(graphics.drawCommitted(layers.scene).commands.length, 1);
+    layers.commit();
+    assert.equal(invalidated.length, 1);
+    assert.equal(invalidated[0], prepared[0]);
+    assert.equal(graphics.drawCommitted(layers.scene).commands.length, 0);
+    assert.throws(() => graphics.image(old.texture), /released/);
+    assert.throws(() => graphics.copyImageLayer(old), /not owned|released/);
+  } finally {
+    layers.close();
+  }
+});
+
+test('Artemis raster upload refusal preserves the old scene and hidden images retain resource ownership', async () => {
+  const {graphics, layers, prepared, invalidated, setRejectUpload} = await rasterFixture();
+  try {
+    await layers.dispatch(command('lyc', {id: 'image', file: 'synthetic'}));
+    layers.commit();
+    const original = layers.scene.entry('image').value;
+    setRejectUpload(true);
+    await assert.rejects(
+      () => layers.dispatch(command('lyc', {id: 'image', file: 'synthetic'})),
+      /upload failure/,
+    );
+    assert.equal(layers.scene.entry('image').value, original);
+    assert.equal(invalidated.length, 0);
+    setRejectUpload(false);
+    await layers.dispatch(command('lyprop', {id: 'image', visible: '0', rotate: '90'}));
+    layers.commit();
+    assert.equal(graphics.drawCommitted(layers.scene).commands.length, 0);
+    assert.equal(prepared.length, 1);
+    assert.equal(invalidated.length, 0);
+    await layers.dispatch(command('lyprop', {id: 'image', visible: '1'}));
+    layers.commit();
+    assert.throws(() => graphics.drawCommitted(layers.scene), /trigonometry owner/);
+    await layers.dispatch(command('lyprop', {id: 'image', rotate: '0', alpha: '0'}));
+    layers.commit();
+    assert.equal(graphics.drawCommitted(layers.scene).commands.length, 0);
+    assert.equal(invalidated.length, 0);
+  } finally {
+    layers.close();
+  }
+  assert.equal(invalidated.length, 1);
+});
+
+test('Artemis rendering descends child keys within each group while selection remains ascending', () => {
+  const scene = new ArtemisScene(revision);
+  scene.set('2.2', '2.2');
+  scene.set('2.10', '2.10');
+  scene.set('10', '10');
+  scene.set('-3', '-3');
+  scene.commit();
+  assert.deepEqual(
+    scene.drawEntries().map((entry) => entry.id),
+    ['10', '2', '2.10', '2.2', '-3'],
+  );
+  assert.deepEqual(
+    scene.select('2').map((entry) => entry.id),
+    ['2', '2.2', '2.10'],
+  );
+});
+
+test('Artemis raster layering paints the lower numeric id after the higher background id', async () => {
+  const {graphics, layers, prepared} = await rasterFixture();
+  try {
+    await layers.dispatch(
+      command('lyc', {id: '-1', file: 'missing', width: '4', height: '2', color: 'ff0000'}),
+    );
+    await layers.dispatch(
+      command('lyc', {id: '0', file: 'missing', width: '4', height: '2', color: '00ff00'}),
+    );
+    layers.commit();
+    const list = graphics.drawCommitted(layers.scene);
+    assert.equal(graphics.image(list.commands[0].texture), prepared[1]);
+    assert.equal(graphics.image(list.commands[1].texture), prepared[0]);
+  } finally {
+    layers.close();
+  }
+});

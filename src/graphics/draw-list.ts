@@ -50,6 +50,14 @@ export interface DrawList {
   sprites: SpriteDraw[];
   commands?: DrawCommand[];
 }
+/** Shared raster resource preparation and draw-list presentation contract. */
+export interface DrawListTarget {
+  readonly width: number;
+  readonly height: number;
+  prepareImage(image: TriangleImage): void;
+  draw(list: DrawList, texture: (id: number) => TriangleImage): void;
+  invalidate(image: object): void;
+}
 
 /** Canvas presentation with a single WebGL framebuffer for all draw operations. */
 export class CanvasDrawTarget extends WebGLDrawTarget {}

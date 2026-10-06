@@ -196,18 +196,27 @@ export class ArtemisScene<T> {
     prefix: string,
     view: ArtemisSceneView,
     result: ArtemisSceneEntry<T>[],
+    reverse = false,
   ): void {
     if (!node.acceptsChildren) return;
-    for (const child of node.children(view)) {
+    const children = node.children(view);
+    for (let index = 0; index < children.length; index++) {
+      const child = children[reverse ? children.length - index - 1 : index]!;
       const id = prefix + child.key;
       result.push({id, value: child.node.value(view), acceptsChildren: child.node.acceptsChildren});
-      this.visit(child.node, id + '.', view, result);
+      this.visit(child.node, id + '.', view, result, reverse);
     }
   }
   /** Borrowed payloads in native child order; not the native layer-selection/enumeration API. */
   entries(view: ArtemisSceneView = 'current'): readonly ArtemisSceneEntry<T>[] {
     const result: ArtemisSceneEntry<T>[] = [];
     this.visit(this.root, '', view, result);
+    return result;
+  }
+  /** Native 0x1401864a0 draws each group's own actor, then children in descending order. */
+  drawEntries(view: ArtemisSceneView = 'retained'): readonly ArtemisSceneEntry<T>[] {
+    const result: ArtemisSceneEntry<T>[] = [];
+    this.visit(this.root, '', view, result, true);
     return result;
   }
   commit(): void {

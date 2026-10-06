@@ -1,5 +1,5 @@
 import type {BlendFactor, BlendOperation, BlendState} from './blend.js';
-import type {DrawList, DrawCommand, SpriteDraw, SolidDraw} from './draw-list.js';
+import type {DrawList, DrawCommand, SpriteDraw, SolidDraw, DrawListTarget} from './draw-list.js';
 import type {TriangleDraw, TriangleImage} from './triangle-draw.js';
 interface DrawProgram {
   program: WebGLProgram;
@@ -9,7 +9,7 @@ interface DrawProgram {
 }
 /** Straight RGBA rendering, with independent color/alpha blending and explicit copies.
  * Pixel ownership stays with the caller; presentation is opaque. */
-export class WebGLDrawTarget {
+export class WebGLDrawTarget implements DrawListTarget {
   private surface: HTMLCanvasElement | undefined;
   private gl: WebGL2RenderingContext | undefined;
   private framebuffer: WebGLFramebuffer | undefined;
@@ -22,6 +22,7 @@ export class WebGLDrawTarget {
   private maxTextureUnits = 0;
   private readonly samplers = new Map<string, WebGLSampler>();
   private readonly images = new Map<object, WebGLTexture>();
+  private readonly preparedImages = new Set<object>();
   private readonly white: TriangleImage = {
     width: 1,
     height: 1,
@@ -174,24 +175,29 @@ void main(){vec4 sampled=texture(atlas,tex);if(maskMode.w!=0.)sampled.rgb=vec3(1
     if (!texture) {
       texture = gl.createTexture() ?? undefined;
       if (!texture) throw new Error('Cannot allocate texture');
-      gl.bindTexture(gl.TEXTURE_2D, texture);
-      gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
-      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
-      gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE);
-      gl.texImage2D(
-        gl.TEXTURE_2D,
-        0,
-        gl.RGBA8,
-        image.width,
-        image.height,
-        0,
-        gl.RGBA,
-        gl.UNSIGNED_BYTE,
-        image.pixels,
-      );
-      if (gl.getError() !== gl.NO_ERROR) throw new Error('Texture upload failed');
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      try {
+        gl.bindTexture(gl.TEXTURE_2D, texture);
+        gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+        gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE);
+        gl.texImage2D(
+          gl.TEXTURE_2D,
+          0,
+          gl.RGBA8,
+          image.width,
+          image.height,
+          0,
+          gl.RGBA,
+          gl.UNSIGNED_BYTE,
+          image.pixels,
+        );
+        if (gl.getError() !== gl.NO_ERROR) throw new Error('Texture upload failed');
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      } catch (error) {
+        gl.deleteTexture(texture);
+        throw error;
+      }
       this.images.set(image, texture);
     } else gl.bindTexture(gl.TEXTURE_2D, texture);
     // Sampler state belongs to a binding, not to the cached image. One image may
@@ -726,12 +732,18 @@ void main(){vec4 sampled=texture(atlas,tex);if(maskMode.w!=0.)sampled.rgb=vec3(1
     this.context.globalCompositeOperation = 'copy';
     this.context.drawImage(this.surface!, 0, 0);
     for (const [image, t] of this.images)
-      if (!used.has(image)) {
+      if (!used.has(image) && !this.preparedImages.has(image)) {
         gl.deleteTexture(t);
         this.images.delete(image);
       }
   }
+  /** Upload and retain until invalidate; later draws select their own sampler binding. */
+  prepareImage(image: TriangleImage): void {
+    this.bind(image, 0);
+    this.preparedImages.add(image);
+  }
   invalidate(image: object): void {
+    this.preparedImages.delete(image);
     const t = this.images.get(image);
     if (t) {
       this.gl?.deleteTexture(t);
@@ -739,6 +751,7 @@ void main(){vec4 sampled=texture(atlas,tex);if(maskMode.w!=0.)sampled.rgb=vec3(1
     }
   }
   dispose(): void {
+    this.preparedImages.clear();
     const gl = this.gl;
     if (gl) {
       for (const t of this.images.values()) gl.deleteTexture(t);

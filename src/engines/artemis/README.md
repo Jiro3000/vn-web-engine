@@ -278,10 +278,40 @@ actors from create/copy and retain shared image resources when copying. Async
 resource dispatch rejects overlapping operations and snapshots tag arguments;
 `cancelPending()` prevents stale completion effects alongside cancellation of
 Lua continuations. These services are tested with synthetic images and suspended
-Lua; there is no production Artemis raster/presentation owner or UI wiring yet.
+Lua; the image raster owner below remains separate from stage/scheduler and UI wiring.
 
 The scene/layer system checks run with:
 
 ```sh
 node --test tests/artemis-scene.test.mjs tests/artemis-image-worker.test.mjs
 ```
+
+`display-object.ts` implements native CDisplayObject defaults and float32 local
+matrix composition. Translation, anchor translation, rotation, scale, reversal
+and inverse-anchor translation preserve the native order, rounding and strict
+snap below `2^-23` after each operation (`0x1400a1060`, `0x1400a14b0`,
+`0x14009ff30`). Matrices use `[a,b,tx,c,d,ty]`. Nonzero rotations require an
+injected native float trig owner; zero rotation is exact without one. Arbitrary
+JS Math trigonometry is not silently substituted.
+
+`image-graphics.ts` implements ordinary unclipped straight-RGBA image actors
+through shared `DrawListTarget`. Native command/error services, sampler and blend
+selection remain mandatory providers. Actors prepare their images before scene
+insertion; copies share texture ownership and outer-wrapper metadata while copying
+inner display state. The last actor releases its image binding. Nonzero rotation,
+group raster, shader, mask and transition paths remain outside this raster subset.
+
+`drawCommitted()` emits the retained ordinary scene with descending child order,
+matching `0x1401864a0`; lower numeric ids paint after higher ids. Native selection
+and structural traversal remain ascending. Image quads preserve float32 transform,
+viewport normalization and triangle-strip order (`0x14015d120`). The stage owner
+chooses frame/commit timing; this method does not implement the full native flip
+state machine. There is no playable Artemis UI/profile yet.
+
+Shared `WebGLDrawTarget.prepareImage()` uploads and retains an image until
+`invalidate()`, including empty/hidden frames. Normal unprepared images retain
+per-frame eviction behavior. Failed uploads delete their partial GPU allocation.
+`tests/browser/artemis-images.html` checks synthetic PNG decoding, Lua suspension,
+actual shared WebGL alpha pixels, descending overlap order, retained resources and
+upload-error cleanup. It contains no game assets. Browser checks use explicit
+sampler/blend fixtures and do not establish native GPU equivalence.
