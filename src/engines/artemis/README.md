@@ -242,3 +242,40 @@ is separate from native selection. `select(id)` expands the current selected
 subtree in child order and preserves the requested id spelling in its prefix
 (`0x140113e50`, `0x140113ab0`). Wildcards and shader/message selection are
 outside this child-map API.
+
+`layers.ts` connects the ordinary image-backed `lyc`, `lydel` and geometry subset
+of `lyprop` to the image loader and scene. Its required graphics owner allocates,
+copies and releases native image actors, applies properties, and owns outer-wrapper
+alpha and native command registrations. `lyc` sets float32 anchors to half the
+image dimensions, deletes the previous selected subtree only after successful
+resource creation, inserts an image leaf and resets that id's command list.
+Creation-tag geometry arguments are not applied: the native command uses separate
+`lyprop`. A missing resource reports a script error while preserving the old layer.
+Rules, solid-color fallback and capture-mode creation are explicitly unsupported.
+Relevant native entries: `0x1400d5930`, `0x1400d6670`, `0x14014f2a0`.
+
+Ordinary image properties copy the inner actor on the first edit after commit,
+retaining its old state (`0x1400b49c0`). Left/top, anchors, rotation, alpha,
+percentage scale and reverse/visible flags are supported. Decimal prefixes use
+native-style conversion; nonfinite/hex values and other property keys refuse.
+Only exact `0` disables flags. Inner alpha rounds to float32 before division by
+255; outer-wrapper alpha divides as double before float32 conversion. Values
+are not clamped by the adapter. Applying these values and recording the original
+command require owner effects. Group/root/shader properties and the alternate
+retained-actor editing mode remain unsupported. Native entries:
+`0x140115650`, `0x1400d76d0`.
+
+Use the layer owner's `commit()` at a confirmed native commit boundary. It releases
+actors absent from all reachable current/retained child maps and inner-actor versions.
+`close()` cancels pending work and releases owned actors. Owners must return fresh
+actors from create/copy and retain shared image resources when copying. Async
+resource dispatch rejects overlapping operations and snapshots tag arguments;
+`cancelPending()` prevents stale completion effects alongside cancellation of
+Lua continuations. These services are tested with synthetic images and suspended
+Lua; there is no production Artemis raster/presentation owner or UI wiring yet.
+
+The scene/layer system checks run with:
+
+```sh
+node --test tests/artemis-scene.test.mjs tests/artemis-image-worker.test.mjs
+```

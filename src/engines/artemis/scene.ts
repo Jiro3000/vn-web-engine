@@ -41,10 +41,22 @@ interface Child<T> {
 class Node<T> {
   private current: Child<T>[] = [];
   private retained = this.current;
+  private currentValue: T | undefined;
+  private retainedValue: T | undefined;
   constructor(
-    readonly value: T | undefined,
+    value: T | undefined,
     readonly acceptsChildren = true,
-  ) {}
+  ) {
+    this.currentValue = this.retainedValue = value;
+  }
+  value(view: ArtemisSceneView): T | undefined {
+    return view === 'current' ? this.currentValue : this.retainedValue;
+  }
+  edit(copy: (value: T) => T): T | undefined {
+    if (this.currentValue !== undefined && this.currentValue === this.retainedValue)
+      this.currentValue = copy(this.currentValue);
+    return this.currentValue;
+  }
   children(view: ArtemisSceneView): readonly Child<T>[] {
     return view === 'current' ? this.current : this.retained;
   }
@@ -76,6 +88,7 @@ class Node<T> {
   commit(): void {
     for (const entry of this.current) entry.node.commit();
     this.retained = this.current;
+    this.retainedValue = this.currentValue;
   }
 }
 
@@ -128,7 +141,38 @@ export class ArtemisScene<T> {
       canonical.push(child.key);
       parent = child.node;
     }
-    return {id: canonical.join('.'), value: parent.value, acceptsChildren: parent.acceptsChildren};
+    return {
+      id: canonical.join('.'),
+      value: parent.value(view),
+      acceptsChildren: parent.acceptsChildren,
+    };
+  }
+  /** Ordinary inner-actor copy-on-first-edit path, retaining the old payload until commit. */
+  editValue(id: string, copy: (value: T) => T): T | undefined {
+    let node = this.root;
+    for (const key of this.path(id)) {
+      if (!node.acceptsChildren) return undefined;
+      const child = node.child(key, 'current');
+      if (!child) return undefined;
+      node = child.node;
+    }
+    return node.edit(copy);
+  }
+  /** All payloads held by reachable nodes, including inner retained versions. */
+  payloads(): ReadonlySet<T> {
+    const result = new Set<T>(),
+      visited = new Set<Node<T>>();
+    const visit = (node: Node<T>) => {
+      if (visited.has(node)) return;
+      visited.add(node);
+      for (const view of ['current', 'retained'] as const) {
+        const value = node.value(view);
+        if (value !== undefined) result.add(value);
+        for (const child of node.children(view)) visit(child.node);
+      }
+    };
+    visit(this.root);
+    return result;
   }
   /** Native 0x140113e50 selects the node and its descendants using the requested prefix.
    * Numeric aliases retain the caller's spelling in the selected identifiers.
@@ -142,7 +186,7 @@ export class ArtemisScene<T> {
       node = child.node;
     }
     const result: ArtemisSceneEntry<T>[] = [
-      {id, value: node.value, acceptsChildren: node.acceptsChildren},
+      {id, value: node.value('current'), acceptsChildren: node.acceptsChildren},
     ];
     this.visit(node, id + '.', 'current', result);
     return result;
@@ -156,7 +200,7 @@ export class ArtemisScene<T> {
     if (!node.acceptsChildren) return;
     for (const child of node.children(view)) {
       const id = prefix + child.key;
-      result.push({id, value: child.node.value, acceptsChildren: child.node.acceptsChildren});
+      result.push({id, value: child.node.value(view), acceptsChildren: child.node.acceptsChildren});
       this.visit(child.node, id + '.', view, result);
     }
   }
