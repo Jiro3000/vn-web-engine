@@ -886,3 +886,152 @@ test('Recording/right-click controls preserve native missing-option and retained
   modes.dispatch(tag('rclick', {file: ''}));
   assert.equal(modes.rightClickScript, '');
 });
+
+test('Backlog configuration selects missing message layers, resets override use and preserves native lists', async () => {
+  const {ArtemisTextControls} = await import('../dist/engines/artemis/text-controls.js');
+  let current = 'message';
+  const layers = new Set(['message']),
+    calls = [];
+  const controls = new ArtemisTextControls({
+    currentMessageLayer: () => current,
+    messageLayerExists: (id) => layers.has(id),
+    selectMessageLayer: (id) => {
+      layers.add(id);
+      calls.push(id);
+    },
+    clearBacklog: () => calls.push('clear'),
+  });
+  const tag = (name, args = {}) => ({
+    kind: 'tag',
+    name,
+    sourceLine: -1,
+    args: new Map(Object.entries(args)),
+  });
+  controls.dispatch(
+    tag('backlog', {
+      allow: '0',
+      messagelayer: 'log',
+      layer: 'override',
+      hide: 'a,, a,a',
+      includefont: '0',
+    }),
+  );
+  assert.deepEqual(calls, ['log', 'message']);
+  assert.equal(controls.backlogAllowed, false);
+  assert.equal(controls.backlogIncludeFont, false);
+  assert.deepEqual(controls.backlogLayer('message'), {useOverride: true, layer: 'override'});
+  assert.deepEqual([...controls.hiddenBacklogLayers], ['a', '', ' a']);
+  controls.dispatch(tag('backlog', {messagelayer: 'log'}));
+  assert.equal(controls.backlogAllowed, true);
+  assert.deepEqual(controls.backlogLayer('message'), {useOverride: false, layer: 'override'});
+  assert.deepEqual(calls, ['log', 'message']);
+  current = 'second';
+  controls.dispatch(tag('backlog', {clear: '00'}));
+  assert.deepEqual(controls.backlogLayer('second'), {useOverride: false, layer: ''});
+  assert.equal(calls.at(-1), 'clear');
+  controls.dispatch(tag('hide', {allow: '0', window: ''}));
+  assert.equal(controls.hideAllowed, false);
+  assert.deepEqual([...controls.hiddenWindows], ['']);
+  controls.dispatch(tag('hide'));
+  assert.equal(controls.hideAllowed, true);
+  assert.deepEqual([...controls.hiddenWindows], ['']);
+});
+
+test('Key configuration replaces ordinary keys and special flags; delonpush removes both copied handlers', async () => {
+  const {ArtemisKeyBindings} = await import('../dist/engines/artemis/key-bindings.js');
+  const bindings = new ArtemisKeyBindings();
+  const tag = (name, args = {}) => ({
+    kind: 'tag',
+    name,
+    sourceLine: -1,
+    args: new Map(Object.entries(args)),
+  });
+  bindings.dispatch(tag('keyconfig', {role: '0', keys: '1,13,136,137,13,, -2'}));
+  assert.deepEqual([...bindings.role(0).keys], [-2, 0, 1, 13]);
+  assert.equal(bindings.role(0).special136, true);
+  assert.equal(bindings.role(0).special137, true);
+  const copy = bindings.role(0);
+  copy.keys.clear();
+  assert.equal(bindings.role(0).keys.size, 4);
+  bindings.dispatch(tag('keyconfig', {role: '0'}));
+  assert.equal(bindings.role(0).keys.size, 0);
+  assert.equal(bindings.role(0).special136, false);
+  bindings.dispatch(tag('keyconfig', {role: '0', keys: ''}));
+  assert.deepEqual([...bindings.role(0).keys], [0]);
+  const command = tag('call', {file: 'sub'});
+  bindings.storePushHandler(3, 0, command);
+  bindings.storePushHandler(3, 1, command);
+  command.args.set('file', 'changed');
+  assert.equal(bindings.pushHandler(3, 0).args.get('file'), 'sub');
+  bindings.dispatch(tag('delonpush', {key: '3'}));
+  assert.equal(bindings.pushHandler(3, 0), undefined);
+  assert.equal(bindings.pushHandler(3, 1), undefined);
+  bindings.storePushHandler(0, 0, command);
+  bindings.dispatch(tag('delonpush'));
+  assert.equal(bindings.pushHandler(0, 0), undefined);
+  assert.throws(() => bindings.dispatch(tag('keyconfig')), /Missing/);
+});
+
+test('Native multi-touch configuration accepts numeric limits and truncates toward zero', () => {
+  const limits = [];
+  const lua = new ArtemisLua({
+    readFile: () => null,
+    fileExists: () => false,
+    now: () => 0,
+    tag: () => {},
+    enqueueTag: () => {},
+    variable: () => '',
+    setTouchLimit: (limit) => limits.push(limit),
+  });
+  try {
+    lua.vm.execute(bytes(`engine:setUseMultiTouch(3); engine:setUseMultiTouch(-2.9)`));
+    assert.deepEqual(limits, [3, -2]);
+    assert.throws(() => lua.vm.execute(bytes(`engine:setUseMultiTouch(true)`)), /touch limit/);
+    assert.throws(() => lua.vm.execute(bytes(`engine:setUseMultiTouch('3')`)), /touch limit/);
+  } finally {
+    lua.close();
+  }
+});
+
+test('Event filters retain the function and preserve native numeric outcomes separately from tags', () => {
+  const lua = new ArtemisLua({
+    readFile: () => null,
+    fileExists: () => false,
+    now: () => 0,
+    tag: () => {},
+    enqueueTag: () => {},
+    variable: () => '',
+  });
+  const event = {kind: 'tag', name: 'click', args: new Map([['code', '2']]), sourceLine: -1};
+  try {
+    assert.equal(lua.filterEvent(event), 0);
+    lua.vm.execute(
+      bytes(`
+      local offset = 0
+      function selected(e,n,p)
+        assert(e == engine and n == 'click')
+        return tonumber(p.code) + offset
+      end
+      engine:setEventFilter(selected)
+      selected = function() return 99 end
+      function change() offset = -1 end
+    `),
+    );
+    assert.equal(lua.filterEvent(event), 2);
+    lua.call('change');
+    assert.equal(lua.filterEvent(event), 1);
+    assert.equal(lua.filterTag(event), false);
+    assert.equal(lua.filterEvent({...event, name: ''}), 0);
+    lua.vm.execute(bytes(`engine:setEventFilter(function() return -2.9 end)`));
+    assert.equal(lua.filterEvent(event), -2);
+    lua.vm.execute(bytes(`engine:setEventFilter(function() return 4294967298 end)`));
+    assert.equal(lua.filterEvent(event), 2);
+    lua.vm.execute(bytes(`engine:setEventFilter(function() return '2' end)`));
+    assert.throws(() => lua.filterEvent(event), /event filter result/);
+    lua.vm.execute(bytes(`engine:setEventFilter(function() error('filter failed') end)`));
+    assert.throws(() => lua.filterEvent(event), /filter failed/);
+    assert.throws(() => lua.vm.execute(bytes(`engine:setEventFilter({})`)), /filter function/);
+  } finally {
+    lua.close();
+  }
+});

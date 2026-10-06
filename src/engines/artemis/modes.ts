@@ -11,9 +11,9 @@ export interface ArtemisModeEffects {
 
 /** Rev.3179 mode command state. Rendering/input effects remain supplied platform services. */
 export class ArtemisModes {
-  /** Undefined until configured; full history collection/serialization is a separate owner. */
-  alreadyReadEnabled: boolean | undefined;
-  writeBacklog: boolean | undefined;
+  /** Constructor bytes b60/37f0 enable these flags; history collection has a separate owner. */
+  alreadyReadEnabled = true;
+  writeBacklog = true;
   rightClickAllowed: boolean | undefined;
   rightClickScript: string | undefined;
   skipAllowed = true;

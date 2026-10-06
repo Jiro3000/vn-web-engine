@@ -143,3 +143,28 @@ missing mode. Exact string `0` disables; `00` remains enabled. `rclick` preserve
 its script filename when omitted and replaces it even with an explicit empty value.
 These command flags do not implement history collection, backlog rendering or
 right-click dispatch by themselves.
+
+`text-controls.ts` handles UTF-8 backlog/hide configuration. It preserves empty
+comma-separated names, literal whitespace, include-font state and per-current-layer
+backlog overrides. Omitting an override layer disables its use while retaining the
+prior identifier. New backlog message layers are created/selected through the owner
+and the current message layer is restored. Clearing backlog requires the storage
+owner to clear every native collection. Configuration is not message/backlog rendering.
+
+`key-bindings.ts` stores native signed ordinary-key sets in sorted order and keeps
+codes 136/137 as separate flags. `keyconfig` clears the role first; missing keys
+leave it empty, while explicit empty keys add ordinary code 0. `delonpush` removes
+both native handler-map slots, using integer-zero for a missing key. Stored command
+arguments are copied. Physical input sampling, special-code interpretation,
+onpush registration and frame dispatch remain separate input-owner work.
+
+`setEventFilter` retains a live Lua function independently of the tag-filter table.
+`filterEvent` supplies the engine, event name and named arguments and preserves the
+native 32-bit numeric result: zero falls through, two fails, and other nonzero
+values consume successfully. Numeric strings are rejected. The event owner must
+report Lua callback errors and continue its default dispatch, as the native owner
+does. Default event actions and physical input dispatch remain unimplemented.
+
+`setUseMultiTouch` requires a numeric limit, truncates it toward zero and calls the
+input owner's contact-limit operation. It is bound only when that owner exists;
+the nonvisual probe records the configuration and does not simulate touch input.

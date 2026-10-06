@@ -17,6 +17,7 @@ export interface ArtemisLuaHost {
   enqueueTag(tag: AsbTag): void;
   variable(name: string): string | Uint8Array;
   setMagicPath?(name: string, root: string): void;
+  setTouchLimit?(limit: number): void;
 }
 
 /** Rev.3179 CLua's confirmed byte-string and tag bridge. Unbound methods fail. */
@@ -24,6 +25,7 @@ export class ArtemisLua {
   readonly vm: Lua51;
   readonly events: ArtemisEvents;
   private filter: LuaReference | undefined;
+  private eventFilter: LuaReference | undefined;
   constructor(
     private readonly host: ArtemisLuaHost,
     instructionLimit?: number,
@@ -48,6 +50,15 @@ export class ArtemisLua {
       this.filter = next;
       return [];
     });
+    this.vm.bindReferences('setEventFilter', (args) => {
+      const callback = args[0];
+      if (!callback || callback.type !== 6)
+        throw new Error('Expected Artemis event filter function');
+      const next = callback.retain();
+      this.eventFilter?.release();
+      this.eventFilter = next;
+      return [];
+    });
     if (host.setMagicPath)
       this.vm.bind('setMagicPath', (args) => {
         const table = args[0];
@@ -60,6 +71,19 @@ export class ArtemisLua {
           if (Math.trunc(key) === 2) root = luaText(value);
         }
         host.setMagicPath!(name, root);
+        return [];
+      });
+    if (host.setTouchLimit)
+      this.vm.bind('setUseMultiTouch', (args) => {
+        const number = args[0];
+        if (
+          typeof number !== 'number' ||
+          !Number.isFinite(number) ||
+          Math.trunc(number) < -0x80000000 ||
+          Math.trunc(number) > 0x7fffffff
+        )
+          throw new Error('Unsupported Artemis touch limit');
+        host.setTouchLimit!(Math.trunc(number));
         return [];
       });
     this.vm.bind('now', () => [Math.trunc(host.now()) & 0x7fffffff]);
@@ -123,6 +147,23 @@ export class ArtemisLua {
     } finally {
       callback.release();
     }
+  }
+  /** Native event dispatcher: zero falls through, two fails, other nonzero values consume.
+   * The event owner must report callback errors and continue its default dispatch.
+   * This is separate from script tag filtering and does not dispatch default actions.
+   */
+  filterEvent(tag: AsbTag): number {
+    if (!tag.name || !this.eventFilter) return 0;
+    const args: LuaTable = new Map();
+    for (const [key, value] of tag.args) args.set(key, new TextEncoder().encode(value));
+    const result = this.eventFilter.invoke([new TextEncoder().encode(tag.name), args], true)[0];
+    if (
+      typeof result !== 'number' ||
+      !Number.isFinite(result) ||
+      !Number.isSafeInteger(Math.trunc(result))
+    )
+      throw new Error('Unsupported Artemis event filter result');
+    return Math.trunc(result) | 0;
   }
   close(): void {
     this.vm.close();
