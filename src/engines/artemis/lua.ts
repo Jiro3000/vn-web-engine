@@ -4,6 +4,8 @@ import {
   type LuaReference,
   type LuaTable,
   type LuaValue,
+  type LuaThread,
+  type LuaThreadResult,
 } from '../../core/lua51/runtime.js';
 import {ArtemisEvents} from './events.js';
 import type {AsbTag} from '../../formats/artemis/asb.js';
@@ -13,7 +15,9 @@ export interface ArtemisLuaHost {
   readFile(path: string): Uint8Array | null;
   fileExists(path: string): boolean;
   now(): number;
-  tag(tag: AsbTag): void;
+  tag(tag: AsbTag): void | 'suspended';
+  /** Opt in only when callbacks run through createCall and the owner drives yielded work. */
+  suspendableTags?: boolean;
   enqueueTag(tag: AsbTag): void;
   variable(name: string): string | Uint8Array;
   setMagicPath?(name: string, root: string): void;
@@ -98,20 +102,64 @@ export class ArtemisLua {
       return [typeof value === 'string' ? new TextEncoder().encode(value) : value];
     });
     this.vm.bind('tag', (args) => {
-      host.tag(luaTag(args[0]));
+      if (host.tag(luaTag(args[0])) === 'suspended') {
+        if (!host.suspendableTags)
+          throw new Error('Artemis tag suspension requires a coroutine owner');
+        return [true];
+      }
       return [];
     });
     this.vm.bind('enqueueTag', (args) => {
       host.enqueueTag(luaTag(args[0]));
       return [];
     });
+    if (host.suspendableTags)
+      this.vm.execute(
+        new TextEncoder().encode(`
+        local nativeTag = engine.tag
+        engine.tag = function(self, command)
+          if nativeTag(self, command) then
+            local ok, message = coroutine.yield()
+            if ok == false then error(message or 'Artemis resource operation failed') end
+          end
+        end
+      `),
+        '@artemis/suspendable-tag',
+      );
   }
   include(path: string): void {
     const bytes = this.host.readFile(path);
     if (bytes === null) throw new Error(`Missing Artemis Lua include ${path}`);
     this.vm.execute(bytes, `@${path}`);
   }
+  get suspendableTags(): boolean {
+    return this.host.suspendableTags === true;
+  }
   call(name: string, args: ReadonlyMap<string, string> = new Map()): void {
+    const callback = this.callback(name);
+    try {
+      callback.invokeVoid(this.callArguments(args), true);
+    } finally {
+      callback.release();
+    }
+  }
+  /** Resumable counterpart for owners that load resources asynchronously. */
+  createCall(name: string, args: ReadonlyMap<string, string> = new Map()): ArtemisLuaCall {
+    const callback = this.callback(name);
+    try {
+      const values = this.callArguments(args);
+      return new ArtemisLuaCall(this.vm.createThread(callback, true), values);
+    } finally {
+      callback.release();
+    }
+  }
+  private callArguments(args: ReadonlyMap<string, string>): LuaValue[] {
+    if (!args.size) return [];
+    const params: LuaTable = new Map();
+    for (const [key, value] of args) params.set(key, new TextEncoder().encode(value));
+    return [params];
+  }
+  private callback(name: string): LuaReference {
     const parts = name.split('.');
     if (parts.some((part) => !part)) throw new Error('Invalid Artemis Lua function path');
     let callback = this.vm.referenceGlobal(parts[0]!);
@@ -121,15 +169,10 @@ export class ArtemisLua {
         callback.release();
         callback = next;
       }
-      const values: LuaValue[] = [];
-      if (args.size) {
-        const params: LuaTable = new Map();
-        for (const [key, value] of args) params.set(key, new TextEncoder().encode(value));
-        values.push(params);
-      }
-      callback.invokeVoid(values, true);
-    } finally {
+      return callback;
+    } catch (error) {
       callback.release();
+      throw error;
     }
   }
   /** Script-origin tags are filtered; direct/queued CLua tags have negative sourceLine and bypass it. */
@@ -167,6 +210,25 @@ export class ArtemisLua {
   }
   close(): void {
     this.vm.close();
+  }
+}
+
+/** The resource owner resumes with no values after success, or false/error bytes after failure. */
+export class ArtemisLuaCall {
+  private started = false;
+  constructor(
+    private readonly thread: LuaThread,
+    private readonly initialArgs: readonly LuaValue[],
+  ) {}
+  resume(values: readonly LuaValue[] = []): LuaThreadResult {
+    if (!this.started && values.length)
+      throw new Error('Artemis call arguments are already captured');
+    const args = this.started ? values : this.initialArgs;
+    this.started = true;
+    return this.thread.resume(args, true);
+  }
+  close(): void {
+    this.thread.close();
   }
 }
 

@@ -31,6 +31,7 @@ const simulatedDialogResult = dialogResultArgument
 if (simulatedDialogResult !== null && ![0, 1].includes(simulatedDialogResult))
   throw new Error('Probe dialog result must be 0 or 1');
 const advanceWaits = process.argv.slice(3).includes('--advance-waits');
+const suspendableTags = process.argv.slice(3).includes('--async-lua');
 let probeTick = 1,
   advancedWaits = 0;
 const installation = await openArtemisInstallation(process.argv[2]);
@@ -197,6 +198,7 @@ try {
     throw new Error(`Unsupported native Artemis tag ${tag.name}`);
   };
   lua = new ArtemisLua({
+    suspendableTags,
     readFile: (path) => {
       includes.push(path);
       return readFile(path);

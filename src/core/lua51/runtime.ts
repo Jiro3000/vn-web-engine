@@ -146,6 +146,7 @@ export class Lua51 {
     ref: LuaReference,
     args: readonly LuaValue[],
     initialEngine: boolean,
+    discardDoneValues = false,
   ): LuaThreadResult {
     ref.assertOwner(this);
     this.assertOpen();
@@ -164,7 +165,8 @@ export class Lua51 {
       );
       if (status === 0 || status === 1) {
         yielded = status === 1;
-        for (let i = top + 1; i <= this.fn('lua51_top')(L); i++) values.push(this.read(i));
+        if (yielded || !discardDoneValues)
+          for (let i = top + 1; i <= this.fn('lua51_top')(L); i++) values.push(this.read(i));
         return 0;
       }
       return status;
@@ -461,7 +463,7 @@ export class LuaThread {
     private readonly reference: LuaReference,
     private readonly withEngine: boolean,
   ) {}
-  resume(args: readonly LuaValue[] = []): LuaThreadResult {
+  resume(args: readonly LuaValue[] = [], discardDoneValues = false): LuaThreadResult {
     if (this.released || this.terminal) throw new Error('Lua thread is closed or finished');
     if (this.busy) throw new Error('Lua thread is already running');
     this.busy = true;
@@ -470,6 +472,7 @@ export class LuaThread {
         this.reference,
         args,
         !this.started && this.withEngine,
+        discardDoneValues,
       );
       this.started = true;
       this.terminal = result.status === 'done';

@@ -1173,3 +1173,99 @@ test('Native module teardown releases the sorted registry once and permits later
   owner.reset();
   assert.deepEqual(released, ['a.dll', 'z.dll', 'a.dll']);
 });
+
+test('Script callbacks await resource work, resume nested calls, then consume queued tags', async () => {
+  const source = bytes(`[lua]
+    function child(e,p)
+      local path=p.file
+      e:tag{'asset',file=path}
+      assert(e:var('asset.ready')=='yes')
+      e:enqueueTag{'record',data=path}
+      return function() end
+    end
+    function parent(e)
+      e:tag{'calllua',['function']='child',file='synthetic.png'}
+      e:enqueueTag{'record',data='parent'}
+      return function() end
+    end
+  [/lua][calllua function="parent"][stop]`);
+  let script;
+  let ready = '';
+  const records = [],
+    requests = [];
+  const lua = new ArtemisLua({
+    readFile: () => source,
+    fileExists: () => true,
+    now: () => 0,
+    variable: () => ready,
+    suspendableTags: true,
+    tag: (tag) => script.executeTag(tag),
+    enqueueTag: (tag) => script.enqueue(tag),
+  });
+  script = new ArtemisScript(lua, {
+    readFile: () => source,
+    dispatch: (tag) => {
+      if (tag.name === 'asset') {
+        requests.push(tag.args.get('file'));
+        return 'suspended';
+      }
+      if (tag.name === 'record') records.push(tag.args.get('data'));
+      if (tag.name === 'stop') return 'stopped';
+    },
+  });
+  try {
+    script.load('boot');
+    assert.equal(script.run(), 'waiting');
+    assert.equal(script.pendingLuaCalls, 2);
+    assert.equal(script.queuedTags, 0);
+    assert.deepEqual(requests, ['synthetic.png']);
+    assert.throws(() => script.resume(), /resumeLua/);
+    ready = await Promise.resolve('yes');
+    assert.equal(script.resumeLua(), 'ready');
+    assert.equal(script.pendingLuaCalls, 0);
+    assert.equal(script.run(), 'stopped');
+    assert.deepEqual(records, ['synthetic.png', 'parent']);
+  } finally {
+    script.cancelLuaCalls();
+    lua.close();
+  }
+});
+
+test('Resource failures propagate through suspended callbacks and a new script cancels old continuations', () => {
+  const source = bytes(`[lua]
+    function child(e) e:tag{'asset'} end
+    function parent(e) e:tag{'calllua',['function']='child'}; should_not_run=true end
+  [/lua][calllua function="parent"][stop]`);
+  let script;
+  const lua = new ArtemisLua({
+    readFile: () => source,
+    fileExists: () => true,
+    now: () => 0,
+    variable: () => '',
+    suspendableTags: true,
+    tag: (tag) => script.executeTag(tag),
+    enqueueTag: () => {},
+  });
+  script = new ArtemisScript(lua, {
+    readFile: () => source,
+    dispatch: (tag) =>
+      tag.name === 'asset' ? 'suspended' : tag.name === 'stop' ? 'stopped' : undefined,
+  });
+  try {
+    script.load('boot');
+    script.run();
+    assert.throws(() => script.resumeLua([false, bytes('asset failed')]), /asset failed/);
+    assert.equal(script.state, 'faulted');
+    assert.equal(script.pendingLuaCalls, 0);
+    assert.equal(lua.vm.getGlobal('should_not_run'), null);
+    script.load('boot');
+    script.run();
+    assert.equal(script.pendingLuaCalls, 2);
+    script.load('replacement');
+    assert.equal(script.pendingLuaCalls, 0);
+    assert.throws(() => script.resumeLua(), /No suspended/);
+  } finally {
+    script.cancelLuaCalls();
+    lua.close();
+  }
+});
