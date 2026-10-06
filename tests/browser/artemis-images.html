@@ -8,6 +8,7 @@
   import {ArtemisLayers} from '../../dist/engines/artemis/layers.js';
   import {createArtemisImageLoader} from '../../dist/engines/artemis/image-loader.js';
   import {ArtemisSurfaceCache} from '../../dist/engines/artemis/surface-cache.js';
+  import {createArtemisOrdinaryGpuRaster} from '../../dist/engines/artemis/gpu-raster.js';
   import {ARTEMIS_3179_EXECUTABLE_SHA256 as revision} from '../../dist/engines/artemis/revision.js';
   import {ArtemisLua} from '../../dist/engines/artemis/lua.js';
   import {ArtemisScript} from '../../dist/engines/artemis/script.js';
@@ -252,6 +253,53 @@
     graphics.drawCommitted(layers.scene);
     const drawOrderPixel = [...canvas.getContext('2d').getImageData(0, 0, 1, 1).data];
     assert(drawOrderPixel.join(',') === '255,0,0,255', 'native descending draw order mismatch');
+    layers.close();
+    const nativeGraphics = new ArtemisImageGraphics(
+      revision,
+      target,
+      {
+        creationMode: () => 0,
+        clearLayerCommands: (ids) => commandRegistry.clear(ids),
+        resetLayerCommands: (id) => commandRegistry.reset(id),
+        recordLayerProperties: (tag) => commandRegistry.record(tag),
+        imageLoadFailed: () => {
+          throw new Error('synthetic native image missing');
+        },
+        layerNotFound: () => {
+          throw new Error('synthetic native layer missing');
+        },
+      },
+      createArtemisOrdinaryGpuRaster(revision),
+    );
+    layers = new ArtemisLayers(
+      revision,
+      createArtemisImageLoader(revision, async (path) => (path === 'synthetic.png' ? png : null)),
+      nativeGraphics,
+    );
+    await layers.dispatch(
+      command('lyc', {id: '10', file: 'missing', width: '4', height: '2', color: '40ff0000'}),
+    );
+    await layers.dispatch(command('lyc', {id: '1', file: 'synthetic'}));
+    await layers.dispatch(command('lyprop', {id: '1', left: '1', xscale: '200'}));
+    stage.dispatch(command('flip'));
+    nativeGraphics.drawCommitted(layers.scene);
+    const nativeFramebuffer = new Uint8Array(16);
+    context.readPixels(0, 1, 4, 1, context.RGBA, context.UNSIGNED_BYTE, nativeFramebuffer);
+    const expected = [64, 0, 0, 16, 80, 8, 0, 20, 64, 72, 0, 52, 32, 128, 0, 80];
+    assert(
+      nativeFramebuffer.every((value, i) => Math.abs(value - expected[i]) <= 1),
+      `native linear/blend/transparent write mismatch: ${nativeFramebuffer}`,
+    );
+    const nativeEmpty = new Uint8Array(4);
+    await layers.dispatch(command('lydel', {id: '10'}));
+    await layers.dispatch(command('lydel', {id: '1'}));
+    stage.dispatch(command('flip'));
+    nativeGraphics.drawCommitted(layers.scene);
+    context.readPixels(0, 0, 1, 1, context.RGBA, context.UNSIGNED_BYTE, nativeEmpty);
+    assert(
+      nativeEmpty.every((value) => value === 0),
+      'native transparent black clear mismatch',
+    );
     window.result = {
       passed: true,
       syntheticOnly: true,
@@ -265,6 +313,8 @@
       surfaceCacheIdleGpuRetention: true,
       surfaceCachePromotionNoDecodeOrUpload: true,
       surfaceCacheActiveCloseDeferred: true,
+      nativeLinearAlphaFramebuffer: [...nativeFramebuffer],
+      nativeTransparentClear: true,
       serviceEffects: effects,
       drawOrderPixel,
     };

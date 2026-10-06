@@ -296,7 +296,9 @@ JS Math trigonometry is not silently substituted.
 
 `image-graphics.ts` implements ordinary unclipped straight-RGBA image actors
 through shared `DrawListTarget`. Native command/error services, sampler and blend
-selection remain mandatory providers. Actors prepare their images before scene
+selection remain explicit providers. `createArtemisOrdinaryGpuRaster()` supplies
+the confirmed mode-0 D3D11 policy for this exact revision's single-level image
+subset. Actors prepare their images before scene
 insertion; copies share texture ownership and outer-wrapper metadata while copying
 inner display state. The last actor releases its image binding. Nonzero rotation,
 group raster, shader, mask and transition paths remain outside this raster subset.
@@ -344,6 +346,26 @@ Reset creates an empty list; deletion removes exact selected ids. Returned histo
 and UTF-8-byte-ordered snapshots copy argument maps. These data are inputs for the
 native save owner; the registry does not serialize them as a substitute save format.
 The browser fixture connects actual reset/clear/property recording to this registry.
+
+`gpu-raster.ts` maps the ordinary D3D11 sampler and blend descriptor to shared
+draw commands. Native renderer initialization `0x14015f1d0` creates filter 0x15
+with clamp addressing, and `0x14015fd30` binds that sampler at slot 0. Ordinary
+shader-table entry 0 samples the foreground texture and multiplies its alpha;
+it does not discard transparent texels. Mode 0 in `0x14015d120` uses RGB source
+alpha / inverse source alpha, but alpha source alpha / one. Alpha accumulates the source alpha squared plus
+the previous target alpha, clamped to the target format. Native frame
+clear `0x14015fe10` supplies transparent black. Shared `DrawList.clearColor`
+preserves the existing opaque-black default for other callers.
+
+These constants map to Microsoft's [D3D11 filter enumeration](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/ne-d3d11-d3d11_filter),
+[blend enumeration](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/ne-d3d11-d3d11_blend)
+and [render-target descriptor](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/ns-d3d11-d3d11_render_target_blend_desc).
+The synthetic browser test reads actual framebuffer RGBA while scaling a
+transparent-red/half-alpha-green PNG over quarter-alpha red. It checks linear interpolation,
+independent alpha writes, transparent-fragment writes and transparent clear.
+This establishes the implemented WebGL behavior against the recovered equations;
+it is not a native GPU differential test. Other mode values, texture mip chains,
+custom shaders and alternate rendering backends remain outside this policy.
 
 `surface-cache.ts` supplies the ordinary native surface-manager loan policy
 (`0x140011a90`, `0x140012200`, `0x1400116b0`). Requested UTF-8 names are exact cache

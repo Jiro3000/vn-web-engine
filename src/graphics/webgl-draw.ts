@@ -517,6 +517,9 @@ void main(){vec4 sampled=texture(atlas,tex);if(maskMode.w!=0.)sampled.rgb=vec3(1
       present: (surface: HTMLCanvasElement | undefined, after?: DrawCommand) => void;
     },
   ): void {
+    const clear = list.clearColor ?? [0, 0, 0, 1];
+    if (clear.length !== 4 || !clear.every(Number.isFinite))
+      throw new Error('Invalid draw-list clear color');
     const gl = this.initialize();
     if (gl.isContextLost()) throw new Error('Graphics context lost');
     this.activeFramebuffer = this.framebuffer;
@@ -524,7 +527,7 @@ void main(){vec4 sampled=texture(atlas,tex);if(maskMode.w!=0.)sampled.rgb=vec3(1
     this.activeHeight = this.height;
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.framebuffer!);
     gl.viewport(0, 0, this.width, this.height);
-    gl.clearColor(0, 0, 0, 1);
+    gl.clearColor(clear[0]!, clear[1]!, clear[2]!, clear[3]!);
     gl.clear(gl.COLOR_BUFFER_BIT);
     const copies = new Map<number, TriangleImage>(),
       used = new Set<object>(),

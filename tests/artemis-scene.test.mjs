@@ -551,7 +551,7 @@ const straightBlend = {
   color: {source: 'source-alpha', destination: 'inverse-source-alpha', operation: 'add'},
   alpha: {source: 'one', destination: 'inverse-source-alpha', operation: 'add'},
 };
-async function rasterFixture() {
+async function rasterFixture(rasterPolicy = {filter: 'nearest', blend: straightBlend}) {
   const {ArtemisImageGraphics} = await import('../dist/engines/artemis/image-graphics.js');
   const {ArtemisLayers} = await import('../dist/engines/artemis/layers.js');
   const {createArtemisImageLoader} = await import('../dist/engines/artemis/image-loader.js');
@@ -584,7 +584,7 @@ async function rasterFixture() {
       imageLoadFailed: (tag) => effects.push(['missing image', tag.args.get('file')]),
       layerNotFound: (tag) => effects.push(['missing layer', tag.args.get('id')]),
     },
-    {filter: 'nearest', blend: straightBlend},
+    rasterPolicy,
   );
   const layers = new ArtemisLayers(
     revision,
@@ -1094,4 +1094,32 @@ test('Artemis cancelled and rejected layer creation releases the cache loan exac
   assert.equal(rejected.cache.bytesUsed, 0n);
   rejected.layers.close();
   rejected.cache.close();
+});
+
+test('Artemis ordinary GPU policy preserves native alpha writes, transparent fragments and clear color', async () => {
+  const {createArtemisOrdinaryGpuRaster} = await import('../dist/engines/artemis/gpu-raster.js');
+  assert.throws(() => createArtemisOrdinaryGpuRaster('unknown'), /Unsupported Artemis executable/);
+  const policy = createArtemisOrdinaryGpuRaster(revision);
+  const {layers, graphics} = await rasterFixture(policy);
+  try {
+    await layers.dispatch(command('lyc', {id: '1', file: 'synthetic'}));
+    layers.commit();
+    const list = graphics.drawCommitted(layers.scene),
+      draw = list.commands[0];
+    assert.deepEqual(list.clearColor, [0, 0, 0, 0]);
+    assert.equal(draw.filter, 'linear');
+    assert.equal(draw.discardTransparent, false);
+    assert.deepEqual(draw.blendState.alpha, {
+      source: 'source-alpha',
+      destination: 'one',
+      operation: 'add',
+    });
+    assert.deepEqual(draw.blendState.color, {
+      source: 'source-alpha',
+      destination: 'inverse-source-alpha',
+      operation: 'add',
+    });
+  } finally {
+    layers.close();
+  }
 });

@@ -1,17 +1,13 @@
 import type {DrawList, DrawListTarget} from '../../graphics/draw-list.js';
-import type {BlendState} from '../../graphics/blend.js';
 import type {TriangleDraw, TriangleImage} from '../../graphics/triangle-draw.js';
 import type {AsbTag} from '../../formats/artemis/asb.js';
 import type {ArtemisLayerHost} from './layers.js';
 import type {ArtemisLayerPropertyPatch} from './layer-properties.js';
 import type {ArtemisLoadedImage} from './image-loader.js';
 import type {ArtemisScene} from './scene.js';
-import {
-  ArtemisDisplayObject,
-  artemisDisplayPoint,
-  type ArtemisFloatTrig,
-} from './display-object.js';
+import {ArtemisDisplayObject, artemisDisplayPoint} from './display-object.js';
 import {artemisRevision} from './revision.js';
+import type {ArtemisRasterPolicy} from './gpu-raster.js';
 
 export interface ArtemisImageActor {
   readonly texture: number;
@@ -57,11 +53,7 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisImageActor>
     executableSha256: string,
     private readonly target: DrawListTarget,
     private readonly services: ArtemisLayerServices,
-    private readonly raster: {
-      readonly filter: 'nearest' | 'linear';
-      readonly blend: BlendState;
-      readonly trig?: ArtemisFloatTrig;
-    },
+    private readonly raster: ArtemisRasterPolicy,
   ) {
     this.hash = artemisRevision(executableSha256).executableSha256;
     if (![target.width, target.height].every((n) => Number.isInteger(n) && n > 0))
@@ -215,9 +207,10 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisImageActor>
         depthClip: false,
         filter: this.raster.filter,
         blendState: this.raster.blend,
+        discardTransparent: this.raster.discardTransparent,
       });
     }
-    const list: DrawList = {sprites: [], commands};
+    const list: DrawList = {sprites: [], commands, clearColor: this.raster.clearColor};
     this.target.draw(list, (id) => this.image(id));
     return list;
   }

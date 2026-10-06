@@ -49,6 +49,8 @@ export type DrawCommand =
 export interface DrawList {
   sprites: SpriteDraw[];
   commands?: DrawCommand[];
+  /** Initial framebuffer RGBA; omitted preserves the ordinary opaque black clear. */
+  clearColor?: readonly [number, number, number, number];
 }
 /** Shared raster resource preparation and draw-list presentation contract. */
 export interface DrawListTarget {
