@@ -281,7 +281,7 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
       visible: true,
     };
     const groups = new Map<string, typeof root>();
-    for (const entry of scene.drawEntries('retained')) {
+    for (const entry of scene.prepareEntries('retained')) {
       const actor = entry.value;
       const separator = entry.id.lastIndexOf('.');
       const parent = separator < 0 ? root : groups.get(entry.id.slice(0, separator))!;
@@ -291,13 +291,16 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
           throw new Error('Unsupported Artemis group raster owner');
         if (actor) this.checkActor(actor);
         const p = actor?.display.properties;
-        const visible = parent.visible && (!p || (p.visible && p.xscale > 0 && p.yscale > 0));
+        const alpha = p ? f(parent.alpha * p.alpha) : parent.alpha;
+        const visible =
+          parent.visible &&
+          (!p || (p.visible && p.xscale > 0 && p.yscale > 0 && alpha >= 2 ** -23));
         groups.set(entry.id, {
           matrix:
             actor && visible
               ? actor.display.matrix(parent.matrix, this.raster.trig)
               : parent.matrix,
-          alpha: p ? f(parent.alpha * p.alpha) : parent.alpha,
+          alpha,
           visible,
         });
         continue;

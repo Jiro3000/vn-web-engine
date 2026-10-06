@@ -687,7 +687,7 @@ test('Artemis raster upload refusal preserves the old scene and hidden images re
   assert.equal(invalidated.length, 1);
 });
 
-test('Artemis rendering descends child keys within each group while selection remains ascending', () => {
+test('Artemis ordinary dispatch descends child keys while GPU preparation and selection ascend', () => {
   const scene = new ArtemisScene(revision);
   scene.set('2.2', '2.2');
   scene.set('2.10', '2.10');
@@ -699,12 +699,16 @@ test('Artemis rendering descends child keys within each group while selection re
     ['10', '2', '2.10', '2.2', '-3'],
   );
   assert.deepEqual(
+    scene.prepareEntries().map((entry) => entry.id),
+    ['-3', '2', '2.2', '2.10', '10'],
+  );
+  assert.deepEqual(
     scene.select('2').map((entry) => entry.id),
     ['2', '2.2', '2.10'],
   );
 });
 
-test('Artemis raster layering paints the lower numeric id after the higher background id', async () => {
+test('Artemis GPU preparation paints the higher numeric id after the lower background id', async () => {
   const {graphics, layers, prepared} = await rasterFixture();
   try {
     await layers.dispatch(
@@ -715,8 +719,8 @@ test('Artemis raster layering paints the lower numeric id after the higher backg
     );
     layers.commit();
     const list = graphics.drawCommitted(layers.scene);
-    assert.equal(graphics.image(list.commands[0].texture), prepared[1]);
-    assert.equal(graphics.image(list.commands[1].texture), prepared[0]);
+    assert.equal(graphics.image(list.commands[0].texture), prepared[0]);
+    assert.equal(graphics.image(list.commands[1].texture), prepared[1]);
   } finally {
     layers.close();
   }
@@ -1407,9 +1411,9 @@ test('Artemis ordinary groups compose retained transforms and alpha without owni
     assert.deepEqual(
       initial.commands.map((c) => c.texture),
       [
-        layers.scene.entry('2.sub.10').value.texture,
-        layers.scene.entry('2.sub.1').value.texture,
         layers.scene.entry('1').value.texture,
+        layers.scene.entry('2.sub.1').value.texture,
+        layers.scene.entry('2.sub.10').value.texture,
       ],
     );
     assert.equal(layers.scene.entry('2', 'retained').value, undefined);
@@ -1428,23 +1432,23 @@ test('Artemis ordinary groups compose retained transforms and alpha without owni
     layers.commit();
     const changed = graphics.drawCommitted(layers.scene).commands;
     // Parent scaling places the unchanged image origins at (3,0) and (5,0).
-    assert.deepEqual([...changed[0].vertices.slice(0, 3)], [0.5, 1, 0]);
+    assert.deepEqual([...changed[2].vertices.slice(0, 3)], [0.5, 1, 0]);
     assert.deepEqual([...changed[1].vertices.slice(0, 3)], [1.5, 1, 0]);
     const alpha = Math.fround(128 / 255),
       groupAlpha = Math.fround(alpha * alpha);
-    assert.equal(changed[0].vertices[6], groupAlpha);
+    assert.equal(changed[2].vertices[6], groupAlpha);
     assert.equal(changed[1].vertices[6], Math.fround(groupAlpha * alpha));
-    assert.equal(changed[2].vertices[6], 1);
+    assert.equal(changed[0].vertices[6], 1);
     assert.equal(group.wrapper.alpha, alpha);
     await layers.dispatch(command('lyprop', {id: '2', top: '1'}));
     const copy = layers.scene.entry('2').value;
     assert.notEqual(copy, group);
     assert.equal(copy.wrapper, group.wrapper);
     assert.equal(layers.scene.entry('2', 'retained').value, group);
-    assert.equal(graphics.drawCommitted(layers.scene).commands[0].vertices[1], 1);
+    assert.equal(graphics.drawCommitted(layers.scene).commands[2].vertices[1], 1);
     layers.commit();
     assert.throws(() => graphics.copyImageLayer(group), /released/);
-    assert.equal(graphics.drawCommitted(layers.scene).commands[0].vertices[1], 0);
+    assert.equal(graphics.drawCommitted(layers.scene).commands[2].vertices[1], 0);
     await layers.dispatch(command('lydel', {id: '2'}));
     assert.equal(graphics.drawCommitted(layers.scene).commands.length, 3);
     layers.commit();
@@ -1508,6 +1512,29 @@ test('Artemis group raster effects require the unimplemented intermediate owner'
         () => layers.dispatch(command('lyprop', {id: 'group', ...patch})),
         /Unsupported Artemis.*(group raster|layer property)/,
       );
+    layers.commit();
+    assert.equal(graphics.drawCommitted(layers.scene).commands.length, 1);
+  } finally {
+    layers.close();
+  }
+});
+
+test('Artemis GPU preparation gates group alpha before descending into brighter or negative children', async () => {
+  const {layers, graphics} = await rasterFixture();
+  try {
+    await layers.dispatch(command('lyc', {id: 'group.child', file: 'synthetic.png'}));
+    await layers.dispatch(command('lyc', {id: 'sibling', file: 'synthetic.png'}));
+    await layers.dispatch(command('lyprop', {id: 'group.child', alpha: '1020'}));
+    await layers.dispatch(command('lyprop', {id: 'group', alpha: String(255 * 2 ** -24)}));
+    layers.commit();
+    assert.equal(graphics.drawCommitted(layers.scene).commands.length, 1);
+    await layers.dispatch(command('lyprop', {id: 'group', alpha: String(255 * 2 ** -23)}));
+    layers.commit();
+    const exact = graphics.drawCommitted(layers.scene).commands;
+    assert.equal(exact.length, 2);
+    assert.equal(exact[0].vertices[6], 4 * 2 ** -23);
+    await layers.dispatch(command('lyprop', {id: 'group', alpha: '-255'}));
+    await layers.dispatch(command('lyprop', {id: 'group.child', alpha: '-255'}));
     layers.commit();
     assert.equal(graphics.drawCommitted(layers.scene).commands.length, 1);
   } finally {

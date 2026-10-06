@@ -252,7 +252,10 @@
     stage.dispatch(command('flip'));
     graphics.drawCommitted(layers.scene);
     const drawOrderPixel = [...canvas.getContext('2d').getImageData(0, 0, 1, 1).data];
-    assert(drawOrderPixel.join(',') === '255,0,0,255', 'native descending draw order mismatch');
+    assert(
+      drawOrderPixel.join(',') === '0,255,0,255',
+      'native ascending GPU preparation order mismatch',
+    );
     layers.close();
     const nativeGraphics = new ArtemisImageGraphics(
       revision,
@@ -277,7 +280,7 @@
       nativeGraphics,
     );
     await layers.dispatch(
-      command('lyc', {id: '10', file: 'missing', width: '4', height: '2', color: '40ff0000'}),
+      command('lyc', {id: '-10', file: 'missing', width: '4', height: '2', color: '40ff0000'}),
     );
     await layers.dispatch(command('lyc', {id: '1', file: 'synthetic'}));
     await layers.dispatch(command('lyprop', {id: '1', left: '1', xscale: '200'}));
@@ -386,7 +389,7 @@
       `native rebased clip/linear sampling mismatch: ${nativeClipPixels}`,
     );
     const nativeEmpty = new Uint8Array(4);
-    await layers.dispatch(command('lydel', {id: '10'}));
+    await layers.dispatch(command('lydel', {id: '-10'}));
     await layers.dispatch(command('lydel', {id: '1'}));
     stage.dispatch(command('flip'));
     nativeGraphics.drawCommitted(layers.scene);

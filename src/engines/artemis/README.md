@@ -314,9 +314,11 @@ insertion; copies share texture ownership and outer-wrapper metadata while copyi
 inner display state. The last actor releases its image binding. Nonzero rotation,
 group raster, shader, mask and transition paths remain outside this raster subset.
 
-`drawCommitted()` emits the retained ordinary scene with descending child order,
-matching `0x1401864a0`; lower numeric ids paint after higher ids. Native selection
-and structural traversal remain ascending. Image quads preserve float32 transform,
+`drawCommitted()` emits retained GPU images in ascending child order through the
+preparation path (`0x140186770`); higher numeric ids paint after lower ids. The
+separate ordinary callback path (`0x1401864a0`) traverses descending for non-raster
+effects. Native selection and structural traversal remain ascending. Image quads
+preserve float32 transform,
 viewport normalization and triangle-strip order (`0x14015d120`). The stage owner
 chooses frame/commit timing; this method does not implement the full native flip
 state machine. There is no playable Artemis UI/profile yet.
@@ -325,7 +327,7 @@ Shared `WebGLDrawTarget.prepareImage()` uploads and retains an image until
 `invalidate()`, including empty/hidden frames. Normal unprepared images retain
 per-frame eviction behavior. Failed uploads delete their partial GPU allocation.
 `tests/browser/artemis-images.html` checks synthetic PNG decoding, Lua suspension,
-actual shared WebGL alpha pixels, descending overlap order, retained resources and
+actual shared WebGL alpha pixels, ascending GPU overlap order, retained resources and
 upload-error cleanup. It contains no game assets. Browser checks use explicit
 sampler/blend fixtures and do not establish native GPU equivalence.
 
@@ -458,10 +460,11 @@ subsequent edits reuse the current copy. The shared outer alpha metadata remains
 separate from draw opacity. No image texture or resource loan belongs to an empty
 ordinary group.
 
-The raster traversal follows native descending child order (`0x1401864a0`),
+The raster traversal follows native ascending GPU preparation order (`0x140186770`),
 composes each child's float32 matrix with its parent's world matrix, and multiplies
-parent/child alpha in float32 (`0x14015b440`, `0x1400b3770`). Hidden groups and
-nonpositive scales suppress their entire descendant branch. Group anchors default
+parent/child alpha in float32 (`0x14015b440`, `0x1400b3790`). Hidden groups,
+nonpositive scales and effective group alpha below `2**-23`
+suppress their entire descendant branch during preparation. Group anchors default
 to zero; image anchors remain centered. Empty dotted identifiers and numeric aliases
 retain scene lookup semantics. Nonzero group rotation still requires the native
 float trig owner.

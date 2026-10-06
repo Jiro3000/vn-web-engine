@@ -284,7 +284,12 @@ export class ArtemisScene<T> {
     this.visit(this.root, '', view, result);
     return result;
   }
-  /** Native 0x1401864a0 draws each group's own actor, then children in descending order. */
+  /** Native 0x140186770 prepares children ascending; GPU images paint in this pass. */
+  prepareEntries(view: ArtemisSceneView = 'retained'): readonly ArtemisSceneEntry<T>[] {
+    return this.entries(view);
+  }
+  /** Ordinary non-raster callbacks (0x1401864a0): group first, then descending children.
+   * GPU images paint separately through prepareEntries. */
   drawEntries(view: ArtemisSceneView = 'retained'): readonly ArtemisSceneEntry<T>[] {
     const result: ArtemisSceneEntry<T>[] = [];
     this.visit(this.root, '', view, result, true);
