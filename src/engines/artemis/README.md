@@ -228,8 +228,10 @@ The image-backed constructor has native type 1 and blocks child traversal;
 empty groups have type 0. Owners explicitly select the group type when inserting
 a group payload. Mutations copy each affected current child map while
 retaining its previous structure; `commit()` recursively releases that structural
-version. Payload ownership, inner-actor versions and presentation timing remain
-separate work. Relevant native entries: `0x140185bf0`, `0x1400b3340`.
+version. Both map and inner-actor buffers retain their physical slot indices;
+nodes shared between maps keep their resources until their last reference.
+Presentation timing remains a separate owner. Relevant native entries:
+`0x140185bf0`, `0x1400b3340`.
 
 Child order compares signed decimal keys numerically when both are numeric and
 otherwise compares UTF-8 bytes (`0x140185740`). Equivalent keys such as `2` and
@@ -273,7 +275,16 @@ retained-actor editing mode remain unsupported. Native entries:
 
 Use the layer owner's `commit()` at a confirmed native commit boundary. It releases
 actors absent from all reachable current/retained child maps and inner-actor versions.
-`close()` cancels pending work and releases owned actors. Owners must return fresh
+Commit visits current children ascending, releases the node's old actor, then
+clears its old child map. Full-map destruction releases children descending
+(`0x1400ec380`, `0x1400f0f70`). A removed node destroys physical map slots 1 then 0,
+followed by actor slots 1 then 0 (`0x1400b1860`). Shared-node and payload references
+preserve this order without releasing live aliases. The layer owner processes
+scene release notifications in order, so surface-cache victims and idle FIFO
+depend on native lifetime order rather than actor allocation order.
+`close()` cancels pending work and clears both scene buffers in that order.
+Scene release callbacks only record notifications; they must not mutate the scene
+or throw. Owners must return fresh
 actors from create/copy and retain shared image resources when copying. Async
 resource dispatch rejects overlapping operations and snapshots tag arguments;
 `cancelPending()` prevents stale completion effects alongside cancellation of

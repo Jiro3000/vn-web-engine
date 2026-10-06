@@ -1228,3 +1228,98 @@ test('Artemis non-default image effects require an owner before changing geometr
     layers.close();
   }
 });
+
+test('Artemis commit releases edited actors in ascending child order before removed children', () => {
+  const released = [],
+    scene = new ArtemisScene(revision, (value) => released.push(value));
+  for (const id of ['10', '2', '0']) scene.set(id, `old-${id}`);
+  scene.commit();
+  scene.editValue('10', () => 'new-10');
+  scene.editValue('2', () => 'new-2');
+  scene.remove('0');
+  assert.deepEqual(released, []);
+  scene.commit();
+  assert.deepEqual(released, ['old-2', 'old-10', 'old-0']);
+  scene.clear();
+  assert.deepEqual(released.slice(3), ['new-10', 'new-2']);
+  assert.equal(scene.payloads().size, 0);
+  scene.clear();
+  assert.equal(released.length, 5);
+});
+
+test('Artemis removed groups destroy physical map slots before both actor slots', () => {
+  for (const secondCycle of [false, true]) {
+    const released = [],
+      scene = new ArtemisScene(revision, (value) => released.push(value));
+    scene.set('g', 'group-old', true);
+    scene.set('g.a', 'a');
+    scene.set('g.b', 'b');
+    scene.commit();
+    if (secondCycle) {
+      scene.set('g.temporary', undefined, true);
+      scene.remove('g.temporary');
+      scene.commit(); // Flip the physical map slot while retaining the same children.
+    }
+    scene.remove('g.a');
+    scene.set('g.c', 'c');
+    scene.editValue('g', () => 'group-new');
+    scene.remove('g');
+    assert.deepEqual(released, []);
+    scene.commit();
+    assert.deepEqual(released, [
+      ...(secondCycle ? ['c', 'b', 'a'] : ['a', 'c', 'b']),
+      'group-new',
+      'group-old',
+    ]);
+    assert.equal(scene.payloads().size, 0);
+  }
+});
+
+test('Artemis shared payloads survive copied maps, actor slots and aliases until their last reference', () => {
+  const released = [],
+    scene = new ArtemisScene(revision, (value) => released.push(value));
+  const shared = {};
+  scene.set('1', shared);
+  scene.set('2', shared);
+  scene.commit();
+  scene.editValue('1', (value) => value);
+  scene.editValue('1', () => {
+    throw Error('must not copy an already edited slot');
+  });
+  scene.commit();
+  scene.remove('1');
+  scene.commit();
+  assert.deepEqual(released, []);
+  assert.deepEqual([...scene.payloads()], [shared]);
+  scene.remove('2');
+  assert.deepEqual(released, []);
+  scene.clear();
+  assert.deepEqual(released, [shared]);
+  scene.clear();
+  assert.equal(released.length, 1);
+});
+
+test('Artemis layer release order determines the native over-budget victim and idle FIFO', async () => {
+  const {cache, layers, disposed} = await cachedLayerFixture(16n);
+  try {
+    for (const id of ['0', '2', '10']) await layers.dispatch(command('lyc', {id, file: id}));
+    layers.commit();
+    for (const id of ['2', '0', '10']) await layers.dispatch(command('lydel', {id}));
+    assert.equal(disposed.length, 0);
+    layers.commit();
+    assert.deepEqual(
+      disposed.map((x) => x.path),
+      ['10.png'],
+    );
+    const added = await cache.load('added'); // Current total fits; no reservation trim.
+    await cache.load('missing'); // New total exceeds budget: oldest idle is 2, then 0.
+    assert.deepEqual(
+      disposed.map((x) => x.path),
+      ['10.png', '2.png'],
+    );
+    added.lease.release();
+  } finally {
+    layers.close();
+    cache.close();
+  }
+});

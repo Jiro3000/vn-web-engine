@@ -62,12 +62,13 @@ export class ArtemisLayers<T extends object> {
   private pending: number | null = null;
   private closed = false;
   private readonly owned = new Set<T>();
+  private readonly released: T[] = [];
   constructor(
     executableSha256: string,
     private readonly images: ArtemisImageSource,
     private readonly host: ArtemisLayerHost<T>,
   ) {
-    this.scene = new ArtemisScene(executableSha256);
+    this.scene = new ArtemisScene(executableSha256, (layer) => this.released.push(layer));
   }
   /** Call alongside cancellation of the old script's Lua continuations. */
   cancelPending(): void {
@@ -76,10 +77,12 @@ export class ArtemisLayers<T extends object> {
   }
   private collect(): void {
     const referenced = this.scene.payloads();
-    for (const layer of this.owned)
+    // Scene notifications preserve native release order. The final fallback
+    // releases fresh actors that failed to enter the tree, rather than sorting
+    // existing actors by allocation order.
+    for (const layer of [...this.released.splice(0), ...this.owned])
       if (!referenced.has(layer)) {
-        this.owned.delete(layer);
-        this.host.releaseImageLayer(layer);
+        if (this.owned.delete(layer)) this.host.releaseImageLayer(layer);
       }
   }
   /** Commit structure and release actors no longer retained by either structural view. */
@@ -92,10 +95,8 @@ export class ArtemisLayers<T extends object> {
     if (this.closed) return;
     this.closed = true;
     this.cancelPending();
-    for (const layer of this.owned) {
-      this.owned.delete(layer);
-      this.host.releaseImageLayer(layer);
-    }
+    this.scene.clear();
+    this.collect();
   }
   private remove(id: string): void {
     const selected = this.scene.select(id).map((entry) => entry.id);

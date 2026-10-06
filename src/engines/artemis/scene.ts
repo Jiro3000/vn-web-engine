@@ -38,27 +38,75 @@ interface Child<T> {
   readonly key: string;
   node: Node<T>;
 }
+class PayloadLifetime<T> {
+  readonly references = new Map<T, number>();
+  constructor(private readonly released?: (value: T) => void) {}
+  retain(value: T | undefined): void {
+    if (value !== undefined) this.references.set(value, (this.references.get(value) ?? 0) + 1);
+  }
+  release(value: T | undefined): void {
+    if (value === undefined) return;
+    const count = this.references.get(value)! - 1;
+    if (count) this.references.set(value, count);
+    else {
+      this.references.delete(value);
+      this.released?.(value);
+    }
+  }
+}
 class Node<T> {
-  private current: Child<T>[] = [];
-  private retained = this.current;
-  private currentValue: T | undefined;
-  private retainedValue: T | undefined;
+  private readonly maps: [Child<T>[], Child<T>[]] = [[], []];
+  private readonly values: [T | undefined, T | undefined];
+  private currentMap = 0;
+  private retainedMap = 0;
+  private currentValue = 0;
+  private retainedValue = 0;
+  private references = 0;
   constructor(
     value: T | undefined,
-    readonly acceptsChildren = true,
+    readonly acceptsChildren: boolean,
+    private readonly lifetime: PayloadLifetime<T>,
   ) {
-    this.currentValue = this.retainedValue = value;
+    this.values = [value, undefined];
+    lifetime.retain(value);
+  }
+  retain(): void {
+    this.references++;
+  }
+  release(): void {
+    if (--this.references) return;
+    // 0x1400b1860 destroys map slots 1,0 before inner-actor slots 1,0.
+    this.clearMap(1);
+    this.clearMap(0);
+    this.clearValue(1);
+    this.clearValue(0);
+  }
+  private clearMap(index: number): void {
+    const entries = this.maps[index]!;
+    this.maps[index] = [];
+    // Full-map clear 0x1400ec380 / 0x1400f0f70 releases descending keys.
+    for (let i = entries.length - 1; i >= 0; i--) entries[i]!.node.release();
+  }
+  private clearValue(index: number): void {
+    const value = this.values[index];
+    this.values[index] = undefined;
+    this.lifetime.release(value);
   }
   value(view: ArtemisSceneView): T | undefined {
-    return view === 'current' ? this.currentValue : this.retainedValue;
+    return this.values[view === 'current' ? this.currentValue : this.retainedValue];
   }
   edit(copy: (value: T) => T): T | undefined {
-    if (this.currentValue !== undefined && this.currentValue === this.retainedValue)
-      this.currentValue = copy(this.currentValue);
-    return this.currentValue;
+    const value = this.value('current');
+    if (value !== undefined && this.currentValue === this.retainedValue) {
+      const replacement = copy(value);
+      this.currentValue = 1 - this.retainedValue;
+      this.values[this.currentValue] = replacement;
+      this.lifetime.retain(replacement);
+    }
+    return this.value('current');
   }
   children(view: ArtemisSceneView): readonly Child<T>[] {
-    return view === 'current' ? this.current : this.retained;
+    return this.maps[view === 'current' ? this.currentMap : this.retainedMap]!;
   }
   private index(key: string, entries: readonly Child<T>[]): number {
     let low = 0,
@@ -76,18 +124,33 @@ class Node<T> {
     return entry && compare(entry.key, key) === 0 ? entry : undefined;
   }
   assign(key: string, node: Node<T> | null): boolean {
-    const index = this.index(key, this.current);
-    const exists = index < this.current.length && compare(this.current[index]!.key, key) === 0;
+    let entries = this.maps[this.currentMap]!;
+    const index = this.index(key, entries);
+    const exists = index < entries.length && compare(entries[index]!.key, key) === 0;
     if (!node && !exists) return false;
-    if (this.current === this.retained) this.current = this.current.map((entry) => ({...entry}));
-    if (!node) this.current.splice(index, 1);
-    else if (exists) this.current[index]!.node = node;
-    else this.current.splice(index, 0, {key, node});
+    if (this.currentMap === this.retainedMap) {
+      this.currentMap = 1 - this.retainedMap;
+      entries = entries.map((entry) => {
+        entry.node.retain();
+        return {...entry};
+      });
+      this.maps[this.currentMap] = entries;
+    }
+    const old = exists ? entries[index]!.node : undefined;
+    node?.retain();
+    if (!node) entries.splice(index, 1);
+    else if (exists) entries[index]!.node = node;
+    else entries.splice(index, 0, {key, node});
+    old?.release();
     return true;
   }
   commit(): void {
-    for (const entry of this.current) entry.node.commit();
-    this.retained = this.current;
+    // 0x1400b3340 commits current children ascending, then releases its old
+    // inner actor before clearing the old child map.
+    for (const entry of this.children('current')) entry.node.commit();
+    if (this.retainedValue !== this.currentValue) this.clearValue(this.retainedValue);
+    if (this.retainedMap !== this.currentMap) this.clearMap(this.retainedMap);
+    this.retainedMap = this.currentMap;
     this.retainedValue = this.currentValue;
   }
 }
@@ -96,9 +159,14 @@ class Node<T> {
  * Mutation updates current child maps; commit releases the retained structural version.
  */
 export class ArtemisScene<T> {
-  private readonly root = new Node<T>(undefined);
-  constructor(executableSha256: string) {
+  private root: Node<T>;
+  private readonly lifetime: PayloadLifetime<T>;
+  /** Release notifications must only record effects, without throwing or mutating this scene. */
+  constructor(executableSha256: string, onPayloadReleased?: (value: T) => void) {
     artemisRevision(executableSha256);
+    this.lifetime = new PayloadLifetime(onPayloadReleased);
+    this.root = new Node(undefined, true, this.lifetime);
+    this.root.retain();
   }
   private path(id: string): string[] {
     const parts = id.split('.');
@@ -114,12 +182,15 @@ export class ArtemisScene<T> {
       if (!parent.acceptsChildren) return false;
       let child = parent.child(key, 'current');
       if (!child) {
-        parent.assign(key, new Node<T>(undefined));
+        parent.assign(key, new Node<T>(undefined, true, this.lifetime));
         child = parent.child(key, 'current')!;
       }
       parent = child.node;
     }
-    return parent.acceptsChildren && parent.assign(parts.at(-1)!, new Node(value, acceptsChildren));
+    return (
+      parent.acceptsChildren &&
+      parent.assign(parts.at(-1)!, new Node(value, acceptsChildren, this.lifetime))
+    );
   }
   remove(id: string): boolean {
     const parts = this.path(id);
@@ -160,19 +231,13 @@ export class ArtemisScene<T> {
   }
   /** All payloads held by reachable nodes, including inner retained versions. */
   payloads(): ReadonlySet<T> {
-    const result = new Set<T>(),
-      visited = new Set<Node<T>>();
-    const visit = (node: Node<T>) => {
-      if (visited.has(node)) return;
-      visited.add(node);
-      for (const view of ['current', 'retained'] as const) {
-        const value = node.value(view);
-        if (value !== undefined) result.add(value);
-        for (const child of node.children(view)) visit(child.node);
-      }
-    };
-    visit(this.root);
-    return result;
+    return new Set(this.lifetime.references.keys());
+  }
+  /** Destroy both physical structural buffers in native member order. */
+  clear(): void {
+    this.root.release();
+    this.root = new Node(undefined, true, this.lifetime);
+    this.root.retain();
   }
   /** Native 0x140113e50 selects the node and its descendants using the requested prefix.
    * Numeric aliases retain the caller's spelling in the selected identifiers.
