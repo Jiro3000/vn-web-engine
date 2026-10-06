@@ -37,6 +37,7 @@ export async function decodeImageOffThread(
 ): Promise<ImageDecodeResponse | null> {
   const workers = decodePool();
   if (!workers.available) return null;
-  const snapshot = bytes.slice();
+  // A Uint8Array subclass (for example Node Buffer) may implement slice as a borrowed view.
+  const snapshot = Uint8Array.from(bytes);
   return (await workers.run({format, bytes: snapshot}, [snapshot.buffer])) ?? null;
 }

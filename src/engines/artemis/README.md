@@ -215,7 +215,7 @@ then content sniffing of the exact file, then appended-extension candidates. Cod
 registration and extension order are preserved; Unicode names/aliases stay unchanged.
 The exact-hash factory selects PNG (`png`, `PNG`), JPEG (`jpg`, `jpeg`, `JPG`, `JPEG`),
 then PSD (`psd`, `PSD`), matching the stage initializer. PNG uses the shared straight
-RGBA decoder; JPEG and PSD require injected owners and refuse when selected without
+RGBA decoder on the shared worker when available, with an in-thread fallback; JPEG and PSD require injected owners and refuse when selected without
 one. Decoder null means native failure/fallback; host and unsupported-format errors
 propagate. Corrupt PNGs are refused by the strict shared reader. Image loading is
 separate from cache eviction, layer geometry, property application and presentation.

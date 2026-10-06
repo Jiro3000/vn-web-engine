@@ -1,5 +1,6 @@
 import type {TriangleImage} from '../../graphics/triangle-draw.js';
 import {decodePng} from '../../formats/png/decode.js';
+import {decodeImageOffThread} from '../../graphics/image-decode-offload.js';
 import {artemisRevision} from './revision.js';
 
 export interface ArtemisImageCodec {
@@ -77,7 +78,7 @@ export function createArtemisImageLoader(
       decode: async (bytes) => {
         if (![137, 80, 78, 71, 13, 10, 26, 10].every((byte, index) => bytes[index] === byte))
           return null;
-        return decodePng(bytes);
+        return (await decodeImageOffThread(bytes, 'png')) ?? decodePng(bytes);
       },
     },
     {extensions: ['jpg', 'jpeg', 'JPG', 'JPEG'], decode: decoders.jpeg ?? absent('JPEG')},
