@@ -4,6 +4,7 @@ import {BrowserWindowsSystemProfileHost} from '../dist/platform/browser-windows-
 import {
   initializeArtemisVariables,
   initializeArtemisWindowsVersion,
+  initializeArtemisResourcePaths,
 } from '../dist/engines/artemis/revision.js';
 import {openArtemisInstallation} from './artemis-installation.mjs';
 import {ArtemisLua} from '../dist/engines/artemis/lua.js';
@@ -64,12 +65,17 @@ try {
   const ini = new TextDecoder('utf-8', {fatal: true}).decode(iniBytes);
   let section = '',
     width,
-    height;
+    height,
+    savePath,
+    savePathCsidl;
   for (const sourceLine of ini.split(/\r?\n/)) {
     const line = sourceLine.split(';', 1)[0].trim();
     const header = /^\[([^\]]+)\]$/.exec(line);
     if (header) section = header[1].toUpperCase();
     if (section !== 'WINDOWS') continue;
+    const setting = /^(SAVEPATH|SAVEPATH_CSIDL)\s*=\s*(.*)$/.exec(line);
+    if (setting?.[1] === 'SAVEPATH') savePath = setting[2];
+    if (setting?.[1] === 'SAVEPATH_CSIDL') savePathCsidl = setting[2];
     const entry = /^(WIDTH|HEIGHT)\s*=\s*(\d+)$/.exec(line);
     if (entry?.[1] === 'WIDTH') width = Number(entry[2]);
     if (entry?.[1] === 'HEIGHT') height = Number(entry[2]);
@@ -88,6 +94,9 @@ try {
   if (executable === null) throw new Error('Missing Artemis executable');
   const executableSha256 = createHash('sha256').update(executable).digest('hex');
   initializeArtemisVariables(variables, executableSha256);
+  // Installation-relative read-only namespace; no Windows known-folder resolution or writes.
+  if (savePath !== undefined && savePathCsidl === undefined && /^[\w-]+$/.test(savePath))
+    initializeArtemisResourcePaths(variables, {dataPath: '', savePath});
   const systemProfile = new BrowserWindowsSystemProfileHost();
   initializeArtemisWindowsVersion(variables, () => systemProfile.readVersion());
   const modes = new ArtemisModes({

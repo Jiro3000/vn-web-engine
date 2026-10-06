@@ -60,3 +60,14 @@ export function initializeArtemisWindowsVersion(
       throw new Error('Invalid Artemis Windows version');
   variables.write('s.windowsversion', `${version.major}.${version.minor}`);
 }
+
+/** Native 0x1400c37e0 publishes the owner's resolved GameDataPath/SaveDataPath.
+ * Resolution and the backing storage namespace belong to the filesystem owner.
+ */
+export function initializeArtemisResourcePaths(
+  variables: ArtemisVariables,
+  paths: {readonly dataPath: string | Uint8Array; readonly savePath: string | Uint8Array},
+): void {
+  variables.write('s.datapath', paths.dataPath);
+  variables.write('s.savepath', paths.savePath);
+}

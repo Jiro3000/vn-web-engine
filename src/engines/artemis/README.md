@@ -182,5 +182,12 @@ returns a native pointer. The owner copies the result before querying/calling
 `Delete`; absent module/export, null result and absent `Delete` produce an empty
 result, matching the native implementation. Browser DLL loading returns failure.
 Successful native hosts must supply `readCString`. The current tag adapter supports
-ASCII arguments only; legacy ANSI encoding and registry teardown remain unsupported.
+ASCII arguments only; legacy ANSI encoding remains unsupported. `reset()` releases
+cached modules in native byte-key order and clears the registry for later reuse.
 Returned bytes are published through the variable owner without UTF-8 conversion.
+
+`initializeArtemisResourcePaths` publishes the filesystem owner's resolved data
+and save roots. It does not resolve Windows known folders or choose persistence.
+The nonvisual probe uses an installation-relative namespace and accepts only an
+explicit simple SAVEPATH with no SAVEPATH_CSIDL. Reads remain in the selected
+installation; it does not create directories or write saves.

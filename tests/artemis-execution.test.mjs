@@ -1144,3 +1144,32 @@ test('Native DLL strings are copied before Delete; missing modules, methods and 
   assert.equal(calls.filter((c) => c[0] === 'delete').length, 1);
   assert.throws(() => native.call('日本語.dll', 'Version', ''), /ANSI/);
 });
+
+test('Native module teardown releases the sorted registry once and permits later loading', async () => {
+  const {ArtemisNativeLibrary} = await import('../dist/engines/artemis/native-library.js');
+  const released = [],
+    loaded = [];
+  const owner = new ArtemisNativeLibrary(
+    {
+      loadLibraryA: (path) => {
+        const library = {path: luaText(path)};
+        loaded.push(library);
+        return library;
+      },
+      getProcAddress: () => null,
+      invoke: () => 0n,
+      freeLibrary: (library) => released.push(library.path),
+      mainWindowHandle: () => null,
+    },
+    () => {},
+  );
+  owner.call('z.dll', 'none', '');
+  owner.call('a.dll', 'none', '');
+  owner.reset();
+  owner.reset();
+  assert.deepEqual(released, ['a.dll', 'z.dll']);
+  owner.call('a.dll', 'none', '');
+  assert.equal(loaded.length, 3);
+  owner.reset();
+  assert.deepEqual(released, ['a.dll', 'z.dll', 'a.dll']);
+});

@@ -61,4 +61,18 @@ export class ArtemisNativeLibrary {
     this.writeResult(p.get('result') ?? '', result);
     return true;
   }
+  /** Native 0x140182640 releases modules in byte-key order and clears the registry. */
+  reset(): void {
+    const entries = [...this.modules].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    this.modules.clear();
+    let failure: unknown;
+    for (const [, library] of entries) {
+      try {
+        synchronous(this.host.freeLibrary(library));
+      } catch (error) {
+        failure ??= error;
+      }
+    }
+    if (failure !== undefined) throw failure;
+  }
 }
