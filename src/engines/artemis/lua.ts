@@ -183,10 +183,19 @@ export class ArtemisLua {
       if (callback.type !== 6) return false;
       const args: LuaTable = new Map();
       for (const [key, value] of tag.args) args.set(key, new TextEncoder().encode(value));
-      const result = callback.invoke([args], true)[0];
-      if (typeof result !== 'number' || !Number.isFinite(result))
-        throw new Error('Invalid Artemis tag filter result');
-      return Math.trunc(result) !== 0;
+      return artemisTagFilterResult(callback.invokeFirst([args], true));
+    } finally {
+      callback.release();
+    }
+  }
+  createTagFilterCall(tag: AsbTag): ArtemisLuaCall | null {
+    if (tag.sourceLine < 0 || !this.filter) return null;
+    const callback = this.filter.get(tag.name);
+    try {
+      if (callback.type !== 6) return null;
+      const params: LuaTable = new Map();
+      for (const [key, value] of tag.args) params.set(key, new TextEncoder().encode(value));
+      return new ArtemisLuaCall(this.vm.createThread(callback, true), [params], false);
     } finally {
       callback.release();
     }
@@ -199,7 +208,7 @@ export class ArtemisLua {
     if (!tag.name || !this.eventFilter) return 0;
     const args: LuaTable = new Map();
     for (const [key, value] of tag.args) args.set(key, new TextEncoder().encode(value));
-    const result = this.eventFilter.invoke([new TextEncoder().encode(tag.name), args], true)[0];
+    const result = this.eventFilter.invokeFirst([new TextEncoder().encode(tag.name), args], true);
     if (
       typeof result !== 'number' ||
       !Number.isFinite(result) ||
@@ -219,17 +228,24 @@ export class ArtemisLuaCall {
   constructor(
     private readonly thread: LuaThread,
     private readonly initialArgs: readonly LuaValue[],
+    private readonly discardDoneValues = true,
   ) {}
   resume(values: readonly LuaValue[] = []): LuaThreadResult {
     if (!this.started && values.length)
       throw new Error('Artemis call arguments are already captured');
     const args = this.started ? values : this.initialArgs;
     this.started = true;
-    return this.thread.resume(args, true);
+    return this.thread.resume(args, this.discardDoneValues, this.discardDoneValues ? Infinity : 1);
   }
   close(): void {
     this.thread.close();
   }
+}
+
+export function artemisTagFilterResult(result: LuaValue | undefined): boolean {
+  if (typeof result !== 'number' || !Number.isFinite(result))
+    throw new Error('Invalid Artemis tag filter result');
+  return Math.trunc(result) !== 0;
 }
 
 /** CLua 0x1401304d0: name at [1], named strings and floorf numeric values. */

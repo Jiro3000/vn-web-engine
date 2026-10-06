@@ -1,7 +1,7 @@
 import type {AsbTag} from '../../formats/artemis/asb.js';
 import {parseAsb} from '../../formats/artemis/asb.js';
 import {parseIet, type IetProgram} from '../../formats/artemis/iet.js';
-import type {ArtemisLua, ArtemisLuaCall} from './lua.js';
+import {artemisTagFilterResult, type ArtemisLua, type ArtemisLuaCall} from './lua.js';
 import type {LuaValue} from '../../core/lua51/runtime.js';
 
 export interface ArtemisScriptTrace {
@@ -21,6 +21,10 @@ export interface ArtemisScriptHost {
   /** Return with no caller reaches native exit/save handling, supplied by the host. */
   emptyReturn?(): 'stopped' | void;
 }
+interface PendingLuaCall {
+  readonly task: ArtemisLuaCall;
+  readonly filterTag?: AsbTag;
+}
 interface Cursor {
   program: IetProgram;
   file: string;
@@ -35,7 +39,7 @@ export class ArtemisScript {
   private queue: AsbTag[] = [];
   private queueHead = 0;
   private running = false;
-  private readonly luaCalls: ArtemisLuaCall[] = [];
+  private readonly luaCalls: PendingLuaCall[] = [];
   private luaSuspended = false;
   state: ArtemisScriptState = 'ended';
   get currentFile(): string {
@@ -143,7 +147,8 @@ export class ArtemisScript {
     this.luaSuspended = false;
     let input = values;
     while (this.luaCalls.length) {
-      const task = this.luaCalls.at(-1)!;
+      const frame = this.luaCalls.at(-1)!;
+      const task = frame.task;
       const index = this.luaCalls.length - 1;
       try {
         const result = task.resume(input);
@@ -152,13 +157,16 @@ export class ArtemisScript {
           this.state = 'waiting';
           return this.state;
         }
-        if (this.luaCalls.at(-1) !== task)
+        if (this.luaCalls.at(-1) !== frame)
           throw new Error('Artemis nested callback completed with unsettled resource work');
         this.luaCalls.pop();
         task.close();
+        if (frame.filterTag && !artemisTagFilterResult(result.values[0])) {
+          if (this.dispatchNative(frame.filterTag) === 'suspended') return this.state;
+        }
         input = [];
       } catch (error) {
-        for (const abandoned of this.luaCalls.splice(index).reverse()) abandoned.close();
+        for (const abandoned of this.luaCalls.splice(index).reverse()) abandoned.task.close();
         if (!this.luaCalls.length) {
           this.state = 'faulted';
           throw error;
@@ -172,7 +180,7 @@ export class ArtemisScript {
     return this.state;
   }
   cancelLuaCalls(): void {
-    for (const task of this.luaCalls.slice().reverse()) task.close();
+    for (const frame of this.luaCalls.slice().reverse()) frame.task.close();
     this.luaCalls.length = 0;
     this.luaSuspended = false;
   }
@@ -185,7 +193,39 @@ export class ArtemisScript {
     }
   }
   private dispatch(tag: AsbTag): void | 'suspended' {
-    if (this.lua.filterTag(tag)) return;
+    if (this.lua.suspendableTags) {
+      const task = this.lua.createTagFilterCall(tag);
+      if (task) return this.beginLuaCall(task, {...tag, args: new Map(tag.args)});
+    } else if (this.lua.filterTag(tag)) return;
+    return this.dispatchNative(tag);
+  }
+  private beginLuaCall(task: ArtemisLuaCall, filterTag?: AsbTag): void | 'suspended' {
+    if (this.luaCalls.length >= 1000) {
+      task.close();
+      throw new Error('Artemis Lua call depth limit exceeded');
+    }
+    const frame = {task, filterTag},
+      index = this.luaCalls.length;
+    this.luaCalls.push(frame);
+    try {
+      const result = task.resume();
+      if (result.status === 'yielded') {
+        this.luaSuspended = true;
+        this.state = 'waiting';
+        return 'suspended';
+      }
+      if (this.luaCalls.at(-1) !== frame)
+        throw new Error('Artemis nested callback completed with unsettled resource work');
+      this.luaCalls.pop();
+      task.close();
+      if (filterTag && !artemisTagFilterResult(result.values[0]))
+        return this.dispatchNative(filterTag);
+    } catch (error) {
+      for (const abandoned of this.luaCalls.splice(index).reverse()) abandoned.task.close();
+      throw error;
+    }
+  }
+  private dispatchNative(tag: AsbTag): void | 'suspended' {
     switch (tag.name) {
       case 'lua':
         break;
@@ -193,28 +233,7 @@ export class ArtemisScript {
         const name = tag.args.get('function');
         if (!name) throw new Error('Missing calllua function');
         if (!this.lua.suspendableTags) this.lua.call(name, tag.args);
-        else {
-          if (this.luaCalls.length >= 1000)
-            throw new Error('Artemis Lua call depth limit exceeded');
-          const task = this.lua.createCall(name, tag.args);
-          const index = this.luaCalls.length;
-          this.luaCalls.push(task);
-          try {
-            const result = task.resume();
-            if (result.status === 'yielded') {
-              this.luaSuspended = true;
-              this.state = 'waiting';
-              return 'suspended';
-            }
-            if (this.luaCalls.at(-1) !== task)
-              throw new Error('Artemis nested callback completed with unsettled resource work');
-            this.luaCalls.pop();
-            task.close();
-          } catch (error) {
-            for (const abandoned of this.luaCalls.splice(index).reverse()) abandoned.close();
-            throw error;
-          }
-        }
+        else return this.beginLuaCall(this.lua.createCall(name, tag.args));
         break;
       }
       case 'jump':

@@ -1400,3 +1400,65 @@ test('Revision-selected image pipeline decodes synthetic PNGs through suspended 
     lua.close();
   }
 });
+
+test('Suspended tag filters preserve original native arguments and first-result consume/fallthrough', () => {
+  const source = bytes(`[lua]
+    engine:setTagFilter({asset=function(e,p)
+      e:tag{'prepare',id=p.id}
+      e:enqueueTag{'record',data=p.id}
+      local consumed=p.consume=='1'
+      p.id='changed'
+      return consumed and 1 or 0, function() end
+    end})
+  [/lua][asset id="original" consume="0"][asset id="consumed" consume="1"][stop]`);
+  let script;
+  const records = [],
+    prepared = [],
+    native = [];
+  const lua = new ArtemisLua({
+    readFile: () => source,
+    fileExists: () => true,
+    now: () => 0,
+    variable: () => '',
+    suspendableTags: true,
+    tag: (tag) => script.executeTag(tag),
+    enqueueTag: (tag) => script.enqueue(tag),
+  });
+  script = new ArtemisScript(lua, {
+    readFile: () => source,
+    dispatch: (tag) => {
+      if (tag.name === 'prepare') {
+        prepared.push(tag.args.get('id'));
+        return 'suspended';
+      }
+      if (tag.name === 'asset') {
+        native.push(tag.args.get('id'));
+        return 'suspended';
+      }
+      if (tag.name === 'record') records.push(tag.args.get('data'));
+      if (tag.name === 'stop') return 'stopped';
+    },
+  });
+  try {
+    script.load('boot');
+    assert.equal(script.run(), 'waiting');
+    assert.equal(script.pendingLuaCalls, 1);
+    // Filter completion falls through to a distinct native resource operation.
+    assert.equal(script.resumeLua(), 'waiting');
+    assert.equal(script.pendingLuaCalls, 0);
+    assert.deepEqual(native, ['original']);
+    script.resume();
+    assert.equal(script.run(), 'waiting');
+    assert.deepEqual(records, ['original']);
+    assert.equal(script.resumeLua(), 'ready');
+    assert.equal(script.run(), 'stopped');
+    assert.deepEqual(prepared, ['original', 'consumed']);
+    assert.deepEqual(native, ['original']);
+    assert.deepEqual(records, ['original', 'consumed']);
+    lua.vm.execute(bytes(`engine:setEventFilter(function() return 2,function() end end)`));
+    assert.equal(lua.filterEvent({kind: 'tag', name: 'event', args: new Map(), sourceLine: -1}), 2);
+  } finally {
+    script.cancelLuaCalls();
+    lua.close();
+  }
+});

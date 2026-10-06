@@ -21,7 +21,8 @@ limits do not bound every C library operation or claim a security sandbox.
 
 `createThread` roots a callable in a separate Lua coroutine. Each `resume` returns
 `yielded` or `done` plus byte/table values; resume arguments become the values of
-Lua `coroutine.yield`. Owners close the thread after completion, failure or
+Lua `coroutine.yield`. `invokeFirst` and an optional thread result limit avoid
+converting extra returns that a native owner discards. Owners close the thread after completion, failure or
 cancellation. A suspended thread keeps its Lua locals while other VM work runs.
 The instruction budget applies per outer resume and is shared with nested calls.
 Host C callbacks must return before Lua yields; yielding across a protected C-call

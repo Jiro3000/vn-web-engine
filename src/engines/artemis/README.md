@@ -202,7 +202,10 @@ failures resume with false/error bytes and propagate through the suspended calls
 Loading another script cancels old Lua continuations; the resource owner must also
 cancel or reject stale resource completions. Lua callback return values are discarded.
 
-The current tag/event filters and inline includes remain synchronous. Lua 5.1
+Tag filters also retain their continuation: the first numeric return decides
+consume/fallthrough, and native dispatch receives the original arguments. Extra
+returns are discarded, matching native single-result callbacks. Event filters
+and inline includes remain synchronous. Lua 5.1
 cannot yield across a protected C-call boundary; such asynchronous paths refuse.
 The default owner keeps the original synchronous callback path. Probe `--async-lua`
 checks the coroutine path through the actual boot without loading/rendering assets.

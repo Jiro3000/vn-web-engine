@@ -147,6 +147,7 @@ export class Lua51 {
     args: readonly LuaValue[],
     initialEngine: boolean,
     discardDoneValues = false,
+    maxResults = Infinity,
   ): LuaThreadResult {
     ref.assertOwner(this);
     this.assertOpen();
@@ -166,7 +167,8 @@ export class Lua51 {
       if (status === 0 || status === 1) {
         yielded = status === 1;
         if (yielded || !discardDoneValues)
-          for (let i = top + 1; i <= this.fn('lua51_top')(L); i++) values.push(this.read(i));
+          for (let i = top + 1; i <= Math.min(this.fn('lua51_top')(L), top + maxResults); i++)
+            values.push(this.read(i));
         return 0;
       }
       return status;
@@ -176,7 +178,7 @@ export class Lua51 {
   /** Internal registry operations used by LuaReference; references never expose wasm pointers. */
   referenceOperation(
     ref: LuaReference,
-    operation: 'read' | 'retain' | 'field' | 'release' | 'invoke' | 'invokeVoid',
+    operation: 'read' | 'retain' | 'field' | 'release' | 'invoke' | 'invokeVoid' | 'invokeFirst',
     key?: string,
     args: readonly LuaValue[] = [],
     withEngine = false,
@@ -191,7 +193,7 @@ export class Lua51 {
         this.fn('lua51_unref')(L, ref.id);
         return;
       }
-      if (operation === 'invoke' || operation === 'invokeVoid') {
+      if (operation === 'invoke' || operation === 'invokeVoid' || operation === 'invokeFirst') {
         let results: LuaValue[] = [];
         this.run(() => {
           for (const value of args) this.push(value);
@@ -202,11 +204,17 @@ export class Lua51 {
             +withEngine,
             this.depth === 1 ? this.instructionLimit : 0,
           );
-          if (!status && operation === 'invoke')
-            for (let i = top + 1; i <= this.fn('lua51_top')(L); i++) results.push(this.read(i));
+          if (!status && operation !== 'invokeVoid')
+            for (
+              let i = top + 1;
+              i <=
+              Math.min(this.fn('lua51_top')(L), operation === 'invokeFirst' ? top + 1 : Infinity);
+              i++
+            )
+              results.push(this.read(i));
           return status;
         });
-        return results;
+        return operation === 'invokeFirst' ? (results[0] ?? null) : results;
       }
       if (operation === 'field') {
         if (ref.type !== 5) throw new Error('Lua reference is not a table');
@@ -439,6 +447,16 @@ export class LuaReference {
     if (this.type !== 6) throw new Error('Lua reference is not a function');
     this.owner.referenceOperation(this, 'invokeVoid', undefined, args, withEngine);
   }
+  invokeFirst(args: readonly LuaValue[] = [], withEngine = false): LuaValue {
+    if (this.type !== 6) throw new Error('Lua reference is not a function');
+    return this.owner.referenceOperation(
+      this,
+      'invokeFirst',
+      undefined,
+      args,
+      withEngine,
+    ) as LuaValue;
+  }
   release(): void {
     if (!this.released) {
       this.owner.referenceOperation(this, 'release');
@@ -463,9 +481,15 @@ export class LuaThread {
     private readonly reference: LuaReference,
     private readonly withEngine: boolean,
   ) {}
-  resume(args: readonly LuaValue[] = [], discardDoneValues = false): LuaThreadResult {
+  resume(
+    args: readonly LuaValue[] = [],
+    discardDoneValues = false,
+    maxResults = Infinity,
+  ): LuaThreadResult {
     if (this.released || this.terminal) throw new Error('Lua thread is closed or finished');
     if (this.busy) throw new Error('Lua thread is already running');
+    if (maxResults !== Infinity && (!Number.isSafeInteger(maxResults) || maxResults < 0))
+      throw new Error('Invalid Lua result limit');
     this.busy = true;
     try {
       const result = this.owner.resumeThread(
@@ -473,6 +497,7 @@ export class LuaThread {
         args,
         !this.started && this.withEngine,
         discardDoneValues,
+        maxResults,
       );
       this.started = true;
       this.terminal = result.status === 'done';
