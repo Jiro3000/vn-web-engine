@@ -1,4 +1,5 @@
 import {WebGLDrawTarget} from './webgl-draw.js';
+import type {GpuRenderSurface} from './gpu-render-surface.js';
 import type {BlendState} from './blend.js';
 import type {TriangleImage, TriangleDraw} from './triangle-draw.js';
 import type {Rect} from './surface.js';
@@ -38,6 +39,13 @@ export interface TargetDraw {
   width: number;
   height: number;
 }
+/** Bind a prepared GPU surface, or return to the presentation target.
+ * Contents persist across draws; clear only when explicitly requested. */
+export interface GpuTargetDraw {
+  kind: 'gpu-target';
+  surface: GpuRenderSurface | null;
+  clearColor?: readonly [number, number, number, number];
+}
 /** Replace a texture allocation at this point in the command stream. */
 export interface TextureDraw {
   kind: 'texture';
@@ -45,7 +53,7 @@ export interface TextureDraw {
   image: TriangleImage;
 }
 export type DrawCommand =
-  TextureDraw | SpriteDraw | SolidDraw | TriangleDraw | CaptureDraw | TargetDraw;
+  TextureDraw | SpriteDraw | SolidDraw | TriangleDraw | CaptureDraw | TargetDraw | GpuTargetDraw;
 export interface DrawList {
   sprites: SpriteDraw[];
   commands?: DrawCommand[];
@@ -57,6 +65,7 @@ export interface DrawListTarget {
   readonly width: number;
   readonly height: number;
   prepareImage(image: TriangleImage): void;
+  prepareRenderSurface?(surface: GpuRenderSurface): void;
   draw(list: DrawList, texture: (id: number) => TriangleImage): void;
   invalidate(image: object): void;
 }

@@ -1,3 +1,4 @@
+import {GpuRenderSurface} from './gpu-render-surface.js';
 import type {BlendFactor, BlendOperation, BlendState} from './blend.js';
 import type {DrawList, DrawCommand, SpriteDraw, SolidDraw, DrawListTarget} from './draw-list.js';
 import type {TriangleDraw, TriangleImage} from './triangle-draw.js';
@@ -22,6 +23,8 @@ export class WebGLDrawTarget implements DrawListTarget {
   private maxTextureUnits = 0;
   private readonly samplers = new Map<string, WebGLSampler>();
   private readonly images = new Map<object, WebGLTexture>();
+  private readonly renderSurfaces = new Map<GpuRenderSurface, WebGLFramebuffer>();
+  private activeRenderSurface: GpuRenderSurface | null = null;
   private readonly preparedImages = new Set<object>();
   private readonly white: TriangleImage = {
     width: 1,
@@ -116,7 +119,7 @@ export class WebGLDrawTarget implements DrawListTarget {
     const vs = compile(
       gl.VERTEX_SHADER,
       `#version 300 es
-precision highp float;in vec3 position;in vec4 color;in vec2 uv;in vec2 maskCoordinates;${indices.map((i) => `in vec2 additionalCoordinates${i};out vec2 additionalUV${i};`).join('')}uniform mat4 transform;uniform bool depthClip;uniform vec2 textureSize;out vec4 tint;out vec2 tex;out vec2 maskUV;void main(){${indices.map((i) => `additionalUV${i}=additionalCoordinates${i};`).join('')}gl_Position=transform*vec4(position,1.);if(!depthClip)gl_Position.z=0.;gl_PointSize=1.;tex=uv/textureSize;maskUV=maskCoordinates;tint=color;}`,
+precision highp float;in vec3 position;in vec4 color;in vec2 uv;in vec2 maskCoordinates;${indices.map((i) => `in vec2 additionalCoordinates${i};out vec2 additionalUV${i};`).join('')}uniform mat4 transform;uniform bool depthClip;uniform bool flipAtlas;uniform bool flipMask;${indices.map((i) => `uniform bool flipAdditional${i};`).join('')}uniform vec2 textureSize;out vec4 tint;out vec2 tex;out vec2 maskUV;void main(){${indices.map((i) => `additionalUV${i}=additionalCoordinates${i};if(flipAdditional${i})additionalUV${i}.y=1.-additionalUV${i}.y;`).join('')}gl_Position=transform*vec4(position,1.);if(!depthClip)gl_Position.z=0.;gl_PointSize=1.;tex=uv/textureSize;if(flipAtlas)tex.y=1.-tex.y;maskUV=maskCoordinates;if(flipMask)maskUV.y=1.-maskUV.y;tint=color;}`,
     );
     const fs = compile(
       gl.FRAGMENT_SHADER,
@@ -141,6 +144,9 @@ void main(){vec4 sampled=texture(atlas,tex);if(maskMode.w!=0.)sampled.rgb=vec3(1
     };
     for (const name of [
       'depthClip',
+      'flipAtlas',
+      'flipMask',
+      ...indices.map((i) => `flipAdditional${i}`),
       'transform',
       'textureSize',
       'atlas',
@@ -170,6 +176,12 @@ void main(){vec4 sampled=texture(atlas,tex);if(maskMode.w!=0.)sampled.rgb=vec3(1
     wrapT: 'clamp' | 'repeat' | 'mirror' = 'clamp',
   ): void {
     const gl = this.initialize();
+    if (image instanceof GpuRenderSurface) {
+      if (!this.renderSurfaces.has(image))
+        throw new Error('GPU surface is not prepared on this target');
+      if (this.activeRenderSurface === image)
+        throw new Error('Cannot sample the active GPU render surface');
+    }
     gl.activeTexture(gl.TEXTURE0 + unit);
     let texture = this.images.get(image);
     if (!texture) {
@@ -376,6 +388,8 @@ void main(){vec4 sampled=texture(atlas,tex);if(maskMode.w!=0.)sampled.rgb=vec3(1
     );
     this.bind(image, 0, draw.filter, draw.wrapS, draw.wrapT);
     gl.uniform1i(uniform('atlas'), 0);
+    gl.uniform1i(uniform('flipAtlas'), image instanceof GpuRenderSurface ? 1 : 0);
+    gl.uniform1i(uniform('flipMask'), mask?.image instanceof GpuRenderSurface ? 1 : 0);
     gl.uniform2f(
       uniform('textureSize'),
       draw.normalizedUV ? 1 : image.width,
@@ -401,6 +415,11 @@ void main(){vec4 sampled=texture(atlas,tex);if(maskMode.w!=0.)sampled.rgb=vec3(1
     if (parameters.length % 4 || parameters.length > 32)
       throw new Error('Invalid shader parameters');
     gl.uniform4fv(uniform('parameters[0]'), parameters);
+    for (let i = 0; i < extraCount; i++)
+      gl.uniform1i(
+        uniform(`flipAdditional${i}`),
+        additional[i] instanceof GpuRenderSurface ? 1 : 0,
+      );
     for (let i = 0; i < extras.length; i++) {
       const t = extras[i]!;
       this.bind(additional[i]!, 2 + i, t.filter, t.wrapS, t.wrapT);
@@ -522,6 +541,7 @@ void main(){vec4 sampled=texture(atlas,tex);if(maskMode.w!=0.)sampled.rgb=vec3(1
       throw new Error('Invalid draw-list clear color');
     const gl = this.initialize();
     if (gl.isContextLost()) throw new Error('Graphics context lost');
+    this.activeRenderSurface = null;
     this.activeFramebuffer = this.framebuffer;
     this.activeWidth = this.width;
     this.activeHeight = this.height;
@@ -551,9 +571,10 @@ void main(){vec4 sampled=texture(atlas,tex);if(maskMode.w!=0.)sampled.rgb=vec3(1
       }
     };
     const target = (id: number | null, width: number, height: number) => {
-      if (id === active) return;
+      if (id === active && !this.activeRenderSurface) return;
       publish();
       active = id;
+      this.activeRenderSurface = null;
       if (id === null) {
         this.activeFramebuffer = this.framebuffer;
         this.activeWidth = this.width;
@@ -626,126 +647,214 @@ void main(){vec4 sampled=texture(atlas,tex);if(maskMode.w!=0.)sampled.rgb=vec3(1
       gl.clear(gl.COLOR_BUFFER_BIT);
       dirty = false;
     };
-    for (const draw of list.commands ?? list.sprites) {
-      if (layers?.omit.has(draw)) {
-        if (active === null && layers.after.has(draw)) present(draw);
-        continue;
-      }
-      if (
-        active === null &&
-        (!('kind' in draw) || draw.kind === 'solid' || draw.kind === 'triangles')
-      )
-        dirty = true;
-      if ('kind' in draw) {
-        if (draw.kind === 'texture') {
-          const old = targets.get(draw.texture),
-            wasActive = active === draw.texture;
-          copies.set(draw.texture, draw.image);
-          if (old) {
-            gl.deleteFramebuffer(old.framebuffer);
-            gl.deleteTexture(old.color);
-            targets.delete(draw.texture);
-          }
-          if (wasActive) {
-            active = null;
-            target(draw.texture, draw.image.width, draw.image.height);
-          }
-        } else if (draw.kind === 'target') {
-          target(draw.texture, draw.width, draw.height);
-        } else if (draw.kind === 'capture') {
-          const image = this.capture(draw.width, draw.height);
-          copies.set(draw.texture, image);
-          const cached = targets.get(draw.texture);
-          if (cached) {
-            if (cached.width !== image.width || cached.height !== image.height)
-              throw new Error('Captured render target dimensions changed');
-            const pixels = new Uint8Array(image.pixels.length);
-            for (let y = 0; y < image.height; y++)
-              pixels.set(
-                image.pixels.subarray(y * image.width * 4, (y + 1) * image.width * 4),
-                (image.height - 1 - y) * image.width * 4,
-              );
-            gl.bindTexture(gl.TEXTURE_2D, cached.color);
-            gl.texSubImage2D(
-              gl.TEXTURE_2D,
-              0,
-              0,
-              0,
-              image.width,
-              image.height,
-              gl.RGBA,
-              gl.UNSIGNED_BYTE,
-              pixels,
-            );
-          }
-          writeTexture?.(draw.texture, image, draw);
-        } else if (draw.kind === 'triangles')
-          this.paint(
-            draw,
-            get(draw.texture),
-            draw.mask ? {settings: draw.mask, image: get(draw.mask.texture)} : undefined,
-            draw.additionalTextures?.map((t) => get(t.texture)),
-          );
-        else this.paint(this.rectangle(draw), this.white);
-      } else if (draw.destination.width && draw.destination.height) {
-        const mesh = this.rectangle(draw);
-        let mask: Parameters<WebGLDrawTarget['paint']>[2];
-        if (draw.mask) {
-          const image = get(draw.mask.texture),
-            s = draw.mask.source,
-            uv = new Float32Array(12);
-          for (const [i, [x, y]] of [
-            [0, 0],
-            [1, 0],
-            [0, 1],
-            [0, 1],
-            [1, 0],
-            [1, 1],
-          ].entries()) {
-            uv[i * 2] = (s.x + x! * s.width) / image.width;
-            uv[i * 2 + 1] = (s.y + y! * s.height) / image.height;
-          }
-          mask = {settings: {...draw.mask, uv}, image};
+    try {
+      for (const draw of list.commands ?? list.sprites) {
+        if (layers?.omit.has(draw)) {
+          if (active === null && !this.activeRenderSurface && layers.after.has(draw)) present(draw);
+          continue;
         }
-        this.paint(mesh, get(draw.texture), mask);
+        if (
+          active === null &&
+          !this.activeRenderSurface &&
+          (!('kind' in draw) || draw.kind === 'solid' || draw.kind === 'triangles')
+        )
+          dirty = true;
+        if ('kind' in draw) {
+          if (draw.kind === 'texture') {
+            const old = targets.get(draw.texture),
+              wasActive = active === draw.texture;
+            copies.set(draw.texture, draw.image);
+            if (old) {
+              gl.deleteFramebuffer(old.framebuffer);
+              gl.deleteTexture(old.color);
+              targets.delete(draw.texture);
+            }
+            if (wasActive) {
+              active = null;
+              target(draw.texture, draw.image.width, draw.image.height);
+            }
+          } else if (draw.kind === 'gpu-target') {
+            const clear = draw.clearColor;
+            if (clear && (clear.length !== 4 || !clear.every(Number.isFinite)))
+              throw new Error('Invalid GPU surface clear color');
+            const surface = draw.surface;
+            const framebuffer = surface ? this.renderSurfaces.get(surface) : this.framebuffer;
+            if (!framebuffer) throw new Error('GPU surface is not prepared on this target');
+            publish();
+            active = null;
+            this.activeRenderSurface = surface;
+            this.activeFramebuffer = framebuffer;
+            this.activeWidth = surface?.width ?? this.width;
+            this.activeHeight = surface?.height ?? this.height;
+            gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+            gl.viewport(0, 0, this.activeWidth, this.activeHeight);
+            if (clear) {
+              gl.clearColor(clear[0], clear[1], clear[2], clear[3]);
+              gl.clear(gl.COLOR_BUFFER_BIT);
+              if (!surface) dirty = true;
+            }
+          } else if (draw.kind === 'target') {
+            target(draw.texture, draw.width, draw.height);
+          } else if (draw.kind === 'capture') {
+            const image = this.capture(draw.width, draw.height);
+            copies.set(draw.texture, image);
+            const cached = targets.get(draw.texture);
+            if (cached) {
+              if (cached.width !== image.width || cached.height !== image.height)
+                throw new Error('Captured render target dimensions changed');
+              const pixels = new Uint8Array(image.pixels.length);
+              for (let y = 0; y < image.height; y++)
+                pixels.set(
+                  image.pixels.subarray(y * image.width * 4, (y + 1) * image.width * 4),
+                  (image.height - 1 - y) * image.width * 4,
+                );
+              gl.bindTexture(gl.TEXTURE_2D, cached.color);
+              gl.texSubImage2D(
+                gl.TEXTURE_2D,
+                0,
+                0,
+                0,
+                image.width,
+                image.height,
+                gl.RGBA,
+                gl.UNSIGNED_BYTE,
+                pixels,
+              );
+            }
+            writeTexture?.(draw.texture, image, draw);
+          } else if (draw.kind === 'triangles')
+            this.paint(
+              draw,
+              get(draw.texture),
+              draw.mask ? {settings: draw.mask, image: get(draw.mask.texture)} : undefined,
+              draw.additionalTextures?.map((t) => get(t.texture)),
+            );
+          else this.paint(this.rectangle(draw), this.white);
+        } else if (draw.destination.width && draw.destination.height) {
+          const mesh = this.rectangle(draw);
+          let mask: Parameters<WebGLDrawTarget['paint']>[2];
+          if (draw.mask) {
+            const image = get(draw.mask.texture),
+              s = draw.mask.source,
+              uv = new Float32Array(12);
+            for (const [i, [x, y]] of [
+              [0, 0],
+              [1, 0],
+              [0, 1],
+              [0, 1],
+              [1, 0],
+              [1, 1],
+            ].entries()) {
+              uv[i * 2] = (s.x + x! * s.width) / image.width;
+              uv[i * 2 + 1] = (s.y + y! * s.height) / image.height;
+            }
+            mask = {settings: {...draw.mask, uv}, image};
+          }
+          this.paint(mesh, get(draw.texture), mask);
+        }
+        if (layers && active === null && !this.activeRenderSurface && layers.after.has(draw))
+          present(draw);
       }
-      if (layers && active === null && layers.after.has(draw)) present(draw);
-    }
-    publish();
-    if (layers) present();
-    for (const t of targets.values()) {
-      gl.deleteFramebuffer(t.framebuffer);
-      gl.deleteTexture(t.color);
-    }
-    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, this.framebuffer!);
-    gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
-    gl.blitFramebuffer(
-      0,
-      0,
-      this.width,
-      this.height,
-      0,
-      0,
-      this.width,
-      this.height,
-      gl.COLOR_BUFFER_BIT,
-      gl.NEAREST,
-    );
-    this.context.globalAlpha = 1;
-    this.context.globalCompositeOperation = 'copy';
-    this.context.drawImage(this.surface!, 0, 0);
-    for (const [image, t] of this.images)
-      if (!used.has(image) && !this.preparedImages.has(image)) {
-        gl.deleteTexture(t);
-        this.images.delete(image);
+      publish();
+      if (this.activeRenderSurface) throw new Error('Draw list must return from its GPU surface');
+      if (layers) present();
+      gl.bindFramebuffer(gl.READ_FRAMEBUFFER, this.framebuffer!);
+      gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
+      gl.blitFramebuffer(
+        0,
+        0,
+        this.width,
+        this.height,
+        0,
+        0,
+        this.width,
+        this.height,
+        gl.COLOR_BUFFER_BIT,
+        gl.NEAREST,
+      );
+      this.context.globalAlpha = 1;
+      this.context.globalCompositeOperation = 'copy';
+      this.context.drawImage(this.surface!, 0, 0);
+      for (const [image, t] of this.images)
+        if (!used.has(image) && !this.preparedImages.has(image)) {
+          gl.deleteTexture(t);
+          this.images.delete(image);
+        }
+    } finally {
+      for (const t of targets.values()) {
+        gl.deleteFramebuffer(t.framebuffer);
+        gl.deleteTexture(t.color);
       }
+      this.activeRenderSurface = null;
+      this.activeFramebuffer = this.framebuffer;
+      this.activeWidth = this.width;
+      this.activeHeight = this.height;
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.framebuffer!);
+      gl.viewport(0, 0, this.width, this.height);
+    }
+  }
+  /** Allocate a persistent GPU-only color attachment, initially transparent. */
+  prepareRenderSurface(surface: GpuRenderSurface): void {
+    if (!(surface instanceof GpuRenderSurface)) throw new Error('Invalid GPU surface');
+    const gl = this.initialize();
+    if (gl.isContextLost()) throw new Error('Graphics context lost');
+    if (this.renderSurfaces.has(surface)) return;
+    const limit = gl.getParameter(gl.MAX_TEXTURE_SIZE);
+    if (surface.width > limit || surface.height > limit)
+      throw new Error('GPU surface exceeds texture limit');
+    const color = gl.createTexture(),
+      framebuffer = gl.createFramebuffer();
+    try {
+      if (!color || !framebuffer) throw new Error('Cannot allocate GPU surface');
+      gl.bindTexture(gl.TEXTURE_2D, color);
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        0,
+        gl.RGBA8,
+        surface.width,
+        surface.height,
+        0,
+        gl.RGBA,
+        gl.UNSIGNED_BYTE,
+        null,
+      );
+      if (gl.getError() !== gl.NO_ERROR) throw new Error('GPU surface allocation failed');
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, color, 0);
+      if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE)
+        throw new Error('Incomplete GPU surface framebuffer');
+      gl.clearColor(0, 0, 0, 0);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      this.images.set(surface, color);
+      this.renderSurfaces.set(surface, framebuffer);
+      this.preparedImages.add(surface);
+    } catch (error) {
+      if (color) gl.deleteTexture(color);
+      if (framebuffer) gl.deleteFramebuffer(framebuffer);
+      throw error;
+    } finally {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.activeFramebuffer!);
+    }
   }
   /** Upload and retain until invalidate; later draws select their own sampler binding. */
   prepareImage(image: TriangleImage): void {
+    if (image instanceof GpuRenderSurface) {
+      this.prepareRenderSurface(image);
+      return;
+    }
     this.bind(image, 0);
     this.preparedImages.add(image);
   }
   invalidate(image: object): void {
+    if (image instanceof GpuRenderSurface) {
+      if (this.activeRenderSurface === image)
+        throw new Error('Cannot release the active GPU render surface');
+      const framebuffer = this.renderSurfaces.get(image);
+      if (framebuffer) this.gl?.deleteFramebuffer(framebuffer);
+      this.renderSurfaces.delete(image);
+    }
     this.preparedImages.delete(image);
     const t = this.images.get(image);
     if (t) {
@@ -757,6 +866,7 @@ void main(){vec4 sampled=texture(atlas,tex);if(maskMode.w!=0.)sampled.rgb=vec3(1
     this.preparedImages.clear();
     const gl = this.gl;
     if (gl) {
+      for (const framebuffer of this.renderSurfaces.values()) gl.deleteFramebuffer(framebuffer);
       for (const t of this.images.values()) gl.deleteTexture(t);
       for (const p of this.programs.values()) {
         for (const layout of p.layouts.values()) gl.deleteVertexArray(layout);
@@ -768,6 +878,8 @@ void main(){vec4 sampled=texture(atlas,tex);if(maskMode.w!=0.)sampled.rgb=vec3(1
       for (const sampler of this.samplers.values()) gl.deleteSampler(sampler);
       gl.getExtension('WEBGL_lose_context')?.loseContext();
     }
+    this.renderSurfaces.clear();
+    this.activeRenderSurface = null;
     this.images.clear();
     this.programs.clear();
     this.samplers.clear();
