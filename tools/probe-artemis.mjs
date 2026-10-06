@@ -1,0 +1,186 @@
+/** Runs Lua/script control only; no renderer, media decoder or native game process. */
+import {createHash} from 'node:crypto';
+import {BrowserWindowsSystemProfileHost} from '../dist/platform/browser-windows-system-profile.js';
+import {
+  initializeArtemisVariables,
+  initializeArtemisWindowsVersion,
+} from '../dist/engines/artemis/revision.js';
+import {openArtemisInstallation} from './artemis-installation.mjs';
+import {ArtemisLua} from '../dist/engines/artemis/lua.js';
+import {ArtemisScript} from '../dist/engines/artemis/script.js';
+import {ArtemisVariables} from '../dist/engines/artemis/variables.js';
+import {ArtemisDialog} from '../dist/engines/artemis/dialog.js';
+import {ArtemisMouse} from '../dist/engines/artemis/mouse.js';
+import {ArtemisModes} from '../dist/engines/artemis/modes.js';
+import {luaText} from '../dist/core/lua51/runtime.js';
+if (!process.argv[2]) throw new Error('Usage: node tools/probe-artemis.mjs GAME_DIRECTORY');
+const dialogResultArgument = process.argv
+  .slice(3)
+  .find((value) => value.startsWith('--dialog-result='));
+const simulatedDialogResult = dialogResultArgument
+  ? Number(dialogResultArgument.split('=')[1])
+  : null;
+if (simulatedDialogResult !== null && ![0, 1].includes(simulatedDialogResult))
+  throw new Error('Probe dialog result must be 0 or 1');
+const installation = await openArtemisInstallation(process.argv[2]);
+let lua, script;
+try {
+  const prepared = new Map();
+  let preparedBytes = 0;
+  for (const path of installation.paths)
+    if (/\.(lua|ast|iet|asb|tbl|ini)$/.test(path)) {
+      const bytes = await installation.files.read(path);
+      if (bytes === null) throw new Error(`Missing inventoried source ${path}`);
+      preparedBytes += bytes.length;
+      if (preparedBytes > 64 * 1024 * 1024)
+        throw new Error('Script corpus exceeds probe memory budget');
+      prepared.set(path, bytes);
+    }
+  const readFile = (path) => {
+    path = path.replaceAll('\\', '/');
+    if (prepared.has(path)) return prepared.get(path);
+    if (installation.paths.has(path))
+      throw new Error(`Resource is not prepared for synchronous Lua: ${path}`);
+    return null;
+  };
+  const events = [],
+    nativeTags = [],
+    includes = [],
+    modeEffects = [];
+  // This probe accepts explicit Windows stage dimensions from the real INI;
+  // it does not supply defaults or implement the complete native INI loader.
+  const iniBytes = await installation.files.read('system.ini');
+  if (iniBytes === null) throw new Error('Missing system.ini');
+  const ini = new TextDecoder('utf-8', {fatal: true}).decode(iniBytes);
+  let section = '',
+    width,
+    height;
+  for (const sourceLine of ini.split(/\r?\n/)) {
+    const line = sourceLine.split(';', 1)[0].trim();
+    const header = /^\[([^\]]+)\]$/.exec(line);
+    if (header) section = header[1].toUpperCase();
+    if (section !== 'WINDOWS') continue;
+    const entry = /^(WIDTH|HEIGHT)\s*=\s*(\d+)$/.exec(line);
+    if (entry?.[1] === 'WIDTH') width = Number(entry[2]);
+    if (entry?.[1] === 'HEIGHT') height = Number(entry[2]);
+  }
+  if (!width || !height) throw new Error('Probe needs explicit WINDOWS WIDTH and HEIGHT');
+  const variables = new ArtemisVariables({stageSize: () => ({width, height})});
+  const executablePaths = [...installation.paths].filter(
+    (path) => /\.exe$/i.test(path) && !path.includes('/'),
+  );
+  if (executablePaths.length !== 1) throw new Error('Probe requires exactly one root executable');
+  const executable = await installation.files.read(executablePaths[0]);
+  if (executable === null) throw new Error('Missing Artemis executable');
+  const executableSha256 = createHash('sha256').update(executable).digest('hex');
+  initializeArtemisVariables(variables, executableSha256);
+  const systemProfile = new BrowserWindowsSystemProfileHost();
+  initializeArtemisWindowsVersion(variables, () => systemProfile.readVersion());
+  const modes = new ArtemisModes({
+    writeStatus: (name, value) => (variables.write(name, value), modeEffects.push({name, value})),
+    commandSkipChanged: (active) => modeEffects.push({commandSkip: active}),
+    controlSkipChanged: (active) => modeEffects.push({controlSkip: active}),
+    automodeChanged: (active) => modeEffects.push({automode: active}),
+    releaseScheduler: () => modeEffects.push({releaseScheduler: true}),
+  });
+  const mouse = new ArtemisMouse(
+    {
+      setVisible: (visible) => modeEffects.push({cursorVisible: visible}),
+      setPosition: (left, top) => modeEffects.push({cursorPosition: {left, top}}),
+    },
+    () => 0,
+  );
+  const dialogs = [];
+  const dialog = new ArtemisDialog(
+    {
+      present: (request, complete) => {
+        dialogs.push(request);
+        if (simulatedDialogResult !== null) complete({result: simulatedDialogResult});
+      },
+    },
+    {
+      blocked: () => false,
+      beginWait: () => script.pause(),
+      endWait: () => script.resume(),
+      writeVariable: (name, value) => variables.write(name, value),
+    },
+  );
+  const dispatch = (tag) => {
+    nativeTags.push({name: tag.name, args: Object.fromEntries(tag.args)});
+    if (dialog.dispatch(tag)) return;
+    if (modes.dispatch(tag) || variables.dispatch(tag) || mouse.dispatch(tag)) return;
+    throw new Error(`Unsupported native Artemis tag ${tag.name}`);
+  };
+  lua = new ArtemisLua({
+    readFile: (path) => {
+      includes.push(path);
+      return readFile(path);
+    },
+    fileExists: (path) => installation.paths.has(path.replaceAll('\\', '/')),
+    now: () => 0, // Deterministic probe clock, not a production game clock.
+    tag: (tag) => script.executeTag(tag),
+    enqueueTag: (tag) => script.enqueue(tag),
+    variable: (name) => variables.read(name),
+  });
+  let compiled = 0;
+  for (const [path, bytes] of prepared)
+    if (/\.(lua|ast)$/.test(path)) {
+      lua.vm.compile(bytes, `@${path}`);
+      compiled++;
+    }
+  script = new ArtemisScript(lua, {
+    pushLocal: () => variables.pushLocal(),
+    popLocal: () => variables.popLocal(),
+    readFile,
+    dispatch,
+    trace: ({origin, file, tagIndex, tag}) =>
+      events.push({origin, file, tagIndex, name: tag.name, sourceLine: tag.sourceLine}),
+  });
+  let refusal = null;
+  try {
+    script.load('system/first.iet');
+    script.run(1000);
+  } catch (error) {
+    refusal = error.message;
+  }
+  // Exercise the game's actual AST loader independently after the boot boundary.
+  // flag=true is its existing load-only path, avoiding image-cache deletion.
+  const loader = lua.vm.referenceGlobal('readScriptFile');
+  let astLoadedByGame;
+  try {
+    astLoadedByGame = loader.invoke([new TextEncoder().encode('flow_start'), true])[0];
+  } finally {
+    loader.release();
+  }
+  if (astLoadedByGame !== true) throw new Error('Game AST loader did not confirm the source');
+  const ast = lua.vm.getGlobal('ast');
+  console.log(
+    JSON.stringify(
+      {
+        executableSha256,
+        dialogRequests: dialogs,
+        dialogPending: dialog.pending,
+        simulatedDialogResult,
+        effectMode: 'record-only',
+        preparedFiles: prepared.size,
+        preparedBytes,
+        compiled,
+        luaVersion: luaText(lua.vm.getGlobal('_VERSION')),
+        state: script.state,
+        refusal,
+        events,
+        nativeTags,
+        includes,
+        modeEffects,
+        astLoadedByGame,
+        astVersion: lua.vm.getGlobal('astver'),
+        astTopLevelKeys: ast.size,
+      },
+      null,
+      2,
+    ),
+  );
+} finally {
+  lua?.close();
+  await installation.close();
+}
