@@ -224,8 +224,9 @@ The pipeline is verified with synthetic PNGs through suspended Lua callbacks.
 `scene.ts` models the UTF-8 hierarchical child maps separately from image and
 rendering owners. Dots separate components, including empty components. Missing
 ancestors become empty groups; removing the last child keeps its parent group.
-Groups can carry an image payload and children. A node with a nonzero native type
-blocks child traversal. Mutations copy each affected current child map while
+The image-backed constructor has native type 1 and blocks child traversal;
+empty groups have type 0. Owners explicitly select the group type when inserting
+a group payload. Mutations copy each affected current child map while
 retaining its previous structure; `commit()` recursively releases that structural
 version. Payload ownership, inner-actor versions and presentation timing remain
 separate work. Relevant native entries: `0x140185bf0`, `0x1400b3340`.
@@ -237,4 +238,7 @@ zero. Numeric overflow and numeric-looking nonnumeric components are refused:
 the latter can make the native comparator nontransitive, so a sorted-array model
 cannot reproduce their native tree behavior. This scene subset requires the
 exact executable hash. `entries()` exposes structural traversal for owners; it
-does not implement native selectors or layer-enumeration callbacks.
+is separate from native selection. `select(id)` expands the current selected
+subtree in child order and preserves the requested id spelling in its prefix
+(`0x140113e50`, `0x140113ab0`). Wildcards and shader/message selection are
+outside this child-map API.

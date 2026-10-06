@@ -48,7 +48,7 @@ test('Artemis numeric child keys preserve first spelling and use signed integer 
 
 test('Artemis group deletion keeps empty ancestors and refuses traversal through leaves', () => {
   const scene = new ArtemisScene(revision);
-  scene.set('bg', 'group image');
+  scene.set('bg', 'group image', true);
   scene.set('bg.child', 'child');
   assert.equal(scene.entry('bg').value, 'group image');
   scene.remove('bg.child');
@@ -93,4 +93,26 @@ test('Artemis scene refuses unproved comparator cases before mutating any parent
     scene.entries().map((x) => x.value),
     ['min', 'max'],
   );
+});
+
+test('Artemis native selection uses the requested prefix and only expands groups', () => {
+  const scene = new ArtemisScene(revision);
+  scene.set('2', undefined, true);
+  scene.set('2.10', 'image');
+  scene.set('2.3', undefined, true);
+  scene.set('2.3.name', 'nested image');
+  assert.deepEqual(
+    scene.select('02').map((x) => x.id),
+    ['02', '02.3', '02.3.name', '02.10'],
+  );
+  assert.deepEqual(
+    scene.select('2.10').map((x) => x.id),
+    ['2.10'],
+  );
+  assert.deepEqual(scene.select('missing'), []);
+  assert.equal(scene.set('2.10.child', 'blocked'), false);
+  scene.commit();
+  scene.remove('02');
+  assert.deepEqual(scene.select('2'), []);
+  assert.equal(scene.entry('2.3.name', 'retained').value, 'nested image');
 });

@@ -93,7 +93,8 @@ export class ArtemisScene<T> {
     for (const part of parts) keyBytes(part);
     return parts;
   }
-  set(id: string, value: T | undefined, acceptsChildren = true): boolean {
+  /** Image-backed constructor 0x1400b1690 has type 1; empty groups have type 0. */
+  set(id: string, value: T | undefined, acceptsChildren = false): boolean {
     const parts = this.path(id);
     let parent = this.root;
     for (const key of parts.slice(0, -1)) {
@@ -129,21 +130,40 @@ export class ArtemisScene<T> {
     }
     return {id: canonical.join('.'), value: parent.value, acceptsChildren: parent.acceptsChildren};
   }
+  /** Native 0x140113e50 selects the node and its descendants using the requested prefix.
+   * Numeric aliases retain the caller's spelling in the selected identifiers.
+   */
+  select(id: string): readonly ArtemisSceneEntry<T>[] {
+    let node = this.root;
+    for (const key of this.path(id)) {
+      if (!node.acceptsChildren) return [];
+      const child = node.child(key, 'current');
+      if (!child) return [];
+      node = child.node;
+    }
+    const result: ArtemisSceneEntry<T>[] = [
+      {id, value: node.value, acceptsChildren: node.acceptsChildren},
+    ];
+    this.visit(node, id + '.', 'current', result);
+    return result;
+  }
+  private visit(
+    node: Node<T>,
+    prefix: string,
+    view: ArtemisSceneView,
+    result: ArtemisSceneEntry<T>[],
+  ): void {
+    if (!node.acceptsChildren) return;
+    for (const child of node.children(view)) {
+      const id = prefix + child.key;
+      result.push({id, value: child.node.value, acceptsChildren: child.node.acceptsChildren});
+      this.visit(child.node, id + '.', view, result);
+    }
+  }
   /** Borrowed payloads in native child order; not the native layer-selection/enumeration API. */
   entries(view: ArtemisSceneView = 'current'): readonly ArtemisSceneEntry<T>[] {
     const result: ArtemisSceneEntry<T>[] = [];
-    const visit = (parent: Node<T>, prefix: readonly string[]) => {
-      for (const child of parent.children(view)) {
-        const path = [...prefix, child.key];
-        result.push({
-          id: path.join('.'),
-          value: child.node.value,
-          acceptsChildren: child.node.acceptsChildren,
-        });
-        visit(child.node, path);
-      }
-    };
-    visit(this.root, []);
+    this.visit(this.root, '', view, result);
     return result;
   }
   commit(): void {
