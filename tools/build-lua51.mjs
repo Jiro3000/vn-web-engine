@@ -37,6 +37,8 @@ try {
     'lua51_pushref',
     'lua51_fieldref',
     'lua51_invokeref',
+    'lua51_newthreadref',
+    'lua51_resumethread',
   ];
   const unused = new Set(['liolib.c', 'loslib.c', 'loadlib.c', 'ldblib.c', 'linit.c']);
   const sources = (await readdir(join(root, 'wasm/lua51/vendor')))

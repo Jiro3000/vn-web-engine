@@ -133,6 +133,44 @@ export class Lua51 {
       this.fn('lua51_type')(this.current, index),
     );
   }
+  /** A coroutine owns its function/locals across host-driven asynchronous waits. */
+  createThread(callback: LuaReference, withEngine = false): LuaThread {
+    this.assertOpen();
+    callback.assertOwner(this);
+    if (callback.type !== 6) throw new Error('Lua thread entry is not a function');
+    const id = this.fn('lua51_newthreadref')(this.current, callback.id, +withEngine);
+    return new LuaThread(this, new LuaReference(this, id, 8), withEngine);
+  }
+  /** Internal thread operation. Yielded values cross the same bounded byte/table bridge. */
+  resumeThread(
+    ref: LuaReference,
+    args: readonly LuaValue[],
+    initialEngine: boolean,
+  ): LuaThreadResult {
+    ref.assertOwner(this);
+    this.assertOpen();
+    let yielded = false;
+    const values: LuaValue[] = [],
+      L = this.current,
+      top = this.fn('lua51_top')(L);
+    this.run(() => {
+      for (const value of args) this.push(value);
+      const status = this.fn('lua51_resumethread')(
+        L,
+        ref.id,
+        args.length,
+        +initialEngine,
+        this.depth === 1 ? this.instructionLimit : 0,
+      );
+      if (status === 0 || status === 1) {
+        yielded = status === 1;
+        for (let i = top + 1; i <= this.fn('lua51_top')(L); i++) values.push(this.read(i));
+        return 0;
+      }
+      return status;
+    });
+    return {status: yielded ? 'yielded' : 'done', values};
+  }
   /** Internal registry operations used by LuaReference; references never expose wasm pointers. */
   referenceOperation(
     ref: LuaReference,
@@ -402,6 +440,51 @@ export class LuaReference {
   release(): void {
     if (!this.released) {
       this.owner.referenceOperation(this, 'release');
+      this.released = true;
+    }
+  }
+}
+
+export interface LuaThreadResult {
+  readonly status: 'yielded' | 'done';
+  readonly values: readonly LuaValue[];
+}
+
+/** Host-owned Lua coroutine; completion/errors require close() to release its registry root. */
+export class LuaThread {
+  private started = false;
+  private busy = false;
+  private terminal = false;
+  private released = false;
+  constructor(
+    private readonly owner: Lua51,
+    private readonly reference: LuaReference,
+    private readonly withEngine: boolean,
+  ) {}
+  resume(args: readonly LuaValue[] = []): LuaThreadResult {
+    if (this.released || this.terminal) throw new Error('Lua thread is closed or finished');
+    if (this.busy) throw new Error('Lua thread is already running');
+    this.busy = true;
+    try {
+      const result = this.owner.resumeThread(
+        this.reference,
+        args,
+        !this.started && this.withEngine,
+      );
+      this.started = true;
+      this.terminal = result.status === 'done';
+      return result;
+    } catch (error) {
+      this.terminal = true;
+      throw error;
+    } finally {
+      this.busy = false;
+    }
+  }
+  close(): void {
+    if (this.busy) throw new Error('Cannot close a running Lua thread');
+    if (!this.released) {
+      this.reference.release();
       this.released = true;
     }
   }

@@ -152,3 +152,76 @@ test('Host conversion bounds large Lua tables and restores the stack after refus
     vm.close();
   }
 });
+
+test('Host-owned Lua threads retain locals, yield byte requests and resume with asynchronous results', () => {
+  const vm = new Lua51(),
+    requests = [];
+  vm.bind('request', (args) => {
+    requests.push(luaText(args[0]));
+    return [];
+  });
+  vm.execute(
+    bytes(`
+    function load(e, initial)
+      local total = initial
+      e:request('first')
+      local result = coroutine.yield('first', nil, {offset = total})
+      total = total + result
+      e:request('second')
+      local next = coroutine.yield('second')
+      return total + next, 'complete'
+    end
+  `),
+  );
+  const callback = vm.referenceGlobal('load'),
+    thread = vm.createThread(callback, true);
+  callback.release();
+  try {
+    const first = thread.resume([4]);
+    assert.equal(first.status, 'yielded');
+    assert.equal(luaText(first.values[0]), 'first');
+    assert.equal(first.values[1], null);
+    assert.equal(first.values[2].get('offset'), 4);
+    // An independent chunk/coroutine may run while this thread is suspended.
+    vm.execute(bytes(`other = 77`));
+    const second = thread.resume([8]);
+    assert.equal(second.status, 'yielded');
+    assert.equal(luaText(second.values[0]), 'second');
+    const final = thread.resume([16]);
+    assert.equal(final.status, 'done');
+    assert.equal(final.values[0], 28);
+    assert.equal(luaText(final.values[1]), 'complete');
+    assert.deepEqual(requests, ['first', 'second']);
+    assert.equal(vm.getGlobal('other'), 77);
+    assert.throws(() => thread.resume(), /finished/);
+  } finally {
+    thread.close();
+    thread.close();
+    vm.close();
+  }
+});
+
+test('Thread errors preserve other VM work; budgets abort loops after a yield and close safely', () => {
+  const vm = new Lua51(10000);
+  vm.execute(
+    bytes(`function broken() coroutine.yield(); error('failed after yield') end
+    function spin() coroutine.yield('ready'); while true do pcall(function() while true do end end) end end`),
+  );
+  const broken = vm.referenceGlobal('broken'),
+    task = vm.createThread(broken);
+  broken.release();
+  assert.equal(task.resume().status, 'yielded');
+  assert.throws(() => task.resume(), /failed after yield/);
+  assert.throws(() => task.resume(), /finished/);
+  task.close();
+  vm.execute(bytes(`valid = 1`));
+  assert.equal(vm.getGlobal('valid'), 1);
+  const spin = vm.referenceGlobal('spin'),
+    loop = vm.createThread(spin);
+  spin.release();
+  assert.equal(loop.resume().status, 'yielded');
+  assert.throws(() => loop.resume(), /instruction budget exceeded/);
+  assert.throws(() => vm.getGlobal('valid'), /closed or interrupted/);
+  loop.close();
+  vm.close();
+});

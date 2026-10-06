@@ -113,3 +113,21 @@ int lua51_invokeref(lua_State *L, int ref, int nargs, int with_engine, int limit
   if (with_engine) { lua_getglobal(L, "engine"); lua_insert(L, -nargs-1); nargs++; }
   return lua_pcall(L, nargs, LUA_MULTRET, 0);
 }
+int lua51_newthreadref(lua_State *L, int function_ref, int with_engine) {
+  lua_State *thread = lua_newthread(L);
+  lua_rawgeti(L, LUA_REGISTRYINDEX, function_ref);
+  lua_xmove(L, thread, 1);
+  if (with_engine) { lua_getglobal(L, "engine"); lua_xmove(L, thread, 1); }
+  return luaL_ref(L, LUA_REGISTRYINDEX);
+}
+int lua51_resumethread(lua_State *L, int ref, int nargs, int initial_engine, int limit) {
+  lua_rawgeti(L, LUA_REGISTRYINDEX, ref);
+  lua_State *thread = lua_tothread(L, -1);
+  lua_pop(L, 1);
+  if (!thread) { lua_pushliteral(L, "Missing Lua thread"); return LUA_ERRRUN; }
+  budget(thread, limit);
+  lua_xmove(L, thread, nargs);
+  int status = lua_resume(thread, nargs + initial_engine);
+  lua_xmove(thread, L, lua_gettop(thread));
+  return status;
+}
