@@ -251,7 +251,13 @@ image dimensions, deletes the previous selected subtree only after successful
 resource creation, inserts an image leaf and resets that id's command list.
 Creation-tag geometry arguments are not applied: the native command uses separate
 `lyprop`. A missing resource reports a script error while preserving the old layer.
-Rules, solid-color fallback and capture-mode creation are explicitly unsupported.
+Rules and capture-mode creation are explicitly unsupported. When file loading
+fails and width/height/color are all present, solid fallback uses shared straight
+RGBA fill. Six-byte colors and eight-byte 0x/0X forms select RGB with forced opaque
+alpha; other forms select ARGB. Hex conversion preserves native prefix/sign and
+uint32 overflow saturation. Decimal dimensions preserve atoi prefixes; negative
+dimensions and signed allocation overflow refuse. Missing any fallback field
+reports the normal load error. Native surface resize/fill: 0x1401910e0/0x140191250.
 Relevant native entries: `0x1400d5930`, `0x1400d6670`, `0x14014f2a0`.
 
 Ordinary image properties copy the inner actor on the first edit after commit,

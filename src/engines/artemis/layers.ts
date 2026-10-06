@@ -2,6 +2,36 @@ import type {AsbTag} from '../../formats/artemis/asb.js';
 import type {ArtemisImageLoader, ArtemisLoadedImage} from './image-loader.js';
 import {ArtemisScene} from './scene.js';
 import {artemisLayerProperties, type ArtemisLayerPropertyPatch} from './layer-properties.js';
+import {createSolidImage} from '../../graphics/solid-image.js';
+
+function dimension(value: string): number {
+  const token = /^[\t\n\v\f\r ]*([+-]?\d+)/.exec(value);
+  const result = token ? Number(token[1]) : 0;
+  if (!Number.isInteger(result) || result < 0 || result > 0x7fffffff)
+    throw new Error('Unsupported Artemis solid surface dimension');
+  return result;
+}
+function solidImage(tag: AsbTag): ArtemisLoadedImage {
+  const value = tag.args.get('color')!;
+  const length = new TextEncoder().encode(value).length;
+  const format = length === 6 || (length === 8 && /^0[xX]/.test(value)) ? 1 : 2;
+  const token = /^[\t\n\v\f\r ]*([+-]?)(?:0[xX])?([0-9a-fA-F]+)/.exec(value);
+  const digits = token?.[2]?.replace(/^0+/, '') ?? '';
+  const overflow = digits.length > 8;
+  const magnitude = overflow ? 0xffffffff : digits ? Number.parseInt(digits, 16) : 0;
+  const color = (overflow ? magnitude : token?.[1] === '-' ? -magnitude : magnitude) >>> 0;
+  const argb = format === 1 ? color | 0xff000000 : color;
+  return {
+    path: '',
+    surfaceFormat: format,
+    image: createSolidImage(dimension(tag.args.get('width')!), dimension(tag.args.get('height')!), [
+      (argb >>> 16) & 255,
+      (argb >>> 8) & 255,
+      argb & 255,
+      argb >>> 24,
+    ]),
+  };
+}
 
 export interface ArtemisLayerHost<T extends object> {
   /** Native 0x1400d5930 has a separate nonzero capture-mode branch. */
@@ -119,13 +149,15 @@ export class ArtemisLayers<T extends object> {
     const token = ++this.generation;
     this.pending = token;
     try {
-      const resource = await this.images.load(tag.args.get('file') ?? '');
+      let resource = await this.images.load(tag.args.get('file') ?? '');
       if (token !== this.generation) throw new Error('Artemis layer resource operation cancelled');
       if (resource === null) {
         if (['width', 'height', 'color'].every((key) => tag.args.has(key)))
-          throw new Error('Unsupported Artemis solid-color surface owner');
-        this.host.imageLoadFailed(tag);
-        return true;
+          resource = solidImage(tag);
+        else {
+          this.host.imageLoadFailed(tag);
+          return true;
+        }
       }
       const layer = this.host.createImageLayer(resource, {
         x: Math.fround(Math.fround(resource.image.width) * 0.5),

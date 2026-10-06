@@ -12,6 +12,8 @@ export interface ArtemisImageCodec {
 export interface ArtemisLoadedImage {
   readonly path: string;
   readonly image: TriangleImage;
+  /** Present when the resource path explicitly determines a native surface format. */
+  readonly surfaceFormat?: 1 | 2;
 }
 
 /** Native 0x1401756a0: extension preference, content sniffing, then appended candidates. */

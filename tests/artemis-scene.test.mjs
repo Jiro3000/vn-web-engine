@@ -235,9 +235,9 @@ test('Artemis image command cancellation rejects stale completions and copies pe
   await assert.rejects(
     () =>
       layers.dispatch(
-        command('lyc', {id: 'bad', file: 'missing', width: '2', height: '1', color: 'ffffff'}),
+        command('lyc', {id: 'bad', file: 'missing', width: '-2', height: '1', color: 'ffffff'}),
       ),
-    /solid-color/,
+    /solid surface dimension/,
   );
   layers.close();
   const capture = await layerFixture(async () => null, {creationMode: () => 1});
@@ -395,4 +395,85 @@ test('Artemis layer number conversion preserves decimal prefixes, float32 bounda
   assert.equal(patch.visible, true);
   for (const value of ['0x1p2', 'nan', 'Infinity', '1e39'])
     assert.throws(() => artemisLayerProperties(new Map([['left', value]])), /property number/);
+});
+
+test('Artemis missing-image fallback preserves native RGB/ARGB color forms and decimal dimensions', async () => {
+  const {layers, events} = await layerFixture(async () => null);
+  try {
+    for (const [color, format, expected] of [
+      ['123456', 1, [18, 52, 86, 255]],
+      ['0x123456', 1, [18, 52, 86, 255]],
+      ['0X123456', 1, [18, 52, 86, 255]],
+      ['00123456', 2, [18, 52, 86, 0]],
+      ['0x80123456', 2, [18, 52, 86, 128]],
+      ['f', 2, [0, 0, 15, 0]],
+      ['-ff', 2, [255, 255, 1, 255]],
+      ['100000000', 2, [255, 255, 255, 255]],
+      ['雪雪', 1, [0, 0, 0, 255]],
+    ]) {
+      await layers.dispatch(
+        command('lyc', {id: 'solid', file: 'missing', width: ' 2pixels', height: '1', color}),
+      );
+      const resource = layers.scene.entry('solid').value.resource;
+      assert.equal(resource.surfaceFormat, format);
+      assert.deepEqual([...resource.image.pixels], [...expected, ...expected]);
+      assert.deepEqual(layers.scene.entry('solid').value.anchor, {x: 1, y: 0.5});
+    }
+    assert.equal(
+      events.some((x) => x[0] === 'error'),
+      false,
+    );
+    await layers.dispatch(
+      command('lyc', {id: 'partial', file: 'missing', width: '2', height: '1'}),
+    );
+    assert.equal(layers.scene.entry('partial'), undefined);
+    assert.deepEqual(events.at(-1), ['error', 'missing']);
+  } finally {
+    layers.close();
+  }
+});
+
+test('Artemis solid fallback snapshots arguments before its asynchronous file miss', async () => {
+  let resolve;
+  const {layers} = await layerFixture((path) =>
+    path === 'missing'
+      ? new Promise((done) => {
+          resolve = done;
+        })
+      : Promise.resolve(null),
+  );
+  const tag = command('lyc', {
+    id: 'solid',
+    file: 'missing',
+    width: '2',
+    height: '1',
+    color: '123456',
+  });
+  const pending = layers.dispatch(tag);
+  tag.args.set('width', '9');
+  tag.args.set('color', 'ffffff');
+  resolve(null);
+  try {
+    await pending;
+    const image = layers.scene.entry('solid').value.resource.image;
+    assert.equal(image.width, 2);
+    assert.deepEqual([...image.pixels.slice(0, 4)], [18, 52, 86, 255]);
+  } finally {
+    layers.close();
+  }
+});
+
+test('Shared solid image allocation preserves straight transparent RGB and rejects native allocation overflow', async () => {
+  const {createSolidImage} = await import('../dist/graphics/solid-image.js');
+  const image = createSolidImage(3, 2, [12, 34, 56, 0]);
+  assert.deepEqual([...image.pixels], Array(6).fill([12, 34, 56, 0]).flat());
+  assert.equal(createSolidImage(0, 1, [0, 0, 0, 255]).pixels.length, 0);
+  for (const [w, h] of [
+    [-1, 1],
+    [1.5, 1],
+    [0x80000000, 0],
+    [0x20000000, 1],
+  ])
+    assert.throws(() => createSolidImage(w, h, [0, 0, 0, 0]), /dimensions/);
+  assert.throws(() => createSolidImage(1, 1, [256, 0, 0, 0]), /RGBA color/);
 });
