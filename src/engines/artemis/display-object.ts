@@ -62,7 +62,10 @@ export class ArtemisDisplayObject {
     this.state = next;
   }
   /** Row-major [a,b,tx,c,d,ty]. Nonzero rotations require the native float trig owner. */
-  matrix(parent = new Float32Array([1, 0, 0, 0, 1, 0]), trig?: ArtemisFloatTrig): Float32Array {
+  matrix(
+    parent: Float32Array = new Float32Array([1, 0, 0, 0, 1, 0]),
+    trig?: ArtemisFloatTrig,
+  ): Float32Array {
     if (parent.length !== 6 || !parent.every(Number.isFinite))
       throw new Error('Invalid Artemis parent matrix');
     const m = parent.slice(),

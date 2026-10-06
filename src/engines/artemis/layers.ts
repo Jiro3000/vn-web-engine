@@ -38,6 +38,8 @@ export interface ArtemisLayerHost<T extends object> {
     resource: ArtemisLoadedImage,
     anchor: {readonly x: number; readonly y: number},
   ): T;
+  /** Materialize the default property holder of an already-existing empty group. */
+  createGroupLayer?(): T;
   releaseImageLayer(layer: T): void;
   /** Copy native inner-actor state; the owner retains any shared raster resources. */
   copyImageLayer(layer: T): T;
@@ -53,7 +55,7 @@ export interface ArtemisLayerHost<T extends object> {
   imageLoadFailed(tag: AsbTag): void;
 }
 
-/** Ordinary image-backed lyc/lydel/lyprop subset of native layer commands.
+/** Ordinary image-backed lyc/lydel and image/direct-group lyprop subset.
  * Raster resources and command registrations remain required owner effects.
  */
 export class ArtemisLayers<T extends object> {
@@ -113,7 +115,12 @@ export class ArtemisLayers<T extends object> {
     this.scene.entry(id);
     if (tag.name === 'lyprop') {
       const entry = this.scene.entry(id);
-      if (id === '!' || (!entry && id.startsWith('~')) || (entry && entry.value === undefined))
+      if (
+        id === '!' ||
+        (!entry && id.startsWith('~')) ||
+        (entry?.acceptsChildren && !this.host.createGroupLayer) ||
+        (entry && entry.value === undefined && !entry.acceptsChildren)
+      )
         throw new Error('Unsupported Artemis group/shader property owner');
       if (!entry) {
         this.host.layerNotFound(tag);
@@ -121,11 +128,21 @@ export class ArtemisLayers<T extends object> {
       }
       const properties = artemisLayerProperties(tag.args);
       try {
-        const actor = this.scene.editValue(id, (old) => {
-          const copy = this.host.copyImageLayer(old);
-          this.owned.add(copy);
-          return copy;
-        })!;
+        const actor = this.scene.editValue(
+          id,
+          (old) => {
+            const copy = this.host.copyImageLayer(old);
+            this.owned.add(copy);
+            return copy;
+          },
+          entry.acceptsChildren
+            ? () => {
+                const group = this.host.createGroupLayer!();
+                this.owned.add(group);
+                return group;
+              }
+            : undefined,
+        )!;
         this.host.applyImageProperties(entry.id, actor, properties);
         this.host.recordLayerProperties(tag);
       } finally {

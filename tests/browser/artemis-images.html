@@ -357,24 +357,34 @@
         );
         nativeEffectsCases++;
       }
-    await layers.dispatch(command('lyprop', {
-      id: '1', layermode: 'normal', negative: '0', grayscale: '0',
-      colormultiply: 'ffffff', clip: '0,0,1,1',
-    }));
+    await layers.dispatch(
+      command('lyprop', {
+        id: '1',
+        layermode: 'normal',
+        negative: '0',
+        grayscale: '0',
+        colormultiply: 'ffffff',
+        clip: '0,0,1,1',
+      }),
+    );
     stage.dispatch(command('flip'));
     nativeGraphics.drawCommitted(layers.scene);
     const initialClipPixels = new Uint8Array(16);
     context.readPixels(0, 1, 4, 1, context.RGBA, context.UNSIGNED_BYTE, initialClipPixels);
-    assert(initialClipPixels.every((value, i) => Math.abs(value - expected[i]) <= 1),
-      'default clip endpoints must preserve disabled initial rectangle');
+    assert(
+      initialClipPixels.every((value, i) => Math.abs(value - expected[i]) <= 1),
+      'default clip endpoints must preserve disabled initial rectangle',
+    );
     await layers.dispatch(command('lyprop', {id: '1', clip: '1,0,1,1'}));
     stage.dispatch(command('flip'));
     nativeGraphics.drawCommitted(layers.scene);
     const nativeClipPixels = new Uint8Array(16);
     context.readPixels(0, 1, 4, 1, context.RGBA, context.UNSIGNED_BYTE, nativeClipPixels);
     const expectedClip = [64, 72, 0, 52, 32, 128, 0, 80, 64, 0, 0, 16, 64, 0, 0, 16];
-    assert(nativeClipPixels.every((value, i) => Math.abs(value - expectedClip[i]) <= 1),
-      `native rebased clip/linear sampling mismatch: ${nativeClipPixels}`);
+    assert(
+      nativeClipPixels.every((value, i) => Math.abs(value - expectedClip[i]) <= 1),
+      `native rebased clip/linear sampling mismatch: ${nativeClipPixels}`,
+    );
     const nativeEmpty = new Uint8Array(4);
     await layers.dispatch(command('lydel', {id: '10'}));
     await layers.dispatch(command('lydel', {id: '1'}));
@@ -385,6 +395,56 @@
       nativeEmpty.every((value) => value === 0),
       'native transparent black clear mismatch',
     );
+    await layers.dispatch(
+      command('lyc', {
+        id: 'g.sub.1',
+        file: 'missing-solid',
+        width: '1',
+        height: '1',
+        color: 'ff0000',
+      }),
+    );
+    stage.dispatch(command('flip'));
+    nativeGraphics.drawCommitted(layers.scene);
+    const readGroupPixel = (x, y) => {
+      const pixel = new Uint8Array(4);
+      context.readPixels(x, 1 - y, 1, 1, context.RGBA, context.UNSIGNED_BYTE, pixel);
+      return [...pixel];
+    };
+    const expectGroupPixel = (x, y, expected) => {
+      const actual = readGroupPixel(x, y);
+      assert(
+        actual.every((value, i) => Math.abs(value - expected[i]) <= 1),
+        `group pixel ${x},${y}: ${actual} != ${expected}`,
+      );
+    };
+    expectGroupPixel(0, 0, [255, 0, 0, 255]);
+    await layers.dispatch(command('lyprop', {id: 'g', left: '1', xscale: '200', alpha: '128'}));
+    await layers.dispatch(command('lyprop', {id: 'g.sub', top: '1', alpha: '128'}));
+    nativeGraphics.drawCommitted(layers.scene);
+    expectGroupPixel(0, 0, [255, 0, 0, 255]);
+    expectGroupPixel(1, 1, [0, 0, 0, 0]);
+    stage.dispatch(command('flip'));
+    nativeGraphics.drawCommitted(layers.scene);
+    const nativeGroupPixel = readGroupPixel(1, 1);
+    expectGroupPixel(1, 1, [64, 0, 0, 16]);
+    expectGroupPixel(2, 1, [64, 0, 0, 16]);
+    expectGroupPixel(0, 1, [0, 0, 0, 0]);
+    expectGroupPixel(1, 0, [0, 0, 0, 0]);
+    await layers.dispatch(command('lyprop', {id: 'g', visible: '0'}));
+    stage.dispatch(command('flip'));
+    nativeGraphics.drawCommitted(layers.scene);
+    expectGroupPixel(1, 1, [0, 0, 0, 0]);
+    await layers.dispatch(command('lyprop', {id: 'g', visible: '1', reversex: '1', anchorx: '1'}));
+    stage.dispatch(command('flip'));
+    nativeGraphics.drawCommitted(layers.scene);
+    expectGroupPixel(1, 1, [0, 0, 0, 0]);
+    expectGroupPixel(2, 1, [64, 0, 0, 16]);
+    expectGroupPixel(3, 1, [64, 0, 0, 16]);
+    await layers.dispatch(command('lydel', {id: 'g'}));
+    stage.dispatch(command('flip'));
+    nativeGraphics.drawCommitted(layers.scene);
+    expectGroupPixel(2, 1, [0, 0, 0, 0]);
     window.result = {
       passed: true,
       syntheticOnly: true,
@@ -403,6 +463,8 @@
       nativeModePixels,
       nativeEffectsCases,
       nativeClipPixels: [...nativeClipPixels],
+      nativeOrdinaryGroups: true,
+      nativeGroupPixel,
       serviceEffects: effects,
       drawOrderPixel,
     };

@@ -448,3 +448,26 @@ and blocked scene insertion release their unadopted resource. Ordinary unmanaged
 images keep the earlier last-actor invalidation behavior. Cached resources use the
 surface owner's disposal effect instead. Close layers before closing the cache
 and raster target at installation shutdown.
+
+## Ordinary group display properties
+
+Empty hierarchy nodes expose their native identity property holder lazily through
+`createGroupLayer`. Ordinary `lyprop` can update that group's geometry, alpha,
+visibility and reversals. First edits retain the previous inner state until commit;
+subsequent edits reuse the current copy. The shared outer alpha metadata remains
+separate from draw opacity. No image texture or resource loan belongs to an empty
+ordinary group.
+
+The raster traversal follows native descending child order (`0x1401864a0`),
+composes each child's float32 matrix with its parent's world matrix, and multiplies
+parent/child alpha in float32 (`0x14015b440`, `0x1400b3770`). Hidden groups and
+nonpositive scales suppress their entire descendant branch. Group anchors default
+to zero; image anchors remain centered. Empty dotted identifiers and numeric aliases
+retain scene lookup semantics. Nonzero group rotation still requires the native
+float trig owner.
+
+This implements direct groups whose intermediate surfaces are absent. Group clips,
+layer modes, color effects, masks and `intermediate_render` remain refused pending
+the intermediate composition owner (`0x140186770`). Shared persistent GPU surfaces
+are available for that owner; see `docs/gpu-render-surfaces.md`. Their allocation
+service alone does not implement native group capture policy, bounds or masking.

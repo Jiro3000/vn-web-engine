@@ -25,8 +25,15 @@ export interface ArtemisImageActor {
   readonly raster: {layerMode: ArtemisLayerMode} & ArtemisRasterEffects;
   readonly clip: ArtemisImageClip;
 }
+/** CLayerSet's ordinary property holder, without an intermediate raster surface. */
+export interface ArtemisGroupActor {
+  readonly texture: null;
+  readonly display: ArtemisDisplayObject;
+  readonly wrapper: {alpha: number};
+}
+export type ArtemisDisplayActor = ArtemisImageActor | ArtemisGroupActor;
 export type ArtemisLayerServices = Pick<
-  ArtemisLayerHost<ArtemisImageActor>,
+  ArtemisLayerHost<ArtemisDisplayActor>,
   | 'creationMode'
   | 'clearLayerCommands'
   | 'resetLayerCommands'
@@ -44,15 +51,15 @@ const identity = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 
 const f = Math.fround;
 const clipKeys = ['left', 'top', 'width', 'height', 'right', 'bottom'] as const;
 
-/** Ordinary unclipped straight-RGBA image actors through the shared raster target.
- * Sampler/blend selection, command services and nonzero-rotation math require owners.
+/** Ordinary straight-RGBA images and direct group transforms through the shared raster target.
+ * Intermediate groups, sampler/blend selection and nonzero-rotation math require owners.
  */
-export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisImageActor> {
+export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActor> {
   private readonly hash: string;
   private nextTexture = 1;
   private readonly textures = new Map<number, Texture>();
   private readonly images = new Map<TriangleImage, Texture>();
-  private readonly actors = new Set<ArtemisImageActor>();
+  private readonly actors = new Set<ArtemisDisplayActor>();
   private readonly wrappers = new Map<
     ArtemisImageActor['wrapper'],
     {
@@ -139,25 +146,56 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisImageActor>
     this.actors.add(actor);
     return actor;
   }
+  createGroupLayer(): ArtemisGroupActor {
+    const actor: ArtemisGroupActor = {
+      texture: null,
+      display: new ArtemisDisplayObject(this.hash),
+      wrapper: {alpha: 1},
+    };
+    this.wrappers.set(actor.wrapper, {references: 1, lease: undefined});
+    this.actors.add(actor);
+    return actor;
+  }
+  private checkActor(actor: ArtemisDisplayActor): void {
+    if (!this.actors.has(actor))
+      throw new Error('Artemis image actor is not owned or was released');
+  }
   private check(actor: ArtemisImageActor): Texture {
     if (!this.actors.has(actor))
       throw new Error('Artemis image actor is not owned or was released');
     return this.textures.get(actor.texture)!;
   }
-  copyImageLayer(old: ArtemisImageActor): ArtemisImageActor {
-    const texture = this.check(old);
-    const actor = {...old, display: old.display.copy(), raster: {...old.raster}};
-    texture.references++;
+  copyImageLayer(old: ArtemisImageActor): ArtemisImageActor;
+  copyImageLayer(old: ArtemisGroupActor): ArtemisGroupActor;
+  copyImageLayer(old: ArtemisDisplayActor): ArtemisDisplayActor;
+  copyImageLayer(old: ArtemisDisplayActor): ArtemisDisplayActor {
+    this.checkActor(old);
+    const actor: ArtemisDisplayActor =
+      old.texture === null
+        ? {...old, display: old.display.copy()}
+        : {...old, display: old.display.copy(), raster: {...old.raster}};
+    if (old.texture !== null) this.check(old).references++;
     this.wrappers.get(actor.wrapper)!.references++;
     this.actors.add(actor);
     return actor;
   }
   applyImageProperties(
     _id: string,
-    actor: ArtemisImageActor,
+    actor: ArtemisDisplayActor,
     patch: ArtemisLayerPropertyPatch,
   ): void {
-    this.check(actor);
+    this.checkActor(actor);
+    if (actor.texture === null) {
+      if (
+        ['clip', 'layermode', 'negative', 'grayscale', 'colormultiply'].some(
+          (key) => patch[key as keyof ArtemisLayerPropertyPatch] !== undefined,
+        )
+      )
+        throw new Error('Unsupported Artemis intermediate group raster property');
+      actor.display.apply(patch);
+      if (patch.wrapperAlpha !== undefined) actor.wrapper.alpha = patch.wrapperAlpha;
+      return;
+    }
     if (
       patch.clip &&
       !clipKeys.every(
@@ -214,10 +252,11 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisImageActor>
     });
     if (patch.wrapperAlpha !== undefined) actor.wrapper.alpha = patch.wrapperAlpha;
   }
-  releaseImageLayer(actor: ArtemisImageActor): void {
-    const texture = this.check(actor);
+  releaseImageLayer(actor: ArtemisDisplayActor): void {
+    this.checkActor(actor);
+    const texture = actor.texture === null ? undefined : this.check(actor);
     this.actors.delete(actor);
-    if (--texture.references === 0) {
+    if (texture && --texture.references === 0) {
       this.textures.delete(texture.id);
       this.images.delete(texture.image);
       if (!texture.managed) this.target.invalidate(texture.image);
@@ -234,24 +273,51 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisImageActor>
     return texture.image;
   }
   /** Emit retained ordinary scene actors; the stage owner decides presentation/commit timing. */
-  drawCommitted(scene: ArtemisScene<ArtemisImageActor>): DrawList {
+  drawCommitted(scene: ArtemisScene<ArtemisDisplayActor>): DrawList {
     const commands: TriangleDraw[] = [];
+    const root: {matrix: Float32Array; alpha: number; visible: boolean} = {
+      matrix: new Float32Array([1, 0, 0, 0, 1, 0]),
+      alpha: 1,
+      visible: true,
+    };
+    const groups = new Map<string, typeof root>();
     for (const entry of scene.drawEntries('retained')) {
       const actor = entry.value;
+      const separator = entry.id.lastIndexOf('.');
+      const parent = separator < 0 ? root : groups.get(entry.id.slice(0, separator))!;
+      if (!parent) throw new Error('Artemis scene traversal lost its parent group');
+      if (entry.acceptsChildren) {
+        if (actor && actor.texture !== null)
+          throw new Error('Unsupported Artemis group raster owner');
+        if (actor) this.checkActor(actor);
+        const p = actor?.display.properties;
+        const visible = parent.visible && (!p || (p.visible && p.xscale > 0 && p.yscale > 0));
+        groups.set(entry.id, {
+          matrix:
+            actor && visible
+              ? actor.display.matrix(parent.matrix, this.raster.trig)
+              : parent.matrix,
+          alpha: p ? f(parent.alpha * p.alpha) : parent.alpha,
+          visible,
+        });
+        continue;
+      }
       if (!actor) continue;
-      if (entry.acceptsChildren) throw new Error('Unsupported Artemis group raster owner');
+      if (actor.texture === null) throw new Error('Artemis group actor cannot own an image leaf');
       const texture = this.check(actor),
-        p = actor.display.properties;
+        p = actor.display.properties,
+        alpha = f(parent.alpha * p.alpha);
       if (
+        !parent.visible ||
         !p.visible ||
         p.xscale <= 0 ||
         p.yscale <= 0 ||
-        p.alpha < 2 ** -23 ||
+        alpha < 2 ** -23 ||
         texture.image.width === 0 ||
         texture.image.height === 0
       )
         continue;
-      const matrix = actor.display.matrix(undefined, this.raster.trig);
+      const matrix = actor.display.matrix(parent.matrix, this.raster.trig);
       const hasEffects = artemisHasRasterEffects(actor.raster);
       if (hasEffects && !this.raster.effects)
         throw new Error('Artemis image effects require a raster policy owner');
@@ -298,7 +364,7 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisImageActor>
             clipY,
             0,
             ...tint,
-            p.alpha,
+            alpha,
             f(f(x + sourceLeft) / imageWidth),
             f(f(y + sourceTop) / imageHeight),
           ],

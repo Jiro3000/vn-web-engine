@@ -1395,3 +1395,122 @@ test('Artemis clip setter preserves dimensions when float32 endpoint comparisons
     layers.close();
   }
 });
+
+test('Artemis ordinary groups compose retained transforms and alpha without owning raster textures', async () => {
+  const {layers, graphics, prepared, invalidated} = await rasterFixture();
+  try {
+    await layers.dispatch(command('lyc', {id: '2.sub.10', file: 'synthetic.png'}));
+    await layers.dispatch(command('lyc', {id: '2.sub.1', file: 'synthetic.png'}));
+    await layers.dispatch(command('lyc', {id: '1', file: 'synthetic.png'}));
+    layers.commit();
+    const initial = graphics.drawCommitted(layers.scene);
+    assert.deepEqual(
+      initial.commands.map((c) => c.texture),
+      [
+        layers.scene.entry('2.sub.10').value.texture,
+        layers.scene.entry('2.sub.1').value.texture,
+        layers.scene.entry('1').value.texture,
+      ],
+    );
+    assert.equal(layers.scene.entry('2', 'retained').value, undefined);
+    await layers.dispatch(command('lyprop', {id: '02', left: '1', xscale: '200', alpha: '128'}));
+    await layers.dispatch(command('lyprop', {id: '2.sub', left: '1', yscale: '200', alpha: '128'}));
+    await layers.dispatch(command('lyprop', {id: '2.sub.1', left: '1', alpha: '128'}));
+    const group = layers.scene.entry('2').value;
+    assert.equal(group.texture, null);
+    assert.equal(group.display.properties.anchorx, 0);
+    assert.equal(group.display.properties.anchory, 0);
+    assert.equal(prepared.length, 3);
+    assert.deepEqual(
+      graphics.drawCommitted(layers.scene).commands.map((c) => [...c.vertices]),
+      initial.commands.map((c) => [...c.vertices]),
+    );
+    layers.commit();
+    const changed = graphics.drawCommitted(layers.scene).commands;
+    // Parent scaling places the unchanged image origins at (3,0) and (5,0).
+    assert.deepEqual([...changed[0].vertices.slice(0, 3)], [0.5, 1, 0]);
+    assert.deepEqual([...changed[1].vertices.slice(0, 3)], [1.5, 1, 0]);
+    const alpha = Math.fround(128 / 255),
+      groupAlpha = Math.fround(alpha * alpha);
+    assert.equal(changed[0].vertices[6], groupAlpha);
+    assert.equal(changed[1].vertices[6], Math.fround(groupAlpha * alpha));
+    assert.equal(changed[2].vertices[6], 1);
+    assert.equal(group.wrapper.alpha, alpha);
+    await layers.dispatch(command('lyprop', {id: '2', top: '1'}));
+    const copy = layers.scene.entry('2').value;
+    assert.notEqual(copy, group);
+    assert.equal(copy.wrapper, group.wrapper);
+    assert.equal(layers.scene.entry('2', 'retained').value, group);
+    assert.equal(graphics.drawCommitted(layers.scene).commands[0].vertices[1], 1);
+    layers.commit();
+    assert.throws(() => graphics.copyImageLayer(group), /released/);
+    assert.equal(graphics.drawCommitted(layers.scene).commands[0].vertices[1], 0);
+    await layers.dispatch(command('lydel', {id: '2'}));
+    assert.equal(graphics.drawCommitted(layers.scene).commands.length, 3);
+    layers.commit();
+    assert.equal(graphics.drawCommitted(layers.scene).commands.length, 1);
+    assert.equal(invalidated.length, 2);
+    assert.throws(() => graphics.copyImageLayer(copy), /released/);
+  } finally {
+    layers.close();
+  }
+  assert.equal(invalidated.length, 3);
+});
+
+test('Artemis group visibility and positive-scale gates block descendants but preserve siblings', async () => {
+  const {layers, graphics, invalidated} = await rasterFixture();
+  try {
+    await layers.dispatch(command('lyc', {id: '.child.image', file: 'synthetic.png'}));
+    await layers.dispatch(command('lyc', {id: 'sibling', file: 'synthetic.png'}));
+    layers.commit();
+    assert.equal(graphics.drawCommitted(layers.scene).commands.length, 2);
+    for (const [patch, restore] of [
+      [{visible: '0'}, {visible: '1'}],
+      [{xscale: '0'}, {xscale: '100'}],
+      [{yscale: '-1'}, {yscale: '100'}],
+    ]) {
+      await layers.dispatch(command('lyprop', {id: '', ...patch}));
+      assert.equal(graphics.drawCommitted(layers.scene).commands.length, 2);
+      layers.commit();
+      assert.equal(graphics.drawCommitted(layers.scene).commands.length, 1);
+      assert.equal(invalidated.length, 0);
+      await layers.dispatch(command('lyprop', {id: '', ...restore}));
+      layers.commit();
+      assert.equal(graphics.drawCommitted(layers.scene).commands.length, 2);
+    }
+    await layers.dispatch(command('lyprop', {id: '.child', alpha: '0'}));
+    layers.commit();
+    assert.equal(graphics.drawCommitted(layers.scene).commands.length, 1);
+    assert.equal(invalidated.length, 0);
+    await layers.dispatch(command('lyprop', {id: '.child', alpha: '255', rotate: '45'}));
+    layers.commit();
+    assert.throws(() => graphics.drawCommitted(layers.scene), /trigonometry owner/);
+  } finally {
+    layers.close();
+  }
+  assert.equal(invalidated.length, 2);
+});
+
+test('Artemis group raster effects require the unimplemented intermediate owner', async () => {
+  const {layers, graphics} = await rasterFixture();
+  try {
+    await layers.dispatch(command('lyc', {id: 'group.child', file: 'synthetic.png'}));
+    layers.commit();
+    for (const patch of [
+      {clip: '0,0,1,1'},
+      {negative: '0'},
+      {grayscale: '1'},
+      {colormultiply: 'ffffff'},
+      {layermode: 'normal'},
+      {intermediate_render: '1'},
+    ])
+      await assert.rejects(
+        () => layers.dispatch(command('lyprop', {id: 'group', ...patch})),
+        /Unsupported Artemis.*(group raster|layer property)/,
+      );
+    layers.commit();
+    assert.equal(graphics.drawCommitted(layers.scene).commands.length, 1);
+  } finally {
+    layers.close();
+  }
+});

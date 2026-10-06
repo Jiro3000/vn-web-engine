@@ -95,10 +95,13 @@ class Node<T> {
   value(view: ArtemisSceneView): T | undefined {
     return this.values[view === 'current' ? this.currentValue : this.retainedValue];
   }
-  edit(copy: (value: T) => T): T | undefined {
+  edit(copy: (value: T) => T, create?: () => T): T | undefined {
     const value = this.value('current');
-    if (value !== undefined && this.currentValue === this.retainedValue) {
-      const replacement = copy(value);
+    if (
+      (value !== undefined && this.currentValue === this.retainedValue) ||
+      (value === undefined && create)
+    ) {
+      const replacement = value === undefined ? create!() : copy(value);
       this.currentValue = 1 - this.retainedValue;
       this.values[this.currentValue] = replacement;
       this.lifetime.retain(replacement);
@@ -218,8 +221,9 @@ export class ArtemisScene<T> {
       acceptsChildren: parent.acceptsChildren,
     };
   }
-  /** Ordinary inner-actor copy-on-first-edit path, retaining the old payload until commit. */
-  editValue(id: string, copy: (value: T) => T): T | undefined {
+  /** Inner-actor copy on first edit; empty group defaults may be materialized lazily.
+   * The retained view keeps its old payload (or default identity) until commit. */
+  editValue(id: string, copy: (value: T) => T, createGroup?: () => T): T | undefined {
     let node = this.root;
     for (const key of this.path(id)) {
       if (!node.acceptsChildren) return undefined;
@@ -227,7 +231,9 @@ export class ArtemisScene<T> {
       if (!child) return undefined;
       node = child.node;
     }
-    return node.edit(copy);
+    if (createGroup && !node.acceptsChildren)
+      throw new Error('Cannot initialize a non-group scene payload');
+    return node.edit(copy, createGroup);
   }
   /** All payloads held by reachable nodes, including inner retained versions. */
   payloads(): ReadonlySet<T> {
