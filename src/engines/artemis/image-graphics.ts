@@ -2,7 +2,11 @@ import type {DrawList, DrawListTarget} from '../../graphics/draw-list.js';
 import type {TriangleDraw, TriangleImage} from '../../graphics/triangle-draw.js';
 import type {AsbTag} from '../../formats/artemis/asb.js';
 import type {ArtemisLayerHost} from './layers.js';
-import type {ArtemisLayerPropertyPatch, ArtemisLayerMode} from './layer-properties.js';
+import type {
+  ArtemisLayerPropertyPatch,
+  ArtemisLayerMode,
+  ArtemisImageClip,
+} from './layer-properties.js';
 import type {ArtemisLoadedImage} from './image-loader.js';
 import type {ArtemisScene} from './scene.js';
 import {ArtemisDisplayObject, artemisDisplayPoint} from './display-object.js';
@@ -19,6 +23,7 @@ export interface ArtemisImageActor {
   /** Outer wrapper metadata is shared by its retained/current inner actor copies. */
   readonly wrapper: {alpha: number};
   readonly raster: {layerMode: ArtemisLayerMode} & ArtemisRasterEffects;
+  readonly clip: ArtemisImageClip;
 }
 export type ArtemisLayerServices = Pick<
   ArtemisLayerHost<ArtemisImageActor>,
@@ -37,6 +42,7 @@ interface Texture {
 }
 const identity = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
 const f = Math.fround;
+const clipKeys = ['left', 'top', 'width', 'height', 'right', 'bottom'] as const;
 
 /** Ordinary unclipped straight-RGBA image actors through the shared raster target.
  * Sampler/blend selection, command services and nonzero-rotation math require owners.
@@ -127,6 +133,7 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisImageActor>
       display,
       wrapper: {alpha: 1},
       raster: {layerMode: 'normal', negative: false, grayscale: false, colorMultiply: 0xffffff},
+      clip: {left: 0, top: 0, width: 0, height: 0, right: 0, bottom: 0},
     };
     this.wrappers.set(actor.wrapper, {references: 1, lease: resource.lease});
     this.actors.add(actor);
@@ -152,6 +159,21 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisImageActor>
   ): void {
     this.check(actor);
     if (
+      patch.clip &&
+      !clipKeys.every(
+        (key) => Number.isFinite(patch.clip![key]) && Number.isFinite(f(patch.clip![key])),
+      )
+    )
+      throw new Error('Invalid Artemis image clip rectangle');
+    const clip: ArtemisImageClip | undefined = patch.clip && {
+      left: f(patch.clip.left),
+      top: f(patch.clip.top),
+      width: f(patch.clip.width),
+      height: f(patch.clip.height),
+      right: f(patch.clip.right),
+      bottom: f(patch.clip.bottom),
+    };
+    if (
       ![patch.negative, patch.grayscale].every(
         (value) => value === undefined || typeof value === 'boolean',
       )
@@ -174,6 +196,15 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisImageActor>
     if (patch.layermode !== undefined && patch.layermode !== 'normal' && !this.raster.layerMode)
       throw new Error('Artemis layer mode requires a raster policy owner');
     actor.display.apply(patch);
+    // Native 0a45d0 compares endpoints only, then copies all six rectangle fields.
+    // In particular, an initial 0,0,1,1 has the default zero endpoints and is ignored.
+    if (
+      clip &&
+      ['left', 'top', 'right', 'bottom'].some(
+        (key) => clip[key as keyof ArtemisImageClip] !== actor.clip[key as keyof ArtemisImageClip],
+      )
+    )
+      Object.assign(actor, {clip});
     if (patch.layermode !== undefined) actor.raster.layerMode = patch.layermode;
     // Raster state is immutable by contract to callers; only this owner updates it.
     Object.assign(actor.raster, {
@@ -227,8 +258,23 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisImageActor>
       const mode = hasEffects
         ? this.raster.effects!(actor.raster.layerMode, actor.raster)
         : this.raster.layerMode?.(actor.raster.layerMode);
-      const width = f(texture.image.width),
-        height = f(texture.image.height);
+      const imageWidth = f(texture.image.width),
+        imageHeight = f(texture.image.height);
+      let width = imageWidth,
+        height = imageHeight,
+        sourceLeft = 0,
+        sourceTop = 0;
+      const clip = actor.clip;
+      // 15d120 crops source UVs but rebases the resulting local quad to 0,0.
+      // Nonpositive dimensions disable clipping rather than making an empty quad.
+      if (clip.width > 0 && clip.height > 0) {
+        if (clip.left >= imageWidth || clip.top >= imageHeight || clip.right < 0 || clip.bottom < 0)
+          continue;
+        sourceLeft = Math.max(0, clip.left);
+        sourceTop = Math.max(0, clip.top);
+        width = f((clip.right < imageWidth ? f(clip.right + 1) : imageWidth) - sourceLeft);
+        height = f((clip.bottom < imageHeight ? f(clip.bottom + 1) : imageHeight) - sourceTop);
+      }
       const vertices = new Float32Array(36);
       const color = actor.raster.colorMultiply;
       const tint = [
@@ -246,7 +292,18 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisImageActor>
         const point = artemisDisplayPoint(matrix, x, y);
         const clipX = f(f(point[0] / f(f(this.target.width) * 0.5)) - 1);
         const clipY = f(1 - f(point[1] / f(f(this.target.height) * 0.5)));
-        vertices.set([clipX, clipY, 0, ...tint, p.alpha, f(x / width), f(y / height)], index * 9);
+        vertices.set(
+          [
+            clipX,
+            clipY,
+            0,
+            ...tint,
+            p.alpha,
+            f(f(x + sourceLeft) / imageWidth),
+            f(f(y + sourceTop) / imageHeight),
+          ],
+          index * 9,
+        );
       }
       commands.push({
         kind: 'triangles',

@@ -1,6 +1,15 @@
 import {artemisHexUint32} from './numbers.js';
 
 export type ArtemisLayerMode = 'normal' | 'add' | 'screen' | 'multiply';
+/** Native TRect<float> stores dimensions and inclusive endpoints independently. */
+export interface ArtemisImageClip {
+  readonly left: number;
+  readonly top: number;
+  readonly width: number;
+  readonly height: number;
+  readonly right: number;
+  readonly bottom: number;
+}
 export interface ArtemisLayerPropertyPatch {
   left?: number;
   top?: number;
@@ -19,6 +28,7 @@ export interface ArtemisLayerPropertyPatch {
   negative?: boolean;
   grayscale?: boolean;
   colormultiply?: number;
+  clip?: ArtemisImageClip;
 }
 const numeric = [
   'left',
@@ -31,7 +41,14 @@ const numeric = [
   'rotate',
 ] as const;
 const flags = ['reversex', 'reversey', 'visible', 'negative', 'grayscale'] as const;
-const supported = new Set<string>(['id', 'layermode', 'colormultiply', ...numeric, ...flags]);
+const supported = new Set<string>([
+  'id',
+  'layermode',
+  'colormultiply',
+  'clip',
+  ...numeric,
+  ...flags,
+]);
 
 /** Decimal finite subset of native atof; preserve prefix parsing and float32 rounding. */
 function decimal(value: string): number {
@@ -70,5 +87,22 @@ export function artemisLayerProperties(
     patch.layermode = mode;
   // Native 115650 leaves the prior mode unchanged for any other spelling.
   if (args.has('colormultiply')) patch.colormultiply = artemisHexUint32(args.get('colormultiply')!);
+  if (args.has('clip')) {
+    const parts = args.get('clip')!.split('\0', 1)[0]!.split(',');
+    // 115650 accepts exactly four fields, including empty comma-separated fields.
+    if (parts.length === 4) {
+      const [left, top, width, height] = parts.map((part) => Math.fround(decimal(part))) as [
+        number,
+        number,
+        number,
+        number,
+      ];
+      const right = Math.fround(Math.fround(left + width) - 1);
+      const bottom = Math.fround(Math.fround(top + height) - 1);
+      if (!Number.isFinite(right) || !Number.isFinite(bottom))
+        throw new Error('Unsupported Artemis clip rectangle');
+      patch.clip = {left, top, width, height, right, bottom};
+    }
+  }
   return patch;
 }

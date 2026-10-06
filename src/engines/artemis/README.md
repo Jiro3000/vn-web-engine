@@ -378,6 +378,22 @@ This establishes the implemented WebGL behavior against the recovered equations;
 it is not a native GPU differential test. Texture mip chains,
 custom shaders and alternate rendering backends remain outside this policy.
 
+`lyprop clip` accepts exactly four comma-separated fields: left, top, width and
+height. Prefix float parsing includes empty fields as zero and stops at NUL.
+Inclusive right/bottom endpoints use separate float32 addition and subtraction
+of one (`0x140115650`). The native setter compares only left/top/right/bottom
+before copying all six fields (`0x1400a45d0`); the initial all-zero rectangle
+therefore ignores `0,0,1,1`. Unchanged rounded endpoints preserve the old dimensions.
+Clip state is retained independently of geometry and wrapper alpha.
+
+Positive width and height enable source cropping. An entirely outside rectangle
+skips drawing; nonpositive dimensions disable cropping. The resulting quad starts
+at local zero with its cropped size, while UVs retain the clamped source offset
+(`0x14015d120`). Anchors keep their original image values. Linear sampling still
+uses the full texture, including adjacent texels at a clip boundary. Node tests
+check retained state, inclusive bounds and endpoint rounding; the synthetic GPU
+fixture checks the rebased cropped quad and actual linear-sampled framebuffer.
+
 `lyprop layermode` preserves the native exact spellings `normal`, `add`, `screen`
 and `multiply`; any other value leaves the old mode intact (`0x140115650`). Mode
 state belongs to the inner image actor and is copied independently of its shared

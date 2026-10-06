@@ -1323,3 +1323,75 @@ test('Artemis layer release order determines the native over-budget victim and i
     cache.close();
   }
 });
+
+test('Artemis clip parsing accepts exactly four comma fields and rounds inclusive endpoints', async () => {
+  const {artemisLayerProperties} = await import('../dist/engines/artemis/layer-properties.js');
+  const parse = (clip) => artemisLayerProperties(new Map([['clip', clip]])).clip;
+  assert.deepEqual(parse(' 1px,,1.5,1\0,extra'), {
+    left: 1,
+    top: 0,
+    width: 1.5,
+    height: 1,
+    right: 1.5,
+    bottom: 0,
+  });
+  for (const value of ['', '1,2,3', '1,2,3,4,5', 'nan,1']) assert.equal(parse(value), undefined);
+  assert.throws(() => parse('nan,0,1,1'), /property number/);
+  assert.throws(() => parse('3e38,0,3e38,1'), /clip rectangle/);
+});
+
+test('Artemis clip keeps retained source UVs and rebases cropped geometry without changing anchors', async () => {
+  const {layers, graphics} = await rasterFixture();
+  const positions = (draw) => [...draw.vertices].filter((_, i) => i % 9 < 2);
+  const uv = (draw) => [...draw.vertices].filter((_, i) => i % 9 >= 7);
+  try {
+    await layers.dispatch(command('lyc', {id: '1', file: 'synthetic'}));
+    layers.commit();
+    const old = layers.scene.entry('1').value;
+    await layers.dispatch(command('lyprop', {id: '1', clip: '0,0,1,1'}));
+    assert.equal(layers.scene.entry('1').value.clip.width, 0); // Default endpoints match.
+    layers.commit();
+    const full = graphics.drawCommitted(layers.scene).commands[0];
+    await layers.dispatch(command('lyprop', {id: '1', clip: '1,0,1,1'}));
+    assert.deepEqual(graphics.drawCommitted(layers.scene).commands[0].vertices, full.vertices);
+    assert.equal(old.clip.width, 0);
+    layers.commit();
+    const cropped = graphics.drawCommitted(layers.scene).commands[0];
+    assert.deepEqual(positions(cropped), [-1, 1, -0.5, 1, -1, 0, -0.5, 0]);
+    assert.deepEqual(uv(cropped), [0.5, 0, 1, 0, 0.5, 1, 1, 1]);
+    assert.equal(layers.scene.entry('1').value.display.properties.anchorx, 1);
+    await layers.dispatch(command('lyprop', {id: '1', clip: '-1,0,2,1'}));
+    layers.commit();
+    assert.deepEqual(
+      uv(graphics.drawCommitted(layers.scene).commands[0]),
+      [0, 0, 0.5, 0, 0, 1, 0.5, 1],
+    );
+    for (const clip of ['2,0,1,1', '0,1,1,1', '-2,0,1,1', '0,-2,1,1']) {
+      await layers.dispatch(command('lyprop', {id: '1', clip}));
+      layers.commit();
+      assert.equal(graphics.drawCommitted(layers.scene).commands.length, 0);
+    }
+    await layers.dispatch(command('lyprop', {id: '1', clip: '2,0,0,1'}));
+    layers.commit();
+    assert.deepEqual(graphics.drawCommitted(layers.scene).commands[0].vertices, full.vertices);
+  } finally {
+    layers.close();
+  }
+});
+
+test('Artemis clip setter preserves dimensions when float32 endpoint comparisons are unchanged', async () => {
+  const {layers, graphics} = await rasterFixture();
+  try {
+    await layers.dispatch(command('lyc', {id: '1', file: 'synthetic'}));
+    await layers.dispatch(command('lyprop', {id: '1', clip: '33554432,0,0,1'}));
+    layers.commit();
+    const old = layers.scene.entry('1').value.clip;
+    assert.equal(old.width, 0);
+    await layers.dispatch(command('lyprop', {id: '1', clip: '33554432,0,1,1'}));
+    layers.commit();
+    assert.deepEqual(layers.scene.entry('1').value.clip, old);
+    assert.equal(graphics.drawCommitted(layers.scene).commands.length, 1);
+  } finally {
+    layers.close();
+  }
+});

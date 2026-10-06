@@ -357,6 +357,24 @@
         );
         nativeEffectsCases++;
       }
+    await layers.dispatch(command('lyprop', {
+      id: '1', layermode: 'normal', negative: '0', grayscale: '0',
+      colormultiply: 'ffffff', clip: '0,0,1,1',
+    }));
+    stage.dispatch(command('flip'));
+    nativeGraphics.drawCommitted(layers.scene);
+    const initialClipPixels = new Uint8Array(16);
+    context.readPixels(0, 1, 4, 1, context.RGBA, context.UNSIGNED_BYTE, initialClipPixels);
+    assert(initialClipPixels.every((value, i) => Math.abs(value - expected[i]) <= 1),
+      'default clip endpoints must preserve disabled initial rectangle');
+    await layers.dispatch(command('lyprop', {id: '1', clip: '1,0,1,1'}));
+    stage.dispatch(command('flip'));
+    nativeGraphics.drawCommitted(layers.scene);
+    const nativeClipPixels = new Uint8Array(16);
+    context.readPixels(0, 1, 4, 1, context.RGBA, context.UNSIGNED_BYTE, nativeClipPixels);
+    const expectedClip = [64, 72, 0, 52, 32, 128, 0, 80, 64, 0, 0, 16, 64, 0, 0, 16];
+    assert(nativeClipPixels.every((value, i) => Math.abs(value - expectedClip[i]) <= 1),
+      `native rebased clip/linear sampling mismatch: ${nativeClipPixels}`);
     const nativeEmpty = new Uint8Array(4);
     await layers.dispatch(command('lydel', {id: '10'}));
     await layers.dispatch(command('lydel', {id: '1'}));
@@ -384,6 +402,7 @@
       nativeTransparentClear: true,
       nativeModePixels,
       nativeEffectsCases,
+      nativeClipPixels: [...nativeClipPixels],
       serviceEffects: effects,
       drawOrderPixel,
     };
