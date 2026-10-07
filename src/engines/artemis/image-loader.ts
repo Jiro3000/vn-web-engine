@@ -5,38 +5,43 @@ import {decodeImageOffThread} from '../../graphics/image-decode-offload.js';
 import {decodeOpaqueJpeg} from '../../graphics/browser-jpeg.js';
 import {artemisRevision} from './revision.js';
 
-export interface ArtemisImageCodec {
+/** Logical resource geometry; the owner decides whether it needs decoded pixel storage. */
+export interface ArtemisImageDimensions {
+  readonly width: number;
+  readonly height: number;
+}
+export interface ArtemisImageCodec<I extends ArtemisImageDimensions = TriangleImage> {
   /** Native plugins expose case-sensitive extension strings in registration order. */
   readonly extensions: readonly string[];
   /** Null is native decode failure; exceptions represent unsupported/host failures. */
-  decode(bytes: Uint8Array): Promise<TriangleImage | null>;
+  decode(bytes: Uint8Array): Promise<I | null>;
 }
-export interface ArtemisLoadedImage {
+export interface ArtemisLoadedImage<I extends ArtemisImageDimensions = TriangleImage> {
   readonly path: string;
-  readonly image: TriangleImage;
+  readonly image: I;
   /** Present when the resource path explicitly determines a native surface format. */
   readonly surfaceFormat?: 1 | 2;
   /** One native surface-manager loan; transfer to a successful outer layer wrapper. */
   readonly lease?: {release(): void};
 }
 
-export interface ArtemisImageSource {
-  load(name: string): Promise<ArtemisLoadedImage | null>;
+export interface ArtemisImageSource<I extends ArtemisImageDimensions = TriangleImage> {
+  load(name: string): Promise<ArtemisLoadedImage<I> | null>;
 }
 
 /** Native 0x1401756a0: extension preference, content sniffing, then appended candidates. */
-export class ArtemisImageLoader {
-  private readonly codecs: readonly ArtemisImageCodec[];
+export class ArtemisImageLoader<I extends ArtemisImageDimensions = TriangleImage> {
+  private readonly codecs: readonly ArtemisImageCodec<I>[];
   constructor(
     private readonly readFile: (path: string) => Promise<Uint8Array | null>,
-    codecs: readonly ArtemisImageCodec[],
+    codecs: readonly ArtemisImageCodec<I>[],
   ) {
     this.codecs = codecs.map((codec) => ({
       extensions: [...codec.extensions],
       decode: (bytes) => codec.decode(bytes),
     }));
   }
-  async load(name: string): Promise<ArtemisLoadedImage | null> {
+  async load(name: string): Promise<ArtemisLoadedImage<I> | null> {
     if (name.includes('\0')) throw new Error('Unsupported Artemis image path containing NUL');
     const exact = await this.readFile(name);
     if (exact !== null) {

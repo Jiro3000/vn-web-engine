@@ -1,5 +1,10 @@
 import type {AsbTag} from '../../formats/artemis/asb.js';
-import type {ArtemisImageSource, ArtemisLoadedImage} from './image-loader.js';
+import type {TriangleImage} from '../../graphics/triangle-draw.js';
+import type {
+  ArtemisImageSource,
+  ArtemisLoadedImage,
+  ArtemisImageDimensions,
+} from './image-loader.js';
 import {ArtemisScene} from './scene.js';
 import {artemisLayerProperties, type ArtemisLayerPropertyPatch} from './layer-properties.js';
 import {createSolidImage} from '../../graphics/solid-image.js';
@@ -30,12 +35,15 @@ function solidImage(tag: AsbTag): ArtemisLoadedImage {
   };
 }
 
-export interface ArtemisLayerHost<T extends object> {
+export interface ArtemisLayerHost<
+  T extends object,
+  I extends ArtemisImageDimensions = TriangleImage,
+> {
   /** Native 0x1400d5930 has a separate nonzero capture-mode branch. */
   creationMode(): number;
   /** Allocate a fresh actor; success transfers the resource lease to its outer wrapper. */
   createImageLayer(
-    resource: ArtemisLoadedImage,
+    resource: ArtemisLoadedImage<I | TriangleImage>,
     anchor: {readonly x: number; readonly y: number},
   ): T;
   /** Allocate the native default property holder of an empty group. */
@@ -60,7 +68,7 @@ export interface ArtemisLayerHost<T extends object> {
 /** Ordinary image-backed lyc/lydel and image/direct-group lyprop subset.
  * Raster resources and command registrations remain required owner effects.
  */
-export class ArtemisLayers<T extends object> {
+export class ArtemisLayers<T extends object, I extends ArtemisImageDimensions = TriangleImage> {
   readonly scene: ArtemisScene<T>;
   private generation = 0;
   private pending: number | null = null;
@@ -70,8 +78,8 @@ export class ArtemisLayers<T extends object> {
     [];
   constructor(
     executableSha256: string,
-    private readonly images: ArtemisImageSource,
-    private readonly host: ArtemisLayerHost<T>,
+    private readonly images: ArtemisImageSource<I>,
+    private readonly host: ArtemisLayerHost<T, I>,
   ) {
     this.scene = new ArtemisScene(
       executableSha256,
@@ -183,7 +191,7 @@ export class ArtemisLayers<T extends object> {
     if (tag.args.has('rule')) throw new Error('Unsupported Artemis rule surface format owner');
     const token = ++this.generation;
     this.pending = token;
-    let resource: ArtemisLoadedImage | null = null;
+    let resource: ArtemisLoadedImage<I | TriangleImage> | null = null;
     try {
       resource = await this.images.load(tag.args.get('file') ?? '');
       if (token !== this.generation) throw new Error('Artemis layer resource operation cancelled');

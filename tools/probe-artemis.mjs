@@ -1,5 +1,6 @@
 /** Runs Lua/script control only; no renderer, media decoder or native game process. */
 import {createHash} from 'node:crypto';
+import {createMetadataLayerFixture} from './artemis-metadata-layer-fixture.mjs';
 import {BrowserWindowsSystemProfileHost} from '../dist/platform/browser-windows-system-profile.js';
 import {
   initializeArtemisVariables,
@@ -32,6 +33,11 @@ if (simulatedDialogResult !== null && ![0, 1].includes(simulatedDialogResult))
   throw new Error('Probe dialog result must be 0 or 1');
 const advanceWaits = process.argv.slice(3).includes('--advance-waits');
 const suspendableTags = process.argv.slice(3).includes('--async-lua');
+const metadataLayers = process.argv.slice(3).includes('--image-metadata');
+if (metadataLayers && !suspendableTags) throw Error('--image-metadata requires --async-lua');
+let layerFixture = null,
+  pendingResource = null,
+  resourceResumptions = 0;
 let probeTick = 1,
   advancedWaits = 0;
 const installation = await openArtemisInstallation(process.argv[2]);
@@ -181,8 +187,17 @@ try {
     new BrowserWindowsDynamicLibraryHost(),
     (name, bytes) => variables.write(name, bytes),
   );
+  if (metadataLayers)
+    layerFixture = createMetadataLayerFixture(executableSha256, (path) =>
+      installation.files.read(path),
+    );
   const dispatch = (tag) => {
     nativeTags.push({name: tag.name, args: Object.fromEntries(tag.args)});
+    if (layerFixture?.accepts(tag)) {
+      if (pendingResource) throw Error('Probe resource operation overlaps');
+      pendingResource = layerFixture.dispatch(tag);
+      return 'suspended';
+    }
     if (dialog.dispatch(tag)) return;
     if (
       keyBindings.dispatch(tag) ||
@@ -232,7 +247,19 @@ try {
   try {
     script.load('system/first.iet');
     script.run(1000);
-    while (advanceWaits && script.state === 'waiting' && wait.pending && advancedWaits < 100) {
+    while (script.state === 'waiting') {
+      if (pendingResource) {
+        if (resourceResumptions >= 1000) throw Error('Probe resource budget exceeded');
+        const operation = pendingResource;
+        pendingResource = null;
+        await operation;
+        resourceResumptions++;
+        if (script.pendingLuaCalls) script.resumeLua();
+        else script.resume();
+        script.run(1000);
+        continue;
+      }
+      if (!advanceWaits || !wait.pending || advancedWaits >= 100) break;
       probeTick = (wait.deadlineTick + 1) >>> 0;
       advancedWaits++;
       if (!wait.tick(probeTick)) break;
@@ -263,6 +290,8 @@ try {
         advancedWaits,
         timedWaitPending: wait.pending,
         effectMode: 'record-only',
+        metadataLayerFixture: layerFixture?.snapshot() ?? null,
+        resourceResumptions,
         preparedFiles: prepared.size,
         preparedBytes,
         compiled,
@@ -283,5 +312,6 @@ try {
   );
 } finally {
   lua?.close();
+  layerFixture?.close();
   await installation.close();
 }

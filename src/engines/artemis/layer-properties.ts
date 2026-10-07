@@ -48,6 +48,13 @@ const supported = new Set<string>([
   'colormultiply',
   'clip',
   'intermediate_render',
+  // Game Lua forwards its creation argument table to lyprop. Native d76d0 /
+  // 115650 never query these keys; keep the recorded tag without reloading.
+  'file',
+  'width',
+  'height',
+  'color',
+  'rule',
   ...numeric,
   ...flags,
 ]);

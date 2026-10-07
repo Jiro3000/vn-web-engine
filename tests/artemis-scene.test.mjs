@@ -1896,3 +1896,60 @@ test('Artemis node capture snapshots release before child images and retained ho
   layers.close();
   assert.equal(invalidated.length, 3);
 });
+
+test('Artemis forwarded creation arguments in lyprop preserve the image and record the complete original tag', async () => {
+  const {layers, graphics, prepared, effects} = await rasterFixture();
+  try {
+    await layers.dispatch(command('lyc', {id: '1', file: 'synthetic.png'}));
+    const first = layers.scene.entry('1').value;
+    await layers.dispatch(
+      command('lyprop', {
+        id: '1',
+        file: 'does-not-load',
+        width: 'invalid',
+        height: '-1',
+        color: 'invalid',
+        rule: 'unused',
+        left: '1',
+      }),
+    );
+    const copy = layers.scene.entry('1').value;
+    assert.notEqual(copy, first);
+    assert.equal(copy.texture, first.texture);
+    assert.equal(prepared.length, 1);
+    assert.equal(copy.display.properties.left, 1);
+    assert.deepEqual(effects.at(-1), ['record', '1']);
+    layers.commit();
+    assert.equal(graphics.drawCommitted(layers.scene).commands.length, 1);
+  } finally {
+    layers.close();
+  }
+});
+
+test('Artemis metadata-only resource owners use actual layer lifecycle without fake pixel buffers', async () => {
+  const {createMetadataLayerFixture} = await import('../tools/artemis-metadata-layer-fixture.mjs');
+  const {png} = await import('./png-fixtures.mjs');
+  const encoded = png({width: 2, height: 1, raw: Buffer.from([0, 1, 2, 3, 255, 4, 5, 6, 128])});
+  const fixture = createMetadataLayerFixture(revision, async (path) =>
+    path === 'fixture.png' ? encoded : null,
+  );
+  try {
+    await fixture.dispatch(command('lyc', {id: 'group.1', file: 'fixture'}));
+    await fixture.dispatch(command('lyprop', {id: 'group.1', file: 'fixture', alpha: '128'}));
+    await fixture.dispatch(command('flip'));
+    const state = fixture.snapshot();
+    assert.equal(state.pixelDecode, false);
+    assert.equal(state.gpuPreparation, false);
+    assert.equal(state.presentation, false);
+    assert.deepEqual(state.loads, [
+      {name: 'fixture', path: 'fixture.png', width: 2, height: 1, pixelDecode: false},
+    ]);
+    assert.deepEqual([state.layers[1].width, state.layers[1].height], [2, 1]);
+    assert.equal(state.layers[1].properties.alpha, Math.fround(128 / 255));
+    await fixture.dispatch(command('lydel', {id: 'group'}));
+    await fixture.dispatch(command('flip'));
+    assert.deepEqual(fixture.snapshot().layers, []);
+  } finally {
+    fixture.close();
+  }
+});

@@ -585,3 +585,26 @@ confirms the ordinary browser bitmap rotates to3x2, and verifies that the Artemi
 owner keeps2x3 and paints expected RGB. This validates ownership and metadata
 policy, not byte-exact equality to the native JPEG library's DCT/color rounding.
 No real game JPEG was decoded or rendered.
+
+## Nonvisual resource geometry probe
+
+Image codecs/resources and layer hosts can select a logical image-dimensions type;
+the ordinary raster owner retains the default straight-RGBA type. This permits an
+explicit geometry-only owner without fake pixel buffers or GPU allocations.
+`tools/probe-artemis.mjs --image-metadata --async-lua` uses such a record-only
+fixture, reads encoded resource headers and drives the actual layer lifecycle,
+property parser, scene commit and suspended Lua. It never decodes image pixels or
+presents game media. Its JSON declares the fixture, nonvisual mode and resource
+resumption count; unsupported services still stop the probe. PNG/PSD header checks
+are geometry inspection, not evidence of full decode compatibility.
+
+Creation keys `file`, `width`, `height`, `color` and `rule` forwarded to `lyprop`
+are retained in its original command record and ignored by ordinary property
+application, matching `0x1400d76d0` / `0x140115650`. The game forwards the table
+used by `lyc`; property application does not reload or recolor its image.
+Unknown/unimplemented actual property keys continue to refuse.
+
+The real nonvisual probe, with explicit simulated dialog result and timed waits,
+now creates the header-verified1920x1080 `:bg/black.png` layer and applies its
+forwarded properties. It stops at missing `getMousePoint`. This is control-flow
+progress through initialization, not playable game output or a rendered frame.
