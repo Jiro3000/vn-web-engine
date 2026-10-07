@@ -883,3 +883,26 @@ graph/device and explicitly refuses startEffect. Decoding :sysse/none.ogg succee
 at48000Hz/stereo/11685frames; this is not evidence of native PCM rounding parity or
 game playback. `ArtemisVariables.lookup` supports non-inserting, owned-byte lookup
 for optional named gains without inventing missing system variables.
+
+## Effect voices and device attenuation
+
+`ArtemisEffectVoices` owns real `AudioVoice` resources, signed-key gain factors,
+per-factor/pan fade jobs and preparation-time inactive collection across managers.
+Default integer fades use native first-tick/uint32 absolute-time behavior, float64
+interpolation and int32 truncation. Gain projection uses float32 factor reduction
+and native rounding, followed by the DirectSound centidB conversion. Fade-out
+completion stops/rewinds the voice; its manager row remains until inactive cleanup.
+Immediate stop disposes it. Close cancels jobs and retires all owned voices; a late
+prepared voice is disposed before any stale script effect.
+
+`createArtemisBrowserEffectVoices` joins a required PCM decoder with the shared
+`BrowserAudioTransport`. The transport has optional loop/reset and independent
+stereo attenuation controls. Mono is duplicated into both channels; stereo content
+is attenuated without crossfeed. Offline contexts permit actual WebAudio processing
+without device output. Ordinary callers retain their existing initial controls.
+The codec owner remains responsible for native formats and buffer-mode semantics.
+
+The synthetic browser smoke verifies real offline PCM gain/pan and mono behavior,
+alongside text/GPU resources. Node diagnostic decoding still refuses playback;
+no silent or timer voice substitutes are installed there. Native PCM16 quantization,
+streaming modes and the production audio/scheduler/profile wiring remain separate.

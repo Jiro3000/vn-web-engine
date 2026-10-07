@@ -4,6 +4,7 @@
 <canvas id="frame" style="width: 256px; height: 128px; image-rendering: pixelated"></canvas>
 <pre id="result">Running synthetic PNG / Lua / raster checks</pre>
 <script type="module">
+  import {createArtemisBrowserEffectVoices} from '../../dist/engines/artemis/browser-effect-voices.js';
   import {ArtemisTextInsertion} from '../../dist/engines/artemis/text-insertion.js';
   import {ArtemisTextGlyphs} from '../../dist/engines/artemis/text-glyphs.js';
   import {ArtemisFileFonts} from '../../dist/engines/artemis/file-fonts.js';
@@ -983,12 +984,69 @@
       glyphPainter.close();
       fontTarget?.dispose();
     }
+    // Real WebAudio processing, with an offline destination: no audible output.
+    const audioContext = new OfflineAudioContext(2, 32, 48000);
+    const audioOwner = createArtemisBrowserEffectVoices(
+      revision,
+      async () => ({
+        sampleRate: 48000,
+        sampleCount: 32,
+        channels: [new Float32Array(32).fill(0.8), new Float32Array(32).fill(0.4)],
+      }),
+      audioContext,
+    );
+    try {
+      const sound = await audioOwner.effects.prepareEffect('synthetic PCM', 0);
+      audioOwner.effects.setEffectGain(sound, 0, 500);
+      audioOwner.effects.setEffectGain(sound, 1, 800);
+      audioOwner.effects.setEffectPan(sound, 500, 0);
+      audioOwner.effects.startEffect(sound, 0, false);
+      const rendered = await audioContext.startRendering(),
+        left = rendered.getChannelData(0)[0],
+        right = rendered.getChannelData(1)[0];
+      assert(
+        Math.abs(left - 0.8 * 10 ** (-796 / 2000) * 10 ** (-602 / 2000)) < 0.00001,
+        'native offline left attenuation',
+      );
+      assert(
+        Math.abs(right - 0.4 * 10 ** (-796 / 2000)) < 0.00001,
+        'native offline right no crossfeed',
+      );
+    } finally {
+      audioOwner.close();
+    }
+    const monoContext = new OfflineAudioContext(2, 16, 48000);
+    const monoOwner = createArtemisBrowserEffectVoices(
+      revision,
+      async () => ({
+        sampleRate: 48000,
+        sampleCount: 16,
+        channels: [new Float32Array(16).fill(0.75)],
+      }),
+      monoContext,
+    );
+    try {
+      const sound = await monoOwner.effects.prepareEffect('synthetic mono PCM', 0);
+      monoOwner.effects.setEffectPan(sound, 0, 0);
+      monoOwner.effects.startEffect(sound, 0, false);
+      const rendered = await monoContext.startRendering();
+      for (let channel = 0; channel < 2; channel++)
+        assert(
+          Math.abs(rendered.getChannelData(channel)[0] - 0.75) < 0.00001,
+          'mono duplication without equal-power attenuation',
+        );
+    } finally {
+      monoOwner.close();
+    }
     window.result = {
       passed: true,
       nativeFontWorker: true,
       nativeGlyphPainter: true,
       nativeTextGlyphBlocks: true,
       nativeTextInsertionFrame: true,
+      nativeOfflineAudioVoices: true,
+      nativeStereoAttenuation: true,
+      audioDeviceOutput: false,
       nativeFontVersion: [2, 4, 8],
       syntheticOnly: true,
       pixels,

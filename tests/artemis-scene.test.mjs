@@ -3562,3 +3562,207 @@ test('External scene attachment rejects reused wrappers and releases blocked act
   layers.close();
   assert.equal(new Set(disposed).size, disposed.length);
 });
+
+async function audioEffectFixture() {
+  const {BrowserAudioTransport} = await import('../dist/audio/transport.js');
+  const {ArtemisEffectVoices} = await import('../dist/engines/artemis/effect-voices.js');
+  const nodes = [],
+    gains = [];
+  const connectable = () => ({
+    connections: [],
+    connect(...args) {
+      this.connections.push(args);
+    },
+    disconnect() {
+      this.connections = [];
+    },
+  });
+  const context = {
+    currentTime: 0,
+    destination: {},
+    resume: async () => {},
+    close: async () => {},
+    createBuffer() {
+      return {copyToChannel() {}};
+    },
+    createGain() {
+      const node = {
+        ...connectable(),
+        gain: {
+          value: 0,
+          setValueAtTime(value) {
+            this.value = value;
+          },
+        },
+      };
+      gains.push(node);
+      return node;
+    },
+    createChannelSplitter: () => connectable(),
+    createChannelMerger: () => connectable(),
+    createBufferSource() {
+      const node = {
+        ...connectable(),
+        stopCalls: 0,
+        stop() {
+          this.stopCalls++;
+        },
+        start(...args) {
+          this.args = args;
+        },
+      };
+      nodes.push(node);
+      return node;
+    },
+  };
+  const clip = {
+    sampleRate: 100,
+    sampleCount: 1000,
+    channels: [new Float32Array(1000), new Float32Array(1000)],
+  };
+  const transport = new BrowserAudioTransport(async () => clip, context);
+  const effects = new ArtemisEffectVoices(revision, {
+    prepareVoice: async () => transport.prepare(0, 0, false),
+  });
+  return {effects, transport, context, nodes, gains};
+}
+
+test('Native effect voices drive the real shared transport through gain, loop, stereo attenuation and fade completion', async () => {
+  const {effects, transport, context, nodes, gains} = await audioEffectFixture();
+  try {
+    const id = await effects.prepareEffect('generated', 0);
+    effects.setEffectGain(id, 0, 500);
+    effects.setEffectGain(id, 1, 800);
+    assert.ok(Math.abs(gains[0].gain.value - 10 ** (-796 / 2000)) < 1e-12); // Native centidB rounding for gain400.
+    effects.setEffectPan(id, 500, 0);
+    assert.ok(Math.abs(gains[1].gain.value - 10 ** (-602 / 2000)) < 1e-12);
+    assert.equal(gains[2].gain.value, 1); // Attenuation only, no stereo crossfeed.
+    effects.startEffect(id, 100, true);
+    assert.equal(nodes[0].loop, true);
+    effects.tick(1000);
+    effects.tick(1050);
+    assert.ok(Math.abs(gains[0].gain.value - 10 ** (-1398 / 2000)) < 1e-12); // Fade factor500 → native gain200.
+    effects.tick(1100);
+    assert.ok(Math.abs(gains[0].gain.value - 10 ** (-796 / 2000)) < 1e-12);
+    context.currentTime = 1;
+    assert.equal(effects.isPlaying(id), true);
+    effects.stopEffect(id, 100);
+    effects.tick(1200);
+    effects.tick(1250);
+    effects.startEffect(id, 0, false); // Cancels stop completion; immediate native start preserves current fade factor.
+    effects.tick(1300);
+    assert.equal(nodes[0].stopCalls, 0);
+    effects.stopEffect(id, 100);
+    effects.tick(1400);
+    effects.tick(1500);
+    assert.equal(effects.isPlaying(id), false);
+    assert.equal(nodes[0].stopCalls, 1);
+    assert.equal(effects.count, 1); // Native stopped voice remains until preparation-time collection.
+    const next = await effects.prepareEffect('next', 0);
+    assert.ok(next > id);
+    assert.equal(effects.count, 1);
+    effects.startEffect(next, 0, false);
+    nodes[1].onended();
+    assert.equal(effects.isPlaying(next), false);
+    await effects.prepareEffect('last', 0);
+    assert.equal(effects.count, 1);
+  } finally {
+    effects.close();
+    transport.dispose();
+  }
+});
+
+test('Native default integer fades preserve first-tick, truncation, cancellation and absolute clock-wrap behavior', async () => {
+  const {ArtemisLinearIntegerTween} = await import('../dist/engines/artemis/integer-tween.js');
+  const values = [];
+  let completed = 0;
+  const tween = new ArtemisLinearIntegerTween(
+    revision,
+    -3,
+    3,
+    5,
+    (value) => values.push(value),
+    () => completed++,
+  );
+  assert.equal(tween.tick(100), false);
+  tween.tick(102);
+  tween.tick(103);
+  assert.equal(tween.tick(105), true);
+  assert.deepEqual(values, [-3, 0, 0, 3]);
+  tween.finish();
+  assert.equal(completed, 1);
+  const cancelled = new ArtemisLinearIntegerTween(
+    revision,
+    10,
+    0,
+    4,
+    (value) => values.push(value),
+    () => completed++,
+  );
+  cancelled.tick(100);
+  cancelled.cancel();
+  cancelled.finish();
+  cancelled.tick(500);
+  assert.equal(completed, 1);
+  const zero = [];
+  const sentinel = new ArtemisLinearIntegerTween(revision, 10, 0, 4, (value) => zero.push(value));
+  sentinel.tick(0);
+  sentinel.tick(1);
+  sentinel.tick(3);
+  sentinel.tick(5);
+  assert.deepEqual(zero, [10, 10, 5, 0]);
+  const wrap = [];
+  const wrapping = new ArtemisLinearIntegerTween(revision, 0, 1000, 4, (value) => wrap.push(value));
+  wrapping.tick(0xfffffffe);
+  assert.equal(wrapping.tick(0xffffffff), true);
+  assert.deepEqual(wrap, [0, 1000]);
+});
+
+test('Effect-manager gain suppression preserves device values and preparation collects inactive voices across managers', async () => {
+  const a = await audioEffectFixture(),
+    b = await audioEffectFixture();
+  try {
+    const id = await a.effects.prepareEffect('a', 0);
+    a.effects.startEffect(id, 0, false);
+    a.effects.setEffectGain(id, 0, 800);
+    const before = a.gains[0].gain.value;
+    a.effects.suppressGainUpdates(true);
+    a.effects.setGroupGain(0);
+    assert.equal(a.gains[0].gain.value, before);
+    a.effects.suppressGainUpdates(false);
+    a.effects.setGroupGain(1000);
+    assert.equal(a.gains[0].gain.value, before);
+    a.effects.stopEffect(id, 10);
+    a.effects.tick(10);
+    a.effects.tick(20);
+    assert.equal(a.effects.count, 1);
+    await b.effects.prepareEffect('b', 0);
+    assert.equal(a.effects.count, 0);
+    assert.equal(b.effects.count, 1);
+    await a.effects.prepareEffect('c', 0);
+    assert.equal(b.effects.count, 0); // Prepared but not playing.
+  } finally {
+    a.effects.close();
+    a.transport.dispose();
+    b.effects.close();
+    b.transport.dispose();
+  }
+});
+
+test('Voice-owner shutdown during real transport preparation releases the late resource and prevents a leaked voice', async () => {
+  const {ArtemisEffectVoices} = await import('../dist/engines/artemis/effect-voices.js');
+  let finish,
+    disposed = 0;
+  const gate = new Promise((resolve) => {
+    finish = resolve;
+  });
+  const effects = new ArtemisEffectVoices(revision, {prepareVoice: () => gate});
+  const operation = effects.prepareEffect('late', 0);
+  await assert.rejects(effects.prepareEffect('overlap', 0), /Overlapping/);
+  effects.close();
+  finish({dispose: () => disposed++, setLoop() {}, stop() {}});
+  await assert.rejects(operation, /closed/);
+  assert.equal(disposed, 1);
+  assert.equal(effects.count, 0);
+  await assert.rejects(effects.prepareEffect('after', 0), /closed/);
+});
