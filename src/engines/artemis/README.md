@@ -624,3 +624,15 @@ fixture in JSON. It now passes cursor resource creation, mouse configuration and
 flip; the next unsupported boot command is `caption`. Lua aliasesx/y/zoom forwarded
 by the game's lyc2 helper remain in recorded tags and do not override the normalized
 left/top/xscale/yscale property names consumed by native115650.
+
+## Window caption
+
+`ArtemisCaption` implements the UTF-8 `caption` command (`0x1400c9870`) through
+shared `WindowCaptionHost`. Missing data clears the caption; UTF-16 strings stop
+at the first NUL as SetWindowTextW does. The native command ignores the host's
+failure result. `BrowserWindowCaptionHost` changes only its selected document's
+title and reports failure when no document is selected. Legacy ANSI caption
+conversion remains unsupported.
+
+The nonvisual probe records caption changes. Boot now advances past caption and
+stops at `chgmsg id=name01 layered=1`, the first message-layer selection command.

@@ -12,6 +12,7 @@ import {ArtemisLua} from '../dist/engines/artemis/lua.js';
 import {ArtemisScript} from '../dist/engines/artemis/script.js';
 import {ArtemisVariables} from '../dist/engines/artemis/variables.js';
 import {ArtemisDialog} from '../dist/engines/artemis/dialog.js';
+import {ArtemisCaption} from '../dist/engines/artemis/caption.js';
 import {ArtemisMouse} from '../dist/engines/artemis/mouse.js';
 import {ArtemisSave} from '../dist/engines/artemis/save.js';
 import {ArtemisTimedWait} from '../dist/engines/artemis/wait.js';
@@ -113,6 +114,12 @@ try {
     automodeChanged: (active) => modeEffects.push({automode: active}),
     releaseScheduler: () => modeEffects.push({releaseScheduler: true}),
   });
+  const caption = new ArtemisCaption({
+    setCaption: (title) => {
+      modeEffects.push({windowCaption: title, simulation: true});
+      return true;
+    },
+  });
   const mouse = new ArtemisMouse(
     {
       setVisible: (visible) => modeEffects.push({cursorVisible: visible}),
@@ -206,6 +213,7 @@ try {
       textControls.dispatch(tag) ||
       modes.dispatch(tag) ||
       variables.dispatch(tag) ||
+      caption.dispatch(tag) ||
       mouse.dispatch(tag) ||
       wait.dispatch(tag)
     )

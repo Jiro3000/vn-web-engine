@@ -1511,3 +1511,31 @@ test('Artemis Lua mouse points use live providers, native float32 widening and f
     lua.close();
   }
 });
+
+test('Artemis caption uses the selected window, Unicode/NUL semantics and native ignored failure results', async () => {
+  const {ArtemisCaption} = await import('../dist/engines/artemis/caption.js');
+  const {BrowserWindowCaptionHost} = await import('../dist/platform/window-caption.js');
+  const tag = (name, args = {}) => ({
+    kind: 'tag',
+    name,
+    sourceLine: -1,
+    args: new Map(Object.entries(args)),
+  });
+  const document = {title: 'initial'},
+    caption = new ArtemisCaption(new BrowserWindowCaptionHost(document));
+  assert.equal(caption.dispatch(tag('other')), false);
+  assert.equal(caption.dispatch(tag('caption', {data: '雪🌸\0ignored'})), true);
+  assert.equal(document.title, '雪🌸');
+  caption.dispatch(tag('caption'));
+  assert.equal(document.title, '');
+  const calls = [],
+    failed = new ArtemisCaption({
+      setCaption: (title) => {
+        calls.push(title);
+        return false;
+      },
+    });
+  assert.equal(failed.dispatch(tag('caption', {data: 'title'})), true);
+  assert.deepEqual(calls, ['title']);
+  assert.equal(new BrowserWindowCaptionHost(null).setCaption('no selected document'), false);
+});
