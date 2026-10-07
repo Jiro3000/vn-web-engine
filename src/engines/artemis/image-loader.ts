@@ -1,5 +1,6 @@
 import type {TriangleImage} from '../../graphics/triangle-draw.js';
 import {decodePng} from '../../formats/png/decode.js';
+import {decodeArtemisPsd} from '../../formats/artemis/psd.js';
 import {decodeImageOffThread} from '../../graphics/image-decode-offload.js';
 import {artemisRevision} from './revision.js';
 
@@ -90,6 +91,14 @@ export function createArtemisImageLoader(
       },
     },
     {extensions: ['jpg', 'jpeg', 'JPG', 'JPEG'], decode: decoders.jpeg ?? absent('JPEG')},
-    {extensions: ['psd', 'PSD'], decode: decoders.psd ?? absent('PSD')},
+    {
+      extensions: ['psd', 'PSD'],
+      decode:
+        decoders.psd ??
+        (async (bytes) => {
+          if (![56, 66, 80, 83].every((byte, index) => bytes[index] === byte)) return null;
+          return (await decodeImageOffThread(bytes, 'artemis-psd')) ?? decodeArtemisPsd(bytes);
+        }),
+    },
   ]);
 }

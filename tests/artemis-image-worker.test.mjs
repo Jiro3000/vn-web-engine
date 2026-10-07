@@ -4,6 +4,7 @@ import {Worker as ThreadWorker} from 'node:worker_threads';
 import {createArtemisImageLoader} from '../dist/engines/artemis/image-loader.js';
 import {ARTEMIS_3179_EXECUTABLE_SHA256} from '../dist/engines/artemis/revision.js';
 import {png} from './png-fixtures.mjs';
+import {psd} from './artemis-image-fixtures.mjs';
 
 const bootstrap = `
 const {parentPort, workerData} = require('node:worker_threads');
@@ -18,7 +19,7 @@ import(workerData);
 `;
 
 test(
-  'Artemis PNG resource pipeline uses the real shared worker without detaching archive bytes',
+  'Artemis PNG and merged PSD resources use the real shared worker without detaching archive bytes',
   {timeout: 15000},
   async () => {
     const workers = [];
@@ -65,6 +66,26 @@ test(
       assert.deepEqual([...loaded.image.pixels], [255, 0, 0, 0, 0, 255, 0, 128]);
       assert.deepEqual(original, snapshot);
       assert.equal(original.byteLength, snapshot.byteLength);
+      const composite = psd({
+          width: 2,
+          height: 1,
+          planes: [
+            [255, 17],
+            [191, 33],
+            [127, 49],
+            [128, 0],
+          ],
+          compression: 1,
+        }),
+        compositeSnapshot = composite.slice(),
+        psdLoader = createArtemisImageLoader(ARTEMIS_3179_EXECUTABLE_SHA256, async (path) =>
+          path === 'fixture.psd' ? composite : null,
+        );
+      const psdImage = await psdLoader.load('fixture.psd');
+      assert.deepEqual([...psdImage.image.pixels], [255, 127, 0, 128, 17, 33, 49, 0]);
+      assert.deepEqual(composite, compositeSnapshot);
+      assert.equal(applied, 2);
+      assert.equal(workers.length, 1);
       const corrupt = original.slice();
       corrupt[corrupt.length - 1] ^= 1;
       const failing = createArtemisImageLoader(ARTEMIS_3179_EXECUTABLE_SHA256, async (path) =>

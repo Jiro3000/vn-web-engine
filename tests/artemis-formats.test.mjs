@@ -185,3 +185,106 @@ test('Magic paths substitute one native alias and preserve overlay/empty loose p
   assert.throws(() => files.setMagicPath('x', '../outside'), /Unsupported/);
   assert.throws(() => files.setMagicPath('x', ':脚本'), /Unsupported/);
 });
+
+test('Artemis PSD merged raw and RLE planes preserve stage white-matte recovery and transparent RGB', async () => {
+  const {psd} = await import('./artemis-image-fixtures.mjs');
+  const {decodeArtemisPsd} = await import('../dist/formats/artemis/psd.js');
+  const planes = [
+      [255, 17, 12],
+      [191, 33, 34],
+      [127, 49, 56],
+      [128, 0, 255],
+    ],
+    expected = [255, 127, 0, 128, 17, 33, 49, 0, 12, 34, 56, 255];
+  for (const compression of [0, 1]) {
+    const bytes = psd({
+        width: 3,
+        height: 1,
+        planes,
+        compression,
+        sections: [
+          [1, 2],
+          [3, 4, 5],
+          [6, 7],
+        ],
+      }),
+      snapshot = bytes.slice();
+    const image = decodeArtemisPsd(bytes);
+    assert.deepEqual([image.width, image.height], [3, 1]);
+    assert.deepEqual([...image.pixels], expected);
+    assert.deepEqual(bytes, snapshot);
+  }
+  const rgb = decodeArtemisPsd(psd({width: 1, height: 1, planes: [[1], [2], [3]]}));
+  assert.deepEqual([...rgb.pixels], [1, 2, 3, 255]);
+  const zeroAlpha = decodeArtemisPsd(
+    psd({
+      width: 2,
+      height: 1,
+      planes: [
+        [1, 4],
+        [2, 5],
+        [3, 6],
+        [0, 0],
+      ],
+    }),
+  );
+  assert.deepEqual([...zeroAlpha.pixels], [1, 2, 3, 255, 4, 5, 6, 255]);
+});
+
+test('Artemis PSD RLE follows native repeat129 header and channel-major row ordering', async () => {
+  const {psd} = await import('./artemis-image-fixtures.mjs');
+  const {decodeArtemisPsd} = await import('../dist/formats/artemis/psd.js');
+  const image = decodeArtemisPsd(
+    psd({
+      width: 129,
+      height: 2,
+      planes: [[], [], []],
+      compression: 1,
+      rows: [
+        [128, 10],
+        [128, 20],
+        [128, 30],
+        [128, 40],
+        [128, 50],
+        [128, 60],
+      ],
+    }),
+  );
+  assert.deepEqual([...image.pixels.slice(0, 4)], [10, 30, 50, 255]);
+  assert.deepEqual([...image.pixels.slice(129 * 4, 129 * 4 + 4)], [20, 40, 60, 255]);
+  assert.deepEqual([...image.pixels.slice(-4)], [20, 40, 60, 255]);
+});
+
+test('Artemis PSD refuses unsupported layouts and incomplete rows before publishing partial images', async () => {
+  const {psd} = await import('./artemis-image-fixtures.mjs');
+  const {decodeArtemisPsd} = await import('../dist/formats/artemis/psd.js');
+  const valid = psd({
+    width: 2,
+    height: 1,
+    planes: [
+      [1, 2],
+      [3, 4],
+      [5, 6],
+    ],
+  });
+  for (const [offset, value, method] of [
+    [4, 2, 'writeUInt16BE'],
+    [12, 5, 'writeUInt16BE'],
+    [22, 16, 'writeUInt16BE'],
+    [24, 1, 'writeUInt16BE'],
+    [18, 0xffffffff, 'writeUInt32BE'],
+  ]) {
+    const bytes = Buffer.from(valid);
+    bytes[method](value, offset);
+    assert.throws(() => decodeArtemisPsd(bytes), /Unsupported/);
+  }
+  assert.throws(() => decodeArtemisPsd(valid.slice(0, -1)), /Invalid range/);
+  for (const row of [[0, 1], [1, 1], [255], [254, 1]])
+    assert.throws(
+      () =>
+        decodeArtemisPsd(
+          psd({width: 2, height: 1, planes: [[], [], []], compression: 1, rows: [row, row, row]}),
+        ),
+      /row|Truncated/,
+    );
+});

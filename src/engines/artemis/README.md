@@ -215,8 +215,9 @@ then content sniffing of the exact file, then appended-extension candidates. Cod
 registration and extension order are preserved; Unicode names/aliases stay unchanged.
 The exact-hash factory selects PNG (`png`, `PNG`), JPEG (`jpg`, `jpeg`, `JPG`, `JPEG`),
 then PSD (`psd`, `PSD`), matching the stage initializer. PNG uses the shared straight
-RGBA decoder on the shared worker when available, with an in-thread fallback; JPEG and PSD require injected owners and refuse when selected without
-one. Decoder null means native failure/fallback; host and unsupported-format errors
+RGBA decoder on the shared worker when available, with an in-thread fallback.
+Merged PSD uses the format reader below on that same worker. JPEG still requires
+an injected owner and refuses when selected without one. Decoder null means native failure/fallback; host and unsupported-format errors
 propagate. Corrupt PNGs are refused by the strict shared reader. Image loading is
 separate from cache eviction, layer geometry, property application and presentation.
 The pipeline is verified with synthetic PNGs through suspended Lua callbacks.
@@ -538,3 +539,27 @@ retention, effects, growth and empty captures. Mask loading/transition shaders,
 current-view capture buffers and full native dirty-flag accounting remain
 unsupported. This rendering service is not connected to a production Artemis
 player or a complete game scheduler.
+
+## Merged PSD images
+
+`src/formats/artemis/psd.ts` implements the default CPsdLoader merged-image path
+(`0x140187d00`), selected with matte recovery enabled by the exact stage initializer
+(`0x14014d100`). It accepts PSD1, 8-bit RGB documents with three/four channels and
+raw or RLE planar composite data. It skips color/resources/layer sections and
+reads the merged image; the other engines' first-layer decoder is not used.
+
+RLE preserves the native `0x80` repeat129 interpretation and channel-major row
+counts. Three channels force opaque alpha. With four channels, nonzero partial
+alpha recovers color with signed integer division toward zero:
+`clamp(trunc((channel - 255) * 256 / alpha) + 255)`. Zero-alpha RGB is preserved;
+an entirely zero alpha plane is instead treated as absent and forced opaque.
+The reader validates source ranges before allocating output, and refuses
+incomplete/overrunning rows or native unsafe signed row lengths rather than
+publishing uninitialized pixels.
+
+The shared image worker accepts `artemis-psd`; input is snapshotted and never
+transferred away from archive/cache ownership. Worker failures rerun the same
+in-thread decoder to report its original error. Synthetic checks compare raw/RLE
+output, recovery and channel order, real worker transport and resulting WebGL
+RGBA. Named layers, PSB, additional color/depth/compression layouts remain
+unsupported. No real game image was decoded for verification.

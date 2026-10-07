@@ -646,6 +646,34 @@
     nativeGraphics.drawCommitted(layers.scene);
     expectGroupPixel(1, 0, [0, 0, 0, 0]);
     assert(context.getError() === context.NO_ERROR, 'intermediate rendering left a GL error');
+    // Merged PSD decoding runs in the same worker and preserves native recovered straight alpha.
+    layers.close();
+    const psdBytes = new Uint8Array(44),
+      psdView = new DataView(psdBytes.buffer);
+    psdBytes.set([56, 66, 80, 83]);
+    psdView.setUint16(4, 1);
+    psdView.setUint16(12, 4);
+    psdView.setUint32(14, 1);
+    psdView.setUint32(18, 1);
+    psdView.setUint16(22, 8);
+    psdView.setUint16(24, 3);
+    psdBytes.set([255, 191, 127, 128], 40);
+    const psdSnapshot = psdBytes.slice();
+    layers = new ArtemisLayers(
+      revision,
+      createArtemisImageLoader(revision, async (path) => (path === 'merged.PSD' ? psdBytes : null)),
+      nativeGraphics,
+    );
+    await layers.dispatch(command('lyc', {id: 'psd', file: 'merged'}));
+    stage.dispatch(command('flip'));
+    nativeGraphics.drawCommitted(layers.scene);
+    expectGroupPixel(0, 0, [128, 64, 0, 64]);
+    assert(
+      psdBytes.every((v, i) => v === psdSnapshot[i]),
+      'PSD worker detached or changed archive bytes',
+    );
+    await layers.dispatch(command('lydel', {id: 'psd'}));
+    stage.dispatch(command('flip'));
     window.result = {
       passed: true,
       syntheticOnly: true,
@@ -665,6 +693,7 @@
       nativeEffectsCases,
       nativeCapturedCases,
       nativeIntermediateGroups: true,
+      nativePsdWorker: true,
       nativeClipPixels: [...nativeClipPixels],
       nativeOrdinaryGroups: true,
       nativeGroupPixel,

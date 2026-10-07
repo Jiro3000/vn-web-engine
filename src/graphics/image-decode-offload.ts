@@ -1,8 +1,8 @@
 import type {DecodedPng} from '../formats/png/decode.js';
 import {WorkerPool} from '../platform/worker-pool.js';
 
-/** `png` uses the engine's PNG decoder; a MIME type uses the browser codec (`decodeBrowserImage`). */
-export type ImageDecodeFormat = 'png' | 'image/webp' | 'image/jpeg';
+/** Named formats use pure byte decoders; MIME types use the browser-owned codec. */
+export type ImageDecodeFormat = 'png' | 'artemis-psd' | 'image/webp' | 'image/jpeg';
 
 export interface ImageDecodeRequest {
   readonly format: ImageDecodeFormat;
