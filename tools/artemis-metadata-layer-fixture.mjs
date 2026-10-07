@@ -101,6 +101,7 @@ export function createMetadataLayerFixture(hash, readFile) {
         display: old.display.copy(),
         properties: {...old.properties},
       };
+      if (actor.kind === 'message') actor.messageOwner.retain(actor.message);
       actors.add(actor);
       return actor;
     },
@@ -112,6 +113,7 @@ export function createMetadataLayerFixture(hash, readFile) {
     },
     releaseImageLayer(actor) {
       if (!actors.delete(actor)) throw Error('Probe actor released twice');
+      if (actor.kind === 'message') actor.messageOwner.release(actor.message);
       effects.push({kind: 'release', actor: actor.id});
     },
     clearLayerCommands: (ids) => effects.push({kind: 'clearCommands', ids}),
@@ -143,6 +145,23 @@ export function createMetadataLayerFixture(hash, readFile) {
     },
   });
   return {
+    attachMessageActor: (name, message, messageOwner) => {
+      const actor = {
+        id: ++sequence,
+        kind: 'message',
+        message,
+        messageOwner,
+        display: new ArtemisDisplayObject(hash),
+        wrapper: {alpha: 1},
+        properties: {},
+      };
+      messageOwner.retain(message);
+      actors.add(actor);
+      if (!layers.attachActor(name, actor))
+        throw Error('Probe message scene attachment blocked: ' + name);
+      effects.push({kind: 'messageAttach', id: name, simulation: true});
+    },
+    detachMessageActor: (name) => layers.detachActor(name),
     accepts: (tag) => ['lyc', 'lyprop', 'lydel', 'flip'].includes(tag.name),
     dispatch: (tag) =>
       tag.name === 'flip' ? Promise.resolve(stage.dispatch(tag)) : layers.dispatch(tag),
@@ -153,16 +172,14 @@ export function createMetadataLayerFixture(hash, readFile) {
       presentation: false,
       loads,
       effects,
-      layers: layers.scene
-        .entries()
-        .map((entry) => ({
-          id: entry.id,
-          group: entry.acceptsChildren,
-          path: entry.value?.path ?? null,
-          width: entry.value?.width ?? null,
-          height: entry.value?.height ?? null,
-          properties: entry.value?.display.properties ?? null,
-        })),
+      layers: layers.scene.entries().map((entry) => ({
+        id: entry.id,
+        group: entry.acceptsChildren,
+        path: entry.value?.path ?? null,
+        width: entry.value?.width ?? null,
+        height: entry.value?.height ?? null,
+        properties: entry.value?.display.properties ?? null,
+      })),
     }),
     close: () => layers.close(),
   };

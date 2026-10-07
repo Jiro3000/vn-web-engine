@@ -2200,3 +2200,260 @@ test('Artemis Lua surface preload binding requires an actual queue owner and pre
     lua.close();
   }
 });
+
+test('Artemis SE stop/fade-out resolves exact slots, delegates actual timing and preserves replay history', async () => {
+  const {ArtemisSeStop} = await import('../dist/engines/artemis/se-stop.js');
+  const hash = '8953562b80608046662bd8c89015d04236b0ba3afee10c36469c11403de3ebaf';
+  const slots = new Map([
+      ['01', 4],
+      ['', 7],
+    ]),
+    history = new Set(['01', 'missing', '']),
+    calls = [];
+  const commands = new ArtemisSeStop(hash, {
+    effectIndex: (id) => slots.get(id),
+    stopEffect: (slot, time) => calls.push([slot, time]),
+    hasEffectHistory: (id) => history.has(id),
+    deleteEffectHistory: (id) => history.delete(id),
+  });
+  const tag = (name, args) => ({
+    kind: 'tag',
+    name,
+    sourceLine: 0,
+    args: new Map(Object.entries(args)),
+  });
+  assert.equal(commands.dispatch(tag('sefadeout', {id: '01', time: '  +250tail'})), true);
+  assert.deepEqual(calls, [[4, 250]]);
+  assert.equal(history.has('01'), false);
+  history.add('01');
+  commands.dispatch(tag('sestop', {id: '01'}), false);
+  assert.deepEqual(calls[1], [4, 0]);
+  assert.equal(history.has('01'), true);
+  commands.dispatch(tag('sestop', {id: 'missing', time: '999999999999999999'}));
+  assert.equal(history.has('missing'), false); // Missing slot never parses time.
+  commands.dispatch(tag('sestop', {}));
+  assert.deepEqual(calls[2], [7, 0]);
+  assert.equal(history.has(''), false);
+  assert.equal(commands.dispatch(tag('seplay', {id: '01'})), false);
+  assert.throws(
+    () => commands.dispatch(tag('sestop', {id: '01', time: '999999999999999999'})),
+    /integer/,
+  );
+  assert.throws(() => new ArtemisSeStop('unknown', {}), /executable/);
+  const failed = new ArtemisSeStop(hash, {
+    effectIndex: () => 0,
+    stopEffect: () => {
+      throw Error('voice failure');
+    },
+    hasEffectHistory: () => true,
+    deleteEffectHistory: () => {
+      throw Error('must not clear after failure');
+    },
+  });
+  assert.throws(() => failed.dispatch(tag('sestop', {id: '01'})), /voice failure/);
+});
+
+async function sePlayFixture(overrides = {}) {
+  const {ArtemisSePlay} = await import('../dist/engines/artemis/se-play.js');
+  const slots = new Map([['01', 1]]),
+    calls = [],
+    history = new Map();
+  const host = {
+    debugSkipActive: () => false,
+    commandSkipActive: () => false,
+    effectIndex: (id) => slots.get(id),
+    stopEffect: (i, ms) => calls.push(['stop', i, ms]),
+    prepareEffect: async (file, buffer) => {
+      calls.push(['prepare', file, buffer]);
+      return 2;
+    },
+    discardPreparedEffect: (i) => calls.push(['discard', i]),
+    setEffectIndex: (id, i) => {
+      slots.set(id, i);
+      calls.push(['slot', id, i]);
+    },
+    setEffectGain: (i, scope, gain) => calls.push(['gain', i, scope, gain]),
+    setEffectPan: (i, pan, ms) => calls.push(['pan', i, pan, ms]),
+    effectGainVariable: () => 800,
+    startEffect: (i, ms, loop) => calls.push(['start', i, ms, loop]),
+    replaceEffectHistory: (id, tag) => {
+      history.set(id, tag);
+      calls.push(['history', id, tag?.name ?? null]);
+    },
+    effectLoadFailed: () => calls.push(['missing']),
+    ...overrides,
+  };
+  const controller = new ArtemisSePlay(
+    '8953562b80608046662bd8c89015d04236b0ba3afee10c36469c11403de3ebaf',
+    host,
+  );
+  const tag = (args = {}, name = 'seplay') => ({
+    kind: 'tag',
+    name,
+    sourceLine: 7,
+    args: new Map(Object.entries(args)),
+  });
+  return {controller, calls, history, slots, tag};
+}
+
+test('Artemis SE preparation, dual gains, pan, fade-in and loop replay history follow native service order', async () => {
+  const {controller, calls, history, slots, tag} = await sePlayFixture();
+  const input = tag({
+    id: '01',
+    file: 'effect.ogg',
+    buffer: '0',
+    gain: ' +1000tail',
+    pan: '-25',
+    time: '10ms',
+    loop: '',
+  });
+  await controller.dispatch(input);
+  assert.deepEqual(calls, [
+    ['stop', 1, 0],
+    ['prepare', 'effect.ogg', 0],
+    ['slot', '01', 2],
+    ['gain', 2, 0, 1000],
+    ['pan', 2, -25, 0],
+    ['gain', 2, 1, 800],
+    ['start', 2, 10, true],
+    ['history', '01', 'seplay'],
+  ]);
+  assert.equal(slots.get('01'), 2);
+  input.args.set('file', 'mutated');
+  assert.equal(history.get('01').args.get('file'), 'effect.ogg');
+  calls.length = 0;
+  await controller.dispatch(tag({id: '01', file: 'second.ogg', loop: '0'}, 'sefadein'), false);
+  assert.equal(
+    calls.some((x) => x[0] === 'history'),
+    false,
+  );
+  assert.deepEqual(calls.at(-1), ['start', 2, 0, false]);
+  await controller.dispatch(tag({id: '01', file: 'third.ogg', loop: '0'}));
+  assert.equal(history.get('01'), null); // Native replaces with empty history block.
+});
+
+test('Artemis debugskip preserves loop history without audio, while skippable playback stops the old voice before returning', async () => {
+  const debug = await sePlayFixture({debugSkipActive: () => true});
+  await debug.controller.dispatch(
+    debug.tag({id: '01', loop: '1', buffer: 'bad', gain: '999999999999999'}),
+  );
+  assert.deepEqual(debug.calls, [['history', '01', 'seplay']]);
+  const skip = await sePlayFixture({commandSkipActive: () => true});
+  await skip.controller.dispatch(
+    skip.tag({id: '01', skippable: '1', file: 'unused', time: '999999999999999'}),
+  );
+  assert.deepEqual(skip.calls, [['stop', 1, 0]]);
+  assert.equal(skip.history.size, 0);
+  const missing = await sePlayFixture({prepareEffect: async () => 0});
+  await missing.controller.dispatch(missing.tag({id: '01', file: 'absent'}));
+  assert.deepEqual(missing.calls, [['stop', 1, 0], ['missing']]);
+  assert.equal(missing.slots.get('01'), 1);
+});
+
+test('Closing Artemis SE preparation disposes the completed resource without starting or recording it', async () => {
+  let finish;
+  const pending = new Promise((resolve) => {
+    finish = resolve;
+  });
+  const {controller, calls, tag} = await sePlayFixture({prepareEffect: () => pending});
+  const operation = controller.dispatch(tag({id: '01', file: 'pending'}));
+  await assert.rejects(controller.dispatch(tag({id: '01'})), /Overlapping/);
+  controller.close();
+  finish(9);
+  await assert.rejects(operation, /cancelled/);
+  assert.deepEqual(calls, [
+    ['stop', 1, 0],
+    ['discard', 9],
+  ]);
+  await assert.rejects(controller.dispatch(tag()), /closed/);
+});
+
+test('Native optional variable lookup preserves absence, local shadowing and owned bytes', async () => {
+  const {ArtemisVariables} = await import('../dist/engines/artemis/variables.js');
+  const variables = new ArtemisVariables();
+  assert.equal(variables.lookup('s.segain.1'), undefined);
+  assert.throws(() => variables.read('s.segain.1'), /Unsupported native/);
+  variables.write('s.segain.1', '800');
+  variables.pushLocal();
+  variables.write('s.segain.1', '500', true);
+  const value = variables.lookup('s.segain.1');
+  value[0] = 0;
+  assert.equal(new TextDecoder().decode(variables.read('s.segain.1')), '500');
+  variables.popLocal();
+  assert.equal(new TextDecoder().decode(variables.lookup('s.segain.1')), '800');
+});
+
+test('Nonvisual sound preparation decodes real synthetic Vorbis PCM but refuses playback without a device owner', async () => {
+  const {createArtemisSoundDecodeFixture} =
+    await import('../tools/artemis-sound-decode-fixture.mjs');
+  const {readFile} = await import('node:fs/promises');
+  const encoded = await readFile(
+    new URL('./fixtures/audio/vorbis-boundaries.ogg', import.meta.url),
+  );
+  const snapshot = Buffer.from(encoded);
+  const fixture = createArtemisSoundDecodeFixture(async (name) =>
+    name === 'fixture.ogg' ? encoded : null,
+  );
+  try {
+    const index = await fixture.prepareEffect('fixture.ogg', 0);
+    assert.ok(index > 0);
+    const sample = fixture.summary().samples[0];
+    assert.ok(sample.frames > 0);
+    assert.ok(sample.sampleRate > 0);
+    assert.ok(sample.channels > 0);
+    assert.equal(sample.pcmSha256.length, sample.channels);
+    assert.equal(fixture.summary().audioGraph, false);
+    assert.deepEqual(encoded, snapshot);
+    fixture.setEffectGain(index, 0, 1000);
+    fixture.setEffectGain(index, 1, 800);
+    fixture.setEffectPan(index, 0, 0);
+    assert.throws(() => fixture.startEffect(index, 10, false), /playback owner/);
+    assert.equal(await fixture.prepareEffect('missing', 0), 0);
+    await assert.rejects(fixture.prepareEffect('fixture.ogg', 1), /buffered/);
+    fixture.discardPreparedEffect(index);
+    assert.equal(fixture.summary().retainedSounds, 0);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test('Lua SE commands suspend until actual preparation finishes, before executing the next Lua statement', async () => {
+  const f = await sePlayFixture();
+  const source = bytes(
+    `[lua]function boot(e) e:tag{'seplay',id='01',file='fixture.ogg'}; completed=1 end[/lua][calllua function="boot"][stop]`,
+  );
+  let script, pending;
+  const lua = new ArtemisLua({
+    readFile: () => source,
+    fileExists: () => true,
+    now: () => 0,
+    variable: () => '',
+    suspendableTags: true,
+    tag: (tag) => script.executeTag(tag),
+    enqueueTag: () => {},
+  });
+  script = new ArtemisScript(lua, {
+    readFile: () => source,
+    dispatch: (tag) => {
+      if (tag.name === 'seplay') {
+        pending = f.controller.dispatch(tag);
+        return 'suspended';
+      }
+      if (tag.name === 'stop') return 'stopped';
+    },
+  });
+  try {
+    script.load('boot');
+    assert.equal(script.run(), 'waiting');
+    assert.equal(lua.vm.getGlobal('completed'), null);
+    await pending;
+    assert.deepEqual(f.calls.at(-2), ['start', 2, 0, false]);
+    script.resumeLua();
+    assert.equal(script.run(), 'stopped');
+    assert.equal(lua.vm.getGlobal('completed'), 1);
+  } finally {
+    f.controller.close();
+    script.cancelLuaCalls();
+    lua.close();
+  }
+});

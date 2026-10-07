@@ -2,6 +2,9 @@
 import {createHash} from 'node:crypto';
 import {createArtemisSurfacePreloadFixture} from './artemis-surface-preload-fixture.mjs';
 import {createArtemisGlyphLayoutFixture} from './artemis-glyph-layout-fixture.mjs';
+import {createArtemisSoundDecodeFixture} from './artemis-sound-decode-fixture.mjs';
+import {ArtemisSePlay} from '../dist/engines/artemis/se-play.js';
+import {ArtemisSeStop} from '../dist/engines/artemis/se-stop.js';
 import {ArtemisPrint} from '../dist/engines/artemis/print.js';
 import {ArtemisRuby} from '../dist/engines/artemis/ruby.js';
 import {ArtemisTextCommands} from '../dist/engines/artemis/text-commands.js';
@@ -53,6 +56,8 @@ const suspendableTags = process.argv.slice(3).includes('--async-lua');
 const metadataLayers = process.argv.slice(3).includes('--image-metadata');
 const glyphLayout = process.argv.slice(3).includes('--glyph-layout');
 const surfacePreloads = process.argv.slice(3).includes('--surface-preloads');
+const soundDecode = process.argv.slice(3).includes('--sound-decode');
+if (soundDecode && !surfacePreloads) throw Error('--sound-decode requires --surface-preloads');
 if (surfacePreloads && !glyphLayout) throw Error('--surface-preloads requires --glyph-layout');
 if (glyphLayout && !metadataLayers)
   throw Error('--glyph-layout requires --async-lua --image-metadata');
@@ -60,6 +65,8 @@ if (metadataLayers && !suspendableTags) throw Error('--image-metadata requires -
 let fontStack = null,
   glyphFixture = null,
   surfaceFixture = null,
+  soundFixture = null,
+  sePlay = null,
   ruby = null,
   textCommands = null;
 let messageStage = null,
@@ -138,11 +145,27 @@ try {
     surfaceFixture = createArtemisSurfacePreloadFixture(executableSha256, (path) =>
       installation.files.read(path),
     );
+  if (soundDecode)
+    soundFixture = createArtemisSoundDecodeFixture((path) => installation.files.read(path));
   // Installation-relative read-only namespace; no Windows known-folder resolution or writes.
   if (savePath !== undefined && savePathCsidl === undefined && /^[\w-]+$/.test(savePath))
     initializeArtemisResourcePaths(variables, {dataPath: '', savePath});
   const systemProfile = new BrowserWindowsSystemProfileHost();
   initializeArtemisWindowsVersion(variables, () => systemProfile.readVersion());
+  // No playback command is accepted yet, so the actual diagnostic SE table is
+  // empty. A later nonempty slot must have a real voice owner, never a no-op.
+  const effectSlots = new Map(),
+    effectHistory = new Map();
+  const seStop = new ArtemisSeStop(executableSha256, {
+    effectIndex: (id) => effectSlots.get(id),
+    stopEffect:
+      soundFixture?.stopEffect ??
+      (() => {
+        throw Error('Unsupported Artemis diagnostic sound voice owner');
+      }),
+    hasEffectHistory: (id) => effectHistory.has(id),
+    deleteEffectHistory: (id) => effectHistory.delete(id),
+  });
   const modes = new ArtemisModes({
     writeStatus: (name, value) => (variables.write(name, value), modeEffects.push({name, value})),
     commandSkipChanged: (active) => modeEffects.push({commandSkip: active}),
@@ -150,6 +173,22 @@ try {
     automodeChanged: (active) => modeEffects.push({automode: active}),
     releaseScheduler: () => modeEffects.push({releaseScheduler: true}),
   });
+  if (soundFixture)
+    sePlay = new ArtemisSePlay(executableSha256, {
+      debugSkipActive: () => false,
+      commandSkipActive: () => modes.skipAllowed && (modes.commandSkip || modes.controlSkip),
+      effectIndex: (id) => effectSlots.get(id),
+      ...soundFixture,
+      setEffectIndex: (id, index) => effectSlots.set(id, index),
+      effectGainVariable: (id) => {
+        const value = variables.lookup('s.segain.' + id);
+        return value === undefined ? undefined : Number(new TextDecoder().decode(value));
+      },
+      replaceEffectHistory: (id, tag) => effectHistory.set(id, tag),
+      effectLoadFailed: () => {
+        throw Error('Artemis actual sound load failed');
+      },
+    });
   const caption = new ArtemisCaption({
     setCaption: (title) => {
       modeEffects.push({windowCaption: title, simulation: true});
@@ -218,6 +257,13 @@ try {
   if (metadataLayers) {
     let serial = 0;
     const resource = (name) => ({name, serial: ++serial, references: 1, font: new Map()});
+    const retainMessage = (layer) => {
+      layer.references++;
+    };
+    const releaseMessage = (layer) => {
+      if (--layer.references < 0) throw Error('Probe message resource released twice');
+      if (layer.references === 0) glyphFixture?.release(layer);
+    };
     messageStage = new ArtemisMessageLayers(executableSha256, '', {
       createMessageLayer: (name) => {
         modeEffects.push({messageCreate: name, simulation: true});
@@ -238,22 +284,20 @@ try {
         glyphFixture?.copy(old, copy);
         return copy;
       },
-      retainMessageLayer: (layer) => {
-        layer.references++;
-      },
-      releaseMessageLayer: (layer) => {
-        if (--layer.references < 0) throw Error('Probe message resource released twice');
-        if (layer.references === 0) glyphFixture?.release(layer);
-      },
+      retainMessageLayer: retainMessage,
+      releaseMessageLayer: releaseMessage,
       attachMessageLayer: (name, layer) => {
+        layerFixture.attachMessageActor(name, layer, {
+          retain: retainMessage,
+          release: releaseMessage,
+        });
         messageFrames.set(name, layer);
-        layer.references++;
         modeEffects.push({messageAttach: name, simulation: true});
       },
       detachMessageLayer: (name) => {
         const old = messageFrames.get(name);
         if (old) {
-          old.references--;
+          layerFixture.detachMessageActor(name);
           messageFrames.delete(name);
         }
         modeEffects.push({messageDetach: name, simulation: true});
@@ -471,10 +515,16 @@ try {
       modes.dispatch(tag) ||
       variables.dispatch(tag) ||
       caption.dispatch(tag) ||
+      seStop.dispatch(tag) ||
       mouse.dispatch(tag) ||
       wait.dispatch(tag)
     )
       return;
+    if (sePlay && ['seplay', 'sefadein'].includes(tag.name)) {
+      if (pendingResource) throw Error('Probe sound resource operation overlaps');
+      pendingResource = sePlay.dispatch(tag);
+      return 'suspended';
+    }
     throw new Error(`Unsupported native Artemis tag ${tag.name}`);
   };
   lua = new ArtemisLua({
@@ -597,6 +647,7 @@ try {
         modeEffects,
         glyphLayoutFixture: glyphFixture?.summary(),
         surfacePreloadFixture: surfaceFixture?.summary(),
+        soundDecodeFixture: soundFixture?.summary(),
         astLoadedByGame,
         astVersion: lua.vm.getGlobal('astver'),
         astTopLevelKeys: ast.size,
@@ -608,11 +659,13 @@ try {
 } finally {
   lua?.close();
   ruby?.close();
+  sePlay?.close();
   textCommands?.close();
-  layerFixture?.close();
   fontStack?.close();
   messageStage?.close();
+  layerFixture?.close();
   await glyphFixture?.close();
   await surfaceFixture?.close();
+  await soundFixture?.close();
   await installation.close();
 }

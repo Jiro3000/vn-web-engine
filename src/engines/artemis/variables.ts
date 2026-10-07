@@ -35,6 +35,13 @@ export class ArtemisVariables {
     if (!this.locals.length) throw new Error('Artemis local scope underflow');
     this.locals.pop();
   }
+  /** Non-inserting native named-variable lookup; callers may distinguish absence
+   * from an empty byte string. System expressions still require their own owner. */
+  lookup(name: string): Uint8Array | undefined {
+    literal(name);
+    const value = this.locals.at(-1)?.get(name) ?? this.global.get(name);
+    return value === undefined ? undefined : Uint8Array.from(value);
+  }
   read(name: string): Uint8Array {
     literal(name);
     const local = this.locals.at(-1);

@@ -848,3 +848,38 @@ and hashes are exported; it does not prepare GPU surfaces, display assets or cla
 production rendering. The host's RGBA8 format and512MiB budget are explicit diagnostic
 policies, not inferred settings of the original game. Existing metadata layer
 fixtures remain simulated and are independent of these pixel resources.
+
+`ArtemisLayers.attachActor` adopts a fresh stage wrapper into the same hierarchical
+scene as image actors. `detachActor` removes its current attachment; retained child
+maps and inner actor slots keep their own resources until commit. The supplied
+copy/property/release hooks therefore apply to message wrappers as well. Stage
+attachment does not reset script command history. Fresh/open/pending checks precede
+ownership transfer; insertion failure releases an unadopted wrapper.
+
+The metadata probe connects layered message selection to these APIs, with actual
+resource-loan accounting. This repairs the diagnostic split between its message
+store and graphical scene. Properties/deletion now find UI text actors; it still
+does not publish their frames, implement links/effects, or claim text rendering.
+
+`ArtemisSeStop` follows e3c60 for sestop/sefadeout: exact named slot lookup,
+integer-prefix milliseconds, mandatory stop/fade service for an existing slot,
+and normal-execution history deletion. A missing slot does not parse time or call
+audio services; replay retains history. This is a command contract, not a playback
+implementation. The diagnostic has an empty SE table until an actual play owner
+is supplied; seplay remains unsupported.
+
+`ArtemisSePlay` follows e3370 for seplay/sefadein: stop an existing named effect,
+check skippable command mode, prepare a real sound, assign its index, set explicit
+gain/pan and optional s.segain.id gain, then start with native time/loop arguments.
+Debug skip bypasses audio while maintaining replay history; skippable command skip
+returns before history. Non-loop sounds replace history with the native empty
+block. Load failure reports without writing a new slot or history. Cancellation
+releases a completed, unadopted sound and suppresses stale script effects.
+
+The required prepare/gain/pan/start services own actual playback. Optional
+`--sound-decode` requires --surface-preloads in the diagnostic and uses the shared
+Vorbis worker to decode real PCM, exporting hashes and metadata. It opens no audio
+graph/device and explicitly refuses startEffect. Decoding :sysse/none.ogg succeeds
+at48000Hz/stereo/11685frames; this is not evidence of native PCM rounding parity or
+game playback. `ArtemisVariables.lookup` supports non-inserting, owned-byte lookup
+for optional named gains without inventing missing system variables.

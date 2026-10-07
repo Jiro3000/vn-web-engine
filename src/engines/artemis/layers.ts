@@ -115,6 +115,34 @@ export class ArtemisLayers<T extends object, I extends ArtemisImageDimensions = 
     for (const layer of this.owned)
       if (!referenced.has(layer) && this.owned.delete(layer)) this.host.releaseImageLayer(layer);
   }
+  /** Adopt a fresh native scene wrapper (for example a message/text actor).
+   * The same scene and property/copy/release hooks handle it alongside images.
+   * Transfers ownership after open/pending/fresh checks, including insertion failure.
+   * Command histories belong to the script owner and are not reset by attachment. */
+  attachActor(id: string, actor: T): boolean {
+    if (this.closed) throw Error('Artemis layer owner closed');
+    if (this.pending !== null) throw Error('Artemis layer resource operation already pending');
+    if (this.owned.has(actor) || this.scene.payloads().has(actor))
+      throw Error('Artemis scene wrapper must be fresh');
+    this.owned.add(actor);
+    try {
+      this.scene.entry(id);
+      return this.scene.set(id, actor);
+    } finally {
+      this.collect();
+    }
+  }
+  /** Native stage removal leaves command-history maintenance to its script owner.
+   * A detached wrapper remains alive while referenced by the retained scene. */
+  detachActor(id: string): void {
+    if (this.closed) throw Error('Artemis layer owner closed');
+    if (this.pending !== null) throw Error('Artemis layer resource operation already pending');
+    try {
+      this.scene.remove(id);
+    } finally {
+      this.collect();
+    }
+  }
   /** Commit structure and release actors no longer retained by either structural view. */
   commit(): void {
     if (this.closed) throw new Error('Artemis layer owner closed');

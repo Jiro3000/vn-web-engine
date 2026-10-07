@@ -3464,3 +3464,101 @@ test('Lua script cache bindings preload a generated PNG through the actual share
   }
   assert.equal(fixture.manager.bytesUsed, 0n);
 });
+
+test('Message-layer scene wrappers share image properties and retained-frame resource ownership', async () => {
+  const {createMetadataLayerFixture} = await import('../tools/artemis-metadata-layer-fixture.mjs');
+  const {ArtemisMessageLayers} = await import('../dist/engines/artemis/message-layers.js');
+  const fixture = createMetadataLayerFixture(revision, async () => null);
+  const resources = [],
+    freed = [];
+  const retain = (layer) => layer.references++;
+  const release = (layer) => {
+    assert.ok(layer.references > 0);
+    if (--layer.references === 0) freed.push(layer);
+  };
+  const stage = new ArtemisMessageLayers(revision, '', {
+    createMessageLayer: (name) => {
+      const layer = {name, references: 1};
+      resources.push(layer);
+      return layer;
+    },
+    copyMessageLayer: (old) => {
+      const layer = {name: old.name, references: 1};
+      resources.push(layer);
+      return layer;
+    },
+    retainMessageLayer: retain,
+    releaseMessageLayer: release,
+    attachMessageLayer: (name, layer) => fixture.attachMessageActor(name, layer, {retain, release}),
+    detachMessageLayer: (name) => fixture.detachMessageActor(name),
+  });
+  try {
+    stage.selectMessageLayer('500.z.bt.tx.1.1', 1);
+    const original = stage.currentLayer();
+    assert.equal(original.references, 3); // Store, selected, current scene wrapper.
+    await fixture.dispatch(command('lyprop', {id: original.name, alpha: '255'}));
+    assert.equal(original.references, 4); // Native new node retains its original inner slot too.
+    await fixture.dispatch(command('flip', {})); // Retain current scene.
+    await fixture.dispatch(command('lyprop', {id: original.name, left: '12'}));
+    assert.equal(original.references, 4); // Current/retained wrappers own independent loans.
+    const actor = fixture.snapshot().layers.find((x) => x.id === original.name);
+    assert.equal(actor.properties.left, 12);
+    stage.selectMessageLayer(original.name, 1); // Detach/copy/reattach; retained original survives.
+    const replacement = stage.currentLayer();
+    assert.notEqual(replacement, original);
+    assert.equal(original.references, 2); // Detached retained node still owns both inner slots.
+    assert.equal(freed.includes(original), false);
+    await fixture.dispatch(command('flip', {}));
+    assert.equal(original.references, 0);
+    assert.equal(freed.includes(original), true);
+    stage.selectMessageLayer(original.name, -1);
+    assert.equal(
+      fixture.snapshot().layers.some((x) => x.id === original.name),
+      false,
+    );
+  } finally {
+    stage.close();
+    fixture.close();
+  }
+  assert.equal(freed.length, resources.length);
+});
+
+test('External scene attachment rejects reused wrappers and releases blocked actors without command-history side effects', async () => {
+  const {ArtemisLayers} = await import('../dist/engines/artemis/layers.js');
+  const disposed = [],
+    commandEffects = [];
+  const layers = new ArtemisLayers(
+    revision,
+    {load: async () => null},
+    {
+      creationMode: () => 0,
+      createImageLayer: () => ({}),
+      copyImageLayer: (old) => ({...old}),
+      createGroupLayer: () => ({}),
+      releaseImageLayer: (actor) => disposed.push(actor),
+      applyImageProperties: () => {},
+      recordLayerProperties: () => {},
+      layerNotFound: () => {},
+      clearLayerCommands: (ids) => commandEffects.push(ids),
+      resetLayerCommands: (id) => commandEffects.push(id),
+      imageLoadFailed: () => {},
+    },
+  );
+  const parent = {},
+    blocked = {},
+    invalid = {};
+  assert.equal(layers.attachActor('leaf', parent), true);
+  assert.throws(() => layers.attachActor('other', parent), /fresh/);
+  assert.equal(layers.attachActor('leaf.child', blocked), false);
+  assert.deepEqual(disposed, [blocked]);
+  assert.throws(() => layers.attachActor('nul\0', invalid), /NUL|key|id/);
+  assert.equal(disposed.includes(invalid), true);
+  layers.commit();
+  layers.detachActor('leaf');
+  assert.equal(disposed.includes(parent), false);
+  layers.commit();
+  assert.equal(disposed.includes(parent), true);
+  assert.deepEqual(commandEffects, []);
+  layers.close();
+  assert.equal(new Set(disposed).size, disposed.length);
+});
