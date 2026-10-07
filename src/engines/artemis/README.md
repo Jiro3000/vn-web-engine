@@ -684,3 +684,14 @@ Display property revisions invalidate intermediate captures when an owner change
 a descendant directly; identical assignments and parent-only transforms reuse
 captured pixels. The nonvisual boot probe now reaches `scetween type=show mode=init`
 after simulated message/font control. This does not verify game text presentation.
+
+## Text effect configuration
+
+`ArtemisSceneTweens` implements `scetween` (cdae0): `init` clears the selected
+vector, `add` appends a copied descriptor. In/out/show/hide are keyed by the script's
+current message-layer name; four backlog vectors are shared across names. Snapshots
+survive later mutations. Parameters distinguish whole-layer and per-character effects;
+ease names retain native dispatch ids. Diff rounds to float32 before alpha/scale
+division, and time wins over the legacy msec key even when explicitly empty.
+Unknown modes/types do not modify vectors, matching the handler's explicit return.
+This configures future text effects; a text/frame owner must actually apply them.

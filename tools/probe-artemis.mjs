@@ -13,6 +13,7 @@ import {ArtemisScript} from '../dist/engines/artemis/script.js';
 import {ArtemisVariables} from '../dist/engines/artemis/variables.js';
 import {ArtemisDialog} from '../dist/engines/artemis/dialog.js';
 import {artemisFontProperties} from '../dist/engines/artemis/font-properties.js';
+import {ArtemisSceneTweens} from '../dist/engines/artemis/scene-tweens.js';
 import {ArtemisFontStack} from '../dist/engines/artemis/font-stack.js';
 import {
   ArtemisMessageLayers,
@@ -272,6 +273,9 @@ try {
         modeEffects.push({fontCommand: tag.name, messageLayer: name, simulation: true}),
       stackUnderflow: (name) => modeEffects.push({fontStackUnderflow: name, simulation: true}),
     });
+  const sceneTweens = messageSelection
+    ? new ArtemisSceneTweens(executableSha256, () => messageSelection.currentMessageLayer())
+    : null;
   const textControls = new ArtemisTextControls({
     currentMessageLayer: () => messageSelection?.currentMessageLayer() ?? '',
     messageLayerExists: (id) =>
@@ -302,7 +306,8 @@ try {
       pendingResource = layerFixture.dispatch(tag);
       return 'suspended';
     }
-    if (messageSelection?.dispatch(tag) || fontStack?.dispatch(tag)) return;
+    if (messageSelection?.dispatch(tag) || fontStack?.dispatch(tag) || sceneTweens?.dispatch(tag))
+      return;
     if (dialog.dispatch(tag)) return;
     if (
       keyBindings.dispatch(tag) ||

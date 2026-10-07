@@ -1816,3 +1816,71 @@ test('Artemis font attributes use integer sizes/flags, double-before-float ratio
   assert.throws(() => artemisFontProperties(new Map([['size', '2147483648']])), /integer/);
   assert.throws(() => artemisFontProperties(new Map([['unimplemented', '1']])), /font property/);
 });
+
+test('Native text tween configuration isolates message vectors, preserves snapshots and shares backlog vectors', async () => {
+  const {ArtemisSceneTweens, artemisTweenTypes} =
+    await import('../dist/engines/artemis/scene-tweens.js');
+  const hash = '8953562b80608046662bd8c89015d04236b0ba3afee10c36469c11403de3ebaf';
+  let current = 'a';
+  const tweens = new ArtemisSceneTweens(hash, () => current);
+  const tag = (args) => ({name: 'scetween', args: new Map(Object.entries(args)), sourceLine: -1});
+  assert.equal(tweens.dispatch({name: 'other', args: new Map(), sourceLine: -1}), false);
+  for (const type of artemisTweenTypes) {
+    tweens.dispatch(
+      tag({
+        mode: 'add',
+        type,
+        param: 'entirealpha',
+        diff: '128',
+        time: '40ms',
+        msec: '999',
+        delay: '-2',
+        randomdelay: '00',
+        ease: 'easeinout_quad',
+      }),
+    );
+    const frame = tweens.snapshot(type);
+    assert.deepEqual(frame, [
+      {
+        parameter: 'alpha',
+        entire: true,
+        diff: Math.fround(Math.fround(128) / 255),
+        time: 40,
+        delay: -2,
+        randomDelay: true,
+        ease: 3,
+        outgoing: type === 'out' || type === 'hide' || type.endsWith('_out'),
+      },
+    ]);
+    tweens.dispatch(tag({mode: 'init', type}));
+    assert.equal(tweens.snapshot(type).length, 0);
+    assert.equal(frame.length, 1);
+  }
+  tweens.dispatch(
+    tag({mode: 'add', type: 'show', param: 'left', diff: '7', ease: 'none', msec: '23'}),
+  );
+  const saved = tweens.snapshot('show');
+  current = 'b';
+  assert.equal(tweens.snapshot('show').length, 0);
+  assert.deepEqual(tweens.snapshot('show', 'a'), saved);
+  tweens.dispatch(tag({mode: 'add', type: 'backlog_down_in', param: 'bad', randomdelay: '0'}));
+  current = 'a';
+  assert.deepEqual(tweens.snapshot('backlog_down_in'), [
+    {
+      parameter: 'unknown',
+      entire: false,
+      ease: 31,
+      diff: 0,
+      time: 0,
+      delay: 0,
+      randomDelay: false,
+      outgoing: false,
+    },
+  ]);
+  tweens.dispatch(tag({mode: 'init', type: 'show', diff: 'nan'}));
+  assert.equal(tweens.snapshot('show').length, 0);
+  assert.equal(saved[0].time, 23);
+  tweens.dispatch(tag({mode: 'unknown', type: 'show', diff: 'nan'}));
+  assert.equal(tweens.snapshot('show').length, 0);
+  assert.throws(() => new ArtemisSceneTweens('bad', () => ''), /Unsupported/);
+});
