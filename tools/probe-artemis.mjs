@@ -12,6 +12,10 @@ import {ArtemisLua} from '../dist/engines/artemis/lua.js';
 import {ArtemisScript} from '../dist/engines/artemis/script.js';
 import {ArtemisVariables} from '../dist/engines/artemis/variables.js';
 import {ArtemisDialog} from '../dist/engines/artemis/dialog.js';
+import {
+  ArtemisMessageLayers,
+  ArtemisMessageSelection,
+} from '../dist/engines/artemis/message-layers.js';
 import {ArtemisCaption} from '../dist/engines/artemis/caption.js';
 import {ArtemisMouse} from '../dist/engines/artemis/mouse.js';
 import {ArtemisSave} from '../dist/engines/artemis/save.js';
@@ -36,6 +40,8 @@ const advanceWaits = process.argv.slice(3).includes('--advance-waits');
 const suspendableTags = process.argv.slice(3).includes('--async-lua');
 const metadataLayers = process.argv.slice(3).includes('--image-metadata');
 if (metadataLayers && !suspendableTags) throw Error('--image-metadata requires --async-lua');
+let messageStage = null,
+  messageSelection = null;
 let layerFixture = null,
   pendingResource = null,
   resourceResumptions = 0;
@@ -176,12 +182,69 @@ try {
     },
     resumeMessageState: () => modeEffects.push({resumeMessageState: true}),
   });
-  const messageLayers = new Set();
+  const messageLayers = new Set(),
+    messageHistory = new Set(),
+    messageFrames = new Map();
+  if (metadataLayers) {
+    let serial = 0;
+    const resource = (name) => ({name, serial: ++serial, references: 1});
+    messageStage = new ArtemisMessageLayers(executableSha256, '', {
+      createMessageLayer: (name) => {
+        modeEffects.push({messageCreate: name, simulation: true});
+        return resource(name);
+      },
+      copyMessageLayer: (old) => {
+        modeEffects.push({messageCopy: old.name, simulation: true});
+        return resource(old.name);
+      },
+      retainMessageLayer: (layer) => {
+        layer.references++;
+      },
+      releaseMessageLayer: (layer) => {
+        if (--layer.references < 0) throw Error('Probe message resource released twice');
+      },
+      attachMessageLayer: (name, layer) => {
+        messageFrames.set(name, layer);
+        layer.references++;
+        modeEffects.push({messageAttach: name, simulation: true});
+      },
+      detachMessageLayer: (name) => {
+        const old = messageFrames.get(name);
+        if (old) {
+          old.references--;
+          messageFrames.delete(name);
+        }
+        modeEffects.push({messageDetach: name, simulation: true});
+      },
+    });
+    messageSelection = new ArtemisMessageSelection(messageStage, {
+      nextMessageLayerId: () => {
+        throw Error('Metadata fixture unnamed message allocator not implemented');
+      },
+      ensureMessageHistory: (name) => {
+        if (!messageHistory.has(name)) {
+          messageHistory.add(name);
+          modeEffects.push({messageHistorySeed: name, simulation: true});
+        }
+      },
+      deleteMessageHistory: (name) => {
+        messageHistory.delete(name);
+        modeEffects.push({messageHistoryDelete: name, simulation: true});
+      },
+      publishCurrentMessageLayer: (name) => variables.write('s.current_message_layer', name),
+      selectionChanged: (_tag, name) => modeEffects.push({messageSelected: name, simulation: true}),
+      stackUnderflow: (_tag, name) =>
+        modeEffects.push({messageStackUnderflow: name, simulation: true}),
+      messageStateUpdated: () => modeEffects.push({messageStateUpdated: true, simulation: true}),
+    });
+  }
   const textControls = new ArtemisTextControls({
-    currentMessageLayer: () => '',
-    messageLayerExists: (id) => messageLayers.has(id),
+    currentMessageLayer: () => messageSelection?.currentMessageLayer() ?? '',
+    messageLayerExists: (id) =>
+      messageStage ? messageStage.messageLayerExists(id) : messageLayers.has(id),
     selectMessageLayer: (id) => {
-      messageLayers.add(id);
+      if (messageStage) messageStage.selectMessageLayer(id, 0);
+      else messageLayers.add(id);
       modeEffects.push({selectMessageLayer: id});
     },
     clearBacklog: () => {
@@ -205,6 +268,7 @@ try {
       pendingResource = layerFixture.dispatch(tag);
       return 'suspended';
     }
+    if (messageSelection?.dispatch(tag)) return;
     if (dialog.dispatch(tag)) return;
     if (
       keyBindings.dispatch(tag) ||
@@ -300,6 +364,14 @@ try {
         timedWaitPending: wait.pending,
         effectMode: 'record-only',
         metadataLayerFixture: layerFixture?.snapshot() ?? null,
+        messageSelectionFixture: messageSelection
+          ? {
+              current: messageSelection.currentMessageLayer(),
+              depth: messageSelection.depth,
+              presentation: false,
+              simulation: true,
+            }
+          : null,
         pointerPositionFixture: metadataLayers ? {x: 0, y: 0, simulation: true} : null,
         resourceResumptions,
         preparedFiles: prepared.size,
@@ -323,5 +395,6 @@ try {
 } finally {
   lua?.close();
   layerFixture?.close();
+  messageStage?.close();
   await installation.close();
 }

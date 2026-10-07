@@ -1539,3 +1539,155 @@ test('Artemis caption uses the selected window, Unicode/NUL semantics and native
   assert.deepEqual(calls, ['title']);
   assert.equal(new BrowserWindowCaptionHost(null).setCaption('no selected document'), false);
 });
+
+async function messageSelectionFixture() {
+  const {ArtemisMessageLayers, ArtemisMessageSelection} =
+    await import('../dist/engines/artemis/message-layers.js');
+  const {ARTEMIS_3179_EXECUTABLE_SHA256} = await import('../dist/engines/artemis/revision.js');
+  let serial = 0;
+  const effects = [],
+    resources = [],
+    frames = new Map(),
+    history = new Set(),
+    published = [];
+  const fresh = (font = 'native synthetic font') => {
+    const layer = {serial: ++serial, font, references: 1};
+    resources.push(layer);
+    return layer;
+  };
+  const stage = new ArtemisMessageLayers(ARTEMIS_3179_EXECUTABLE_SHA256, 'initial', {
+    createMessageLayer: (name) => {
+      effects.push(['create', name]);
+      return fresh();
+    },
+    copyMessageLayer: (old) => {
+      effects.push(['copy', old.serial]);
+      return fresh(old.font);
+    },
+    retainMessageLayer: (layer) => layer.references++,
+    releaseMessageLayer: (layer) => {
+      layer.references--;
+      assert.ok(layer.references >= 0);
+    },
+    attachMessageLayer: (name, layer) => {
+      effects.push(['attach', name, layer.serial]);
+      frames.set(name, layer);
+      layer.references++;
+    },
+    detachMessageLayer: (name) => {
+      effects.push(['detach', name]);
+      const layer = frames.get(name);
+      if (layer) {
+        layer.references--;
+        frames.delete(name);
+      }
+    },
+  });
+  const selection = new ArtemisMessageSelection(stage, {
+    nextMessageLayerId: () => 'automatic',
+    ensureMessageHistory: (name) => {
+      if (!history.has(name)) {
+        effects.push(['history seed', name]);
+        history.add(name);
+      }
+    },
+    deleteMessageHistory: (name) => {
+      effects.push(['history delete', name]);
+      history.delete(name);
+    },
+    publishCurrentMessageLayer: (name) => published.push(name),
+    selectionChanged: (_tag, name) => effects.push(['selected', name]),
+    stackUnderflow: (_tag, name) => effects.push(['underflow', name]),
+    messageStateUpdated: () => effects.push(['message state']),
+  });
+  return {
+    stage,
+    selection,
+    effects,
+    resources,
+    frames,
+    history,
+    published,
+    tag: (name, args = {}) => ({
+      kind: 'tag',
+      name,
+      sourceLine: -1,
+      args: new Map(Object.entries(args)),
+    }),
+  };
+}
+
+test('Artemis message selection defaults stack on, keeps byte-exact layered flags and restores without mode changes', async () => {
+  const f = await messageSelectionFixture();
+  try {
+    f.selection.dispatch(f.tag('chgmsg', {id: 'name', layered: '1'}));
+    const original = f.stage.currentLayer();
+    original.font = 'retained font';
+    assert.equal(f.frames.get('name'), original);
+    assert.equal(f.selection.depth, 1);
+    f.selection.dispatch(f.tag('chgmsg', {id: 'name', layered: '00', stack: '0'}));
+    const copy = f.stage.currentLayer();
+    assert.notEqual(copy, original);
+    assert.equal(copy.font, 'retained font');
+    assert.equal(original.references, 0);
+    assert.equal(copy.references, 3); // Map, selected pointer, attached wrapper.
+    assert.equal(f.selection.depth, 1);
+    f.selection.dispatch(f.tag('/chgmsg'));
+    assert.equal(f.selection.currentMessageLayer(), 'initial');
+    assert.equal(f.stage.currentMessageLayer(), 'initial');
+    assert.equal(f.frames.get('name'), copy); // Restore mode0 preserves attachment.
+    const before = f.published.length;
+    f.selection.dispatch(f.tag('/chgmsg'));
+    assert.equal(f.published.length, before);
+    assert.deepEqual(f.effects.at(-1), ['underflow', 'initial']);
+  } finally {
+    f.stage.close();
+  }
+  assert.ok(f.resources.every((layer) => layer.references === 0));
+});
+
+test('Artemis explicit layered zero detaches/clones text and resets history before reseeding selected style', async () => {
+  const f = await messageSelectionFixture();
+  try {
+    f.selection.dispatch(f.tag('chgmsg', {id: 'text', layered: '1'}));
+    const old = f.stage.currentLayer(),
+      start = f.effects.length;
+    f.selection.dispatch(f.tag('chgmsg', {id: 'text', layered: '0', stack: '0'}));
+    assert.notEqual(f.stage.currentLayer(), old);
+    assert.equal(f.frames.has('text'), false);
+    assert.equal(f.stage.currentLayer().references, 2);
+    assert.equal(old.references, 0);
+    assert.deepEqual(
+      f.effects.slice(start).map((event) => event[0]),
+      ['detach', 'copy', 'history delete', 'history seed', 'selected', 'message state'],
+    );
+    f.selection.dispatch(f.tag('chgmsg', {stack: '00'}));
+    assert.equal(f.selection.currentMessageLayer(), 'automatic');
+    assert.equal(f.selection.depth, 2);
+    assert.equal(f.frames.has('automatic'), false);
+  } finally {
+    f.stage.close();
+  }
+  assert.ok(f.resources.every((layer) => layer.references === 0));
+});
+
+test('Artemis stage/backlog selection preserves the script message stack and does not invent history', async () => {
+  const f = await messageSelectionFixture();
+  try {
+    f.selection.dispatch(f.tag('chgmsg', {id: 'text'}));
+    f.stage.selectMessageLayer('backlog');
+    f.stage.selectMessageLayer('text');
+    assert.equal(f.selection.currentMessageLayer(), 'text');
+    assert.equal(f.selection.depth, 1);
+    assert.equal(f.history.has('backlog'), false);
+    const creates = f.effects.filter((event) => event[0] === 'create').length;
+    f.selection.dispatch(f.tag('chgmsg', {id: 'text', stack: '0'}));
+    assert.equal(f.effects.filter((event) => event[0] === 'create').length, creates);
+    assert.throws(() => f.stage.selectMessageLayer('bad\0id'), /message-layer id/);
+  } finally {
+    f.stage.close();
+    f.stage.close();
+  }
+  assert.ok(f.resources.every((layer) => layer.references === 0));
+  assert.throws(() => f.stage.currentLayer(), /closed/);
+});

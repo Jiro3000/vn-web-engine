@@ -636,3 +636,31 @@ conversion remains unsupported.
 
 The nonvisual probe records caption changes. Boot now advances past caption and
 stops at `chgmsg id=name01 layered=1`, the first message-layer selection command.
+
+## Message-layer selection
+
+`ArtemisMessageLayers` implements the named stage store and independently retained
+selected pointer (`0x14014f490`). Required owners construct/copy the complete
+CLinkableTextLayer resource bundle, manage loans and attach/detach scene wrappers.
+Selecting an existing layer with mode0 keeps its layered state. Explicit mode1/-1
+first detaches and copies an already layered resource; mode1 attaches the new
+copy, while mode-1 leaves it detached. Missing names create a new bundle. Scene
+owners must retain earlier frame resources after detach. Shutdown releases its
+logical loans; font/render/resource construction is not replaced with placeholders
+in this production interface.
+
+`ArtemisMessageSelection` handles `chgmsg` and `/chgmsg` (`0x1400d1c10` / `0x1400d20d0`).
+Stacking defaults enabled; only exact `stack=0` disables it. Missing `layered`
+selects mode0, exact0 selects mode-1, every other spelling selects mode1. An omitted
+id requires the script owner's automatic-name allocator. The command reseeds
+missing message history after a detach request, publishes `s.current_message_layer`,
+emits INFO3 selection diagnostics and requires message wait/indicator updates.
+The restore command pops the prior script name and selects mode0. Empty-stack
+restore emits its INFO3 diagnostic only. Backlog's transient stage selection does
+not alter this script selection stack or create script history.
+
+Synthetic owners verify layer copies preserve their supplied font state, independent
+map/current/scene loans, exact flag handling, history effects and restore behavior.
+The nonvisual probe's message resources explicitly remain a simulation with no
+text presentation. Its real Lua initialization now reaches `fontinit`; font/glyph
+construction, style application and text rendering are still unimplemented.
