@@ -1981,3 +1981,132 @@ test('Artemis captures observe public display mutations without rebuilding for u
     layers.close();
   }
 });
+
+test('Native grayscale glyph painting preserves outline opacity, float truncation and shifted shadows', async () => {
+  const {paintArtemisGrayGlyph} = await import('../dist/engines/artemis/glyph-paint.js');
+  const hash = '8953562b80608046662bd8c89015d04236b0ba3afee10c36469c11403de3ebaf';
+  const glyph = {width: 1, height: 1, left: 3, top: 5, advance: 2, pixels: Uint8Array.of(128)};
+  const style = {
+    color: 0xff0000,
+    outlineColor: 0x0000ff,
+    shadowColor: 0x00ff00,
+    outline: 1,
+    shadow: 0,
+  };
+  const edge = paintArtemisGrayGlyph(hash, glyph, style);
+  assert.deepEqual(
+    [edge.image.width, edge.image.height, edge.left, edge.top, edge.advance],
+    [3, 3, 3, 5, 4],
+  );
+  const pixel = (surface, x, y) =>
+    Array.from(
+      surface.image.pixels.subarray(
+        (y * surface.image.width + x) * 4,
+        (y * surface.image.width + x + 1) * 4,
+      ),
+    );
+  assert.deepEqual(pixel(edge, 0, 0), [0, 0, 255, 128]);
+  assert.deepEqual(pixel(edge, 1, 1), [128, 0, 126, 255]);
+  const plain = paintArtemisGrayGlyph(hash, glyph, {...style, outline: 0});
+  assert.deepEqual(pixel(plain, 0, 0), [255, 0, 0, 128]);
+  const shifted = paintArtemisGrayGlyph(hash, glyph, {...style, shadow: 1});
+  assert.deepEqual(pixel(shifted, 1, 1), [128, 0, 126, 255]);
+  assert.deepEqual(pixel(shifted, 2, 2), [0, 126, 128, 255]);
+  assert.deepEqual(pixel(shifted, 3, 3), [0, 254, 0, 128]);
+  const shadow = paintArtemisGrayGlyph(hash, glyph, {...style, outline: 0, shadow: 1});
+  assert.deepEqual(pixel(shadow, 1, 1), [0, 254, 0, 128]);
+  glyph.pixels[0] = 0;
+  assert.deepEqual(pixel(edge, 1, 1), [128, 0, 126, 255]);
+  assert.deepEqual(
+    paintArtemisGrayGlyph(
+      hash,
+      {...glyph, width: 0, height: 0, advance: 10, pixels: new Uint8Array()},
+      style,
+    ),
+    {image: null, left: 0, top: 0, advance: 12},
+  );
+  assert.throws(() => paintArtemisGrayGlyph(hash, glyph, {...style, outline: 33}), /edge size/);
+});
+
+test('Real native glyph worker transfers painted storage without detaching font coverage and cancels pending jobs', async () => {
+  const {Worker} = await import('node:worker_threads');
+  const {ArtemisGlyphPainter} = await import('../dist/engines/artemis/glyph-paint-client.js');
+  const hash = '8953562b80608046662bd8c89015d04236b0ba3afee10c36469c11403de3ebaf';
+  const painter = new ArtemisGlyphPainter(hash, () => {
+    const raw = new Worker(new URL('./artemis-glyph-node-worker.mjs', import.meta.url));
+    const host = {
+      onmessage: null,
+      onerror: null,
+      onmessageerror: null,
+      postMessage: (value, transfers) => raw.postMessage(value, transfers),
+      terminate: () => raw.terminate(),
+    };
+    raw.on('message', (data) => host.onmessage?.({data}));
+    raw.on('error', (error) => host.onerror?.(error));
+    return host;
+  });
+  const glyph = {width: 1, height: 1, left: 0, top: 0, advance: 1, pixels: Uint8Array.of(128)},
+    style = {color: 0xff0000, outlineColor: 0x0000ff, shadowColor: 0, outline: 1, shadow: 0};
+  try {
+    const painted = await painter.paint(glyph, style);
+    assert.deepEqual(Array.from(painted.image.pixels.subarray(16, 20)), [128, 0, 126, 255]);
+    assert.deepEqual(Array.from(glyph.pixels), [128]);
+    await assert.rejects(painter.paint(glyph, {...style, outline: 33}), /edge size/);
+    assert.equal((await painter.paint(glyph, style)).advance, 3);
+    const pending = painter.paint(glyph, style);
+    painter.close();
+    await assert.rejects(pending, /closed/);
+  } finally {
+    painter.close();
+  }
+});
+
+test('Native glyph decorations extend bearing bounds and paint underline on whitespace', async () => {
+  const {paintArtemisGrayGlyph} = await import('../dist/engines/artemis/glyph-paint.js');
+  const hash = '8953562b80608046662bd8c89015d04236b0ba3afee10c36469c11403de3ebaf';
+  const metrics = {
+    size: 8,
+    baseline: 8,
+    decorationThickness: 1,
+    underlineThickness: 1,
+    strikeoutPosition: 3,
+    underlinePosition: 4,
+  };
+  const style = {
+    color: 0xff0000,
+    outlineColor: 0x0000ff,
+    shadowColor: 0,
+    outline: 0,
+    shadow: 0,
+    decorationMetrics: metrics,
+  };
+  const blank = {width: 0, height: 0, left: 9, top: 9, advance: 3, pixels: new Uint8Array()};
+  const space = paintArtemisGrayGlyph(hash, blank, {...style, underline: true});
+  assert.deepEqual(
+    [space.image.width, space.image.height, space.left, space.top, space.advance],
+    [3, 5, 0, 0, 3],
+  );
+  assert.deepEqual(
+    Array.from(space.image.pixels.slice(-12)),
+    [255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255],
+  );
+  assert.ok(
+    space.image.pixels
+      .slice(0, -12)
+      .filter((_, i) => i % 4 === 3)
+      .every((alpha) => alpha === 0),
+  );
+  const glyph = {width: 1, height: 1, left: 2, top: 5, advance: 5, pixels: Uint8Array.of(128)};
+  const strike = paintArtemisGrayGlyph(hash, glyph, {...style, strikeout: true});
+  assert.deepEqual(
+    [strike.image.width, strike.image.height, strike.left, strike.top],
+    [5, 3, 0, 3],
+  );
+  assert.deepEqual(Array.from(strike.image.pixels.slice(0, 4)), [255, 0, 0, 255]);
+  assert.deepEqual(Array.from(strike.image.pixels.slice(48, 52)), [255, 0, 0, 128]);
+  assert.throws(
+    () =>
+      paintArtemisGrayGlyph(hash, glyph, {...style, underline: true, decorationMetrics: undefined}),
+    /require font metrics/,
+  );
+});

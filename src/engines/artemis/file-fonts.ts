@@ -176,11 +176,13 @@ export class ArtemisFileFont {
       size: {type: 3, width: 0, height: this.metrics.size * 64},
     });
     if (this.closed || !this.ownerOpen()) throw Error('Artemis file font closed');
+    if (glyph.width && glyph.height && glyph.bitmapMode !== 2)
+      throw Error('Unsupported Artemis file glyph bitmap mode');
     return {
       width: glyph.width,
       height: glyph.height,
       left: glyph.left,
-      top: this.metrics.baseline - glyph.top,
+      top: (this.metrics.baseline - glyph.top) | 0,
       advance: glyph.advanceX >> 6,
       pixels: glyph.pixels,
     };

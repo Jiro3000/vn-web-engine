@@ -727,3 +727,18 @@ native overflow effects. Async calls retain copied arguments and reject overlapp
 prints. `cancelPending` discards stale script effects after script transfer; the
 layout owner independently cancels its insertion job before reusing resources.
 No recording-only print owner is supplied to the nonvisual boot probe.
+
+`paintArtemisGrayGlyph` reconstructs the grayscale glyph branch of166420. It owns
+RGBA storage with native outline/shadow padding and padded advance. Outline pixels
+use a square maximum; nonzero foreground coverage mixes foreground/outline RGB
+but writes opaque alpha, preserving the native float32 rounding and truncation.
+Shadow copies painted alpha diagonally underneath existing pixels. Underline and
+strikeout rows use required font-provider metrics, including whitespace and bearing
+expansion. `ArtemisGlyphPainter` executes this work in a dedicated engine worker.
+Coverage is copied, painted pixels are transferred and close rejects pending jobs.
+Native atlas allocation is replaced by independent images; packed-bit/RGBA font
+sources and oversized/negative edge cases remain explicitly unsupported.
+
+A generated rectangle font verifies FreeType worker → native glyph paint worker →
+GPU output in the browser. The integration still requires actual text blocks, line
+layout, effects and production player wiring; no real game glyphs were displayed.

@@ -32,6 +32,7 @@ export interface FreeTypeRasterOptions {
 }
 export interface FreeTypeGlyph {
   readonly glyphIndex: number;
+  readonly bitmapMode: number;
   readonly width: number;
   readonly height: number;
   readonly left: number;
@@ -194,6 +195,7 @@ export class FreeType {
     }
     return {
       glyphIndex: this.call('font_char_index', face, codePoint),
+      bitmapMode: mode,
       width,
       height,
       left: info(3),

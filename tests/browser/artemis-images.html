@@ -4,6 +4,7 @@
 <canvas id="frame" style="width: 256px; height: 128px; image-rendering: pixelated"></canvas>
 <pre id="result">Running synthetic PNG / Lua / raster checks</pre>
 <script type="module">
+  import {ArtemisGlyphPainter} from '../../dist/engines/artemis/glyph-paint-client.js';
   import {FreeTypeWorker} from '../../dist/text/freetype-worker-client.js';
   import {buildAtlasFont} from '../../dist/text/atlas-font.js';
   import {ArtemisImageGraphics} from '../../dist/engines/artemis/image-graphics.js';
@@ -779,6 +780,7 @@
     );
     const fontWorker = new FreeTypeWorker();
     let fontTarget;
+    const glyphPainter = new ArtemisGlyphPainter(revision);
     try {
       const font = await fontWorker.open(rectangleFont());
       await font.requestSize(3, 0, 32 * 64);
@@ -790,36 +792,56 @@
       );
       const fontCanvas = document.createElement('canvas');
       fontTarget = new CanvasDrawTarget(fontCanvas, 16, 32);
-      const rgba = new Uint8Array(glyph.width * glyph.height * 4);
-      for (let i = 0; i < glyph.pixels.length; i++) rgba.set([0, 180, 255, glyph.pixels[i]], i * 4);
+      const surface = await glyphPainter.paint(
+        {
+          width: glyph.width,
+          height: glyph.height,
+          left: glyph.left,
+          top: 32 - glyph.top,
+          advance: glyph.advanceX >> 6,
+          pixels: glyph.pixels,
+        },
+        {color: 0x00b4ff, outlineColor: 0xff0000, shadowColor: 0, outline: 1, shadow: 0},
+      );
+      assert(
+        surface.advance === 26 && surface.image.width === 10 && surface.image.height === 18,
+        'native glyph padded metrics',
+      );
       fontTarget.draw(
         {
           sprites: [
             {
               texture: 0,
-              source: {x: 0, y: 0, width: 8, height: 16},
-              destination: {x: 4, y: 4, width: 8, height: 16},
+              source: {x: 0, y: 0, width: 10, height: 18},
+              destination: {x: 4, y: 4, width: 10, height: 18},
               color: 0xffffff,
               alpha: 255,
               filter: 'nearest',
             },
           ],
         },
-        () => ({width: 8, height: 16, pixels: rgba}),
+        () => surface.image,
       );
       const pixel = [...fontCanvas.getContext('2d').getImageData(8, 8, 1, 1).data];
       assert(
         pixel.every((v, i) => v === [0, 180, 255, 255][i]),
         'FreeType worker to GPU pixel ' + pixel,
       );
+      const edgePixel = [...fontCanvas.getContext('2d').getImageData(4, 4, 1, 1).data];
+      assert(
+        edgePixel.every((v, i) => v === [255, 0, 0, 255][i]),
+        'native glyph outline GPU pixel ' + edgePixel,
+      );
       await font.close();
     } finally {
       fontWorker.close();
+      glyphPainter.close();
       fontTarget?.dispose();
     }
     window.result = {
       passed: true,
       nativeFontWorker: true,
+      nativeGlyphPainter: true,
       nativeFontVersion: [2, 4, 8],
       syntheticOnly: true,
       pixels,
