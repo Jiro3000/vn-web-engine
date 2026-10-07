@@ -742,3 +742,13 @@ sources and oversized/negative edge cases remain explicitly unsupported.
 A generated rectangle font verifies FreeType worker → native glyph paint worker →
 GPU output in the browser. The integration still requires actual text blocks, line
 layout, effects and production player wiring; no real game glyphs were displayed.
+
+`layoutArtemisTextBlock` reconstructs normal/ruby stream placement from1971e0.
+Advances add kerning only when painted advance is positive. Net-width comparison
+removes each stream's last kerning; the longer stream supplies the stored full
+block width and the shorter receives evenly distributed gaps. Empty ruby text
+still reserves its configured vertical space. Glyph resources remain owner-supplied;
+positions and layout snapshots are copied/frozen. `ArtemisTextLine` implements line
+append/pop, native width/height counts, bottom-aligned block rows and four alignment
+modes, including single-block equalize fallback. Wrapping, indentation/prohibition,
+vertical display rotation and resource lifetimes remain text-layer owner work.

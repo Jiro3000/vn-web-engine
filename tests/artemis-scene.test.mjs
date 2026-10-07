@@ -2110,3 +2110,119 @@ test('Native glyph decorations extend bearing bounds and paint underline on whit
     /require font metrics/,
   );
 });
+
+test('Native text blocks reserve ruby space, compare widths without last kerning and distribute the shorter stream', async () => {
+  const {layoutArtemisTextBlock} = await import('../dist/engines/artemis/text-block.js');
+  const hash = '8953562b80608046662bd8c89015d04236b0ba3afee10c36469c11403de3ebaf';
+  const style = {
+    size: 58,
+    shadow: 0,
+    outline: 1,
+    rubysize: 22,
+    rubyshadow: 0,
+    rubyoutline: 1,
+    spacetop: 0,
+    spacemiddle: -16,
+    spacebottom: -12,
+    kerning: -1,
+    rubykerning: 0,
+  };
+  const main = [
+      {glyph: '雪', advance: 20},
+      {glyph: '人', advance: 20},
+    ],
+    ruby = [
+      {glyph: 'ゆ', advance: 5},
+      {glyph: 'き', advance: 5},
+    ];
+  const block = layoutArtemisTextBlock(hash, main, ruby, style);
+  assert.deepEqual([block.width, block.height], [38, 56]);
+  assert.deepEqual(
+    block.main.map((g) => [g.x, g.y, g.advance]),
+    [
+      [0, 8, 19],
+      [19, 8, 19],
+    ],
+  );
+  assert.deepEqual(
+    block.ruby.map((g) => [g.x, g.y, g.advance]),
+    [
+      [Math.fround(29 / 3), 0, 5],
+      [Math.fround(Math.fround(Math.fround(29 / 3) + 5) + Math.fround(29 / 3)), 0, 5],
+    ],
+  );
+  const wider = layoutArtemisTextBlock(
+    hash,
+    [{glyph: 'A', advance: 5}],
+    [{glyph: 'r', advance: 20}],
+    {...style, kerning: 0},
+  );
+  assert.equal(wider.width, 20);
+  assert.equal(wider.main[0].x, 7.5);
+  assert.equal(wider.ruby[0].x, 0);
+  const empty = layoutArtemisTextBlock(hash, [], [], style);
+  assert.equal(empty.height, 56);
+  assert.equal(empty.width, 0);
+  const shifted = layoutArtemisTextBlock(
+    hash,
+    [{glyph: 'zero', advance: 0}],
+    [{glyph: 'r', advance: 2}],
+    {...style, kerning: 1, rubykerning: 10},
+  );
+  assert.equal(shifted.main[0].advance, 0);
+  assert.equal(shifted.width, 12);
+  assert.equal(shifted.main[0].x, 1.5); // bodyNet=-1, rubyNet=2, shorter stream centered.
+  assert.equal(Object.isFrozen(block.main[0]), true);
+  assert.throws(() => layoutArtemisTextBlock(hash, main, [], {...style, size: 0}), /zero-size/);
+});
+
+test('Native text lines align blocks by their reserved heights and recompute after prohibited-character transfers', async () => {
+  const {ArtemisTextLine} = await import('../dist/engines/artemis/text-line.js');
+  const hash = '8953562b80608046662bd8c89015d04236b0ba3afee10c36469c11403de3ebaf';
+  const block = (width, height, count) =>
+    Object.freeze({
+      width,
+      height,
+      main: new Array(count).fill({advance: width, x: 0, y: 0, glyph: 'synthetic'}),
+      ruby: [],
+    });
+  const line = new ArtemisTextLine(hash),
+    a = block(10, 20, 1),
+    b = block(20, 40, 2),
+    c = block(5, 10, 1);
+  line.append(a);
+  line.append(b);
+  line.append(c);
+  assert.deepEqual([line.width, line.height, line.characterCount], [35, 40, 4]);
+  assert.deepEqual(
+    line.finalize(100, 'center', 30).blocks.map((b) => [b.x, b.y]),
+    [
+      [32.5, 20],
+      [42.5, 0],
+      [62.5, 30],
+    ],
+  );
+  assert.deepEqual(
+    line.finalize(100, 'right', 30).blocks.map((b) => b.x),
+    [65, 75, 95],
+  );
+  assert.deepEqual(
+    line.finalize(100, 'equalize', 30).blocks.map((b) => b.x),
+    [0, 42.5, 95],
+  );
+  assert.equal(line.pop(), c);
+  assert.equal(line.pop(), b);
+  assert.deepEqual([line.width, line.height, line.characterCount], [10, 20, 1]);
+  assert.equal(line.finalize(100, 'equalize', 30).blocks[0].x, 0);
+  assert.equal(line.pop(), a);
+  assert.equal(line.finalize(100, 'left', 30).height, 30);
+  assert.throws(() => line.pop(), /underflow/);
+  const next = new ArtemisTextLine(hash);
+  next.append(c);
+  next.append(b);
+  assert.deepEqual(
+    next.finalize(15, 'equalize', 30).blocks.map((b) => b.x),
+    [0, -5],
+  );
+  assert.equal(next.characterCount, 3);
+});
