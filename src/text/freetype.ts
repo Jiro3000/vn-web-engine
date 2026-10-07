@@ -15,6 +15,8 @@ export interface FreeTypeMetrics {
   readonly scaledDescender: number;
   readonly scaledHeight: number;
   readonly scaledMaxAdvance: number;
+  readonly underlinePosition: number;
+  readonly underlineThickness: number;
 }
 export interface FreeTypeSizeRequest {
   readonly type: 0 | 1 | 2 | 3 | 4;
@@ -59,6 +61,8 @@ const metricsKeys = [
   'scaledDescender',
   'scaledHeight',
   'scaledMaxAdvance',
+  'underlinePosition',
+  'underlineThickness',
 ] as const;
 function int(value: number, minimum: number, maximum: number): number {
   if (!Number.isInteger(value) || value < minimum || value > maximum)

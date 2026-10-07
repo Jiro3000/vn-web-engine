@@ -1961,3 +1961,197 @@ test('Native UTF-8 prohibited characters restore separate defaults and keep expl
   partial.foot.clear();
   assert.equal(artemisUtf8Prohibition(new Set(), new Set()).foot.size, 10);
 });
+
+test('Native file fonts share resources but keep cell-size metrics and raster jobs independent', async () => {
+  const {ArtemisFileFonts, artemisFileFontMetrics} =
+    await import('../dist/engines/artemis/file-fonts.js');
+  const {rectangleFont, createNodeFontWorker} = await import('./freetype-fixtures.mjs');
+  const worker = await createNodeFontWorker();
+  let reads = 0,
+    opens = 0,
+    closes = 0;
+  const owner = new ArtemisFileFonts(
+    '8953562b80608046662bd8c89015d04236b0ba3afee10c36469c11403de3ebaf',
+    {
+      readFontFile: async (path) => {
+        reads++;
+        return path === 'synthetic.ttf' ? rectangleFont() : null;
+      },
+      openFontFace: async (bytes) => {
+        opens++;
+        const face = await worker.open(bytes);
+        return {
+          requestSize: (...args) => face.requestSize(...args),
+          rasterize: (...args) => face.rasterize(...args),
+          close: async () => {
+            closes++;
+            await face.close();
+          },
+        };
+      },
+    },
+  );
+  try {
+    const [a, b] = await Promise.all([
+      owner.load('synthetic.ttf', 32),
+      owner.load('synthetic.ttf', 64),
+    ]);
+    assert.deepEqual([reads, opens], [1, 1]);
+    assert.deepEqual(a.metrics, {
+      size: 32,
+      baseline: 32,
+      decorationThickness: 1,
+      underlineThickness: 1,
+      strikeoutPosition: 22,
+      underlinePosition: 31,
+    });
+    const [small, large] = await Promise.all([a.glyph(65), b.glyph(65)]);
+    assert.deepEqual([small.width, small.height, small.top, small.advance], [8, 16, 0, 24]);
+    assert.deepEqual([large.width, large.height, large.top, large.advance], [16, 32, 0, 48]);
+    const italic = await owner.load('synthetic.ttf', 32, 16);
+    assert.deepEqual(await italic.glyph(65), small);
+    const byte = await owner.load('synthetic.ttf', 288);
+    assert.equal(byte.metrics.size, 32);
+    await a.close();
+    assert.equal(closes, 0);
+    assert.equal((await b.glyph(65)).width, 16);
+    await b.close();
+    await italic.close();
+    await byte.close();
+    assert.equal(closes, 1);
+    const reopened = await owner.load('synthetic.ttf', 32);
+    assert.deepEqual([reads, opens], [2, 2]);
+    await assert.rejects(owner.load('missing', 32), /Missing/);
+    await assert.rejects(owner.load('synthetic.ttf', 256), /zero/);
+    await owner.close();
+    await owner.close();
+    assert.equal(closes, 2);
+    await assert.rejects(reopened.glyph(65), /closed/);
+    await reopened.close();
+    assert.equal(closes, 2);
+    await assert.rejects(owner.load('synthetic.ttf', 32), /closed/);
+    const narrow = artemisFileFontMetrics(10, {
+      unitsPerEm: 1000,
+      yPpem: 10,
+      ascender: 1000,
+      descender: -1000,
+      underlineThickness: 100,
+      underlinePosition: -1000,
+    });
+    assert.equal(narrow.underlinePosition, 9);
+  } finally {
+    await owner.close();
+    worker.close();
+  }
+});
+
+test('Native print overflow records UTF-8 prefixes and appends @/rp/remainder after pending FIFO tags', async () => {
+  const {ArtemisPrint} = await import('../dist/engines/artemis/print.js');
+  const effects = [],
+    queue = [{name: 'alreadyQueued'}],
+    history = [];
+  let ruby = false,
+    skip = false,
+    policy = 0,
+    result = {result: -2, consumedBytes: 3};
+  const printer = new ArtemisPrint(
+    '8953562b80608046662bd8c89015d04236b0ba3afee10c36469c11403de3ebaf',
+    {
+      currentMessageLayer: () => 'adv',
+      rubyActive: () => ruby,
+      debugSkipActive: () => skip,
+      print: async (layer, data) => {
+        effects.push(['print', layer, new TextDecoder().decode(data)]);
+        return result;
+      },
+      appendRubyBytes: (bytes) => effects.push(['ruby', Array.from(bytes)]),
+      fontOverflowPolicy: () => policy,
+      writeOverflowed: (value) => effects.push(['overflowed', value]),
+      reportPrintError: (_tag, kind, tail) => effects.push([kind, new TextDecoder().decode(tail)]),
+      enqueue: (tag) => queue.push({...tag, args: new Map(tag.args)}),
+      recordPrintCommand: (layer, tag) => history.push({layer, tag}),
+    },
+  );
+  const tag = {
+    kind: 'tag',
+    name: 'print',
+    sourceLine: 22,
+    args: new Map([
+      ['data', '雪人'],
+      ['extra', 'keep'],
+    ]),
+  };
+  await printer.dispatch(tag);
+  assert.deepEqual(
+    queue.map((tag) => tag.name),
+    ['alreadyQueued', '@', 'rp', 'print'],
+  );
+  assert.equal(queue[1].sourceLine, 0);
+  assert.equal(queue[2].sourceLine, 0);
+  assert.equal(queue[3].sourceLine, 22);
+  assert.equal(queue[3].args.get('data'), '人');
+  assert.equal(queue[3].args.get('extra'), 'keep');
+  assert.equal(history[0].tag.args.get('data'), '雪');
+  assert.equal(tag.args.get('data'), '雪人');
+  const oldQueue = queue.length;
+  policy = 1;
+  await printer.dispatch(tag);
+  assert.equal(queue.length, oldQueue);
+  assert.equal(history.at(-1).tag.args.get('data'), '雪');
+  result = {result: -1, consumedBytes: 0};
+  const oldHistory = history.length;
+  await printer.dispatch(tag);
+  assert.equal(history.length, oldHistory);
+  assert.equal(effects.at(-1)[0], 'unprintable');
+  ruby = true;
+  await printer.dispatch({...tag, args: new Map([['data', 'A\0雪']])}, false);
+  assert.deepEqual(effects.at(-1), ['ruby', [65, 0, 233, 155, 170]]);
+  assert.equal(history.length, oldHistory);
+  ruby = false;
+  skip = true;
+  await printer.dispatch({...tag, args: new Map()});
+  assert.equal(history.at(-1).tag.args.has('data'), false);
+  skip = false;
+  result = {result: 0, consumedBytes: 0};
+  await printer.dispatch({...tag, args: new Map([['data', 'A\0B']])});
+  assert.deepEqual(effects.at(-1), ['print', 'adv', 'A']);
+  assert.equal(history.at(-1).tag.args.get('data'), 'A\0B');
+  result = {result: -2, consumedBytes: 1};
+  await assert.rejects(printer.dispatch(tag), /encoded data/);
+  result = {result: 1, consumedBytes: 3};
+  assert.equal(await printer.dispatch(tag, false), true);
+  assert.equal(await printer.dispatch({...tag, name: 'other'}), false);
+});
+
+test('Cancelling an asynchronous print prevents stale history and keeps a newer operation pending', async () => {
+  const {ArtemisPrint} = await import('../dist/engines/artemis/print.js');
+  const completions = [],
+    effects = [];
+  const printer = new ArtemisPrint(
+    '8953562b80608046662bd8c89015d04236b0ba3afee10c36469c11403de3ebaf',
+    {
+      currentMessageLayer: () => 'adv',
+      rubyActive: () => false,
+      debugSkipActive: () => false,
+      print: () => new Promise((resolve) => completions.push(resolve)),
+      appendRubyBytes: () => {},
+      fontOverflowPolicy: () => 0,
+      writeOverflowed: () => effects.push('overflow'),
+      reportPrintError: () => effects.push('error'),
+      enqueue: () => effects.push('queue'),
+      recordPrintCommand: () => effects.push('history'),
+    },
+  );
+  const tag = {kind: 'tag', name: 'print', sourceLine: 0, args: new Map([['data', 'A']])};
+  const old = printer.dispatch(tag);
+  await assert.rejects(printer.dispatch(tag), /Overlapping/);
+  printer.cancelPending();
+  const current = printer.dispatch(tag);
+  completions[0]({result: -2, consumedBytes: 0});
+  await assert.rejects(old, /cancelled/);
+  assert.deepEqual(effects, []);
+  await assert.rejects(printer.dispatch(tag), /Overlapping/);
+  completions[1]({result: 1, consumedBytes: 1});
+  await current;
+  assert.deepEqual(effects, ['history']);
+});

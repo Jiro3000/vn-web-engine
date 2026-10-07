@@ -13,7 +13,7 @@ int font_size(FT_Face face,int type,int width,int height,int xres,int yres) {
  FT_Size_RequestRec req={(FT_Size_Request_Type)type,width,height,(unsigned)xres,(unsigned)yres};return FT_Request_Size(face,&req);
 }
 int font_info(FT_Face f,int key) {
- switch(key){case 0:return f->units_per_EM;case 1:return f->ascender;case 2:return f->descender;case 3:return f->height;case 4:return f->max_advance_width;case 5:return f->max_advance_height;case 6:return f->num_glyphs;case 7:return f->num_faces;case 8:return f->size->metrics.x_ppem;case 9:return f->size->metrics.y_ppem;case 10:return f->size->metrics.ascender;case 11:return f->size->metrics.descender;case 12:return f->size->metrics.height;case 13:return f->size->metrics.max_advance;default:return 0;}
+ switch(key){case 0:return f->units_per_EM;case 1:return f->ascender;case 2:return f->descender;case 3:return f->height;case 4:return f->max_advance_width;case 5:return f->max_advance_height;case 6:return f->num_glyphs;case 7:return f->num_faces;case 8:return f->size->metrics.x_ppem;case 9:return f->size->metrics.y_ppem;case 10:return f->size->metrics.ascender;case 11:return f->size->metrics.descender;case 12:return f->size->metrics.height;case 13:return f->size->metrics.max_advance;case 14:return f->underline_position;case 15:return f->underline_thickness;default:return 0;}
 }
 int font_glyph(FT_Face face,unsigned codepoint,int flags,int bold,int shear) {
  int error=FT_Load_Char(face,codepoint,flags);if(error)return error;

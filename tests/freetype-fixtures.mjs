@@ -42,3 +42,21 @@ export function rectangleFont() {
   view.setUint32(head + 8, (0xb1b0afba - sum(0, bytes.length)) >>> 0);
   return bytes;
 }
+
+export async function createNodeFontWorker() {
+  const {Worker} = await import('node:worker_threads');
+  const {FreeTypeWorker} = await import('../dist/text/freetype-worker-client.js');
+  return new FreeTypeWorker(() => {
+    const raw = new Worker(new URL('./freetype-node-worker.mjs', import.meta.url));
+    const host = {
+      onmessage: null,
+      onerror: null,
+      onmessageerror: null,
+      postMessage: (value, transfers) => raw.postMessage(value, transfers),
+      terminate: () => raw.terminate(),
+    };
+    raw.on('message', (data) => host.onmessage?.({data}));
+    raw.on('error', (error) => host.onerror?.(error));
+    return host;
+  });
+}

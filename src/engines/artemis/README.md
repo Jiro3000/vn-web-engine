@@ -704,3 +704,26 @@ are copied separately, with wordparts sharing the indent replay slot. Replay mod
 suppresses both history writes. Owners must store the copied configuration and
 apply it during actual layout. `artemisUtf8Prohibition` supplies the encoding2
 native defaults independently for each empty prohibited-character set.
+
+## File fonts and print dispatch
+
+`ArtemisFileFonts` reconstructs the Unicode file-backed CFreeTypeFont subset.
+An explicit owner reads font files and supplies FreeType2.4.8 worker faces. Exact
+paths share face resources until their final loan closes. Sizes narrow to uint8;
+zero-size error handling remains unsupported. Each glyph job applies the CELL size
+atomically, preserving independent sizes/styles on a shared face. Baseline and
+underline/strikeout metrics use the native signed integer formulas. Glyph advance
+uses arithmetic shift of the 26.6 value; glyph top is relative to the font baseline.
+The native post-render italic outline transform does not rerasterize its bitmap.
+System fonts, legacy character conversion, renderer atlas/edge algorithms and text
+layout remain distinct owners.
+
+`ArtemisPrint` handles print/ruby-buffer/debug-skip routing, diagnostics, overflow
+variable writes and consumed-prefix history. The required insertion owner returns
+its native result and the first unconsumed UTF-8 byte offset. Overflow policy0
+appends `@`, `rp` and the remaining print tag to the existing FIFO; other policies
+keep only the consumed prefix in history. Replay suppresses history writes, not
+native overflow effects. Async calls retain copied arguments and reject overlapping
+prints. `cancelPending` discards stale script effects after script transfer; the
+layout owner independently cancels its insertion job before reusing resources.
+No recording-only print owner is supplied to the nonvisual boot probe.
