@@ -3227,3 +3227,240 @@ test('Opt-in nonvisual glyph fixture performs actual worker jobs and refuses vis
     await fixture.close();
   }
 });
+
+async function preloadFixture(budget = 16n, decode) {
+  const {ArtemisSurfaceManager} = await import('../dist/engines/artemis/surface-manager.js');
+  const {createSolidImage} = await import('../dist/graphics/solid-image.js');
+  const loaded = [],
+    disposed = [],
+    created = [];
+  const manager = new ArtemisSurfaceManager(revision, budget, {
+    createSurface() {
+      const surface = {id: created.length};
+      created.push(surface);
+      return surface;
+    },
+    async decodeSurface(surface, name) {
+      loaded.push({name, surface});
+      if (decode) await decode(surface, name);
+      if (name === 'missing') return null;
+      return {path: `${name}.png`, image: createSolidImage(1, 1, [10, 20, 30, 255])};
+    },
+    storageBytes: () => 8,
+    disposeSurface(surface, resource) {
+      disposed.push({surface, resource});
+    },
+  });
+  return {manager, loaded, disposed, created};
+}
+
+test('Artemis preload queue shares real surfaces with foreground loans and keeps one explicit script binding', async () => {
+  const {manager, loaded, disposed} = await preloadFixture();
+  manager.bindSurfaceAsync('a');
+  manager.bindSurfaceAsync('a');
+  manager.bindSurfaceAsync('b');
+  assert.equal(manager.isLoadingSurface('a'), true);
+  assert.equal(manager.isLoadingSurface(), true);
+  const foreground = manager.load('a');
+  await manager.waitForLoads();
+  const a = await foreground;
+  assert.deepEqual(
+    loaded.map((x) => x.name),
+    ['a', 'b'],
+  );
+  assert.equal(manager.bytesUsed, 16n);
+  assert.equal(manager.isLoadingSurface(), false);
+  manager.unbindSurface('a');
+  assert.equal(disposed.length, 0);
+  a.lease.release();
+  const again = await manager.load('a');
+  assert.equal(again.image, a.image);
+  manager.bindSurfaceAsync('a'); // Cached binding increments native loan count.
+  again.lease.release();
+  await manager.close(); // Drops script-only bindings, including b.
+  assert.equal(manager.bytesUsed, 0n);
+  assert.equal(disposed.length, 2);
+});
+
+test('Artemis preload mode2 skips at equal budget while mode1 can exceed it, then release trims actual storage', async () => {
+  const {manager, loaded, disposed} = await preloadFixture(8n);
+  manager.bindSurfaceAsync('a');
+  manager.bindSurfaceAsync('conditional', true);
+  manager.bindSurfaceAsync('b');
+  await manager.waitForLoads();
+  assert.deepEqual(
+    loaded.map((x) => x.name),
+    ['a', 'b'],
+  );
+  assert.equal(manager.bytesUsed, 16n);
+  assert.equal(disposed.length, 1); // Prepared conditional surface, no decoded resource.
+  assert.equal(disposed[0].resource, null);
+  manager.unbindSurface('b');
+  assert.equal(manager.bytesUsed, 8n);
+  const a = await manager.load('a');
+  await manager.close();
+  assert.equal(manager.bytesUsed, 8n); // Held image lease survives close.
+  assert.equal(a.image.pixels[0], 10);
+  a.lease.release();
+  assert.equal(manager.bytesUsed, 0n);
+  assert.equal(new Set(disposed.map((x) => x.surface)).size, disposed.length);
+});
+
+test('Artemis foreground promotion removes a later preload while the head decoder remains active', async () => {
+  let finish, started;
+  const pending = new Promise((resolve) => {
+    finish = resolve;
+  });
+  const startedPromise = new Promise((resolve) => {
+    started = resolve;
+  });
+  const {manager, loaded, created, disposed} = await preloadFixture(16n, async (_, name) => {
+    if (name === 'head') {
+      started();
+      await pending;
+    }
+  });
+  manager.bindSurfaceAsync('head');
+  manager.bindSurfaceAsync('later');
+  await startedPromise;
+  const later = await manager.load('later');
+  assert.equal(manager.isLoadingSurface('head'), true);
+  assert.equal(manager.isLoadingSurface('later'), false);
+  assert.equal(disposed[0].surface, created[1]); // Retire queued placeholder.
+  assert.equal(disposed[0].resource, null);
+  assert.deepEqual(
+    loaded.map((x) => x.name),
+    ['head', 'later'],
+  );
+  finish();
+  await manager.waitForLoads();
+  later.lease.release();
+  await manager.close();
+  assert.equal(manager.bytesUsed, 0n);
+});
+
+test('Artemis cancellation retains the in-flight prepared surface until its decoder finishes and rejects stale publication', async () => {
+  let finish, started;
+  const gate = new Promise((resolve) => {
+    finish = resolve;
+  });
+  const began = new Promise((resolve) => {
+    started = resolve;
+  });
+  const {manager, disposed} = await preloadFixture(16n, async () => {
+    started();
+    await gate;
+  });
+  manager.bindSurfaceAsync('a');
+  await began;
+  manager.unbindSurface('a');
+  assert.equal(manager.isLoadingSurface(), false);
+  assert.equal(disposed.length, 0);
+  finish();
+  await manager.waitForLoads();
+  assert.equal(disposed.length, 1);
+  assert.ok(disposed[0].resource.image.pixels.length);
+  assert.equal(manager.bytesUsed, 0n);
+  await manager.close();
+});
+
+test('Artemis native front-name revalidation preserves same-name clear/requeue behavior', async () => {
+  let finish, started;
+  const gate = new Promise((resolve) => {
+    finish = resolve;
+  });
+  const began = new Promise((resolve) => {
+    started = resolve;
+  });
+  const {manager, created, disposed, loaded} = await preloadFixture(16n, async () => {
+    started();
+    await gate;
+  });
+  manager.bindSurfaceAsync('a');
+  await began;
+  manager.clearSurfaceLoadQueue();
+  manager.bindSurfaceAsync('a');
+  finish();
+  await manager.waitForLoads();
+  assert.equal(loaded.length, 1); // Old decoder result accepted for matching front name.
+  assert.equal(disposed[0].surface, created[1]);
+  assert.equal(manager.bytesUsed, 8n);
+  await manager.close();
+  assert.equal(disposed[1].surface, created[0]);
+  assert.equal(manager.bytesUsed, 0n);
+});
+
+test('Artemis missing images and unsupported preload hosts are observable without leaked prepared resources', async () => {
+  const missing = await preloadFixture();
+  missing.manager.bindSurfaceAsync('missing');
+  assert.equal(await missing.manager.load('missing'), null);
+  await missing.manager.waitForLoads();
+  assert.equal(missing.loaded.length, 2); // Queued miss followed by native foreground retry.
+  assert.equal(missing.disposed.length, 2);
+  await missing.manager.close();
+  const failed = await preloadFixture(8n, async () => {
+    throw Error('Unsupported decoder');
+  });
+  failed.manager.bindSurfaceAsync('a');
+  await assert.rejects(failed.manager.waitForLoads(), /Unsupported decoder/);
+  assert.equal(failed.manager.loadFailures.length, 1);
+  assert.equal(failed.manager.isLoadingSurface(), false);
+  assert.equal(failed.disposed.length, 1);
+  for (const name of ['nul\0', '\ud800', '\udc00']) {
+    assert.throws(() => failed.manager.bindSurfaceAsync(name), /surface name/);
+    await assert.rejects(failed.manager.load(name), /surface name/);
+  }
+  await failed.manager.close();
+});
+
+test('Lua script cache bindings preload a generated PNG through the actual shared worker and release it by name', async () => {
+  const {createArtemisSurfacePreloadFixture} =
+    await import('../tools/artemis-surface-preload-fixture.mjs');
+  const {ArtemisLua} = await import('../dist/engines/artemis/lua.js');
+  const {png} = await import('./png-fixtures.mjs');
+  const encoded = png({width: 2, height: 1, raw: Buffer.from([0, 255, 0, 0, 255, 0, 255, 0, 128])});
+  const original = Buffer.from(encoded);
+  const fixture = createArtemisSurfacePreloadFixture(
+    revision,
+    async (path) => (path === 'fixture.png' ? encoded : null),
+    16n,
+  );
+  const lua = new ArtemisLua({
+    readFile: () => null,
+    fileExists: () => false,
+    now: () => 0,
+    tag: () => {},
+    enqueueTag: () => {},
+    variable: () => '',
+    bindSurfaceAsync: (name) => fixture.manager.bindSurfaceAsync(name),
+    unbindSurface: (name) => fixture.manager.unbindSurface(name),
+    clearSurfaceLoadQueue: () => fixture.manager.clearSurfaceLoadQueue(),
+    isLoadingSurface: (name) => fixture.manager.isLoadingSurface(name),
+  });
+  try {
+    lua.vm.execute(
+      new TextEncoder().encode(
+        'engine:bindSurfaceAsync("fixture"); engine:bindSurfaceAsync("fixture"); assert(engine:isLoadingSurface("fixture")); engine:bindSurfaceAsync("cancelled"); engine:unbindSurface("cancelled")',
+      ),
+    );
+    const foreground = fixture.manager.load('fixture');
+    await fixture.manager.waitForLoads();
+    const image = await foreground;
+    assert.deepEqual([...image.image.pixels], [255, 0, 0, 255, 0, 255, 0, 128]);
+    assert.deepEqual(encoded, original);
+    lua.vm.execute(
+      new TextEncoder().encode(
+        'assert(not engine:isLoadingSurface()); engine:clearSurfaceLoadQueue(); engine:unbindSurface("fixture")',
+      ),
+    );
+    assert.equal(fixture.summary().decodedImages, 1);
+    assert.equal(fixture.summary().samples[0].rgbaSha256.length, 64);
+    assert.equal(fixture.summary().gameVisualAssetsDisplayed, false);
+    image.lease.release();
+    assert.equal(fixture.manager.bytesUsed, 8n);
+  } finally {
+    lua.close();
+    await fixture.close();
+  }
+  assert.equal(fixture.manager.bytesUsed, 0n);
+});

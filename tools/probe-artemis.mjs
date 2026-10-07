@@ -1,5 +1,6 @@
 /** Runs Lua/script control only; no renderer, media decoder or native game process. */
 import {createHash} from 'node:crypto';
+import {createArtemisSurfacePreloadFixture} from './artemis-surface-preload-fixture.mjs';
 import {createArtemisGlyphLayoutFixture} from './artemis-glyph-layout-fixture.mjs';
 import {ArtemisPrint} from '../dist/engines/artemis/print.js';
 import {ArtemisRuby} from '../dist/engines/artemis/ruby.js';
@@ -51,11 +52,14 @@ const advanceWaits = process.argv.slice(3).includes('--advance-waits');
 const suspendableTags = process.argv.slice(3).includes('--async-lua');
 const metadataLayers = process.argv.slice(3).includes('--image-metadata');
 const glyphLayout = process.argv.slice(3).includes('--glyph-layout');
+const surfacePreloads = process.argv.slice(3).includes('--surface-preloads');
+if (surfacePreloads && !glyphLayout) throw Error('--surface-preloads requires --glyph-layout');
 if (glyphLayout && !metadataLayers)
   throw Error('--glyph-layout requires --async-lua --image-metadata');
 if (metadataLayers && !suspendableTags) throw Error('--image-metadata requires --async-lua');
 let fontStack = null,
   glyphFixture = null,
+  surfaceFixture = null,
   ruby = null,
   textCommands = null;
 let messageStage = null,
@@ -128,6 +132,10 @@ try {
   initializeArtemisVariables(variables, executableSha256);
   if (glyphLayout)
     glyphFixture = createArtemisGlyphLayoutFixture(executableSha256, (path) =>
+      installation.files.read(path),
+    );
+  if (surfacePreloads)
+    surfaceFixture = createArtemisSurfacePreloadFixture(executableSha256, (path) =>
       installation.files.read(path),
     );
   // Installation-relative read-only namespace; no Windows known-folder resolution or writes.
@@ -470,6 +478,14 @@ try {
     throw new Error(`Unsupported native Artemis tag ${tag.name}`);
   };
   lua = new ArtemisLua({
+    ...(surfaceFixture
+      ? {
+          bindSurfaceAsync: (name) => surfaceFixture.manager.bindSurfaceAsync(name),
+          unbindSurface: (name) => surfaceFixture.manager.unbindSurface(name),
+          clearSurfaceLoadQueue: () => surfaceFixture.manager.clearSurfaceLoadQueue(),
+          isLoadingSurface: (name) => surfaceFixture.manager.isLoadingSurface(name),
+        }
+      : {}),
     suspendableTags,
     readFile: (path) => {
       includes.push(path);
@@ -526,6 +542,13 @@ try {
   } catch (error) {
     refusal = error.message;
   }
+  if (surfaceFixture) {
+    try {
+      await surfaceFixture.manager.waitForLoads();
+    } catch (error) {
+      refusal = refusal ? `${refusal}; preload: ${error.message}` : error.message;
+    }
+  }
   // Exercise the game's actual AST loader independently after the boot boundary.
   // flag=true is its existing load-only path, avoiding image-cache deletion.
   const loader = lua.vm.referenceGlobal('readScriptFile');
@@ -573,6 +596,7 @@ try {
         includes,
         modeEffects,
         glyphLayoutFixture: glyphFixture?.summary(),
+        surfacePreloadFixture: surfaceFixture?.summary(),
         astLoadedByGame,
         astVersion: lua.vm.getGlobal('astver'),
         astTopLevelKeys: ast.size,
@@ -589,5 +613,6 @@ try {
   fontStack?.close();
   messageStage?.close();
   await glyphFixture?.close();
+  await surfaceFixture?.close();
   await installation.close();
 }

@@ -814,3 +814,37 @@ FIFO preload jobs, prepared surfaces, promotion/wait behavior and cancellation.
 
 Message-store/display wiring, links, text effects, vertical rotation and production
 player integration remain separate work; diagnostic progression is not gameplay.
+
+## Asynchronous surface preload ownership
+
+`ArtemisSurfaceManager` connects native011a90 lookup/promotion,0128b0 worker FIFO
+and012200 release policy. Its required host creates a fresh prepared surface,
+decodes actual pixels into it, reports native storage size and disposes resources.
+PNG headers or guessed widths cannot satisfy that host. Script bindings and
+foreground image leases share active/idle resources; duplicate queued names add
+no binding, while a cached bind adds one. Mode2 checks current usage against the
+budget before decode; mode1 may exceed it. No room for the new surface is reserved
+by native trimming. Background success holds a script binding until unbind/close.
+
+An ordinary load waits/retries for the queue head or removes/promotes a later job.
+Unsupported overlapping foreground loads are refused. Decode runs outside logical
+queue selection. Completion revalidates the front **name**, preserving the native
+same-name clear/requeue behavior; cancelled placeholders retain their resource
+until the in-flight decoder releases it. Browser cancellation wakes pending calls,
+an explicit adaptation from native condition-variable waiting. Close rejects new
+operations, clears/joins background work and drops script bindings; held foreground
+leases keep their decoded resources until released. Decoder null is an ordinary
+miss; unsupported host exceptions remain available through `loadFailures` and the
+diagnostic `waitForLoads` join.
+
+Lua exposes optional strict-string bindSurfaceAsync/unbindSurface and no-argument
+clearSurfaceLoadQueue hosts. isLoadingSurface(string) queries a name; any non-string
+queries the whole queue and returns a boolean. No queue host is invented by default.
+
+`probe-artemis --surface-preloads` additionally requires --glyph-layout and uses
+a real shared image worker for RGB/RGBA PNG and merged PSD pixels. JPEG and other
+PNG native format branches explicitly refuse in this Node diagnostic. Only metrics
+and hashes are exported; it does not prepare GPU surfaces, display assets or claim
+production rendering. The host's RGBA8 format and512MiB budget are explicit diagnostic
+policies, not inferred settings of the original game. Existing metadata layer
+fixtures remain simulated and are independent of these pixel resources.

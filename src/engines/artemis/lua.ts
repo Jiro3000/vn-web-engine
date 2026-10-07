@@ -28,6 +28,7 @@ export interface ArtemisLuaHost {
   bindSurfaceAsync?(path: string): void;
   /** Cancel a queued binding or release a completed named native binding. */
   unbindSurface?(path: string): void;
+  clearSurfaceLoadQueue?(): void;
   /** Missing/non-string Lua argument queries the whole queue; a string queries its name. */
   isLoadingSurface?(path?: string): boolean;
 }
@@ -112,6 +113,11 @@ export class ArtemisLua {
         if (!(value instanceof Uint8Array)) throw Error('Expected Artemis surface name string');
         const nul = value.indexOf(0);
         host.unbindSurface!(luaText(nul < 0 ? value : value.subarray(0, nul)));
+        return [];
+      });
+    if (host.clearSurfaceLoadQueue)
+      this.vm.bind('clearSurfaceLoadQueue', () => {
+        host.clearSurfaceLoadQueue!();
         return [];
       });
     if (host.isLoadingSurface)
