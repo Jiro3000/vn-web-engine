@@ -27,6 +27,7 @@ export class ArtemisDisplayObject {
   private parentMatrix = new Float32Array([1, 0, 0, 0, 1, 0]);
   private world = new Float32Array([1, 0, 0, 0, 1, 0]);
   private matrixDirty = true;
+  private stateRevision = 0;
   private state: ArtemisDisplayProperties = {
     left: 0,
     top: 0,
@@ -46,12 +47,17 @@ export class ArtemisDisplayObject {
   get properties(): Readonly<ArtemisDisplayProperties> {
     return {...this.state};
   }
+  /** Property mutations invalidate dependent captures; accepted-parent updates do not. */
+  get propertyRevision(): number {
+    return this.stateRevision;
+  }
   copy(): ArtemisDisplayObject {
     const result = new ArtemisDisplayObject(this.hash);
     result.state = {...this.state};
     result.parentMatrix = this.parentMatrix.slice();
     result.world = this.world.slice();
     result.matrixDirty = this.matrixDirty;
+    result.stateRevision = this.stateRevision;
     return result;
   }
   apply(patch: ArtemisLayerPropertyPatch): void {
@@ -77,6 +83,12 @@ export class ArtemisDisplayObject {
       'reversey',
     ] as const;
     if (geometry.some((key) => next[key] !== this.state[key])) this.matrixDirty = true;
+    if (
+      (Object.keys(next) as (keyof ArtemisDisplayProperties)[]).some(
+        (key) => next[key] !== this.state[key],
+      )
+    )
+      this.stateRevision++;
     this.state = next;
   }
   /** Parent acceptance in 0x14015b440/0x14015adc0: retain all six coefficients

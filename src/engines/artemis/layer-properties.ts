@@ -1,4 +1,4 @@
-import {artemisHexUint32} from './numbers.js';
+import {artemisHexUint32, artemisDecimal} from './numbers.js';
 
 export type ArtemisLayerMode = 'normal' | 'add' | 'screen' | 'multiply';
 /** Native TRect<float> stores dimensions and inclusive endpoints independently. */
@@ -66,11 +66,7 @@ const supported = new Set<string>([
 
 /** Decimal finite subset of native atof; preserve prefix parsing and float32 rounding. */
 function decimal(value: string): number {
-  const input = value.split('\0', 1)[0]!;
-  if (/^[\t\n\v\f\r ]*[+-]?(?:0x|inf|nan)/i.test(input))
-    throw new Error('Unsupported Artemis layer property number');
-  const token = /^[\t\n\v\f\r ]*([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)/.exec(input);
-  const number = token ? Number(token[1]) : 0;
+  const number = artemisDecimal(value, 'Unsupported Artemis layer property number');
   if (!Number.isFinite(Math.fround(number)))
     throw new Error('Unsupported Artemis layer property number');
   return number;

@@ -1691,3 +1691,128 @@ test('Artemis stage/backlog selection preserves the script message stack and doe
   assert.ok(f.resources.every((layer) => layer.references === 0));
   assert.throws(() => f.stage.currentLayer(), /closed/);
 });
+
+test('Artemis fontinit snapshots current font, font stack zero replaces its top, and pop preserves the base', async () => {
+  const {ArtemisFontStack} = await import('../dist/engines/artemis/font-stack.js');
+  let layer = 'name',
+    current = {size: 10},
+    sequence = 0;
+  const released = new Set(),
+    history = [],
+    snapshots = [];
+  const snapshot = (value) => {
+    const result = {...value, id: ++sequence};
+    snapshots.push(result);
+    return result;
+  };
+  const fonts = new ArtemisFontStack({
+    currentMessageLayer: () => layer,
+    snapshotCurrentFont: () => snapshot(current),
+    createFontCommandSnapshot: (tag) => snapshot({...current, size: Number(tag.args.get('size'))}),
+    applyFontSnapshot: (value) => {
+      current = {size: value.size};
+    },
+    releaseFontSnapshot: (value) => {
+      assert.equal(released.has(value.id), false);
+      released.add(value.id);
+    },
+    recordFontCommand: (name, tag) => history.push([name, tag]),
+    stackUnderflow: (name) => history.push([name, 'underflow']),
+  });
+  const tag = (name, args = {}) => ({
+    kind: 'tag',
+    name,
+    sourceLine: -1,
+    args: new Map(Object.entries(args)),
+  });
+  try {
+    fonts.dispatch(tag('fontinit'));
+    assert.equal(fonts.depth(), 1);
+    assert.equal(current.size, 10);
+    fonts.dispatch(tag('font', {size: '20'}));
+    assert.equal(fonts.depth(), 2);
+    const command = tag('font', {size: '30', stack: '0'});
+    fonts.dispatch(command);
+    command.args.set('size', '99');
+    assert.equal(current.size, 30);
+    assert.equal(fonts.depth(), 2);
+    assert.equal(history.at(-1)[1].args.get('size'), '30');
+    fonts.dispatch(tag('/font'));
+    assert.equal(current.size, 10);
+    assert.equal(fonts.depth(), 1);
+    const count = history.length;
+    fonts.dispatch(tag('/font'));
+    assert.equal(history.length, count + 1);
+    assert.equal(history.at(-1)[1], 'underflow');
+    current = {size: 45};
+    fonts.dispatch(tag('fontinit'), false);
+    assert.equal(fonts.depth(), 1);
+    assert.equal(current.size, 45);
+    assert.equal(history.length, count + 1);
+    fonts.dispatch(tag('font', {size: '50', stack: '0'}));
+    assert.equal(fonts.depth(), 1);
+    fonts.dispatch(tag('/font'));
+    assert.equal(current.size, 50);
+    layer = 'other';
+    fonts.dispatch(tag('font', {size: '60', stack: '0'}));
+    assert.equal(fonts.depth(), 1);
+    assert.equal(fonts.depth('name'), 1);
+  } finally {
+    fonts.close();
+    fonts.close();
+  }
+  assert.equal(released.size, snapshots.length);
+});
+
+test('Artemis font attributes use integer sizes/flags, double-before-float ratios and style override order', async () => {
+  const {artemisFontProperties} = await import('../dist/engines/artemis/font-properties.js');
+  const patch = artemisFontProperties(
+    new Map(
+      Object.entries({
+        size: '58.9px',
+        outline: '3',
+        rubyoutline: '9',
+        alpha: '128.3',
+        xscale: '128.3',
+        hung: '00',
+        visible: 'junk',
+        vertical: '-2',
+        color: '0xfbfbfb',
+        face: 'font/雪.ttf',
+        align: 'equalize',
+        style: 'bold,italic,outline_shadow',
+        show: '250',
+        layered: '1',
+        overflow: '1',
+      }),
+    ),
+  );
+  assert.equal(patch.size, 58);
+  assert.equal(patch.alpha, Math.fround(128.3 / 255));
+  assert.notEqual(patch.alpha, Math.fround(Math.fround(128.3) / 255));
+  assert.equal(patch.xscale, Math.fround(128.3 / 100));
+  assert.equal(patch.hung, false);
+  assert.equal(patch.visible, false);
+  assert.equal(patch.vertical, true);
+  assert.equal(patch.outline, 1);
+  assert.equal(patch.rubyoutline, 1);
+  assert.equal(patch.shadow, 1);
+  assert.equal(patch.styleBits, 24);
+  assert.equal(patch.face, 'font/雪.ttf');
+  assert.equal(patch.color, 0xfbfbfb);
+  assert.equal(patch.align, 'equalize');
+  assert.equal(patch.overflow, 1);
+  assert.equal(patch.show, undefined);
+  assert.deepEqual(
+    artemisFontProperties(
+      new Map([
+        ['align', 'unknown'],
+        ['layermode', 'unknown'],
+      ]),
+    ),
+    {},
+  );
+  assert.deepEqual(artemisFontProperties(new Map([['style', 'bold, italic']])), {styleBits: 8});
+  assert.throws(() => artemisFontProperties(new Map([['size', '2147483648']])), /integer/);
+  assert.throws(() => artemisFontProperties(new Map([['unimplemented', '1']])), /font property/);
+});

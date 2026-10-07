@@ -437,6 +437,7 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
         signature.push(
           child.id,
           child.actor,
+          child.actor?.display.propertyRevision,
           child.actor ? this.changes.get(child.actor) : undefined,
         );
         if (child.actor?.texture === null)

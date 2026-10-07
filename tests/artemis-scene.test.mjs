@@ -1958,3 +1958,26 @@ test('Artemis metadata-only resource owners use actual layer lifecycle without f
     fixture.close();
   }
 });
+
+test('Artemis captures observe public display mutations without rebuilding for unchanged or parent-only state', async () => {
+  const {layers, graphics, prepared} = await captureFixture();
+  try {
+    graphics.drawCommitted(layers.scene);
+    const child = layers.scene.entry('group.1').value;
+    child.display.apply({left: 1, alpha: 0.5});
+    let list = graphics.drawCommitted(layers.scene);
+    assert.equal(list.commands.filter((command) => command.kind === 'gpu-copy').length, 1);
+    assert.equal(list.commands.find((command) => command.kind === 'triangles').vertices[6], 0.5);
+    const revision = child.display.propertyRevision;
+    child.display.apply({left: 1, alpha: 0.5});
+    assert.equal(child.display.propertyRevision, revision);
+    assert.equal(child.display.copy().propertyRevision, revision);
+    assert.equal(graphics.drawCommitted(layers.scene).commands.length, 1);
+    layers.scene.entry('group').value.display.apply({left: 1});
+    list = graphics.drawCommitted(layers.scene);
+    assert.equal(list.commands.length, 1);
+    assert.equal(prepared.length, 3);
+  } finally {
+    layers.close();
+  }
+});

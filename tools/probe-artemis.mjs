@@ -12,6 +12,8 @@ import {ArtemisLua} from '../dist/engines/artemis/lua.js';
 import {ArtemisScript} from '../dist/engines/artemis/script.js';
 import {ArtemisVariables} from '../dist/engines/artemis/variables.js';
 import {ArtemisDialog} from '../dist/engines/artemis/dialog.js';
+import {artemisFontProperties} from '../dist/engines/artemis/font-properties.js';
+import {ArtemisFontStack} from '../dist/engines/artemis/font-stack.js';
 import {
   ArtemisMessageLayers,
   ArtemisMessageSelection,
@@ -40,6 +42,7 @@ const advanceWaits = process.argv.slice(3).includes('--advance-waits');
 const suspendableTags = process.argv.slice(3).includes('--async-lua');
 const metadataLayers = process.argv.slice(3).includes('--image-metadata');
 if (metadataLayers && !suspendableTags) throw Error('--image-metadata requires --async-lua');
+let fontStack = null;
 let messageStage = null,
   messageSelection = null;
 let layerFixture = null,
@@ -187,7 +190,7 @@ try {
     messageFrames = new Map();
   if (metadataLayers) {
     let serial = 0;
-    const resource = (name) => ({name, serial: ++serial, references: 1});
+    const resource = (name) => ({name, serial: ++serial, references: 1, font: new Map()});
     messageStage = new ArtemisMessageLayers(executableSha256, '', {
       createMessageLayer: (name) => {
         modeEffects.push({messageCreate: name, simulation: true});
@@ -195,7 +198,9 @@ try {
       },
       copyMessageLayer: (old) => {
         modeEffects.push({messageCopy: old.name, simulation: true});
-        return resource(old.name);
+        const copy = resource(old.name);
+        copy.font = new Map(old.font);
+        return copy;
       },
       retainMessageLayer: (layer) => {
         layer.references++;
@@ -224,11 +229,13 @@ try {
       ensureMessageHistory: (name) => {
         if (!messageHistory.has(name)) {
           messageHistory.add(name);
+          fontStack?.seedCurrentLayer();
           modeEffects.push({messageHistorySeed: name, simulation: true});
         }
       },
       deleteMessageHistory: (name) => {
         messageHistory.delete(name);
+        fontStack?.deleteLayer(name);
         modeEffects.push({messageHistoryDelete: name, simulation: true});
       },
       publishCurrentMessageLayer: (name) => variables.write('s.current_message_layer', name),
@@ -238,6 +245,33 @@ try {
       messageStateUpdated: () => modeEffects.push({messageStateUpdated: true, simulation: true}),
     });
   }
+  if (messageSelection)
+    fontStack = new ArtemisFontStack({
+      currentMessageLayer: () => messageSelection.currentMessageLayer(),
+      snapshotCurrentFont: () => ({
+        font: new Map(messageStage.currentLayer().font),
+        simulation: true,
+      }),
+      createFontCommandSnapshot: (tag) => {
+        const patch = artemisFontProperties(tag.args),
+          font = new Map(messageStage.currentLayer().font);
+        for (const [key, value] of Object.entries(patch))
+          if (key !== 'overflow') font.set(key, value);
+        modeEffects.push({
+          fontAttributeKeys: Object.keys(patch),
+          simulation: true,
+          fontRendering: false,
+        });
+        return {font, overflow: patch.overflow, simulation: true};
+      },
+      applyFontSnapshot: (snapshot) => {
+        messageStage.currentLayer().font = new Map(snapshot.font);
+      },
+      releaseFontSnapshot: () => modeEffects.push({fontSnapshotReleased: true, simulation: true}),
+      recordFontCommand: (name, tag) =>
+        modeEffects.push({fontCommand: tag.name, messageLayer: name, simulation: true}),
+      stackUnderflow: (name) => modeEffects.push({fontStackUnderflow: name, simulation: true}),
+    });
   const textControls = new ArtemisTextControls({
     currentMessageLayer: () => messageSelection?.currentMessageLayer() ?? '',
     messageLayerExists: (id) =>
@@ -268,7 +302,7 @@ try {
       pendingResource = layerFixture.dispatch(tag);
       return 'suspended';
     }
-    if (messageSelection?.dispatch(tag)) return;
+    if (messageSelection?.dispatch(tag) || fontStack?.dispatch(tag)) return;
     if (dialog.dispatch(tag)) return;
     if (
       keyBindings.dispatch(tag) ||
@@ -364,6 +398,9 @@ try {
         timedWaitPending: wait.pending,
         effectMode: 'record-only',
         metadataLayerFixture: layerFixture?.snapshot() ?? null,
+        fontStackFixture: fontStack
+          ? {depth: fontStack.depth(), fontRendering: false, simulation: true}
+          : null,
         messageSelectionFixture: messageSelection
           ? {
               current: messageSelection.currentMessageLayer(),
@@ -395,6 +432,7 @@ try {
 } finally {
   lua?.close();
   layerFixture?.close();
+  fontStack?.close();
   messageStage?.close();
   await installation.close();
 }

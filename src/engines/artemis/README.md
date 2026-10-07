@@ -664,3 +664,23 @@ map/current/scene loans, exact flag handling, history effects and restore behavi
 The nonvisual probe's message resources explicitly remain a simulation with no
 text presentation. Its real Lua initialization now reaches `fontinit`; font/glyph
 construction, style application and text rendering are still unimplemented.
+
+## Font stack and properties
+
+`ArtemisFontStack` implements native `fontinit`, `font` and `/font` history.
+Initialization snapshots the current selected font; a normal font command pushes
+a complete owner-created frame. Exact `stack=0` replaces a nonempty top frame.
+Restore requires two frames, releases the current frame and applies the preceding
+one. Empty restore emits a diagnostic. History recording can be disabled for replay.
+Owners remain responsible for complete font resources and actual text rendering.
+
+`artemisFontProperties` parses the 38 observed native attributes as partial patches,
+preserving omitted defaults. Numeric conversions, double division before float32,
+colors, modes, alignment and comma-separated style flags follow a74d0. Style spans
+are not trimmed. Overflow belongs to the command frame rather than copied font
+attributes. Unknown keys and out-of-range conversions are refused.
+
+Display property revisions invalidate intermediate captures when an owner changes
+a descendant directly; identical assignments and parent-only transforms reuse
+captured pixels. The nonvisual boot probe now reaches `scetween type=show mode=init`
+after simulated message/font control. This does not verify game text presentation.
