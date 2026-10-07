@@ -46,6 +46,12 @@ export interface GpuTargetDraw {
   surface: GpuRenderSurface | null;
   clearColor?: readonly [number, number, number, number];
 }
+/** Copy a complete persistent color attachment without publishing CPU pixels. */
+export interface GpuCopyDraw {
+  kind: 'gpu-copy';
+  source: GpuRenderSurface;
+  destination: GpuRenderSurface;
+}
 /** Replace a texture allocation at this point in the command stream. */
 export interface TextureDraw {
   kind: 'texture';
@@ -53,7 +59,14 @@ export interface TextureDraw {
   image: TriangleImage;
 }
 export type DrawCommand =
-  TextureDraw | SpriteDraw | SolidDraw | TriangleDraw | CaptureDraw | TargetDraw | GpuTargetDraw;
+  | TextureDraw
+  | SpriteDraw
+  | SolidDraw
+  | TriangleDraw
+  | CaptureDraw
+  | TargetDraw
+  | GpuTargetDraw
+  | GpuCopyDraw;
 export interface DrawList {
   sprites: SpriteDraw[];
   commands?: DrawCommand[];

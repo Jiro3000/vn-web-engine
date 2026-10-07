@@ -673,6 +673,23 @@ void main(){vec4 sampled=texture(atlas,tex);if(maskMode.w!=0.)sampled.rgb=vec3(1
               active = null;
               target(draw.texture, draw.image.width, draw.image.height);
             }
+          } else if (draw.kind === 'gpu-copy') {
+            const {source, destination} = draw;
+            const framebuffer = this.renderSurfaces.get(source),
+              color = this.images.get(destination);
+            if (!framebuffer || !this.renderSurfaces.has(destination) || !color)
+              throw new Error('GPU copy surfaces are not prepared on this target');
+            if (source === destination) throw new Error('GPU surface cannot copy itself');
+            if (source.width !== destination.width || source.height !== destination.height)
+              throw new Error('GPU copy surface dimensions differ');
+            gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+            try {
+              gl.activeTexture(gl.TEXTURE0);
+              gl.bindTexture(gl.TEXTURE_2D, color);
+              gl.copyTexSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 0, 0, source.width, source.height);
+            } finally {
+              gl.bindFramebuffer(gl.FRAMEBUFFER, this.activeFramebuffer!);
+            }
           } else if (draw.kind === 'gpu-target') {
             const clear = draw.clearColor;
             if (clear && (clear.length !== 4 || !clear.every(Number.isFinite)))

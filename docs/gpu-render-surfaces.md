@@ -14,6 +14,13 @@ Coordinates retain the shared top-down image convention for all those bindings.
 Sampling the currently bound render surface is refused to prevent framebuffer
 feedback. GPU surfaces are not automatically evicted between frames.
 
+A `gpu-copy` command copies every RGBA texel from its `source` to its
+`destination`, retaining the active target and viewport. Both surfaces must be
+prepared on the same target, distinct, and have matching dimensions. The copy
+uses the GPU framebuffer directly; it does not blend, reallocate, upload or read
+CPU pixels. The destination may then serve as a background snapshot while the
+source remains the current render target.
+
 Target switches do not read back or upload surface pixels. The existing `target`
 command retains its CPU-owned texture publication behavior, and an explicit
 `capture` still returns a CPU image. Mixing both target kinds is supported;
@@ -24,6 +31,6 @@ attachments. An aborted stream restores the main framebuffer binding.
 
 The synthetic browser fixture `tests/browser/draw-list.html` verifies nested
 surfaces, vertical orientation, masks and extra textures, alpha, frame retention,
-feedback rejection, legacy publication and explicit capture. Instrumented WebGL
+feedback rejection, background copies, legacy publication and explicit capture. Instrumented WebGL
 calls check that switches and repeated frames perform no readbacks or reallocations,
 and that attachments are released once. No game images are used.
