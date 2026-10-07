@@ -4,6 +4,8 @@
 <canvas id="frame" style="width: 256px; height: 128px; image-rendering: pixelated"></canvas>
 <pre id="result">Running synthetic PNG / Lua / raster checks</pre>
 <script type="module">
+  import {ArtemisTextGlyphs} from '../../dist/engines/artemis/text-glyphs.js';
+  import {ArtemisFileFonts} from '../../dist/engines/artemis/file-fonts.js';
   import {ArtemisGlyphPainter} from '../../dist/engines/artemis/glyph-paint-client.js';
   import {FreeTypeWorker} from '../../dist/text/freetype-worker-client.js';
   import {buildAtlasFont} from '../../dist/text/atlas-font.js';
@@ -833,6 +835,81 @@
         'native glyph outline GPU pixel ' + edgePixel,
       );
       await font.close();
+      const fileFonts = new ArtemisFileFonts(revision, {
+        readFontFile: async () => rectangleFont(),
+        openFontFace: (bytes) => fontWorker.open(bytes),
+      });
+      const textGlyphs = new ArtemisTextGlyphs(revision, fileFonts, glyphPainter);
+      let blockTarget;
+      try {
+        const block = await textGlyphs.load('AA', 'A', {
+          face: 'synthetic.ttf',
+          rubyface: 'synthetic.ttf',
+          size: 32,
+          rubysize: 16,
+          shadow: 0,
+          outline: 1,
+          rubyshadow: 0,
+          rubyoutline: 1,
+          spacetop: 0,
+          spacemiddle: 0,
+          spacebottom: 0,
+          kerning: 0,
+          rubykerning: 0,
+          color: 0x00b4ff,
+          outlinecolor: 0xff0000,
+          shadowcolor: 0,
+          styleBits: 0,
+        });
+        assert(block.width === 52 && block.height === 52, 'native glyph block dimensions');
+        assert(block.main[0].glyph === block.main[1].glyph, 'glyph cache identity');
+        const placed = [...block.main, ...block.ruby],
+          blockCanvas = document.createElement('canvas');
+        blockTarget = new CanvasDrawTarget(blockCanvas, 64, 64);
+        blockTarget.draw(
+          {
+            sprites: placed
+              .filter((g) => g.glyph.surface.image)
+              .map((g, index) => {
+                const surface = g.glyph.surface,
+                  image = surface.image;
+                return {
+                  texture: index,
+                  source: {x: 0, y: 0, width: image.width, height: image.height},
+                  destination: {
+                    x: g.x + surface.left,
+                    y: g.y + surface.top,
+                    width: image.width,
+                    height: image.height,
+                  },
+                  color: 0xffffff,
+                  alpha: 255,
+                  filter: 'nearest',
+                };
+              }),
+          },
+          (index) => placed[index].glyph.surface.image,
+        );
+        const mainEdge = [...blockCanvas.getContext('2d').getImageData(0, 18, 1, 1).data],
+          rubyEdge = [...blockCanvas.getContext('2d').getImageData(19, 0, 1, 1).data];
+        assert(
+          mainEdge.every((v, i) => v === [255, 0, 0, 255][i]),
+          'main glyph block GPU placement',
+        );
+        assert(
+          rubyEdge.every((v, i) => v === [255, 0, 0, 255][i]),
+          'ruby glyph block GPU placement',
+        );
+        await textGlyphs.close();
+        assert(
+          block.main[0].glyph.surface.image.pixels.byteLength > 0,
+          'closed cache destroyed frame glyph',
+        );
+      } finally {
+        blockTarget?.dispose();
+        await textGlyphs.close();
+        await fileFonts.close();
+      }
     } finally {
       fontWorker.close();
       glyphPainter.close();
@@ -842,6 +919,7 @@
       passed: true,
       nativeFontWorker: true,
       nativeGlyphPainter: true,
+      nativeTextGlyphBlocks: true,
       nativeFontVersion: [2, 4, 8],
       syntheticOnly: true,
       pixels,

@@ -76,6 +76,8 @@ The included [GitHub Pages workflow](.github/workflows/pages.yml) builds and dep
 
 The website is an installable progressive web app. Use your browser's **Install app** command, or **Share → Add to Home Screen** on iPhone/iPad. After the first online visit finishes caching, the library, players, and tools can reopen offline. Game files still need to be selected locally or retained with **Keep game files in browser**. When a new version is published, open pages show an update notice; choose **Reload** to switch, or keep playing and the update applies once all app windows and tabs are closed.
 
+Artemis compatibility is under development. See [implementation status and validation boundaries](docs/artemis-status.md) for the text/font pipeline and remaining player integration.
+
 ## Development
 
 ```sh

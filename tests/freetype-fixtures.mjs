@@ -60,3 +60,21 @@ export async function createNodeFontWorker() {
     return host;
   });
 }
+
+export async function createNodeGlyphPainter(hash) {
+  const {Worker} = await import('node:worker_threads');
+  const {ArtemisGlyphPainter} = await import('../dist/engines/artemis/glyph-paint-client.js');
+  return new ArtemisGlyphPainter(hash, () => {
+    const raw = new Worker(new URL('./artemis-glyph-node-worker.mjs', import.meta.url));
+    const host = {
+      onmessage: null,
+      onerror: null,
+      onmessageerror: null,
+      postMessage: (value, transfers) => raw.postMessage(value, transfers),
+      terminate: () => raw.terminate(),
+    };
+    raw.on('message', (data) => host.onmessage?.({data}));
+    raw.on('error', (error) => host.onerror?.(error));
+    return host;
+  });
+}

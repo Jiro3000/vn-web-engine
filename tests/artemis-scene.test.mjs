@@ -2226,3 +2226,291 @@ test('Native text lines align blocks by their reserved heights and recompute aft
   );
   assert.equal(next.characterCount, 3);
 });
+
+test('Native glyph block pipeline shares file faces and cached painted glyphs across normal/ruby jobs', async () => {
+  const {ArtemisTextGlyphs} = await import('../dist/engines/artemis/text-glyphs.js');
+  const {ArtemisFileFonts} = await import('../dist/engines/artemis/file-fonts.js');
+  const {rectangleFont, createNodeFontWorker, createNodeGlyphPainter} =
+    await import('./freetype-fixtures.mjs');
+  const hash = '8953562b80608046662bd8c89015d04236b0ba3afee10c36469c11403de3ebaf';
+  const worker = await createNodeFontWorker(),
+    painter = await createNodeGlyphPainter(hash);
+  let reads = 0;
+  const fonts = new ArtemisFileFonts(hash, {
+    readFontFile: async () => {
+      reads++;
+      return rectangleFont();
+    },
+    openFontFace: (bytes) => worker.open(bytes),
+  });
+  const loader = new ArtemisTextGlyphs(hash, fonts, painter);
+  const style = {
+    face: 'synthetic.ttf',
+    rubyface: 'synthetic.ttf',
+    size: 32,
+    rubysize: 16,
+    shadow: 0,
+    outline: 1,
+    rubyshadow: 0,
+    rubyoutline: 1,
+    spacetop: 0,
+    spacemiddle: 0,
+    spacebottom: 0,
+    kerning: 0,
+    rubykerning: 0,
+    color: 0xff0000,
+    shadowcolor: 0,
+    outlinecolor: 0x0000ff,
+    styleBits: 0,
+  };
+  try {
+    const block = await loader.load('AA', 'A', style);
+    assert.deepEqual([block.width, block.height], [52, 52]);
+    assert.deepEqual(
+      block.main.map((g) => [g.x, g.y, g.advance]),
+      [
+        [0, 18, 26],
+        [26, 18, 26],
+      ],
+    );
+    assert.deepEqual(
+      block.ruby.map((g) => [g.x, g.y, g.advance]),
+      [[19, 0, 14]],
+    );
+    assert.equal(block.main[0].glyph, block.main[1].glyph);
+    assert.deepEqual(
+      [block.main[0].glyph.surface.image.width, block.ruby[0].glyph.surface.image.width],
+      [10, 6],
+    );
+    assert.equal(reads, 1);
+    const again = await loader.load('A\0ignored', '', style);
+    assert.equal(again.main[0].glyph, block.main[0].glyph);
+    const pixels = block.main[0].glyph.surface.image.pixels.slice();
+    // More than 512 distinct glyphs evict old entries without destroying frames.
+    const distinct = Array.from({length: 512}, (_, i) => String.fromCodePoint(0x100 + i)).join('');
+    await loader.load(distinct, '', style);
+    assert.notEqual((await loader.load('A', '', style)).main[0].glyph, block.main[0].glyph);
+    assert.deepEqual(block.main[0].glyph.surface.image.pixels, pixels);
+    await loader.close();
+    await loader.close();
+    assert.deepEqual(block.main[0].glyph.surface.image.pixels, pixels);
+    await assert.rejects(loader.load('A', '', style), /closed/);
+  } finally {
+    await loader.close();
+    await fonts.close();
+    painter.close();
+    worker.close();
+  }
+});
+
+test('Native glyph pipeline validates before allocation, retries failed paint and cancels pending results', async () => {
+  const {ArtemisTextGlyphs} = await import('../dist/engines/artemis/text-glyphs.js');
+  const {ArtemisFileFonts} = await import('../dist/engines/artemis/file-fonts.js');
+  const {rectangleFont, createNodeFontWorker, createNodeGlyphPainter} =
+    await import('./freetype-fixtures.mjs');
+  const hash = '8953562b80608046662bd8c89015d04236b0ba3afee10c36469c11403de3ebaf';
+  const worker = await createNodeFontWorker(),
+    painter = await createNodeGlyphPainter(hash);
+  let reads = 0,
+    paints = 0,
+    fail = true,
+    gate,
+    started;
+  const fonts = new ArtemisFileFonts(hash, {
+    readFontFile: async () => {
+      reads++;
+      return rectangleFont();
+    },
+    openFontFace: (bytes) => worker.open(bytes),
+  });
+  const loader = new ArtemisTextGlyphs(hash, fonts, {
+    paint: async (...args) => {
+      paints++;
+      if (fail) {
+        fail = false;
+        throw Error('injected painter failure');
+      }
+      started?.();
+      if (gate) await gate;
+      return painter.paint(...args);
+    },
+  });
+  const style = {
+    face: 'synthetic.ttf',
+    rubyface: 'synthetic.ttf',
+    size: 32,
+    rubysize: 16,
+    shadow: 0,
+    outline: 0,
+    rubyshadow: 0,
+    rubyoutline: 0,
+    spacetop: 0,
+    spacemiddle: 0,
+    spacebottom: 0,
+    kerning: 0,
+    rubykerning: 0,
+    color: 0xff0000,
+    shadowcolor: 0,
+    outlinecolor: 0,
+    styleBits: 0,
+  };
+  try {
+    await assert.rejects(loader.load('A', '\ud800', style), /UTF-8/);
+    await assert.rejects(loader.load('A', '', {...style, size: NaN}), /block integer/);
+    assert.equal(reads, 0);
+    const empty = await loader.load('A', '', {...style, size: 0, rubysize: 0});
+    assert.equal(empty.main.length, 0);
+    assert.equal(reads, 0);
+    await assert.rejects(loader.load('A', '', style), /injected painter failure/);
+    const [block, concurrent] = await Promise.all([
+      loader.load('A', '', style),
+      loader.load('A', '', style),
+    ]);
+    assert.equal(block.main[0].glyph, concurrent.main[0].glyph);
+    assert.equal(paints, 2);
+    assert.equal(reads, 1);
+    assert.equal((await loader.load('A', '', style)).main[0].glyph, block.main[0].glyph);
+    let release;
+    gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    const begun = new Promise((resolve) => {
+      started = resolve;
+    });
+    const pending = loader.load('A', '', {...style, color: 0x00ff00});
+    const rejected = assert.rejects(pending, /closed/);
+    await begun;
+    await loader.close();
+    release();
+    await rejected;
+    assert.equal(block.main[0].glyph.surface.image.pixels[0], 255);
+  } finally {
+    await loader.close();
+    await fonts.close();
+    painter.close();
+    worker.close();
+  }
+});
+
+test('Native UTF-8 print runs preserve ASCII words, explicit wordparts and overflow byte offsets', async () => {
+  const {artemisUtf8TextRuns} = await import('../dist/engines/artemis/text-runs.js');
+  const hash = '8953562b80608046662bd8c89015d04236b0ba3afee10c36469c11403de3ebaf';
+  const source = 'AbZ あいう12\n😀cd\0ignored';
+  const runs = artemisUtf8TextRuns(hash, source);
+  assert.deepEqual(
+    runs.map((r) => r.text),
+    ['AbZ', ' ', 'あ', 'い', 'う', '1', '2', '\n', '😀', 'cd'],
+  );
+  const bytes = new TextEncoder().encode(source.split('\0')[0]);
+  for (const run of runs)
+    assert.equal(new TextDecoder().decode(bytes.slice(run.utf8Start, run.utf8End)), run.text);
+  assert.equal(runs.at(-1).utf8End, bytes.length);
+  assert.deepEqual(
+    artemisUtf8TextRuns(hash, 'abあい😀うZ', ['あ', 'い', '😀', 'あ']).map((r) => r.text),
+    ['a', 'b', 'あい😀', 'う', 'Z'],
+  );
+  assert.deepEqual(
+    artemisUtf8TextRuns(hash, 'A'.repeat(1024)).map((r) => r.text.length),
+    [1023, 1],
+  );
+  assert.deepEqual(
+    artemisUtf8TextRuns(hash, 'あ'.repeat(342), ['あ']).map((r) => r.utf8End - r.utf8Start),
+    [1023, 3],
+  );
+  assert.throws(() => artemisUtf8TextRuns(hash, '😀'.repeat(256), ['😀']), /partial UTF-8/);
+  assert.throws(() => artemisUtf8TextRuns(hash, '\ud800'), /UTF-8/);
+  assert.throws(() => artemisUtf8TextRuns(hash, 'A', ['ab']), /wordparts/);
+  assert.equal(Object.isFrozen(runs), true);
+  assert.equal(Object.isFrozen(runs[0]), true);
+  assert.deepEqual(artemisUtf8TextRuns(hash, ''), []);
+});
+
+test('Native unindented wrapping transfers prohibited blocks, permits hanging and preserves overflow mutation', async () => {
+  const {ArtemisUnindentedTextWrapping} = await import('../dist/engines/artemis/text-wrapping.js');
+  const hash = '8953562b80608046662bd8c89015d04236b0ba3afee10c36469c11403de3ebaf';
+  const style = {width: 20, height: 40, lineHeight: 10, align: 'left', hung: false};
+  const block = (
+    name,
+    width = 10,
+    height = 10,
+    headProhibited = false,
+    footProhibited = false,
+  ) => ({
+    block: {width, height, main: [{glyph: name, advance: width, x: 0, y: 0}], ruby: []},
+    headProhibited,
+    footProhibited,
+  });
+  const names = (text) =>
+    text.finalize().map((line) => line.geometry.blocks.map((b) => b.block.main[0].glyph));
+  const text = new ArtemisUnindentedTextWrapping(hash, style);
+  assert.equal(text.append(block('a')), 'ok');
+  text.append(block('(', 10, 10, false, true));
+  text.append(block('b'));
+  assert.deepEqual(names(text), [['a'], ['(', 'b']]);
+  assert.deepEqual(
+    text.finalize().map((line) => line.y),
+    [0, 10],
+  );
+  const head = new ArtemisUnindentedTextWrapping(hash, style);
+  head.append(block('a'));
+  head.append(block('b'));
+  head.append(block(')', 10, 10, true));
+  assert.deepEqual(names(head), [['a'], ['b', ')']]);
+  const hung = new ArtemisUnindentedTextWrapping(hash, {...style, hung: true});
+  hung.append(block('a'));
+  hung.append(block('b'));
+  hung.append(block(')', 10, 10, true));
+  assert.deepEqual(names(hung), [['a', 'b', ')']]);
+  assert.equal(hung.finalize()[0].geometry.width, 30);
+  hung.append(block(']', 10, 10, true));
+  // Head transfers recurse before the new line hangs the final punctuation.
+  assert.deepEqual(names(hung), [['a'], ['b', ')', ']']]);
+  const overflow = new ArtemisUnindentedTextWrapping(hash, {...style, height: 10});
+  overflow.append(block('a'));
+  overflow.append(block('b'));
+  assert.equal(overflow.append(block('c')), 'overflow');
+  assert.deepEqual(names(overflow), [['a', 'b'], []]);
+  assert.equal(overflow.append(block('wide', 21)), 'unprintable');
+  assert.deepEqual(names(overflow), [['a', 'b'], []]);
+  const explicitHead = new ArtemisUnindentedTextWrapping(hash, style);
+  explicitHead.append(block('a'));
+  explicitHead.append(block('b'));
+  explicitHead.newline();
+  explicitHead.append(block(')', 10, 10, true));
+  assert.deepEqual(names(explicitHead), [['a'], ['b', ')']]);
+  const newline = new ArtemisUnindentedTextWrapping(hash, style);
+  newline.newline();
+  newline.newline();
+  assert.deepEqual(
+    newline.finalize().map((line) => line.y),
+    [0, 10, 20],
+  );
+  assert.deepEqual(
+    newline.finalize().map((line) => line.wrapped),
+    [false, false, false],
+  );
+});
+
+test('Native block flags classify whole single-character main streams and suppress prohibition after newline', async () => {
+  const {artemisUtf8TextBlockFlags: flags} =
+    await import('../dist/engines/artemis/text-block-flags.js');
+  const {artemisUtf8Prohibition} = await import('../dist/engines/artemis/text-break-controls.js');
+  const hash = '8953562b80608046662bd8c89015d04236b0ba3afee10c36469c11403de3ebaf';
+  const state = {
+    ...artemisUtf8Prohibition(new Set(), new Set()),
+    indentPairs: new Map([['「', '」']]),
+    indentClosing: '」',
+    afterExplicitNewline: false,
+  };
+  assert.equal(flags(hash, '」', state).bits, 9);
+  assert.equal(flags(hash, '「', state).bits, 6);
+  assert.equal(flags(hash, '」', {...state, afterExplicitNewline: true}).bits, 8);
+  assert.equal(flags(hash, '「', {...state, afterExplicitNewline: true}).bits, 4);
+  assert.equal(flags(hash, '「abc」', state).bits, 0);
+  assert.equal(flags(hash, '', state).bits, 0);
+  assert.equal(flags(hash, '」\0ignored', state).bits, 9);
+  assert.equal(flags(hash, '😀', {...state, head: new Set(['😀'])}).bits, 1);
+  assert.equal(flags(hash, '「', {...state, indentClosing: '「'}).bits, 6);
+  assert.throws(() => flags(hash, '\ud800', state), /UTF-8/);
+  assert.equal(Object.isFrozen(flags(hash, '」', state)), true);
+});
