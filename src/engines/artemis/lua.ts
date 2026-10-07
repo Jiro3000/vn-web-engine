@@ -9,6 +9,7 @@ import {
 } from '../../core/lua51/runtime.js';
 import {ArtemisEvents} from './events.js';
 import type {AsbTag} from '../../formats/artemis/asb.js';
+import type {PointerPositionHost} from '../../input/cursor-host.js';
 
 export interface ArtemisLuaHost {
   /** Synchronous prepared byte sources; null means the file does not exist. */
@@ -22,6 +23,7 @@ export interface ArtemisLuaHost {
   variable(name: string): string | Uint8Array;
   setMagicPath?(name: string, root: string): void;
   setTouchLimit?(limit: number): void;
+  pointerPosition?: PointerPositionHost;
 }
 
 /** Rev.3179 CLua's confirmed byte-string and tag bridge. Unbound methods fail. */
@@ -89,6 +91,24 @@ export class ArtemisLua {
           throw new Error('Unsupported Artemis touch limit');
         host.setTouchLimit!(Math.trunc(number));
         return [];
+      });
+    if (host.pointerPosition)
+      this.vm.bind('getMousePoint', () => {
+        // 134ca0 reads the provider twice, stores each coordinate as float32,
+        // then 138f10 widens it to the Lua number. No integer truncation.
+        const coordinate = (value: number) => {
+          if (typeof value !== 'number' || !Number.isFinite(Math.fround(value)))
+            throw new Error('Invalid Artemis pointer position');
+          return Math.fround(value);
+        };
+        const x = coordinate(host.pointerPosition!.readPointerPosition().x);
+        const y = coordinate(host.pointerPosition!.readPointerPosition().y);
+        return [
+          new Map<string, LuaValue>([
+            ['x', x],
+            ['y', y],
+          ]),
+        ];
       });
     this.vm.bind('now', () => [Math.trunc(host.now()) & 0x7fffffff]);
     this.vm.bind('file', (args) => [host.readFile(luaText(args[0]))]);

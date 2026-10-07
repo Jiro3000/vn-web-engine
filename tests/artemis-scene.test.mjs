@@ -1910,6 +1910,9 @@ test('Artemis forwarded creation arguments in lyprop preserve the image and reco
         height: '-1',
         color: 'invalid',
         rule: 'unused',
+        x: '-99',
+        y: '999',
+        zoom: 'invalid',
         left: '1',
       }),
     );
@@ -1918,6 +1921,8 @@ test('Artemis forwarded creation arguments in lyprop preserve the image and reco
     assert.equal(copy.texture, first.texture);
     assert.equal(prepared.length, 1);
     assert.equal(copy.display.properties.left, 1);
+    assert.equal(copy.display.properties.top, 0);
+    assert.equal(copy.display.properties.xscale, 1);
     assert.deepEqual(effects.at(-1), ['record', '1']);
     layers.commit();
     assert.equal(graphics.drawCommitted(layers.scene).commands.length, 1);

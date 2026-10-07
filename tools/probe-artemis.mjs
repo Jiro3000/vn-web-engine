@@ -224,6 +224,7 @@ try {
       modeEffects.push({magicPath: {name, root}});
     },
     setTouchLimit: (limit) => modeEffects.push({touchLimit: limit}),
+    ...(metadataLayers ? {pointerPosition: {readPointerPosition: () => ({x: 0, y: 0})}} : {}),
     now: () => probeTick, // Deterministic probe clock, not a production game clock.
     tag: (tag) => script.executeTag(tag),
     enqueueTag: (tag) => script.enqueue(tag),
@@ -291,6 +292,7 @@ try {
         timedWaitPending: wait.pending,
         effectMode: 'record-only',
         metadataLayerFixture: layerFixture?.snapshot() ?? null,
+        pointerPositionFixture: metadataLayers ? {x: 0, y: 0, simulation: true} : null,
         resourceResumptions,
         preparedFiles: prepared.size,
         preparedBytes,

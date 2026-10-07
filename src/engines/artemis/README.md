@@ -608,3 +608,19 @@ The real nonvisual probe, with explicit simulated dialog result and timed waits,
 now creates the header-verified1920x1080 `:bg/black.png` layer and applies its
 forwarded properties. It stops at missing `getMousePoint`. This is control-flow
 progress through initialization, not playable game output or a rendered frame.
+
+## Lua pointer query
+
+`getMousePoint` is bound only when the Lua host supplies the shared
+`PointerPositionHost`. Its owner supplies already-mapped window/input coordinates
+without consuming pending input edges. Native `0x140134ca0` reads its provider twice:
+firstx, theny; both are float32 values widened to Lua numbers (`0x140138f10`),
+not integer coordinates. Each call returns a fresh table with namedx/y fields.
+Nonfinite provider values refuse. Native input sampling and stage coordinate
+mapping remain the input owner's responsibility.
+
+The metadata-only probe explicitly selects simulated position0,0 and marks that
+fixture in JSON. It now passes cursor resource creation, mouse configuration and
+flip; the next unsupported boot command is `caption`. Lua aliasesx/y/zoom forwarded
+by the game's lyc2 helper remain in recorded tags and do not override the normalized
+left/top/xscale/yscale property names consumed by native115650.

@@ -1469,3 +1469,45 @@ test('Suspended tag filters preserve original native arguments and first-result 
     lua.close();
   }
 });
+
+test('Artemis Lua mouse points use live providers, native float32 widening and fresh named coordinate tables', () => {
+  let reads = 0;
+  const point = {x: 16777217, y: -0.1};
+  const lua = new ArtemisLua({
+    readFile: () => null,
+    fileExists: () => false,
+    now: () => 0,
+    variable: () => '',
+    tag: () => {},
+    enqueueTag: () => {},
+    pointerPosition: {
+      readPointerPosition: () => {
+        reads++;
+        return {...point};
+      },
+    },
+  });
+  try {
+    lua.vm.execute(bytes(`a=engine:getMousePoint(); oldx=a.x; oldy=a.y; a.x=99`), 'mouse');
+    assert.equal(lua.vm.getGlobal('oldx'), Math.fround(16777217));
+    assert.equal(lua.vm.getGlobal('oldy'), Math.fround(-0.1));
+    assert.equal(reads, 2);
+    point.x = -12.5;
+    point.y = 7.25;
+    lua.vm.execute(
+      bytes(`b=engine:getMousePoint(); newx=b.x; newy=b.y; independent=(a~=b and a.x==99)`),
+      'mouse',
+    );
+    assert.equal(lua.vm.getGlobal('newx'), -12.5);
+    assert.equal(lua.vm.getGlobal('newy'), 7.25);
+    assert.equal(lua.vm.getGlobal('independent'), true);
+    assert.equal(reads, 4);
+    point.x = Infinity;
+    assert.throws(
+      () => lua.vm.execute(bytes('engine:getMousePoint()'), 'invalid'),
+      /pointer position/,
+    );
+  } finally {
+    lua.close();
+  }
+});
