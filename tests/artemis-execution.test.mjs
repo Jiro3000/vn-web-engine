@@ -2158,7 +2158,9 @@ test('Cancelling an asynchronous print prevents stale history and keeps a newer 
 
 test('Artemis Lua surface preload binding requires an actual queue owner and preserves native string/NUL rules', async () => {
   const {ArtemisLua} = await import('../dist/engines/artemis/lua.js');
-  const names = [];
+  const names = [],
+    released = [],
+    queries = [];
   const lua = new ArtemisLua({
     readFile: () => null,
     fileExists: () => false,
@@ -2167,12 +2169,25 @@ test('Artemis Lua surface preload binding requires an actual queue owner and pre
     enqueueTag: () => {},
     variable: () => '',
     bindSurfaceAsync: (name) => names.push(name),
+    unbindSurface: (name) => released.push(name),
+    isLoadingSurface: (name) => {
+      queries.push(name);
+      return name === undefined || name === '雪.png';
+    },
   });
   try {
     lua.vm.execute(
       bytes('engine:bindSurfaceAsync("font.png\\000ignored"); engine:bindSurfaceAsync("雪.png")'),
     );
     assert.deepEqual(names, ['font.png', '雪.png']);
+    lua.vm.execute(
+      bytes(
+        'engine:unbindSurface("雪.png\\000ignored"); assert(engine:isLoadingSurface("雪.png\\000ignored") == true); assert(engine:isLoadingSurface("absent") == false); assert(engine:isLoadingSurface() == true); assert(engine:isLoadingSurface(12) == true); assert(engine:isLoadingSurface({}) == true)',
+      ),
+    );
+    assert.deepEqual(released, ['雪.png']);
+    assert.deepEqual(queries, ['雪.png', 'absent', undefined, undefined, undefined]);
+    assert.throws(() => lua.vm.execute(bytes('engine:unbindSurface(12)')), /surface name string/);
     assert.throws(
       () => lua.vm.execute(bytes('engine:bindSurfaceAsync(12)')),
       /surface name string/,

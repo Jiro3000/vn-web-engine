@@ -806,7 +806,10 @@ The default real metadata-only probe continues to refuse print. Optional
 glyph workers through the Node browser-worker adapter, returning metrics and hashes
 without displaying game assets. Calibration print/rp pass, then `bindSurfaceAsync`
 is refused. Lua exposes this strict-string/NUL-terminated void binding only when
-an actual preload host is supplied; the probe supplies none. Native loading needs
+an actual preload host is supplied; the probe supplies none. Optional
+`unbindSurface` requires a strict NUL-terminated name; `isLoadingSurface` returns
+a boolean for a string name or the whole queue for any non-string argument.
+Their hosts must own the real queue and binding lifetimes. Native loading needs
 FIFO preload jobs, prepared surfaces, promotion/wait behavior and cancellation.
 
 Message-store/display wiring, links, text effects, vertical rotation and production

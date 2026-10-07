@@ -26,6 +26,10 @@ export interface ArtemisLuaHost {
   pointerPosition?: PointerPositionHost;
   /** Actual native mode1 preload request owner; call returns without waiting for decode. */
   bindSurfaceAsync?(path: string): void;
+  /** Cancel a queued binding or release a completed named native binding. */
+  unbindSurface?(path: string): void;
+  /** Missing/non-string Lua argument queries the whole queue; a string queries its name. */
+  isLoadingSurface?(path?: string): boolean;
 }
 
 /** Rev.3179 CLua's confirmed byte-string and tag bridge. Unbound methods fail. */
@@ -101,6 +105,26 @@ export class ArtemisLua {
         const nul = value.indexOf(0);
         host.bindSurfaceAsync!(luaText(nul < 0 ? value : value.subarray(0, nul)));
         return [];
+      });
+    if (host.unbindSurface)
+      this.vm.bind('unbindSurface', (args) => {
+        const value = args[0];
+        if (!(value instanceof Uint8Array)) throw Error('Expected Artemis surface name string');
+        const nul = value.indexOf(0);
+        host.unbindSurface!(luaText(nul < 0 ? value : value.subarray(0, nul)));
+        return [];
+      });
+    if (host.isLoadingSurface)
+      this.vm.bind('isLoadingSurface', (args) => {
+        const value = args[0];
+        let path: string | undefined;
+        if (value instanceof Uint8Array) {
+          const nul = value.indexOf(0);
+          path = luaText(nul < 0 ? value : value.subarray(0, nul));
+        }
+        const loading = host.isLoadingSurface!(path);
+        if (typeof loading !== 'boolean') throw Error('Expected Artemis surface loading boolean');
+        return [loading];
       });
     if (host.pointerPosition)
       this.vm.bind('getMousePoint', () => {
