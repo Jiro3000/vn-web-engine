@@ -4,6 +4,8 @@
 <canvas id="frame" style="width: 256px; height: 128px; image-rendering: pixelated"></canvas>
 <pre id="result">Running synthetic PNG / Lua / raster checks</pre>
 <script type="module">
+  import {FreeTypeWorker} from '../../dist/text/freetype-worker-client.js';
+  import {buildAtlasFont} from '../../dist/text/atlas-font.js';
   import {ArtemisImageGraphics} from '../../dist/engines/artemis/image-graphics.js';
   import {ArtemisLayers} from '../../dist/engines/artemis/layers.js';
   import {
@@ -19,6 +21,50 @@
   import {ArtemisLayerCommands} from '../../dist/engines/artemis/layer-commands.js';
   import {GpuRenderSurface} from '../../dist/graphics/gpu-render-surface.js';
   import {CanvasDrawTarget} from '../../dist/graphics/draw-list.js';
+
+  /** Synthetic single rectangle glyph. Remap the cmap from COLR's empty base to its
+   * outline layer, so historical FreeType tests ordinary glyf data without COLR.
+   */
+  function rectangleFont() {
+    const bytes = new Uint8Array(
+      buildAtlasFont([
+        {
+          codePoint: 65,
+          width: 0.25,
+          height: 0.5,
+          advance: 0.75,
+          pixels: Uint8Array.of(255, 255, 255, 255),
+          pixelWidth: 1,
+          pixelHeight: 1,
+          sourceX: 0,
+          sourceY: 0,
+          sourceWidth: 1,
+          sourceHeight: 1,
+        },
+      ]),
+    );
+    const view = new DataView(bytes.buffer);
+    const sum = (start, length) => {
+      let value = 0;
+      for (let i = 0; i < length; i += 4) value = (value + view.getUint32(start + i)) >>> 0;
+      return value;
+    };
+    let head;
+    for (let i = 0; i < view.getUint16(4); i++) {
+      const at = 12 + i * 16,
+        tag = new TextDecoder().decode(bytes.subarray(at, at + 4)),
+        offset = view.getUint32(at + 8),
+        length = view.getUint32(at + 12);
+      if (tag === 'cmap') {
+        view.setUint32(offset + 36, 2);
+        view.setUint32(at + 4, sum(offset, (length + 3) & ~3));
+      }
+      if (tag === 'head') head = offset;
+    }
+    view.setUint32(head + 8, 0);
+    view.setUint32(head + 8, (0xb1b0afba - sum(0, bytes.length)) >>> 0);
+    return bytes;
+  }
 
   const png = Uint8Array.from(
     atob(
@@ -731,8 +777,50 @@
       jpegPixel.every((v, i) => Math.abs(v - [200, 50, 25, 255][i]) <= 3),
       `JPEG GPU pixel mismatch: ${jpegPixel}`,
     );
+    const fontWorker = new FreeTypeWorker();
+    let fontTarget;
+    try {
+      const font = await fontWorker.open(rectangleFont());
+      await font.requestSize(3, 0, 32 * 64);
+      const glyph = await font.rasterize(65);
+      assert(glyph.width === 8 && glyph.height === 16, 'FreeType worker glyph metrics');
+      assert(
+        glyph.pixels.every((value) => value === 255),
+        'FreeType worker rectangle coverage',
+      );
+      const fontCanvas = document.createElement('canvas');
+      fontTarget = new CanvasDrawTarget(fontCanvas, 16, 32);
+      const rgba = new Uint8Array(glyph.width * glyph.height * 4);
+      for (let i = 0; i < glyph.pixels.length; i++) rgba.set([0, 180, 255, glyph.pixels[i]], i * 4);
+      fontTarget.draw(
+        {
+          sprites: [
+            {
+              texture: 0,
+              source: {x: 0, y: 0, width: 8, height: 16},
+              destination: {x: 4, y: 4, width: 8, height: 16},
+              color: 0xffffff,
+              alpha: 255,
+              filter: 'nearest',
+            },
+          ],
+        },
+        () => ({width: 8, height: 16, pixels: rgba}),
+      );
+      const pixel = [...fontCanvas.getContext('2d').getImageData(8, 8, 1, 1).data];
+      assert(
+        pixel.every((v, i) => v === [0, 180, 255, 255][i]),
+        'FreeType worker to GPU pixel ' + pixel,
+      );
+      await font.close();
+    } finally {
+      fontWorker.close();
+      fontTarget?.dispose();
+    }
     window.result = {
       passed: true,
+      nativeFontWorker: true,
+      nativeFontVersion: [2, 4, 8],
       syntheticOnly: true,
       pixels,
       uploads,
