@@ -55,6 +55,11 @@ const supported = new Set<string>([
   'stack',
   'layered',
   'show',
+  // Forwarded by Lua styling; applied through separate indent/prohibit tags.
+  'range',
+  'logicalrange',
+  'indent',
+  'prohibit',
 ]);
 
 /** a74d0 font-frame attributes. Omitted values remain owned by the selected font;

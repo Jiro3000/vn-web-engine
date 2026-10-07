@@ -1813,6 +1813,17 @@ test('Artemis font attributes use integer sizes/flags, double-before-float ratio
     {},
   );
   assert.deepEqual(artemisFontProperties(new Map([['style', 'bold, italic']])), {styleBits: 8});
+  assert.deepEqual(
+    artemisFontProperties(
+      new Map([
+        ['range', '1'],
+        ['logicalrange', '1'],
+        ['indent', 'indent'],
+        ['prohibit', '1'],
+      ]),
+    ),
+    {},
+  );
   assert.throws(() => artemisFontProperties(new Map([['size', '2147483648']])), /integer/);
   assert.throws(() => artemisFontProperties(new Map([['unimplemented', '1']])), /font property/);
 });
@@ -1883,4 +1894,70 @@ test('Native text tween configuration isolates message vectors, preserves snapsh
   tweens.dispatch(tag({mode: 'unknown', type: 'show', diff: 'nan'}));
   assert.equal(tweens.snapshot('show').length, 0);
   assert.throws(() => new ArtemisSceneTweens('bad', () => ''), /Unsupported/);
+});
+
+test('UTF-8 text break controls preserve paired characters, native exact flags and replay history slots', async () => {
+  const {ArtemisTextBreakControls} = await import('../dist/engines/artemis/text-break-controls.js');
+  const effects = [],
+    history = [],
+    remembered = [];
+  const controls = new ArtemisTextBreakControls({
+    setIndentation: (value) => effects.push(value),
+    setProhibitedCharacters: (head, foot) => effects.push({head, foot}),
+    setWordParts: (parts) => effects.push({parts}),
+    currentMessageLayer: () => '雪',
+    recordTextCommand: (layer, tag) => history.push({layer, tag}),
+    rememberTextCommand: (layer, slot, tag) => remembered.push({layer, slot, tag}),
+  });
+  const tag = (name, args = {}) => ({name, args: new Map(Object.entries(args)), sourceLine: 4});
+  const indent = tag('indent', {
+    pair: '「」😀😁「』x',
+    range: '-12px',
+    nest: '00',
+    logicalrange: '',
+  });
+  controls.dispatch(indent);
+  assert.deepEqual(effects[0], {
+    pairs: new Map([
+      ['「', '』'],
+      ['😀', '😁'],
+    ]),
+    range: -12,
+    logicalRange: true,
+    nest: true,
+  });
+  indent.args.set('pair', 'changed');
+  assert.equal(history[0].tag.args.get('pair'), '「」😀😁「』x');
+  assert.equal(history[0].layer, '雪');
+  assert.equal(remembered[0].slot, 'indent');
+  controls.dispatch(tag('indent'), false);
+  assert.deepEqual(effects[1], {pairs: new Map(), range: 0, logicalRange: false, nest: false});
+  assert.equal(history.length, 1);
+  controls.dispatch(tag('prohibit', {head: '、😀、\0ignored', foot: '「「'}));
+  assert.deepEqual(effects[2], {head: new Set(['、', '😀']), foot: new Set(['「'])});
+  assert.equal(remembered[1].slot, 'prohibit');
+  controls.dispatch(tag('prohibit'));
+  assert.deepEqual(effects[3], {head: new Set(), foot: new Set()});
+  controls.dispatch(tag('wordparts', {parts: 'AあA'}));
+  assert.deepEqual(effects[4], {parts: new Set(['A', 'あ'])});
+  assert.equal(remembered.at(-1).slot, 'indent');
+  assert.throws(() => controls.dispatch(tag('wordparts', {parts: '\ud800'})), /UTF-8/);
+  assert.equal(controls.dispatch(tag('other')), false);
+});
+
+test('Native UTF-8 prohibited characters restore separate defaults and keep explicit whitespace', async () => {
+  const {artemisUtf8Prohibition} = await import('../dist/engines/artemis/text-break-controls.js');
+  const defaults = artemisUtf8Prohibition(new Set(), new Set());
+  assert.deepEqual(
+    defaults.head,
+    new Set(Array.from('!?%)]},.:;、。，．・：；！？」』）｝〕］】')),
+  );
+  assert.deepEqual(defaults.foot, new Set(Array.from('([{「『（｛〔［【')));
+  const explicit = new Set([' ']);
+  const partial = artemisUtf8Prohibition(explicit, new Set());
+  assert.deepEqual(partial.head, explicit);
+  assert.notEqual(partial.head, explicit);
+  assert.deepEqual(partial.foot, defaults.foot);
+  partial.foot.clear();
+  assert.equal(artemisUtf8Prohibition(new Set(), new Set()).foot.size, 10);
 });

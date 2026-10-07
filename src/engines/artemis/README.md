@@ -695,3 +695,12 @@ ease names retain native dispatch ids. Diff rounds to float32 before alpha/scale
 division, and time wins over the legacy msec key even when explicitly empty.
 Unknown modes/types do not modify vectors, matching the handler's explicit return.
 This configures future text effects; a text/frame owner must actually apply them.
+
+`ArtemisTextBreakControls` dispatches `indent`, `prohibit` and `wordparts` to the
+selected text resource. UTF-8 characters form pairs; duplicate openings replace
+previous closings and a trailing unmatched character is discarded. Range is int32;
+logicalrange/nest use native exact-zero flags. History and remembered replay slots
+are copied separately, with wordparts sharing the indent replay slot. Replay mode
+suppresses both history writes. Owners must store the copied configuration and
+apply it during actual layout. `artemisUtf8Prohibition` supplies the encoding2
+native defaults independently for each empty prohibited-character set.

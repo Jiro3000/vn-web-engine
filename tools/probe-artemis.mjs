@@ -13,6 +13,10 @@ import {ArtemisScript} from '../dist/engines/artemis/script.js';
 import {ArtemisVariables} from '../dist/engines/artemis/variables.js';
 import {ArtemisDialog} from '../dist/engines/artemis/dialog.js';
 import {artemisFontProperties} from '../dist/engines/artemis/font-properties.js';
+import {
+  ArtemisTextBreakControls,
+  artemisUtf8Prohibition,
+} from '../dist/engines/artemis/text-break-controls.js';
 import {ArtemisSceneTweens} from '../dist/engines/artemis/scene-tweens.js';
 import {ArtemisFontStack} from '../dist/engines/artemis/font-stack.js';
 import {
@@ -201,6 +205,14 @@ try {
         modeEffects.push({messageCopy: old.name, simulation: true});
         const copy = resource(old.name);
         copy.font = new Map(old.font);
+        if (old.indentation)
+          copy.indentation = {...old.indentation, pairs: new Map(old.indentation.pairs)};
+        if (old.wordParts) copy.wordParts = new Set(old.wordParts);
+        if (old.prohibition)
+          copy.prohibition = {
+            head: new Set(old.prohibition.head),
+            foot: new Set(old.prohibition.foot),
+          };
         return copy;
       },
       retainMessageLayer: (layer) => {
@@ -276,6 +288,27 @@ try {
   const sceneTweens = messageSelection
     ? new ArtemisSceneTweens(executableSha256, () => messageSelection.currentMessageLayer())
     : null;
+  const textBreakControls = messageSelection
+    ? new ArtemisTextBreakControls({
+        currentMessageLayer: () => messageSelection.currentMessageLayer(),
+        setIndentation: (value) => {
+          messageStage.currentLayer().indentation = {...value, pairs: new Map(value.pairs)};
+          modeEffects.push({indentationConfigured: true, simulation: true, textLayout: false});
+        },
+        setProhibitedCharacters: (head, foot) => {
+          messageStage.currentLayer().prohibition = artemisUtf8Prohibition(head, foot);
+          modeEffects.push({prohibitionConfigured: true, simulation: true, textLayout: false});
+        },
+        setWordParts: (parts) => {
+          messageStage.currentLayer().wordParts = new Set(parts);
+          modeEffects.push({wordPartsConfigured: true, simulation: true, textLayout: false});
+        },
+        recordTextCommand: (layer, tag) =>
+          modeEffects.push({textCommand: tag.name, messageLayer: layer, simulation: true}),
+        rememberTextCommand: (layer, slot, tag) =>
+          modeEffects.push({textReplaySlot: slot, messageLayer: layer, simulation: true}),
+      })
+    : null;
   const textControls = new ArtemisTextControls({
     currentMessageLayer: () => messageSelection?.currentMessageLayer() ?? '',
     messageLayerExists: (id) =>
@@ -306,7 +339,12 @@ try {
       pendingResource = layerFixture.dispatch(tag);
       return 'suspended';
     }
-    if (messageSelection?.dispatch(tag) || fontStack?.dispatch(tag) || sceneTweens?.dispatch(tag))
+    if (
+      messageSelection?.dispatch(tag) ||
+      fontStack?.dispatch(tag) ||
+      sceneTweens?.dispatch(tag) ||
+      textBreakControls?.dispatch(tag)
+    )
       return;
     if (dialog.dispatch(tag)) return;
     if (
