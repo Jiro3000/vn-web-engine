@@ -5,12 +5,13 @@ executable SHA-256 `8953562b80608046662bd8c89015d04236b0ba3afee10c36469c11403de3
 Artemis is still under development and does not have a production player profile.
 
 The archive/ASB readers and Lua 5.1 runtime can run the game's Lua initialization
-in a metadata-only diagnostic probe. That probe supplies explicit simulated hosts
-for selected native services; reaching a tag is not proof that the game is playable.
-The default probe refuses `print`. An optional `--glyph-layout` probe supplies actual
-font/glyph workers and a logical insertion owner; it passes calibration `print`
-and `rp`, then refuses the unimplemented `bindSurfaceAsync` preload service.
-It remains a nonvisual diagnostic, without scene rendering or a production player.
+in a nonvisual diagnostic probe. Selected services still use explicit diagnostic
+hosts; reaching a command is not proof that the game is playable. The default
+probe refuses `print`. With `--glyph-layout --surface-preloads --sound-decode`,
+actual font/glyph/image/Vorbis workers run and real surface resources are retained.
+The latest real probe reaches637 native tags and44 resource resumptions, decodes
+68 UI images and one Ogg clip, then refuses the nonvisual playback owner. No game
+assets are displayed and no audio device output is opened.
 
 The text foundations now include:
 
@@ -69,8 +70,27 @@ It neither publishes frames nor displays game assets. At the tested font setting
 the line is246 units wide and56 high before clear, then all counters/metrics return
 to zero. The font file is read from the installation and is not redistributed.
 
-Next implement the native asynchronous surface preload queue and complete message
-store/display/links, scene/frame effects and completion events. Production integration
-also needs the remaining commands/transitions/masks, media, input, save/load and
-real game regression coverage. Existing image workers and ordinary/captured/group
-GPU paths are available as foundations for that integration.
+The asynchronous surface owner now implements native FIFO preparation, foreground
+promotion, script/image loans, cancellation, conditional budget drops, inactive
+retention and stale-result handling. Message-layer actors attach to the common
+scene, with actual wrapper/frame references and copy/release hooks.
+
+SE play/stop command owners preserve native skip, replacement, variable gain,
+replay history, asynchronous suspension and cancellation. `ArtemisEffectVoices`
+owns actual voices and integer fade tasks; the browser adapter uses shared WebAudio
+with independent stereo attenuation, loop/reset controls and offline test contexts.
+Filename resolution preserves native preferred suffix/sniff/appended candidates;
+the revision-selected factory installs verified Vorbis-before-WAVE plugins.
+The encoded WAVE owner preserves native headers, paired A/B reads and B-only reset.
+The diagnostic supplies Ogg-only registration and still refuses actual playback.
+
+Build and195 focused tests pass. The full1869-test suite has1832 passes and the
+same37 baseline failures, with no new failing names. Synthetic browser checks
+cover real font/image workers, GPU scenes and sound lookup through actual offline
+WebAudio voices. These checks do not establish production game compatibility.
+
+Next complete message display/links/effects/jobs, native codec/buffer-mode behavior
+and production scheduler/audio wiring. Remaining commands/transitions/masks,
+media, input, save/load and the production game profile still require implementation
+and real game regression coverage. Engineering completion is roughly50% (a broad
+40–55% estimate), not story coverage or proof of a playable game.

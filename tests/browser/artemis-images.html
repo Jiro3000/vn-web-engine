@@ -4,6 +4,8 @@
 <canvas id="frame" style="width: 256px; height: 128px; image-rendering: pixelated"></canvas>
 <pre id="result">Running synthetic PNG / Lua / raster checks</pre>
 <script type="module">
+  import {ArtemisWaveSource} from '../../dist/engines/artemis/wave-source.js';
+  import {encodeWav} from '../../dist/audio/pcm.js';
   import {ArtemisSoundLoader} from '../../dist/engines/artemis/sound-loader.js';
   import {createArtemisBrowserEffectVoices} from '../../dist/engines/artemis/browser-effect-voices.js';
   import {ArtemisTextInsertion} from '../../dist/engines/artemis/text-insertion.js';
@@ -1062,6 +1064,50 @@
     } finally {
       monoOwner.close();
     }
+    // Actual native WAVE byte owner feeding a synthetic16-bit mono decoder.
+    const wav = (values) =>
+      encodeWav({
+        sampleRate: 48000,
+        sampleCount: values.length,
+        channels: [Float32Array.from(values)],
+      });
+    const waveFiles = new Map([
+      ['intro_a.wav', wav([0.25, 0.5])],
+      ['intro_b.wav', wav([-0.25, -0.5])],
+    ]);
+    const waveContext = new OfflineAudioContext(1, 8, 48000);
+    const waveOwner = createArtemisBrowserEffectVoices(
+      revision,
+      async (path) => {
+        const source = await ArtemisWaveSource.load(
+          revision,
+          path,
+          async (file) => waveFiles.get(file) ?? null,
+        );
+        if (!source) return null;
+        const bytes = source.read(8),
+          view = new DataView(bytes.buffer),
+          plane = Float32Array.from({length: 4}, (_, i) => view.getInt16(i * 2, true) / 32768);
+        return {
+          sampleRate: source.format.sampleRate,
+          sampleCount: 4,
+          channels: [plane],
+          loop: {start: 2, end: 4},
+        };
+      },
+      waveContext,
+    );
+    try {
+      const sound = await waveOwner.effects.prepareEffect('intro_a.wav', 0);
+      waveOwner.effects.startEffect(sound, 0, true);
+      const rendered = await waveContext.startRendering(),
+        plane = rendered.getChannelData(0);
+      const expected = [0.25, 0.5, -0.25, -0.5, -0.25, -0.5, -0.25, -0.5];
+      for (let i = 0; i < expected.length; i++)
+        assert(Math.abs(plane[i] - expected[i]) < 0.00001, 'WAVE intro then B-only loop ' + i);
+    } finally {
+      waveOwner.close();
+    }
     window.result = {
       passed: true,
       nativeFontWorker: true,
@@ -1070,6 +1116,7 @@
       nativeTextInsertionFrame: true,
       nativeOfflineAudioVoices: true,
       nativeSoundFilenameVoiceIntegration: true,
+      nativePairedWaveVoiceIntegration: true,
       nativeStereoAttenuation: true,
       audioDeviceOutput: false,
       nativeFontVersion: [2, 4, 8],

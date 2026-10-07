@@ -907,7 +907,6 @@ alongside text/GPU resources. Node diagnostic decoding still refuses playback;
 no silent or timer voice substitutes are installed there. Native PCM16 quantization,
 streaming modes and the production audio/scheduler/profile wiring remain separate.
 
-
 ### Native sound filename lookup
 
 `ArtemisSoundLoader` follows Rev.3179 `190290`: it first tries codecs advertising
@@ -917,10 +916,23 @@ only passed to their corresponding codec. Native char-pointer filenames stop at
 NUL; buffer modes are forwarded unchanged as int32. Decode misses return null,
 while unsupported services and decoder failures propagate. Independent byte
 storage lets each asynchronous decoder begin at offset zero without detaching or
-modifying subsequent attempts. The installation must supply its actual codec
-registration order; no unverified default is selected.
+modifying subsequent attempts. The generic loader accepts an explicit codec list. Revision-selected
+`createArtemisSoundLoader` installs native Vorbis (`ogg`, `OGG`) before WAVE
+(`wav`, `WAV`), as verified in constructor `b9e80` and the codec extension methods.
+Both decoder services are mandatory; their native formats and buffer modes are
+separate responsibilities.
 
 The nonvisual sound probe uses an explicit Ogg-only diagnostic registration and
 the actual shared Vorbis worker, now including suffix lookup. A synthetic browser
 fixture connects this loader to actual offline WebAudio voices. Neither check
 opens audible game playback or proves native codec/streaming-mode completeness.
+
+`ArtemisWaveSource` provides the actual encoded PCM resource owner from `19d570`,
+`19e170` and `19e120`. It validates native PCM/channel/rate/alignment fields,
+ignores the RIFF length boundary, and skips chunks without standard odd-byte
+padding. Truncated payloads retain the advertised data size and return only bytes
+actually available. Exact lowercase `_a` names attempt a paired `_b` resource;
+reads cross the boundary, and reset stays on B once activated. Missing or invalid
+paired resources leave the main source usable. It does not interpret PCM, create
+a voice, or claim support for backward seeks from negative chunk sizes.
+The sound codec receives the resolved filename to preserve this source behavior.

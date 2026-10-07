@@ -2524,3 +2524,117 @@ test('Sound filename lookup preserves native preference, rewind, and candidate o
   );
   await assert.rejects(() => refused.load('name.ogg', 0), /decoder unavailable/);
 });
+
+test('Revision-selected sound plugins search Vorbis before WAVE with native uppercase aliases', async () => {
+  const {createArtemisSoundLoader} = await import('../dist/engines/artemis/sound-loader.js');
+  const {ARTEMIS_3179_EXECUTABLE_SHA256: sha} = await import('../dist/engines/artemis/revision.js');
+  const opened = [],
+    decoded = [],
+    sound = {sampleRate: 48000};
+  const loader = createArtemisSoundLoader(
+    sha,
+    async (path) => {
+      opened.push(path);
+      return ['voice.OGG', 'voice.wav'].includes(path) ? bytes('ogg') : null;
+    },
+    {
+      vorbis: async (value, mode, path) => {
+        decoded.push(['vorbis', luaText(value), mode, path]);
+        return sound;
+      },
+      wave: async () => {
+        throw Error('WAVE should not run');
+      },
+    },
+  );
+  assert.deepEqual(await loader.load('voice', 3), {path: 'voice.OGG', sound});
+  assert.deepEqual(opened, ['voice', 'voice.ogg', 'voice.OGG']);
+  assert.deepEqual(decoded, [['vorbis', 'ogg', 3, 'voice.OGG']]);
+  assert.throws(
+    () =>
+      createArtemisSoundLoader('0'.repeat(64), async () => null, {
+        vorbis: async () => null,
+        wave: async () => null,
+      }),
+    /Unsupported Artemis/,
+  );
+});
+
+test('Native WAVE sources stream paired files and rewind only the active segment', async () => {
+  const {ArtemisWaveSource} = await import('../dist/engines/artemis/wave-source.js');
+  const {ARTEMIS_3179_EXECUTABLE_SHA256: sha} = await import('../dist/engines/artemis/revision.js');
+  const {encodeWav} = await import('../dist/audio/pcm.js');
+  const wave = (values) =>
+    encodeWav({
+      sampleRate: 48000,
+      sampleCount: values.length,
+      channels: [Float32Array.from(values)],
+    });
+  const a = wave([0.25, 0.5]),
+    b = wave([-0.25, -0.5]),
+    opened = [];
+  const files = new Map([
+    ['dir\\music_a.wav', a],
+    ['dir\\music_b.wav', b],
+    ['single.WAV', a],
+  ]);
+  const readFile = async (path) => {
+    opened.push(path);
+    return files.get(path) ?? null;
+  };
+  const source = await ArtemisWaveSource.load(sha, 'dir\\music_a.wav', readFile);
+  assert.deepEqual(opened, ['dir\\music_a.wav', 'dir\\music_b.wav']);
+  assert.deepEqual(source.format, {
+    sampleRate: 48000,
+    channels: 1,
+    bitsPerSample: 16,
+    blockAlign: 2,
+  });
+  assert.equal(source.dataSize, 4);
+  assert.deepEqual(source.read(2), a.slice(44, 46));
+  source.reset();
+  assert.deepEqual(source.read(6), Uint8Array.from([...a.slice(44), ...b.slice(44, 46)]));
+  source.reset(); // Once switched, native loops B; it does not replay the intro A.
+  assert.deepEqual(source.read(20), b.slice(44));
+  source.reset();
+  assert.deepEqual(source.read(0), new Uint8Array());
+  assert.deepEqual(source.read(2), b.slice(44, 46));
+  assert.throws(() => source.read(-1), /length/);
+  const single = await ArtemisWaveSource.load(sha, 'single.WAV', readFile);
+  assert.deepEqual(single.read(99), a.slice(44));
+  single.reset();
+  assert.deepEqual(single.read(99), a.slice(44));
+  const withoutPair = await ArtemisWaveSource.load(sha, 'missing_a.wav', async (path) =>
+    path.endsWith('_a.wav') ? a : bytes('not a wave'),
+  );
+  assert.deepEqual(withoutPair.read(99), a.slice(44));
+  const upperPaths = [];
+  const upper = await ArtemisWaveSource.load(sha, 'music_A.wav', async (path) => {
+    upperPaths.push(path);
+    return a;
+  });
+  assert.deepEqual(upperPaths, ['music_A.wav']);
+  assert.deepEqual(upper.read(99), a.slice(44));
+  const invalid = Uint8Array.from(a);
+  new DataView(invalid.buffer).setUint32(28, 1, true);
+  assert.equal(await ArtemisWaveSource.load(sha, 'bad.wav', async () => invalid), null);
+  // Native ignores declared RIFF size and skips odd chunks without RIFF padding.
+  const odd = new Uint8Array(a.length + 9);
+  odd.set(a.slice(0, 12));
+  odd.set(bytes('JUNK'), 12);
+  odd[16] = 1;
+  odd[20] = 7;
+  odd.set(a.slice(12), 21);
+  new DataView(odd.buffer).setUint32(4, 4, true);
+  const oddSource = await ArtemisWaveSource.load(sha, 'odd.wav', async () => odd);
+  assert.deepEqual(oddSource.read(99), a.slice(44));
+  const truncated = a.slice(0, 46);
+  const short = await ArtemisWaveSource.load(sha, 'short.wav', async () => truncated);
+  assert.equal(short.dataSize, 4);
+  assert.deepEqual(short.read(99), truncated.slice(44));
+  assert.deepEqual(short.read(99), new Uint8Array());
+  await assert.rejects(
+    () => ArtemisWaveSource.load('0'.repeat(64), 'a.wav', readFile),
+    /Unsupported Artemis/,
+  );
+});
