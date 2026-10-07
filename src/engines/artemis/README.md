@@ -425,6 +425,15 @@ is applied. The synthetic browser fixture checks framebuffer pixels for all
 32 combinations of four modes and three effect flags; these checks do not
 establish native GPU rounding equivalence.
 
+The exact-hash raster policy also exposes the format-2 captured-background
+shaders (indices 72–79, 96–103, 120–127 and 144–151). These sample a GPU
+snapshot through additional texture 0 and replace the destination RGBA without
+hardware blending. Alpha uses `back.a * (1 - fore.a) + fore.a`; RGB follows the
+native normal/add/screen/multiply formulas and divides by that output alpha.
+The native zero-alpha division is preserved. All 32 effect combinations are
+checked with synthetic nonzero-alpha foreground/background texels in Chrome.
+Group capture scheduling, bounds and storage lifetimes remain separate work.
+
 `surface-cache.ts` supplies the ordinary native surface-manager loan policy
 (`0x140011a90`, `0x140012200`, `0x1400116b0`). Requested UTF-8 names are exact cache
 keys, independently of the loader's resolved extension/path. Active hits add a

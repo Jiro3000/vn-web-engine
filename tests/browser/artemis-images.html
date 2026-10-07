@@ -14,6 +14,7 @@
   import {ArtemisScript} from '../../dist/engines/artemis/script.js';
   import {ArtemisStage} from '../../dist/engines/artemis/stage.js';
   import {ArtemisLayerCommands} from '../../dist/engines/artemis/layer-commands.js';
+  import {GpuRenderSurface} from '../../dist/graphics/gpu-render-surface.js';
   import {CanvasDrawTarget} from '../../dist/graphics/draw-list.js';
 
   const png = Uint8Array.from(
@@ -257,6 +258,110 @@
       'native ascending GPU preparation order mismatch',
     );
     layers.close();
+    // Format-2 intermediate shaders replace straight RGBA using a GPU background snapshot.
+    let nativeCapturedCases = 0;
+    const captureTarget = new CanvasDrawTarget(document.createElement('canvas'), 2, 2);
+    try {
+      const capture = new GpuRenderSurface(2, 2),
+        background = new GpuRenderSurface(2, 2),
+        foreground = {width: 1, height: 1, pixels: new Uint8Array([128, 64, 192, 128])},
+        images = [foreground, capture, background],
+        raster = createArtemisOrdinaryGpuRaster(revision),
+        coords = [
+          [0, 0],
+          [1, 0],
+          [0, 1],
+          [1, 1],
+        ],
+        replace = {
+          color: {source: 'one', destination: 'zero', operation: 'add'},
+          alpha: {source: 'one', destination: 'zero', operation: 'add'},
+        };
+      captureTarget.prepareRenderSurface(capture);
+      captureTarget.prepareRenderSurface(background);
+      captureTarget.prepareImage(foreground);
+      for (const mode of ['normal', 'add', 'screen', 'multiply'])
+        for (let bits = 0; bits < 8; bits++) {
+          const state = {
+              negative: !!(bits & 4),
+              grayscale: !!(bits & 2),
+              colorMultiply: bits & 1 ? 0x4080c0 : 0xffffff,
+            },
+            color = bits & 1 ? [64 / 255, 128 / 255, 192 / 255] : [1, 1, 1],
+            shader = raster.captured(mode, state);
+          captureTarget.draw(
+            {
+              sprites: [],
+              clearColor: [0, 0, 0, 0],
+              commands: [
+                {
+                  kind: 'gpu-target',
+                  surface: capture,
+                  clearColor: [51 / 255, 102 / 255, 153 / 255, 64 / 255],
+                },
+                {kind: 'gpu-copy', source: capture, destination: background},
+                {
+                  kind: 'triangles',
+                  texture: 0,
+                  topology: 'triangle-strip',
+                  normalizedUV: true,
+                  vertices: new Float32Array(
+                    coords.flatMap(([x, y]) => [x * 2, y * 2, 0, ...color, 0.75, x, y]),
+                  ),
+                  blendState: shader.blend,
+                  fragment: shader.fragment,
+                  additionalTextures: [
+                    {texture: 2, uv: new Float32Array(coords.flat()), filter: 'linear'},
+                  ],
+                },
+                {kind: 'gpu-target', surface: null},
+                {
+                  texture: 1,
+                  source: {x: 0, y: 0, width: 2, height: 2},
+                  destination: {x: 0, y: 0, width: 2, height: 2},
+                  color: 0xffffff,
+                  alpha: 255,
+                  blendState: replace,
+                },
+              ],
+            },
+            (id) => images[id],
+          );
+          const actual = new Uint8Array(4),
+            gl = captureTarget.gl;
+          gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, actual);
+          const ba = 64 / 255,
+            fa = (128 / 255) * 0.75,
+            alpha = ba * (1 - fa) + fa,
+            back = [51 / 255, 102 / 255, 153 / 255];
+          let fore = [128 / 255, 64 / 255, 192 / 255];
+          if (state.negative) fore = fore.map((v) => 1 - v);
+          if (state.grayscale)
+            fore = Array(3).fill(fore[0] * 0.298912 + fore[1] * 0.586611 + fore[2] * 0.114478);
+          fore = fore.map((v, i) => v * color[i]);
+          const expected = [
+            ...fore.map((v, i) => {
+              if (mode === 'normal') return (back[i] * ba * (1 - fa) + v * fa) / alpha;
+              const overlap =
+                mode === 'add'
+                  ? Math.min(1, back[i] + v)
+                  : mode === 'screen'
+                    ? 1 - (1 - back[i]) * (1 - v)
+                    : back[i] * v;
+              return (overlap * ba * fa + back[i] * ba * (1 - fa) + v * fa * (1 - ba)) / alpha;
+            }),
+            alpha,
+          ].map((v) => Math.round(v * 255));
+          assert(
+            actual.every((v, i) => Math.abs(v - expected[i]) <= 1),
+            `captured ${mode}/${bits}: ${actual} != ${expected}`,
+          );
+          assert(gl.getError() === gl.NO_ERROR, 'captured shader GL error');
+          nativeCapturedCases++;
+        }
+    } finally {
+      captureTarget.dispose();
+    }
     const nativeGraphics = new ArtemisImageGraphics(
       revision,
       target,
@@ -465,6 +570,7 @@
       nativeTransparentClear: true,
       nativeModePixels,
       nativeEffectsCases,
+      nativeCapturedCases,
       nativeClipPixels: [...nativeClipPixels],
       nativeOrdinaryGroups: true,
       nativeGroupPixel,
