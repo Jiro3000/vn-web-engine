@@ -20,6 +20,10 @@ export class ArtemisFontStack<T extends object> {
   private readonly layers = new Map<string, T[]>();
   private closed = false;
   constructor(private readonly host: ArtemisFontStackHost<T>) {}
+  /** Borrowed read-only records; callers needing ownership must copy their data. */
+  borrowFrames(layer = this.host.currentMessageLayer()): readonly Readonly<T>[] {
+    return Object.freeze([...(this.layers.get(layer) ?? [])]);
+  }
   depth(layer = this.host.currentMessageLayer()): number {
     return this.layers.get(layer)?.length ?? 0;
   }

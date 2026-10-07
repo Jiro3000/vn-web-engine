@@ -26,7 +26,10 @@ export function artemisUtf8TextBlockFlags(
 ): ArtemisTextBlockFlags {
   artemisRevision(hash);
   mainText = mainText.split('\0', 1)[0]!;
-  if (new TextDecoder().decode(new TextEncoder().encode(mainText)) !== mainText)
+  if (
+    new TextDecoder('utf-8', {ignoreBOM: true}).decode(new TextEncoder().encode(mainText)) !==
+    mainText
+  )
     throw Error('Unsupported Artemis block flag UTF-8');
   let bits = 0;
   if (Array.from(mainText).length === 1) {

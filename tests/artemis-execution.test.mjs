@@ -2155,3 +2155,33 @@ test('Cancelling an asynchronous print prevents stale history and keeps a newer 
   await current;
   assert.deepEqual(effects, ['history']);
 });
+
+test('Artemis Lua surface preload binding requires an actual queue owner and preserves native string/NUL rules', async () => {
+  const {ArtemisLua} = await import('../dist/engines/artemis/lua.js');
+  const names = [];
+  const lua = new ArtemisLua({
+    readFile: () => null,
+    fileExists: () => false,
+    now: () => 0,
+    tag: () => {},
+    enqueueTag: () => {},
+    variable: () => '',
+    bindSurfaceAsync: (name) => names.push(name),
+  });
+  try {
+    lua.vm.execute(
+      bytes('engine:bindSurfaceAsync("font.png\\000ignored"); engine:bindSurfaceAsync("雪.png")'),
+    );
+    assert.deepEqual(names, ['font.png', '雪.png']);
+    assert.throws(
+      () => lua.vm.execute(bytes('engine:bindSurfaceAsync(12)')),
+      /surface name string/,
+    );
+    assert.throws(
+      () => lua.vm.execute(bytes('engine:bindSurfaceAsync({})')),
+      /surface name string/,
+    );
+  } finally {
+    lua.close();
+  }
+});

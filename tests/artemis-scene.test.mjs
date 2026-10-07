@@ -2514,3 +2514,716 @@ test('Native block flags classify whole single-character main streams and suppre
   assert.throws(() => flags(hash, '\ud800', state), /UTF-8/);
   assert.equal(Object.isFrozen(flags(hash, '」', state)), true);
 });
+
+async function nativeInsertionFixture() {
+  const {ArtemisTextInsertion} = await import('../dist/engines/artemis/text-insertion.js');
+  const {ArtemisTextGlyphs} = await import('../dist/engines/artemis/text-glyphs.js');
+  const {ArtemisFileFonts} = await import('../dist/engines/artemis/file-fonts.js');
+  const {rectangleFont, createNodeFontWorker, createNodeGlyphPainter} =
+    await import('./freetype-fixtures.mjs');
+  const hash = '8953562b80608046662bd8c89015d04236b0ba3afee10c36469c11403de3ebaf';
+  const worker = await createNodeFontWorker(),
+    painter = await createNodeGlyphPainter(hash);
+  const fonts = new ArtemisFileFonts(hash, {
+    readFontFile: async () => rectangleFont(),
+    openFontFace: (bytes) => worker.open(bytes),
+  });
+  const glyphs = new ArtemisTextGlyphs(hash, fonts, painter);
+  const style = {
+    face: 'synthetic.ttf',
+    rubyface: 'synthetic.ttf',
+    size: 32,
+    rubysize: 16,
+    shadow: 0,
+    outline: 0,
+    rubyshadow: 0,
+    rubyoutline: 0,
+    spacetop: 0,
+    spacemiddle: 0,
+    spacebottom: 0,
+    kerning: 0,
+    rubykerning: 0,
+    styleBits: 0,
+    color: 0xff0000,
+    shadowcolor: 0,
+    outlinecolor: 0,
+    width: 48,
+    height: 104,
+    align: 'left',
+    hung: false,
+    vertical: false,
+  };
+  const owners = [],
+    frames = [];
+  return {
+    hash,
+    style,
+    glyphs,
+    frames,
+    owner: (patch = {}, load = (main, ruby, style) => glyphs.load(main, ruby, style)) => {
+      const owner = new ArtemisTextInsertion(
+        hash,
+        {...style, ...patch},
+        {
+          loadBlock: load,
+          publishFrame: async (frame) => {
+            frames.push(frame);
+          },
+        },
+      );
+      owners.push(owner);
+      return owner;
+    },
+    close: async () => {
+      owners.forEach((owner) => owner.close());
+      await glyphs.close();
+      await fonts.close();
+      painter.close();
+      worker.close();
+    },
+  };
+}
+
+test('Native insertion owns actual glyph blocks, counts and UTF-8 overflow cursors through print history', async () => {
+  const fixture = await nativeInsertionFixture();
+  const {ArtemisPrint} = await import('../dist/engines/artemis/print.js');
+  const enc = new TextEncoder();
+  try {
+    const owner = fixture.owner();
+    assert.deepEqual(await owner.insert(enc.encode('A\nA\nA')), {result: -2, consumedBytes: 4});
+    assert.deepEqual(owner.measure(), {width: 24, height: 96, lineWidth: 0});
+    const frame = await owner.prepareFrame();
+    assert.equal(frame.glyphCount, 2);
+    assert.deepEqual(
+      frame.lines.slice(0, 2).map((l) => l.geometry.blocks[0].block.main[0].glyph.glyphId),
+      [0, 1],
+    );
+    assert.equal(
+      frame.lines[0].geometry.blocks[0].block.main[0].glyph.surface,
+      frame.lines[1].geometry.blocks[0].block.main[0].glyph.surface,
+    );
+    assert.equal(frame.lines.at(-1).geometry.height, 0);
+    const closedRows = fixture.owner();
+    await closedRows.insert(enc.encode('A\n'));
+    assert.deepEqual(closedRows.measure(), {width: 24, height: 48, lineWidth: 0});
+    closedRows.setStyle({...fixture.style, width: 96, align: 'right'});
+    const emptyCurrent = await closedRows.prepareFrame();
+    assert.equal(emptyCurrent.lines[0].geometry.blocks[0].x, 0);
+    assert.equal(emptyCurrent.lines[1].geometry.height, 0);
+    await closedRows.insert(enc.encode('A'));
+    const newCurrent = await closedRows.prepareFrame();
+    assert.deepEqual(
+      newCurrent.lines.map((line) => line.geometry.blocks[0].x),
+      [0, 72],
+    );
+    assert.deepEqual(
+      frame.lines.map((line) => [line.y, line.geometry.characterCount]),
+      [
+        [0, 1],
+        [48, 1],
+        [96, 0],
+      ],
+    );
+    assert.equal(frame.lines[0].geometry.blocks[0].block.main[0].glyph.surface.image.width, 8);
+    const changed = fixture.owner();
+    await changed.insert(enc.encode('A'));
+    changed.setStyle({...fixture.style, size: 48, width: 96, height: 400});
+    assert.deepEqual(await changed.insert(enc.encode('A')), {result: 2, consumedBytes: 1});
+    const resized = await changed.prepareFrame();
+    assert.deepEqual(
+      resized.lines[0].geometry.blocks.map((b) => b.block.main[0].glyph.surface.image.width),
+      [8, 12],
+    );
+    const overflow = fixture.owner({height: 48}),
+      history = [],
+      queued = [];
+    let overflowed = 0;
+    const print = new ArtemisPrint(fixture.hash, {
+      currentMessageLayer: () => 'message',
+      rubyActive: () => false,
+      debugSkipActive: () => false,
+      print: (_layer, bytes) => overflow.insert(bytes),
+      appendRubyBytes: () => assert.fail('unexpected ruby'),
+      fontOverflowPolicy: () => 0,
+      writeOverflowed: (value) => {
+        overflowed = value;
+      },
+      reportPrintError: () => {},
+      enqueue: (tag) => queued.push(tag),
+      recordPrintCommand: (_layer, tag) => history.push(tag),
+    });
+    await print.dispatch({
+      kind: 'tag',
+      name: 'print',
+      sourceLine: 7,
+      args: new Map([['data', 'A\n😀']]),
+    });
+    assert.equal(overflowed, 1);
+    assert.equal(history[0].args.get('data'), 'A\n');
+    assert.deepEqual(
+      queued.map((tag) => tag.name),
+      ['@', 'rp', 'print'],
+    );
+    assert.equal(queued[2].args.get('data'), '😀');
+    assert.equal(overflow.glyphCount, 1);
+    const bom = fixture.owner();
+    assert.deepEqual(await bom.insert(enc.encode('\ufeffA')), {result: 2, consumedBytes: 4});
+    await assert.rejects(bom.insert(Uint8Array.of(0xff)), /encoded|encoding/);
+    const wide = fixture.owner({width: 20});
+    assert.deepEqual(await wide.insert(enc.encode('A')), {result: -1, consumedBytes: 0});
+    assert.equal(wide.glyphCount, 0);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test('Native insertion cancels pending resources while already published frames remain owned', async () => {
+  const fixture = await nativeInsertionFixture();
+  let release, started, gate;
+  const begun = new Promise((resolve) => {
+    started = resolve;
+  });
+  const owner = fixture.owner({}, async (...args) => {
+    const block = await fixture.glyphs.load(...args);
+    if (gate) {
+      started();
+      await gate;
+    }
+    return block;
+  });
+  try {
+    const bytes = new TextEncoder().encode('A');
+    const first = owner.insert(bytes);
+    bytes[0] = 66;
+    await first;
+    const frame = await owner.prepareFrame(),
+      glyph = frame.lines[0].geometry.blocks[0].block.main[0].glyph;
+    assert.equal(glyph.codePoint, 65);
+    const pixels = glyph.surface.image.pixels.slice();
+    gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    const pending = owner.insert(new TextEncoder().encode('A'));
+    const rejection = assert.rejects(pending, /cancelled/);
+    await begun;
+    assert.throws(() => owner.setStyle(fixture.style), /Overlapping/);
+    owner.close();
+    release();
+    await rejection;
+    await fixture.glyphs.close();
+    assert.deepEqual(glyph.surface.image.pixels, pixels);
+    await assert.rejects(owner.prepareFrame(), /closed/);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test('Native indentation keeps paired width stacks, one-level wrap pops and physical/logical range counts', async () => {
+  const {ArtemisTextWrapping} = await import('../dist/engines/artemis/text-wrapping.js');
+  const {artemisUtf8TextBlockFlags: flags} =
+    await import('../dist/engines/artemis/text-block-flags.js');
+  const hash = '8953562b80608046662bd8c89015d04236b0ba3afee10c36469c11403de3ebaf';
+  const pairs = new Map([
+    ['[', ']'],
+    ['(', ')'],
+  ]);
+  const make = (width = 30, patch = {}) => {
+    const wrap = new ArtemisTextWrapping(hash, {
+      width,
+      height: 1000,
+      lineHeight: 10,
+      align: 'left',
+      hung: false,
+    });
+    wrap.setIndentation({pairs, range: 0, logicalRange: false, nest: true, ...patch});
+    return {
+      wrap,
+      add: (text, width = 10) =>
+        wrap.append({
+          text,
+          block: {width, height: 10, main: [{glyph: text, advance: width, x: 0, y: 0}], ruby: []},
+          ...flags(hash, text, {
+            head: new Set([' ']),
+            foot: new Set([' ']),
+            indentPairs: pairs,
+            indentClosing: wrap.indentClosing,
+            afterExplicitNewline: false,
+          }),
+        }),
+    };
+  };
+  const nested = make();
+  nested.add('[');
+  nested.add('(');
+  nested.add('A');
+  assert.equal(nested.wrap.indentationDepth, 2);
+  nested.add('B', 20);
+  assert.equal(nested.wrap.indentationDepth, 1);
+  const moved = nested.wrap.prepareFrame();
+  assert.equal(moved[1].geometry.blocks.length, 1);
+  assert.equal(moved[1].geometry.blocks[0].block.main[0].glyph, 'B');
+  assert.equal(moved[1].geometry.width, 20);
+  nested.add(']');
+  assert.equal(nested.wrap.indentationDepth, 0);
+  const retained = make();
+  retained.add('[');
+  retained.add('A');
+  retained.add('B');
+  retained.add('C');
+  const rows = retained.wrap.prepareFrame();
+  assert.equal(rows[1].geometry.blocks[0].block.main.length, 0);
+  assert.equal(rows[1].geometry.blocks[0].block.width, 10);
+  assert.equal(rows[1].geometry.characterCount, 1);
+  assert.equal(rows[1].geometry.blocks[1].x, 10);
+  for (const logicalRange of [false, true]) {
+    const range = make(20, {range: 2, logicalRange});
+    range.add('[');
+    range.add('(');
+    range.add('A');
+    range.add('(');
+    assert.equal(range.wrap.indentationDepth, logicalRange ? 1 : 2);
+    assert.equal(range.wrap.prepareFrame()[1].wrapped, true);
+  }
+  const logicalNewline = make(30, {range: 1, logicalRange: true});
+  logicalNewline.add('[');
+  logicalNewline.add('A');
+  logicalNewline.wrap.newline();
+  logicalNewline.add('(');
+  assert.equal(logicalNewline.wrap.indentationDepth, 2);
+  const nonnest = make(40, {nest: false});
+  nonnest.add('[');
+  nonnest.add('(');
+  assert.equal(nonnest.wrap.indentationDepth, 1);
+  nonnest.add(')');
+  assert.equal(nonnest.wrap.indentationDepth, 1);
+  nonnest.add(']');
+  assert.equal(nonnest.wrap.indentationDepth, 0);
+});
+
+test('Native glyph insertion preserves active indentation across config replacement and explicit newlines', async () => {
+  const fixture = await nativeInsertionFixture();
+  try {
+    const owner = fixture.owner({width: 96, height: 400});
+    owner.setWordParts(new Set(['^']));
+    owner.setIndentation({pairs: new Map([['A', 'B']]), range: 0, logicalRange: true, nest: true});
+    assert.deepEqual(await owner.insert(new TextEncoder().encode('A\nA\nB')), {
+      result: 3,
+      consumedBytes: 5,
+    });
+    const nested = await owner.prepareFrame();
+    assert.deepEqual(
+      nested.lines.map((line) => line.geometry.blocks[0].block.width),
+      [24, 24, 48],
+    );
+    assert.deepEqual(
+      nested.lines.map((line) => line.geometry.characterCount),
+      [1, 1, 1],
+    );
+    owner.setIndentation({pairs: new Map(), range: 0, logicalRange: false, nest: false});
+    await owner.insert(new TextEncoder().encode('B\nA'));
+    const closed = await owner.prepareFrame();
+    assert.equal(closed.glyphCount, 5);
+    // The actual .notdef advance for B wraps once before closing the outer level.
+    assert.equal(closed.lines[3].geometry.blocks[0].block.main.length, 0);
+    assert.equal(closed.lines.at(-1).geometry.blocks.length, 1);
+    assert.equal(closed.lines.at(-1).geometry.blocks[0].block.width, 24);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test('Native logical text copies retain glyph ids/pixels while line and indentation mutations are independent', async () => {
+  const fixture = await nativeInsertionFixture();
+  let copied;
+  try {
+    const source = fixture.owner({width: 96, height: 400});
+    source.setWordParts(new Set(['^']));
+    source.setIndentation({
+      pairs: new Map([['A', 'B']]),
+      range: 0,
+      logicalRange: false,
+      nest: true,
+    });
+    await source.insert(new TextEncoder().encode('A\nA'));
+    const original = await source.prepareFrame();
+    copied = source.copy({
+      loadBlock: (...args) => fixture.glyphs.load(...args),
+      publishFrame: async (frame) => {
+        fixture.frames.push(frame);
+      },
+    });
+    const retained = await copied.prepareFrame();
+    const oldGlyph = original.lines[0].geometry.blocks[0].block.main[0].glyph,
+      newGlyph = retained.lines[0].geometry.blocks[0].block.main[0].glyph;
+    assert.notEqual(newGlyph, oldGlyph);
+    assert.equal(newGlyph.glyphId, oldGlyph.glyphId);
+    assert.equal(newGlyph.surface, oldGlyph.surface);
+    source.close();
+    assert.deepEqual(await copied.insert(new TextEncoder().encode('B\nB\nA')), {
+      result: 5,
+      consumedBytes: 5,
+    });
+    const changed = await copied.prepareFrame();
+    assert.equal(changed.lines.at(-1).geometry.blocks.length, 1);
+    assert.equal(changed.lines.at(-1).geometry.blocks[0].block.main[0].glyph.glyphId, 4);
+    assert.equal(original.glyphCount, 2);
+    assert.equal(original.lines.length, 2);
+    assert.equal(original.lines[1].geometry.blocks.length, 2);
+    const pixels = oldGlyph.surface.image.pixels.slice();
+    copied.close();
+    await fixture.glyphs.close();
+    assert.deepEqual(oldGlyph.surface.image.pixels, pixels);
+  } finally {
+    copied?.close();
+    await fixture.close();
+  }
+});
+
+test('Native font defaults preserve historical face bytes and keep overflow outside attribute snapshots', async () => {
+  const {artemisDefaultFontAttributes: defaults, artemisPatchFontAttributes: patch} =
+    await import('../dist/engines/artemis/font-state.js');
+  const fixture = await nativeInsertionFixture();
+  try {
+    const original = defaults(fixture.hash);
+    assert.equal(Object.keys(original).length, 37);
+    assert.deepEqual(
+      [original.size, original.rubysize, original.width, original.height, original.hung],
+      [24, 8, 640, 480, true],
+    );
+    assert.equal(
+      new TextDecoder('shift_jis').decode(Uint8Array.from(original.face)),
+      'ＭＳ ゴシック',
+    );
+    assert.equal(Object.isFrozen(original.face), true);
+    const next = patch(
+      fixture.hash,
+      original,
+      new Map([
+        ['face', 'synthetic.ttf'],
+        ['size', '32'],
+        ['overflow', '1'],
+        ['alpha', '128'],
+      ]),
+    );
+    assert.equal(next.overflow, 1);
+    assert.equal('overflow' in next.font, false);
+    assert.equal(next.font.alpha, Math.fround(128 / 255));
+    assert.equal(original.alpha, 1);
+    assert.deepEqual(
+      (await fixture.glyphs.load('A', '', next.font)).main.map((g) => g.glyph.codePoint),
+      [65],
+    );
+    await assert.rejects(fixture.glyphs.load('A', '', original), /legacy\/system/);
+    // An unused legacy ruby face must not prevent actual normal text insertion.
+    assert.equal(next.font.rubyface, original.rubyface);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test('Native published text frames retain glyph font attributes and compute automatic whole-text pivots', async () => {
+  const fixture = await nativeInsertionFixture();
+  try {
+    const source = fixture.owner({alpha: 0.5, entirealpha: 0.25});
+    await source.insert(new TextEncoder().encode('A'));
+    source.setStyle({...fixture.style, alpha: 1, entirealpha: 1});
+    await source.insert(new TextEncoder().encode('A'));
+    const frame = await source.prepareFrame(),
+      blocks = frame.lines[0].geometry.blocks;
+    assert.deepEqual(
+      blocks.map((b) => b.block.main[0].glyph.font.alpha),
+      [0.5, 1],
+    );
+    assert.deepEqual(
+      blocks.map((b) => b.block.main[0].glyph.font.entirealpha),
+      [0.25, 1],
+    );
+    assert.equal(blocks[0].block.main[0].glyph.surface.image.pixels[3], 255);
+    assert.deepEqual([frame.font.entireanchorx, frame.font.entireanchory], [24, 24]);
+    assert.equal(source.snapshotFont(), frame.font);
+    source.setStyle({...fixture.style, width: 96, align: 'right'});
+    const right = await source.prepareFrame();
+    assert.deepEqual([right.font.entireanchorx, right.font.entireanchory], [72, 24]);
+    assert.deepEqual(
+      right.lines[0].geometry.blocks.map((b) => b.x),
+      [48, 72],
+    );
+    source.setStyle({...fixture.style, width: 96, align: 'equalize'});
+    assert.equal((await source.prepareFrame()).font.entireanchorx, 48);
+    source.setStyle({...fixture.style, anchorcenter: false, entireanchorx: 7, entireanchory: 9});
+    const manual = await source.prepareFrame();
+    assert.deepEqual([manual.font.entireanchorx, manual.font.entireanchory], [7, 9]);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test('Native empty-effect clear resets glyph ids but retains active indentation and captured old frames', async () => {
+  const fixture = await nativeInsertionFixture();
+  try {
+    const owner = fixture.owner({width: 96, height: 400});
+    owner.setWordParts(new Set(['^']));
+    owner.setIndentation({pairs: new Map([['A', 'B']]), range: 0, logicalRange: false, nest: true});
+    await owner.insert(new TextEncoder().encode('A\nA'));
+    const old = await owner.prepareFrame();
+    owner.clearEmptyEffects();
+    assert.equal(owner.glyphCount, 0);
+    assert.deepEqual(owner.measure(), {width: 48, height: 0, lineWidth: 48});
+    const empty = await owner.prepareFrame();
+    assert.equal(empty.lines.length, 1);
+    assert.equal(empty.lines[0].geometry.characterCount, 0);
+    assert.equal(empty.lines[0].geometry.blocks[0].block.width, 48);
+    assert.equal(old.glyphCount, 2);
+    assert.equal(old.lines.length, 2);
+    // With zero count/index a second clear retains this placeholder.
+    owner.clearEmptyEffects();
+    assert.equal((await owner.prepareFrame()).lines[0].geometry.blocks.length, 1);
+    await owner.insert(new TextEncoder().encode('B'));
+    const fresh = await owner.prepareFrame();
+    assert.equal(fresh.lines[0].geometry.blocks[1].block.main[0].glyph.glyphId, 0);
+    assert.equal(owner.glyphCount, 1);
+    assert.equal(old.lines[0].geometry.blocks[0].block.main[0].glyph.glyphId, 0);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test('Native ruby buffers print data globally and end inserts one real normal/ruby block in the current layer', async () => {
+  const fixture = await nativeInsertionFixture();
+  const {ArtemisRuby} = await import('../dist/engines/artemis/ruby.js');
+  const {ArtemisPrint} = await import('../dist/engines/artemis/print.js');
+  const owners = {
+      a: fixture.owner({width: 96, height: 400}),
+      b: fixture.owner({width: 96, height: 400}),
+    },
+    history = [],
+    errors = [],
+    queued = [];
+  let selected = 'a';
+  const tag = (name, data) => ({
+    kind: 'tag',
+    name,
+    sourceLine: 3,
+    args: new Map(data === undefined ? [] : [['data', data]]),
+  });
+  const ruby = new ArtemisRuby(fixture.hash, {
+    currentMessageLayer: () => selected,
+    insertRuby: (layer, ...args) => owners[layer].insertRuby(...args),
+    fontOverflowPolicy: () => 1,
+    writeOverflowed: () => {},
+    enqueue: (t) => queued.push(t),
+    recordTextCommand: (layer, t) => history.push([layer, t]),
+    reportRubyError: (_t, kind) => errors.push(kind),
+  });
+  const print = new ArtemisPrint(fixture.hash, {
+    currentMessageLayer: () => selected,
+    rubyActive: () => ruby.active,
+    debugSkipActive: () => true,
+    print: () => assert.fail('ruby bypassed buffer'),
+    appendRubyBytes: (bytes) => ruby.appendRubyBytes(bytes),
+    fontOverflowPolicy: () => 1,
+    writeOverflowed: () => {},
+    reportPrintError: () => {},
+    enqueue: () => {},
+    recordPrintCommand: (layer, t) => history.push([layer, t]),
+  });
+  try {
+    await ruby.dispatch(tag('ruby', 'A'));
+    await print.dispatch(tag('print', 'AA\0ignored'));
+    await ruby.dispatch(tag('ruby', 'wrong'));
+    assert.deepEqual(errors, ['nested']);
+    selected = 'b';
+    await ruby.dispatch(tag('/ruby'));
+    assert.equal(ruby.active, false);
+    assert.equal(owners.a.glyphCount, 0);
+    assert.equal(owners.b.glyphCount, 3);
+    const frame = await owners.b.prepareFrame(),
+      block = frame.lines[0].geometry.blocks[0].block;
+    assert.deepEqual(
+      block.main.map((g) => g.glyph.glyphId),
+      [0, 1],
+    );
+    assert.deepEqual(
+      block.ruby.map((g) => g.glyph.glyphId),
+      [2],
+    );
+    assert.equal(frame.lines[0].geometry.characterCount, 2);
+    assert.deepEqual(
+      history.map(([layer, t]) => [layer, t.name]),
+      [
+        ['a', 'ruby'],
+        ['a', 'print'],
+        ['a', 'ruby'],
+        ['b', '/ruby'],
+      ],
+    );
+    await ruby.dispatch(tag('/ruby'));
+    assert.equal(history.length, 4);
+    assert.deepEqual(errors, ['nested', 'inactive']);
+    await ruby.dispatch(tag('ruby'));
+    assert.equal(history.at(-1)[1].args.get('data'), '');
+    await ruby.dispatch(tag('/ruby'));
+    assert.equal(queued.length, 0);
+  } finally {
+    ruby.close();
+    await fixture.close();
+  }
+});
+
+test('Native ruby overflow queues retry with active buffers and distinguishes unprintable/replay/cancellation', async () => {
+  const fixture = await nativeInsertionFixture();
+  const {ArtemisRuby} = await import('../dist/engines/artemis/ruby.js');
+  const tag = (name) => ({kind: 'tag', name, sourceLine: 19, args: new Map([['data', 'A']])});
+  const queue = [],
+    history = [],
+    errors = [];
+  let result = -2,
+    overflowed = 0,
+    gate,
+    started;
+  const ruby = new ArtemisRuby(fixture.hash, {
+    currentMessageLayer: () => '',
+    insertRuby: async (_layer, main, annotation) => {
+      assert.equal(new TextDecoder().decode(main), 'AA');
+      assert.equal(new TextDecoder().decode(annotation), 'A');
+      if (gate) {
+        started();
+        await gate;
+      }
+      return result;
+    },
+    fontOverflowPolicy: () => 0,
+    writeOverflowed: (v) => {
+      overflowed = v;
+    },
+    enqueue: (t) => queue.push(t),
+    recordTextCommand: (_layer, t) => history.push(t),
+    reportRubyError: (_t, kind) => errors.push(kind),
+  });
+  try {
+    await ruby.dispatch(tag('ruby'));
+    ruby.appendRubyBytes(new TextEncoder().encode('AA'));
+    await ruby.dispatch(tag('/ruby'));
+    assert.equal(ruby.active, true);
+    assert.equal(overflowed, 1);
+    assert.equal(history.length, 1);
+    assert.deepEqual(
+      queue.map((t) => t.name),
+      ['@', 'rp', '/ruby'],
+    );
+    assert.equal(queue[2].sourceLine, 19);
+    result = 3;
+    await ruby.dispatch(queue[2], false);
+    assert.equal(ruby.active, false);
+    assert.equal(history.length, 1);
+    await ruby.dispatch(tag('ruby'));
+    ruby.appendRubyBytes(new TextEncoder().encode('AA'));
+    result = -1;
+    await ruby.dispatch(tag('/ruby'));
+    assert.equal(ruby.active, false);
+    assert.equal(history.length, 2);
+    assert.deepEqual(errors, ['overflow', 'unprintable']);
+    await ruby.dispatch(tag('ruby'));
+    ruby.appendRubyBytes(new TextEncoder().encode('AA'));
+    let release;
+    gate = new Promise((r) => {
+      release = r;
+    });
+    const begun = new Promise((r) => {
+      started = r;
+    });
+    const pending = ruby.dispatch(tag('/ruby')),
+      rejected = assert.rejects(pending, /cancelled/);
+    await begun;
+    assert.throws(() => ruby.appendRubyBytes(new Uint8Array()), /Overlapping/);
+    ruby.close();
+    release();
+    await rejected;
+    assert.equal(history.length, 3);
+  } finally {
+    ruby.close();
+    await fixture.close();
+  }
+});
+
+test('Native rt/rp maintain history/backlog before actual clear and replay suppresses only history effects', async () => {
+  const fixture = await nativeInsertionFixture();
+  const {ArtemisTextCommands} = await import('../dist/engines/artemis/text-commands.js');
+  const owner = fixture.owner(),
+    calls = [];
+  let force = false;
+  const commands = new ArtemisTextCommands(fixture.hash, {
+    currentMessageLayer: () => '',
+    newline: (_layer, omit) => owner.newline(omit),
+    backlogAllowed: () => false,
+    backlogIncludeFont: () => true,
+    captureBacklog: () => calls.push('backlog'),
+    clearCommandHistory: () => calls.push('history'),
+    saveCurrentFontHistory: () => calls.push('font'),
+    promoteRememberedTextCommands: () => calls.push('promote'),
+    forceImmediateClear: () => force,
+    clearText: async (_layer, out) => {
+      calls.push(out ? 'clear:out' : 'clear:now');
+      owner.clearEmptyEffects();
+    },
+    recordTextCommand: (_layer, tag) => calls.push(tag.name),
+  });
+  const tag = (name, args = []) => ({kind: 'tag', name, sourceLine: 0, args: new Map(args)});
+  try {
+    await commands.dispatch(tag('rt', [['omitblankline', '']]));
+    assert.equal((await owner.prepareFrame()).lines.length, 1);
+    await owner.insert(new TextEncoder().encode('A'));
+    await commands.dispatch(tag('rt', [['omitblankline', '0']]));
+    assert.equal((await owner.prepareFrame()).lines.length, 2);
+    await commands.dispatch(tag('rp', [['backlog', '1']]));
+    assert.deepEqual(calls, ['rt', 'rt', 'backlog', 'history', 'font', 'promote', 'clear:out']);
+    assert.equal(owner.glyphCount, 0);
+    assert.equal((await owner.prepareFrame()).lines.length, 1);
+    calls.length = 0;
+    force = true;
+    await commands.dispatch(tag('rp', [['backlog', '1']]), false);
+    assert.deepEqual(calls, ['clear:now']);
+  } finally {
+    commands.close();
+    await fixture.close();
+  }
+});
+
+test('Opt-in nonvisual glyph fixture performs actual worker jobs and refuses visual publication', async () => {
+  const {createArtemisGlyphLayoutFixture} =
+    await import('../tools/artemis-glyph-layout-fixture.mjs');
+  const {rectangleFont} = await import('./freetype-fixtures.mjs');
+  const hash = '8953562b80608046662bd8c89015d04236b0ba3afee10c36469c11403de3ebaf';
+  const fixture = createArtemisGlyphLayoutFixture(hash, async () => rectangleFont());
+  const resource = {
+    name: 'source',
+    font: new Map([
+      ['face', 'synthetic.ttf'],
+      ['rubyface', 'synthetic.ttf'],
+      ['size', 32],
+      ['rubysize', 16],
+      ['width', 96],
+      ['height', 400],
+    ]),
+  };
+  try {
+    const owner = fixture.get(resource);
+    assert.deepEqual(await owner.insert(new TextEncoder().encode('A')), {
+      result: 1,
+      consumedBytes: 1,
+    });
+    const copy = {name: 'copy', font: new Map(resource.font)};
+    fixture.copy(resource, copy);
+    fixture.release(resource);
+    assert.equal(fixture.get(copy).glyphCount, 1);
+    await assert.rejects(fixture.get(copy).prepareFrame(), /cannot publish visual/);
+    const summary = fixture.summary();
+    assert.equal(summary.rasterJobs, 1);
+    assert.equal(summary.sceneRendering, false);
+    assert.equal(summary.gameVisualAssetsDisplayed, false);
+    assert.equal(summary.samples[0].paintedSha256.length, 1);
+    assert.equal(summary.openedFonts[0].path, 'synthetic.ttf');
+  } finally {
+    await fixture.close();
+  }
+});

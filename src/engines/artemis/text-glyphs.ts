@@ -7,11 +7,12 @@ import {
   type ArtemisTextBlockStyle,
   type ArtemisBlockGlyph,
 } from './text-block.js';
+import type {ArtemisFontFace} from './font-state.js';
 import {artemisRevision} from './revision.js';
 
 export interface ArtemisTextGlyphStyle extends ArtemisTextBlockStyle {
-  readonly face: string;
-  readonly rubyface: string;
+  readonly face: ArtemisFontFace;
+  readonly rubyface: ArtemisFontFace;
   readonly styleBits: number;
   readonly color: number;
   readonly shadowcolor: number;
@@ -58,7 +59,9 @@ export class ArtemisTextGlyphs {
     layoutArtemisTextBlock(this.hash, [], [], snapshot);
     const symbolsFor = (text: string): string[] => {
       text = text.split('\0', 1)[0]!;
-      if (new TextDecoder().decode(new TextEncoder().encode(text)) !== text)
+      if (
+        new TextDecoder('utf-8', {ignoreBOM: true}).decode(new TextEncoder().encode(text)) !== text
+      )
         throw Error('Unsupported Artemis glyph text UTF-8');
       const symbols = Array.from(text);
       if (symbols.length > 10000) throw Error('Artemis text glyph budget exceeded');
@@ -66,13 +69,20 @@ export class ArtemisTextGlyphs {
     };
     const mainSymbols = symbolsFor(mainText),
       rubySymbols = symbolsFor(rubyText);
+    if (
+      (snapshot.size ? mainSymbols.length : 0) + (snapshot.rubysize ? rubySymbols.length : 0) >
+      10000
+    )
+      throw Error('Artemis text block glyph budget exceeded');
     const stream = async (
       symbols: string[],
       ruby: boolean,
     ): Promise<ArtemisBlockGlyph<ArtemisTextGlyphResource>[]> => {
       const size = ruby ? snapshot.rubysize : snapshot.size;
       if (!size || !symbols.length) return [];
-      const path = (ruby ? snapshot.rubyface : snapshot.face).split('\0', 1)[0]!;
+      const face = ruby ? snapshot.rubyface : snapshot.face;
+      if (typeof face !== 'string') throw Error('Unsupported Artemis legacy/system font face');
+      const path = face.split('\0', 1)[0]!;
       const shadow = ruby ? snapshot.rubyshadow : snapshot.shadow,
         outline = ruby ? snapshot.rubyoutline : snapshot.outline;
       const font = await this.font(path, size, snapshot.styleBits);

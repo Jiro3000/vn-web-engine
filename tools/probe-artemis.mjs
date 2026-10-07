@@ -1,5 +1,9 @@
 /** Runs Lua/script control only; no renderer, media decoder or native game process. */
 import {createHash} from 'node:crypto';
+import {createArtemisGlyphLayoutFixture} from './artemis-glyph-layout-fixture.mjs';
+import {ArtemisPrint} from '../dist/engines/artemis/print.js';
+import {ArtemisRuby} from '../dist/engines/artemis/ruby.js';
+import {ArtemisTextCommands} from '../dist/engines/artemis/text-commands.js';
 import {createMetadataLayerFixture} from './artemis-metadata-layer-fixture.mjs';
 import {BrowserWindowsSystemProfileHost} from '../dist/platform/browser-windows-system-profile.js';
 import {
@@ -46,8 +50,14 @@ if (simulatedDialogResult !== null && ![0, 1].includes(simulatedDialogResult))
 const advanceWaits = process.argv.slice(3).includes('--advance-waits');
 const suspendableTags = process.argv.slice(3).includes('--async-lua');
 const metadataLayers = process.argv.slice(3).includes('--image-metadata');
+const glyphLayout = process.argv.slice(3).includes('--glyph-layout');
+if (glyphLayout && !metadataLayers)
+  throw Error('--glyph-layout requires --async-lua --image-metadata');
 if (metadataLayers && !suspendableTags) throw Error('--image-metadata requires --async-lua');
-let fontStack = null;
+let fontStack = null,
+  glyphFixture = null,
+  ruby = null,
+  textCommands = null;
 let messageStage = null,
   messageSelection = null;
 let layerFixture = null,
@@ -116,6 +126,10 @@ try {
   if (executable === null) throw new Error('Missing Artemis executable');
   const executableSha256 = createHash('sha256').update(executable).digest('hex');
   initializeArtemisVariables(variables, executableSha256);
+  if (glyphLayout)
+    glyphFixture = createArtemisGlyphLayoutFixture(executableSha256, (path) =>
+      installation.files.read(path),
+    );
   // Installation-relative read-only namespace; no Windows known-folder resolution or writes.
   if (savePath !== undefined && savePathCsidl === undefined && /^[\w-]+$/.test(savePath))
     initializeArtemisResourcePaths(variables, {dataPath: '', savePath});
@@ -213,6 +227,7 @@ try {
             head: new Set(old.prohibition.head),
             foot: new Set(old.prohibition.foot),
           };
+        glyphFixture?.copy(old, copy);
         return copy;
       },
       retainMessageLayer: (layer) => {
@@ -220,6 +235,7 @@ try {
       },
       releaseMessageLayer: (layer) => {
         if (--layer.references < 0) throw Error('Probe message resource released twice');
+        if (layer.references === 0) glyphFixture?.release(layer);
       },
       attachMessageLayer: (name, layer) => {
         messageFrames.set(name, layer);
@@ -275,7 +291,11 @@ try {
           simulation: true,
           fontRendering: false,
         });
-        return {font, overflow: patch.overflow, simulation: true};
+        return {
+          font,
+          overflow: patch.overflow ?? (glyphLayout ? 2 : undefined),
+          simulation: !glyphLayout,
+        };
       },
       applyFontSnapshot: (snapshot) => {
         messageStage.currentLayer().font = new Map(snapshot.font);
@@ -303,10 +323,18 @@ try {
           messageStage.currentLayer().wordParts = new Set(parts);
           modeEffects.push({wordPartsConfigured: true, simulation: true, textLayout: false});
         },
-        recordTextCommand: (layer, tag) =>
-          modeEffects.push({textCommand: tag.name, messageLayer: layer, simulation: true}),
-        rememberTextCommand: (layer, slot, tag) =>
-          modeEffects.push({textReplaySlot: slot, messageLayer: layer, simulation: true}),
+        recordTextCommand: (layer, tag) => {
+          modeEffects.push({textCommand: tag.name, messageLayer: layer, simulation: true});
+          if (glyphLayout) recordText(layer, tag);
+        },
+        rememberTextCommand: (layer, slot, tag) => {
+          modeEffects.push({textReplaySlot: slot, messageLayer: layer, simulation: true});
+          if (glyphLayout) {
+            const slots = remembered.get(layer) ?? new Map();
+            slots.set(slot, {...tag, args: new Map(tag.args)});
+            remembered.set(layer, slots);
+          }
+        },
       })
     : null;
   const textControls = new ArtemisTextControls({
@@ -332,8 +360,88 @@ try {
     layerFixture = createMetadataLayerFixture(executableSha256, (path) =>
       installation.files.read(path),
     );
+  const textHistory = new Map(),
+    savedFonts = new Map(),
+    remembered = new Map(),
+    retainedControls = new Map();
+  const recordText = (name, tag) => {
+    const tags = textHistory.get(name) ?? [];
+    tags.push({...tag, args: new Map(tag.args)});
+    textHistory.set(name, tags);
+  };
+  const selectedResource = (name) => {
+    if (name !== messageSelection.currentMessageLayer())
+      throw Error('Probe selected message resource changed');
+    return messageStage.currentLayer();
+  };
+  const overflowPolicy = (name) => {
+    const frame = fontStack.borrowFrames(name).at(-1);
+    if (frame?.overflow === undefined)
+      throw Error('Probe cached fontinit overflow extra is unresolved');
+    return frame.overflow;
+  };
+  if (glyphFixture) {
+    ruby = new ArtemisRuby(executableSha256, {
+      currentMessageLayer: () => messageSelection.currentMessageLayer(),
+      insertRuby: (name, main, annotation) =>
+        glyphFixture.get(selectedResource(name)).insertRuby(main, annotation),
+      fontOverflowPolicy: overflowPolicy,
+      writeOverflowed: (value) => variables.write('s.overflowed', value),
+      enqueue: (tag) => script.enqueue(tag),
+      recordTextCommand: recordText,
+      reportRubyError: (tag, kind) => modeEffects.push({rubyError: kind, tag: tag.name}),
+    });
+    textCommands = new ArtemisTextCommands(executableSha256, {
+      currentMessageLayer: () => messageSelection.currentMessageLayer(),
+      newline: (name, omit) => glyphFixture.get(selectedResource(name)).newline(omit),
+      backlogAllowed: () => modes.writeBacklog,
+      backlogIncludeFont: () => textControls.backlogIncludeFont,
+      captureBacklog: () => {
+        throw Error('Native backlog resource snapshot not implemented in nonvisual glyph fixture');
+      },
+      clearCommandHistory: (name) => textHistory.set(name, []),
+      saveCurrentFontHistory: (name) => savedFonts.set(name, fontStack.borrowFrames(name)),
+      promoteRememberedTextCommands: (name) => {
+        if (remembered.has(name)) {
+          retainedControls.set(name, new Map(remembered.get(name)));
+          remembered.delete(name);
+        }
+      },
+      forceImmediateClear: () => modes.skipAllowed && (modes.commandSkip || modes.controlSkip),
+      clearText: async (name, out) => {
+        if (out && sceneTweens.snapshot('out', name).length)
+          throw Error('Native outgoing text effects are not implemented');
+        glyphFixture.get(selectedResource(name)).clearEmptyEffects();
+      },
+      recordTextCommand: recordText,
+    });
+  }
+  const print = glyphFixture
+    ? new ArtemisPrint(executableSha256, {
+        currentMessageLayer: () => messageSelection.currentMessageLayer(),
+        rubyActive: () => ruby.active,
+        debugSkipActive: () => false,
+        print: (name, bytes) => glyphFixture.get(selectedResource(name)).insert(bytes),
+        appendRubyBytes: (bytes) => ruby.appendRubyBytes(bytes),
+        fontOverflowPolicy: overflowPolicy,
+        writeOverflowed: (value) => variables.write('s.overflowed', value),
+        reportPrintError: (tag, kind) => modeEffects.push({printError: kind, tag: tag.name}),
+        enqueue: (tag) => script.enqueue(tag),
+        recordPrintCommand: recordText,
+      })
+    : null;
   const dispatch = (tag) => {
     nativeTags.push({name: tag.name, args: Object.fromEntries(tag.args)});
+    if (glyphFixture && ['print', 'ruby', '/ruby', 'rt', 'rp'].includes(tag.name)) {
+      if (pendingResource) throw Error('Probe text resource operation overlaps');
+      pendingResource =
+        tag.name === 'print'
+          ? print.dispatch(tag)
+          : ['ruby', '/ruby'].includes(tag.name)
+            ? ruby.dispatch(tag)
+            : textCommands.dispatch(tag);
+      return 'suspended';
+    }
     if (layerFixture?.accepts(tag)) {
       if (pendingResource) throw Error('Probe resource operation overlaps');
       pendingResource = layerFixture.dispatch(tag);
@@ -464,6 +572,7 @@ try {
         nativeTags,
         includes,
         modeEffects,
+        glyphLayoutFixture: glyphFixture?.summary(),
         astLoadedByGame,
         astVersion: lua.vm.getGlobal('astver'),
         astTopLevelKeys: ast.size,
@@ -474,8 +583,11 @@ try {
   );
 } finally {
   lua?.close();
+  ruby?.close();
+  textCommands?.close();
   layerFixture?.close();
   fontStack?.close();
   messageStage?.close();
+  await glyphFixture?.close();
   await installation.close();
 }

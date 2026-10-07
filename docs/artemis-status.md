@@ -7,7 +7,10 @@ Artemis is still under development and does not have a production player profile
 The archive/ASB readers and Lua 5.1 runtime can run the game's Lua initialization
 in a metadata-only diagnostic probe. That probe supplies explicit simulated hosts
 for selected native services; reaching a tag is not proof that the game is playable.
-Its current unsupported boundary is `print`, which needs an actual text-layer owner.
+The default probe refuses `print`. An optional `--glyph-layout` probe supplies actual
+font/glyph workers and a logical insertion owner; it passes calibration `print`
+and `rp`, then refuses the unimplemented `bindSurfaceAsync` preload service.
+It remains a nonvisual diagnostic, without scene rendering or a production player.
 
 The text foundations now include:
 
@@ -22,10 +25,13 @@ The text foundations now include:
 - `ArtemisTextGlyphs`, which combines fonts and painted resources into normal/ruby
   blocks, sharing pending jobs and bounding the glyph cache. Closing the cache
   releases font loans; a frame retaining painted pixel storage remains valid.
-- Native unindented wrapping, prohibited-head/foot transfers, hanging punctuation,
-  explicit newlines and overflow mutation. Native single-character block flags
-  include the first-block prohibition exception after newline. Indented layers
-  need a separate owner.
+- Native wrapping with nested indentation stacks, range/logical-range checks,
+  prohibited-head/foot transfers, hanging punctuation, explicit newlines and
+  overflow mutation. Single-character block flags preserve the first-block
+  prohibition exception after newline.
+- Logical text insertion joining these components with actual glyphs and UTF-8
+  consumed offsets, counter rollback, font snapshots, native frame preparation,
+  metric queries and independently mutable copies sharing painted storage.
 - Native block spacing, ruby distribution, reserved line height, line alignment,
   and append/pop geometry. `artemisUtf8TextRuns` provides native word grouping and
   byte spans needed to resume overflowed print data. Legacy encodings and partial
@@ -33,6 +39,12 @@ The text foundations now include:
 - A print controller for history, ruby buffering, overflow variables and queued
   remainder commands. Its insertion callback is mandatory; it cannot claim output
   without a text-layout owner.
+
+- Native `ruby`/`/ruby` buffering and whole-block insertion, including retry queue
+  behavior that retains active buffers after automatic page overflow.
+- `rt` newline and `rp` history/backlog/font maintenance with a mandatory resource
+  clear host. The insertion owner implements the empty-outgoing-effects clear
+  branch; a complete scene owner still must cancel jobs and handle nonempty effects.
 
 The native reference entries are `195720` (UTF-8 runs/insertion), `1971e0`
 (block construction), `198690` (wrapping), `197f40`/`197fd0`/`198080` (line geometry),
@@ -51,9 +63,14 @@ compare geometry and pixels, verify cancellation/retry/cache eviction, and rende
 normal/ruby glyphs through the browser GPU. No game font or decoded game image is
 included in these fixtures.
 
-Next implement the text-layer owner: connect wrapping and glyph blocks,
-indent stacks, resource/display ownership and UTF-8 consumed offsets. Connect it to
-print, then supply scene/frame effects and completion events. Production integration
+The optional real glyph probe processes six calibration glyphs using both workers,
+records metrics and RGBA hashes, and verifies that `rp` clears their logical layer.
+It neither publishes frames nor displays game assets. At the tested font settings,
+the line is246 units wide and56 high before clear, then all counters/metrics return
+to zero. The font file is read from the installation and is not redistributed.
+
+Next implement the native asynchronous surface preload queue and complete message
+store/display/links, scene/frame effects and completion events. Production integration
 also needs the remaining commands/transitions/masks, media, input, save/load and
 real game regression coverage. Existing image workers and ordinary/captured/group
 GPU paths are available as foundations for that integration.

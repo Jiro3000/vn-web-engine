@@ -47,7 +47,10 @@ export class ArtemisFileFonts {
   async load(path: string, size: number, styleBits = 0): Promise<ArtemisFileFont> {
     if (this.closed) throw Error('Artemis file fonts closed');
     path = path.split('\0', 1)[0]!;
-    if (!path || new TextDecoder().decode(new TextEncoder().encode(path)) !== path)
+    if (
+      !path ||
+      new TextDecoder('utf-8', {ignoreBOM: true}).decode(new TextEncoder().encode(path)) !== path
+    )
       throw Error('Unsupported Artemis font path');
     for (const value of [size, styleBits])
       if (!Number.isInteger(value) || value < -0x80000000 || value > 0x7fffffff)

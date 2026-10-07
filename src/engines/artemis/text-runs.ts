@@ -17,7 +17,7 @@ export function artemisUtf8TextRuns(
 ): readonly ArtemisTextRun[] {
   artemisRevision(hash);
   const encoder = new TextEncoder(),
-    decoder = new TextDecoder();
+    decoder = new TextDecoder('utf-8', {ignoreBOM: true});
   text = text.split('\0', 1)[0]!;
   if (decoder.decode(encoder.encode(text)) !== text) throw Error('Unsupported Artemis run UTF-8');
   if (text.length > 1000000) throw Error('Artemis text run budget exceeded');

@@ -23,7 +23,7 @@ export interface ArtemisTextBreakHost {
  */
 function characters(value: string): string[] {
   const text = value.split('\0', 1)[0]!;
-  if (new TextDecoder().decode(new TextEncoder().encode(text)) !== text)
+  if (new TextDecoder('utf-8', {ignoreBOM: true}).decode(new TextEncoder().encode(text)) !== text)
     throw Error('Unsupported Artemis text-control UTF-8');
   return Array.from(text);
 }

@@ -24,6 +24,8 @@ export interface ArtemisLuaHost {
   setMagicPath?(name: string, root: string): void;
   setTouchLimit?(limit: number): void;
   pointerPosition?: PointerPositionHost;
+  /** Actual native mode1 preload request owner; call returns without waiting for decode. */
+  bindSurfaceAsync?(path: string): void;
 }
 
 /** Rev.3179 CLua's confirmed byte-string and tag bridge. Unbound methods fail. */
@@ -90,6 +92,14 @@ export class ArtemisLua {
         )
           throw new Error('Unsupported Artemis touch limit');
         host.setTouchLimit!(Math.trunc(number));
+        return [];
+      });
+    if (host.bindSurfaceAsync)
+      this.vm.bind('bindSurfaceAsync', (args) => {
+        const value = args[0];
+        if (!(value instanceof Uint8Array)) throw Error('Expected Artemis surface name string');
+        const nul = value.indexOf(0);
+        host.bindSurfaceAsync!(luaText(nul < 0 ? value : value.subarray(0, nul)));
         return [];
       });
     if (host.pointerPosition)

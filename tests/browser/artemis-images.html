@@ -4,6 +4,7 @@
 <canvas id="frame" style="width: 256px; height: 128px; image-rendering: pixelated"></canvas>
 <pre id="result">Running synthetic PNG / Lua / raster checks</pre>
 <script type="module">
+  import {ArtemisTextInsertion} from '../../dist/engines/artemis/text-insertion.js';
   import {ArtemisTextGlyphs} from '../../dist/engines/artemis/text-glyphs.js';
   import {ArtemisFileFonts} from '../../dist/engines/artemis/file-fonts.js';
   import {ArtemisGlyphPainter} from '../../dist/engines/artemis/glyph-paint-client.js';
@@ -842,7 +843,7 @@
       const textGlyphs = new ArtemisTextGlyphs(revision, fileFonts, glyphPainter);
       let blockTarget;
       try {
-        const block = await textGlyphs.load('AA', 'A', {
+        const glyphStyle = {
           face: 'synthetic.ttf',
           rubyface: 'synthetic.ttf',
           size: 32,
@@ -860,7 +861,8 @@
           outlinecolor: 0xff0000,
           shadowcolor: 0,
           styleBits: 0,
-        });
+        };
+        const block = await textGlyphs.load('AA', 'A', glyphStyle);
         assert(block.width === 52 && block.height === 52, 'native glyph block dimensions');
         assert(block.main[0].glyph === block.main[1].glyph, 'glyph cache identity');
         const placed = [...block.main, ...block.ruby],
@@ -900,6 +902,72 @@
           rubyEdge.every((v, i) => v === [255, 0, 0, 255][i]),
           'ruby glyph block GPU placement',
         );
+        const insertionCanvas = document.createElement('canvas'),
+          insertionTarget = new CanvasDrawTarget(insertionCanvas, 64, 128);
+        let published;
+        const insertion = new ArtemisTextInsertion(
+          revision,
+          {...glyphStyle, width: 64, height: 104, align: 'left', hung: false, vertical: false},
+          {
+            loadBlock: (...args) => textGlyphs.load(...args),
+            publishFrame: async (frame) => {
+              published = frame;
+              const textures = [],
+                sprites = [];
+              for (const line of frame.lines)
+                for (const positioned of line.geometry.blocks)
+                  for (const glyph of [...positioned.block.main, ...positioned.block.ruby]) {
+                    const surface = glyph.glyph.surface,
+                      image = surface.image;
+                    if (!image) continue;
+                    const texture = textures.length;
+                    textures.push(image);
+                    sprites.push({
+                      texture,
+                      source: {x: 0, y: 0, width: image.width, height: image.height},
+                      destination: {
+                        x: positioned.x + glyph.x + surface.left,
+                        y: line.y + positioned.y + glyph.y + surface.top,
+                        width: image.width,
+                        height: image.height,
+                      },
+                      color: 0xffffff,
+                      alpha: 255,
+                      filter: 'nearest',
+                    });
+                  }
+              insertionTarget.draw({sprites}, (id) => textures[id]);
+            },
+          },
+        );
+        try {
+          const result = await insertion.insert(new TextEncoder().encode('A\nA\nA'));
+          assert(
+            result.result === -2 && result.consumedBytes === 4,
+            'native insertion overflow cursor',
+          );
+          await insertion.prepareFrame();
+          assert(
+            published.glyphCount === 2 && published.lines.length === 3,
+            'native insertion frame counts',
+          );
+          for (const y of [18, 70]) {
+            const pixel = [...insertionCanvas.getContext('2d').getImageData(0, y, 1, 1).data];
+            assert(
+              pixel.every((v, i) => v === [255, 0, 0, 255][i]),
+              'native insertion published GPU row ' + y,
+            );
+          }
+          insertion.close();
+          assert(
+            published.lines[0].geometry.blocks[0].block.main[0].glyph.surface.image.pixels
+              .byteLength > 0,
+            'insertion closed retained frame pixels',
+          );
+        } finally {
+          insertion.close();
+          insertionTarget.dispose();
+        }
         await textGlyphs.close();
         assert(
           block.main[0].glyph.surface.image.pixels.byteLength > 0,
@@ -920,6 +988,7 @@
       nativeFontWorker: true,
       nativeGlyphPainter: true,
       nativeTextGlyphBlocks: true,
+      nativeTextInsertionFrame: true,
       nativeFontVersion: [2, 4, 8],
       syntheticOnly: true,
       pixels,

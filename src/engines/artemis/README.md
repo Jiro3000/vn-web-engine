@@ -752,3 +752,62 @@ positions and layout snapshots are copied/frozen. `ArtemisTextLine` implements l
 append/pop, native width/height counts, bottom-aligned block rows and four alignment
 modes, including single-block equalize fallback. Wrapping, indentation/prohibition,
 vertical display rotation and resource lifetimes remain text-layer owner work.
+
+## Logical text insertion and frame ownership
+
+`font-state.ts` supplies the complete37 native attributes from193720. It keeps
+factory face labels as their original13 Shift-JIS bytes; file-font rendering must
+receive an actual filename. A missing system/default font provider is refused when
+that stream is used, not replaced by a browser font. Font command patches keep the
+history frame's overflow extra separate from attributes.
+
+`ArtemisTextInsertion` connects actual glyph blocks, UTF-8 runs, block flags and
+full indentation/wrapping storage. It copies input bytes, reports native consumed
+byte cursors, rolls back the global glyph counter on unprintable/overflow results,
+and preserves line mutation already performed by recursive wrapping. Logical glyph
+ids are new for every insertion even when painted pixels are shared. Counter520
+includes normal and ruby glyphs; line90 counts normal glyphs only.
+
+`ArtemisTextWrapping` retains paired closing-string/width stacks, range and logical
+range, nest behavior, empty indent placeholders and the one-level pop-without-
+replacement branch. Explicit configuration replacement preserves active stacks.
+`ArtemisUnindentedTextWrapping` remains a facade that refuses active pair mappings.
+
+`prepareFrame` follows14c5d0: finalize only the current nonempty line; keep closed
+line placement and avoid reserving height on an empty current line. Frame row Y is
+computed from stored heights separately from cached insertion Y. Auto anchors use
+native maximum width, alignment and total line height. Each glyph retains its
+captured font attributes; published frames retain logical resources after close.
+The required publisher performs actual display effects. Tests use both real workers
+and a generated font to publish an insertion frame through GPU drawing.
+
+`measure` follows149d90/149e60/149ea0, including omission of current line height when
+its main glyph count is zero. `copy` clones logical line/indent/font/glyph state and
+preserves ids while sharing painted storage. It is not a complete CLinkableTextLayer
+copy: the enclosing owner must additionally handle display state, in/out job handles
+and native link-scope movement. Native full clones move link scope and active flag
+out of the source; plain CTextLayer clones clear copied job lists instead.
+
+`insertRuby` creates a single native main/annotation block, with global glyph ids
+for both streams. `ArtemisRuby` follows the global buffers and end-command layer
+selection. Automatic page overflow queues `@`, `rp`, `/ruby` while retaining active
+buffers; inactive/nested/unprintable behavior and history follow the native branches.
+
+`ArtemisTextCommands` implements `rt` (newline) and `rp` dispatch. Backlog capture
+uses write-backlog mode, separately from the UI backlog-allowed flag. A replay
+skips history/backlog maintenance but still calls the required resource-clear host.
+`clearEmptyEffects` follows1962d0 only after that host has cancelled jobs and
+confirmed no outgoing descriptors: it conditionally resets lines/counters while
+retaining indentation stacks and newline state. It is not a replacement for
+animation scheduling or a complete CLinkable clear.
+
+The default real metadata-only probe continues to refuse print. Optional
+`--glyph-layout` (requires `--async-lua --image-metadata`) uses the actual font and
+glyph workers through the Node browser-worker adapter, returning metrics and hashes
+without displaying game assets. Calibration print/rp pass, then `bindSurfaceAsync`
+is refused. Lua exposes this strict-string/NUL-terminated void binding only when
+an actual preload host is supplied; the probe supplies none. Native loading needs
+FIFO preload jobs, prepared surfaces, promotion/wait behavior and cancellation.
+
+Message-store/display wiring, links, text effects, vertical rotation and production
+player integration remain separate work; diagnostic progression is not gameplay.

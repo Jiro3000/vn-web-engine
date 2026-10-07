@@ -22,7 +22,7 @@ export interface ArtemisPrintHost {
   recordPrintCommand(layer: string, tag: AsbTag): void;
 }
 const encoder = new TextEncoder(),
-  decoder = new TextDecoder('utf-8', {fatal: true});
+  decoder = new TextDecoder('utf-8', {fatal: true, ignoreBOM: true});
 function encoded(value: string): Uint8Array {
   const bytes = encoder.encode(value);
   if (decoder.decode(bytes) !== value) throw Error('Unsupported Artemis print UTF-8');

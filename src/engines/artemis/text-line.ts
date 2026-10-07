@@ -18,11 +18,24 @@ const f = Math.fround;
  */
 export class ArtemisTextLine<T> {
   private readonly blocks: ArtemisTextBlock<T>[] = [];
+  private positions: {x: number; y: number}[] = [];
   private lineWidth = 0;
   private lineHeight = 0;
   private count = 0;
-  constructor(hash: string) {
+  constructor(private readonly hash: string) {
     artemisRevision(hash);
+  }
+  copy(
+    copyBlock: (block: ArtemisTextBlock<T>, index: number) => ArtemisTextBlock<T> = (block) =>
+      block,
+  ): ArtemisTextLine<T> {
+    const copied = new ArtemisTextLine<T>(this.hash);
+    copied.blocks.push(...this.blocks.map(copyBlock));
+    copied.positions = this.positions.map((position) => ({...position}));
+    copied.lineWidth = this.lineWidth;
+    copied.lineHeight = this.lineHeight;
+    copied.count = this.count;
+    return copied;
   }
   get width(): number {
     return this.lineWidth;
@@ -48,11 +61,13 @@ export class ArtemisTextLine<T> {
       this.lineHeight = f(block.height);
     this.count = (this.count + block.main.length) | 0;
     this.blocks.push(block);
+    this.positions.push({x: 0, y: 0});
   }
   /** Transfers this line's logical block reference back to its wrapping owner. */
   pop(): ArtemisTextBlock<T> {
     const block = this.blocks.pop();
     if (!block) throw Error('Artemis text line underflow');
+    this.positions.pop();
     this.lineWidth = f(this.lineWidth - block.width);
     this.count = (this.count - block.main.length) | 0;
     this.lineHeight = 0;
@@ -88,11 +103,18 @@ export class ArtemisTextLine<T> {
       x = equalize ? f(f(x + gap) + block.width) : f(x + block.width);
       return placed;
     });
+    this.positions = blocks.map(({x, y}) => ({x, y}));
+    return this.snapshot();
+  }
+  /** Copies stored placement without applying finalization or reserving empty height. */
+  snapshot(): ArtemisTextLineSnapshot<T> {
     return Object.freeze({
       width: this.lineWidth,
       height: this.lineHeight,
       characterCount: this.count,
-      blocks: Object.freeze(blocks),
+      blocks: Object.freeze(
+        this.blocks.map((block, index) => Object.freeze({block, ...this.positions[index]!})),
+      ),
     });
   }
 }
