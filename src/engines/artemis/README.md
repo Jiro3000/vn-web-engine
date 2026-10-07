@@ -906,3 +906,21 @@ The synthetic browser smoke verifies real offline PCM gain/pan and mono behavior
 alongside text/GPU resources. Node diagnostic decoding still refuses playback;
 no silent or timer voice substitutes are installed there. Native PCM16 quantization,
 streaming modes and the production audio/scheduler/profile wiring remain separate.
+
+
+### Native sound filename lookup
+
+`ArtemisSoundLoader` follows Rev.3179 `190290`: it first tries codecs advertising
+an exact case-sensitive suffix, then all registered codecs on the exact file,
+then appended extension candidates in codec/extension order. Appended files are
+only passed to their corresponding codec. Native char-pointer filenames stop at
+NUL; buffer modes are forwarded unchanged as int32. Decode misses return null,
+while unsupported services and decoder failures propagate. Independent byte
+storage lets each asynchronous decoder begin at offset zero without detaching or
+modifying subsequent attempts. The installation must supply its actual codec
+registration order; no unverified default is selected.
+
+The nonvisual sound probe uses an explicit Ogg-only diagnostic registration and
+the actual shared Vorbis worker, now including suffix lookup. A synthetic browser
+fixture connects this loader to actual offline WebAudio voices. Neither check
+opens audible game playback or proves native codec/streaming-mode completeness.

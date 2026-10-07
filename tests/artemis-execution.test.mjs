@@ -2457,3 +2457,70 @@ test('Lua SE commands suspend until actual preparation finishes, before executin
     lua.close();
   }
 });
+
+test('Sound filename lookup preserves native preference, rewind, and candidate ownership', async () => {
+  const {ArtemisSoundLoader} = await import('../dist/engines/artemis/sound-loader.js');
+  const opened = [],
+    attempts = [],
+    sound = {frames: 12};
+  const files = new Map([
+    ['name.ogg', bytes('bad')],
+    ['name.ogg.wav', bytes('good')],
+    [':voice/雪.ogg', bytes('good')],
+    ['dir\\part.OGG', bytes('good')],
+  ]);
+  const codecs = [
+    {
+      extensions: ['wav'],
+      decode: async (value, mode) => {
+        attempts.push(['wav', luaText(value), mode]);
+        if (luaText(value) === 'good') return sound;
+        value.fill(0); // A consuming/transfer-capable host cannot corrupt the next attempt.
+        return null;
+      },
+    },
+    {
+      extensions: ['ogg', 'ogg'],
+      decode: async (value, mode) => {
+        attempts.push(['ogg', luaText(value), mode]);
+        return null;
+      },
+    },
+  ];
+  const loader = new ArtemisSoundLoader(async (path) => {
+    opened.push(path);
+    return files.get(path) ?? null;
+  }, codecs);
+  assert.deepEqual(await loader.load('name.ogg\0ignored', -7), {path: 'name.ogg.wav', sound});
+  assert.deepEqual(opened, ['name.ogg', 'name.ogg.wav']);
+  assert.deepEqual(attempts, [
+    ['ogg', 'bad', -7],
+    ['wav', 'bad', -7],
+    ['ogg', 'bad', -7],
+    ['wav', 'good', -7],
+  ]);
+  opened.length = attempts.length = 0;
+  // Appended candidates only use their corresponding codec, not all sniffers.
+  assert.equal(await loader.load(':voice/雪', 0), null);
+  assert.deepEqual(opened, [':voice/雪', ':voice/雪.wav', ':voice/雪.ogg', ':voice/雪.ogg']);
+  assert.deepEqual(attempts, [
+    ['ogg', 'good', 0],
+    ['ogg', 'good', 0],
+  ]);
+  attempts.length = 0;
+  assert.deepEqual(await loader.load('dir\\part.OGG', 0), {path: 'dir\\part.OGG', sound});
+  assert.deepEqual(attempts, [['wav', 'good', 0]]); // Suffix matching is case-sensitive.
+  await assert.rejects(() => loader.load('name', 2147483648), /int32/);
+  const refused = new ArtemisSoundLoader(
+    async () => bytes('good'),
+    [
+      {
+        extensions: ['ogg'],
+        decode: async () => {
+          throw Error('decoder unavailable');
+        },
+      },
+    ],
+  );
+  await assert.rejects(() => refused.load('name.ogg', 0), /decoder unavailable/);
+});

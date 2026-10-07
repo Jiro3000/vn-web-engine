@@ -4,6 +4,7 @@
 <canvas id="frame" style="width: 256px; height: 128px; image-rendering: pixelated"></canvas>
 <pre id="result">Running synthetic PNG / Lua / raster checks</pre>
 <script type="module">
+  import {ArtemisSoundLoader} from '../../dist/engines/artemis/sound-loader.js';
   import {createArtemisBrowserEffectVoices} from '../../dist/engines/artemis/browser-effect-voices.js';
   import {ArtemisTextInsertion} from '../../dist/engines/artemis/text-insertion.js';
   import {ArtemisTextGlyphs} from '../../dist/engines/artemis/text-glyphs.js';
@@ -986,17 +987,40 @@
     }
     // Real WebAudio processing, with an offline destination: no audible output.
     const audioContext = new OfflineAudioContext(2, 32, 48000);
+    const audioFiles = [],
+      audioDecodes = [];
+    const soundLoader = new ArtemisSoundLoader(
+      async (path) => {
+        audioFiles.push(path);
+        return path === 'synthetic PCM.testpcm' ? new Uint8Array([42]) : null;
+      },
+      [
+        {
+          extensions: ['testpcm'],
+          decode: async (bytes, mode) => {
+            audioDecodes.push(mode);
+            assert(bytes[0] === 42, 'archive sound bytes reached codec');
+            return {
+              sampleRate: 48000,
+              sampleCount: 32,
+              channels: [new Float32Array(32).fill(0.8), new Float32Array(32).fill(0.4)],
+            };
+          },
+        },
+      ],
+    );
     const audioOwner = createArtemisBrowserEffectVoices(
       revision,
-      async () => ({
-        sampleRate: 48000,
-        sampleCount: 32,
-        channels: [new Float32Array(32).fill(0.8), new Float32Array(32).fill(0.4)],
-      }),
+      async (file, mode) => (await soundLoader.load(file, mode))?.sound ?? null,
       audioContext,
     );
     try {
       const sound = await audioOwner.effects.prepareEffect('synthetic PCM', 0);
+      assert(
+        audioFiles.join('|') === 'synthetic PCM|synthetic PCM.testpcm',
+        'sound suffix lookup reached actual voice',
+      );
+      assert(audioDecodes.length === 1 && audioDecodes[0] === 0, 'sound buffer mode reached codec');
       audioOwner.effects.setEffectGain(sound, 0, 500);
       audioOwner.effects.setEffectGain(sound, 1, 800);
       audioOwner.effects.setEffectPan(sound, 500, 0);
@@ -1045,6 +1069,7 @@
       nativeTextGlyphBlocks: true,
       nativeTextInsertionFrame: true,
       nativeOfflineAudioVoices: true,
+      nativeSoundFilenameVoiceIntegration: true,
       nativeStereoAttenuation: true,
       audioDeviceOutput: false,
       nativeFontVersion: [2, 4, 8],

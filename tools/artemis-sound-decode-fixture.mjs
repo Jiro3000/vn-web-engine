@@ -1,5 +1,6 @@
 /** Actual shared Vorbis decode for nonvisual diagnostics. No audio graph/device is opened. */
 import {createHash} from 'node:crypto';
+import {ArtemisSoundLoader} from '../dist/engines/artemis/sound-loader.js';
 import {createNodeBrowserWorker} from './node-browser-worker.mjs';
 export function createArtemisSoundDecodeFixture(readFile) {
   const worker = createNodeBrowserWorker(
@@ -26,35 +27,46 @@ export function createArtemisSoundDecodeFixture(readFile) {
       job.reject(Error(data.response?.error ?? 'Invalid Vorbis worker response'));
     else job.resolve(data.response.pcm);
   };
+  // Diagnostic Ogg-only registration; this is not an inferred native plugin order.
+  const loader = new ArtemisSoundLoader(readFile, [
+    {
+      extensions: ['ogg'],
+      decode: async (source, bufferMode) => {
+        if (bufferMode !== 0) throw Error('Unsupported nonvisual buffered sound owner');
+        if (![79, 103, 103, 83].every((v, i) => source[i] === v)) return null;
+        const bytes = Uint8Array.from(source),
+          id = ++nextJob;
+        const pcm = await new Promise((resolve, reject) => {
+          jobs.set(id, {resolve, reject});
+          try {
+            worker.postMessage({id, request: bytes}, [bytes.buffer]);
+          } catch (error) {
+            jobs.delete(id);
+            reject(error);
+          }
+        });
+        return {pcm, encodedSha256: createHash('sha256').update(source).digest('hex')};
+      },
+    },
+  ]);
   return {
     prepareEffect: async (file, bufferMode) => {
       if (closed) throw Error('Sound decode fixture closed');
       if (bufferMode !== 0) throw Error('Unsupported nonvisual buffered sound owner');
-      const source = await readFile(file);
-      if (source === null) return 0;
-      if (!source.length || ![79, 103, 103, 83].every((v, i) => source[i] === v))
-        throw Error('Unsupported nonvisual sound codec');
-      const bytes = Uint8Array.from(source),
-        id = ++nextJob;
-      const pcm = await new Promise((resolve, reject) => {
-        jobs.set(id, {resolve, reject});
-        try {
-          worker.postMessage({id, request: bytes}, [bytes.buffer]);
-        } catch (error) {
-          jobs.delete(id);
-          reject(error);
-        }
-      });
+      const loaded = await loader.load(file, bufferMode);
+      if (loaded === null) return 0;
+      const {pcm, encodedSha256} = loaded.sound;
       if (closed) throw Error('Sound decode fixture closed during preparation');
       const index = ++nextSound;
       sounds.set(index, {pcm, gains: new Map(), pan: 0});
       samples.push({
         file,
+        resolvedFile: loaded.path,
         bufferMode,
         sampleRate: pcm.sampleRate,
         frames: pcm.frames,
         channels: pcm.planes.length,
-        encodedSha256: createHash('sha256').update(source).digest('hex'),
+        encodedSha256,
         pcmSha256: pcm.planes.map((plane) =>
           createHash('sha256')
             .update(new Uint8Array(plane.buffer, plane.byteOffset, plane.byteLength))
