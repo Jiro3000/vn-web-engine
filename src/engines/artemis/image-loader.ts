@@ -2,6 +2,7 @@ import type {TriangleImage} from '../../graphics/triangle-draw.js';
 import {decodePng} from '../../formats/png/decode.js';
 import {decodeArtemisPsd} from '../../formats/artemis/psd.js';
 import {decodeImageOffThread} from '../../graphics/image-decode-offload.js';
+import {decodeOpaqueJpeg} from '../../graphics/browser-jpeg.js';
 import {artemisRevision} from './revision.js';
 
 export interface ArtemisImageCodec {
@@ -101,4 +102,20 @@ export function createArtemisImageLoader(
         }),
     },
   ]);
+}
+
+/** Browser-owned opaque RGB JPEG alongside the native PNG/merged PSD readers.
+ * Exact revision's default CJpg path has no alpha sidecar (178e80/179120).
+ * Grayscale format0 and paired alpha JPEGs require separate owners.
+ */
+export function createArtemisBrowserImageLoader(
+  executableSha256: string,
+  readFile: (path: string) => Promise<Uint8Array | null>,
+): ArtemisImageLoader {
+  return createArtemisImageLoader(executableSha256, readFile, {
+    jpeg: async (bytes) => {
+      if (bytes[0] !== 255 || bytes[1] !== 216) return null;
+      return (await decodeImageOffThread(bytes, 'opaque-jpeg')) ?? decodeOpaqueJpeg(bytes);
+    },
+  });
 }

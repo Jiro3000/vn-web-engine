@@ -563,3 +563,25 @@ in-thread decoder to report its original error. Synthetic checks compare raw/RLE
 output, recovery and channel order, real worker transport and resulting WebGL
 RGBA. Named layers, PSB, additional color/depth/compression layouts remain
 unsupported. No real game image was decoded for verification.
+
+## Browser JPEG owner
+
+`createArtemisBrowserImageLoader` keeps the exact stage codec order and supplies
+an opaque RGB JPEG owner using the shared `opaque-jpeg` worker service. The base
+`createArtemisImageLoader` still permits an injected JPEG decoder for other hosts.
+The native default CJpg file path (`0x140178e80` / `0x140179120`) has no alpha sidecar;
+its grayscale format0 and paired-alpha path remain unsupported by this browser owner.
+
+The shared marker reader strips APP1/APP2 metadata before browser decoding, so
+EXIF orientation and ICC profiles do not change stored pixels/dimensions. It
+preserves stuffed entropy bytes, restart markers and metadata between scans.
+The decoder accepts 8-bit, three-component baseline/progressive frames and checks
+that returned dimensions match the stored JPEG frame. Browser bitmap/readback
+must preserve opaque alpha. Archive bytes are snapshotted for worker transfer,
+and generic browser Blob construction copies exactly the supplied byte view.
+
+The synthetic Chrome check encodes a2x3 solid JPEG, injects valid EXIF orientation6,
+confirms the ordinary browser bitmap rotates to3x2, and verifies that the Artemis
+owner keeps2x3 and paints expected RGB. This validates ownership and metadata
+policy, not byte-exact equality to the native JPEG library's DCT/color rounding.
+No real game JPEG was decoded or rendered.

@@ -6,7 +6,10 @@
 <script type="module">
   import {ArtemisImageGraphics} from '../../dist/engines/artemis/image-graphics.js';
   import {ArtemisLayers} from '../../dist/engines/artemis/layers.js';
-  import {createArtemisImageLoader} from '../../dist/engines/artemis/image-loader.js';
+  import {
+    createArtemisImageLoader,
+    createArtemisBrowserImageLoader,
+  } from '../../dist/engines/artemis/image-loader.js';
   import {ArtemisSurfaceCache} from '../../dist/engines/artemis/surface-cache.js';
   import {createArtemisOrdinaryGpuRaster} from '../../dist/engines/artemis/gpu-raster.js';
   import {ARTEMIS_3179_EXECUTABLE_SHA256 as revision} from '../../dist/engines/artemis/revision.js';
@@ -674,6 +677,60 @@
     );
     await layers.dispatch(command('lydel', {id: 'psd'}));
     stage.dispatch(command('flip'));
+    // JPEG uses the real browser worker codec and ignores EXIF orientation like CJpg.
+    layers.close();
+    const jpegCanvas = new OffscreenCanvas(2, 3),
+      jpegContext = jpegCanvas.getContext('2d');
+    jpegContext.fillStyle = 'rgb(200,50,25)';
+    jpegContext.fillRect(0, 0, 2, 3);
+    const encodedJpeg = new Uint8Array(
+      await (await jpegCanvas.convertToBlob({type: 'image/jpeg', quality: 1})).arrayBuffer(),
+    );
+    const exif = new Uint8Array(36),
+      exifView = new DataView(exif.buffer);
+    exif.set([255, 225, 0, 34, 69, 120, 105, 102, 0, 0, 73, 73, 42, 0]);
+    exifView.setUint32(14, 8, true);
+    exifView.setUint16(18, 1, true);
+    exifView.setUint16(20, 0x112, true);
+    exifView.setUint16(22, 3, true);
+    exifView.setUint32(24, 1, true);
+    exifView.setUint16(28, 6, true);
+    const jpegBytes = new Uint8Array(encodedJpeg.length + exif.length);
+    jpegBytes.set(encodedJpeg.subarray(0, 2));
+    jpegBytes.set(exif, 2);
+    jpegBytes.set(encodedJpeg.subarray(2), 2 + exif.length);
+    const orientedBitmap = await createImageBitmap(new Blob([jpegBytes], {type: 'image/jpeg'}));
+    assert(
+      orientedBitmap.width === 3 && orientedBitmap.height === 2,
+      'synthetic EXIF orientation fixture is ineffective',
+    );
+    orientedBitmap.close();
+    const jpegSnapshot = jpegBytes.slice(),
+      jpegLoader = createArtemisBrowserImageLoader(revision, async (path) =>
+        path === 'synthetic.JPG' ? jpegBytes : null,
+      ),
+      decodedJpeg = await jpegLoader.load('synthetic');
+    assert(
+      decodedJpeg.image.width === 2 && decodedJpeg.image.height === 3,
+      'JPEG unexpectedly applied EXIF orientation',
+    );
+    assert(
+      decodedJpeg.image.pixels.every((v, i) => i % 4 !== 3 || v === 255),
+      'JPEG opaque alpha lost',
+    );
+    assert(
+      jpegBytes.every((v, i) => v === jpegSnapshot[i]),
+      'JPEG worker changed archive bytes',
+    );
+    layers = new ArtemisLayers(revision, jpegLoader, nativeGraphics);
+    await layers.dispatch(command('lyc', {id: 'jpeg', file: 'synthetic'}));
+    stage.dispatch(command('flip'));
+    nativeGraphics.drawCommitted(layers.scene);
+    const jpegPixel = readGroupPixel(0, 0);
+    assert(
+      jpegPixel.every((v, i) => Math.abs(v - [200, 50, 25, 255][i]) <= 3),
+      `JPEG GPU pixel mismatch: ${jpegPixel}`,
+    );
     window.result = {
       passed: true,
       syntheticOnly: true,
@@ -694,6 +751,8 @@
       nativeCapturedCases,
       nativeIntermediateGroups: true,
       nativePsdWorker: true,
+      nativeJpegWorker: true,
+      nativeJpegExifIgnored: true,
       nativeClipPixels: [...nativeClipPixels],
       nativeOrdinaryGroups: true,
       nativeGroupPixel,

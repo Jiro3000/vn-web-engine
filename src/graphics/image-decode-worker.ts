@@ -2,6 +2,7 @@ import {serveWorkerPool} from '../platform/worker-pool.js';
 import {decodePng} from '../formats/png/decode.js';
 import {decodeBrowserImage} from './browser-image.js';
 import {decodeArtemisPsd} from '../formats/artemis/psd.js';
+import {decodeOpaqueJpeg} from './browser-jpeg.js';
 import type {ImageDecodeRequest, ImageDecodeResponse} from './image-decode-offload.js';
 
 // Failures are reported as failed jobs; the host reruns the in-thread decoder, which raises
@@ -12,7 +13,9 @@ serveWorkerPool<ImageDecodeRequest, ImageDecodeResponse>(async ({format, bytes})
       ? await decodePng(bytes)
       : format === 'artemis-psd'
         ? decodeArtemisPsd(bytes)
-        : await decodeBrowserImage(bytes, format);
+        : format === 'opaque-jpeg'
+          ? await decodeOpaqueJpeg(bytes)
+          : await decodeBrowserImage(bytes, format);
   const transfer: Transferable[] = [image.pixels.buffer];
   const indices = (image as {indices?: Uint8Array}).indices;
   if (indices) transfer.push(indices.buffer);

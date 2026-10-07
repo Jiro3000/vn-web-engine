@@ -288,3 +288,51 @@ test('Artemis PSD refuses unsupported layouts and incomplete rows before publish
       /row|Truncated/,
     );
 });
+
+test('Shared JPEG metadata reader preserves entropy/restart bytes and removes EXIF/ICC between scans', async () => {
+  const {readJpegHeader} = await import('../dist/formats/jpeg/header.js');
+  const segment = (marker, payload) =>
+    Buffer.concat([
+      Buffer.from([255, marker, (payload.length + 2) >>> 8, (payload.length + 2) & 255]),
+      Buffer.from(payload),
+    ]);
+  const frame = segment(192, [8, 0, 3, 0, 2, 3, 1, 17, 0, 2, 17, 0, 3, 17, 0]),
+    scan = segment(218, [3, 1, 0, 2, 0, 3, 0, 0, 63, 0]),
+    entropy = Buffer.from([17, 255, 0, 225, 255, 208, 34]),
+    plain = Buffer.concat([
+      Buffer.from([255, 216]),
+      frame,
+      scan,
+      entropy,
+      scan,
+      Buffer.from([51, 255, 217, 91]),
+    ]),
+    encoded = Buffer.concat([
+      Buffer.from([255, 216]),
+      segment(225, [69, 120, 105, 102, 0, 0]),
+      frame,
+      scan,
+      entropy,
+      segment(226, [73, 67, 67]),
+      scan,
+      Buffer.from([51, 255, 217, 91]),
+    ]),
+    container = new Uint8Array(encoded.length + 4);
+  container.set(encoded, 2);
+  const view = container.subarray(2, -2),
+    snapshot = view.slice();
+  const unchanged = readJpegHeader(view);
+  assert.equal(unchanged.bytes, view);
+  assert.deepEqual(
+    [unchanged.width, unchanged.height, unchanged.components, unchanged.precision],
+    [2, 3, 3, 8],
+  );
+  const stripped = readJpegHeader(view, true);
+  assert.deepEqual([...stripped.bytes], [...plain]);
+  assert.deepEqual(view, snapshot);
+  assert.throws(
+    () => readJpegHeader(new Uint8Array([255, 216, 255, 225, 0, 8, 1])),
+    /segment length/,
+  );
+  assert.throws(() => readJpegHeader(new Uint8Array([255, 216, 255, 217])), /header missing/);
+});
