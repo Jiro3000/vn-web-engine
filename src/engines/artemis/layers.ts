@@ -38,7 +38,7 @@ export interface ArtemisLayerHost<T extends object> {
     resource: ArtemisLoadedImage,
     anchor: {readonly x: number; readonly y: number},
   ): T;
-  /** Materialize the default property holder of an already-existing empty group. */
+  /** Allocate the native default property holder of an empty group. */
   createGroupLayer?(): T;
   releaseImageLayer(layer: T): void;
   /** Copy native inner-actor state; the owner retains any shared raster resources. */
@@ -70,7 +70,17 @@ export class ArtemisLayers<T extends object> {
     private readonly images: ArtemisImageSource,
     private readonly host: ArtemisLayerHost<T>,
   ) {
-    this.scene = new ArtemisScene(executableSha256, (layer) => this.released.push(layer));
+    this.scene = new ArtemisScene(
+      executableSha256,
+      (layer) => this.released.push(layer),
+      host.createGroupLayer
+        ? () => {
+            const group = host.createGroupLayer!();
+            this.owned.add(group);
+            return group;
+          }
+        : undefined,
+    );
   }
   /** Call alongside cancellation of the old script's Lua continuations. */
   cancelPending(): void {

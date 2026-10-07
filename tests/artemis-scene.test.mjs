@@ -671,7 +671,7 @@ test('Artemis raster upload refusal preserves the old scene and hidden images re
     setRejectUpload(false);
     await layers.dispatch(command('lyprop', {id: 'image', visible: '0', rotate: '90'}));
     layers.commit();
-    assert.equal(graphics.drawCommitted(layers.scene).commands.length, 0);
+    assert.throws(() => graphics.drawCommitted(layers.scene), /trigonometry owner/);
     assert.equal(prepared.length, 1);
     assert.equal(invalidated.length, 0);
     await layers.dispatch(command('lyprop', {id: 'image', visible: '1'}));
@@ -1416,7 +1416,8 @@ test('Artemis ordinary groups compose retained transforms and alpha without owni
         layers.scene.entry('2.sub.10').value.texture,
       ],
     );
-    assert.equal(layers.scene.entry('2', 'retained').value, undefined);
+    assert.equal(layers.scene.entry('2', 'retained').value.texture, null);
+    assert.equal(layers.scene.entry('2', 'retained').value.display.properties.left, 0);
     await layers.dispatch(command('lyprop', {id: '02', left: '1', xscale: '200', alpha: '128'}));
     await layers.dispatch(command('lyprop', {id: '2.sub', left: '1', yscale: '200', alpha: '128'}));
     await layers.dispatch(command('lyprop', {id: '2.sub.1', left: '1', alpha: '128'}));
@@ -1540,4 +1541,101 @@ test('Artemis GPU preparation gates group alpha before descending into brighter 
   } finally {
     layers.close();
   }
+});
+
+test('Artemis parent acceptance holds sub-epsilon changes through actor copies and accepts the exact boundary', async () => {
+  const {ArtemisDisplayObject} = await import('../dist/engines/artemis/display-object.js');
+  const object = new ArtemisDisplayObject(revision);
+  object.apply({left: 2 ** 20});
+  const parent = new Float32Array([0.5, 0, 0, 0, 1, 0]);
+  assert.equal(object.worldMatrix(parent)[2], 524288);
+  const changed = parent.slice();
+  changed[0] += 2 ** -24;
+  assert.equal(object.worldMatrix(changed)[2], 524288);
+  const copy = object.copy();
+  copy.apply({left: 2 ** 20 + 2});
+  assert.equal(copy.worldMatrix(changed)[2], 524289);
+  changed[0] = 0.5 + 2 ** -23;
+  assert.equal(object.worldMatrix(changed)[2], 524288.125);
+  assert.equal(object.worldMatrix(parent)[2], 524288);
+  const borrowed = object.worldMatrix(parent);
+  borrowed.fill(0);
+  parent[0] = 0.5 + 2 ** -24;
+  assert.equal(object.worldMatrix(parent)[2], 524288);
+  assert.equal(copy.worldMatrix(parent)[2], 524289);
+  assert.throws(
+    () => object.worldMatrix(new Float32Array([1, 0, 0, 0, Infinity, 0])),
+    /parent matrix/,
+  );
+});
+
+test('Artemis hidden leaf matrix accepts parent changes before visibility but skipped groups block propagation', async () => {
+  const {layers, graphics} = await rasterFixture();
+  try {
+    await layers.dispatch(command('lyc', {id: 'group.child', file: 'synthetic.png'}));
+    await layers.dispatch(
+      command('lyprop', {id: 'group.child', visible: '0', left: String(2 ** 20)}),
+    );
+    await layers.dispatch(command('lyprop', {id: 'group', xscale: '50'}));
+    layers.commit();
+    assert.equal(graphics.drawCommitted(layers.scene).commands.length, 0);
+    const child = layers.scene.entry('group.child').value;
+    assert.equal(
+      child.display.worldMatrix(new Float32Array([0.5 + 2 ** -24, 0, 0, 0, 1, 0]))[2],
+      524288,
+    );
+    // Visibility does not skip the leaf's parent update in native15b440.
+    await layers.dispatch(command('lyprop', {id: 'group', xscale: '75'}));
+    layers.commit();
+    graphics.drawCommitted(layers.scene);
+    assert.equal(
+      child.display.worldMatrix(new Float32Array([0.75 + 2 ** -24, 0, 0, 0, 1, 0]))[2],
+      786432,
+    );
+    await layers.dispatch(command('lyprop', {id: 'group', visible: '0', xscale: '100'}));
+    layers.commit();
+    graphics.drawCommitted(layers.scene);
+    // Child's cache remains at .75 because its parent's preparation callback is gated.
+    assert.equal(
+      child.display.worldMatrix(new Float32Array([0.75 + 2 ** -24, 0, 0, 0, 1, 0]))[2],
+      786432,
+    );
+    await layers.dispatch(command('lyprop', {id: 'group.child', visible: '1'}));
+    await layers.dispatch(command('lyprop', {id: 'group', visible: '1'}));
+    layers.commit();
+    const image = graphics.drawCommitted(layers.scene).commands[0];
+    assert.equal(image.vertices[0], 524287);
+  } finally {
+    layers.close();
+  }
+});
+
+test('Artemis implicit groups preserve their own accepted parent matrix without allocating GPU images', async () => {
+  const {layers, graphics, prepared, invalidated} = await rasterFixture();
+  try {
+    await layers.dispatch(command('lyc', {id: 'outer.implicit.leaf', file: 'synthetic.png'}));
+    await layers.dispatch(command('lyprop', {id: 'outer', xscale: '50'}));
+    await layers.dispatch(command('lyprop', {id: 'outer.implicit.leaf', left: String(2 ** 20)}));
+    layers.commit();
+    const implicit = layers.scene.entry('outer.implicit').value;
+    assert.equal(implicit.texture, null);
+    assert.equal(prepared.length, 1);
+    assert.equal(graphics.drawCommitted(layers.scene).commands[0].vertices[0], 262143);
+    await layers.dispatch(
+      command('lyprop', {id: 'outer', xscale: String(Math.fround((0.5 + 2 ** -24) * 100))}),
+    );
+    layers.commit();
+    assert.equal(layers.scene.entry('outer.implicit').value, implicit);
+    assert.equal(graphics.drawCommitted(layers.scene).commands[0].vertices[0], 262143);
+    await layers.dispatch(
+      command('lyprop', {id: 'outer', xscale: String(Math.fround((0.5 + 2 ** -23) * 100))}),
+    );
+    layers.commit();
+    assert.equal(graphics.drawCommitted(layers.scene).commands[0].vertices[0], 262143.0625);
+    assert.equal(prepared.length, 1);
+    assert.equal(invalidated.length, 0);
+  } finally {
+    layers.close();
+  }
+  assert.equal(invalidated.length, 1);
 });

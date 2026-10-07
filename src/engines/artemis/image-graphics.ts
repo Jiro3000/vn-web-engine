@@ -291,15 +291,18 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
           throw new Error('Unsupported Artemis group raster owner');
         if (actor) this.checkActor(actor);
         const p = actor?.display.properties;
+        const scales = !p || (p.xscale > 0 && p.yscale > 0);
+        // Native updates the holder's matrix before its own visibility/alpha gate.
+        const matrix =
+          actor && parent.visible && scales
+            ? actor.display.worldMatrix(parent.matrix, this.raster.trig)
+            : parent.matrix;
         const alpha = p ? f(parent.alpha * p.alpha) : parent.alpha;
         const visible =
           parent.visible &&
           (!p || (p.visible && p.xscale > 0 && p.yscale > 0 && alpha >= 2 ** -23));
         groups.set(entry.id, {
-          matrix:
-            actor && visible
-              ? actor.display.matrix(parent.matrix, this.raster.trig)
-              : parent.matrix,
+          matrix,
           alpha,
           visible,
         });
@@ -310,17 +313,10 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
       const texture = this.check(actor),
         p = actor.display.properties,
         alpha = f(parent.alpha * p.alpha);
-      if (
-        !parent.visible ||
-        !p.visible ||
-        p.xscale <= 0 ||
-        p.yscale <= 0 ||
-        alpha < 2 ** -23 ||
-        texture.image.width === 0 ||
-        texture.image.height === 0
-      )
+      if (!parent.visible || p.xscale <= 0 || p.yscale <= 0) continue;
+      const matrix = actor.display.worldMatrix(parent.matrix, this.raster.trig);
+      if (!p.visible || alpha < 2 ** -23 || texture.image.width === 0 || texture.image.height === 0)
         continue;
-      const matrix = actor.display.matrix(parent.matrix, this.raster.trig);
       const hasEffects = artemisHasRasterEffects(actor.raster);
       if (hasEffects && !this.raster.effects)
         throw new Error('Artemis image effects require a raster policy owner');

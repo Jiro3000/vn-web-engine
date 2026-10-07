@@ -453,8 +453,8 @@ and raster target at installation shutdown.
 
 ## Ordinary group display properties
 
-Empty hierarchy nodes expose their native identity property holder lazily through
-`createGroupLayer`. Ordinary `lyprop` can update that group's geometry, alpha,
+Empty hierarchy nodes allocate their native identity property holder through
+`createGroupLayer` when created. Ordinary `lyprop` can update that group's geometry, alpha,
 visibility and reversals. First edits retain the previous inner state until commit;
 subsequent edits reuse the current copy. The shared outer alpha metadata remains
 separate from draw opacity. No image texture or resource loan belongs to an empty
@@ -474,3 +474,13 @@ layer modes, color effects, masks and `intermediate_render` remain refused pendi
 the intermediate composition owner (`0x140186770`). Shared persistent GPU surfaces
 are available for that owner; see `docs/gpu-render-surfaces.md`. Their allocation
 service alone does not implement native group capture policy, bounds or masking.
+
+The display owner retains the native parent-matrix acceptance state
+(`0x14015adc0`, `0x14015b440`). All six float32 differences must be strictly below
+`2**-23` to preserve the previous parent matrix; reaching the threshold updates all
+six coefficients together. Inner copies preserve this parent and world state
+(`0x1400a17c0`). The browser memoizes unchanged geometry calculations, while alpha
+and visibility remain live. Each implicit group owns its own display state.
+Native updates a holder's matrix before testing its own visibility or alpha;
+nonpositive scales and a gated ancestor prevent that update. Consequently a hidden
+rotated holder still needs the native trig provider.

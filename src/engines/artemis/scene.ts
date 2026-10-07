@@ -165,7 +165,11 @@ export class ArtemisScene<T> {
   private root: Node<T>;
   private readonly lifetime: PayloadLifetime<T>;
   /** Release notifications must only record effects, without throwing or mutating this scene. */
-  constructor(executableSha256: string, onPayloadReleased?: (value: T) => void) {
+  constructor(
+    executableSha256: string,
+    onPayloadReleased?: (value: T) => void,
+    private readonly createGroup?: () => T,
+  ) {
     artemisRevision(executableSha256);
     this.lifetime = new PayloadLifetime(onPayloadReleased);
     this.root = new Node(undefined, true, this.lifetime);
@@ -185,14 +189,21 @@ export class ArtemisScene<T> {
       if (!parent.acceptsChildren) return false;
       let child = parent.child(key, 'current');
       if (!child) {
-        parent.assign(key, new Node<T>(undefined, true, this.lifetime));
+        parent.assign(key, new Node<T>(this.createGroup?.(), true, this.lifetime));
         child = parent.child(key, 'current')!;
       }
       parent = child.node;
     }
     return (
       parent.acceptsChildren &&
-      parent.assign(parts.at(-1)!, new Node(value, acceptsChildren, this.lifetime))
+      parent.assign(
+        parts.at(-1)!,
+        new Node(
+          value === undefined && acceptsChildren ? this.createGroup?.() : value,
+          acceptsChildren,
+          this.lifetime,
+        ),
+      )
     );
   }
   remove(id: string): boolean {

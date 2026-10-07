@@ -24,6 +24,9 @@ const sum = (a: number, b: number) => f(a + b);
 /** Native CDisplayObject defaults and ordinary local transform, 0x1400a1060 / 0x1400a14b0. */
 export class ArtemisDisplayObject {
   private readonly hash: string;
+  private parentMatrix = new Float32Array([1, 0, 0, 0, 1, 0]);
+  private world = new Float32Array([1, 0, 0, 0, 1, 0]);
+  private matrixDirty = true;
   private state: ArtemisDisplayProperties = {
     left: 0,
     top: 0,
@@ -46,6 +49,9 @@ export class ArtemisDisplayObject {
   copy(): ArtemisDisplayObject {
     const result = new ArtemisDisplayObject(this.hash);
     result.state = {...this.state};
+    result.parentMatrix = this.parentMatrix.slice();
+    result.world = this.world.slice();
+    result.matrixDirty = this.matrixDirty;
     return result;
   }
   apply(patch: ArtemisLayerPropertyPatch): void {
@@ -59,7 +65,35 @@ export class ArtemisDisplayObject {
         throw new Error('Unsupported Artemis display value');
       Object.assign(next, {[key]: typeof value === 'number' ? f(value) : value});
     }
+    const geometry = [
+      'left',
+      'top',
+      'anchorx',
+      'anchory',
+      'xscale',
+      'yscale',
+      'rotate',
+      'reversex',
+      'reversey',
+    ] as const;
+    if (geometry.some((key) => next[key] !== this.state[key])) this.matrixDirty = true;
     this.state = next;
+  }
+  /** Parent acceptance in 0x14015b440/0x14015adc0: retain all six coefficients
+   * unless at least one float32 difference reaches FLT_EPSILON. Copy preserves it.
+   * Memoizing unchanged geometry avoids repeating the pure float transform in JS. */
+  worldMatrix(parent: Float32Array, trig?: ArtemisFloatTrig): Float32Array {
+    if (parent.length !== 6 || !parent.every(Number.isFinite))
+      throw new Error('Invalid Artemis parent matrix');
+    if (!parent.every((value, index) => Math.abs(f(value - this.parentMatrix[index]!)) < epsilon)) {
+      this.parentMatrix = new Float32Array(parent);
+      this.matrixDirty = true;
+    }
+    if (this.matrixDirty) {
+      this.world = new Float32Array(this.matrix(this.parentMatrix, trig));
+      this.matrixDirty = false;
+    }
+    return this.world.slice();
   }
   /** Row-major [a,b,tx,c,d,ty]. Nonzero rotations require the native float trig owner. */
   matrix(
