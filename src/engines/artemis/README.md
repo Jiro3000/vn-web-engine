@@ -269,8 +269,9 @@ native-style conversion; nonfinite/hex values and other property keys refuse.
 Only exact `0` disables flags. Inner alpha rounds to float32 before division by
 255; outer-wrapper alpha divides as double before float32 conversion. Values
 are not clamped by the adapter. Applying these values and recording the original
-command require owner effects. Group/root/shader properties and the alternate
-retained-actor editing mode remain unsupported. Native entries:
+command require owner effects. Root/shader properties and the alternate
+retained-actor editing mode remain unsupported. Ordinary and intermediate group
+properties are described below. Native entries:
 `0x140115650`, `0x1400d76d0`.
 
 Use the layer owner's `commit()` at a confirmed native commit boundary. It releases
@@ -432,7 +433,7 @@ hardware blending. Alpha uses `back.a * (1 - fore.a) + fore.a`; RGB follows the
 native normal/add/screen/multiply formulas and divides by that output alpha.
 The native zero-alpha division is preserved. All 32 effect combinations are
 checked with synthetic nonzero-alpha foreground/background texels in Chrome.
-Group capture scheduling, bounds and storage lifetimes remain separate work.
+The group owner below schedules these shaders with GPU background copies.
 
 `surface-cache.ts` supplies the ordinary native surface-manager loan policy
 (`0x140011a90`, `0x140012200`, `0x1400116b0`). Requested UTF-8 names are exact cache
@@ -478,12 +479,6 @@ to zero; image anchors remain centered. Empty dotted identifiers and numeric ali
 retain scene lookup semantics. Nonzero group rotation still requires the native
 float trig owner.
 
-This implements direct groups whose intermediate surfaces are absent. Group clips,
-layer modes, color effects, masks and `intermediate_render` remain refused pending
-the intermediate composition owner (`0x140186770`). Shared persistent GPU surfaces
-are available for that owner; see `docs/gpu-render-surfaces.md`. Their allocation
-service alone does not implement native group capture policy, bounds or masking.
-
 The display owner retains the native parent-matrix acceptance state
 (`0x14015adc0`, `0x14015b440`). All six float32 differences must be strictly below
 `2**-23` to preserve the previous parent matrix; reaching the threshold updates all
@@ -493,3 +488,53 @@ and visibility remain live. Each implicit group owns its own display state.
 Native updates a holder's matrix before testing its own visibility or alpha;
 nonpositive scales and a gated ancestor prevent that update. Consequently a hidden
 rotated holder still needs the native trig provider.
+
+## Intermediate group composition
+
+`lyprop intermediate_render` changes the group's shared node configuration before
+holder commit. Exact `0` disables and releases capture storage; every other value
+enables it. Exact `1` selects format2, exact `2` format1, and other values retain
+its previous format (initially2). Type1 image leaves ignore this configuration,
+as native `0x1400b30b0` does. Group clip, layer mode and color effects belong to
+its copied holder and are used when rendering the group's captured result.
+They do not affect a direct group with intermediate rendering disabled.
+
+The retained GPU path binds a persistent surface, prepares children ascending with
+identity translated by minus the capture bounds and alpha1, restores the parent
+target, then paints the captured layer using the group's matrix, opacity and
+raster effects. Nested captures restore their own parent target. Format2 uses
+the captured-background shader and a GPU snapshot before each layer; format1 uses
+the ordinary blend path. Neither surface format forces alpha opaque.
+
+Positive clip dimensions select explicit bounds with float32 left/top and ceiled
+allocation dimensions. The output clip starts at0,0 and preserves the original
+fractional width/height. Otherwise bounds callbacks walk descendants regardless
+of visibility/alpha, composing uncached local transforms and extending four
+pixel-center corners at0 and dimension-minus-one. Nonzero image clip dimensions
+override natural dimensions independently. The bounds rectangle starts with all
+six fields0; extending an endpoint recomputes its dimension inclusively. This
+preserves origin inclusion and the native degenerate single-point behavior.
+Nonzero rotation still requires the native float trig owner.
+
+Without a mask, capture storage is resized only when either requested dimension
+exceeds capacity. Both dimensions become the newly requested values. A change of
+preferred format alone does not replace existing storage; its old format remains
+until resizing. Holder copies share capture ownership, and disabling/releasing
+the final wrapper releases each GPU attachment once. Allocation failure leaves
+existing browser storage owned, reports the failure and permits a retry; the
+native flags0 fallback has no browser render-target implementation.
+
+Unchanged committed descendants reuse their captured surface. Preparation tracks
+actor identities, property changes, child keys, clips and nested capture configuration;
+a failed draw does not mark pending snapshots reusable. Parent geometry/alpha
+updates can repaint a cached capture. Clear is lazy: the first eligible image
+preparation clears the entire intermediate target before source clip rejection.
+A capture containing no eligible image retains earlier pixels, including when
+empty auto bounds fit an existing allocation. The main presentation clear remains
+independent of this intermediate rule.
+
+The synthetic browser pipeline checks actual RGBA for both formats, nested targets,
+retention, effects, growth and empty captures. Mask loading/transition shaders,
+current-view capture buffers and full native dirty-flag accounting remain
+unsupported. This rendering service is not connected to a production Artemis
+player or a complete game scheduler.

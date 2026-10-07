@@ -553,6 +553,99 @@
     stage.dispatch(command('flip'));
     nativeGraphics.drawCommitted(layers.scene);
     expectGroupPixel(2, 1, [0, 0, 0, 0]);
+    await layers.dispatch(
+      command('lyc', {
+        id: 'capture.1',
+        file: 'missing-solid',
+        width: '2',
+        height: '2',
+        color: '80ff0000',
+      }),
+    );
+    await layers.dispatch(
+      command('lyprop', {
+        id: 'capture',
+        clip: '0,0,2,2',
+        intermediate_render: '1',
+        left: '1',
+        alpha: '128',
+      }),
+    );
+    stage.dispatch(command('flip'));
+    let captureList = nativeGraphics.drawCommitted(layers.scene);
+    expectGroupPixel(1, 0, [64, 0, 0, 16]);
+    expectGroupPixel(1, 1, [64, 0, 0, 16]);
+    expectGroupPixel(0, 0, [0, 0, 0, 0]);
+    assert(
+      captureList.commands.some((c) => c.kind === 'gpu-copy'),
+      'format2 capture did not snapshot',
+    );
+    captureList = nativeGraphics.drawCommitted(layers.scene);
+    assert(captureList.commands.length === 1, 'unchanged intermediate group was redrawn');
+    expectGroupPixel(1, 0, [64, 0, 0, 16]);
+    await layers.dispatch(command('lyprop', {id: 'capture', intermediate_render: '2'}));
+    stage.dispatch(command('flip'));
+    captureList = nativeGraphics.drawCommitted(layers.scene);
+    assert(
+      captureList.commands.some((c) => c.kind === 'gpu-copy'),
+      'format changed without native resize',
+    );
+    expectGroupPixel(1, 0, [64, 0, 0, 16]);
+    await layers.dispatch(command('lyprop', {id: 'capture', clip: '0,0,3,2'}));
+    stage.dispatch(command('flip'));
+    captureList = nativeGraphics.drawCommitted(layers.scene);
+    assert(
+      !captureList.commands.some((c) => c.kind === 'gpu-copy'),
+      'format1 resize still sampled background',
+    );
+    expectGroupPixel(1, 0, [16, 0, 0, 4]);
+    // Disabling then re-enabling selects fresh format2 storage, before holder commit.
+    await layers.dispatch(command('lyprop', {id: 'capture', intermediate_render: '0'}));
+    await layers.dispatch(command('lyprop', {id: 'capture', intermediate_render: '1'}));
+    stage.dispatch(command('flip'));
+    await layers.dispatch(
+      command('lyc', {
+        id: 'capture.nested.1',
+        file: 'missing-solid',
+        width: '2',
+        height: '2',
+        color: '800000ff',
+      }),
+    );
+    await layers.dispatch(
+      command('lyprop', {id: 'capture.nested', clip: '0,0,2,2', intermediate_render: '1'}),
+    );
+    stage.dispatch(command('flip'));
+    captureList = nativeGraphics.drawCommitted(layers.scene);
+    expectGroupPixel(1, 0, [32, 0, 64, 36]);
+    expectGroupPixel(1, 1, [32, 0, 64, 36]);
+    assert(
+      captureList.commands.filter((c) => c.kind === 'gpu-copy').length === 3,
+      'nested background snapshots missing',
+    );
+    await layers.dispatch(command('lyprop', {id: 'capture.nested', visible: '0'}));
+    stage.dispatch(command('flip'));
+    nativeGraphics.drawCommitted(layers.scene);
+    expectGroupPixel(1, 0, [64, 0, 0, 16]);
+    await layers.dispatch(
+      command('lyprop', {id: 'capture', negative: '1', grayscale: '1', colormultiply: '4080c0'}),
+    );
+    stage.dispatch(command('flip'));
+    nativeGraphics.drawCommitted(layers.scene);
+    // Gray of inverted red is 0.701088, then multiply and final effective alpha.
+    expectGroupPixel(1, 0, [11, 23, 34, 16]);
+    await layers.dispatch(command('lydel', {id: 'capture.1'}));
+    await layers.dispatch(command('lydel', {id: 'capture.nested'}));
+    await layers.dispatch(command('lyprop', {id: 'capture', clip: '0,0,0,0'}));
+    stage.dispatch(command('flip'));
+    captureList = nativeGraphics.drawCommitted(layers.scene);
+    assert(!captureList.commands.some((c) => c.clearColor), 'empty capture eagerly cleared');
+    expectGroupPixel(1, 0, [11, 23, 34, 16]);
+    await layers.dispatch(command('lydel', {id: 'capture'}));
+    stage.dispatch(command('flip'));
+    nativeGraphics.drawCommitted(layers.scene);
+    expectGroupPixel(1, 0, [0, 0, 0, 0]);
+    assert(context.getError() === context.NO_ERROR, 'intermediate rendering left a GL error');
     window.result = {
       passed: true,
       syntheticOnly: true,
@@ -571,6 +664,7 @@
       nativeModePixels,
       nativeEffectsCases,
       nativeCapturedCases,
+      nativeIntermediateGroups: true,
       nativeClipPixels: [...nativeClipPixels],
       nativeOrdinaryGroups: true,
       nativeGroupPixel,

@@ -40,7 +40,10 @@ interface Child<T> {
 }
 class PayloadLifetime<T> {
   readonly references = new Map<T, number>();
-  constructor(private readonly released?: (value: T) => void) {}
+  constructor(
+    private readonly released?: (value: T) => void,
+    readonly nodeReleased?: (values: readonly T[]) => void,
+  ) {}
   retain(value: T | undefined): void {
     if (value !== undefined) this.references.set(value, (this.references.get(value) ?? 0) + 1);
   }
@@ -75,6 +78,8 @@ class Node<T> {
   }
   release(): void {
     if (--this.references) return;
+    // Capture/mask members precede both child-map and holder-slot destructors.
+    this.lifetime.nodeReleased?.(this.values.filter((value): value is T => value !== undefined));
     // 0x1400b1860 destroys map slots 1,0 before inner-actor slots 1,0.
     this.clearMap(1);
     this.clearMap(0);
@@ -169,9 +174,10 @@ export class ArtemisScene<T> {
     executableSha256: string,
     onPayloadReleased?: (value: T) => void,
     private readonly createGroup?: () => T,
+    onNodeReleased?: (values: readonly T[]) => void,
   ) {
     artemisRevision(executableSha256);
-    this.lifetime = new PayloadLifetime(onPayloadReleased);
+    this.lifetime = new PayloadLifetime(onPayloadReleased, onNodeReleased);
     this.root = new Node(undefined, true, this.lifetime);
     this.root.retain();
   }

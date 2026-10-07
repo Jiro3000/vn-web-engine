@@ -41,6 +41,8 @@ export interface ArtemisLayerHost<T extends object> {
   /** Allocate the native default property holder of an empty group. */
   createGroupLayer?(): T;
   releaseImageLayer(layer: T): void;
+  /** Node-owned captures precede child-map and holder destruction (0x1400b1860). */
+  releaseGroupResources?(layer: T): void;
   /** Copy native inner-actor state; the owner retains any shared raster resources. */
   copyImageLayer(layer: T): T;
   /** Apply inner actor properties and the separate outer-wrapper alpha effect. */
@@ -64,7 +66,8 @@ export class ArtemisLayers<T extends object> {
   private pending: number | null = null;
   private closed = false;
   private readonly owned = new Set<T>();
-  private readonly released: T[] = [];
+  private readonly released: ({kind: 'actor'; layer: T} | {kind: 'node'; layers: readonly T[]})[] =
+    [];
   constructor(
     executableSha256: string,
     private readonly images: ArtemisImageSource,
@@ -72,7 +75,7 @@ export class ArtemisLayers<T extends object> {
   ) {
     this.scene = new ArtemisScene(
       executableSha256,
-      (layer) => this.released.push(layer),
+      (layer) => this.released.push({kind: 'actor', layer}),
       host.createGroupLayer
         ? () => {
             const group = host.createGroupLayer!();
@@ -80,6 +83,7 @@ export class ArtemisLayers<T extends object> {
             return group;
           }
         : undefined,
+      (layers) => this.released.push({kind: 'node', layers}),
     );
   }
   /** Call alongside cancellation of the old script's Lua continuations. */
@@ -92,10 +96,16 @@ export class ArtemisLayers<T extends object> {
     // Scene notifications preserve native release order. The final fallback
     // releases fresh actors that failed to enter the tree, rather than sorting
     // existing actors by allocation order.
-    for (const layer of [...this.released.splice(0), ...this.owned])
-      if (!referenced.has(layer)) {
-        if (this.owned.delete(layer)) this.host.releaseImageLayer(layer);
+    for (const effect of this.released.splice(0)) {
+      if (effect.kind === 'node') {
+        for (const layer of new Set(effect.layers))
+          if (!referenced.has(layer)) this.host.releaseGroupResources?.(layer);
+      } else if (!referenced.has(effect.layer)) {
+        if (this.owned.delete(effect.layer)) this.host.releaseImageLayer(effect.layer);
       }
+    }
+    for (const layer of this.owned)
+      if (!referenced.has(layer) && this.owned.delete(layer)) this.host.releaseImageLayer(layer);
   }
   /** Commit structure and release actors no longer retained by either structural view. */
   commit(): void {

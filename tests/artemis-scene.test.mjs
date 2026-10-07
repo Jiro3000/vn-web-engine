@@ -551,7 +551,10 @@ const straightBlend = {
   color: {source: 'source-alpha', destination: 'inverse-source-alpha', operation: 'add'},
   alpha: {source: 'one', destination: 'inverse-source-alpha', operation: 'add'},
 };
-async function rasterFixture(rasterPolicy = {filter: 'nearest', blend: straightBlend}) {
+async function rasterFixture(
+  rasterPolicy = {filter: 'nearest', blend: straightBlend},
+  surfaces = false,
+) {
   const {ArtemisImageGraphics} = await import('../dist/engines/artemis/image-graphics.js');
   const {ArtemisLayers} = await import('../dist/engines/artemis/layers.js');
   const {createArtemisImageLoader} = await import('../dist/engines/artemis/image-loader.js');
@@ -568,9 +571,22 @@ async function rasterFixture(rasterPolicy = {filter: 'nearest', blend: straightB
       if (rejectUpload) throw new Error('synthetic upload failure');
       prepared.push(image);
     },
+    ...(surfaces
+      ? {
+          prepareRenderSurface: (image) => {
+            if (rejectUpload) throw new Error('synthetic upload failure');
+            prepared.push(image);
+          },
+        }
+      : {}),
     invalidate: (image) => invalidated.push(image),
     draw(list, resolve) {
-      frames.push({list, images: list.commands.map((command) => resolve(command.texture))});
+      frames.push({
+        list,
+        images: list.commands
+          .filter((command) => command.kind === 'triangles')
+          .map((command) => resolve(command.texture)),
+      });
     },
   };
   const graphics = new ArtemisImageGraphics(
@@ -598,6 +614,7 @@ async function rasterFixture(rasterPolicy = {filter: 'nearest', blend: straightB
     invalidated,
     frames,
     effects,
+    target,
     setRejectUpload: (value) => {
       rejectUpload = value;
     },
@@ -1496,23 +1513,28 @@ test('Artemis group visibility and positive-scale gates block descendants but pr
   assert.equal(invalidated.length, 2);
 });
 
-test('Artemis group raster effects require the unimplemented intermediate owner', async () => {
+test('Artemis groups retain raster metadata while intermediate rendering requires a GPU owner', async () => {
   const {layers, graphics} = await rasterFixture();
   try {
     await layers.dispatch(command('lyc', {id: 'group.child', file: 'synthetic.png'}));
     layers.commit();
-    for (const patch of [
-      {clip: '0,0,1,1'},
-      {negative: '0'},
-      {grayscale: '1'},
-      {colormultiply: 'ffffff'},
-      {layermode: 'normal'},
-      {intermediate_render: '1'},
-    ])
-      await assert.rejects(
-        () => layers.dispatch(command('lyprop', {id: 'group', ...patch})),
-        /Unsupported Artemis.*(group raster|layer property)/,
-      );
+    await layers.dispatch(
+      command('lyprop', {
+        id: 'group',
+        clip: '0,0,2,2',
+        layermode: 'normal',
+        negative: '0',
+        colormultiply: 'ffffff',
+      }),
+    );
+    await assert.rejects(
+      () => layers.dispatch(command('lyprop', {id: 'group', intermediate_render: '1'})),
+      /GPU surface owner/,
+    );
+    await assert.rejects(
+      () => layers.dispatch(command('lyprop', {id: 'group', mask: 'missing'})),
+      /Unsupported Artemis layer property/,
+    );
     layers.commit();
     assert.equal(graphics.drawCommitted(layers.scene).commands.length, 1);
   } finally {
@@ -1638,4 +1660,239 @@ test('Artemis implicit groups preserve their own accepted parent matrix without 
     layers.close();
   }
   assert.equal(invalidated.length, 1);
+});
+
+async function captureFixture() {
+  const {createArtemisOrdinaryGpuRaster} = await import('../dist/engines/artemis/gpu-raster.js');
+  const fixture = await rasterFixture(createArtemisOrdinaryGpuRaster(revision), true);
+  await fixture.layers.dispatch(command('lyc', {id: 'group.1', file: 'synthetic.png'}));
+  await fixture.layers.dispatch(
+    command('lyprop', {id: 'group', clip: '0,0,2,2', intermediate_render: '1'}),
+  );
+  fixture.layers.commit();
+  return fixture;
+}
+
+test('Artemis intermediate groups retain GPU captures and only redraw changed committed descendants', async () => {
+  const {layers, graphics, prepared, invalidated, frames} = await captureFixture();
+  try {
+    let list = graphics.drawCommitted(layers.scene);
+    assert.deepEqual(
+      list.commands.map((x) => x.kind),
+      ['gpu-target', 'gpu-target', 'gpu-copy', 'triangles', 'gpu-target', 'triangles'],
+    );
+    assert.equal(prepared.length, 3); // Image plus capture and its background copy.
+    assert.deepEqual(list.commands[1].clearColor, [0, 0, 0, 0]);
+    assert.equal(list.commands[2].source, list.commands[0].surface);
+    assert.equal(list.commands[3].additionalTextures[0].texture, 3);
+    assert.equal(list.commands[5].texture, 2);
+    list = graphics.drawCommitted(layers.scene);
+    assert.deepEqual(
+      list.commands.map((x) => x.kind),
+      ['triangles'],
+    );
+    await layers.dispatch(command('lyprop', {id: 'group.1', left: '1'}));
+    assert.equal(graphics.drawCommitted(layers.scene).commands.length, 1);
+    layers.commit();
+    assert.equal(
+      graphics.drawCommitted(layers.scene).commands.filter((x) => x.kind === 'gpu-copy').length,
+      1,
+    );
+    assert.equal(prepared.length, 3);
+    assert.equal(frames.length, 4);
+  } finally {
+    layers.close();
+  }
+  assert.equal(invalidated.length, 3);
+  assert.equal(new Set(invalidated).size, 3);
+});
+
+test('Artemis capture storage keeps its native format until a resize, and grows to requested dimensions', async () => {
+  const {layers, graphics, prepared, invalidated} = await captureFixture();
+  try {
+    graphics.drawCommitted(layers.scene);
+    await layers.dispatch(
+      command('lyprop', {id: 'group', intermediate_render: '2', clip: '0,0,1,2'}),
+    );
+    layers.commit();
+    let list = graphics.drawCommitted(layers.scene);
+    assert.equal(list.commands.filter((x) => x.kind === 'gpu-copy').length, 1); // Still format2.
+    assert.equal(prepared.length, 3);
+    await layers.dispatch(command('lyprop', {id: 'group', clip: '0,0,1,3'}));
+    layers.commit();
+    list = graphics.drawCommitted(layers.scene);
+    assert.equal(list.commands.filter((x) => x.kind === 'gpu-copy').length, 0);
+    assert.deepEqual([prepared.at(-1).width, prepared.at(-1).height], [1, 3]);
+    assert.equal(invalidated.length, 2);
+    assert.equal(
+      list.commands.filter((x) => x.kind === 'triangles')[0].blendState.alpha.source,
+      'source-alpha',
+    );
+  } finally {
+    layers.close();
+  }
+  assert.equal(invalidated.length, 4);
+});
+
+test('Artemis explicit group clips translate children before capture and rebase the output quad', async () => {
+  const {layers, graphics} = await captureFixture();
+  try {
+    await layers.dispatch(
+      command('lyprop', {id: 'group', clip: '1,1,1.25,1.5', left: '1', top: '0'}),
+    );
+    layers.commit();
+    const draws = graphics
+      .drawCommitted(layers.scene)
+      .commands.filter((x) => x.kind === 'triangles');
+    assert.deepEqual([...draws[0].vertices.slice(0, 2)], [-2, 2]);
+    assert.deepEqual([...draws[1].vertices.slice(0, 2)], [-0.5, 1]);
+    assert.deepEqual([...draws[1].vertices.slice(9, 11)], [0.125, 1]);
+    assert.deepEqual([...draws[1].vertices.slice(16, 18)], [0.625, 0]);
+  } finally {
+    layers.close();
+  }
+});
+
+test('Artemis capture auto bounds include zero endpoints, hidden actors and pixel centers', async () => {
+  const {createArtemisOrdinaryGpuRaster} = await import('../dist/engines/artemis/gpu-raster.js');
+  const {layers, graphics, prepared} = await rasterFixture(
+    createArtemisOrdinaryGpuRaster(revision),
+    true,
+  );
+  try {
+    await layers.dispatch(command('lyc', {id: 'group.1', file: 'synthetic.png'}));
+    await layers.dispatch(command('lyprop', {id: 'group.1', left: '2.5', top: '1', visible: '0'}));
+    await layers.dispatch(command('lyprop', {id: 'group', intermediate_render: '1'}));
+    layers.commit();
+    let list = graphics.drawCommitted(layers.scene);
+    assert.deepEqual([prepared[1].width, prepared[1].height], [5, 2]); // ceil((3.5-0)+1), (1-0)+1
+    assert.deepEqual(
+      list.commands.map((x) => x.kind),
+      ['gpu-target', 'gpu-target', 'triangles'],
+    ); // Lazy clear: no child drew.
+    await layers.dispatch(
+      command('lyprop', {id: 'group.1', left: '-2.5', top: '-1', visible: '1'}),
+    );
+    layers.commit();
+    list = graphics.drawCommitted(layers.scene);
+    const imageDraw = list.commands.find((x) => x.kind === 'triangles');
+    assert.deepEqual([...imageDraw.vertices.slice(0, 2)], [-1, 1]); // Local origin translated by -bounds.
+    assert.equal(prepared.length, 3); // Smaller bounds reuse earlier capacity.
+    assert.deepEqual([...list.commands.at(-1).vertices.slice(0, 2)], [-2.25, 2]);
+  } finally {
+    layers.close();
+  }
+});
+
+test('Artemis nested intermediate groups restore targets and snapshot each format-2 draw', async () => {
+  const {layers, graphics, prepared} = await captureFixture();
+  try {
+    await layers.dispatch(command('lyc', {id: 'group.nested.1', file: 'synthetic.png'}));
+    await layers.dispatch(
+      command('lyprop', {id: 'group.nested', clip: '0,0,2,2', intermediate_render: '1'}),
+    );
+    layers.commit();
+    const list = graphics.drawCommitted(layers.scene),
+      copies = list.commands.filter((x) => x.kind === 'gpu-copy');
+    assert.equal(prepared.length, 6); // Two images, two captures, two snapshots.
+    assert.equal(copies.length, 3); // Direct image, nested image, nested capture into outer.
+    assert.notEqual(copies[0].source, copies[1].source);
+    assert.equal(copies[0].source, copies[2].source);
+    assert.equal(list.commands.at(-2).surface, null);
+    assert.equal(graphics.drawCommitted(layers.scene).commands.length, 1);
+  } finally {
+    layers.close();
+  }
+});
+
+test('Artemis intermediate enable/disable is shared across retained holder copies, exact zero alone disables', async () => {
+  const {layers, graphics, prepared, invalidated} = await captureFixture();
+  try {
+    graphics.drawCommitted(layers.scene);
+    await layers.dispatch(command('lyprop', {id: 'group', intermediate_render: '0'}));
+    assert.equal(invalidated.length, 2); // Native node effect precedes holder commit.
+    assert.equal(graphics.drawCommitted(layers.scene).commands.length, 1);
+    await layers.dispatch(command('lyprop', {id: 'group', intermediate_render: '00'}));
+    assert.equal(
+      graphics.drawCommitted(layers.scene).commands.filter((x) => x.kind === 'gpu-copy').length,
+      1,
+    );
+    assert.equal(prepared.length, 5);
+    await layers.dispatch(command('lyprop', {id: 'group.1', intermediate_render: '1'})); // Native type1 ignores it.
+    layers.commit();
+    assert.equal(
+      graphics.drawCommitted(layers.scene).commands.filter((x) => x.kind === 'gpu-copy').length,
+      1,
+    );
+  } finally {
+    layers.close();
+  }
+  assert.equal(invalidated.length, 5);
+});
+
+test('Artemis empty captures preserve lazy-clear contents and empty auto bounds reuse existing capacity', async () => {
+  const {layers, graphics, prepared} = await captureFixture();
+  try {
+    graphics.drawCommitted(layers.scene);
+    await layers.dispatch(command('lydel', {id: 'group.1'}));
+    await layers.dispatch(command('lyprop', {id: 'group', clip: '0,0,0,0'}));
+    layers.commit();
+    const list = graphics.drawCommitted(layers.scene);
+    assert.deepEqual(
+      list.commands.map((x) => x.kind),
+      ['gpu-target', 'gpu-target', 'triangles'],
+    );
+    assert.equal(
+      list.commands.some((x) => x.clearColor),
+      false,
+    );
+    assert.equal(list.commands.at(-1).texture, 2);
+    assert.equal(prepared.length, 3);
+    assert.equal(graphics.drawCommitted(layers.scene).commands.length, 1);
+  } finally {
+    layers.close();
+  }
+});
+
+test('Artemis failed capture presentation retries preparation and GPU allocation failures preserve the old surface', async () => {
+  const {layers, graphics, prepared, target, setRejectUpload} = await captureFixture();
+  try {
+    const draw = target.draw;
+    target.draw = () => {
+      throw Error('presentation failed');
+    };
+    assert.throws(() => graphics.drawCommitted(layers.scene), /presentation failed/);
+    target.draw = draw;
+    assert.equal(
+      graphics.drawCommitted(layers.scene).commands.filter((x) => x.kind === 'gpu-copy').length,
+      1,
+    );
+    assert.equal(graphics.drawCommitted(layers.scene).commands.length, 1);
+    await layers.dispatch(command('lyprop', {id: 'group', clip: '0,0,3,2'}));
+    layers.commit();
+    setRejectUpload(true);
+    assert.throws(() => graphics.drawCommitted(layers.scene), /upload failure/);
+    assert.equal(prepared.length, 3);
+    setRejectUpload(false);
+    assert.equal(
+      graphics.drawCommitted(layers.scene).commands.filter((x) => x.kind === 'gpu-copy').length,
+      1,
+    );
+    assert.equal(prepared.length, 5);
+  } finally {
+    layers.close();
+  }
+});
+
+test('Artemis node capture snapshots release before child images and retained holder copies', async () => {
+  const {layers, graphics, prepared, invalidated} = await captureFixture();
+  graphics.drawCommitted(layers.scene);
+  await layers.dispatch(command('lyprop', {id: 'group', left: '1'}));
+  // Both holder slots remain reachable; native node capture storage is independent.
+  await layers.dispatch(command('lydel', {id: 'group'}));
+  assert.equal(invalidated.length, 0);
+  layers.commit();
+  assert.deepEqual(invalidated, [prepared[2], prepared[1], prepared[0]]);
+  layers.close();
+  assert.equal(invalidated.length, 3);
 });

@@ -29,6 +29,7 @@ export interface ArtemisLayerPropertyPatch {
   grayscale?: boolean;
   colormultiply?: number;
   clip?: ArtemisImageClip;
+  intermediateRender?: {enabled: boolean; format?: 1 | 2};
 }
 const numeric = [
   'left',
@@ -46,6 +47,7 @@ const supported = new Set<string>([
   'layermode',
   'colormultiply',
   'clip',
+  'intermediate_render',
   ...numeric,
   ...flags,
 ]);
@@ -69,6 +71,13 @@ export function artemisLayerProperties(
   for (const key of args.keys())
     if (!supported.has(key)) throw new Error(`Unsupported Artemis layer property ${key}`);
   const patch: ArtemisLayerPropertyPatch = {};
+  if (args.has('intermediate_render')) {
+    const value = args.get('intermediate_render');
+    patch.intermediateRender = {
+      enabled: value !== '0',
+      format: value === '1' ? 2 : value === '2' ? 1 : undefined,
+    };
+  }
   for (const key of numeric) {
     if (!args.has(key)) continue;
     const double = decimal(args.get(key)!);
