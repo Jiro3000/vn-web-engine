@@ -232,3 +232,46 @@ export async function compileArtemisShaderPreset(
     };
   throw Error('Unsupported Artemis custom shader source');
 }
+
+export type ArtemisShaderPresetKind =
+  | 'raster'
+  | 'screen'
+  | ArtemisColorKind
+  | ArtemisBlurKind
+  | 'radial'
+  | 'mosaic'
+  | ArtemisCompositeKind;
+/** Reconstructed preset source, independent of resource selection/registration. */
+export function artemisShaderFragmentSource(kind: ArtemisShaderPresetKind): string {
+  switch (kind) {
+    case 'raster':
+      return ARTEMIS_RASTER_FRAGMENT_SOURCE;
+    case 'screen':
+      return ARTEMIS_SCREEN_FRAGMENT_SOURCE;
+    case 'radial':
+      return ARTEMIS_RADIAL_FRAGMENT_SOURCE;
+    case 'mosaic':
+      return ARTEMIS_MOSAIC_FRAGMENT_SOURCE;
+    case 'blur_h':
+    case 'blur_v':
+      return artemisBlurFragmentSource(kind);
+    case 'sepia':
+    case 'sepia2':
+    case 'gray':
+    case 'nega':
+    case 'rgb':
+    case 'cadd':
+    case 'cmul':
+    case 'reset':
+      return artemisColorFragmentSource(kind);
+    case 'add':
+    case 'mul':
+    case 'compbr':
+    case 'compbrc':
+    case 'compdk':
+    case 'compdkc':
+      return artemisCompositeFragmentSource(kind);
+    default:
+      throw Error('Unsupported Artemis shader preset');
+  }
+}

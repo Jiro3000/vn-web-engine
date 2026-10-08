@@ -3256,3 +3256,102 @@ test('Cadd allows negative offsets unlike RGB; Cmul and reset keep their own equ
     Math.fround(0.4),
   ]);
 });
+
+test('Shader parameter lists preserve order, duplicate names, empty fields and native numeric prefixes', async () => {
+  const {artemisShaderProperties} = await import('../dist/engines/artemis/shader-properties.js');
+  const patch = artemisShaderProperties(
+    new Map([
+      ['shader', 'raster\0suffix'],
+      ['shaderconstant', 'size,missing,size, '],
+      ['size', '0.125tail,,2e1\0,99'],
+      [' ', '-0'],
+      ['shadertexture', 'user,missing,user'],
+      ['user', ':sys/user.png'],
+    ]),
+  );
+  assert.equal(patch.shader, 'raster\0suffix');
+  assert.deepEqual(patch.constants, [
+    {name: 'size', values: [0.125, 0, 20]},
+    {name: 'size', values: [0.125, 0, 20]},
+    {name: ' ', values: [-0]},
+  ]);
+  assert.deepEqual(patch.textures, [
+    {name: 'user', path: ':sys/user.png'},
+    {name: 'user', path: ':sys/user.png'},
+  ]);
+  assert.deepEqual(artemisShaderProperties(new Map([['size', '7']])), {});
+});
+test('Copied shader state retains texture resources and distinguishes native float equality from texture invalidation', async () => {
+  const {ArtemisShaderProperties} = await import('../dist/engines/artemis/shader-properties.js');
+  const state = new ArtemisShaderProperties(
+      '8953562b80608046662bd8c89015d04236b0ba3afee10c36469c11403de3ebaf',
+    ),
+    resource = {},
+    counts = {refs: 1};
+  const make = () => {
+    let live = true;
+    return {
+      resource,
+      retain() {
+        assert.ok(live);
+        counts.refs++;
+        return make();
+      },
+      release() {
+        assert.ok(live);
+        live = false;
+        counts.refs--;
+      },
+    };
+  };
+  const source = make();
+  state.setShader('raster');
+  state.setConstants([{name: 'size', values: [0.1]}]);
+  const revision = state.propertyRevision;
+  state.setConstants([{name: 'size', values: [Math.fround(0.1)]}]);
+  assert.equal(state.propertyRevision, revision);
+  state.setTextures([{name: 'user', lease: source}]);
+  assert.equal(counts.refs, 2);
+  const copy = state.copy();
+  assert.equal(counts.refs, 3);
+  state.setTextures([{name: 'user', lease: source}]);
+  assert.equal(counts.refs, 3);
+  assert.equal(state.propertyRevision, copy.propertyRevision + 1);
+  state.setConstants([{name: 'size', values: [-0]}]);
+  const zeros = state.propertyRevision;
+  state.setConstants([{name: 'size', values: [0]}]);
+  assert.equal(state.propertyRevision, zeros);
+  state.setConstants([{name: 'size', values: [NaN]}]);
+  const nan = state.propertyRevision;
+  state.setConstants([{name: 'size', values: [NaN]}]);
+  assert.equal(state.propertyRevision, nan + 1);
+  assert.equal(copy.constantValues()[0].values[0], Math.fround(0.1));
+  state.close();
+  state.close();
+  assert.equal(counts.refs, 2);
+  copy.close();
+  source.release();
+  assert.equal(counts.refs, 0);
+  assert.throws(() => state.copy(), /closed/);
+});
+
+test('Draw-list shader binding requires explicit constants and packs blur arrays across vector slots', async () => {
+  const {createArtemisDrawShaderPreset} = await import('../dist/engines/artemis/draw-shader.js');
+  const hash = '8953562b80608046662bd8c89015d04236b0ba3afee10c36469c11403de3ebaf';
+  const blur = createArtemisDrawShaderPreset(hash, 'blur_h');
+  assert.throws(() => blur.parameters(new Map()), /weights/);
+  const p = blur.parameters(
+    new Map([
+      ['weights', [1, 2, 3, 4, 5, 6, 7, 8]],
+      ['width', [0.125]],
+    ]),
+  );
+  assert.deepEqual([...p.slice(0, 9)], [1, 2, 3, 4, 5, 6, 7, 8, 0.125]);
+  assert.ok(blur.fragment.includes('parameters[2].x'));
+  assert.ok(!blur.fragment.includes('uniform'));
+  const screen = createArtemisDrawShaderPreset(hash, 'screen', 1);
+  assert.ok(screen.fragment.includes('additionalAtlas1,additionalUV1'));
+  assert.ok(screen.needsUserTexture);
+  assert.equal(screen.fields.length, 0);
+  assert.throws(() => createArtemisDrawShaderPreset(hash, 'unknown'), /Unsupported/);
+});

@@ -4,6 +4,7 @@
 <canvas id="frame" style="width: 256px; height: 128px; image-rendering: pixelated"></canvas>
 <pre id="result">Running synthetic PNG / Lua / raster checks</pre>
 <script type="module">
+  import {createArtemisDrawShaderPreset} from '../../dist/engines/artemis/draw-shader.js';
   import {artemisRadialShade} from '../../dist/engines/artemis/radial-shader.js';
   import {ArtemisBrowserRasterShader} from '../../dist/engines/artemis/browser-raster-shader.js';
   import {createArtemisRollingVoice} from '../../dist/engines/artemis/browser-rolling-voice.js';
@@ -1425,6 +1426,115 @@
         shader.dispose();
       }
     }
+    const drawCanvas = document.createElement('canvas'),
+      drawTarget = new CanvasDrawTarget(drawCanvas, 4, 4);
+    const drawFore = {width: 4, height: 4, pixels: customPixels},
+      drawUser = {width: 1, height: 1, pixels: new Uint8Array([128, 64, 192, 128])};
+    const drawVertices = new Float32Array([
+      -1, 1, 0, 0.01, 0.02, 0.03, 0.5, 0, 0, 1, 1, 0, 0.01, 0.02, 0.03, 0.5, 1, 0, -1, -1, 0, 0.01,
+      0.02, 0.03, 0.5, 0, 1, 1, -1, 0, 0.01, 0.02, 0.03, 0.5, 1, 1,
+    ]);
+    const replaceBlend = {
+      color: {source: 'one', destination: 'zero', operation: 'add'},
+      alpha: {source: 'one', destination: 'zero', operation: 'add'},
+    };
+    try {
+      for (const kind of [
+        'add',
+        'blur_h',
+        'blur_v',
+        'cadd',
+        'cmul',
+        'compbr',
+        'compbrc',
+        'compdk',
+        'compdkc',
+        'gray',
+        'mosaic',
+        'mul',
+        'nega',
+        'radial',
+        'raster',
+        'reset',
+        'rgb',
+        'screen',
+        'sepia',
+        'sepia2',
+      ]) {
+        const p = {
+          alpha: 0.5,
+          red: 0.1,
+          green: 0.8,
+          blue: 0.6,
+          param: 0.75,
+          angle: 90,
+          inter: 0,
+          size: kind === 'mosaic' ? 2 : kind === 'radial' ? 0.8 : 0.25,
+          ratio: 1,
+          step: 0.25,
+          weights: [0.5, 0.25, 0, 0, 0, 0, 0, 0],
+          ax: 0.5,
+          ay: 0.5,
+          fade: 1,
+        };
+        const adapter = createArtemisDrawShaderPreset(revision, kind);
+        const constants = new Map(
+          adapter.fields.map((field) => [
+            field.name,
+            field.name === 'weights'
+              ? p.weights
+              : [field.name === 'width' || field.name === 'height' ? p.step : p[field.name]],
+          ]),
+        );
+        const reference = new ArtemisBrowserRasterShader(revision, customGl, kind);
+        try {
+          reference.draw(drawFore, 4, 4, p, {filter: 'nearest', address: 'clamp'}, drawUser);
+          const expected = new Uint8Array(64);
+          customGl.readPixels(0, 0, 4, 4, customGl.RGBA, customGl.UNSIGNED_BYTE, expected);
+          drawTarget.draw(
+            {
+              sprites: [],
+              commands: [
+                {
+                  kind: 'triangles',
+                  texture: 1,
+                  vertices: drawVertices,
+                  topology: 'triangle-strip',
+                  normalizedUV: true,
+                  transform: new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]),
+                  filter: 'nearest',
+                  blendState: replaceBlend,
+                  fragment: adapter.fragment,
+                  parameters: adapter.parameters(constants),
+                  additionalTextures: adapter.needsUserTexture
+                    ? [
+                        {
+                          texture: 2,
+                          uv: new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]),
+                          filter: 'nearest',
+                        },
+                      ]
+                    : undefined,
+                },
+              ],
+            },
+            (id) => (id === 1 ? drawFore : drawUser),
+          );
+          const gl = drawTarget.gl,
+            actual = new Uint8Array(64);
+          gl.readPixels(0, 0, 4, 4, gl.RGBA, gl.UNSIGNED_BYTE, actual);
+          for (let i = 0; i < 64; i++)
+            assert(
+              Math.abs(actual[i] - expected[i]) <= 1,
+              'shared draw shader ' + kind + ':' + i + ':' + actual[i] + '/' + expected[i],
+            );
+        } finally {
+          reference.dispose();
+        }
+      }
+    } finally {
+      drawTarget.dispose();
+    }
     window.result = {
       passed: true,
       nativeFontWorker: true,
@@ -1437,6 +1547,7 @@
       nativeBufferedSoundDecoderIntegration: true,
       nativeRollingAudioWorklet: true,
       nativeCustomRasterShader: true,
+      nativeAllCustomDrawShaders: true,
       nativeCustomScreenShader: true,
       nativeStereoAttenuation: true,
       audioDeviceOutput: false,

@@ -91,7 +91,7 @@ through native voice owners, without an audio device. It supports sound-finish
 registration, then requires a graphics feature owner. An explicitly simulated
 feature-level diagnostic reaches the next unsupported `lyshader` command.
 
-Build and215 focused tests pass. The full1889-test suite has1852 passes and the
+Build and218 focused tests pass. The full1892-test suite has1855 passes and the
 same37 baseline failures, with no new failing names. Synthetic browser checks
 cover real font/image workers, GPU scenes and sound lookup through actual offline
 WebAudio voices. These checks do not establish production game compatibility.
@@ -108,3 +108,8 @@ is independent of layer existence. Nonvisual probing completes all shader loads,
 then reaches authentication() in init.lua. The distributed auth.lua is empty;
 native file-existence/lookup behavior is under investigation. Actor shader binding
 and uniform jobs remain separate from preset compilation.
+
+CLayer shader state now owns ordered constants and retained texture leases.
+All twenty executables also run through the shared DrawList renderer, verified
+against dedicated WebGL outputs. Native reflection/preparation/default constants
+and per-actor ImageGraphics wiring remain separate required work.

@@ -1067,3 +1067,18 @@ RGB zeros negative-coefficient channels. Mosaic uses floor(UV*grid)/grid with
 w=size*ratio,h=size; grid inputs are not pixel dimensions. Caller/target own
 filtering, addressing and clamping. These known presets are not a general HLSL
 compiler; actor shader properties and constant/texture jobs require separate owners.
+
+`shader-properties.ts` parses native shader/shaderconstant/shadertexture property
+lists and owns the CLayer shader state. Constants preserve order, duplicate names,
+float32 equality and copied state; texture assignments retain complete replacements
+before releasing old resources, and always invalidate preparation. Native parsing
+of nonfinite/hexadecimal floating literals is outside the finite-decimal subset.
+The resource loader remains mandatory; parsing paths alone does not load textures.
+
+`draw-shader.ts` adapts all twenty reconstructed programs to the shared DrawList
+shade/atlas/tex/tint/parameters ABI, with explicit required named uniform values and
+user texture index. Real synthetic GPU tests compare every adapted program against
+the dedicated WebGL executable, including nonzero UV transforms and user texture
+composites. This is executable renderer integration, not native reflection/constant
+buffer packing: missing coefficients are refused and actor preparation/jobs still
+require wiring into ImageGraphics and retained resource owners.
