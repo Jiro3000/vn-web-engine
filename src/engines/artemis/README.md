@@ -985,3 +985,24 @@ Progressive decode timing, damaged/chained streams and DirectSound lost-buffer
 recovery remain separate native services. Fractional device rates use browser
 linear interpolation; no target-driver bit identity is claimed. Worklet control
 commands have completion fences for tests and callers that must observe state.
+
+## Offline PCM and sound completion
+
+`createArtemisOfflineSoundVoices` uses actual decoded PCM and the same progressive
+processor without opening an audio context or device. Its caller renders explicit
+sample-frame blocks and supplies scheduler ticks. Cached clips use the shared
+`PcmClipRenderer`; frame positions advance from consumed samples, not timers.
+`--sound-render` enables this diagnostic after `--sound-decode`, reports PCM hashes
+and explicit clock/rounding policy, and can pass real `seplay` control flow.
+
+`ArtemisSoundFinish` captures copied set/del registrations. Missing `id` chooses
+music; present empty `id` chooses that exact SE slot. Missing slots do nothing.
+The voice owner's native playing flag settles on frame tick, then invokes its
+finish callback once. Explicit stop and fade-out do not emit natural completion.
+The required event dispatcher owns filter/scope/queue semantics of the captured
+command. The probe currently refuses that script dispatcher if a callback fires;
+registration itself is supported. It does not invent default event actions.
+
+Graphics feature level is published only through an explicit revision-selected
+owner callback. `--graphics-feature-level=NUMBER` is an optional simulated diagnostic
+value, recorded as such; it is not a report about browser/Windows GPU capability.

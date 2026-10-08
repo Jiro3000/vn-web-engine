@@ -86,9 +86,12 @@ Native PCM16 conversion and buffered=-1 codec services now use actual reusable
 Vorbis/integer-PCM workers. Cached repeat includes the whole A+B clip; progressive
 B-only refill now uses a native two-half ring and actual AudioWorklet voices.
 Engine scheduler ticks pump inactive halves; device callbacks advance the cursor. The diagnostic supplies
-Ogg-only registration and still refuses actual playback.
+Ogg-only registration by default. Optional `--sound-render` consumes actual PCM
+through native voice owners, without an audio device. It supports sound-finish
+registration, then requires a graphics feature owner. An explicitly simulated
+feature-level diagnostic reaches the next unsupported `lyshader` command.
 
-Build and201 focused tests pass. The full1875-test suite has1838 passes and the
+Build and205 focused tests pass. The full1879-test suite has1842 passes and the
 same37 baseline failures, with no new failing names. Synthetic browser checks
 cover real font/image workers, GPU scenes and sound lookup through actual offline
 WebAudio voices. These checks do not establish production game compatibility.

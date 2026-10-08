@@ -13,6 +13,7 @@ interface Effect {
   readonly jobs: Map<number, ArtemisLinearIntegerTween>;
   pan: number;
   playing: boolean;
+  onFinish?: () => void;
 }
 function int32(value: number): void {
   if (!Number.isInteger(value) || value < -0x80000000 || value > 0x7fffffff)
@@ -60,15 +61,20 @@ export class ArtemisEffectVoices {
     effect.voice.dispose();
   }
   private collectInactive(): void {
-    for (const [index, effect] of this.effects)
-      if (!effect.playing || effect.voice.ended()) this.retire(index, effect);
+    for (const [index, effect] of this.effects) if (!effect.playing) this.retire(index, effect);
   }
   get count(): number {
     return this.effects.size;
   }
   isPlaying(index: number): boolean {
     const effect = this.effects.get(index);
-    return !!effect?.playing && !effect.voice.ended();
+    return !!effect?.playing;
+  }
+  /** ae2e0/ae440 assign/clear the existing player's callback; missing indices do nothing. */
+  setFinishCallback(index: number, callback: (() => void) | null): void {
+    this.open();
+    const effect = this.effects.get(index);
+    if (effect) effect.onFinish = callback ?? undefined;
   }
   async prepareEffect(file: string, bufferMode: number): Promise<number> {
     this.open();
@@ -173,8 +179,13 @@ export class ArtemisEffectVoices {
         ),
       );
     }
-    effect.voice.setLoop!(loop);
-    effect.voice.pause(false);
+    // Native164410 does nothing if its playing flag is already set. A stopped
+    // player can be reused, starting at its reset device cursor.
+    if (!effect.playing) {
+      if (effect.voice.ended()) effect.voice.stop!();
+      effect.voice.setLoop!(loop);
+      effect.voice.pause(false);
+    }
     effect.playing = true;
   }
   stopEffect(index: number, milliseconds: number): void {
@@ -205,7 +216,15 @@ export class ArtemisEffectVoices {
     this.open();
     if (!Number.isInteger(now) || now < 0 || now > 0xffffffff)
       throw Error('Invalid Artemis audio clock');
-    for (const effect of [...this.effects.values()]) effect.voice.pump?.();
+    for (const effect of [...this.effects.values()]) {
+      if (!effect.playing) continue;
+      effect.voice.pump?.();
+      if (effect.voice.ended()) {
+        effect.voice.stop!();
+        effect.playing = false;
+        effect.onFinish?.();
+      }
+    }
     for (const effect of [...this.effects.values()])
       for (const [key, job] of [...effect.jobs])
         if (effect.jobs.get(key) === job && job.tick(now)) effect.jobs.delete(key);

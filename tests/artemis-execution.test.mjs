@@ -2877,3 +2877,156 @@ test('Device-driven rolling PCM renderer preserves pause, cursor, scheduler refi
   renderer.receive({id: 6, command: {kind: 'dispose'}});
   assert.equal(renderer.render(block()), false);
 });
+
+test('Offline PCM voices render actual cached gain/pan and progressive native completion', async () => {
+  const {createArtemisOfflineSoundVoices} =
+    await import('../dist/engines/artemis/offline-sound-voices.js');
+  const {encodeWav} = await import('../dist/audio/pcm.js');
+  const {ARTEMIS_3179_EXECUTABLE_SHA256: sha} = await import('../dist/engines/artemis/revision.js');
+  const data = encodeWav({
+    sampleRate: 1000,
+    sampleCount: 2,
+    channels: [Float32Array.from([0.25, 0.5])],
+  });
+  const owner = createArtemisOfflineSoundVoices(
+    sha,
+    async (path) => (path === 'voice.wav' ? data : null),
+    'nearest-even',
+    1000,
+  );
+  try {
+    const cached = await owner.effects.prepareEffect('voice.wav', -1);
+    owner.effects.setEffectGain(cached, 0, 500);
+    owner.effects.setEffectPan(cached, 500, 0);
+    owner.effects.startEffect(cached, 0, false);
+    const output = owner.render(2),
+      gain = 10 ** (-602 / 2000);
+    assert.ok(Math.abs(output[0][0] - 0.25 * gain * gain) < 1e-6);
+    assert.ok(Math.abs(output[1][0] - 0.25 * gain) < 1e-6);
+    assert.equal(owner.effects.isPlaying(cached), true);
+    owner.effects.tick(1);
+    assert.equal(owner.effects.isPlaying(cached), false);
+    const stream = await owner.effects.prepareEffect('voice.wav', 2);
+    owner.effects.startEffect(stream, 0, false);
+    const first = owner.render(3);
+    assert.deepEqual([...first[0]], [0.25, 0.5, 0]);
+    assert.equal(owner.effects.isPlaying(stream), true);
+    owner.effects.tick(3);
+    owner.render(1);
+    owner.effects.tick(4);
+    assert.equal(owner.effects.isPlaying(stream), false);
+    assert.deepEqual([...owner.render(2)[0]], [0, 0]);
+  } finally {
+    owner.close();
+  }
+});
+
+test('Sound-finish registration selects exact native slots and captures independent event commands', async () => {
+  const {ArtemisSoundFinish} = await import('../dist/engines/artemis/sound-finish.js');
+  const {ARTEMIS_3179_EXECUTABLE_SHA256: sha} = await import('../dist/engines/artemis/revision.js');
+  const effects = new Map([
+      ['', 11],
+      ['se', 12],
+    ]),
+    handlers = new Map(),
+    events = [];
+  const controller = new ArtemisSoundFinish(sha, {
+    currentFile: () => 'system/first.iet',
+    musicIndex: () => 7,
+    effectIndex: (id) => effects.get(id),
+    setMusicFinish: (index, cb) => handlers.set('m' + index, cb),
+    setEffectFinish: (index, cb) => handlers.set('s' + index, cb),
+    emit: (tag) => events.push(tag),
+  });
+  const tag = {
+    name: 'setonsoundfinish',
+    sourceLine: 9,
+    args: new Map([
+      ['id', ''],
+      ['label', 'done'],
+    ]),
+  };
+  assert.equal(controller.dispatch(tag), true);
+  tag.args.set('label', 'mutated');
+  handlers.get('s11')();
+  assert.equal(events[0].args.get('label'), 'done');
+  assert.equal(events[0].args.get('file'), 'system/first.iet');
+  events[0].args.set('label', 'event mutation');
+  handlers.get('s11')();
+  assert.equal(events[1].args.get('label'), 'done');
+  controller.dispatch({
+    name: 'setonsoundfinish',
+    sourceLine: 0,
+    args: new Map([
+      ['function', 'musicdone'],
+      ['handler', 'calllua'],
+    ]),
+  });
+  assert.equal(typeof handlers.get('m7'), 'function');
+  controller.dispatch({name: 'delonsoundfinish', sourceLine: 0, args: new Map([['id', '']])});
+  assert.equal(handlers.get('s11'), null);
+  controller.dispatch({
+    name: 'setonsoundfinish',
+    sourceLine: 0,
+    args: new Map([['id', 'missing']]),
+  });
+  assert.equal(handlers.size, 2);
+});
+
+test('Sound completion callbacks are frame-driven, reusable and never emitted by explicit stop', async () => {
+  const {createArtemisOfflineSoundVoices} =
+    await import('../dist/engines/artemis/offline-sound-voices.js');
+  const {encodeWav} = await import('../dist/audio/pcm.js');
+  const {ARTEMIS_3179_EXECUTABLE_SHA256: sha} = await import('../dist/engines/artemis/revision.js');
+  const data = encodeWav({sampleRate: 1000, sampleCount: 1, channels: [Float32Array.from([0.25])]});
+  const owner = createArtemisOfflineSoundVoices(sha, async () => data, 'nearest-even', 1000),
+    finished = [];
+  try {
+    const index = await owner.effects.prepareEffect('one.wav', -1);
+    owner.effects.setFinishCallback(index, () => finished.push(index));
+    owner.effects.startEffect(index, 0, false);
+    owner.render(1);
+    assert.equal(owner.effects.isPlaying(index), true);
+    assert.deepEqual(finished, []);
+    owner.effects.tick(1);
+    assert.equal(owner.effects.isPlaying(index), false);
+    assert.deepEqual(finished, [index]);
+    owner.effects.tick(2);
+    assert.deepEqual(finished, [index]);
+    owner.effects.startEffect(index, 0, false);
+    assert.deepEqual([...owner.render(1)[0]], [0.25]);
+    owner.effects.tick(3);
+    assert.deepEqual(finished, [index, index]);
+    owner.effects.startEffect(index, 0, false);
+    owner.effects.stopEffect(index, 0);
+    owner.effects.tick(4);
+    assert.deepEqual(finished, [index, index]);
+  } finally {
+    owner.close();
+  }
+});
+
+test('Graphics feature publication requires an explicit revision-selected owner value', async () => {
+  const {initializeArtemisGraphicsFeatureLevel, ARTEMIS_3179_EXECUTABLE_SHA256: sha} =
+    await import('../dist/engines/artemis/revision.js');
+  const {ArtemisVariables} = await import('../dist/engines/artemis/variables.js');
+  const variables = new ArtemisVariables();
+  assert.throws(() => variables.queryLiteral('s.windowsfeaturelevel'), /Unsupported native/);
+  initializeArtemisGraphicsFeatureLevel(variables, sha, () => 45056);
+  assert.equal(new TextDecoder().decode(variables.read('s.windowsfeaturelevel')), '45056');
+  assert.throws(
+    () => initializeArtemisGraphicsFeatureLevel(variables, sha, () => NaN),
+    /feature level/,
+  );
+  assert.throws(
+    () =>
+      initializeArtemisGraphicsFeatureLevel(variables, sha, () => {
+        throw Error('no graphics owner');
+      }),
+    /no graphics owner/,
+  );
+  assert.throws(
+    () => initializeArtemisGraphicsFeatureLevel(variables, '0'.repeat(64), () => 45056),
+    /Unsupported Artemis/,
+  );
+});

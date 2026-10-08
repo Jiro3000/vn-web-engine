@@ -3663,6 +3663,8 @@ test('Native effect voices drive the real shared transport through gain, loop, s
     assert.equal(effects.count, 1);
     effects.startEffect(next, 0, false);
     nodes[1].onended();
+    assert.equal(effects.isPlaying(next), true); // Native playing flag settles on its frame tick.
+    effects.tick(1501);
     assert.equal(effects.isPlaying(next), false);
     await effects.prepareEffect('last', 0);
     assert.equal(effects.count, 1);

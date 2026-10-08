@@ -1,8 +1,10 @@
-/** Runs Lua/script control only; no renderer, media decoder or native game process. */
+/** Nonvisual Lua/script diagnostics with optional actual memory asset/PCM providers. No native game process or audio-device output. */
 import {createHash} from 'node:crypto';
 import {createArtemisSurfacePreloadFixture} from './artemis-surface-preload-fixture.mjs';
 import {createArtemisGlyphLayoutFixture} from './artemis-glyph-layout-fixture.mjs';
+import {createArtemisOfflineSoundFixture} from './artemis-offline-sound-fixture.mjs';
 import {createArtemisSoundDecodeFixture} from './artemis-sound-decode-fixture.mjs';
+import {ArtemisSoundFinish} from '../dist/engines/artemis/sound-finish.js';
 import {ArtemisSePlay} from '../dist/engines/artemis/se-play.js';
 import {ArtemisSeStop} from '../dist/engines/artemis/se-stop.js';
 import {ArtemisPrint} from '../dist/engines/artemis/print.js';
@@ -12,6 +14,7 @@ import {createMetadataLayerFixture} from './artemis-metadata-layer-fixture.mjs';
 import {BrowserWindowsSystemProfileHost} from '../dist/platform/browser-windows-system-profile.js';
 import {
   initializeArtemisVariables,
+  initializeArtemisGraphicsFeatureLevel,
   initializeArtemisWindowsVersion,
   initializeArtemisResourcePaths,
 } from '../dist/engines/artemis/revision.js';
@@ -57,6 +60,13 @@ const metadataLayers = process.argv.slice(3).includes('--image-metadata');
 const glyphLayout = process.argv.slice(3).includes('--glyph-layout');
 const surfacePreloads = process.argv.slice(3).includes('--surface-preloads');
 const soundDecode = process.argv.slice(3).includes('--sound-decode');
+const soundRender = process.argv.slice(3).includes('--sound-render');
+const graphicsFeatureArgument = process.argv
+  .slice(3)
+  .find((value) => value.startsWith('--graphics-feature-level='));
+const simulatedGraphicsFeatureLevel =
+  graphicsFeatureArgument === undefined ? null : Number(graphicsFeatureArgument.split('=')[1]);
+if (soundRender && !soundDecode) throw Error('--sound-render requires --sound-decode');
 if (soundDecode && !surfacePreloads) throw Error('--sound-decode requires --surface-preloads');
 if (surfacePreloads && !glyphLayout) throw Error('--surface-preloads requires --glyph-layout');
 if (glyphLayout && !metadataLayers)
@@ -137,6 +147,12 @@ try {
   if (executable === null) throw new Error('Missing Artemis executable');
   const executableSha256 = createHash('sha256').update(executable).digest('hex');
   initializeArtemisVariables(variables, executableSha256);
+  if (simulatedGraphicsFeatureLevel !== null)
+    initializeArtemisGraphicsFeatureLevel(
+      variables,
+      executableSha256,
+      () => simulatedGraphicsFeatureLevel,
+    );
   if (glyphLayout)
     glyphFixture = createArtemisGlyphLayoutFixture(executableSha256, (path) =>
       installation.files.read(path),
@@ -146,14 +162,15 @@ try {
       installation.files.read(path),
     );
   if (soundDecode)
-    soundFixture = createArtemisSoundDecodeFixture((path) => installation.files.read(path));
+    soundFixture = soundRender
+      ? createArtemisOfflineSoundFixture(executableSha256, (path) => installation.files.read(path))
+      : createArtemisSoundDecodeFixture((path) => installation.files.read(path));
   // Installation-relative read-only namespace; no Windows known-folder resolution or writes.
   if (savePath !== undefined && savePathCsidl === undefined && /^[\w-]+$/.test(savePath))
     initializeArtemisResourcePaths(variables, {dataPath: '', savePath});
   const systemProfile = new BrowserWindowsSystemProfileHost();
   initializeArtemisWindowsVersion(variables, () => systemProfile.readVersion());
-  // No playback command is accepted yet, so the actual diagnostic SE table is
-  // empty. A later nonempty slot must have a real voice owner, never a no-op.
+  // Slots begin empty; --sound-render supplies actual non-device PCM voices.
   const effectSlots = new Map(),
     effectHistory = new Map();
   const seStop = new ArtemisSeStop(executableSha256, {
@@ -166,6 +183,23 @@ try {
     hasEffectHistory: (id) => effectHistory.has(id),
     deleteEffectHistory: (id) => effectHistory.delete(id),
   });
+  const soundFinish = soundRender
+    ? new ArtemisSoundFinish(executableSha256, {
+        currentFile: () => script.currentFile,
+        musicIndex: () => 0, // Actual empty diagnostic music slot; no music command accepted.
+        effectIndex: (id) => effectSlots.get(id),
+        setEffectFinish: (index, callback) => soundFixture.setFinishCallback(index, callback),
+        setMusicFinish: (index) => {
+          if (index !== 0) throw Error('Unsupported diagnostic music callback owner');
+        },
+        emit: (command) => {
+          modeEffects.push({
+            soundFinishCommand: {name: command.name, args: Object.fromEntries(command.args)},
+          });
+          throw Error('Unsupported diagnostic sound-finish script event dispatcher');
+        },
+      })
+    : null;
   const modes = new ArtemisModes({
     writeStatus: (name, value) => (variables.write(name, value), modeEffects.push({name, value})),
     commandSkipChanged: (active) => modeEffects.push({commandSkip: active}),
@@ -516,6 +550,7 @@ try {
       variables.dispatch(tag) ||
       caption.dispatch(tag) ||
       seStop.dispatch(tag) ||
+      soundFinish?.dispatch(tag) ||
       mouse.dispatch(tag) ||
       wait.dispatch(tag)
     )
@@ -578,6 +613,10 @@ try {
         pendingResource = null;
         await operation;
         resourceResumptions++;
+        if (soundRender) {
+          probeTick = (probeTick + 1) >>> 0;
+          soundFixture.advanceToTick(probeTick);
+        }
         if (script.pendingLuaCalls) script.resumeLua();
         else script.resume();
         script.run(1000);
@@ -586,6 +625,7 @@ try {
       if (!advanceWaits || !wait.pending || advancedWaits >= 100) break;
       probeTick = (wait.deadlineTick + 1) >>> 0;
       advancedWaits++;
+      soundFixture?.advanceToTick?.(probeTick);
       if (!wait.tick(probeTick)) break;
       script.run(1000);
     }
@@ -617,6 +657,10 @@ try {
         dialogRequests: dialogs,
         dialogPending: dialog.pending,
         simulatedDialogResult,
+        graphicsFeatureLevel:
+          simulatedGraphicsFeatureLevel === null
+            ? null
+            : {value: simulatedGraphicsFeatureLevel, simulation: true},
         advanceWaits,
         advancedWaits,
         timedWaitPending: wait.pending,

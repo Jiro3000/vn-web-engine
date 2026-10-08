@@ -71,3 +71,18 @@ export function initializeArtemisResourcePaths(
   variables.write('s.datapath', paths.dataPath);
   variables.write('s.savepath', paths.savePath);
 }
+
+/** Native c37e0 queries graphics owner.virtual+a8 and publishes its feature level.
+ * The renderer supplies the value; no capability or missing-owner fallback is inferred.
+ */
+export function initializeArtemisGraphicsFeatureLevel(
+  variables: ArtemisVariables,
+  executableSha256: string,
+  readFeatureLevel: () => number,
+): void {
+  artemisRevision(executableSha256);
+  const value = readFeatureLevel();
+  if (!Number.isInteger(value) || value < 0 || value > 0x7fffffff)
+    throw Error('Invalid Artemis graphics feature level');
+  variables.write('s.windowsfeaturelevel', String(value));
+}
