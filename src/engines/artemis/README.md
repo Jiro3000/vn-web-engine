@@ -1152,3 +1152,10 @@ The frame owner must call beginEventPhase after scene update and before sound/mu
 settling, matching c05e2's word30 reset. This does not implement the full frame loop.
 The standalone TimedWait already owns callback/save effects: a unified wait adapter
 must choose one owner before wiring it to RunMode, to avoid duplicate callbacks.
+
+`reportIncludeError` supplies native12d080 level1 final-error reporting and return
+to the include caller. Without that owner, diagnostics retain final refusal.
+Poisoned/closed Lua VMs remain nonrecoverable. Packed loadbuffer uses a literal
+filename chunk name, while plain loadfile uses @filename. The nonvisual probe can
+opt into --native-include-reporting with error records and explicit host guards.
+This does not handle errors in an outer calllua after a successful include.
