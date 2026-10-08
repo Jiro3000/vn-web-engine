@@ -4513,3 +4513,46 @@ test('Suspended calllua failures close their coroutine, report once and resume t
     lua.close();
   }
 });
+
+test('Native stop shows the wait indicator, enters run mode 3 with the save gate and stops automode', async () => {
+  const {ArtemisStop} = await import('../dist/engines/artemis/stop.js');
+  const {ArtemisModes} = await import('../dist/engines/artemis/modes.js');
+  const log = [];
+  const modes = new ArtemisModes({
+    writeStatus: (name, value) => log.push(name + '=' + value),
+    automodeChanged: () => {},
+    commandSkipChanged: () => {},
+    controlSkipChanged: () => {},
+    releaseScheduler: () => {},
+  });
+  let entered = true;
+  const stop = new ArtemisStop(
+    modes,
+    {request: (file, transient, force) => (log.push(['save', file, transient, force]), true)},
+    {
+      debugSkipActive: () => false,
+      showWaitIndicator: (skip) => log.push(skip ? 'skipIndicator' : 'messageIndicator'),
+      enterStopMode: () => (log.push('mode3'), entered),
+    },
+  );
+  assert.equal(stop.dispatch({name: 'wait', args: new Map()}), false);
+  modes.autosave = 2;
+  modes.setAutomode(true);
+  log.length = 0;
+  assert.equal(stop.dispatch({name: 'stop', args: new Map()}), true);
+  assert.deepEqual(log.splice(0), [
+    'messageIndicator',
+    'mode3',
+    ['save', 'autosave.dat', undefined, undefined],
+    's.status.automode=0',
+  ]);
+  modes.setCommandSkip(true);
+  log.length = 0;
+  stop.dispatch({name: 'stop', args: new Map()});
+  assert.deepEqual(log, ['skipIndicator', 'mode3']);
+  modes.setCommandSkip(false);
+  entered = false;
+  log.length = 0;
+  stop.dispatch({name: 'stop', args: new Map()});
+  assert.deepEqual(log, ['messageIndicator', 'mode3']);
+});

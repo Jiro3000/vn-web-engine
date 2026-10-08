@@ -85,6 +85,12 @@ clock. fullscreen and minimize use shared `WindowStateHost`
 (`src/platform/window-state.ts`); the software-renderer guard and display reset are host
 operations. Unknown commands do nothing.
 
+`stop.ts` owns the stop tag (`0x1400c7bb0`). It shows the wait indicator chosen like the
+wait tag (skip indicator while skipping or debug-skipping, otherwise the message layer's),
+enters run mode 3 through the host (refused from mode 13) with the mode 3 save gate, and
+turns an active automode off without force. Click consumption of mode 3 belongs to the
+frame owner.
+
 `events.ts` copies recognized callback names and applies partial updates, including
 the legacy onClickWait alias. The frame/input/save owner emits callbacks; failed
 frame/click-wait callbacks are disabled. Named Lua calls resolve dotted table paths and supply

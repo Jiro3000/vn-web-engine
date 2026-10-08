@@ -48,6 +48,7 @@ import {ArtemisNativeLibrary} from '../dist/engines/artemis/native-library.js';
 import {BrowserWindowsDynamicLibraryHost} from '../dist/platform/windows-dynamic-library.js';
 import {ArtemisModes} from '../dist/engines/artemis/modes.js';
 import {ArtemisExec} from '../dist/engines/artemis/exec.js';
+import {ArtemisStop} from '../dist/engines/artemis/stop.js';
 import {luaText} from '../dist/core/lua51/runtime.js';
 if (!process.argv[2]) throw new Error('Usage: node tools/probe-artemis.mjs GAME_DIRECTORY');
 const dialogResultArgument = process.argv
@@ -326,6 +327,16 @@ try {
       }
     },
     resumeMessageState: () => modeEffects.push({resumeMessageState: true}),
+  });
+  // Run mode 3 has no click/frame owner in this probe: stop pauses at an input boundary.
+  const stop = new ArtemisStop(modes, save, {
+    debugSkipActive: () => false,
+    showWaitIndicator: (skip) => modeEffects.push({waitIndicator: skip ? 'skip' : 'message'}),
+    enterStopMode: () => {
+      modeEffects.push({runMode: 3, simulation: true});
+      script.pause();
+      return true;
+    },
   });
   const messageLayers = new Set(),
     messageHistory = new Set(),
@@ -613,7 +624,8 @@ try {
       seStop.dispatch(tag) ||
       soundFinish?.dispatch(tag) ||
       mouse.dispatch(tag) ||
-      wait.dispatch(tag)
+      wait.dispatch(tag) ||
+      stop.dispatch(tag)
     )
       return;
     if (shaderFixture && tag.name === 'lyshader') {
