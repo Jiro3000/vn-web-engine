@@ -3170,3 +3170,15 @@ test('Blur samples all fifteen taps in native positive-negative order and scales
     assert.equal(out[kind === 'blur_h' ? 1 : 0], 0.25);
   }
 });
+
+test('RGB preset zeros negative channels, adds nonnegative offsets and nega preserves alpha', async () => {
+  const {artemisColorShade} = await import('../dist/engines/artemis/color-shader.js');
+  const sample = () => [0.2, 0.4, 0.6, 0.8];
+  assert.deepEqual(
+    artemisColorShade('rgb', sample, 0, 0, {alpha: 0.5, red: -0.01, green: 0, blue: 0.2}),
+    [0, Math.fround(0.4), Math.fround(Math.fround(0.6) + Math.fround(0.2)), Math.fround(0.4)],
+  );
+  const n = artemisColorShade('nega', sample, 0, 0, {alpha: 0.5});
+  for (let i = 0; i < 3; i++) assert.ok(Math.abs(n[i] - (1 - sample()[i])) < 1e-7);
+  assert.equal(n[3], Math.fround(0.4));
+});

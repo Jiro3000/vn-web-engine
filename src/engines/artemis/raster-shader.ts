@@ -145,6 +145,8 @@ export async function compileArtemisShaderPreset(
       shade: artemisScreenShade,
     };
   const colors: Record<string, ArtemisColorKind> = {
+    c7c5cebcfb6cacb90e9c7dc22c847ece6f3954b725eb9c565920be1a2a430c0d: 'nega',
+    d4204bafc284e3becc3cdcf3a0477c9c34ee4ecfea27abf716229d81132017b0: 'rgb',
     '36c560ed78d7f48b8f04426b45c1cc18c441e0fbcad9967f0809a26e5c391e9b': 'sepia',
     a637849ea00721f8aebdf2a197c33c7198951401bc5530fc89bfa13973b31fc6: 'sepia2',
     '693a8b58386c0b58e7e8cbb9b655ca42d71ce6792db7a6172ad3eac4836c3e1e': 'gray',

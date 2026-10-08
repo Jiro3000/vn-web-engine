@@ -182,7 +182,7 @@ export class ArtemisBrowserRasterShader {
       );
       gl.uniform1i(gl.getUniformLocation(this.program, 'uUser'), 1);
     }
-    if (this.kind === 'sepia' || this.kind === 'sepia2') {
+    if (this.kind === 'sepia' || this.kind === 'sepia2' || this.kind === 'rgb') {
       const color = p as ArtemisColorUniforms;
       if (
         ![color.red, color.green, color.blue].every(

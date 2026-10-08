@@ -1044,3 +1044,8 @@ in center, positive, negative order for offsets 1..7, with eight explicit weight
 and a UV step on the selected axis. It scales accumulated alpha after filtering.
 These presets have real CPU references and linked WebGL2 implementations;
 GPU dot/FMA rounding and sampler policy can affect numerical results.
+
+Nega inverts foreground RGB without changing its alpha before global alpha.
+RGB sets a channel to zero for a negative coefficient, otherwise adds that
+coefficient. Values are not clamped by the shader; output target format decides
+clamping. Both presets require exact original-source signatures.
