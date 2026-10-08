@@ -3,6 +3,8 @@
  */
 import {ArtemisImageLoader} from '../dist/engines/artemis/image-loader.js';
 import {ArtemisLayers} from '../dist/engines/artemis/layers.js';
+import {ArtemisLayerCommands} from '../dist/engines/artemis/layer-commands.js';
+import {ArtemisLayerEventSlots, ArtemisLayerEvents} from '../dist/engines/artemis/layer-events.js';
 import {ArtemisDisplayObject} from '../dist/engines/artemis/display-object.js';
 import {ArtemisStage} from '../dist/engines/artemis/stage.js';
 import {artemisRevision} from '../dist/engines/artemis/revision.js';
@@ -100,6 +102,7 @@ export function createMetadataLayerFixture(hash, readFile) {
         id: ++sequence,
         display: old.display.copy(),
         properties: {...old.properties},
+        events: old.events?.copy(),
       };
       if (actor.kind === 'message') actor.messageOwner.retain(actor.message);
       actors.add(actor);
@@ -128,6 +131,11 @@ export function createMetadataLayerFixture(hash, readFile) {
     },
   };
   const layers = new ArtemisLayers(hash, source, host);
+  // lyevent history only; other layer commands are recorded as simulated effects above.
+  const layerCommands = new ArtemisLayerCommands(hash);
+  const layerEvents = new ArtemisLayerEvents(layers.scene, layerCommands, {
+    slots: (actor) => (actor.events ??= new ArtemisLayerEventSlots()),
+  });
   const stage = new ArtemisStage(hash, {
     captureMode: () => 0,
     transitionState: () => transitionState,
@@ -162,9 +170,13 @@ export function createMetadataLayerFixture(hash, readFile) {
       effects.push({kind: 'messageAttach', id: name, simulation: true});
     },
     detachMessageActor: (name) => layers.detachActor(name),
-    accepts: (tag) => ['lyc', 'lyprop', 'lydel', 'flip'].includes(tag.name),
+    accepts: (tag) => ['lyc', 'lyprop', 'lydel', 'flip', 'lyevent'].includes(tag.name),
     dispatch: (tag) =>
-      tag.name === 'flip' ? Promise.resolve(stage.dispatch(tag)) : layers.dispatch(tag),
+      tag.name === 'flip'
+        ? Promise.resolve(stage.dispatch(tag))
+        : tag.name === 'lyevent'
+          ? Promise.resolve(layerEvents.dispatch(tag))
+          : layers.dispatch(tag),
     snapshot: () => ({
       mode: 'metadata-only fixture',
       pixelDecode: false,
@@ -179,6 +191,15 @@ export function createMetadataLayerFixture(hash, readFile) {
         width: entry.value?.width ?? null,
         height: entry.value?.height ?? null,
         properties: entry.value?.display.properties ?? null,
+        events: entry.value?.events
+          ? ['click', 'rollover', 'rollout', 'dragin', 'drag', 'dragout'].filter((type) =>
+              entry.value.events.callback(type),
+            )
+          : [],
+      })),
+      layerEventCommands: [...layerCommands.snapshot()].map(([id, tags]) => ({
+        id,
+        commands: tags.map((tag) => Object.fromEntries(tag.args)),
       })),
     }),
     close: () => layers.close(),

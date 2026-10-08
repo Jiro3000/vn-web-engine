@@ -64,6 +64,14 @@ backslash escapes, `name(expr)` spliced variable names, and reduction passes `* 
 comparison when either side is a string), `&&`, `||`. Failures yield an empty argument.
 `ArtemisVariables.expressionValue` supplies leaves; absent names become integer zero.
 
+`layer-events.ts` is the lyevent handler (`0x1400d8a10`): types click, rollover, rollout,
+dragin, drag and dragout; mode init stores a copy of the tag as the callback (with the
+penetration flag for click/rollover), reset stores an empty callback, enable/disable write
+the per-type enable flag (groups reach every child actor). History uses
+`ArtemisLayerCommands` (`erase` = `0x140144960`, `append`, coalescing `record`) unless the
+dispatch is a replay. `ArtemisLayerEventSlots` is actor-owned state that actor copies must
+copy; pointer delivery to the callbacks belongs to the input owner and is not implemented.
+
 `modes.ts` owns skip/auto/autosave command state and emits required status/effect
 callbacks (`0x1400d47b0`, `0x1400d4350`, `0x1400ca3d0`). Scheduler, indicator,
 message and save effects still require native service implementations. Nonempty

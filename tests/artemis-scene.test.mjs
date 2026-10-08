@@ -3768,3 +3768,70 @@ test('Voice-owner shutdown during real transport preparation releases the late r
   assert.equal(effects.count, 0);
   await assert.rejects(effects.prepareEffect('after', 0), /closed/);
 });
+
+test('lyevent registers tag callbacks, maintains history and propagates group enables', async () => {
+  const {ArtemisLayerCommands} = await import('../dist/engines/artemis/layer-commands.js');
+  const {ArtemisLayerEvents, ArtemisLayerEventSlots} =
+    await import('../dist/engines/artemis/layer-events.js');
+  const scene = new ArtemisScene(revision);
+  const commands = new ArtemisLayerCommands(revision);
+  const slots = new Map();
+  const events = new ArtemisLayerEvents(scene, commands, {
+    slots: (actor) => {
+      if (!slots.has(actor)) slots.set(actor, new ArtemisLayerEventSlots());
+      return slots.get(actor);
+    },
+  });
+  const a = {name: 'a'},
+    b = {name: 'b'};
+  scene.set('600.3.0', a);
+  scene.set('600.3.1', b);
+  const tag = (args) => ({kind: 'tag', name: 'lyevent', args: new Map(args), sourceLine: 9});
+  const click = tag([
+    ['id', '600.3.0'],
+    ['type', 'click'],
+    ['mode', 'init'],
+    ['handler', 'calllua'],
+    ['function', 'btn_click'],
+  ]);
+  assert.equal(events.dispatch(click), true);
+  const callback = slots.get(a).callback('click');
+  assert.equal(callback.penetration, false);
+  assert.equal(callback.command.args.get('function'), 'btn_click');
+  assert.equal(slots.get(a).callback('rollout'), null);
+  // Rollout/drag types always pass through; click/rollover only with penetration != "0".
+  events.dispatch(tag([...click.args, ['type', 'rollover'], ['penetration', '1']]));
+  assert.equal(slots.get(a).callback('rollover').penetration, true);
+  events.dispatch(tag([...click.args, ['type', 'rollout'], ['penetration', '0']]));
+  assert.equal(slots.get(a).callback('rollout').penetration, true);
+  // A second init of the same type replaces the history entry; reset erases it.
+  events.dispatch(tag([...click.args, ['function', 'other']]));
+  const types = () => commands.commands('600.3.0').map((x) => x.args.get('type'));
+  assert.deepEqual(types(), ['rollover', 'rollout', 'click']);
+  events.dispatch(tag([...click.args, ['mode', 'reset']]));
+  assert.equal(slots.get(a).callback('click'), null);
+  assert.deepEqual(types(), ['rollover', 'rollout']);
+  // Disable on a group reaches every child actor and records history for descendants.
+  const disable = tag([
+    ['id', '600.3'],
+    ['type', 'rollover'],
+    ['mode', 'disable'],
+  ]);
+  events.dispatch(disable);
+  assert.equal(slots.get(a).isEnabled('rollover'), false);
+  assert.equal(slots.get(b).isEnabled('rollover'), false);
+  assert.equal(slots.get(a).isEnabled('click'), true);
+  assert.equal(commands.commands('600.3').length, 1);
+  assert.equal(commands.commands('600.3.1')[0].args.get('mode'), 'disable');
+  events.dispatch(tag([...disable.args, ['mode', 'enable']]));
+  assert.equal(slots.get(b).isEnabled('rollover'), true);
+  assert.deepEqual(commands.commands('600.3'), []);
+  assert.deepEqual(commands.commands('600.3.1'), []);
+  // Replay applies state without touching history; absent layers and unknown types are ignored.
+  events.dispatch(tag([...disable.args, ['id', '600.3.0']]), true);
+  assert.equal(slots.get(a).isEnabled('rollover'), false);
+  assert.deepEqual(types(), ['rollover', 'rollout']);
+  assert.equal(events.dispatch(tag([...click.args, ['id', 'missing']])), true);
+  assert.equal(events.dispatch(tag([...click.args, ['type', 'wheel']])), true);
+  assert.equal(commands.commands('missing'), undefined);
+});

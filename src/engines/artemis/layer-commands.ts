@@ -45,6 +45,25 @@ export class ArtemisLayerCommands {
     }
     list.push(copy(tag));
   }
+  /** Unconditional append of a command copy to the id's list (find-or-create). */
+  append(id: string, tag: AsbTag): void {
+    let list = this.lists.get(id);
+    if (!list) this.lists.set(id, (list = []));
+    list.push(copy(tag));
+  }
+  /** Native 0x140144960: remove every command with this name whose arguments contain each
+   * key/value of `keys`. The id's list is created when absent; nothing is appended. */
+  erase(id: string, name: string, keys: ReadonlyMap<string, string>): void {
+    const list = this.lists.get(id) ?? [];
+    this.lists.set(
+      id,
+      list.filter(
+        (tag) =>
+          tag.name !== name ||
+          [...keys].some(([key, value]) => !tag.args.has(key) || tag.args.get(key) !== value),
+      ),
+    );
+  }
   commands(id: string): readonly AsbTag[] | undefined {
     return this.lists.get(id)?.map(copy);
   }
