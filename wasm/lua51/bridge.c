@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <stdint.h>
 
+int luaopen_pluto(lua_State *L);
+
 __attribute__((import_module("host"), import_name("call")))
 extern int host_call(lua_State *L, const char *method, size_t length);
 
@@ -40,6 +42,7 @@ static int initialize(lua_State *L) {
   lua_pushcfunction(L, luaopen_table); lua_pushliteral(L, LUA_TABLIBNAME); lua_call(L, 1, 0);
   lua_pushcfunction(L, luaopen_string); lua_pushliteral(L, LUA_STRLIBNAME); lua_call(L, 1, 0);
   lua_pushcfunction(L, luaopen_math); lua_pushliteral(L, LUA_MATHLIBNAME); lua_call(L, 1, 0);
+  lua_pushcfunction(L, luaopen_pluto); lua_pushliteral(L, "pluto"); lua_call(L, 1, 0);
   /* Loading host paths is deliberately delegated to the platform file resolver. */
   lua_pushcfunction(L, disabled); lua_setglobal(L, "dofile");
   lua_pushcfunction(L, disabled); lua_setglobal(L, "loadfile");

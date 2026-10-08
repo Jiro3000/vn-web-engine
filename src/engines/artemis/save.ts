@@ -1,3 +1,4 @@
+import type {AsbTag} from '../../formats/artemis/asb.js';
 import type {ArtemisVariables} from './variables.js';
 
 export interface ArtemisSaveEffects {
@@ -31,6 +32,13 @@ export class ArtemisSave {
       this.variables.clearGlobalDirty();
       this.effects.writeSystem();
     }
+    return true;
+  }
+  /** Save tag 0x1400ca5b0: file (absent reads as empty), then the gate with transient state
+   * and a forced global save (R8 = R9 = 1). An empty file writes only saveg.dat/system.dat. */
+  dispatch(tag: AsbTag): boolean {
+    if (tag.name !== 'save') return false;
+    this.request(tag.args.get('file') ?? '', true, true);
     return true;
   }
 }

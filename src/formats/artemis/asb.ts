@@ -5,6 +5,9 @@ export interface AsbTag {
   readonly name: string;
   readonly sourceLine: number;
   readonly args: ReadonlyMap<string, string>;
+  /** Exact argument bytes of Lua-built tags (native arguments are byte strings, NULs
+   * included). Owners that store data read these; `args` holds their text form. */
+  readonly bytes?: ReadonlyMap<string, Uint8Array>;
 }
 export interface AsbLabel {
   readonly kind: 'label';

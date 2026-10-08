@@ -387,16 +387,31 @@ export function luaTag(value: LuaValue | undefined): AsbTag {
   if (!(value instanceof Map)) throw new Error('Expected Artemis Lua tag table');
   const table = value as LuaTable,
     name = luaText(table.get(1));
-  const args = new Map<string, string>();
+  const args = new Map<string, string>(),
+    bytes = new Map<string, Uint8Array>();
   for (const [key, item] of table) {
     if (typeof key !== 'string') continue;
-    if (item instanceof Uint8Array) args.set(key, luaText(item));
-    else if (typeof item === 'number') {
+    if (item instanceof Uint8Array) {
+      // 0x140139920 copies lua_tostring/lua_objlen bytes, so binary data (Pluto) survives.
+      bytes.set(key, item);
+      args.set(key, tagText(item));
+    } else if (typeof item === 'number') {
       const n = Math.floor(Math.fround(item));
       if (!Number.isFinite(n) || n < -0x80000000 || n > 0x7fffffff)
         throw new Error('Unsupported Artemis tag number');
       args.set(key, String(n));
     }
   }
-  return {kind: 'tag', name, args, sourceLine: -1};
+  return {kind: 'tag', name, args, bytes, sourceLine: -1};
+}
+
+const strictText = new TextDecoder('utf-8', {fatal: true}),
+  lossyText = new TextDecoder('utf-8');
+/** Text view of a byte argument; text consumers of binary data see replacement characters. */
+function tagText(bytes: Uint8Array): string {
+  try {
+    return strictText.decode(bytes);
+  } catch {
+    return lossyText.decode(bytes);
+  }
 }

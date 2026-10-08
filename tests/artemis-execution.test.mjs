@@ -4796,3 +4796,56 @@ test('Native reset saves globals, restarts the boot script and boot loads saved 
     lua.close();
   }
 });
+
+test('Lua var tags store Pluto bytes exactly and the save tag forces a global save', async () => {
+  const {ArtemisSave} = await import('../dist/engines/artemis/save.js');
+  const {ArtemisVariables} = await import('../dist/engines/artemis/variables.js');
+  const lua = new ArtemisLua({readFile: () => null});
+  const variables = new ArtemisVariables();
+  const calls = [];
+  const save = new ArtemisSave(variables, {
+    reportEventError: (error) => calls.push(String(error)),
+    beforeScenario: (file) => calls.push(['saveEvent', file]),
+    writeScenario: (file, transient) => calls.push(['scenario', file, transient]),
+    writeGlobal: () => calls.push('global'),
+    writeSystem: () => calls.push('system'),
+  });
+  try {
+    lua.vm.execute(
+      new TextEncoder().encode(`
+      sys = {langselect = 1, name = string.char(0, 255, 0x80)}
+      data = pluto.persist({}, sys)
+      binaryTag = {"var", name="g.sys", data=data}
+    `),
+    );
+    const data = lua.vm.getGlobal('data');
+    const tag = luaTag(lua.vm.getGlobal('binaryTag'));
+    assert.match(tag.args.get('data'), /�/);
+    assert.equal(variables.dispatch(tag), true);
+    assert.deepEqual(variables.lookup('g.sys'), data);
+    assert.equal(variables.globalDirty, true);
+    lua.vm.setGlobal('stored', variables.lookup('g.sys'));
+    lua.vm.execute(
+      new TextEncoder().encode(`
+      local copy = pluto.unpersist({}, stored)
+      assert(copy.langselect == 1 and copy.name == string.char(0, 255, 0x80))
+    `),
+    );
+  } finally {
+    lua.close();
+  }
+  const saveTag = (args) => ({kind: 'tag', name: 'save', sourceLine: 1, args: new Map(args)});
+  // Empty file: no scenario, but saveg.dat/system.dat are forced even when g. is clean.
+  variables.clearGlobalDirty();
+  assert.equal(save.dispatch(saveTag([])), true);
+  assert.equal(save.dispatch({...saveTag([]), name: 'load'}), false);
+  assert.deepEqual(calls, ['global', 'system']);
+  calls.length = 0;
+  save.dispatch(saveTag([['file', 'save001.dat']]));
+  assert.deepEqual(calls, [
+    ['saveEvent', 'save001.dat'],
+    ['scenario', 'save001.dat', true],
+    'global',
+    'system',
+  ]);
+});

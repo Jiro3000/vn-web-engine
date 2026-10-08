@@ -51,6 +51,7 @@ try {
     [
       ...sources,
       'wasm/lua51/bridge.c',
+      'wasm/lua51/pluto.c',
       '-Iwasm/lua51/vendor',
       '-O2',
       '--no-entry',

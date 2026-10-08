@@ -673,6 +673,7 @@ try {
       return 'suspended';
     }
     if (reset.dispatch(tag)) return;
+    if (save.dispatch(tag)) return;
     if (sePlay && ['seplay', 'sefadein'].includes(tag.name)) {
       if (pendingResource) throw Error('Probe sound resource operation overlaps');
       pendingResource = sePlay.dispatch(tag);
@@ -856,6 +857,7 @@ try {
     }
   } catch (error) {
     refusal = error.message;
+    if (process.env.ARTEMIS_PROBE_STACK) console.error(error.stack, error.hostCause?.stack ?? '');
   }
   await Promise.all(saveWrites);
   if (surfaceFixture) {

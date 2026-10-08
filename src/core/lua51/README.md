@@ -6,8 +6,9 @@ values at the host boundary. `LuaReference` retains live tables/functions in the
 Lua registry; owners release retained handles. Callback arguments from
 `bindReferences` are temporary and must be retained to outlive the callback.
 
-Base/coroutine, table, string and math libraries are available. Filesystem and
-process services, package loading, debug and Pluto are not exposed. Include and
+Base/coroutine, table, string, math and Pluto 2.4 (`pluto.persist(perms, value)`,
+`pluto.unpersist(perms, bytes)`) libraries are available. Filesystem and process
+services, package loading and debug are not exposed. Include and
 other platform effects use explicit host bindings. The execute/compile entry APIs
 reject precompiled bytecode; this embedding does not reproduce the Windows x64
 native bytecode ABI. It is not a full native Lua library replacement.
@@ -43,6 +44,16 @@ Upstream archive SHA-256:
 The standalone lua/luac executables and print.c are omitted. The build also excludes
 io, os, package, debug and the upstream library initialization implementation.
 Custom embedding code is in `wasm/lua51/bridge.c`.
+
+`wasm/lua51/pluto.c` implements Pluto 2.4 against the Lua internals. Its byte stream
+is the x64 Windows layout that Artemis executables use: C `int` fields take 4 bytes;
+`size_t`, pointer and `ptrdiff_t` fields (string and userdata lengths, light userdata,
+thread stack and frame offsets) take 8 bytes, little-endian. Every value starts with
+an int first-time flag and an int reference; first occurrences add the type and its
+payload, and type 101 marks a value found in the perms table. Function environments
+equal to the globals table are stored as nil and restored to the loading state's
+globals. Malformed or truncated input raises a Lua error and restarts the collector,
+where the native library would read undefined data.
 
 With Emscripten on PATH:
 

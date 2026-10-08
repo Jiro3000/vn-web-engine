@@ -115,7 +115,7 @@ export class ArtemisVariables {
     if (name === undefined) throw new Error('Missing Artemis var name');
     const local = p.has('writelocal') && p.get('writelocal') !== '0';
     // The native handler gives data precedence over system queries.
-    if (p.has('data')) this.write(name, p.get('data')!, local);
+    if (p.has('data')) this.write(name, tag.bytes?.get('data') ?? p.get('data')!, local);
     else if (p.get('system') === 'delete') this.delete(name, local);
     else if (p.get('system') === 'get_exe_parameter') {
       if (!this.host?.applicationArguments)

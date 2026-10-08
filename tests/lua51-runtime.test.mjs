@@ -301,3 +301,63 @@ test('Lua errors carry status, string bytes and the host exception they were rai
     vm.close();
   }
 });
+
+test('Pluto persists the native x64 byte layout and restores shared, cyclic and running state', () => {
+  const vm = new Lua51();
+  try {
+    vm.execute(
+      bytes(`
+      flat = pluto.persist({}, {a=true})
+      ok, cfunction = pcall(pluto.persist, {}, string.format)
+      perm = pluto.persist({[string.format]='fmt'}, {f=string.format})
+      local shared = {n=1.5, s=string.char(0,1,2)}
+      local root = {x=shared, y=shared, list={10,20,30}}
+      root.self = root
+      setmetatable(root, {kind='mt'})
+      local up = 5
+      root.inc = function() up = up + 1; return up end
+      root.get = function() return up end
+      root.env = setfenv(function() return marker end, {marker='own'})
+      root.co = coroutine.create(function(a)
+        local b = a * 2
+        local c = coroutine.yield(b)
+        return b + c
+      end)
+      assert(select(2, coroutine.resume(root.co, 4)) == 8)
+      -- The suspended frame of the coroutine.yield C function is persisted as a permanent.
+      data = pluto.persist({[coroutine.yield]=1}, root)
+      local copy = pluto.unpersist({coroutine.yield}, data)
+      assert(copy.self == copy and copy.x == copy.y and copy.x ~= shared)
+      assert(copy.x.n == 1.5 and copy.x.s == string.char(0,1,2))
+      assert(copy.list[1] == 10 and copy.list[3] == 30 and #copy.list == 3)
+      assert(getmetatable(copy).kind == 'mt')
+      assert(copy.inc() == 6 and copy.get() == 6 and up == 5)
+      marker = 'global'
+      assert(copy.env() == 'own')
+      local ok2, sum = coroutine.resume(copy.co, 3)
+      assert(ok2 and sum == 11 and coroutine.status(copy.co) == 'dead')
+      assert(coroutine.status(root.co) == 'suspended')
+      local p = pluto.unpersist({fmt=string.format}, perm)
+      assert(p.f == string.format)
+      bad = pcall(pluto.unpersist, {}, string.sub(data, 1, 20))
+      collectgarbage('collect')
+    `),
+    );
+    const flat = vm.getGlobal('flat');
+    const view = new DataView(flat.buffer, flat.byteOffset, flat.byteLength);
+    const ints = (offset, count) =>
+      Array.from({length: count}, (_, index) => view.getInt32(offset + index * 4, true));
+    // Table #1: not special, nil metatable (0, 0); key "a" (#2, size_t length 1);
+    // true (#3); nil terminator.
+    assert.deepEqual(ints(0, 9), [1, 1, 5, 0, 0, 0, 1, 2, 4]);
+    assert.equal(view.getBigInt64(36, true), 1n);
+    assert.equal(flat[44], 0x61);
+    assert.deepEqual(ints(45, 6), [1, 3, 1, 1, 0, 0]);
+    assert.equal(flat.length, 69);
+    assert.equal(vm.getGlobal('ok'), false);
+    assert.match(luaText(vm.getGlobal('cfunction')), /Attempt to persist a C function/);
+    assert.equal(vm.getGlobal('bad'), false);
+  } finally {
+    vm.close();
+  }
+});
