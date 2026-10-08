@@ -91,6 +91,18 @@ export class ArtemisShaderProperties<T extends object> {
     this.check();
     return this.textures.map(({name, lease}) => ({name, resource: lease.resource}));
   }
+  /** Hold texture resources independently through renderer command submission. */
+  leaseTextures(): readonly {name: string; lease: ArtemisShaderTextureLease<T>}[] {
+    this.check();
+    const held: TextureEntry<T>[] = [];
+    try {
+      for (const entry of this.textures) held.push({name: entry.name, lease: entry.lease.retain()});
+    } catch (error) {
+      for (const entry of held) entry.lease.release();
+      throw error;
+    }
+    return held;
+  }
   setShader(name: string): void {
     this.check();
     if (this.shader === name) return;

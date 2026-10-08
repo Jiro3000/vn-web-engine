@@ -1,3 +1,10 @@
+import {
+  ArtemisShaderProperties,
+  ArtemisShaderConstantStorage,
+  type ArtemisShaderPropertyPatch,
+  type ArtemisShaderTextureLease,
+} from './shader-properties.js';
+import type {ArtemisDrawShaderResource} from './draw-shader.js';
 import type {DrawList, DrawListTarget, DrawCommand} from '../../graphics/draw-list.js';
 import {GpuRenderSurface} from '../../graphics/gpu-render-surface.js';
 import type {TriangleImage} from '../../graphics/triangle-draw.js';
@@ -20,6 +27,8 @@ import {
 
 export interface ArtemisImageActor {
   readonly texture: number;
+  readonly shaderState: ArtemisShaderProperties<object>;
+  readonly shaderConstants: ArtemisShaderConstantStorage;
   readonly display: ArtemisDisplayObject;
   /** Outer wrapper metadata is shared by its retained/current inner actor copies. */
   readonly wrapper: {alpha: number};
@@ -31,8 +40,13 @@ export interface ArtemisGroupActor {
   readonly texture: null;
   readonly raster: ArtemisImageActor['raster'];
   readonly clip: ArtemisImageClip;
+  readonly shaderState: ArtemisShaderProperties<object>;
+  readonly shaderConstants: ArtemisShaderConstantStorage;
   readonly display: ArtemisDisplayObject;
   readonly wrapper: {alpha: number};
+}
+export interface ArtemisImageShaderPrograms {
+  bind(id: string): {shader: ArtemisDrawShaderResource; release(): void} | null;
 }
 export type ArtemisDisplayActor = ArtemisImageActor | ArtemisGroupActor;
 export type ArtemisLayerServices = Pick<
@@ -96,6 +110,8 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
   private readonly actors = new Set<ArtemisDisplayActor>();
   private readonly changes = new WeakMap<ArtemisDisplayActor, number>();
   private nextChange = 1;
+  private readonly shaderTextureResources = new WeakSet<object>();
+  private nativeSlotOne: Float32Array | null = null;
   private readonly wrappers = new Map<
     ArtemisImageActor['wrapper'],
     {
@@ -109,6 +125,7 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
     private readonly target: DrawListTarget,
     private readonly services: ArtemisLayerServices,
     private readonly raster: ArtemisRasterPolicy,
+    private readonly shaderPrograms?: ArtemisImageShaderPrograms,
   ) {
     this.hash = artemisRevision(executableSha256).executableSha256;
     if (![target.width, target.height].every((n) => Number.isInteger(n) && n > 0))
@@ -175,6 +192,8 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
     const actor: ArtemisImageActor = {
       texture: texture.id,
       display,
+      shaderState: new ArtemisShaderProperties<object>(this.hash),
+      shaderConstants: new ArtemisShaderConstantStorage(this.hash),
       wrapper: {alpha: 1},
       raster: {layerMode: 'normal', negative: false, grayscale: false, colorMultiply: 0xffffff},
       clip: {left: 0, top: 0, width: 0, height: 0, right: 0, bottom: 0},
@@ -189,6 +208,8 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
       raster: {layerMode: 'normal', negative: false, grayscale: false, colorMultiply: 0xffffff},
       clip: {left: 0, top: 0, width: 0, height: 0, right: 0, bottom: 0},
       display: new ArtemisDisplayObject(this.hash),
+      shaderState: new ArtemisShaderProperties<object>(this.hash),
+      shaderConstants: new ArtemisShaderConstantStorage(this.hash),
       wrapper: {alpha: 1},
     };
     this.wrappers.set(actor.wrapper, {
@@ -216,12 +237,57 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
     const actor: ArtemisDisplayActor = {
       ...old,
       display: old.display.copy(),
+      shaderState: old.shaderState.copy(),
+      shaderConstants: old.shaderConstants.copy(),
       raster: {...old.raster},
     };
     if (old.texture !== null) this.check(old).references++;
     this.wrappers.get(actor.wrapper)!.references++;
     this.actors.add(actor);
     return actor;
+  }
+  supportsShaderProperties(): boolean {
+    return this.shaderPrograms !== undefined;
+  }
+  /** Resource lease transfers into an actual prepared texture, independently of scene nodes. */
+  createShaderTexture(resource: ArtemisLoadedImage): ArtemisShaderTextureLease<object> {
+    if (!this.shaderPrograms) throw Error('Unsupported Artemis shader program owner');
+    const holder = this.createImageLayer(resource, {x: 0, y: 0});
+    const texture = Object.freeze({texture: holder.texture});
+    this.shaderTextureResources.add(texture);
+    const lease = (actor: ArtemisImageActor): ArtemisShaderTextureLease<object> => {
+      let live = true;
+      return {
+        resource: texture,
+        retain: () => {
+          if (!live) throw Error('Shader texture lease released');
+          return lease(this.copyImageLayer(actor));
+        },
+        release: () => {
+          if (live) {
+            live = false;
+            this.releaseImageLayer(actor);
+          }
+        },
+      };
+    };
+    return lease(holder);
+  }
+  applyShaderProperties(
+    actor: ArtemisDisplayActor,
+    patch: ArtemisShaderPropertyPatch,
+    textures?: readonly {name: string; lease: ArtemisShaderTextureLease<object>}[],
+  ): void {
+    this.checkActor(actor);
+    if (!this.shaderPrograms) throw Error('Unsupported Artemis shader program owner');
+    if (patch.textures !== undefined && textures === undefined)
+      throw Error('Artemis shader textures require prepared resource leases');
+    if (textures?.some((entry) => !this.shaderTextureResources.has(entry.lease.resource)))
+      throw Error('Foreign Artemis shader texture resource');
+    if (patch.shader !== undefined) actor.shaderState.setShader(patch.shader);
+    if (patch.constants !== undefined) actor.shaderState.setConstants(patch.constants);
+    if (textures !== undefined) actor.shaderState.setTextures(textures);
+    this.changes.set(actor, this.nextChange++);
   }
   applyImageProperties(
     _id: string,
@@ -317,6 +383,7 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
     this.checkActor(actor);
     const texture = actor.texture === null ? undefined : this.check(actor);
     this.actors.delete(actor);
+    actor.shaderState.close();
     if (texture && --texture.references === 0) {
       this.textures.delete(texture.id);
       this.images.delete(texture.image);
@@ -438,6 +505,7 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
           child.id,
           child.actor,
           child.actor?.display.propertyRevision,
+          child.actor?.shaderState.propertyRevision,
           child.actor ? this.changes.get(child.actor) : undefined,
         );
         if (child.actor?.texture === null)
@@ -452,220 +520,306 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
   drawCommitted(scene: ArtemisScene<ArtemisDisplayActor>): DrawList {
     const commands: DrawCommand[] = [],
       updates: (() => void)[] = [];
-    const clear = (context: RenderContext) => {
-      if (context.pendingClear) {
-        commands.push({kind: 'gpu-target', surface: context.surface, clearColor: [0, 0, 0, 0]});
-        context.pendingClear = false;
-      }
-    };
-    const quad = (
-      texture: number,
-      matrix: Float32Array,
-      alpha: number,
-      raster: ArtemisImageActor['raster'],
-      clip: ArtemisImageClip,
-      context: RenderContext,
-    ) => {
-      const image = this.image(texture),
-        imageWidth = f(image.width),
-        imageHeight = f(image.height);
-      clear(context); // Native clears lazily before source clip rejection.
-      let width = imageWidth,
-        height = imageHeight,
-        sourceLeft = 0,
-        sourceTop = 0;
-      if (clip.width > 0 && clip.height > 0) {
-        if (clip.left >= imageWidth || clip.top >= imageHeight || clip.right < 0 || clip.bottom < 0)
-          return;
-        sourceLeft = Math.max(0, clip.left);
-        sourceTop = Math.max(0, clip.top);
-        width = f((clip.right < imageWidth ? f(clip.right + 1) : imageWidth) - sourceLeft);
-        height = f((clip.bottom < imageHeight ? f(clip.bottom + 1) : imageHeight) - sourceTop);
-      }
-      const mode =
-        context.format === 2
-          ? this.raster.captured?.(raster.layerMode, raster)
-          : artemisHasRasterEffects(raster)
-            ? this.raster.effects?.(raster.layerMode, raster)
-            : this.raster.layerMode?.(raster.layerMode);
-      if (context.format === 2 && !mode)
-        throw new Error('Artemis captured raster policy owner missing');
-      if (context.format !== 2 && artemisHasRasterEffects(raster) && !mode)
-        throw new Error('Artemis image effects require a raster policy owner');
-      const vertices = new Float32Array(36),
-        backgroundUV = new Float32Array(8),
-        color = raster.colorMultiply,
-        tint = [
-          f(((color >>> 16) & 255) / 255),
-          f(((color >>> 8) & 255) / 255),
-          f((color & 255) / 255),
-        ];
-      const corners = [
-        [0, 0],
-        [width, 0],
-        [0, height],
-        [width, height],
-      ] as const;
-      for (const [index, [x, y]] of corners.entries()) {
-        const point = artemisDisplayPoint(matrix, x, y);
-        vertices.set(
-          [
-            f(f(point[0] / f(f(context.width) * 0.5)) - 1),
-            f(1 - f(point[1] / f(f(context.height) * 0.5))),
-            0,
-            ...tint,
-            alpha,
-            f(f(x + sourceLeft) / imageWidth),
-            f(f(y + sourceTop) / imageHeight),
-          ],
-          index * 9,
-        );
-        backgroundUV.set(
-          [f(point[0] / f(context.width)), f(point[1] / f(context.height))],
-          index * 2,
-        );
-      }
-      if (context.format === 2)
-        commands.push({
-          kind: 'gpu-copy',
-          source: context.surface!,
-          destination: context.back!.image,
-        });
-      commands.push({
-        kind: 'triangles',
-        texture,
-        vertices,
-        topology: 'triangle-strip',
-        normalizedUV: true,
-        transform: identity.slice(),
-        depthClip: false,
-        filter: this.raster.filter,
-        blendState: mode?.blend ?? this.raster.blend,
-        fragment: mode?.fragment,
-        additionalTextures:
-          context.format === 2
-            ? [{texture: context.back!.id, uv: backgroundUV, filter: this.raster.filter}]
-            : undefined,
-        discardTransparent: this.raster.discardTransparent,
-      });
-    };
-    const visit = (
-      nodes: readonly RenderNode[],
-      parent: Float32Array,
-      parentAlpha: number,
-      context: RenderContext,
-    ) => {
-      for (const node of nodes) {
-        const actor = node.actor;
-        if (!actor) {
-          if (node.group) visit(node.children, parent, parentAlpha, context);
-          continue;
+    const shaderLoans: {release(): void}[] = [];
+    try {
+      const clear = (context: RenderContext) => {
+        if (context.pendingClear) {
+          commands.push({kind: 'gpu-target', surface: context.surface, clearColor: [0, 0, 0, 0]});
+          context.pendingClear = false;
         }
-        this.checkActor(actor);
-        if (node.group !== (actor.texture === null))
-          throw new Error('Unsupported Artemis group raster owner');
-        const p = actor.display.properties;
-        if (p.xscale <= 0 || p.yscale <= 0) continue;
-        const matrix = actor.display.worldMatrix(parent, this.raster.trig),
-          alpha = f(parentAlpha * p.alpha);
-        if (!p.visible || alpha < 2 ** -23) continue;
-        if (actor.texture !== null) {
-          const image = this.check(actor).image;
-          if (image.width > 0 && image.height > 0)
-            quad(actor.texture, matrix, alpha, actor.raster, actor.clip, context);
-          continue;
+      };
+      const quad = (
+        texture: number,
+        matrix: Float32Array,
+        alpha: number,
+        raster: ArtemisImageActor['raster'],
+        clip: ArtemisImageClip,
+        context: RenderContext,
+        actor: ArtemisDisplayActor,
+      ) => {
+        const image = this.image(texture),
+          imageWidth = f(image.width),
+          imageHeight = f(image.height);
+        clear(context); // Native clears lazily before source clip rejection.
+        let width = imageWidth,
+          height = imageHeight,
+          sourceLeft = 0,
+          sourceTop = 0;
+        if (clip.width > 0 && clip.height > 0) {
+          if (
+            clip.left >= imageWidth ||
+            clip.top >= imageHeight ||
+            clip.right < 0 ||
+            clip.bottom < 0
+          )
+            return;
+          sourceLeft = Math.max(0, clip.left);
+          sourceTop = Math.max(0, clip.top);
+          width = f((clip.right < imageWidth ? f(clip.right + 1) : imageWidth) - sourceLeft);
+          height = f((clip.bottom < imageHeight ? f(clip.bottom + 1) : imageHeight) - sourceTop);
         }
-        const capture = this.wrappers.get(actor.wrapper)!.capture!;
-        if (!capture.enabled) {
-          visit(node.children, matrix, alpha, context);
-          continue;
-        }
-        const signature = this.fingerprint(node, capture),
-          previous = capture.storage?.signature,
-          changed =
-            !previous ||
-            previous.length !== signature.length ||
-            signature.some((value, index) => value !== previous[index]);
-        let storage = capture.storage,
-          plan = storage?.plan;
-        if (changed) {
-          plan =
-            actor.clip.width > 0 && actor.clip.height > 0 ? actor.clip : this.bounds(node.children);
-          const width = Math.ceil(plan.width),
-            height = Math.ceil(plan.height);
-          if (![width, height].every((n) => Number.isSafeInteger(n) && n <= 0x7fffffff))
-            throw new Error('Unsupported Artemis intermediate surface size');
-          if (!storage || storage.fore.image.width < width || storage.fore.image.height < height) {
-            if (width <= 0 || height <= 0) continue; // Native cannot allocate an empty capture.
-            const fore = this.captureTexture(width, height);
-            let back: CaptureTexture | undefined;
-            try {
-              if (capture.format === 2) back = this.captureTexture(width, height);
-            } catch (error) {
-              this.target.invalidate(fore.image);
-              this.textures.delete(fore.id);
-              throw error;
-            }
-            this.releaseCapture(capture);
-            storage = {
-              fore,
-              back,
-              format: capture.format,
-              display: new ArtemisDisplayObject(this.hash),
-            };
-            capture.storage = storage;
+        const shaderName = actor.shaderState.shaderName;
+        let custom: ReturnType<ArtemisDrawShaderResource['preset']> | undefined;
+        let parameters: Float32Array | undefined;
+        let userTextures: {texture: number; uv: Float32Array; filter: 'nearest' | 'linear'}[] = [];
+        if (shaderName) {
+          if (!this.shaderPrograms) throw Error('Unsupported Artemis shader program owner');
+          const prepared = actor.shaderConstants.update(actor.shaderState.constantValues());
+          if (prepared) this.nativeSlotOne = prepared;
+          const loan = this.shaderPrograms.bind(shaderName);
+          if (!loan) {
+            // Native null pixel shader emits no target pixels, but capture copy still occurs.
+            if (context.format === 2)
+              commands.push({
+                kind: 'gpu-copy',
+                source: context.surface!,
+                destination: context.back!.image,
+              });
+            return;
           }
-          const local = new Float32Array([1, 0, f(-plan.left), 0, 1, f(-plan.top)]),
-            childContext: RenderContext = {
-              surface: storage.fore.image,
-              width: storage.fore.image.width,
-              height: storage.fore.image.height,
-              format: storage.format,
-              back: storage.back,
-              pendingClear: true,
-            };
-          commands.push({kind: 'gpu-target', surface: storage.fore.image});
-          visit(node.children, local, 1, childContext);
-          commands.push({kind: 'gpu-target', surface: context.surface});
-          const completed = storage,
-            completedPlan = plan;
-          updates.push(() => {
-            completed.signature = signature;
-            completed.plan = completedPlan;
-          });
+          shaderLoans.push(loan);
+          custom = loan.shader.preset(context.format === 2);
+          if (custom.needsUserTexture) {
+            const leases = actor.shaderState.leaseTextures();
+            shaderLoans.push(...leases.map((entry) => entry.lease));
+            if (!leases.length) {
+              custom = loan.shader.preset(context.format === 2, false);
+            } else {
+              const resource = leases[0]!.lease.resource;
+              if (
+                !this.shaderTextureResources.has(resource) ||
+                !('texture' in resource) ||
+                typeof resource.texture !== 'number'
+              )
+                throw Error('Foreign Artemis shader texture resource');
+              userTextures = [
+                {texture: resource.texture, uv: new Float32Array(8), filter: this.raster.filter},
+              ];
+            }
+          }
+          parameters = custom.bufferParameters(this.nativeSlotOne);
         }
-        if (!storage || !plan) continue;
-        const explicit = actor.clip.width > 0 && actor.clip.height > 0,
-          sourceClip: ArtemisImageClip = explicit
+        const mode = custom
+          ? context.format === 2
             ? {
-                left: 0,
-                top: 0,
-                width: plan.width,
-                height: plan.height,
-                right: f(plan.width - 1),
-                bottom: f(plan.height - 1),
+                blend: {
+                  color: {
+                    source: 'one' as const,
+                    destination: 'zero' as const,
+                    operation: 'add' as const,
+                  },
+                  alpha: {
+                    source: 'one' as const,
+                    destination: 'zero' as const,
+                    operation: 'add' as const,
+                  },
+                },
               }
-            : {left: 0, top: 0, width: 0, height: 0, right: 0, bottom: 0};
-        storage.display.apply({left: explicit ? 0 : plan.left, top: explicit ? 0 : plan.top});
-        quad(
-          storage.fore.id,
-          storage.display.worldMatrix(matrix, this.raster.trig),
-          alpha,
-          actor.raster,
-          sourceClip,
-          context,
-        );
-      }
-    };
-    visit(this.nodes(scene), new Float32Array([1, 0, 0, 0, 1, 0]), 1, {
-      surface: null,
-      width: this.target.width,
-      height: this.target.height,
-      pendingClear: false,
-    });
-    const list: DrawList = {sprites: [], commands, clearColor: this.raster.clearColor};
-    this.target.draw(list, (id) => this.image(id));
-    for (const update of updates) update();
-    return list;
+            : this.raster.layerMode?.(raster.layerMode)
+          : context.format === 2
+            ? this.raster.captured?.(raster.layerMode, raster)
+            : artemisHasRasterEffects(raster)
+              ? this.raster.effects?.(raster.layerMode, raster)
+              : this.raster.layerMode?.(raster.layerMode);
+        if (context.format === 2 && !mode)
+          throw new Error('Artemis captured raster policy owner missing');
+        if (!custom && context.format !== 2 && artemisHasRasterEffects(raster) && !mode)
+          throw new Error('Artemis image effects require a raster policy owner');
+        const vertices = new Float32Array(36),
+          backgroundUV = new Float32Array(8),
+          color = raster.colorMultiply,
+          tint = [
+            f(((color >>> 16) & 255) / 255),
+            f(((color >>> 8) & 255) / 255),
+            f((color & 255) / 255),
+          ];
+        const corners = [
+          [0, 0],
+          [width, 0],
+          [0, height],
+          [width, height],
+        ] as const;
+        for (const [index, [x, y]] of corners.entries()) {
+          const point = artemisDisplayPoint(matrix, x, y);
+          vertices.set(
+            [
+              f(f(point[0] / f(f(context.width) * 0.5)) - 1),
+              f(1 - f(point[1] / f(f(context.height) * 0.5))),
+              0,
+              ...tint,
+              alpha,
+              f(f(x + sourceLeft) / imageWidth),
+              f(f(y + sourceTop) / imageHeight),
+            ],
+            index * 9,
+          );
+          for (const texture of userTextures)
+            texture.uv.set(
+              [f(f(x + sourceLeft) / imageWidth), f(f(y + sourceTop) / imageHeight)],
+              index * 2,
+            );
+          backgroundUV.set(
+            [f(point[0] / f(context.width)), f(point[1] / f(context.height))],
+            index * 2,
+          );
+        }
+        if (context.format === 2)
+          commands.push({
+            kind: 'gpu-copy',
+            source: context.surface!,
+            destination: context.back!.image,
+          });
+        commands.push({
+          kind: 'triangles',
+          texture,
+          vertices,
+          topology: 'triangle-strip',
+          normalizedUV: true,
+          transform: identity.slice(),
+          depthClip: false,
+          filter: this.raster.filter,
+          blendState: mode?.blend ?? this.raster.blend,
+          fragment: custom?.fragment ?? mode?.fragment,
+          parameters,
+          additionalTextures:
+            context.format === 2
+              ? [
+                  {texture: context.back!.id, uv: backgroundUV, filter: this.raster.filter},
+                  ...userTextures,
+                ]
+              : userTextures.length
+                ? userTextures
+                : undefined,
+          discardTransparent: this.raster.discardTransparent,
+        });
+      };
+      const visit = (
+        nodes: readonly RenderNode[],
+        parent: Float32Array,
+        parentAlpha: number,
+        context: RenderContext,
+      ) => {
+        for (const node of nodes) {
+          const actor = node.actor;
+          if (!actor) {
+            if (node.group) visit(node.children, parent, parentAlpha, context);
+            continue;
+          }
+          this.checkActor(actor);
+          if (node.group !== (actor.texture === null))
+            throw new Error('Unsupported Artemis group raster owner');
+          const p = actor.display.properties;
+          if (p.xscale <= 0 || p.yscale <= 0) continue;
+          const matrix = actor.display.worldMatrix(parent, this.raster.trig),
+            alpha = f(parentAlpha * p.alpha);
+          if (!p.visible || alpha < 2 ** -23) continue;
+          if (actor.texture !== null) {
+            const image = this.check(actor).image;
+            if (image.width > 0 && image.height > 0)
+              quad(actor.texture, matrix, alpha, actor.raster, actor.clip, context, actor);
+            continue;
+          }
+          const capture = this.wrappers.get(actor.wrapper)!.capture!;
+          if (!capture.enabled) {
+            visit(node.children, matrix, alpha, context);
+            continue;
+          }
+          const signature = this.fingerprint(node, capture),
+            previous = capture.storage?.signature,
+            changed =
+              !previous ||
+              previous.length !== signature.length ||
+              signature.some((value, index) => value !== previous[index]);
+          let storage = capture.storage,
+            plan = storage?.plan;
+          if (changed) {
+            plan =
+              actor.clip.width > 0 && actor.clip.height > 0
+                ? actor.clip
+                : this.bounds(node.children);
+            const width = Math.ceil(plan.width),
+              height = Math.ceil(plan.height);
+            if (![width, height].every((n) => Number.isSafeInteger(n) && n <= 0x7fffffff))
+              throw new Error('Unsupported Artemis intermediate surface size');
+            if (
+              !storage ||
+              storage.fore.image.width < width ||
+              storage.fore.image.height < height
+            ) {
+              if (width <= 0 || height <= 0) continue; // Native cannot allocate an empty capture.
+              const fore = this.captureTexture(width, height);
+              let back: CaptureTexture | undefined;
+              try {
+                if (capture.format === 2) back = this.captureTexture(width, height);
+              } catch (error) {
+                this.target.invalidate(fore.image);
+                this.textures.delete(fore.id);
+                throw error;
+              }
+              this.releaseCapture(capture);
+              storage = {
+                fore,
+                back,
+                format: capture.format,
+                display: new ArtemisDisplayObject(this.hash),
+              };
+              capture.storage = storage;
+            }
+            const local = new Float32Array([1, 0, f(-plan.left), 0, 1, f(-plan.top)]),
+              childContext: RenderContext = {
+                surface: storage.fore.image,
+                width: storage.fore.image.width,
+                height: storage.fore.image.height,
+                format: storage.format,
+                back: storage.back,
+                pendingClear: true,
+              };
+            commands.push({kind: 'gpu-target', surface: storage.fore.image});
+            visit(node.children, local, 1, childContext);
+            commands.push({kind: 'gpu-target', surface: context.surface});
+            const completed = storage,
+              completedPlan = plan;
+            updates.push(() => {
+              completed.signature = signature;
+              completed.plan = completedPlan;
+            });
+          }
+          if (!storage || !plan) continue;
+          const explicit = actor.clip.width > 0 && actor.clip.height > 0,
+            sourceClip: ArtemisImageClip = explicit
+              ? {
+                  left: 0,
+                  top: 0,
+                  width: plan.width,
+                  height: plan.height,
+                  right: f(plan.width - 1),
+                  bottom: f(plan.height - 1),
+                }
+              : {left: 0, top: 0, width: 0, height: 0, right: 0, bottom: 0};
+          storage.display.apply({left: explicit ? 0 : plan.left, top: explicit ? 0 : plan.top});
+          quad(
+            storage.fore.id,
+            storage.display.worldMatrix(matrix, this.raster.trig),
+            alpha,
+            actor.raster,
+            sourceClip,
+            context,
+            actor,
+          );
+        }
+      };
+      visit(this.nodes(scene), new Float32Array([1, 0, 0, 0, 1, 0]), 1, {
+        surface: null,
+        width: this.target.width,
+        height: this.target.height,
+        pendingClear: false,
+      });
+      const list: DrawList = {sprites: [], commands, clearColor: this.raster.clearColor};
+      this.target.draw(list, (id) => this.image(id));
+      for (const update of updates) update();
+      return list;
+    } finally {
+      for (const loan of shaderLoans) loan.release();
+    }
   }
 }

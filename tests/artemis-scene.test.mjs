@@ -345,7 +345,7 @@ test('Artemis image properties copy the inner actor once per commit and retain n
     const before = events.length;
     await assert.rejects(
       () => layers.dispatch(command('lyprop', {id: '2', shader: 'unsupported'})),
-      /property shader/,
+      /shader property owner/,
     );
     assert.equal(events.length, before);
     await layers.dispatch(command('lyprop', {id: 'missing', left: '0'}));

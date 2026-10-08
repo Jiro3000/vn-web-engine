@@ -1,3 +1,4 @@
+import type {ArtemisShaderPropertyPatch, ArtemisShaderTextureLease} from './shader-properties.js';
 import type {AsbTag} from '../../formats/artemis/asb.js';
 import type {TriangleImage} from '../../graphics/triangle-draw.js';
 import type {
@@ -55,6 +56,13 @@ export interface ArtemisLayerHost<
   copyImageLayer(layer: T): T;
   /** Apply inner actor properties and the separate outer-wrapper alpha effect. */
   applyImageProperties(id: string, layer: T, properties: ArtemisLayerPropertyPatch): void;
+  supportsShaderProperties?(): boolean;
+  createShaderTexture?(resource: ArtemisLoadedImage<I>): ArtemisShaderTextureLease<object>;
+  applyShaderProperties?(
+    layer: T,
+    patch: ArtemisShaderPropertyPatch,
+    textures?: readonly {name: string; lease: ArtemisShaderTextureLease<object>}[],
+  ): void;
   recordLayerProperties(tag: AsbTag): void;
   layerNotFound(tag: AsbTag): void;
   /** Remove the selected native layer command registrations, after structural deletion. */
@@ -183,7 +191,32 @@ export class ArtemisLayers<T extends object, I extends ArtemisImageDimensions = 
         return true;
       }
       const properties = artemisLayerProperties(tag.args);
+      const shader = properties.customShader;
+      if (shader && (!this.host.applyShaderProperties || !this.host.supportsShaderProperties?.()))
+        throw Error('Unsupported Artemis shader property owner');
+      if (shader?.textures?.length && !this.host.createShaderTexture)
+        throw Error('Unsupported Artemis shader texture resource owner');
+      const textures: {name: string; lease: ArtemisShaderTextureLease<object>}[] = [];
+      const generation = shader ? ++this.generation : null;
+      if (generation !== null) this.pending = generation;
       try {
+        for (const entry of shader?.textures ?? []) {
+          const resource = await this.images.load(entry.path);
+          if (this.closed || generation !== this.generation) {
+            resource?.lease?.release();
+            return true;
+          }
+          if (resource) {
+            try {
+              textures.push({name: entry.name, lease: this.host.createShaderTexture!(resource)});
+            } catch (error) {
+              resource.lease?.release();
+              throw error;
+            }
+          }
+          if (this.closed || generation !== this.generation) return true;
+        }
+
         const actor = this.scene.editValue(
           id,
           (old) => {
@@ -200,8 +233,16 @@ export class ArtemisLayers<T extends object, I extends ArtemisImageDimensions = 
             : undefined,
         )!;
         this.host.applyImageProperties(entry.id, actor, properties);
+        if (shader)
+          this.host.applyShaderProperties!(
+            actor,
+            shader,
+            shader.textures === undefined ? undefined : textures,
+          );
         this.host.recordLayerProperties(tag);
       } finally {
+        for (const entry of textures) entry.lease.release();
+        if (generation !== null && this.pending === generation) this.pending = null;
         this.collect();
       }
       return true;

@@ -78,6 +78,8 @@ export interface DrawListTarget {
   readonly width: number;
   readonly height: number;
   prepareImage(image: TriangleImage): void;
+  /** Eagerly compile/link an executable triangle program on the actual target. */
+  prepareTriangleShader?(fragment: string, additionalTextureCount: number): void;
   prepareRenderSurface?(surface: GpuRenderSurface): void;
   draw(list: DrawList, texture: (id: number) => TriangleImage): void;
   invalidate(image: object): void;

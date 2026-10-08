@@ -3371,9 +3371,9 @@ test('Native shader constant buffer uses list order rather than parameter-name r
     ],
     [90, 0, 0.125],
   );
-  assert.throws(
-    () => raster.nativeParameters([{name: 'size', values: [0.125]}]),
-    /constant buffer/,
+  assert.deepEqual(
+    [...raster.nativeParameters([{name: 'size', values: [0.125]}]).slice(0, 3)],
+    [0.125, 0, 0],
   );
   const blur = createArtemisDrawShaderPreset(hash, 'blur_v');
   assert.deepEqual(
@@ -3430,5 +3430,97 @@ test('Copied native constant storage shares reused coefficients and detaches on 
   const short = new ArtemisShaderConstantStorage(hash);
   const buf = short.update([{name: 'ignored', values: [90]}]);
   assert.deepEqual([...raster.bufferParameters(buf).slice(0, 3)], [90, 0, 0]);
-  assert.throws(() => raster.bufferParameters(null), /binding/);
+  assert.deepEqual([...raster.bufferParameters(null)], new Array(32).fill(0));
+});
+
+test('Layer shader properties admit only named coefficient keys and require a real owner before mutation', async () => {
+  const {artemisLayerProperties} = await import('../dist/engines/artemis/layer-properties.js');
+  const {createArtemisDrawShaderPreset, createArtemisDrawShaderCompiler} =
+    await import('../dist/engines/artemis/draw-shader.js');
+  const p = artemisLayerProperties(
+    new Map([
+      ['id', '1'],
+      ['shader', 'warp'],
+      ['shaderconstant', 'a,b'],
+      ['a', '90,0'],
+      ['b', '.25'],
+    ]),
+  );
+  assert.deepEqual(p.customShader, {
+    shader: 'warp',
+    constants: [
+      {name: 'a', values: [90, 0]},
+      {name: 'b', values: [0.25]},
+    ],
+  });
+  assert.throws(
+    () =>
+      artemisLayerProperties(
+        new Map([
+          ['id', '1'],
+          ['unlisted', '2'],
+        ]),
+      ),
+    /property unlisted/,
+  );
+  const hash = '8953562b80608046662bd8c89015d04236b0ba3afee10c36469c11403de3ebaf';
+  const nullTexture = createArtemisDrawShaderPreset(hash, 'screen', 0, false);
+  assert.equal(nullTexture.needsUserTexture, false);
+  assert.ok(nullTexture.fragment.includes('vec4(0.0)'));
+  assert.ok(!nullTexture.fragment.includes('texture(additionalAtlas'));
+  let prepared = 0;
+  const compiler = createArtemisDrawShaderCompiler(hash, () => prepared++);
+  await assert.rejects(compiler.compile('bad', new Uint8Array([1])), /Unsupported/);
+  assert.equal(prepared, 0);
+});
+test('Cancelled shader texture loading releases real resources before creating a GPU lease or editing the layer', async () => {
+  const {ArtemisLayers} = await import('../dist/engines/artemis/layers.js');
+  const hash = '8953562b80608046662bd8c89015d04236b0ba3afee10c36469c11403de3ebaf';
+  let resolveTexture,
+    resourceReleased = 0,
+    actorsReleased = 0,
+    shaderApplied = 0,
+    properties = 0;
+  const host = {
+    creationMode: () => 0,
+    createImageLayer: () => ({value: 1}),
+    releaseImageLayer: () => actorsReleased++,
+    copyImageLayer: (old) => ({...old}),
+    applyImageProperties: () => properties++,
+    recordLayerProperties: () => {},
+    layerNotFound: () => assert.fail('layer missing'),
+    clearLayerCommands: () => {},
+    resetLayerCommands: () => {},
+    imageLoadFailed: () => assert.fail('load failed'),
+    supportsShaderProperties: () => true,
+    createShaderTexture: () => assert.fail('cancelled resource uploaded'),
+    applyShaderProperties: () => shaderApplied++,
+  };
+  const source = {
+    load: async (path) =>
+      path === 'fore'
+        ? {path, image: {width: 1, height: 1, pixels: new Uint8Array(4)}, surfaceFormat: 1}
+        : new Promise((resolve) => (resolveTexture = resolve)),
+  };
+  const layers = new ArtemisLayers(hash, source, host),
+    tag = (name, args) => ({name, args: new Map(Object.entries(args))});
+  await layers.dispatch(tag('lyc', {id: '1', file: 'fore'}));
+  layers.commit();
+  const priorProperties = properties;
+  const pending = layers.dispatch(
+    tag('lyprop', {id: '1', shader: 'screen', shadertexture: 'user', user: 'texture'}),
+  );
+  layers.cancelPending();
+  resolveTexture({
+    path: 'texture',
+    image: {width: 1, height: 1, pixels: new Uint8Array(4)},
+    surfaceFormat: 1,
+    lease: {release: () => resourceReleased++},
+  });
+  await pending;
+  assert.equal(resourceReleased, 1);
+  assert.equal(shaderApplied, 0);
+  assert.equal(properties, priorProperties);
+  layers.close();
+  assert.equal(actorsReleased, 1);
 });

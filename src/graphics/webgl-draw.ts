@@ -97,6 +97,14 @@ export class WebGLDrawTarget implements DrawListTarget {
     gl.enable(gl.BLEND);
     return gl;
   }
+  prepareTriangleShader(fragment: string, additionalTextureCount: number): void {
+    if (!Number.isInteger(additionalTextureCount) || additionalTextureCount < 0)
+      throw Error('Invalid triangle shader texture count');
+    this.initialize();
+    if (additionalTextureCount + 2 > this.maxTextureUnits)
+      throw Error('Texture bindings exceed WebGL fragment texture units');
+    this.program(fragment, false, Math.max(3, additionalTextureCount));
+  }
   private program(
     fragment = 'vec4 shade(vec4 sampleColor,vec4 tint){return sampleColor*tint;}',
     discardTransparent = true,

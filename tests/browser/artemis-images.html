@@ -4,6 +4,8 @@
 <canvas id="frame" style="width: 256px; height: 128px; image-rendering: pixelated"></canvas>
 <pre id="result">Running synthetic PNG / Lua / raster checks</pre>
 <script type="module">
+  import {ArtemisDrawShaderResource} from '../../dist/engines/artemis/draw-shader.js';
+  import {ArtemisShaderLibrary} from '../../dist/engines/artemis/shader-library.js';
   import {ArtemisShaderConstantStorage} from '../../dist/engines/artemis/shader-properties.js';
   import {createArtemisDrawShaderPreset} from '../../dist/engines/artemis/draw-shader.js';
   import {artemisRadialShade} from '../../dist/engines/artemis/radial-shader.js';
@@ -1540,6 +1542,204 @@
     } finally {
       drawTarget.dispose();
     }
+    // Calibration compiler selects reconstructed programs; real-source SHA selection
+    // is checked separately by the nonvisual installation probe, without game pixels.
+    const actorCanvas = document.createElement('canvas'),
+      actorTarget = new CanvasDrawTarget(actorCanvas, 4, 4);
+    let selectedProgram = 'raster';
+    const library = new ArtemisShaderLibrary(
+      revision,
+      async () => new Uint8Array([1]),
+      {
+        compile: async () => ({
+          shader: new ArtemisDrawShaderResource(revision, selectedProgram, (fragment, count) =>
+            actorTarget.prepareTriangleShader(fragment, count),
+          ),
+        }),
+        dispose: (shader) => shader.dispose(),
+      },
+      () => {
+        throw Error('calibration shader compile failure');
+      },
+    );
+    const ctag = (name, args) => ({name, args: new Map(Object.entries(args))});
+    await library.dispatch(ctag('lyshader', {id: 'warp', file: 'calibration'}));
+    selectedProgram = 'screen';
+    await library.dispatch(ctag('lyshader', {id: 'user', file: 'calibration'}));
+    const released = [];
+    const actorGraphics = new ArtemisImageGraphics(
+      revision,
+      actorTarget,
+      {
+        creationMode: () => 0,
+        clearLayerCommands: () => {},
+        resetLayerCommands: () => {},
+        recordLayerProperties: () => {},
+        imageLoadFailed: () => {
+          throw Error('actor image missing');
+        },
+        layerNotFound: () => {
+          throw Error('actor missing');
+        },
+      },
+      createArtemisOrdinaryGpuRaster(revision),
+      library,
+    );
+    const actorLayers = new ArtemisLayers(
+      revision,
+      {
+        load: async (path) => {
+          const image = path === 'fore' ? drawFore : path === 'user' ? drawUser : null;
+          if (!image) return null;
+          let live = true;
+          return {
+            path,
+            image,
+            surfaceFormat: 2,
+            lease: {
+              release: () => {
+                assert(live, 'actor resource double release');
+                live = false;
+                released.push(path);
+              },
+            },
+          };
+        },
+      },
+      actorGraphics,
+    );
+    const actorPixels = () => {
+      actorGraphics.drawCommitted(actorLayers.scene);
+      const gl = actorTarget.gl,
+        out = new Uint8Array(64);
+      gl.readPixels(0, 0, 4, 4, gl.RGBA, gl.UNSIGNED_BYTE, out);
+      return out;
+    };
+    const assertActor = (actual, expected, label) => {
+      for (let y = 0; y < 4; y++)
+        for (let x = 0; x < 4; x++)
+          for (let ch = 0; ch < 4; ch++)
+            assert(
+              Math.abs(
+                actual[(y * 4 + x) * 4 + ch] -
+                  Math.round(
+                    ((ch === 3 ? expected(x, y)[3] : expected(x, y)[ch]) * expected(x, y)[3]) / 255,
+                  ),
+              ) <= 1,
+              label + ':' + x + ':' + y + ':' + ch,
+            );
+    };
+    try {
+      await actorLayers.dispatch(ctag('lyc', {id: '1', file: 'fore'}));
+      await actorLayers.dispatch(
+        ctag('lyprop', {
+          id: '1',
+          alpha: '127.5',
+          shader: 'warp',
+          shaderconstant: 'a,b',
+          a: '90,0',
+          b: '.25',
+        }),
+      );
+      actorLayers.commit();
+      assertActor(
+        actorPixels(),
+        (x, y) => [Math.max(0, x - 1) * 40, (3 - y) * 40, 0, 100],
+        'actual scene raster',
+      );
+      await actorLayers.dispatch(
+        ctag('lyprop', {id: '1', shaderconstant: 'notHlslNames', notHlslNames: '0,0,0'}),
+      );
+      assertActor(
+        actorPixels(),
+        (x, y) => [Math.max(0, x - 1) * 40, (3 - y) * 40, 0, 100],
+        'retained shader frame',
+      );
+      actorLayers.commit();
+      assertActor(
+        actorPixels(),
+        (x, y) => [x * 40, (3 - y) * 40, 0, 100],
+        'committed shader constants',
+      );
+      await actorLayers.dispatch(
+        ctag('lyprop', {
+          id: '1',
+          shader: 'user',
+          shadertexture: 'renamed,missing',
+          renamed: 'user',
+          missing: 'absent',
+        }),
+      );
+      actorLayers.commit();
+      assertActor(
+        actorPixels(),
+        (x, y) => {
+          const fore = [x * 40, (3 - y) * 40, 0],
+            user = [128, 64, 192];
+          return [
+            ...fore.map((f, c) =>
+              Math.round(255 * (1 - (1 - f / 255) * (1 - ((user[c] / 255) * 128) / 255))),
+            ),
+            100,
+          ];
+        },
+        'ordered shader texture binding',
+      );
+      await actorLayers.dispatch(ctag('lyprop', {id: '1', shadertexture: ''}));
+      actorLayers.commit();
+      assertActor(actorPixels(), (x, y) => [x * 40, (3 - y) * 40, 0, 100], 'null D3D user texture');
+      selectedProgram = 'reset';
+      await library.dispatch(ctag('lyshader', {id: 'user', file: 'calibration'}));
+      assertActor(
+        actorPixels(),
+        (x, y) => [x * 40, (3 - y) * 40, 0, 100],
+        'named program replacement',
+      );
+      await actorLayers.dispatch(ctag('lyprop', {id: '1', shader: 'missing-program'}));
+      actorLayers.commit();
+      const missing = actorPixels();
+      for (let i = 0; i < 64; i++)
+        if (i % 4 !== 3) assert(missing[i] === 0, 'null pixel shader no color');
+      await actorLayers.dispatch(ctag('lydel', {id: '1'}));
+      actorLayers.commit();
+      selectedProgram = 'screen';
+      await library.dispatch(ctag('lyshader', {id: 'captured-user', file: 'calibration'}));
+      await actorLayers.dispatch(ctag('lyc', {id: 'g.1', file: 'fore'}));
+      await actorLayers.dispatch(
+        ctag('lyprop', {
+          id: 'g.1',
+          alpha: '127.5',
+          shader: 'captured-user',
+          shadertexture: 'first',
+          first: 'user',
+        }),
+      );
+      await actorLayers.dispatch(ctag('lyprop', {id: 'g', intermediate_render: '1'}));
+      actorLayers.commit();
+      assertActor(
+        actorPixels(),
+        (x, y) => {
+          const fore = [x * 40, (3 - y) * 40, 0],
+            user = [128, 64, 192];
+          return [
+            ...fore.map((f, c) =>
+              Math.round(255 * (1 - (1 - f / 255) * (1 - ((user[c] / 255) * 128) / 255))),
+            ),
+            100,
+          ];
+        },
+        'captured custom shader and user slot',
+      );
+    } finally {
+      actorLayers.close();
+      library.close();
+      actorTarget.dispose();
+    }
+    assert(
+      released.filter((path) => path === 'fore').length === 2 &&
+        released.filter((path) => path === 'user').length === 2,
+      'actor texture resources released',
+    );
     window.result = {
       passed: true,
       nativeFontWorker: true,
@@ -1553,6 +1753,7 @@
       nativeRollingAudioWorklet: true,
       nativeCustomRasterShader: true,
       nativeAllCustomDrawShaders: true,
+      nativeSceneCustomShaders: true,
       nativeCustomScreenShader: true,
       nativeStereoAttenuation: true,
       audioDeviceOutput: false,

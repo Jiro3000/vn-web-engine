@@ -1,3 +1,4 @@
+import {artemisShaderProperties, type ArtemisShaderPropertyPatch} from './shader-properties.js';
 import {artemisHexUint32, artemisDecimal} from './numbers.js';
 
 export type ArtemisLayerMode = 'normal' | 'add' | 'screen' | 'multiply';
@@ -11,6 +12,7 @@ export interface ArtemisImageClip {
   readonly bottom: number;
 }
 export interface ArtemisLayerPropertyPatch {
+  customShader?: ArtemisShaderPropertyPatch;
   left?: number;
   top?: number;
   alpha?: number;
@@ -44,6 +46,9 @@ const numeric = [
 const flags = ['reversex', 'reversey', 'visible', 'negative', 'grayscale'] as const;
 const supported = new Set<string>([
   'id',
+  'shader',
+  'shaderconstant',
+  'shadertexture',
   'layermode',
   'colormultiply',
   'clip',
@@ -76,9 +81,16 @@ function decimal(value: string): number {
 export function artemisLayerProperties(
   args: ReadonlyMap<string, string>,
 ): ArtemisLayerPropertyPatch {
+  const named = new Set<string>();
+  for (const key of ['shaderconstant', 'shadertexture'])
+    if (args.has(key))
+      for (const name of args.get(key)!.split('\0', 1)[0]!.split(',')) named.add(name);
   for (const key of args.keys())
-    if (!supported.has(key)) throw new Error(`Unsupported Artemis layer property ${key}`);
+    if (!supported.has(key) && !named.has(key))
+      throw new Error(`Unsupported Artemis layer property ${key}`);
   const patch: ArtemisLayerPropertyPatch = {};
+  if (['shader', 'shaderconstant', 'shadertexture'].some((key) => args.has(key)))
+    patch.customShader = artemisShaderProperties(args);
   if (args.has('intermediate_render')) {
     const value = args.get('intermediate_render');
     patch.intermediateRender = {

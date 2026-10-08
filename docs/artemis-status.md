@@ -91,7 +91,7 @@ through native voice owners, without an audio device. It supports sound-finish
 registration, then requires a graphics feature owner. An explicitly simulated
 feature-level diagnostic reaches the next unsupported `lyshader` command.
 
-Build and221 focused tests pass. The full1895-test suite has1858 passes and the
+Build and223 focused tests pass. The full1897-test suite has1860 passes and the
 same37 baseline failures, with no new failing names. Synthetic browser checks
 cover real font/image workers, GPU scenes and sound lookup through actual offline
 WebAudio voices. These checks do not establish production game compatibility.
@@ -118,3 +118,10 @@ Native constant preparation is ordered concatenation, with16-byte grow-only,
 zero-initialized shared storage and persistent trailing coefficients. Copied GPU
 actors share buffers until growth. Native default/unbound slot behavior and full
 per-actor scene wiring remain required before declaring production compatibility.
+
+Custom shader properties now wire through async texture loading, retained actor
+copies and actual ImageGraphics draws, including captured surfaces. Synthetic GPU
+checks exercise constants at commit boundaries, texture lifetime, named-program
+replacement, null bindings and capture user-slot selection. Native API defaults
+are backed by the Direct3D specification. Coefficient animation jobs/root selectors
+and the production runtime still require work. Rough engineering completion58%.

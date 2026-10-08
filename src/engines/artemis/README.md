@@ -1022,7 +1022,7 @@ not shipped. The program displaces UV1.x by `sin(radians(UV1.y*inter-angle))*siz
 samples foreground and multiplies only alpha. Back/mask samples and color multiplier
 have no observable contribution in this source. Sampler filtering/addressing belong
 to the host. `ArtemisBrowserRasterShader` provides a real linked WebGL2 program on a
-dedicated context; actor-specific scene binding and parameter jobs remain separate.
+dedicated context; actor-specific scene binding is now wired as described below; parameter animation jobs remain separate.
 
 `--shader-presets` adds actual known-source CPU executable registration to the
 nonvisual probe. It does not display or shade game image pixels. Its optional
@@ -1080,8 +1080,8 @@ shade/atlas/tex/tint/parameters ABI, with explicit required named uniform values
 user texture index. Real synthetic GPU tests compare every adapted program against
 the dedicated WebGL executable, including nonzero UV transforms and user texture
 composites. This is executable renderer integration, not native reflection/constant
-buffer packing: missing coefficients are refused and actor preparation/jobs still
-require wiring into ImageGraphics and retained resource owners.
+buffer packing: the explicit named calibration helper refuses missing coefficients. Native ordered
+buffer preparation and retained ImageGraphics wiring are described below.
 
 Native15d120 rendering ignores constant names after argument collection and
 concatenates vectors in list order. `nativeParameters` preserves this order;
@@ -1091,4 +1091,32 @@ constant storage grows in16-byte units, initializes new memory to zero and keeps
 old trailing coefficients on shorter writes. GPU-layer copies share existing
 storage until one grows, matching verified15c850 pointer/refcount copies. Empty
 lists do not update slot1; the graphics binding owner must preserve prior slot1.
-Unbound/undersized reads and nonempty lists of empty vectors remain refused.
+Nonempty lists of empty vectors remain refused; API unbound/out-of-range reads are
+now represented by zero, as described below.
+
+Custom shader properties now connect to `ArtemisLayers` and `ImageGraphics`.
+Supply an owned ShaderLibrary of DrawShaderResource objects through the optional
+ImageGraphics shader-program provider. `createArtemisDrawShaderCompiler` selects
+exact source signatures and requires actual target prepareTriangleShader to compile
+both ordinary and captured variants. Unknown-source presets remain unsupported.
+
+Lyprop parses shader names, ordered shaderconstant lists and shadertexture paths.
+Texture jobs resolve asynchronously through the existing image source, retain
+prepared raster resources, skip missing loads and release stale completions before
+upload/edit. Missing shader providers refuse before scene mutation. Copied actors
+retain independent property vectors and texture leases, plus shared native constant
+storage. Renderer program loans and sampled texture loans remain held through draw
+submission. Captures include shader-property revision in their invalidation signature.
+
+Per-frame draws look up the current named program, reuse slot1 for empty constant
+lists and apply native ordered packing. TextureUser selects the first surviving
+texture entry regardless of its name. Ordinary draws use their native blend state;
+captured custom programs replace RGBA before outer composition. Null user binding
+returns zero in the shader, and unknown named programs produce no color pixels.
+D3D constant-buffer out-of-range accesses are also zero; bufferParameters now models
+that verified API behavior rather than refusing a missing/short buffer.
+
+These API defaults follow the [Direct3D functional specification](https://microsoft.github.io/DirectX-Specs/d3d/archive/D3D11_3_FunctionalSpec.htm),
+sections7.5,7.18.17 and16.6. No game asset is synthesized to fill a missing resource.
+Shader coefficient animation jobs, root/wildcard property modes and full production
+runtime wiring remain distinct requirements.

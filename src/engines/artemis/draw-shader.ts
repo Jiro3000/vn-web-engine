@@ -1,6 +1,10 @@
-import type {ArtemisShaderConstant} from './shader-properties.js';
+import {ArtemisShaderConstantStorage, type ArtemisShaderConstant} from './shader-properties.js';
 import {artemisRevision} from './revision.js';
-import {artemisShaderFragmentSource, type ArtemisShaderPresetKind} from './raster-shader.js';
+import {
+  compileArtemisShaderPreset,
+  artemisShaderFragmentSource,
+  type ArtemisShaderPresetKind,
+} from './raster-shader.js';
 
 interface UniformField {
   readonly name: string;
@@ -27,6 +31,7 @@ export function createArtemisDrawShaderPreset(
   hash: string,
   kind: ArtemisShaderPresetKind,
   userTextureIndex = 0,
+  userTextureBound = true,
 ): ArtemisDrawShaderPreset {
   artemisRevision(hash);
   if (!Number.isInteger(userTextureIndex) || userTextureIndex < 0 || userTextureIndex > 29)
@@ -79,15 +84,9 @@ export function createArtemisDrawShaderPreset(
     default:
       throw Error('Unsupported Artemis draw shader kind');
   }
-  const needsUserTexture = [
-    'screen',
-    'add',
-    'mul',
-    'compbr',
-    'compbrc',
-    'compdk',
-    'compdkc',
-  ].includes(kind);
+  const needsUserTexture =
+    userTextureBound &&
+    ['screen', 'add', 'mul', 'compbr', 'compbrc', 'compdk', 'compdkc'].includes(kind);
   let index = 0;
   const value = (offset: number) => `parameters[${Math.floor(offset / 4)}].${'xyzw'[offset % 4]}`;
   const declarations = fields
@@ -106,7 +105,9 @@ export function createArtemisDrawShaderPreset(
     .replace(/out vec4 outColor;/g, '')
     .replace(
       /texture\(uUser,\s*vUv\)/g,
-      `texture(additionalAtlas${userTextureIndex},additionalUV${userTextureIndex})`,
+      userTextureBound
+        ? `texture(additionalAtlas${userTextureIndex},additionalUV${userTextureIndex})`
+        : 'vec4(0.0)',
     )
     .replace(/\buFore\b/g, 'atlas')
     .replace(/\bvUv\b/g, 'tex')
@@ -123,11 +124,9 @@ export function createArtemisDrawShaderPreset(
     fields: fields.map(({name, size}) => ({name, size})),
     needsUserTexture,
     bufferParameters(buffer) {
-      const required = fields.reduce((n, field) => n + field.size, 0);
       if (
-        (buffer?.length ?? 0) < required ||
         (buffer?.length ?? 0) > 32 ||
-        (buffer && !buffer.every(Number.isFinite))
+        (buffer && (buffer.length % 4 !== 0 || !buffer.every(Number.isFinite)))
       )
         throw Error('Unsupported Artemis native shader buffer binding');
       const result = new Float32Array(32);
@@ -135,17 +134,7 @@ export function createArtemisDrawShaderPreset(
       return result;
     },
     nativeParameters(values) {
-      const flattened = values.flatMap((entry) => [...entry.values]);
-      const required = fields.reduce((n, field) => n + field.size, 0);
-      if (
-        flattened.length < required ||
-        flattened.length > 32 ||
-        !flattened.every((x) => Number.isFinite(Math.fround(x)))
-      )
-        throw Error('Unsupported Artemis native shader constant buffer');
-      const result = new Float32Array(32);
-      result.set(flattened);
-      return result;
+      return this.bufferParameters(new ArtemisShaderConstantStorage(hash).update(values));
     },
     parameters(values) {
       const result = new Float32Array(32);
@@ -162,6 +151,60 @@ export function createArtemisDrawShaderPreset(
         offset += field.size;
       }
       return result;
+    },
+  };
+}
+
+/** Owned executable metadata. GPU programs are prepared and cached by the shared
+ * target; shader-library loans keep this resource valid through command submission.
+ */
+export class ArtemisDrawShaderResource {
+  private closed = false;
+  private readonly ordinary: ArtemisDrawShaderPreset;
+  private readonly captured: ArtemisDrawShaderPreset;
+  private readonly nullOrdinary: ArtemisDrawShaderPreset;
+  private readonly nullCaptured: ArtemisDrawShaderPreset;
+  constructor(
+    hash: string,
+    kind: ArtemisShaderPresetKind,
+    prepare: (fragment: string, additionalTextureCount: number) => void,
+  ) {
+    this.ordinary = createArtemisDrawShaderPreset(hash, kind, 0);
+    this.captured = createArtemisDrawShaderPreset(hash, kind, 1);
+    this.nullOrdinary = createArtemisDrawShaderPreset(hash, kind, 0, false);
+    this.nullCaptured = createArtemisDrawShaderPreset(hash, kind, 1, false);
+    prepare(this.nullOrdinary.fragment, 0);
+    prepare(this.nullCaptured.fragment, 1);
+    prepare(this.ordinary.fragment, this.ordinary.needsUserTexture ? 1 : 0);
+    prepare(this.captured.fragment, this.captured.needsUserTexture ? 2 : 1);
+  }
+  preset(captured: boolean, userTextureBound = true): ArtemisDrawShaderPreset {
+    if (this.closed) throw Error('Artemis draw shader resource disposed');
+    return userTextureBound
+      ? captured
+        ? this.captured
+        : this.ordinary
+      : captured
+        ? this.nullCaptured
+        : this.nullOrdinary;
+  }
+  dispose(): void {
+    this.closed = true;
+  }
+}
+/** Exact-source selector plus mandatory actual GPU preparation. */
+export function createArtemisDrawShaderCompiler(
+  hash: string,
+  prepare: (fragment: string, additionalTextureCount: number) => void,
+) {
+  artemisRevision(hash);
+  return {
+    async compile(_id: string, bytes: Uint8Array): Promise<{shader: ArtemisDrawShaderResource}> {
+      const program = await compileArtemisShaderPreset(hash, bytes);
+      return {shader: new ArtemisDrawShaderResource(hash, program.kind, prepare)};
+    },
+    dispose(shader: ArtemisDrawShaderResource): void {
+      shader.dispose();
     },
   };
 }
