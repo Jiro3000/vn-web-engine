@@ -1056,3 +1056,14 @@ is multiplied by fade. Distance scales the inward step. Alpha scales only after
 accumulation. Zero size and zero fade retain the original foreground. Values
 are not clamped or inferred. CPU and actual GPU outputs are compared on synthetic
 nonzero radial displacement as well as identity cases.
+
+All twenty original DX11 source signatures now select executable CPU/WebGL2
+presets. Additional programs cover add/mul, per-channel bright/dark composites,
+color add/multiply, reset and mosaic. Compbr/compbrc and compdk/compdkc have
+identical equations but retain separate signatures. Composite normalization uses
+foreground/user combined alpha in RGB, then returns foreground alpha*alpha;
+transparent division is not regularized. Cadd accepts negative channels, while
+RGB zeros negative-coefficient channels. Mosaic uses floor(UV*grid)/grid with
+w=size*ratio,h=size; grid inputs are not pixel dimensions. Caller/target own
+filtering, addressing and clamping. These known presets are not a general HLSL
+compiler; actor shader properties and constant/texture jobs require separate owners.

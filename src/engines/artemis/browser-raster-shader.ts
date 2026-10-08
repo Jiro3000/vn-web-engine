@@ -1,3 +1,9 @@
+import {
+  artemisCompositeFragmentSource,
+  type ArtemisCompositeKind,
+  type ArtemisCompositeUniforms,
+} from './composite-shader.js';
+import {ARTEMIS_MOSAIC_FRAGMENT_SOURCE, type ArtemisMosaicUniforms} from './mosaic-shader.js';
 import {ARTEMIS_RADIAL_FRAGMENT_SOURCE, type ArtemisRadialUniforms} from './radial-shader.js';
 import {
   artemisBlurFragmentSource,
@@ -37,7 +43,13 @@ export class ArtemisBrowserRasterShader {
     hash: string,
     private readonly gl: WebGL2RenderingContext,
     private readonly kind:
-      'raster' | 'screen' | ArtemisColorKind | ArtemisBlurKind | 'radial' = 'raster',
+      | 'raster'
+      | 'screen'
+      | ArtemisColorKind
+      | ArtemisBlurKind
+      | 'radial'
+      | 'mosaic'
+      | ArtemisCompositeKind = 'raster',
   ) {
     artemisRevision(hash);
     const compile = (type: number, source: string) => {
@@ -66,7 +78,11 @@ export class ArtemisBrowserRasterShader {
               ? artemisBlurFragmentSource(kind)
               : kind === 'radial'
                 ? ARTEMIS_RADIAL_FRAGMENT_SOURCE
-                : artemisColorFragmentSource(kind),
+                : kind === 'mosaic'
+                  ? ARTEMIS_MOSAIC_FRAGMENT_SOURCE
+                  : ['add', 'mul', 'compbr', 'compbrc', 'compdk', 'compdkc'].includes(kind)
+                    ? artemisCompositeFragmentSource(kind as ArtemisCompositeKind)
+                    : artemisColorFragmentSource(kind as ArtemisColorKind),
       );
       program = gl.createProgram();
       if (!program) throw Error('Cannot allocate raster program');
@@ -106,7 +122,9 @@ export class ArtemisBrowserRasterShader {
       | ArtemisScreenUniforms
       | ArtemisColorUniforms
       | ArtemisBlurUniforms
-      | ArtemisRadialUniforms,
+      | ArtemisRadialUniforms
+      | ArtemisMosaicUniforms
+      | ArtemisCompositeUniforms,
     sampler: {readonly filter: 'nearest' | 'linear'; readonly address: 'clamp' | 'repeat'},
     userImage?: TriangleImage,
   ): void {
@@ -164,7 +182,10 @@ export class ArtemisBrowserRasterShader {
         ['uSize', p.size],
       ] as const)
         gl.uniform1f(gl.getUniformLocation(this.program, name), value);
-    } else if (this.kind === 'screen') {
+    } else if (
+      this.kind === 'screen' ||
+      ['add', 'mul', 'compbr', 'compbrc', 'compdk', 'compdkc'].includes(this.kind)
+    ) {
       if (
         !userImage ||
         userImage.width < 1 ||
@@ -191,7 +212,13 @@ export class ArtemisBrowserRasterShader {
       );
       gl.uniform1i(gl.getUniformLocation(this.program, 'uUser'), 1);
     }
-    if (this.kind === 'sepia' || this.kind === 'sepia2' || this.kind === 'rgb') {
+    if (
+      this.kind === 'sepia' ||
+      this.kind === 'sepia2' ||
+      this.kind === 'rgb' ||
+      this.kind === 'cadd' ||
+      this.kind === 'cmul'
+    ) {
       const color = p as ArtemisColorUniforms;
       if (
         ![color.red, color.green, color.blue].every(
@@ -231,6 +258,17 @@ export class ArtemisBrowserRasterShader {
         ['uFade', r.fade],
       ] as const)
         gl.uniform1f(gl.getUniformLocation(this.program, name), value);
+    }
+    if (['add', 'mul', 'compbr', 'compbrc', 'compdk', 'compdkc'].includes(this.kind)) {
+      const c = p as ArtemisCompositeUniforms;
+      if (!Number.isFinite(c.param)) throw Error('Missing composite uniforms');
+      gl.uniform1f(gl.getUniformLocation(this.program, 'uParam'), c.param);
+    }
+    if (this.kind === 'mosaic') {
+      const m = p as ArtemisMosaicUniforms;
+      if (![m.size, m.ratio].every(Number.isFinite)) throw Error('Missing mosaic uniforms');
+      gl.uniform1f(gl.getUniformLocation(this.program, 'uSize'), m.size);
+      gl.uniform1f(gl.getUniformLocation(this.program, 'uRatio'), m.ratio);
     }
     gl.viewport(0, 0, width, height);
     gl.disable(gl.BLEND);

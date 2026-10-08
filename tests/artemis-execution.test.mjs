@@ -3195,3 +3195,64 @@ test('Radial center and zero-size conserve color; zero-fade keeps foreground', a
   const inward = artemisRadialShade((u, v) => [u, v, 1, 1], 0.75, 0.25, p);
   assert.ok(inward[0] < 0.75 && inward[1] > 0.25);
 });
+
+test('Composite presets preserve source alpha, user weighting and singular transparent division', async () => {
+  const {artemisCompositeShade} = await import('../dist/engines/artemis/composite-shader.js');
+  const a = () => [0.2, 0.4, 0.6, 0.8],
+    b = () => [0.5, 0.25, 0, 0.5],
+    p = {alpha: 0.5, param: 0.75};
+  const out = (k) => artemisCompositeShade(k, a, b, 0, 0, p),
+    base = 0.8 * 0.5 + 0.5;
+  const close = (x, y) => assert.ok(Math.abs(x - y) < 1e-7, `${x} vs ${y}`);
+  close(out('add')[0], 0.2 + 0.5 * 0.5 * 0.75);
+  close(out('mul')[0], 0.2 * ((0.2 * 0.8 * 0.5 + 0.5 * 0.5) / base + 0.25));
+  close(out('compbr')[0], ((0.2 * 0.8 * 0.5 + 0.5 * 0.5) / base) * 0.75);
+  close(out('compdk')[0], ((0.2 * 0.8 * 0.5 + 0.2 * 0.5) / base) * 0.75);
+  assert.deepEqual(out('compbr'), out('compbrc'));
+  assert.deepEqual(out('compdk'), out('compdkc'));
+  for (const k of ['add', 'mul', 'compbr', 'compdk']) close(out(k)[3], 0.4);
+  const zero = () => [0, 0, 0, 0];
+  assert.ok(Number.isNaN(artemisCompositeShade('mul', zero, zero, 0, 0, p)[0]));
+  assert.equal(artemisCompositeShade('add', zero, zero, 0, 0, p)[0], 0);
+});
+test('Mosaic uses grid counts and floor coordinates without half-cell or source-size adjustment', async () => {
+  const {artemisMosaicShade} = await import('../dist/engines/artemis/mosaic-shader.js');
+  let uv;
+  const pixel = artemisMosaicShade(
+    (u, v) => {
+      uv = [u, v];
+      return [u, v, 0.3, 0.8];
+    },
+    0.55,
+    0.35,
+    {alpha: 0.5, size: 4, ratio: 2},
+  );
+  assert.deepEqual(uv, [0.5, 0.25]);
+  assert.equal(pixel[3], Math.fround(0.4));
+  artemisMosaicShade(
+    (u, v) => {
+      assert.ok(Number.isNaN(u) && Number.isNaN(v));
+      return [0, 0, 0, 0];
+    },
+    0.5,
+    0.5,
+    {alpha: 1, size: 0, ratio: 1},
+  );
+});
+test('Cadd allows negative offsets unlike RGB; Cmul and reset keep their own equations', async () => {
+  const {artemisColorShade} = await import('../dist/engines/artemis/color-shader.js');
+  const sample = () => [0.2, 0.4, 0.6, 0.8],
+    p = {alpha: 0.5, red: -0.1, green: 2, blue: 0};
+  const add = artemisColorShade('cadd', sample, 0, 0, p);
+  assert.ok(Math.abs(add[0] - 0.1) < 1e-7);
+  assert.ok(add[1] > 1);
+  const mul = artemisColorShade('cmul', sample, 0, 0, p);
+  assert.ok(Math.abs(mul[0] + 0.02) < 1e-7);
+  assert.equal(mul[2], 0);
+  assert.deepEqual(artemisColorShade('reset', sample, 0, 0, {alpha: 0.5}), [
+    0.2,
+    0.4,
+    0.6,
+    Math.fround(0.4),
+  ]);
+});
