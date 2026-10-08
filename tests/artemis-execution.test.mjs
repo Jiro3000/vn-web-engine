@@ -3524,3 +3524,253 @@ test('Cancelled shader texture loading releases real resources before creating a
   layers.close();
   assert.equal(actorsReleased, 1);
 });
+
+test('Native script event producer preserves deferred copies, force/latch rules and filter/default result semantics', async () => {
+  const {ArtemisScriptEvents} = await import('../dist/engines/artemis/script-events.js');
+  const hash = '8953562b80608046662bd8c89015d04236b0ba3afee10c36469c11403de3ebaf';
+  let mode = 2,
+    disabled = false,
+    status = 0;
+  const latches = [false, false],
+    effects = [];
+  const host = {
+    nativeMode: () => mode,
+    disabled: () => disabled,
+    latched: (i) => latches[i],
+    latch: (i) => (latches[i] = true),
+    filter: () => {
+      if (status === 'error') throw Error('filter failed');
+      return status;
+    },
+    report: (kind) => effects.push(['error', kind]),
+    jump: (file, label) => {
+      effects.push(['jump', file, label]);
+      return false;
+    },
+    call: (file, label) => {
+      effects.push(['call', file, label]);
+      return false;
+    },
+    enterHandlerScope: () => effects.push(['scope']),
+    enqueueHandler: (tag) => effects.push(['handler', tag]),
+  };
+  const events = new ArtemisScriptEvents(hash, host),
+    args = new Map([
+      ['handler', 'callback'],
+      ['id', '1'],
+    ]),
+    tag = {kind: 'tag', name: 'setonsoundfinish', sourceLine: -1, args};
+  assert.deepEqual(events.emit(tag, 0, false), {status: 'queued'});
+  args.set('id', 'changed');
+  assert.deepEqual(events.emit(tag, 0, false), {status: 'suppressed'});
+  assert.equal(events.drainOne(), null);
+  mode = 1;
+  assert.deepEqual(events.drainOne(), {status: 'delivered', failed: false});
+  assert.equal(events.queuedEvents, 0);
+  assert.deepEqual(effects[0], ['scope']);
+  const queued = effects[1][1];
+  assert.equal(queued.name, 'callback');
+  assert.equal(queued.sourceLine, 0);
+  assert.equal(queued.args.get('id'), '1');
+  effects.length = 0;
+  status = 1;
+  assert.deepEqual(events.emit(tag, 0, true), {status: 'delivered', failed: false});
+  assert.equal(effects.length, 0);
+  status = 2;
+  assert.equal(events.dispatch(tag), true);
+  status = -1;
+  assert.equal(events.dispatch(tag), false);
+  status = 'error';
+  assert.equal(
+    events.dispatch({
+      ...tag,
+      args: new Map([
+        ['file', ''],
+        ['call', '00'],
+        ['handler', 'callback'],
+      ]),
+    }),
+    false,
+  );
+  assert.deepEqual(effects.slice(0, 2), [
+    ['error', 'filter'],
+    ['call', '', ''],
+  ]);
+  assert.equal(effects[2][0], 'handler');
+  effects.length = 0;
+  status = 0;
+  events.dispatch({
+    ...tag,
+    args: new Map([
+      ['label', 'last'],
+      ['call', '0'],
+    ]),
+  });
+  assert.deepEqual(effects, [['jump', '', 'last']]);
+  disabled = true;
+  assert.deepEqual(events.emit(tag, 0, true), {status: 'suppressed'});
+  assert.equal(events.dispatch({...tag, name: ''}), true);
+});
+test('Default event handlers use a fresh local scope and filtered priority tag, then restore a waiting script', async () => {
+  const {ArtemisScriptEvents} = await import('../dist/engines/artemis/script-events.js');
+  const {ArtemisVariables} = await import('../dist/engines/artemis/variables.js');
+  const source = bytes('[wait]\n[mark phase=after]\n[return]'),
+    vars = new ArtemisVariables();
+  vars.pushLocal();
+  vars.write('local', 'outer', true);
+  const marks = [];
+  let script;
+  const lua = new ArtemisLua({
+    readFile: (path) => (path === 'main.iet' ? source : null),
+    fileExists: () => true,
+    now: () => 0,
+    readVariable: (name) => vars.read(name),
+    writeVariable: (name, value) => vars.write(name, value),
+    tag: (tag) => script.executeTag(tag),
+  });
+  script = new ArtemisScript(lua, {
+    readFile: (path) => (path === 'main.iet' ? source : null),
+    pushLocal: () => vars.pushLocal(),
+    popLocal: () => vars.popLocal(),
+    emptyReturn: () => 'ended',
+    dispatch: (tag) => {
+      if (tag.name === 'wait') return 'waiting';
+      if (tag.name === 'mark') {
+        marks.push([tag.args.get('phase'), luaText(vars.read('local'))]);
+        vars.write('local', 'handler', true);
+      } else throw Error(tag.name);
+    },
+  });
+  lua.vm.execute(
+    bytes('engine:setTagFilter{callback=function(e,p) e:tag{"mark",phase=p.id}; return 1 end}'),
+  );
+  script.load('main.iet');
+  assert.equal(script.step(), 'waiting');
+  const events = new ArtemisScriptEvents(
+    '8953562b80608046662bd8c89015d04236b0ba3afee10c36469c11403de3ebaf',
+    {
+      nativeMode: () => 3,
+      disabled: () => false,
+      latched: () => false,
+      latch: () => {},
+      filter: (tag) => lua.filterEvent(tag),
+      report: () => assert.fail('event error'),
+      jump: (f, l) => {
+        script.jump(f, l);
+        return false;
+      },
+      call: (f, l) => {
+        script.call(f, l);
+        return false;
+      },
+      enterHandlerScope: () => script.enterEventHandlerScope(),
+      enqueueHandler: (tag) => script.enqueue(tag),
+    },
+  );
+  events.emit(
+    {
+      kind: 'tag',
+      name: 'setonsoundfinish',
+      sourceLine: -1,
+      args: new Map([
+        ['handler', 'callback'],
+        ['id', 'from-event'],
+      ]),
+    },
+    0,
+    true,
+  );
+  assert.equal(script.currentFile, '');
+  assert.equal(script.callDepth, 1);
+  assert.equal(script.step(), 'ready');
+  assert.deepEqual(marks, [['from-event', '']]);
+  assert.equal(script.step(), 'waiting');
+  assert.equal(script.currentFile, 'main.iet');
+  assert.equal(luaText(vars.read('local')), 'outer');
+  assert.equal(script.callDepth, 0);
+  script.resume();
+  script.step();
+  assert.deepEqual(marks.at(-1), ['after', 'outer']);
+  lua.close();
+});
+
+test('Actual PCM EOF flows through captured sound-finish event into a filtered scoped script handler', async () => {
+  const {createArtemisOfflineSoundVoices} =
+    await import('../dist/engines/artemis/offline-sound-voices.js');
+  const {ArtemisSoundFinish} = await import('../dist/engines/artemis/sound-finish.js');
+  const {createArtemisScriptEvents} = await import('../dist/engines/artemis/script-events.js');
+  const {ArtemisVariables} = await import('../dist/engines/artemis/variables.js');
+  const {encodeWav} = await import('../dist/audio/pcm.js');
+  const hash = '8953562b80608046662bd8c89015d04236b0ba3afee10c36469c11403de3ebaf';
+  const data = encodeWav({sampleRate: 1000, sampleCount: 1, channels: [Float32Array.from([0.25])]});
+  const owner = createArtemisOfflineSoundVoices(hash, async () => data, 'nearest-even', 1000),
+    vars = new ArtemisVariables(),
+    seen = [];
+  const source = bytes('[wait]');
+  let script;
+  const lua = new ArtemisLua({
+    readFile: () => source,
+    fileExists: () => true,
+    now: () => 0,
+    tag: (tag) => script.executeTag(tag),
+    enqueueTag: () => assert.fail('unexpected direct queue'),
+    variable: () => '',
+  });
+  script = new ArtemisScript(lua, {
+    readFile: () => source,
+    pushLocal: () => vars.pushLocal(),
+    popLocal: () => vars.popLocal(),
+    dispatch: (tag) => {
+      if (tag.name === 'wait') return 'waiting';
+      if (tag.name === 'observed') seen.push(tag.args.get('id'));
+      else assert.fail(tag.name);
+    },
+  });
+  lua.vm.execute(
+    bytes('engine:setTagFilter{finished=function(e,p) e:tag{"observed",id=p.id}; return 1 end}'),
+  );
+  const events = createArtemisScriptEvents(hash, lua, script, {
+    nativeMode: () => 3,
+    disabled: () => false,
+    latched: () => false,
+    latch: () => {},
+    report: () => assert.fail('event dispatch failed'),
+  });
+  try {
+    script.load('main.iet');
+    script.step();
+    const index = await owner.effects.prepareEffect('one.wav', -1);
+    const finish = new ArtemisSoundFinish(hash, {
+      currentFile: () => script.currentFile,
+      musicIndex: () => index,
+      effectIndex: (id) => (id === 'voice' ? index : undefined),
+      setMusicFinish: (i, cb) => owner.effects.setFinishCallback(i, cb),
+      setEffectFinish: (i, cb) => owner.effects.setFinishCallback(i, cb),
+      emit: (tag) => events.emit(tag, 0, true),
+    });
+    finish.dispatch({
+      kind: 'tag',
+      name: 'setonsoundfinish',
+      sourceLine: -1,
+      args: new Map([
+        ['id', 'voice'],
+        ['handler', 'finished'],
+      ]),
+    });
+    owner.effects.startEffect(index, 0, false);
+    assert.deepEqual([...owner.render(1)[0]], [0.25]);
+    assert.deepEqual(seen, []);
+    owner.effects.tick(1);
+    assert.equal(script.queuedTags, 1);
+    assert.equal(script.callDepth, 1);
+    script.step();
+    assert.deepEqual(seen, ['voice']);
+    script.step();
+    assert.equal(script.state, 'waiting');
+    assert.equal(script.currentFile, 'main.iet');
+    assert.equal(script.callDepth, 0);
+  } finally {
+    owner.close();
+    lua.close();
+  }
+});

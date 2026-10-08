@@ -35,7 +35,7 @@ interface Cursor {
 export class ArtemisScript {
   private cursor: Cursor | null = null;
   private readonly cache = new Map<string, IetProgram>();
-  private readonly callers: Cursor[] = [];
+  private readonly callers: (Cursor & {readonly resumeState?: ArtemisScriptState})[] = [];
   private queue: AsbTag[] = [];
   private queueHead = 0;
   private running = false;
@@ -105,6 +105,24 @@ export class ArtemisScript {
     this.cursor = destination;
     this.state = 'ready';
   }
+  /** c6730 handler-only events interrupt with an empty caret and a fresh scope.
+   * Resource-suspended Lua must be deferred by the native-mode event owner.
+   */
+  enterEventHandlerScope(): void {
+    if (!this.cursor || (this.state !== 'ready' && this.state !== 'waiting') || this.luaSuspended)
+      throw Error('Unsupported Artemis interrupted event scope');
+    if (!this.host.pushLocal || !this.host.popLocal)
+      throw Error('Artemis event handler requires local scope owner');
+    if (this.callers.length >= 10000) throw Error('Artemis call depth limit exceeded');
+    this.host.pushLocal();
+    this.callers.push({...this.cursor, resumeState: this.state});
+    this.cursor = {
+      file: '',
+      index: 0,
+      program: {records: [], tags: [], labels: new Map()},
+    };
+    this.state = 'ready';
+  }
   return(): void {
     if (!this.callers.length) {
       if (!this.host.emptyReturn)
@@ -113,8 +131,9 @@ export class ArtemisScript {
       return;
     }
     this.host.popLocal?.();
-    this.cursor = this.callers.pop()!;
-    this.state = 'ready';
+    const {resumeState, ...cursor} = this.callers.pop()!;
+    this.cursor = cursor;
+    this.state = resumeState ?? 'ready';
   }
   enqueue(tag: AsbTag): void {
     if (this.queue.length - this.queueHead >= 10000)
@@ -193,6 +212,7 @@ export class ArtemisScript {
     }
   }
   private dispatch(tag: AsbTag): void | 'suspended' {
+    if (!tag.name) return; // Native generated empty handler block has no action.
     if (this.lua.suspendableTags) {
       const task = this.lua.createTagFilterCall(tag);
       if (task) return this.beginLuaCall(task, {...tag, args: new Map(tag.args)});

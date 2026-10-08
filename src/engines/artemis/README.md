@@ -1120,3 +1120,15 @@ These API defaults follow the [Direct3D functional specification](https://micros
 sections7.5,7.18.17 and16.6. No game asset is synthesized to fill a missing resource.
 Shader coefficient animation jobs, root/wildcard property modes and full production
 runtime wiring remain distinct requirements.
+
+`script-events.ts` reconstructs b73e0/c6730 registration dispatch: producer-owned
+native modes, disabled/latch flags, copied deferred registrations, retained Lua
+event filter and default file/label transfers followed by priority handler tags.
+The concrete Script adapter installs an empty caret with a fresh local variable
+scope for handler-only events, then restores the interrupted ready/waiting cursor.
+A synthetic PCM EOF test exercises sound-finish capture, frame tick, event filter,
+scoped handler queue and return to the waiting script without an audio device.
+
+Native frame/timer/caret control and latch reset remain required production owners;
+no JS state-to-native-mode mapping is guessed. Resource-suspended Lua events must
+be deferred by that owner. Direct registered Lua Events callbacks remain distinct.
