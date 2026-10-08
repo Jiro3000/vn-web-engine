@@ -225,3 +225,32 @@ test('Thread errors preserve other VM work; budgets abort loops after a yield an
   loop.close();
   vm.close();
 });
+
+test('Prepared loadfile preserves header line numbers, text translation and binary reopen refusal', async () => {
+  const {windowsTextFileBytes} = await import('../dist/platform/windows-text-file.js');
+  const vm = new Lua51();
+  try {
+    const source = bytes('#!/lua\r\nresult=[[A\r\nB\rC]]\x1a invalid tail'),
+      original = source.slice();
+    vm.executeFile(source, 'module.lua', windowsTextFileBytes(source));
+    assert.equal(luaText(vm.getGlobal('result')), 'A\nB\nC');
+    assert.deepEqual(source, original);
+    vm.executeFile(bytes('# header without newline'), 'empty.lua');
+    const broken = bytes('# header\r\nfunction broken(');
+    assert.throws(
+      () => vm.compileFile(broken, 'broken.lua', windowsTextFileBytes(broken)),
+      /broken.lua:2/,
+    );
+    assert.throws(
+      () => vm.executeFile(Uint8Array.of(35, 10, 27, 76, 117, 97), 'binary.lua'),
+      /bytecode/,
+    );
+    assert.throws(() => vm.execute(bytes('#!/lua\nresult=1')), /unexpected symbol/);
+    assert.deepEqual(
+      windowsTextFileBytes(Uint8Array.of(65, 13, 10, 66, 13, 67, 26, 68)),
+      Uint8Array.of(65, 10, 66, 13, 67),
+    );
+  } finally {
+    vm.close();
+  }
+});

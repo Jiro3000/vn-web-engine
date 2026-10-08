@@ -10,10 +10,15 @@ import {
 import {ArtemisEvents} from './events.js';
 import type {AsbTag} from '../../formats/artemis/asb.js';
 import type {PointerPositionHost} from '../../input/cursor-host.js';
+import {windowsTextFileBytes} from '../../platform/windows-text-file.js';
 
 export interface ArtemisLuaHost {
   /** Synchronous prepared byte sources; null means the file does not exist. */
   readFile(path: string): Uint8Array | null;
+  /** Optional prepared CFile owner. Include tries luaL_loadfile here before
+   * retrying the normal loose-first CArtemisPackFile read on any failure.
+   */
+  readPlainFile?(path: string): Uint8Array | null;
   fileExists(path: string): boolean;
   now(): number;
   tag(tag: AsbTag): void | 'suspended';
@@ -188,6 +193,17 @@ export class ArtemisLua {
       );
   }
   include(path: string): void {
+    if (this.host.readPlainFile) {
+      try {
+        const plain = this.host.readPlainFile(path);
+        if (plain !== null) {
+          this.vm.executeFile(plain, path, windowsTextFileBytes(plain));
+          return;
+        }
+      } catch {
+        // 12d590 retries on open/load/pcall failure, preserving prior Lua effects.
+      }
+    }
     const bytes = this.host.readFile(path);
     if (bytes === null) throw new Error(`Missing Artemis Lua include ${path}`);
     this.vm.execute(bytes, `@${path}`);

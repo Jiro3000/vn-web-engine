@@ -20,6 +20,7 @@ import {
   initializeArtemisResourcePaths,
 } from '../dist/engines/artemis/revision.js';
 import {openArtemisInstallation} from './artemis-installation.mjs';
+import {windowsTextFileBytes} from '../dist/platform/windows-text-file.js';
 import {ArtemisLua} from '../dist/engines/artemis/lua.js';
 import {ArtemisScript} from '../dist/engines/artemis/script.js';
 import {ArtemisVariables} from '../dist/engines/artemis/variables.js';
@@ -93,7 +94,8 @@ let probeTick = 1,
 const installation = await openArtemisInstallation(process.argv[2]);
 let lua, script;
 try {
-  const prepared = new Map();
+  const prepared = new Map(),
+    plainFiles = new Map();
   let preparedBytes = 0;
   for (const path of installation.paths)
     if (/\.(lua|ast|iet|asb|tbl|ini)$/.test(path)) {
@@ -103,6 +105,15 @@ try {
       if (preparedBytes > 64 * 1024 * 1024)
         throw new Error('Script corpus exceeds probe memory budget');
       prepared.set(path, bytes);
+      if (/\.(lua|ast)$/.test(path)) {
+        const plain = await installation.files.readPlain(path);
+        if (plain !== null) {
+          plainFiles.set(path, plain);
+          preparedBytes += plain.length;
+          if (preparedBytes > 64 * 1024 * 1024)
+            throw new Error('Script corpus exceeds probe memory budget');
+        }
+      }
     }
   const readFile = (path) => {
     path = installation.files.resolvePath(path);
@@ -585,6 +596,10 @@ try {
         }
       : {}),
     suspendableTags,
+    readPlainFile: (path) => {
+      includes.push(path);
+      return plainFiles.get(path.replaceAll('\\', '/')) ?? null;
+    },
     readFile: (path) => {
       includes.push(path);
       return readFile(path);
@@ -604,7 +619,9 @@ try {
   let compiled = 0;
   for (const [path, bytes] of prepared)
     if (/\.(lua|ast)$/.test(path)) {
-      lua.vm.compile(bytes, `@${path}`);
+      const plain = plainFiles.get(path);
+      if (plain !== undefined) lua.vm.compileFile(plain, path, windowsTextFileBytes(plain));
+      else lua.vm.compile(bytes, `@${path}`);
       compiled++;
     }
   script = new ArtemisScript(lua, {

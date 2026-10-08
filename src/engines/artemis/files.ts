@@ -75,6 +75,12 @@ export class ArtemisFiles {
     return found ? found.archive.entrySource(found.entry) : null;
   }
 
+  /** Plain CFile namespace: no archive lookup or CArtemisPackFile magic aliases. */
+  async readPlain(path: string): Promise<Uint8Array | null> {
+    const source = await this.lookup(segments(path));
+    return source ? source.read(0, source.size) : null;
+  }
+
   async read(path: string): Promise<Uint8Array | null> {
     const source = await this.open(path);
     return source ? source.read(0, source.size) : null;

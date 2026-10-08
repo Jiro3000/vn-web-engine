@@ -336,3 +336,19 @@ test('Shared JPEG metadata reader preserves entropy/restart bytes and removes EX
   );
   assert.throws(() => readJpegHeader(new Uint8Array([255, 216, 255, 217])), /header missing/);
 });
+
+test('Plain CFile reads bypass archive overlays and pack magic aliases', async () => {
+  const installed = new Map([
+    ['game.pfs', memory(pfs([['system/module.lua', Buffer.from('archive')]]))],
+    ['system/empty.lua', memory(Buffer.alloc(0))],
+    ['system/plain.lua', memory(Buffer.from('plain'))],
+  ]);
+  const files = await ArtemisFiles.mount('game.pfs', (parts) => installed.get(parts.join('/')));
+  files.setMagicPath('system', 'system');
+  assert.equal(await files.readPlain('system/module.lua'), null);
+  assert.equal(Buffer.from(await files.read('system/module.lua')).toString(), 'archive');
+  assert.equal((await files.readPlain('system/empty.lua')).length, 0);
+  assert.equal(Buffer.from(await files.readPlain('system\\plain.lua')).toString(), 'plain');
+  await assert.rejects(files.readPlain(':system/plain.lua'), /Unsupported/);
+  assert.equal(Buffer.from(await files.read(':system/plain.lua')).toString(), 'plain');
+});

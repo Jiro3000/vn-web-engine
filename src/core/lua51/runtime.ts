@@ -240,6 +240,36 @@ export class Lua51 {
       ),
     );
   }
+  /** luaL_loadfile framing over prepared sources. Text-mode translation belongs
+   * to the platform owner; binary reopen uses the original borrowed bytes.
+   */
+  executeFile(raw: Uint8Array, path: string, text = raw): void {
+    this.execute(this.fileBytes(raw, text), `@${path}`);
+  }
+  compileFile(raw: Uint8Array, path: string, text = raw): void {
+    this.compile(this.fileBytes(raw, text), `@${path}`);
+  }
+  private fileBytes(raw: Uint8Array, text: Uint8Array): Uint8Array {
+    let offset = 0;
+    const header = text[0] === 35;
+    if (header) {
+      const newline = text.indexOf(10);
+      offset = newline < 0 ? text.length : newline + 1;
+    }
+    if (text[offset] === 27) {
+      // Lua 5.1 reopens in binary mode and scans from the beginning to ESC.
+      const start = raw.indexOf(27);
+      if (start < 0) throw Error('Lua binary reopen requires original file bytes');
+      return raw.subarray(start);
+    }
+    if (!header) return text;
+    else {
+      const body = new Uint8Array(1 + text.length - offset);
+      body[0] = 10; // Preserve source line numbers after skipping the header.
+      body.set(text.subarray(offset), 1);
+      return body;
+    }
+  }
   compile(bytes: Uint8Array, name = 'chunk'): void {
     this.run(() =>
       this.name(name, (n) =>

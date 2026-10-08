@@ -3774,3 +3774,61 @@ test('Actual PCM EOF flows through captured sound-finish event into a filtered s
     lua.close();
   }
 });
+
+test('Native Lua includes load plain text first and retry the normal file owner after load or pcall failure', () => {
+  const plain = new Map([
+      ['empty.lua', bytes('')],
+      ['script.lua', bytes('#!/lua\r\nvalue=[[a\r\nb]]\x1athis is not Lua')],
+      ['syntax.lua', bytes('not valid Lua!')],
+      ['runtime.lua', bytes('partial=(partial or 0)+1; error("first error")')],
+      ['twice.lua', bytes('attempts=(attempts or 0)+1; error("retry error")')],
+    ]),
+    packed = new Map([
+      ['empty.lua', bytes('error("must not fallback")')],
+      ['syntax.lua', bytes('value=17')],
+      ['runtime.lua', bytes('assert(partial==1); value=18')],
+      ['twice.lua', plain.get('twice.lua')],
+      ['archive.lua', bytes('value=19')],
+    ]),
+    reads = [];
+  const lua = new ArtemisLua({
+    readPlainFile: (path) => {
+      reads.push(['plain', path]);
+      if (path === 'open-error.lua') throw Error('plain open failed');
+      return plain.get(path) ?? null;
+    },
+    readFile: (path) => {
+      reads.push(['packed', path]);
+      return path === 'open-error.lua' ? bytes('value=20') : (packed.get(path) ?? null);
+    },
+    fileExists: () => false,
+    now: () => 0,
+    tag: () => {},
+    enqueueTag: () => {},
+    variable: () => '',
+  });
+  try {
+    lua.vm.execute(bytes('engine:include("empty.lua"); engine:include("script.lua")'));
+    assert.deepEqual(reads, [
+      ['plain', 'empty.lua'],
+      ['plain', 'script.lua'],
+    ]);
+    assert.equal(luaText(lua.vm.getGlobal('value')), 'a\nb');
+    for (const [path, value] of [
+      ['syntax.lua', 17],
+      ['runtime.lua', 18],
+      ['archive.lua', 19],
+      ['open-error.lua', 20],
+    ]) {
+      lua.include(path);
+      assert.equal(lua.vm.getGlobal('value'), value);
+    }
+    assert.throws(() => lua.include('twice.lua'), /retry error/);
+    assert.equal(lua.vm.getGlobal('attempts'), 2); // CPack remains loose-first.
+    assert.throws(() => lua.include('missing.lua'), /Missing Artemis Lua include/);
+    lua.vm.execute(bytes('assert(partial==1); recovered=true'));
+    assert.equal(lua.vm.getGlobal('recovered'), true);
+  } finally {
+    lua.close();
+  }
+});

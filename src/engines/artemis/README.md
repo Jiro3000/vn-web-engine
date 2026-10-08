@@ -1132,3 +1132,11 @@ scoped handler queue and return to the waiting script without an audio device.
 Native frame/timer/caret control and latch reset remain required production owners;
 no JS state-to-native-mode mapping is guessed. Resource-suspended Lua events must
 be deferred by that owner. Direct registered Lua Events callbacks remain distinct.
+
+Lua include accepts an explicit prepared `readPlainFile` owner: plain CFile uses
+Lua loadfile header/line framing and Windows CRT text input, then any open/load/
+protected execution failure retries normal loose-first pack bytes. Empty plain
+files succeed without fallback; first-attempt Lua side effects survive. Shared
+Lua51 executeFile/compileFile operate on prepared raw/text bytes and preserve the
+existing explicit bytecode refusal. Hosts without the plain provider retain the
+pack-only subset. Final native error reporting and streaming I/O remain host work.
