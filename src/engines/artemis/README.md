@@ -55,6 +55,14 @@ callbacks (`0x1400d47b0`, `0x1400d4350`, `0x1400ca3d0`). Scheduler, indicator,
 message and save effects still require native service implementations. Nonempty
 syncse is refused until its audio behavior is implemented.
 
+`exec.ts` owns the exec tag (`0x1400d52c0`). automode/skip force the mode setters
+(absent mode enables auto and toggles skip; exactly `0` disables). rclick/hide/backlog
+record requests that the frame owner consumes like the matching key inputs, enter run
+mode 4 through the host and write the wait timestamp from the platform millisecond
+clock. fullscreen and minimize use shared `WindowStateHost`
+(`src/platform/window-state.ts`); the software-renderer guard and display reset are host
+operations. Unknown commands do nothing.
+
 `events.ts` copies recognized callback names and applies partial updates, including
 the legacy onClickWait alias. The frame/input/save owner emits callbacks; failed
 frame/click-wait callbacks are disabled. Named Lua calls resolve dotted table paths and supply

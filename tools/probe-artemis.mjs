@@ -46,6 +46,7 @@ import {ArtemisEventCommands} from '../dist/engines/artemis/event-commands.js';
 import {ArtemisNativeLibrary} from '../dist/engines/artemis/native-library.js';
 import {BrowserWindowsDynamicLibraryHost} from '../dist/platform/windows-dynamic-library.js';
 import {ArtemisModes} from '../dist/engines/artemis/modes.js';
+import {ArtemisExec} from '../dist/engines/artemis/exec.js';
 import {luaText} from '../dist/core/lua51/runtime.js';
 if (!process.argv[2]) throw new Error('Usage: node tools/probe-artemis.mjs GAME_DIRECTORY');
 const dialogResultArgument = process.argv
@@ -246,6 +247,23 @@ try {
         throw Error('Artemis actual sound load failed');
       },
     });
+  const exec = new ArtemisExec(modes, {
+    window: {
+      minimized: () => false,
+      show: (command) => modeEffects.push({windowShow: command, simulation: true}),
+      toggleFullscreen: () => modeEffects.push({toggleFullscreen: true, simulation: true}),
+    },
+    enterRunMode: () => {
+      throw Error('Unsupported diagnostic Artemis run mode owner');
+    },
+    now: () => 0,
+    setWaitStart: () => {
+      throw Error('Unsupported diagnostic Artemis wait timestamp owner');
+    },
+    // Matches the simulated hardware feature level; no software renderer fallback.
+    softwareRenderer: () => false,
+    displayModeChanged: () => modeEffects.push({displayModeChanged: true, simulation: true}),
+  });
   const caption = new ArtemisCaption({
     setCaption: (title) => {
       modeEffects.push({windowCaption: title, simulation: true});
@@ -570,6 +588,7 @@ try {
       nativeLibrary.dispatch(tag) ||
       textControls.dispatch(tag) ||
       modes.dispatch(tag) ||
+      exec.dispatch(tag) ||
       variables.dispatch(tag) ||
       caption.dispatch(tag) ||
       seStop.dispatch(tag) ||

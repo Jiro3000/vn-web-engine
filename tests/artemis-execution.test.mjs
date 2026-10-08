@@ -201,6 +201,105 @@ test('Mode commands disable active skip/auto through status and effect services'
   assert.equal(modes.dispatch(tag('unknown', {})), false);
 });
 
+test('Exec commands force skip/auto, queue frame requests and use window services', async () => {
+  const {ArtemisModes} = await import('../dist/engines/artemis/modes.js');
+  const {ArtemisExec} = await import('../dist/engines/artemis/exec.js');
+  const {BrowserWindowStateHost} = await import('../dist/platform/window-state.js');
+  const events = [];
+  const modes = new ArtemisModes({
+    writeStatus: (name, value) => events.push([name, value]),
+    commandSkipChanged: (v) => events.push(['commandSkip', v]),
+    controlSkipChanged: (v) => events.push(['controlSkip', v]),
+    automodeChanged: (v) => events.push(['auto', v]),
+    releaseScheduler: () => events.push(['release']),
+  });
+  let visibilityState = 'visible';
+  let software = false;
+  const reports = [];
+  const window = new BrowserWindowStateHost(
+    {
+      get visibilityState() {
+        return visibilityState;
+      },
+    },
+    {toggleFullscreen: () => events.push(['toggleFullscreen'])},
+    (message) => reports.push(message),
+  );
+  const exec = new ArtemisExec(modes, {
+    window: {
+      minimized: () => window.minimized(),
+      show: (command) => (events.push(['show', command]), window.show(command)),
+      toggleFullscreen: () => window.toggleFullscreen(),
+    },
+    enterRunMode: (mode) => events.push(['enter', mode]),
+    now: () => 2 ** 32 + 7,
+    setWaitStart: (ms) => events.push(['waitStart', ms]),
+    softwareRenderer: () => software,
+    displayModeChanged: () => events.push(['displayModeChanged']),
+  });
+  const tag = (args) => ({
+    kind: 'tag',
+    name: 'exec',
+    args: new Map(Object.entries(args)),
+    sourceLine: -1,
+  });
+  assert.equal(exec.dispatch({...tag({}), name: 'automode'}), false);
+  // Disallowed modes are forced on; only exactly "0" disables; absent skip mode toggles.
+  modes.skipAllowed = modes.automodeAllowed = false;
+  exec.dispatch(tag({command: 'automode', mode: '0'}));
+  exec.dispatch(tag({command: 'automode'}));
+  exec.dispatch(tag({command: 'automode', mode: '00'}));
+  exec.dispatch(tag({command: 'automode', mode: '0'}));
+  exec.dispatch(tag({command: 'skip'}));
+  exec.dispatch(tag({command: 'skip'}));
+  exec.dispatch(tag({command: 'skip', mode: ''}));
+  exec.dispatch(tag({command: 'skip', mode: '0'}));
+  assert.deepEqual(events.splice(0), [
+    ['s.status.automode', '1'],
+    ['auto', true],
+    ['s.status.automode', '0'],
+    ['auto', false],
+    ['s.status.commandskip', '1'],
+    ['commandSkip', true],
+    ['s.status.commandskip', '0'],
+    ['commandSkip', false],
+    ['s.status.commandskip', '1'],
+    ['commandSkip', true],
+    ['s.status.commandskip', '0'],
+    ['commandSkip', false],
+  ]);
+  exec.dispatch(tag({command: 'rclick'}));
+  exec.dispatch(tag({command: 'hide'}));
+  exec.dispatch(tag({command: 'Backlog'}));
+  exec.dispatch(tag({command: 'backlog'}));
+  assert.deepEqual(events.splice(0), [
+    ['enter', 4],
+    ['waitStart', 7],
+    ['enter', 4],
+    ['waitStart', 7],
+    ['enter', 4],
+    ['waitStart', 7],
+  ]);
+  assert.equal(exec.consume('rightClick'), true);
+  assert.equal(exec.consume('rightClick'), false);
+  assert.equal(exec.requested('hide'), true);
+  exec.clearRequests();
+  assert.equal(exec.requested('backlog'), false);
+  exec.dispatch(tag({command: 'fullscreen'}));
+  software = true;
+  exec.dispatch(tag({command: 'fullscreen'}));
+  exec.dispatch(tag({command: 'minimize'}));
+  visibilityState = 'hidden';
+  exec.dispatch(tag({command: 'minimize'}));
+  assert.deepEqual(events, [
+    ['toggleFullscreen'],
+    ['displayModeChanged'],
+    ['show', 'minimize'],
+    ['show', 'restore'],
+  ]);
+  assert.equal(reports.length, 1);
+});
+
 test('Queued tags retain a copy and run before the next script command, across ASB call/return', () => {
   const u32 = (n) => {
     const b = Buffer.alloc(4);
