@@ -1,4 +1,5 @@
 import {artemisRevision} from './revision.js';
+import {ARTEMIS_SCREEN_FRAGMENT_SOURCE, artemisScreenShade} from './screen-shader.js';
 
 export interface ArtemisRasterUniforms {
   readonly alpha: number;
@@ -77,4 +78,39 @@ export async function compileArtemisRasterPreset(
     fragmentSource: ARTEMIS_RASTER_FRAGMENT_SOURCE,
     shade: artemisRasterShade,
   };
+}
+
+export async function compileArtemisShaderPreset(
+  hash: string,
+  bytes: Uint8Array,
+): Promise<
+  | {
+      readonly kind: 'raster';
+      readonly fragmentSource: string;
+      readonly shade: typeof artemisRasterShade;
+    }
+  | {
+      readonly kind: 'screen';
+      readonly fragmentSource: string;
+      readonly shade: typeof artemisScreenShade;
+    }
+> {
+  artemisRevision(hash);
+  const digest = await crypto.subtle.digest('SHA-256', Uint8Array.from(bytes).buffer),
+    signature = [...new Uint8Array(digest)]
+      .map((value) => value.toString(16).padStart(2, '0'))
+      .join('');
+  if (signature === '56f51f6ef596f287bc75bfe9266ce382a98884b8659267822ca74c1a22e49aba')
+    return {
+      kind: 'raster',
+      fragmentSource: ARTEMIS_RASTER_FRAGMENT_SOURCE,
+      shade: artemisRasterShade,
+    };
+  if (signature === 'd55bc26b8b72c1f38ff34aa1d41a15a7be69f2351518a8f8a3e99b39f61b59d2')
+    return {
+      kind: 'screen',
+      fragmentSource: ARTEMIS_SCREEN_FRAGMENT_SOURCE,
+      shade: artemisScreenShade,
+    };
+  throw Error('Unsupported Artemis custom shader source');
 }

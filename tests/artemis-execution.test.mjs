@@ -3106,3 +3106,26 @@ test('Executable raster shader uses native UV1 displacement and alpha without ch
   assert.deepEqual(pixel.slice(0, 3), [0.2, 0.4, 0.6]);
   assert.ok(Math.abs(pixel[3] - 0.4) < 1e-6);
 });
+
+test('Screen shader uses user alpha in screen RGB while retaining foreground alpha semantics', async () => {
+  const {artemisScreenShade} = await import('../dist/engines/artemis/screen-shader.js');
+  const color = artemisScreenShade(
+    () => [0.2, 0.4, 0.6, 0.8],
+    () => [0.5, 0.25, 0, 0.5],
+    0.5,
+    0.25,
+    {alpha: 0.5},
+  );
+  const expected = [0.4, 0.475, 0.6, 0.4];
+  color.forEach((value, index) => assert.ok(Math.abs(value - expected[index]) < 1e-6));
+  const neutral = artemisScreenShade(
+    () => [0.2, 0.4, 0.6, 0.8],
+    () => [1, 1, 1, 0],
+    0.5,
+    0.25,
+    {alpha: 1},
+  );
+  neutral.forEach((value, index) =>
+    assert.ok(Math.abs(value - [0.2, 0.4, 0.6, 0.8][index]) < 1e-6),
+  );
+});

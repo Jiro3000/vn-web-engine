@@ -1,5 +1,5 @@
 /** Known-source executable CPU shader registry. No game pixels are shown/rendered. */
-import {compileArtemisRasterPreset} from '../dist/engines/artemis/raster-shader.js';
+import {compileArtemisShaderPreset} from '../dist/engines/artemis/raster-shader.js';
 import {ArtemisShaderLibrary} from '../dist/engines/artemis/shader-library.js';
 import {createHash} from 'node:crypto';
 export function createArtemisShaderFixture(hash, readFile) {
@@ -9,7 +9,7 @@ export function createArtemisShaderFixture(hash, readFile) {
     readFile,
     {
       compile: async (id, bytes) => {
-        const program = await compileArtemisRasterPreset(hash, bytes);
+        const program = await compileArtemisShaderPreset(hash, bytes);
         let disposed = false;
         const shader = {
           kind: program.kind,
@@ -21,12 +21,21 @@ export function createArtemisShaderFixture(hash, readFile) {
             disposed = true;
           },
         };
-        const calibration = shader.shade((u, v) => [u, v, 0, 1], 0.5, 0.25, {
-          alpha: 0.5,
-          angle: 0,
-          inter: 360,
-          size: 0.125,
-        });
+        const calibration =
+          program.kind === 'raster'
+            ? shader.shade((u, v) => [u, v, 0, 1], 0.5, 0.25, {
+                alpha: 0.5,
+                angle: 0,
+                inter: 360,
+                size: 0.125,
+              })
+            : shader.shade(
+                () => [0.2, 0.4, 0.6, 0.8],
+                () => [0.5, 0.25, 0, 0.5],
+                0.5,
+                0.25,
+                {alpha: 0.5},
+              );
         compiled.push({
           id,
           kind: program.kind,

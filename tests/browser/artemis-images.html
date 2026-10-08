@@ -1213,6 +1213,36 @@
     } finally {
       customShader.dispose();
     }
+    const screenShader = new ArtemisBrowserRasterShader(revision, customGl, 'screen');
+    try {
+      screenShader.draw(
+        {width: 4, height: 4, pixels: customPixels},
+        4,
+        4,
+        {alpha: 0.5},
+        {filter: 'nearest', address: 'clamp'},
+        {width: 1, height: 1, pixels: new Uint8Array([128, 64, 0, 128])},
+      );
+      const actual = new Uint8Array(64);
+      customGl.readPixels(0, 0, 4, 4, customGl.RGBA, customGl.UNSIGNED_BYTE, actual);
+      for (let y = 0; y < 4; y++)
+        for (let x = 0; x < 4; x++) {
+          const fore = [x * 40, (3 - y) * 40, 0],
+            user = [128, 64, 0];
+          for (let channel = 0; channel < 3; channel++) {
+            const expected = Math.round(
+              255 * (1 - (1 - fore[channel] / 255) * (1 - (user[channel] / 255) * (128 / 255))),
+            );
+            assert(
+              Math.abs(actual[(y * 4 + x) * 4 + channel] - expected) <= 1,
+              'screen user-alpha RGB ' + x + ':' + y + ':' + channel,
+            );
+          }
+          assert(actual[(y * 4 + x) * 4 + 3] === 100, 'screen foreground alpha');
+        }
+    } finally {
+      screenShader.dispose();
+    }
     window.result = {
       passed: true,
       nativeFontWorker: true,
@@ -1225,6 +1255,7 @@
       nativeBufferedSoundDecoderIntegration: true,
       nativeRollingAudioWorklet: true,
       nativeCustomRasterShader: true,
+      nativeCustomScreenShader: true,
       nativeStereoAttenuation: true,
       audioDeviceOutput: false,
       nativeFontVersion: [2, 4, 8],

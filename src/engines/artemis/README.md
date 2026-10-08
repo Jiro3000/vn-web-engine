@@ -1028,3 +1028,10 @@ dedicated context; actor-specific scene binding and parameter jobs remain separa
 nonvisual probe. It does not display or shade game image pixels. Its optional
 feature-level input remains explicitly simulated. Unknown HLSL sources are refused;
 this is a verified preset port, not a general HLSL compiler.
+
+The recognized `screen` shader screens foreground RGB against `user.rgb*user.a`
+and scales foreground alpha independently. Its declared `param`, back/mask samples
+and color multiplier are unused by the returned color. The exact source signature
+selects its reconstructed executable through `compileArtemisShaderPreset`.
+The dedicated WebGL helper accepts this preset with an explicit user texture;
+synthetic checks compare GPU output against the CPU screen equation.

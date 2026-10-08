@@ -1,5 +1,6 @@
 import {artemisRevision} from './revision.js';
 import {ARTEMIS_RASTER_FRAGMENT_SOURCE, type ArtemisRasterUniforms} from './raster-shader.js';
+import {ARTEMIS_SCREEN_FRAGMENT_SOURCE, type ArtemisScreenUniforms} from './screen-shader.js';
 import type {TriangleImage} from '../../graphics/triangle-draw.js';
 
 const vertexSource = `#version 300 es
@@ -19,10 +20,12 @@ export class ArtemisBrowserRasterShader {
   private readonly program: WebGLProgram;
   private readonly texture: WebGLTexture;
   private readonly vao: WebGLVertexArrayObject;
+  private readonly userTexture: WebGLTexture;
   private disposed = false;
   constructor(
     hash: string,
     private readonly gl: WebGL2RenderingContext,
+    private readonly kind: 'raster' | 'screen' = 'raster',
   ) {
     artemisRevision(hash);
     const compile = (type: number, source: string) => {
@@ -41,7 +44,10 @@ export class ArtemisBrowserRasterShader {
     let fragment: WebGLShader | undefined,
       program: WebGLProgram | null = null;
     try {
-      fragment = compile(gl.FRAGMENT_SHADER, ARTEMIS_RASTER_FRAGMENT_SOURCE);
+      fragment = compile(
+        gl.FRAGMENT_SHADER,
+        kind === 'raster' ? ARTEMIS_RASTER_FRAGMENT_SOURCE : ARTEMIS_SCREEN_FRAGMENT_SOURCE,
+      );
       program = gl.createProgram();
       if (!program) throw Error('Cannot allocate raster program');
       gl.attachShader(program, vertex);
@@ -58,22 +64,26 @@ export class ArtemisBrowserRasterShader {
     }
     this.program = program;
     const texture = gl.createTexture(),
+      userTexture = gl.createTexture(),
       vao = gl.createVertexArray();
-    if (!texture || !vao) {
+    if (!texture || !vao || !userTexture) {
       if (texture) gl.deleteTexture(texture);
+      if (userTexture) gl.deleteTexture(userTexture);
       if (vao) gl.deleteVertexArray(vao);
       gl.deleteProgram(program);
       throw Error('Cannot allocate raster GPU resources');
     }
     this.texture = texture;
+    this.userTexture = userTexture;
     this.vao = vao;
   }
   draw(
     image: TriangleImage,
     width: number,
     height: number,
-    p: ArtemisRasterUniforms,
+    p: ArtemisRasterUniforms | ArtemisScreenUniforms,
     sampler: {readonly filter: 'nearest' | 'linear'; readonly address: 'clamp' | 'repeat'},
+    userImage?: TriangleImage,
   ): void {
     if (this.disposed) throw Error('Raster GPU program disposed');
     if (
@@ -86,7 +96,7 @@ export class ArtemisBrowserRasterShader {
       image.width < 1 ||
       image.height < 1 ||
       image.pixels.length !== image.width * image.height * 4 ||
-      ![p.alpha, p.angle, p.inter, p.size].every(Number.isFinite)
+      ![p.alpha, ...('angle' in p ? [p.angle, p.inter, p.size] : [])].every(Number.isFinite)
     )
       throw Error('Invalid raster GPU input');
     const gl = this.gl;
@@ -120,13 +130,42 @@ export class ArtemisBrowserRasterShader {
       image.pixels as Uint8Array<ArrayBuffer>,
     );
     gl.uniform1i(gl.getUniformLocation(this.program, 'uFore'), 0);
-    for (const [name, value] of [
-      ['uAlpha', p.alpha],
-      ['uAngle', p.angle],
-      ['uInter', p.inter],
-      ['uSize', p.size],
-    ] as const)
-      gl.uniform1f(gl.getUniformLocation(this.program, name), value);
+    gl.uniform1f(gl.getUniformLocation(this.program, 'uAlpha'), p.alpha);
+    if (this.kind === 'raster') {
+      if (!('angle' in p)) throw Error('Missing raster uniforms');
+      for (const [name, value] of [
+        ['uAngle', p.angle],
+        ['uInter', p.inter],
+        ['uSize', p.size],
+      ] as const)
+        gl.uniform1f(gl.getUniformLocation(this.program, name), value);
+    } else {
+      if (
+        !userImage ||
+        userImage.width < 1 ||
+        userImage.height < 1 ||
+        userImage.pixels.length !== userImage.width * userImage.height * 4
+      )
+        throw Error('Missing screen user texture');
+      gl.activeTexture(gl.TEXTURE1);
+      gl.bindTexture(gl.TEXTURE_2D, this.userTexture);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, address);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, address);
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        0,
+        gl.RGBA8,
+        userImage.width,
+        userImage.height,
+        0,
+        gl.RGBA,
+        gl.UNSIGNED_BYTE,
+        userImage.pixels as Uint8Array<ArrayBuffer>,
+      );
+      gl.uniform1i(gl.getUniformLocation(this.program, 'uUser'), 1);
+    }
     gl.viewport(0, 0, width, height);
     gl.disable(gl.BLEND);
     gl.disable(gl.DEPTH_TEST);
@@ -138,6 +177,7 @@ export class ArtemisBrowserRasterShader {
     if (this.disposed) return;
     this.disposed = true;
     this.gl.deleteTexture(this.texture);
+    this.gl.deleteTexture(this.userTexture);
     this.gl.deleteVertexArray(this.vao);
     this.gl.deleteProgram(this.program);
   }
