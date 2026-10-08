@@ -128,7 +128,7 @@ try {
     plainFiles = new Map();
   let preparedBytes = 0;
   for (const path of installation.paths)
-    if (/\.(lua|ast|iet|asb|tbl|ini)$/.test(path)) {
+    if (/\.(lua|ast|iet|ipt|asb|tbl|ini)$/.test(path)) {
       const bytes = await installation.files.read(path);
       if (bytes === null) throw new Error(`Missing inventoried source ${path}`);
       preparedBytes += bytes.length;
@@ -560,6 +560,7 @@ try {
         enter: () => script.pause(),
         release: () => script.resume(),
         now: () => probeTick,
+        emit: (tag) => scriptEvents.emit(tag, 0, true),
         skipState: () => ({
           allowed: modes.skipAllowed,
           command: modes.commandSkip,
@@ -655,6 +656,10 @@ try {
       if (pendingResource) throw Error('Probe transition operation overlaps');
       pendingResource = result;
       return 'suspended';
+    }
+    if (layerFixture && (tag.name === 'lytween' || tag.name === 'lytweendel')) {
+      layerFixture.dispatchTween(tag);
+      return;
     }
     if (layerFixture?.accepts(tag)) {
       if (pendingResource) throw Error('Probe resource operation overlaps');
@@ -863,6 +868,7 @@ try {
         if (soundRender) {
           probeTick = (probeTick + 1) >>> 0;
           soundFixture.advanceToTick(probeTick);
+          layerFixture?.tickTweens(probeTick);
         }
         if (script.pendingLuaCalls) script.resumeLua();
         else script.resume();
@@ -873,6 +879,19 @@ try {
         probeTick = layerFixture.finishTransition((probeTick + 1) >>> 0 || 1);
         advancedWaits++;
         soundFixture?.advanceToTick?.(probeTick);
+        layerFixture.tickTweens(probeTick);
+        script.run(1000);
+        continue;
+      }
+      if (advanceWaits && layerFixture?.tweenSyncPending && advancedWaits < 100) {
+        // Deterministic 16 ms frames until the sync tween's completion ends run mode 4.
+        for (let frame = 0; layerFixture.tweenSyncPending; frame++) {
+          if (frame >= 100000) throw Error('Probe sync tween did not finish');
+          probeTick = (probeTick + 16) >>> 0 || 1;
+          soundFixture?.advanceToTick?.(probeTick);
+          layerFixture.tickTweens(probeTick);
+        }
+        advancedWaits++;
         script.run(1000);
         continue;
       }
@@ -896,6 +915,7 @@ try {
       probeTick = (wait.deadlineTick + 1) >>> 0;
       advancedWaits++;
       soundFixture?.advanceToTick?.(probeTick);
+      layerFixture?.tickTweens(probeTick);
       if (!wait.tick(probeTick)) break;
       script.run(1000);
     }

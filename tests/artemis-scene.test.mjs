@@ -3945,3 +3945,194 @@ test('Layer event slots invoke the stored callback functor with the type index a
     ['f', 2, true],
   ]);
 });
+
+test('Artemis tween curves start at b and end at b + c; ease names map to native ids', async () => {
+  const {artemisEase, artemisEaseId} = await import('../dist/engines/artemis/tween.js');
+  for (let ease = 0; ease <= 31; ease++) {
+    assert.ok(Math.abs(artemisEase(ease, 0, 3, 8, 200) - 3) < 1e-5, `start ${ease}`);
+    assert.ok(Math.abs(artemisEase(ease, 200, 3, 8, 200) - 11) < 1e-5, `end ${ease}`);
+  }
+  assert.equal(artemisEase(1, 100, 0, 8, 200), 2);
+  assert.equal(artemisEase(29, 50, 0, 8, 200), 0.25 * 7.5625 * 0.25 * 8);
+  assert.equal(artemisEase(31, 50, 0, 8, 200), 2);
+  assert.ok(artemisEase(22, 20, 0, 100, 200) < 0, 'back overshoots below the start');
+  assert.deepEqual(
+    ['easein_quad', 'easeout_quad', 'easeinout_bounce', 'linear', undefined].map(artemisEaseId),
+    [1, 2, 30, 0, 0],
+  );
+});
+
+test('Artemis tweens honor delay, yoyo reversal, loop delay and loop overshoot', async () => {
+  const {ArtemisFloatTween} = await import('../dist/engines/artemis/tween.js');
+  const run = (options, ticks) => {
+    const values = [];
+    let completions = 0;
+    const tween = new ArtemisFloatTween(
+      revision,
+      0,
+      10,
+      100,
+      (value) => values.push(value),
+      () => completions++,
+      options,
+    );
+    const results = ticks.map((now) => tween.tick(now));
+    return {
+      values,
+      results,
+      tween,
+      get completions() {
+        return completions;
+      },
+    };
+  };
+  const yoyo = run({delay: 50, yoyo: 1}, [1000, 1100, 1150, 1200, 1250]);
+  assert.deepEqual(yoyo.values, [0, 5, 10, 5, 0]);
+  assert.deepEqual(yoyo.results, [false, false, false, false, true]);
+  assert.equal(yoyo.completions, 1);
+  assert.deepEqual(run({loop: 1, loopDelay: 20}, [10, 110, 180, 240]).values, [0, 0, 5, 10]);
+  const forever = run({loop: -1}, [10, 135]);
+  assert.deepEqual(forever.values, [0, 2.5]);
+  assert.equal(forever.tween.done, false);
+  // Finishing with an odd yoyo count pending ends on the start value.
+  const pending = run({yoyo: 3}, [10]);
+  pending.tween.finish();
+  assert.deepEqual(pending.values, [0, 0]);
+  assert.equal(pending.completions, 1);
+});
+
+test('Artemis tween registry defers registrations made while stepping', async () => {
+  const {ArtemisTweenRegistry} = await import('../dist/engines/artemis/tween.js');
+  const registry = new ArtemisTweenRegistry(revision),
+    log = [];
+  const later = {
+    tick: (now) => (log.push(['later', now]), false),
+    finish: () => log.push('finish'),
+  };
+  const first = {
+    tick(now) {
+      log.push(['first', now]);
+      log.push(['registered', registry.register(later)]);
+      return true;
+    },
+    finish() {},
+  };
+  assert.equal(registry.register(first), 0);
+  registry.tick(5);
+  assert.deepEqual(log, [
+    ['first', 5],
+    ['registered', 1],
+  ]);
+  assert.equal(registry.size, 1);
+  registry.tick(6);
+  registry.finish(1);
+  registry.finish(99);
+  assert.deepEqual(log.slice(2), [['later', 6], 'finish']);
+});
+
+test('Artemis lytween animates current and retained actors, then syncs, deletes, emits and records', async () => {
+  const {ArtemisLayerTweens} = await import('../dist/engines/artemis/layer-tweens.js');
+  const {ArtemisLayerCommands} = await import('../dist/engines/artemis/layer-commands.js');
+  const {ArtemisTweenRegistry} = await import('../dist/engines/artemis/tween.js');
+  const image = await syntheticImage();
+  const {layers} = await layerFixture(async (path) => (path === 'synthetic.png' ? image : null));
+  const commands = new ArtemisLayerCommands(revision),
+    registry = new ArtemisTweenRegistry(revision),
+    log = [];
+  const tweens = new ArtemisLayerTweens(revision, layers.scene, registry, commands, {
+    applyImageProperties: (id, actor, patch) => log.push([id, actor.number, patch]),
+    layerNotFound: (tag) => log.push(['missing', tag.args.get('id')]),
+    enterRunMode: (mode) => log.push(['mode', mode]),
+    endSyncWait: () => log.push(['syncEnd']),
+    deleteLayer: (tag, recordHistory) => {
+      log.push(['delete', tag.args.get('id'), recordHistory]);
+      layers.deleteLayer(tag.args.get('id'), recordHistory);
+    },
+    emitEvent: (tag) => log.push(['event', tag.args.get('label')]),
+    recordLayerProperties: (tag) => log.push(['lyprop', Object.fromEntries(tag.args)]),
+  });
+  const take = () => log.splice(0);
+  try {
+    await layers.dispatch(command('lyc', {id: 'bg', file: 'synthetic'}));
+    layers.commit();
+    await layers.dispatch(command('lyprop', {id: 'bg', left: '1'}));
+    assert.equal(tweens.dispatch(command('unrelated')), false);
+    tweens.dispatch(
+      command('lytween', {
+        id: 'bg',
+        param: 'alpha',
+        from: '255',
+        to: '0',
+        time: '100',
+        ease: 'easein_quad',
+        sync: '1',
+      }),
+    );
+    // The edited copy (2) and the retained original (1) both receive the start value.
+    assert.deepEqual(take(), [
+      ['bg', 2, {alpha: 1}],
+      ['bg', 1, {alpha: 1}],
+      ['mode', 4],
+      ['lyprop', {id: 'bg', alpha: '0'}],
+    ]);
+    registry.tick(1000);
+    registry.tick(1050);
+    registry.tick(1100);
+    assert.deepEqual(
+      take().filter((entry) => entry[1] === 2 || entry[0] === 'syncEnd'),
+      [['bg', 2, {alpha: 1}], ['bg', 2, {alpha: 0.75}], ['bg', 2, {alpha: 0}], ['syncEnd']],
+    );
+
+    tweens.dispatch(command('lytween', {id: 'bg', param: 'blur', from: '1', to: '2'}));
+    tweens.dispatch(command('lytween', {id: 'none', param: 'left'}));
+    assert.deepEqual(take(), [['missing', 'none']]);
+    tweens.dispatch(
+      command('lytween', {id: 'bg', param: 'xscale', from: '300', to: '100', delete: ''}),
+    );
+    assert.deepEqual(
+      commands.commands('bg').map((tag) => tag.args.get('time')),
+      [''],
+      'absent time is inserted before the command is appended',
+    );
+    take();
+    registry.tick(2000);
+    registry.tick(2001);
+    assert.deepEqual(take().slice(-3), [
+      ['bg', 2, {xscale: 1}],
+      ['bg', 1, {xscale: 1}],
+      ['delete', 'bg', true],
+    ]);
+    assert.equal(layers.scene.entry('bg'), undefined);
+
+    await layers.dispatch(command('lyc', {id: 'fg', file: 'synthetic'}));
+    layers.commit();
+    tweens.dispatch(
+      command('lytween', {
+        id: 'fg',
+        param: 'top',
+        from: '0',
+        to: '10',
+        time: '1000',
+        yoyo: '1',
+        label: 'done',
+      }),
+    );
+    tweens.dispatch(command('lytween', {id: 'fg', param: 'left', from: '4', to: '8', loop: '-1'}));
+    assert.deepEqual(
+      take().filter((entry) => entry[0] === 'lyprop'),
+      [['lyprop', {id: 'fg', top: '0'}]],
+    );
+    assert.equal(commands.commands('fg').length, 1);
+    tweens.dispatch(command('lytweendel', {id: 'fg'}));
+    assert.deepEqual(take(), [
+      ['fg', 3, {top: 0}],
+      ['event', 'done'],
+      ['fg', 3, {left: 8}],
+    ]);
+    assert.deepEqual(commands.commands('fg'), []);
+    registry.tick(3000);
+    assert.equal(registry.size, 0);
+  } finally {
+    layers.close();
+  }
+});

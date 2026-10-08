@@ -8,10 +8,14 @@ import {ArtemisLayerEventSlots, ArtemisLayerEvents} from '../dist/engines/artemi
 import {ArtemisDisplayObject} from '../dist/engines/artemis/display-object.js';
 import {ArtemisStage} from '../dist/engines/artemis/stage.js';
 import {ArtemisTransition} from '../dist/engines/artemis/transition.js';
+import {ArtemisLayerTweens} from '../dist/engines/artemis/layer-tweens.js';
+import {ArtemisTweenRegistry} from '../dist/engines/artemis/tween.js';
+import {ArtemisShaderProperties} from '../dist/engines/artemis/shader-properties.js';
 import {artemisRevision} from '../dist/engines/artemis/revision.js';
 import {readJpegHeader} from '../dist/formats/jpeg/header.js';
 
-/** `runMode` supplies the probe's run mode/wait owner for trans; absent owner refuses it. */
+/** `runMode` supplies the probe's run mode/wait owner for trans and sync tweens, and
+ * `emit` for tween completion events; an absent owner refuses them. */
 export function createMetadataLayerFixture(hash, readFile, runMode = null) {
   artemisRevision(hash);
   const loads = [],
@@ -105,6 +109,7 @@ export function createMetadataLayerFixture(hash, readFile, runMode = null) {
         display: old.display.copy(),
         properties: {...old.properties},
         events: old.events?.copy(),
+        shader: old.shader?.copy(),
       };
       if (actor.kind === 'message') actor.messageOwner.retain(actor.message);
       actors.add(actor);
@@ -116,13 +121,49 @@ export function createMetadataLayerFixture(hash, readFile, runMode = null) {
       Object.assign(actor.properties, patch);
       effects.push({kind: 'properties', id, keys: Object.keys(patch), simulation: true});
     },
+    // Shader state is recorded through the shared property owner; no program is compiled.
+    supportsShaderProperties: () => true,
+    createShaderTexture(resource) {
+      let references = 1;
+      const texture = Object.freeze({path: resource.path, width: resource.image.width});
+      const lease = {
+        resource: texture,
+        retain() {
+          if (!references) throw Error('Probe shader texture released');
+          references++;
+          return lease;
+        },
+        release() {
+          if (!references) throw Error('Probe shader texture released twice');
+          references--;
+        },
+      };
+      return lease;
+    },
+    applyShaderProperties(actor, patch, textures) {
+      if (!actors.has(actor)) throw Error('Probe actor released');
+      if (patch.textures !== undefined && textures === undefined)
+        throw Error('Artemis shader textures require prepared resource leases');
+      actor.shader ??= new ArtemisShaderProperties(hash);
+      if (patch.shader !== undefined) actor.shader.setShader(patch.shader);
+      if (patch.constants !== undefined) actor.shader.setConstants(patch.constants);
+      if (textures !== undefined) actor.shader.setTextures(textures);
+      effects.push({kind: 'shader', keys: Object.keys(patch), simulation: true});
+    },
     releaseImageLayer(actor) {
       if (!actors.delete(actor)) throw Error('Probe actor released twice');
+      actor.shader?.close();
       if (actor.kind === 'message') actor.messageOwner.release(actor.message);
       effects.push({kind: 'release', actor: actor.id});
     },
-    clearLayerCommands: (ids) => effects.push({kind: 'clearCommands', ids}),
-    resetLayerCommands: (id) => effects.push({kind: 'resetCommands', id}),
+    clearLayerCommands: (ids) => {
+      effects.push({kind: 'clearCommands', ids});
+      layerCommands.clear(ids);
+    },
+    resetLayerCommands: (id) => {
+      effects.push({kind: 'resetCommands', id});
+      layerCommands.reset(id);
+    },
     recordLayerProperties: (tag) =>
       effects.push({kind: 'recordProperties', id: tag.args.get('id')}),
     imageLoadFailed: (tag) => {
@@ -133,7 +174,7 @@ export function createMetadataLayerFixture(hash, readFile, runMode = null) {
     },
   };
   const layers = new ArtemisLayers(hash, source, host);
-  // lyevent history only; other layer commands are recorded as simulated effects above.
+  // lyevent/lytween lists; lyprop records are simulated effects above.
   const layerCommands = new ArtemisLayerCommands(hash);
   const layerEvents = new ArtemisLayerEvents(layers.scene, layerCommands, {
     slots: (actor) => (actor.events ??= new ArtemisLayerEventSlots()),
@@ -196,7 +237,51 @@ export function createMetadataLayerFixture(hash, readFile, runMode = null) {
       throw Error('Unsupported diagnostic Artemis trans error report');
     },
   });
+  const tweens = new ArtemisTweenRegistry(hash);
+  let tweenSync = false,
+    tweenFrames = 0;
+  const layerTweens = new ArtemisLayerTweens(hash, layers.scene, tweens, layerCommands, {
+    // Per-frame values update the actor geometry without one effect record per frame.
+    applyImageProperties(id, actor, patch) {
+      actor.display.apply(patch);
+      Object.assign(actor.properties, patch);
+      tweenFrames++;
+    },
+    layerNotFound: host.layerNotFound,
+    enterRunMode: (mode) => {
+      effects.push({kind: 'runMode', mode, simulation: true});
+      tweenSync = true;
+      (runMode?.enter ?? refuseRunMode)(mode);
+    },
+    endSyncWait: () => {
+      effects.push({kind: 'tweenSyncEnd', simulation: true});
+      tweenSync = false;
+      (runMode?.release ?? refuseRunMode)();
+    },
+    deleteLayer: (tag, recordHistory) => {
+      effects.push({kind: 'tweenDelete', id: tag.args.get('id'), simulation: true});
+      layers.deleteLayer(tag.args.get('id') ?? '', recordHistory);
+    },
+    emitEvent: (tag) => {
+      effects.push({kind: 'tweenEvent', id: tag.args.get('id'), simulation: true});
+      if (!runMode?.emit) throw Error('Unsupported diagnostic Artemis tween event owner');
+      runMode.emit(tag);
+    },
+    recordLayerProperties: host.recordLayerProperties,
+  });
   return {
+    /** Steps every registered layer tween at the probe clock. */
+    tickTweens: (now) => tweens.tick(now),
+    get tweenSyncPending() {
+      return tweenSync;
+    },
+    get tweensRegistered() {
+      return tweens.size;
+    },
+    dispatchTween: (tag) => {
+      effects.push({kind: 'tween', name: tag.name, id: tag.args.get('id'), simulation: true});
+      return layerTweens.dispatch(tag);
+    },
     hasLayer: (id) => !!layers.scene.entry(id),
     /** Runs the registered transition tween from `start` (nonzero uint32) to natural
      * completion and returns the completion tick. */
@@ -257,6 +342,7 @@ export function createMetadataLayerFixture(hash, readFile, runMode = null) {
       mode: 'metadata-only fixture',
       pixelDecode: false,
       gpuPreparation: false,
+      tweenFrames,
       presentation: false,
       loads,
       effects,
@@ -267,13 +353,23 @@ export function createMetadataLayerFixture(hash, readFile, runMode = null) {
         width: entry.value?.width ?? null,
         height: entry.value?.height ?? null,
         properties: entry.value?.display.properties ?? null,
+        shader: entry.value?.shader
+          ? {
+              name: entry.value.shader.shaderName,
+              constants: entry.value.shader.constantValues(),
+              textures: entry.value.shader.textureValues().map((texture) => ({
+                name: texture.name,
+                path: texture.resource.path,
+              })),
+            }
+          : null,
         events: entry.value?.events
           ? ['click', 'rollover', 'rollout', 'dragin', 'drag', 'dragout'].filter((type) =>
               entry.value.events.callback(type),
             )
           : [],
       })),
-      layerEventCommands: [...layerCommands.snapshot()].map(([id, tags]) => ({
+      layerCommands: [...layerCommands.snapshot()].map(([id, tags]) => ({
         id,
         commands: tags.map((tag) => Object.fromEntries(tag.args)),
       })),

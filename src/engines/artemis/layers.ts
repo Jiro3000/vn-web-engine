@@ -176,6 +176,18 @@ export class ArtemisLayers<T extends object, I extends ArtemisImageDimensions = 
     this.scene.remove(id);
     if (selected.length) this.host.clearLayerCommands(selected);
   }
+  /** Synchronous lydel body 0x1400d6670, also bound as a tween completion. Replay leaves
+   * the command registrations alone. */
+  deleteLayer(id: string, recordHistory = true): void {
+    if (this.closed) throw Error('Artemis layer owner closed');
+    if (this.pending !== null) throw Error('Artemis layer resource operation already pending');
+    try {
+      if (recordHistory) this.remove(id);
+      else this.scene.remove(id);
+    } finally {
+      this.collect();
+    }
+  }
   async dispatch(input: AsbTag): Promise<boolean> {
     if (this.closed) throw new Error('Artemis layer owner closed');
     if (input.name !== 'lyc' && input.name !== 'lydel' && input.name !== 'lyprop') return false;

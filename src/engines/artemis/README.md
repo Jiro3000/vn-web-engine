@@ -552,6 +552,48 @@ images keep the earlier last-actor invalidation behavior. Cached resources use t
 surface owner's disposal effect instead. Close layers before closing the cache
 and raster target at installation shutdown.
 
+## Tweens and layer tweens
+
+`tween.ts` holds the shared `TTween` template (constructor `0x1400ef000`; float step
+`0x1400ee310` and finish `0x1400ee280`, identical to the integer step `0x1400eccf0`).
+`ArtemisTween` initializes on its first tick (`start = delay + now`, zero start is the
+uninitialized sentinel) and compares absolute uint32 times. At the end of a play it
+either completes (applies `to`, marks done, runs the completion) or starts the next play
+at `loopdelay - overshoot + now`, where an overshoot of at least one duration counts as 0.
+`loop` (or `repeat`) counts extra plays and `yoyo` counts reversals that swap `from` and
+`to`; -1 repeats forever. Finish applies `from` while an odd yoyo count is pending,
+otherwise `to`. `artemisEase` is the 30-curve switch (quad, cubic, quart, quint, expo,
+circ, sine, back, elastic, bounce; in/out/inout) with the native float-rounded constants.
+Ease 0 and unknown ids are linear. `ArtemisLinearIntegerTween` (truncating) and
+`ArtemisLinearFloatTween` (float32) are the curve-0 forms used by transitions and audio.
+
+`ArtemisTweenRegistry` is the global registry: register `0x1400a5360` returns ids from
+one uint32 counter, and registrations made during a step wait in a pending map that is
+merged after the step. The frame step `0x14019aa00` destroys tweens that report done.
+Finish `0x1400a54b0` searches the active map, then the pending map. Steps visit tweens in
+registration order.
+
+`layer-tweens.ts` implements `lytween` (`0x1400da830`) and `lytweendel` (`0x1400dd3a0`)
+for direct scene layers:
+
+- Missing ids report the native layer-not-found error. Root (`!`) and alias (`~`)
+  owners and tween groups are refused as unsupported.
+- `param` selects `left`, `top`, `alpha` (/255), `xscale`/`yscale` (/100) or `rotate`.
+  Any other parameter returns without registration or history.
+- Duration is `time`, else `msec`. Absent `id`, `from`, `to`, `param` and `time` are
+  inserted as empty strings, as `std::map::operator[]` does, and stay in recorded copies.
+- The setter holds the layer node (`ArtemisScene.layer`). It writes the current inner
+  actor and, when distinct, the retained one; it never copies the actor or touches the
+  outer wrapper alpha. The start value is applied at creation.
+- Completion is chosen in this order: `sync` (not `"0"`) enters run mode 4 and the
+  completion sets the run mode to 0. `delete` removes the layer through the `lydel`
+  body (`ArtemisLayers.deleteLayer`). `file`, `label` or `handler` emits the tag as a
+  script event.
+- History: infinite `loop`/`yoyo` or `delete` appends the tag to the layer's command list.
+  Otherwise an `lyprop` with the end value string is recorded.
+- `lytweendel` finishes every tween registered on the layer and erases its `lytween`
+  commands.
+
 ## Ordinary group display properties
 
 Empty hierarchy nodes allocate their native identity property holder through
@@ -693,6 +735,11 @@ are retained in its original command record and ignored by ordinary property
 application, matching `0x1400d76d0` / `0x140115650`. The game forwards the table
 used by `lyc`; property application does not reload or recolor its image.
 Unknown/unimplemented actual property keys continue to refuse.
+
+The fixture records shader name, constants and texture leases through
+`ArtemisShaderProperties` without compiling programs. It steps layer tweens whenever the
+probe clock advances, and advances 16 ms frames while a `sync` tween holds run mode 4.
+Lua `.ipt` animation tables are preloaded with the other script sources.
 
 The real nonvisual probe, with explicit simulated dialog result and timed waits,
 now creates the header-verified1920x1080 `:bg/black.png` layer and applies its

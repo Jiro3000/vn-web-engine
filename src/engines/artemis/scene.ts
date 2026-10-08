@@ -6,6 +6,12 @@ export interface ArtemisSceneEntry<T> {
   readonly value: T | undefined;
   readonly acceptsChildren: boolean;
 }
+/** A layer node held by an owner beyond its tree membership (for example a tween setter). */
+export interface ArtemisSceneLayer<T> {
+  /** CArtemisLayer setters 0x1400b22e0..0x1400b2660: the current inner actor, then the
+   * retained one when the two indices differ. Empty once the node is destroyed. */
+  actors(): readonly T[];
+}
 const encoder = new TextEncoder();
 function integerKey(key: string): number | null {
   // Native 0x1401856c0 accepts a lone minus sign; atoi then yields zero.
@@ -57,7 +63,7 @@ class PayloadLifetime<T> {
     }
   }
 }
-class Node<T> {
+class Node<T> implements ArtemisSceneLayer<T> {
   private readonly maps: [Child<T>[], Child<T>[]] = [[], []];
   private readonly values: [T | undefined, T | undefined];
   private currentMap = 0;
@@ -99,6 +105,13 @@ class Node<T> {
   }
   value(view: ArtemisSceneView): T | undefined {
     return this.values[view === 'current' ? this.currentValue : this.retainedValue];
+  }
+  actors(): readonly T[] {
+    const current = this.values[this.currentValue],
+      retained = this.values[this.retainedValue];
+    const result = current === undefined ? [] : [current];
+    if (this.retainedValue !== this.currentValue && retained !== undefined) result.push(retained);
+    return result;
   }
   edit(copy: (value: T) => T, create?: () => T): T | undefined {
     const value = this.value('current');
@@ -237,6 +250,17 @@ export class ArtemisScene<T> {
       value: parent.value(view),
       acceptsChildren: parent.acceptsChildren,
     };
+  }
+  /** The node at `id` in the current structure, without copying its inner actor. */
+  layer(id: string): ArtemisSceneLayer<T> | undefined {
+    let node = this.root;
+    for (const key of this.path(id)) {
+      if (!node.acceptsChildren) return undefined;
+      const child = node.child(key, 'current');
+      if (!child) return undefined;
+      node = child.node;
+    }
+    return node === this.root ? undefined : node;
   }
   /** Inner-actor copy on first edit; empty group defaults may be materialized lazily.
    * The retained view keeps its old payload (or default identity) until commit. */
