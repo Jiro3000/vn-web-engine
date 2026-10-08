@@ -381,22 +381,22 @@ export function artemisTagFilterResult(result: LuaValue | undefined): boolean {
   return (Math.trunc(result) | 0) !== 0;
 }
 
-/** CLua 0x1401304d0: name at [1], named strings and floorf numeric values. */
+/** CLua 0x1401304d0: name at [1], named strings and floorf numeric values. Other keys
+ * (numeric keys besides 1, booleans, tables) and values of other Lua types are skipped. */
 export function luaTag(value: LuaValue | undefined): AsbTag {
   if (!(value instanceof Map)) throw new Error('Expected Artemis Lua tag table');
   const table = value as LuaTable,
     name = luaText(table.get(1));
   const args = new Map<string, string>();
   for (const [key, item] of table) {
-    if (key === 1) continue;
-    if (typeof key !== 'string') throw new Error('Unsupported numeric Artemis Lua tag argument');
+    if (typeof key !== 'string') continue;
     if (item instanceof Uint8Array) args.set(key, luaText(item));
     else if (typeof item === 'number') {
       const n = Math.floor(Math.fround(item));
       if (!Number.isFinite(n) || n < -0x80000000 || n > 0x7fffffff)
         throw new Error('Unsupported Artemis tag number');
       args.set(key, String(n));
-    } else throw new Error(`Unsupported Artemis Lua tag argument ${key}`);
+    }
   }
   return {kind: 'tag', name, args, sourceLine: -1};
 }

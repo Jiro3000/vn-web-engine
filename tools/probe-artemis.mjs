@@ -24,6 +24,7 @@ import {windowsTextFileBytes} from '../dist/platform/windows-text-file.js';
 import {ArtemisLua} from '../dist/engines/artemis/lua.js';
 import {ArtemisScript} from '../dist/engines/artemis/script.js';
 import {ArtemisVariables} from '../dist/engines/artemis/variables.js';
+import {artemisExpressionBytes} from '../dist/engines/artemis/expression.js';
 import {ArtemisDialog} from '../dist/engines/artemis/dialog.js';
 import {artemisFontProperties} from '../dist/engines/artemis/font-properties.js';
 import {
@@ -663,6 +664,8 @@ try {
     popLocal: () => variables.popLocal(),
     readFile,
     dispatch,
+    evaluateExpression: (expression) =>
+      new TextDecoder().decode(artemisExpressionBytes(expression, variables)),
     trace: ({origin, file, tagIndex, tag}) =>
       events.push({origin, file, tagIndex, name: tag.name, sourceLine: tag.sourceLine}),
     // Diagnostic record of native c84b0 severity1 reports; no debug console/LogFilter policy.

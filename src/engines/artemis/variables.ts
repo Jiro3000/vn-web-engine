@@ -1,6 +1,7 @@
 import type {ApplicationArgumentsHost} from '../../platform/application-arguments.js';
 import type {WindowDisplayGeometry} from '../../platform/window-display.js';
 import type {AsbTag} from '../../formats/artemis/asb.js';
+import type {ArtemisExpressionValue} from './expression.js';
 
 const encoder = new TextEncoder();
 const empty = new Uint8Array();
@@ -28,6 +29,8 @@ export class ArtemisVariables {
   }
   private readonly global = new Map<string, Uint8Array>();
   private readonly locals: Map<string, Uint8Array>[] = [];
+  /** Stored values created by 0x140157fa0 as CVariant integers; any write replaces them. */
+  private readonly integers = new WeakSet<Uint8Array>();
   pushLocal(): void {
     this.locals.push(new Map());
   }
@@ -57,8 +60,15 @@ export class ArtemisVariables {
       if (name.startsWith('s.') || name.startsWith('ini.'))
         throw new Error(`Unsupported native Artemis variable ${name}`);
       this.write(name, '0');
+      this.integers.add(this.global.get(name)!);
     }
     return this.read(name);
+  }
+  /** Expression leaf value: query-created zeros are integers, stored data is a string. */
+  expressionValue(name: string): ArtemisExpressionValue {
+    const bytes = this.queryLiteral(name);
+    const stored = this.locals.at(-1)?.get(name) ?? this.global.get(name)!;
+    return this.integers.has(stored) ? {kind: 'integer', value: 0} : {kind: 'string', bytes};
   }
   write(name: string, value: Uint8Array | string, local = false): void {
     literal(name);

@@ -57,6 +57,13 @@ if/elseif/loop when atoi(`estimate`) is zero (`0x1400e9fb0`) and for every goto
 (`0x1400c7800`). Arguments starting with `$` are evaluated before filtering through
 `ArtemisScriptHost.evaluateExpression` once per `$`; without an evaluator they are refused.
 
+`expression.ts` is the CCompute evaluator (`0x140157ff0`, substitution `0x1400afc60`) over
+UTF-8 bytes with `'` as the only quote character: integer/hex literals with sign merging,
+backslash escapes, `name(expr)` spliced variable names, and reduction passes `* / %`,
+`+ -` (string concatenation unless both operands are numeric), relational, `== !=` (string
+comparison when either side is a string), `&&`, `||`. Failures yield an empty argument.
+`ArtemisVariables.expressionValue` supplies leaves; absent names become integer zero.
+
 `modes.ts` owns skip/auto/autosave command state and emits required status/effect
 callbacks (`0x1400d47b0`, `0x1400d4350`, `0x1400ca3d0`). Scheduler, indicator,
 message and save effects still require native service implementations. Nonempty
@@ -106,7 +113,7 @@ By default dialogs remain pending. `--dialog-result=0` or `--dialog-result=1`
 explicitly supplies a simulated outcome for a separate probe, recorded in its JSON.
 Probe cursor/scheduler effects are record-only and do not represent production effects.
 
-Remaining work includes native system variables/events, expression evaluation,
+Remaining work includes native system variables/events,
 full IET compilation, AST story execution, text/media/save services and UI wiring.
 The integration is not playable. Shared platform/media services must remain in
 the shared layers. Evidence and game resources are local-only and are not part of

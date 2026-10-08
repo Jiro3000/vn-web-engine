@@ -107,15 +107,24 @@ test('Unsupported native dispatch faults execution and never silently continues'
     assert.throws(() => script.run(), /unsupported/);
     assert.equal(script.state, 'faulted');
     assert.equal(script.step(), 'faulted');
-    assert.throws(
-      () =>
-        luaTag(
-          new Map([
-            [1, bytes('x')],
-            ['boolean', true],
-          ]),
-        ),
-      /Unsupported/,
+    // 1304d0 converts only string keys with string/number values; other entries are skipped.
+    const converted = luaTag(
+      new Map([
+        [1, bytes('x')],
+        [2, bytes('positional')],
+        ['boolean', true],
+        ['table', new Map()],
+        ['text', bytes('t')],
+        ['number', 2.75],
+      ]),
+    );
+    assert.equal(converted.name, 'x');
+    assert.deepEqual(
+      [...converted.args],
+      [
+        ['text', 't'],
+        ['number', '2'],
+      ],
     );
   } finally {
     lua.close();
@@ -216,6 +225,53 @@ test('IET conditionals and loops lower to native goto tags and move the cursor',
   } finally {
     lua.close();
   }
+});
+
+test('Expression arguments follow native operator passes, CVariant types and variable leaves', async () => {
+  const {ArtemisVariables} = await import('../dist/engines/artemis/variables.js');
+  const {artemisExpressionBytes, evaluateArtemisExpression} =
+    await import('../dist/engines/artemis/expression.js');
+  const variables = new ArtemisVariables();
+  const text = (expression) =>
+    new TextDecoder().decode(artemisExpressionBytes(expression, variables));
+  // Absent leaves are created as integer zero and stay readable afterwards.
+  assert.equal(text('t.load != 0'), '0');
+  assert.deepEqual(evaluateArtemisExpression('t.load', variables), {kind: 'integer', value: 0});
+  assert.equal(new TextDecoder().decode(variables.read('t.load')), '0');
+  variables.write('t.load', 'scene.ast');
+  assert.equal(text('t.load != 0'), '1');
+  assert.equal(text('t.load'), 'scene.ast');
+  // + concatenates unless both sides are numeric; == compares strings when either is a string.
+  variables.write('t.path', 'ui/menu');
+  assert.equal(text("t.path+'02'"), 'ui/menu02');
+  variables.write('t.path', '1');
+  assert.equal(text("t.path+'02'"), '3');
+  assert.equal(text("'01'==1"), '0');
+  assert.equal(text('01 == 1'), '1');
+  assert.equal(text("'0x10'+1"), '17');
+  // Pass order *,/,% then +,- then relational, equality, && and ||, each left to right.
+  assert.equal(text('1+2*3'), '7');
+  assert.equal(text('(1+2)*3'), '9');
+  assert.equal(text('-3+5'), '2');
+  assert.equal(text('2*-3'), '-6');
+  assert.equal(text('10-4-3'), '3');
+  assert.equal(text('-7/2'), '-3');
+  assert.equal(text('7%-3'), '1');
+  assert.equal(text('1<2&&2>=2||0'), '1');
+  assert.equal(text('0x1F'), '31');
+  assert.equal(text('2147483648'), '2147483647');
+  // Quote character is ' with backslash escapes; an unterminated string yields no value.
+  assert.equal(text("'it\\'s'"), "it's");
+  assert.equal(text("'abc"), '');
+  // name(expr) splices the evaluated text into the variable name.
+  variables.write('a2b', 'spliced');
+  assert.equal(text('a(1+1)b'), 'spliced');
+  // A closing parenthesis ends the outermost level; failures produce an empty argument.
+  assert.equal(text('3) + 4'), '3');
+  for (const failing of ['1/0', '1 2', '-a', '*2', '()', "x'y'"])
+    assert.equal(text(failing), '', failing);
+  assert.equal(evaluateArtemisExpression('1/0', variables), null);
+  assert.throws(() => text('s.missing'), /Unsupported native Artemis variable/);
 });
 
 test('Mode commands disable active skip/auto through status and effect services', async () => {
