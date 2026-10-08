@@ -4,6 +4,7 @@
 <canvas id="frame" style="width: 256px; height: 128px; image-rendering: pixelated"></canvas>
 <pre id="result">Running synthetic PNG / Lua / raster checks</pre>
 <script type="module">
+  import {createArtemisBufferedSoundDecoder} from '../../dist/engines/artemis/buffered-sound-decoder.js';
   import {ArtemisWaveSource} from '../../dist/engines/artemis/wave-source.js';
   import {encodeWav} from '../../dist/audio/pcm.js';
   import {ArtemisSoundLoader} from '../../dist/engines/artemis/sound-loader.js';
@@ -1108,6 +1109,29 @@
     } finally {
       waveOwner.close();
     }
+    const cachedDecoder = createArtemisBufferedSoundDecoder(
+      revision,
+      async (path) => waveFiles.get(path) ?? null,
+      'nearest-even',
+    );
+    const cachedContext = new OfflineAudioContext(1, 8, 48000);
+    const cachedOwner = createArtemisBrowserEffectVoices(
+      revision,
+      (file, buffer) => cachedDecoder.decode(file, buffer),
+      cachedContext,
+    );
+    try {
+      const sound = await cachedOwner.effects.prepareEffect('intro_a', -1);
+      cachedOwner.effects.startEffect(sound, 0, true);
+      const rendered = await cachedContext.startRendering(),
+        plane = rendered.getChannelData(0);
+      const expected = [0.25, 0.5, -0.25, -0.5, 0.25, 0.5, -0.25, -0.5];
+      for (let i = 0; i < expected.length; i++)
+        assert(Math.abs(plane[i] - expected[i]) < 0.00001, 'cached full A+B hardware repeat ' + i);
+    } finally {
+      cachedOwner.close();
+      cachedDecoder.close();
+    }
     window.result = {
       passed: true,
       nativeFontWorker: true,
@@ -1117,6 +1141,7 @@
       nativeOfflineAudioVoices: true,
       nativeSoundFilenameVoiceIntegration: true,
       nativePairedWaveVoiceIntegration: true,
+      nativeBufferedSoundDecoderIntegration: true,
       nativeStereoAttenuation: true,
       audioDeviceOutput: false,
       nativeFontVersion: [2, 4, 8],

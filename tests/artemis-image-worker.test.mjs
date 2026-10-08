@@ -99,3 +99,57 @@ test(
     }
   },
 );
+
+test(
+  'Artemis Vorbis worker preserves real boundary frames and produces native PCM16 without detaching input',
+  {timeout: 15000},
+  async () => {
+    const {readFile} = await import('node:fs/promises');
+    const {createNodeBrowserWorker} = await import('../tools/node-browser-worker.mjs');
+    const {ArtemisVorbisPcmDecoder} = await import('../dist/engines/artemis/vorbis-pcm-decoder.js');
+    const encoded = new Uint8Array(
+      await readFile(new URL('./fixtures/audio/vorbis-boundaries.ogg', import.meta.url)),
+    );
+    const original = globalThis.Worker,
+      workers = [];
+    globalThis.Worker = class {
+      constructor(url) {
+        const worker = createNodeBrowserWorker(url);
+        workers.push(worker);
+        return worker;
+      }
+    };
+    const decoder = new ArtemisVorbisPcmDecoder(ARTEMIS_3179_EXECUTABLE_SHA256, 'nearest-even');
+    try {
+      const decoded = await decoder.decode(encoded);
+      assert.equal(decoded.sampleRate, 48000);
+      assert.equal(decoded.channels, 1);
+      assert.equal(decoded.bytes.length, 4109 * 2);
+      const golden = await readFile(
+        new URL('./fixtures/audio/vorbis-boundaries.f32', import.meta.url),
+      );
+      const expected = new DataView(golden.buffer, golden.byteOffset, golden.byteLength),
+        actual = new DataView(decoded.bytes.buffer);
+      for (let i = 0; i < 256; i++) {
+        const sample = expected.getFloat32(i * 4, true) * 32768,
+          floor = Math.floor(sample),
+          fraction = sample - floor;
+        const integer = fraction > 0.5 || (fraction === 0.5 && floor % 2 !== 0) ? floor + 1 : floor;
+        const at = i < 128 ? i : 4109 - 256 + i;
+        assert.ok(
+          Math.abs(actual.getInt16(at * 2, true) - Math.max(-32768, Math.min(32767, integer))) <= 1,
+          `native PCM16 boundary ${i}`,
+        );
+      }
+      assert.ok(encoded.length > 0);
+      assert.equal(await decoder.decode(new Uint8Array([0, 1, 2])), null);
+      assert.equal(workers.length, 1);
+      decoder.close();
+      await assert.rejects(() => decoder.decode(encoded), /closed/);
+    } finally {
+      decoder.close();
+      globalThis.Worker = original;
+      await Promise.all(workers.map((worker) => worker.terminate()));
+    }
+  },
+);

@@ -936,3 +936,30 @@ reads cross the boundary, and reset stays on B once activated. Missing or invali
 paired resources leave the main source usable. It does not interpret PCM, create
 a voice, or claim support for backward seeks from negative chunk sizes.
 The sound codec receives the resolved filename to preserve this source behavior.
+
+## Buffered sound codec services
+
+`ArtemisVorbisPcmDecoder` runs the shared real libvorbis decoder and Rev.3179's
+float32 scaling / signed32 conversion / PCM16 saturation in reusable module workers.
+The installation supplies an explicit SSE rounding policy; no native FPU state is
+inferred. PCM keeps encoded channel order. Encoded-data decode misses return null;
+worker/host failures propagate. Closing stops workers and rejects pending adoption.
+
+`ArtemisVorbisSource` retains actual decoded integer bytes and native paired-file
+read/reset semantics. Unlike WAVE, reading exactly to A's end retains A until a
+later nonzero read observes EOF. Sub-frame reads and progressive decoder error timing
+are unsupported in this eager resource adaptation.
+
+`createArtemisBufferedSoundDecoder` joins the revision-selected filename codecs,
+WAVE/Vorbis resource owners and shared integer-PCM conversion worker with the browser
+voice adapter. Only native `buffer=-1` is implemented: complete A+B storage, with
+hardware repeat of the whole clip. Native source B-only reset is used by streaming,
+not cached hardware looping. Zero/positive buffer modes still require the native
+rolling-buffer service. The decoder does not create an audio context itself.
+PCM8/16, aligned frames and complete payloads are supported; other bit depths and
+truncated cached payloads are explicitly refused. No silence substitute is supplied.
+
+Native references: `88340` (Vorbis integer samples), `19cb30/19d390/19d2f0`
+(Vorbis resources), `163a80` (buffer sizing), `164410` (fill/play), `1640c0`
+(rolling refill versus cached completion). Synthetic browser checks distinguish
+A+B cached repeat from the B-only streaming-source reset behavior.

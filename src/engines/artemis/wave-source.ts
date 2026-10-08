@@ -1,4 +1,5 @@
 import {artemisRevision} from './revision.js';
+import {artemisPairedSoundPath} from './paired-sound-path.js';
 
 export interface ArtemisWaveFormat {
   readonly sampleRate: number;
@@ -74,6 +75,12 @@ export class ArtemisWaveSource {
   get dataSize(): number {
     return this.metadata.dataSize;
   }
+  get totalDataSize(): number {
+    return this.dataSize + (this.paired?.totalDataSize ?? 0);
+  }
+  get loopStartBytes(): number {
+    return this.paired ? this.dataSize : 0;
+  }
   static async load(
     hash: string,
     path: string,
@@ -83,20 +90,23 @@ export class ArtemisWaveSource {
     path = path.split('\0', 1)[0]!;
     const bytes = await readFile(path);
     if (bytes === null) return null;
+    return ArtemisWaveSource.fromBytes(hash, path, bytes, readFile);
+  }
+  /** Consume the already-opened codec input; only paired files require another open. */
+  static async fromBytes(
+    hash: string,
+    path: string,
+    bytes: Uint8Array,
+    readFile: (path: string) => Promise<Uint8Array | null>,
+  ): Promise<ArtemisWaveSource | null> {
+    artemisRevision(hash);
+    path = path.split('\0', 1)[0]!;
     const metadata = header(bytes);
     if (!metadata) return null;
     const source = new ArtemisWaveSource(path, Uint8Array.from(bytes), metadata);
-    const basenameStart = path.lastIndexOf('\\') + 1,
-      dot = path.lastIndexOf('.'),
-      extensionAt = dot >= basenameStart ? dot : path.length,
-      stem = path.slice(0, extensionAt),
-      extension = extensionAt < path.length ? path.slice(extensionAt + 1) : '';
-    if (stem.endsWith('_a'))
-      source.paired = await ArtemisWaveSource.load(
-        hash,
-        `${stem.slice(0, -2)}_b.${extension}`,
-        readFile,
-      );
+    const pairedPath = artemisPairedSoundPath(path);
+    if (pairedPath !== null)
+      source.paired = await ArtemisWaveSource.load(hash, pairedPath, readFile);
     return source;
   }
   read(maxBytes: number): Uint8Array {

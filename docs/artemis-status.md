@@ -82,9 +82,12 @@ with independent stereo attenuation, loop/reset controls and offline test contex
 Filename resolution preserves native preferred suffix/sniff/appended candidates;
 the revision-selected factory installs verified Vorbis-before-WAVE plugins.
 The encoded WAVE owner preserves native headers, paired A/B reads and B-only reset.
-The diagnostic supplies Ogg-only registration and still refuses actual playback.
+Native PCM16 conversion and buffered=-1 codec services now use actual reusable
+Vorbis/integer-PCM workers. Cached repeat includes the whole A+B clip; progressive
+B-only refill still requires a rolling-buffer owner. The diagnostic supplies
+Ogg-only registration and still refuses actual playback.
 
-Build and195 focused tests pass. The full1869-test suite has1832 passes and the
+Build and199 focused tests pass. The full1873-test suite has1836 passes and the
 same37 baseline failures, with no new failing names. Synthetic browser checks
 cover real font/image workers, GPU scenes and sound lookup through actual offline
 WebAudio voices. These checks do not establish production game compatibility.

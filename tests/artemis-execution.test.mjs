@@ -2638,3 +2638,149 @@ test('Native WAVE sources stream paired files and rewind only the active segment
     /Unsupported Artemis/,
   );
 });
+
+test('Native Vorbis PCM16 conversion preserves rounding, saturation and encoded channel order', async () => {
+  const {artemisVorbisPcm16} = await import('../dist/engines/artemis/vorbis-pcm.js');
+  const {ARTEMIS_3179_EXECUTABLE_SHA256: sha} = await import('../dist/engines/artemis/revision.js');
+  const left = Float32Array.from([
+    0.5 / 32768,
+    1.5 / 32768,
+    -0.5 / 32768,
+    -1.5 / 32768,
+    1,
+    -1,
+    Infinity,
+    NaN,
+  ]);
+  const right = Float32Array.from([
+    3.5 / 32768,
+    2.5 / 32768,
+    -3.5 / 32768,
+    -2.5 / 32768,
+    2,
+    -2,
+    -Infinity,
+    65536,
+  ]);
+  const pcm = {sampleRate: 48000, frames: 8, planes: [left, right]};
+  const result = artemisVorbisPcm16(sha, pcm, 'nearest-even'),
+    view = new DataView(result.buffer);
+  const actual = Array.from({length: 16}, (_, i) => view.getInt16(i * 2, true));
+  assert.deepEqual(
+    actual,
+    [0, 4, 2, 2, 0, -4, -2, -2, 32767, 32767, -32768, -32768, -32768, -32768, -32768, -32768],
+  );
+  const one = {
+    sampleRate: 48000,
+    frames: 2,
+    planes: [Float32Array.from([0.5 / 32768, -0.5 / 32768])],
+  };
+  const values = (mode) => {
+    const b = artemisVorbisPcm16(sha, one, mode);
+    const v = new DataView(b.buffer);
+    return [v.getInt16(0, true), v.getInt16(2, true)];
+  };
+  assert.deepEqual(values('down'), [0, -1]);
+  assert.deepEqual(values('up'), [1, 0]);
+  assert.deepEqual(values('toward-zero'), [0, 0]);
+  assert.throws(() => values('invented'), /rounding/);
+});
+
+test('Vorbis exact-end reads retain intro ownership until decoder EOF is actually observed', async () => {
+  const {ArtemisVorbisSource} = await import('../dist/engines/artemis/vorbis-source.js');
+  const {ARTEMIS_3179_EXECUTABLE_SHA256: sha} = await import('../dist/engines/artemis/revision.js');
+  const files = new Map([
+      ['音_a.OGG', new Uint8Array([1])],
+      ['音_b.OGG', new Uint8Array([2])],
+    ]),
+    opened = [];
+  const decode = async (bytes) => ({
+    sampleRate: 48000,
+    channels: 1,
+    bytes: new Uint8Array([bytes[0], 0]),
+  });
+  const source = await ArtemisVorbisSource.load(
+    sha,
+    '音_a.OGG',
+    async (path) => {
+      opened.push(path);
+      return files.get(path) ?? null;
+    },
+    decode,
+  );
+  assert.deepEqual(opened, ['音_a.OGG', '音_b.OGG']);
+  assert.equal(source.totalDataSize, 4);
+  assert.equal(source.loopStartBytes, 2);
+  assert.deepEqual(source.read(2), new Uint8Array([1, 0]));
+  source.reset();
+  assert.deepEqual(source.read(2), new Uint8Array([1, 0]));
+  source.read(0);
+  source.reset();
+  assert.deepEqual(source.read(2), new Uint8Array([1, 0]));
+  assert.deepEqual(source.read(2), new Uint8Array([2, 0]));
+  source.reset();
+  assert.deepEqual(source.read(4), new Uint8Array([2, 0]));
+  assert.throws(() => source.read(1), /sub-frame/);
+  const failed = await ArtemisVorbisSource.fromBytes(
+    sha,
+    'bad.ogg',
+    new Uint8Array(),
+    async () => null,
+    async () => null,
+  );
+  assert.equal(failed, null);
+  await assert.rejects(
+    () =>
+      ArtemisVorbisSource.fromBytes(
+        sha,
+        'bad.ogg',
+        new Uint8Array(),
+        async () => null,
+        async () => {
+          throw Error('worker unavailable');
+        },
+      ),
+    /unavailable/,
+  );
+});
+
+test('Buffered native sound loading resolves codecs and caches complete paired PCM without a streaming loop window', async () => {
+  const {createArtemisBufferedSoundDecoder} =
+    await import('../dist/engines/artemis/buffered-sound-decoder.js');
+  const {ARTEMIS_3179_EXECUTABLE_SHA256: sha} = await import('../dist/engines/artemis/revision.js');
+  const {encodeWav} = await import('../dist/audio/pcm.js');
+  const wav = (values) =>
+    encodeWav({
+      sampleRate: 48000,
+      sampleCount: values.length,
+      channels: [Float32Array.from(values)],
+    });
+  const files = new Map([
+      ['音_a.wav', wav([0.25, 0.5])],
+      ['音_b.wav', wav([-0.25, -0.5])],
+    ]),
+    opened = [];
+  const decoder = createArtemisBufferedSoundDecoder(
+    sha,
+    async (path) => {
+      opened.push(path);
+      return files.get(path) ?? null;
+    },
+    'nearest-even',
+  );
+  try {
+    const clip = await decoder.decode('音_a', -1);
+    assert.deepEqual(opened, ['音_a', '音_a.ogg', '音_a.OGG', '音_a.wav', '音_b.wav']);
+    assert.equal(clip.sampleCount, 4);
+    assert.equal(clip.sampleRate, 48000);
+    assert.deepEqual([...clip.channels[0]], [0.25, 0.5, -0.25, -0.5]);
+    assert.equal(clip.loop, undefined); // -1 uses the complete hardware buffer on repeat.
+    await assert.rejects(() => decoder.decode('音_a', 0), /progressive/);
+    await assert.rejects(() => decoder.decode('音_a', 100), /progressive/);
+    assert.equal(await decoder.decode('missing', -1), null);
+    decoder.close();
+    await assert.rejects(() => decoder.decode('音_a', -1), /closed/);
+  } finally {
+    decoder.close();
+  }
+});

@@ -1,4 +1,6 @@
 /** Actual shared Vorbis decode for nonvisual diagnostics. No audio graph/device is opened. */
+import {artemisVorbisPcm16} from '../dist/engines/artemis/vorbis-pcm.js';
+import {ARTEMIS_3179_EXECUTABLE_SHA256} from '../dist/engines/artemis/revision.js';
 import {createHash} from 'node:crypto';
 import {ArtemisSoundLoader} from '../dist/engines/artemis/sound-loader.js';
 import {createNodeBrowserWorker} from './node-browser-worker.mjs';
@@ -67,6 +69,10 @@ export function createArtemisSoundDecodeFixture(readFile) {
         frames: pcm.frames,
         channels: pcm.planes.length,
         encodedSha256,
+        pcm16RoundingPolicy: 'nearest-even-explicit-diagnostic',
+        pcm16Sha256: createHash('sha256')
+          .update(artemisVorbisPcm16(ARTEMIS_3179_EXECUTABLE_SHA256, pcm, 'nearest-even'))
+          .digest('hex'),
         pcmSha256: pcm.planes.map((plane) =>
           createHash('sha256')
             .update(new Uint8Array(plane.buffer, plane.byteOffset, plane.byteLength))
