@@ -4,6 +4,7 @@
 <canvas id="frame" style="width: 256px; height: 128px; image-rendering: pixelated"></canvas>
 <pre id="result">Running synthetic PNG / Lua / raster checks</pre>
 <script type="module">
+  import {createArtemisRollingVoice} from '../../dist/engines/artemis/browser-rolling-voice.js';
   import {createArtemisBufferedSoundDecoder} from '../../dist/engines/artemis/buffered-sound-decoder.js';
   import {ArtemisWaveSource} from '../../dist/engines/artemis/wave-source.js';
   import {encodeWav} from '../../dist/audio/pcm.js';
@@ -1132,6 +1133,47 @@
       cachedOwner.close();
       cachedDecoder.close();
     }
+    const rollingSource = await ArtemisWaveSource.load(
+      revision,
+      'intro_a.wav',
+      async (file) => waveFiles.get(file) ?? null,
+    );
+    const rollingContext = new OfflineAudioContext(2, 384, 48000);
+    const rollingVoice = await createArtemisRollingVoice(rollingContext, {
+      hash: revision,
+      resource: rollingSource.snapshot(),
+      bufferMode: 4,
+    });
+    try {
+      rollingVoice.volume(0.5);
+      rollingVoice.stereoBalance(0.5, 1);
+      rollingVoice.setLoop(false);
+      rollingVoice.pause(false);
+      await rollingVoice.synchronize();
+      const pausedAt = rollingContext.suspend(256 / 48000);
+      const rendering = rollingContext.startRendering();
+      await pausedAt;
+      rollingVoice.pump();
+      await rollingVoice.synchronize();
+      assert(rollingVoice.ended(), 'native rolling trailing-half completion');
+      await rollingContext.resume();
+      const rendered = await rendering;
+      for (let channel = 0; channel < 2; channel++) {
+        const expected = [0.25, 0.5, -0.25, -0.5],
+          plane = rendered.getChannelData(channel);
+        for (let i = 0; i < expected.length; i++)
+          assert(
+            Math.abs(plane[i] - expected[i] * (channel === 0 ? 0.25 : 0.5)) < 0.00001,
+            'actual worklet rolling PCM/gain/balance ' + channel + ':' + i,
+          );
+        assert(
+          plane.slice(4).every((sample) => Math.abs(sample) < 0.00001),
+          'native EOF trailing silence',
+        );
+      }
+    } finally {
+      rollingVoice.dispose();
+    }
     window.result = {
       passed: true,
       nativeFontWorker: true,
@@ -1142,6 +1184,7 @@
       nativeSoundFilenameVoiceIntegration: true,
       nativePairedWaveVoiceIntegration: true,
       nativeBufferedSoundDecoderIntegration: true,
+      nativeRollingAudioWorklet: true,
       nativeStereoAttenuation: true,
       audioDeviceOutput: false,
       nativeFontVersion: [2, 4, 8],

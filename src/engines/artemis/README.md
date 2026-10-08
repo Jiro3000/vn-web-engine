@@ -963,3 +963,25 @@ Native references: `88340` (Vorbis integer samples), `19cb30/19d390/19d2f0`
 (Vorbis resources), `163a80` (buffer sizing), `164410` (fill/play), `1640c0`
 (rolling refill versus cached completion). Synthetic browser checks distinguish
 A+B cached repeat from the B-only streaming-source reset behavior.
+
+## Progressive PCM device voices
+
+`ArtemisRollingSoundBuffer` owns the native two-half PCM ring, partial-read padding,
+strict inactive-half cursor boundaries and trailing-half stop count. It reads real
+PCM byte resources; it does not provide a voice by itself. `ArtemisPcmCursor` owns
+transferred WAVE/Vorbis snapshots inside the audio processor without changing the
+source owner's cursor.
+
+`createArtemisBrowserSoundVoices` selects cached `buffer=-1` or actual progressive
+AudioWorklet voices. `ArtemisEffectVoices.tick` pumps progressive buffers from the
+engine scheduler; the device render callback advances playback position. A delayed
+pump can replay stale ring data, matching the native buffer behavior. The shared
+PCM host provides its real ScriptProcessor compatibility fallback where worklets
+are unavailable. Mono duplicates into stereo, and per-side attenuation is independent.
+
+The browser adapter prefills both halves before output; native fills its second
+half during the first engine tick. Sources are eagerly decoded in codec workers.
+Progressive decode timing, damaged/chained streams and DirectSound lost-buffer
+recovery remain separate native services. Fractional device rates use browser
+linear interpolation; no target-driver bit identity is claimed. Worklet control
+commands have completion fences for tests and callers that must observe state.

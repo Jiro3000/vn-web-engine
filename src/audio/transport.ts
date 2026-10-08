@@ -13,6 +13,8 @@ export interface AudioVoice {
   /** Optional reusable-source controls for engines that prepare before choosing loops. */
   setLoop?(loop: boolean): void;
   stop?(): void;
+  /** Scheduler-driven refill for device buffers; ordinary cached voices need no pump. */
+  pump?(): void;
   /** Independent stereo attenuation, including mono duplication; no crossfeed/pan law. */
   stereoBalance?(leftGain: number, rightGain: number): void;
   dispose(): void;

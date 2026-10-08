@@ -205,6 +205,7 @@ export class ArtemisEffectVoices {
     this.open();
     if (!Number.isInteger(now) || now < 0 || now > 0xffffffff)
       throw Error('Invalid Artemis audio clock');
+    for (const effect of [...this.effects.values()]) effect.voice.pump?.();
     for (const effect of [...this.effects.values()])
       for (const [key, job] of [...effect.jobs])
         if (effect.jobs.get(key) === job && job.tick(now)) effect.jobs.delete(key);

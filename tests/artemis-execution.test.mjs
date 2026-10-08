@@ -2784,3 +2784,96 @@ test('Buffered native sound loading resolves codecs and caches complete paired P
     decoder.close();
   }
 });
+
+test('Rolling audio refills the inactive half and preserves native trailing-half completion', async () => {
+  const {ArtemisRollingSoundBuffer} =
+    await import('../dist/engines/artemis/rolling-sound-buffer.js');
+  const {ArtemisWaveSource} = await import('../dist/engines/artemis/wave-source.js');
+  const {encodeWav} = await import('../dist/audio/pcm.js');
+  const {ARTEMIS_3179_EXECUTABLE_SHA256: sha} = await import('../dist/engines/artemis/revision.js');
+  const a = encodeWav({sampleRate: 1000, sampleCount: 1, channels: [Float32Array.from([0.25])]});
+  const source = await ArtemisWaveSource.fromBytes(sha, 'one.wav', a, async () => null);
+  const ring = new ArtemisRollingSoundBuffer(sha, source, 2);
+  assert.equal(ring.halfSize, 4);
+  assert.equal(ring.start(false), true);
+  assert.deepEqual(ring.snapshot().slice(0, 4), new Uint8Array([0, 32, 0, 0]));
+  assert.deepEqual(ring.tick(0), {half: 1, bytes: new Uint8Array(4), stopped: false});
+  assert.equal(ring.tick(0), null);
+  assert.equal(ring.tick(4), null);
+  assert.deepEqual(ring.tick(5), {half: 0, bytes: new Uint8Array(4), stopped: true});
+  assert.equal(ring.playing, false);
+  assert.equal(ring.tick(0), null);
+  const files = new Map([
+    ['loop_a.wav', a],
+    [
+      'loop_b.wav',
+      encodeWav({sampleRate: 1000, sampleCount: 1, channels: [Float32Array.from([-0.25])]}),
+    ],
+  ]);
+  const paired = await ArtemisWaveSource.load(
+    sha,
+    'loop_a.wav',
+    async (path) => files.get(path) ?? null,
+  );
+  const looping = new ArtemisRollingSoundBuffer(sha, paired, 2);
+  assert.equal(looping.start(true), true);
+  assert.deepEqual(looping.snapshot().slice(0, 4), new Uint8Array([0, 32, 0, 224]));
+  assert.deepEqual(looping.tick(0), {
+    half: 1,
+    bytes: new Uint8Array([0, 224, 0, 224]),
+    stopped: false,
+  });
+  assert.deepEqual(looping.tick(5), {
+    half: 0,
+    bytes: new Uint8Array([0, 224, 0, 224]),
+    stopped: false,
+  });
+  looping.stop();
+  assert.equal(looping.tick(0), null);
+  const defaultRing = new ArtemisRollingSoundBuffer(sha, source, 0);
+  assert.equal(defaultRing.halfSize, 4000);
+  assert.throws(() => new ArtemisRollingSoundBuffer(sha, source, -1), /mode/);
+});
+
+test('Device-driven rolling PCM renderer preserves pause, cursor, scheduler refill and native completion', async () => {
+  const {ArtemisRollingAudioProcessor} =
+    await import('../dist/engines/artemis/rolling-audio-processor.js');
+  const {ArtemisWaveSource} = await import('../dist/engines/artemis/wave-source.js');
+  const {encodeWav} = await import('../dist/audio/pcm.js');
+  const {ARTEMIS_3179_EXECUTABLE_SHA256: sha} = await import('../dist/engines/artemis/revision.js');
+  const bytes = encodeWav({
+    sampleRate: 1000,
+    sampleCount: 1,
+    channels: [Float32Array.from([0.25])],
+  });
+  const source = await ArtemisWaveSource.fromBytes(sha, 'voice.wav', bytes, async () => null),
+    events = [];
+  const renderer = new ArtemisRollingAudioProcessor(
+    {hash: sha, resource: source.snapshot(), bufferMode: 2},
+    1000,
+    (event) => events.push(event),
+  );
+  const block = () => [new Float32Array(3), new Float32Array(3)];
+  renderer.receive({id: 1, command: {kind: 'start', loop: false}});
+  const first = block();
+  assert.equal(renderer.render(first), true);
+  assert.deepEqual([...first[0]], [0.25, 0, 0]);
+  assert.deepEqual(first[1], first[0]);
+  renderer.receive({id: 2, command: {kind: 'pause', paused: true}});
+  const paused = block();
+  renderer.render(paused);
+  assert.deepEqual([...paused[0]], [0, 0, 0]);
+  assert.equal(events.at(-1).position, 3);
+  renderer.receive({id: 3, command: {kind: 'pump'}});
+  assert.equal(events.at(-1).finished, true);
+  assert.equal(events.at(-1).playing, false);
+  renderer.receive({id: 4, command: {kind: 'stop'}});
+  assert.equal(events.at(-1).position, 0);
+  assert.equal(events.at(-1).finished, false);
+  renderer.receive({id: 5, command: {kind: 'start', loop: true}});
+  const looped = block();
+  renderer.render(looped);
+  assert.deepEqual([...looped[0]], [0.25, 0.25, 0.25]);
+  renderer.receive({id: 6, command: {kind: 'dispose'}});
+  assert.equal(renderer.render(block()), false);
+});

@@ -1,6 +1,7 @@
 import {artemisRevision} from './revision.js';
 import {artemisPairedSoundPath} from './paired-sound-path.js';
 import type {ArtemisWaveFormat} from './wave-source.js';
+import type {ArtemisPcmResource} from './pcm-resource.js';
 
 export interface ArtemisVorbisBytes {
   readonly sampleRate: number;
@@ -48,6 +49,15 @@ export class ArtemisVorbisSource {
   }
   get loopStartBytes(): number {
     return this.paired ? this.dataSize : 0;
+  }
+  snapshot(): ArtemisPcmResource {
+    return {
+      kind: 'vorbis',
+      format: {...this.format},
+      declaredSize: this.dataSize,
+      bytes: this.pcm.bytes.slice(),
+      paired: this.paired?.snapshot(),
+    };
   }
   static async load(
     hash: string,

@@ -84,10 +84,11 @@ the revision-selected factory installs verified Vorbis-before-WAVE plugins.
 The encoded WAVE owner preserves native headers, paired A/B reads and B-only reset.
 Native PCM16 conversion and buffered=-1 codec services now use actual reusable
 Vorbis/integer-PCM workers. Cached repeat includes the whole A+B clip; progressive
-B-only refill still requires a rolling-buffer owner. The diagnostic supplies
+B-only refill now uses a native two-half ring and actual AudioWorklet voices.
+Engine scheduler ticks pump inactive halves; device callbacks advance the cursor. The diagnostic supplies
 Ogg-only registration and still refuses actual playback.
 
-Build and199 focused tests pass. The full1873-test suite has1836 passes and the
+Build and201 focused tests pass. The full1875-test suite has1838 passes and the
 same37 baseline failures, with no new failing names. Synthetic browser checks
 cover real font/image workers, GPU scenes and sound lookup through actual offline
 WebAudio voices. These checks do not establish production game compatibility.

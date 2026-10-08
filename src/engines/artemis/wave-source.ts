@@ -1,5 +1,6 @@
 import {artemisRevision} from './revision.js';
 import {artemisPairedSoundPath} from './paired-sound-path.js';
+import type {ArtemisPcmResource} from './pcm-resource.js';
 
 export interface ArtemisWaveFormat {
   readonly sampleRate: number;
@@ -80,6 +81,15 @@ export class ArtemisWaveSource {
   }
   get loopStartBytes(): number {
     return this.paired ? this.dataSize : 0;
+  }
+  snapshot(): ArtemisPcmResource {
+    return {
+      kind: 'wave',
+      format: {...this.format},
+      declaredSize: this.dataSize,
+      bytes: this.bytes.slice(this.metadata.dataOffset, this.metadata.dataOffset + this.dataSize),
+      paired: this.paired?.snapshot(),
+    };
   }
   static async load(
     hash: string,
