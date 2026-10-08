@@ -3926,3 +3926,22 @@ test('Native trans commits, starts crossfade/rule tweens, tiles rule images and 
   });
   assert.deepEqual(target.pixels, Uint8Array.of(9, 8, 7, 6));
 });
+
+test('Layer event slots invoke the stored callback functor with the type index and force', async () => {
+  const {ArtemisLayerEventSlots} = await import('../dist/engines/artemis/layer-events.js');
+  const slots = new ArtemisLayerEventSlots();
+  const emitted = [];
+  const sink = {
+    emit: (command, mode, force) => emitted.push([command.args.get('function'), mode, force]),
+  };
+  assert.equal(slots.invoke('click', sink), false);
+  const command = {name: 'lyevent', args: new Map([['function', 'f']])};
+  slots.setCallback(2, {command, penetration: true});
+  assert.equal(slots.invoke('rollout', sink), true);
+  command.args.set('function', 'changed');
+  slots.invoke('rollout', sink);
+  assert.deepEqual(emitted, [
+    ['f', 2, true],
+    ['f', 2, true],
+  ]);
+});

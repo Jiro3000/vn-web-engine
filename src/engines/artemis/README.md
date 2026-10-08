@@ -70,7 +70,10 @@ penetration flag for click/rollover), reset stores an empty callback, enable/dis
 the per-type enable flag (groups reach every child actor). History uses
 `ArtemisLayerCommands` (`erase` = `0x140144960`, `append`, coalescing `record`) unless the
 dispatch is a replay. `ArtemisLayerEventSlots` is actor-owned state that actor copies must
-copy; pointer delivery to the callbacks belongs to the input owner and is not implemented.
+copy. `invoke` calls the stored functor: `ArtemisScriptEvents.emit` (b73e0) with the tag copy,
+the type index as event mode and force set. Pointer hit testing, rollover state and
+penetration belong to the input owner and are not implemented. The probe's
+`--layer-click=<id>` invokes a named layer's click slot at a run mode 3 stop.
 
 `modes.ts` owns skip/auto/autosave command state and emits required status/effect
 callbacks (`0x1400d47b0`, `0x1400d4350`, `0x1400ca3d0`). Scheduler, indicator,

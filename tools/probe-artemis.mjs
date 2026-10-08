@@ -49,6 +49,7 @@ import {BrowserWindowsDynamicLibraryHost} from '../dist/platform/windows-dynamic
 import {ArtemisModes} from '../dist/engines/artemis/modes.js';
 import {ArtemisExec} from '../dist/engines/artemis/exec.js';
 import {ArtemisStop} from '../dist/engines/artemis/stop.js';
+import {createArtemisScriptEvents} from '../dist/engines/artemis/script-events.js';
 import {luaText} from '../dist/core/lua51/runtime.js';
 if (!process.argv[2]) throw new Error('Usage: node tools/probe-artemis.mjs GAME_DIRECTORY');
 const dialogResultArgument = process.argv
@@ -68,6 +69,11 @@ const soundDecode = process.argv.slice(3).includes('--sound-decode');
 const soundRender = process.argv.slice(3).includes('--sound-render');
 const nativeIncludeReporting = process.argv.slice(3).includes('--native-include-reporting');
 const nativeCallLuaReporting = process.argv.slice(3).includes('--native-calllua-reporting');
+// Diagnostic clicks on named layers at a run mode 3 stop, in order; no hit testing.
+const layerClicks = process.argv
+  .slice(3)
+  .filter((arg) => arg.startsWith('--layer-click='))
+  .map((arg) => arg.slice('--layer-click='.length));
 const shaderPresets = process.argv.slice(3).includes('--shader-presets');
 if (shaderPresets && !metadataLayers) throw Error('--shader-presets requires --image-metadata');
 const graphicsFeatureArgument = process.argv
@@ -329,10 +335,12 @@ try {
     resumeMessageState: () => modeEffects.push({resumeMessageState: true}),
   });
   // Run mode 3 has no click/frame owner in this probe: stop pauses at an input boundary.
+  let probeRunMode = 0;
   const stop = new ArtemisStop(modes, save, {
     debugSkipActive: () => false,
     showWaitIndicator: (skip) => modeEffects.push({waitIndicator: skip ? 'skip' : 'message'}),
     enterStopMode: () => {
+      probeRunMode = 3;
       modeEffects.push({runMode: 3, simulation: true});
       script.pause();
       return true;
@@ -712,6 +720,14 @@ try {
         }
       : {}),
   });
+  const scriptEvents = createArtemisScriptEvents(executableSha256, lua, script, {
+    nativeMode: () => probeRunMode,
+    disabled: () => false,
+    latched: () => false,
+    latch: () => {},
+    report: (kind, command, error) =>
+      modeEffects.push({eventError: {kind, name: command.name, error: String(error)}}),
+  });
   let refusal = null;
   try {
     script.load('system/first.iet');
@@ -736,6 +752,13 @@ try {
         probeTick = layerFixture.finishTransition((probeTick + 1) >>> 0 || 1);
         advancedWaits++;
         soundFixture?.advanceToTick?.(probeTick);
+        script.run(1000);
+        continue;
+      }
+      if (layerClicks.length && probeRunMode === 3 && !wait.pending && layerFixture) {
+        const id = layerClicks.shift();
+        modeEffects.push({layerClick: id, simulation: true});
+        layerFixture.invokeLayerEvent(id, 'click', scriptEvents);
         script.run(1000);
         continue;
       }

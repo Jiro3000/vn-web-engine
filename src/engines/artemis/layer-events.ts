@@ -21,6 +21,11 @@ export interface ArtemisLayerEventCallback {
 
 const copyTag = (tag: AsbTag): AsbTag => ({...tag, args: new Map(tag.args)});
 
+/** b73e0 (ArtemisScriptEvents.emit). */
+export interface ArtemisLayerEventSink {
+  emit(command: AsbTag, mode: number, force: boolean): unknown;
+}
+
 /** Per-actor event state of CLayer: six callbacks and enable bytes (+0x280..0x285, all
  * enabled by constructor 0x1400a3640). Actor copies (0x1400a4eb0) copy this state. */
 export class ArtemisLayerEventSlots {
@@ -40,6 +45,15 @@ export class ArtemisLayerEventSlots {
   /** Virtual +0x108. */
   setEnabled(type: number, enabled: boolean): void {
     this.enabled[type] = enabled;
+  }
+  /** The stored functor (f8050/f8210) calls b73e0 with the tag copy, the type index as event
+   * mode and force 1. Empty slots do nothing. Pointer hit testing, enable bytes, rollover
+   * state and penetration belong to the pointer owner that selects the slot. */
+  invoke(type: ArtemisLayerEventType, sink: ArtemisLayerEventSink): boolean {
+    const callback = this.callback(type);
+    if (!callback) return false;
+    sink.emit(callback.command, ARTEMIS_LAYER_EVENT_TYPES.indexOf(type), true);
+    return true;
   }
   copy(): ArtemisLayerEventSlots {
     const copy = new ArtemisLayerEventSlots();

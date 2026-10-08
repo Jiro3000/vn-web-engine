@@ -227,6 +227,13 @@ export function createMetadataLayerFixture(hash, readFile, runMode = null) {
       effects.push({kind: 'messageAttach', id: name, simulation: true});
     },
     detachMessageActor: (name) => layers.detachActor(name),
+    /** Invokes an actor's stored layer event callback; no pointer hit testing is simulated. */
+    invokeLayerEvent: (id, type, sink) => {
+      const actor = layers.scene.entry(id)?.value;
+      if (!actor?.events) throw Error('Probe layer has no events: ' + id);
+      if (!actor.events.isEnabled(type)) throw Error('Probe layer event disabled: ' + id);
+      return actor.events.invoke(type, sink);
+    },
     /** trans runs synchronously except rule loads, which return a promise. */
     dispatchTransition: (tag) => transition.dispatch(tag),
     accepts: (tag) => ['lyc', 'lyprop', 'lydel', 'flip', 'lyevent'].includes(tag.name),
