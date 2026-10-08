@@ -40,6 +40,12 @@ import {
 import {ArtemisCaption} from '../dist/engines/artemis/caption.js';
 import {ArtemisMouse} from '../dist/engines/artemis/mouse.js';
 import {ArtemisSave} from '../dist/engines/artemis/save.js';
+import {
+  ArtemisReadHistory,
+  writeArtemisGlobalArchive,
+  writeArtemisSystemArchive,
+} from '../dist/engines/artemis/global-save.js';
+import {packArtemisSaveFile} from '../dist/formats/artemis/save-file.js';
 import {ArtemisTimedWait} from '../dist/engines/artemis/wait.js';
 import {ArtemisTextControls} from '../dist/engines/artemis/text-controls.js';
 import {ArtemisKeyBindings} from '../dist/engines/artemis/key-bindings.js';
@@ -110,6 +116,8 @@ let layerFixture = null,
   resourceResumptions = 0;
 let probeTick = 1,
   advancedWaits = 0;
+const saveFiles = new Map(),
+  saveWrites = [];
 const installation = await openArtemisInstallation(process.argv[2]);
 let lua, script;
 try {
@@ -308,17 +316,26 @@ try {
       writeVariable: (name, value) => variables.write(name, value),
     },
   );
+  const readHistory = new ArtemisReadHistory();
   const save = new ArtemisSave(variables, {
     beforeScenario: (file) => lua.events.emit('onSave', new Map([['file', file]])),
     reportEventError: (error) => modeEffects.push({saveEventError: String(error)}),
     writeScenario: () => {
       throw new Error('Artemis scenario save serialization is not implemented');
     },
+    // Archives are snapshotted synchronously; SIMULATED storage keeps the packed files in
+    // memory and the loop awaits the pending compression.
     writeGlobal: () => {
-      throw new Error('Artemis global save serialization is not implemented');
+      const archive = writeArtemisGlobalArchive(readHistory, variables);
+      saveWrites.push(
+        packArtemisSaveFile('G', archive).then((file) => saveFiles.set('saveg.dat', file)),
+      );
     },
     writeSystem: () => {
-      throw new Error('Artemis system save serialization is not implemented');
+      const archive = writeArtemisSystemArchive(variables);
+      saveWrites.push(
+        packArtemisSaveFile('X', archive).then((file) => saveFiles.set('system.dat', file)),
+      );
     },
   });
   const wait = new ArtemisTimedWait(modes, save, {
@@ -789,6 +806,7 @@ try {
   } catch (error) {
     refusal = error.message;
   }
+  await Promise.all(saveWrites);
   if (surfaceFixture) {
     try {
       await surfaceFixture.manager.waitForLoads();
@@ -812,6 +830,9 @@ try {
       {
         executableSha256,
         dialogRequests: dialogs,
+        saveFiles: Object.fromEntries(
+          [...saveFiles].map(([name, bytes]) => [name, {bytes: bytes.length}]),
+        ),
         dialogPending: dialog.pending,
         simulatedDialogResult,
         graphicsFeatureLevel:

@@ -77,11 +77,30 @@ export class ArtemisVariables {
     const old = target.get(name);
     if (
       target === this.global &&
-      name.startsWith('sf') &&
+      name.startsWith('g.') &&
       (!old || old.length !== bytes.length || old.some((byte, index) => byte !== bytes[index]))
     )
       this.dirty = true;
     target.set(name, bytes);
+  }
+  /** Save serialization (0x14013ec90): global entries whose name starts with prefix, as
+   * their stored strings. Native order follows MSVC hash iteration; readers do not depend
+   * on it. */
+  globalEntries(prefix: string): [string, Uint8Array][] {
+    return [...this.global]
+      .filter(([name]) => name.startsWith(prefix))
+      .map(([name, value]) => [name, value.slice()]);
+  }
+  /** Save load (0x14013ef10): find-or-insert and the value's string setter, bypassing the
+   * table setter, so the global dirty flag is unchanged. */
+  restore(name: string, value: Uint8Array): void {
+    this.global.set(name, value.slice());
+  }
+  /** Variables virtual +0x38 (0x1400b0bd0), the reset tag tail: every global variable
+   * except g. and s. names is erased. Local scopes are separate and unchanged. */
+  resetScenario(): void {
+    for (const name of [...this.global.keys()])
+      if (!name.startsWith('g.') && !name.startsWith('s.')) this.global.delete(name);
   }
   delete(name: string, local = false): void {
     literal(name);

@@ -808,7 +808,7 @@ test('Stale dialog callbacks cannot complete a subsequent dialog', async () => {
   ]);
 });
 
-test('Native save-gate tracks changed global sf bytes and orders scenario/global/system effects', async () => {
+test('Native save-gate tracks changed global g. bytes and orders scenario/global/system effects', async () => {
   const {ArtemisVariables} = await import('../dist/engines/artemis/variables.js');
   const {ArtemisSave} = await import('../dist/engines/artemis/save.js');
   const variables = new ArtemisVariables(),
@@ -822,7 +822,7 @@ test('Native save-gate tracks changed global sf bytes and orders scenario/global
   });
   assert.equal(save.request(''), false);
   assert.deepEqual(calls, []);
-  variables.write('sf.flag', Uint8Array.of(0, 255));
+  variables.write('g.flag', Uint8Array.of(0, 255));
   assert.equal(variables.globalDirty, true);
   save.request('slot.dat', true);
   assert.deepEqual(calls, [
@@ -833,15 +833,17 @@ test('Native save-gate tracks changed global sf bytes and orders scenario/global
   ]);
   assert.equal(variables.globalDirty, false);
   calls.length = 0;
-  variables.write('sf.flag', Uint8Array.of(0, 255));
+  variables.write('g.flag', Uint8Array.of(0, 255));
   assert.equal(variables.globalDirty, false);
   variables.pushLocal();
-  variables.write('sf.flag', 'local', true);
+  variables.write('g.flag', 'local', true);
   assert.equal(variables.globalDirty, false);
   variables.popLocal();
-  variables.delete('sf.flag');
+  variables.delete('g.flag');
   assert.equal(variables.globalDirty, false);
   variables.write('sf', '');
+  assert.equal(variables.globalDirty, false);
+  variables.write('g.', '');
   assert.equal(variables.globalDirty, true);
   save.request('');
   assert.deepEqual(calls, ['global', 'system']);
@@ -953,7 +955,7 @@ test('Save callback errors are reported before native save continues, and dirty 
   const {ArtemisSave} = await import('../dist/engines/artemis/save.js');
   const {ArtemisVariables} = await import('../dist/engines/artemis/variables.js');
   const variables = new ArtemisVariables();
-  variables.write('sf.dirty', '1');
+  variables.write('g.dirty', '1');
   const calls = [];
   const save = new ArtemisSave(variables, {
     beforeScenario: () => {
@@ -971,18 +973,18 @@ test('Save callback errors are reported before native save continues, and dirty 
   assert.deepEqual(calls, ['callback', 'scenario', 'global']);
 });
 
-test('Lua literal expression lookup creates absent zero variables and participates in sf dirty tracking', async () => {
+test('Lua literal expression lookup creates absent zero variables and participates in g. dirty tracking', async () => {
   const {ArtemisVariables} = await import('../dist/engines/artemis/variables.js');
   const variables = new ArtemisVariables();
-  assert.equal(variables.read('g.config').length, 0);
-  assert.equal(luaText(variables.queryLiteral('g.config')), '0');
-  assert.equal(luaText(variables.read('g.config')), '0');
+  assert.equal(variables.read('f.config').length, 0);
+  assert.equal(luaText(variables.queryLiteral('f.config')), '0');
+  assert.equal(luaText(variables.read('f.config')), '0');
   assert.equal(variables.globalDirty, false);
   variables.pushLocal();
-  variables.write('g.config', 'local', true);
-  assert.equal(luaText(variables.queryLiteral('g.config')), 'local');
+  variables.write('f.config', 'local', true);
+  assert.equal(luaText(variables.queryLiteral('f.config')), 'local');
   variables.popLocal();
-  assert.equal(luaText(variables.queryLiteral('sf.new')), '0');
+  assert.equal(luaText(variables.queryLiteral('g.new')), '0');
   assert.equal(variables.globalDirty, true);
   assert.throws(() => variables.queryLiteral('s.unsupported'), /Unsupported/);
 });
@@ -4587,4 +4589,64 @@ test('Native push handlers deliver slot 0 then slot 1 in key order until a comma
     (command) => (seen.push(command.args.get('key')), false),
   );
   assert.deepEqual(seen, ['2']);
+});
+
+test('Global and system saves round-trip through native BOW archives and reset keeps g./s. variables', async () => {
+  const {ArtemisVariables} = await import('../dist/engines/artemis/variables.js');
+  const {
+    ArtemisReadHistory,
+    readArtemisSaveArchive,
+    writeArtemisGlobalArchive,
+    writeArtemisSystemArchive,
+  } = await import('../dist/engines/artemis/global-save.js');
+  const {packArtemisSaveFile, unpackArtemisSaveFile, ArtemisSaveArchiveReader} =
+    await import('../dist/formats/artemis/save-file.js');
+  const variables = new ArtemisVariables();
+  variables.write('g.clear', Uint8Array.of(0xe3, 0x81, 0x82));
+  variables.write('s.bgmvol', '800');
+  variables.write('f.scene', '1');
+  const history = new ArtemisReadHistory();
+  history.add('script/a.ast', 3);
+  history.add('script/a.ast', 7);
+  const global = writeArtemisGlobalArchive(history, variables);
+  const view = new DataView(global.buffer);
+  // Section 1 at 0: one file entry; section 2 follows; the scope table closes the archive.
+  assert.equal(view.getUint32(0, true), 1);
+  const table = view.getUint32(global.length - 4, true);
+  assert.deepEqual(
+    [...Array(7)].map((_, index) => view.getUint32(table + index * 4, true)),
+    [1, 0, 2, 1, 0, 2, 4 + 4 + 12 + 4 + 8],
+  );
+  const file = await packArtemisSaveFile('G', global);
+  assert.deepEqual([...file.subarray(0, 4)], [0x42, 0x4f, 0x57, 0x47]);
+  assert.equal(new DataView(file.buffer).getUint32(4, true), 1003);
+  assert.equal(new DataView(file.buffer).getUint32(8, true), global.length);
+  const unpacked = await unpackArtemisSaveFile(file);
+  assert.deepEqual(unpacked.archive, global);
+  const system = await unpackArtemisSaveFile(
+    await packArtemisSaveFile('X', writeArtemisSystemArchive(variables)),
+  );
+  assert.equal(system.kind, 'X');
+  assert.equal(new ArtemisSaveArchiveReader(system.archive).seek(2), false);
+
+  const loaded = new ArtemisVariables();
+  const loadedHistory = new ArtemisReadHistory();
+  loadedHistory.add('stale', 1);
+  readArtemisSaveArchive(unpacked, loadedHistory, loaded);
+  readArtemisSaveArchive(system, loadedHistory, loaded);
+  assert.deepEqual(loadedHistory.entries(), [['script/a.ast', [3, 7]]]);
+  assert.deepEqual([...loaded.read('g.clear')], [0xe3, 0x81, 0x82]);
+  assert.equal(new TextDecoder().decode(loaded.read('s.bgmvol')), '800');
+  assert.equal(loaded.lookup('f.scene'), undefined);
+  assert.equal(loaded.globalDirty, false);
+  assert.equal(
+    await unpackArtemisSaveFile(Uint8Array.of(0x42, 0x4f, 0x57, 0x47, 0, 0, 0, 0)),
+    null,
+  );
+  assert.equal(await unpackArtemisSaveFile(file.subarray(0, 7)), null);
+
+  variables.resetScenario();
+  assert.equal(variables.lookup('f.scene'), undefined);
+  assert.notEqual(variables.lookup('g.clear'), undefined);
+  assert.notEqual(variables.lookup('s.bgmvol'), undefined);
 });

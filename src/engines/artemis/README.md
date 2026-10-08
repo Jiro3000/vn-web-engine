@@ -43,7 +43,10 @@ not a separately invented AST VM.
 before globals (`0x1400b0880`). An exact delete removes only that key; otherwise
 it removes keys starting with the name plus a dot (`0x1400af990`). Expressions,
 empty-name global clears and complete system-variable initialization remain incomplete.
-Global sf-prefix writes track changes in bytes; deletion preserves the native dirty-flag quirk.
+Writes to names starting with `g.` mark the global state dirty (`0x1400b0940`/`0x1400b0a00`;
+string writes only on change); deletion preserves the native dirty-flag quirk. `restore`
+sets values without dirtying (save load) and `resetScenario` keeps only `g.`/`s.` names
+(`0x1400b0bd0`, reset tail).
 Literal Lua queries create missing variables as integer zero (0x140157fa0),
 while raw map reads preserve empty absence. Other expressions remain unsupported. Stage-size queries require a configuration/rendering provider.
 `revision.ts` initializes the confirmed static boot variables only after exact
@@ -151,8 +154,14 @@ scenario, media and click-to-skip remain explicitly unsupported.
 performs no writes. A nonempty filename emits onSave before the scenario snapshot;
 callback errors are reported and disable the callback before native save continues.
 Dirty/forced global saves write global state, clear dirty, then write system state.
-Actual serialization and persistence are required host effects and are not implemented
-by this gate. No JSON replacement for native save formats is provided.
+Persistence is a host effect.
+
+`src/formats/artemis/save-file.ts` reads and writes the native `BOW` container
+(`0x14013f940`/`0x14013fde0`: kind `G`/`X`/`S`, version 1003, zlib archive; 1001 raw
+archives load, 1000 legacy archives are rejected) and the sectioned archive with its
+trailing scope table. `global-save.ts` serializes `saveg.dat` (section 1 read history,
+section 2 `g.` variables) and `system.dat` (section 1 `s.` variables) and loads them
+without dirtying variables. Scenario (`S`) saves are not implemented.
 
 Probe `--advance-waits` advances its simulated clock beyond each timed deadline,
 up to 100 waits. It is separate from actual user input and production scheduling.
