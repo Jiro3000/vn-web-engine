@@ -35,6 +35,7 @@ export function createArtemisOfflineSoundFixture(hash, readFile) {
         throw Error('Probe offline PCM frame budget exceeded');
       lastTick = (lastTick + milliseconds) >>> 0;
       owner.effects.tick(lastTick);
+      owner.music.tick(lastTick);
       const output = owner.render(frames);
       output.forEach((plane, channel) => {
         outputHashes[channel].update(
@@ -58,6 +59,17 @@ export function createArtemisOfflineSoundFixture(hash, readFile) {
     setEffectPan: (index, pan, time) => owner.effects.setEffectPan(index, pan, time),
     startEffect: (index, time, loop) => owner.effects.startEffect(index, time, loop),
     setFinishCallback: (index, callback) => owner.effects.setFinishCallback(index, callback),
+    prepareMusic: async (file, bufferMode) => {
+      const index = await owner.music.prepareEffect(file, bufferMode);
+      samples.push({music: true, file, bufferMode, index});
+      return index;
+    },
+    discardPreparedMusic: (index) => owner.music.discardPreparedEffect(index),
+    stopMusic: (index, time) => owner.music.stopEffect(index, time),
+    setMusicGain: (index, scope, gain, time) => owner.music.setEffectGain(index, scope, gain, time),
+    setMusicPan: (index, pan, time) => owner.music.setEffectPan(index, pan, time),
+    startMusic: (index, time, loop) => owner.music.startEffect(index, time, loop),
+    setMusicFinishCallback: (index, callback) => owner.music.setFinishCallback(index, callback),
     advanceToTick,
     summary: () => ({
       soundDecode: 'actual-codec-native-PCM16',
@@ -72,6 +84,7 @@ export function createArtemisOfflineSoundFixture(hash, readFile) {
       peak,
       pcmSha256: outputHashes.map((hash) => hash.copy().digest('hex')),
       retainedSounds: owner.effects.count,
+      retainedMusic: owner.music.count,
       files,
       samples,
     }),

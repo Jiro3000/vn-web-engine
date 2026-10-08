@@ -7,6 +7,7 @@ import {createArtemisOfflineSoundFixture} from './artemis-offline-sound-fixture.
 import {createArtemisSoundDecodeFixture} from './artemis-sound-decode-fixture.mjs';
 import {ArtemisSoundFinish} from '../dist/engines/artemis/sound-finish.js';
 import {ArtemisSePlay} from '../dist/engines/artemis/se-play.js';
+import {ArtemisMusic} from '../dist/engines/artemis/music.js';
 import {ArtemisSeStop} from '../dist/engines/artemis/se-stop.js';
 import {ArtemisPrint} from '../dist/engines/artemis/print.js';
 import {ArtemisRuby} from '../dist/engines/artemis/ruby.js';
@@ -241,12 +242,10 @@ try {
   const soundFinish = soundRender
     ? new ArtemisSoundFinish(executableSha256, {
         currentFile: () => script.currentFile,
-        musicIndex: () => 0, // Actual empty diagnostic music slot; no music command accepted.
+        musicIndex: () => music.currentIndex,
         effectIndex: (id) => effectSlots.get(id),
         setEffectFinish: (index, callback) => soundFixture.setFinishCallback(index, callback),
-        setMusicFinish: (index) => {
-          if (index !== 0) throw Error('Unsupported diagnostic music callback owner');
-        },
+        setMusicFinish: (index, callback) => soundFixture.setMusicFinishCallback(index, callback),
         emit: (command) => {
           modeEffects.push({
             soundFinishCommand: {name: command.name, args: Object.fromEntries(command.args)},
@@ -277,6 +276,16 @@ try {
       replaceEffectHistory: (id, tag) => effectHistory.set(id, tag),
       effectLoadFailed: () => {
         throw Error('Artemis actual sound load failed');
+      },
+    });
+  // BGM manager script +0x3d60 over the same non-device PCM owner (--sound-render only).
+  const music =
+    soundFixture?.prepareMusic &&
+    new ArtemisMusic(executableSha256, {
+      debugSkipActive: () => false,
+      ...soundFixture,
+      musicLoadFailed: () => {
+        throw Error('Artemis actual music load failed');
       },
     });
   const exec = new ArtemisExec(modes, {
@@ -684,6 +693,15 @@ try {
     if (reset.dispatch(tag)) return;
     if (save.dispatch(tag)) return;
     if (clickGlyphs.dispatch(tag)) return;
+    if (music) {
+      const result = music.dispatch(tag);
+      if (result === true) return;
+      if (result) {
+        if (pendingResource) throw Error('Probe sound resource operation overlaps');
+        pendingResource = result;
+        return 'suspended';
+      }
+    }
     if (sePlay && ['seplay', 'sefadein'].includes(tag.name)) {
       if (pendingResource) throw Error('Probe sound resource operation overlaps');
       pendingResource = sePlay.dispatch(tag);
@@ -694,6 +712,14 @@ try {
   lua = new ArtemisLua({
     ...(surfaceFixture
       ? {
+          bindSurface: (name) => {
+            if (pendingResource) throw Error('Probe surface resource operation overlaps');
+            // Foreground load; the returned lease is released at once (native 0x140134180).
+            pendingResource = surfaceFixture.manager
+              .load(name)
+              .then((image) => image?.lease?.release());
+            return 'suspended';
+          },
           bindSurfaceAsync: (name) => surfaceFixture.manager.bindSurfaceAsync(name),
           unbindSurface: (name) => surfaceFixture.manager.unbindSurface(name),
           clearSurfaceLoadQueue: () => surfaceFixture.manager.clearSurfaceLoadQueue(),
@@ -731,6 +757,7 @@ try {
     tag: (tag) => script.executeTag(tag),
     enqueueTag: (tag) => script.enqueue(tag),
     variable: (name) => variables.queryLiteral(name),
+    scriptStack: () => script.stack(),
   });
   let compiled = 0;
   for (const [path, bytes] of prepared)
@@ -790,6 +817,11 @@ try {
     // New music/effect managers: every effect voice stops and the id map empties.
     for (const index of new Set(effectSlots.values())) soundFixture?.stopEffect(index, 0);
     effectSlots.clear();
+    if (music) {
+      soundFixture.stopMusic(music.currentIndex, 0);
+      soundFixture.stopMusic(music.fadingIndex, 0);
+      music.reset();
+    }
     lua.events.clear();
     layerFixture?.reset();
     messageStage?.reset();
@@ -802,6 +834,7 @@ try {
     applyVolumes: (music, effect) => modeEffects.push({volumes: {music, effect}, simulation: true}),
     resetSaveObject: () => {
       effectHistory.clear();
+      music?.clearHistory();
       textHistory.clear();
       savedFonts.clear();
       remembered.clear();

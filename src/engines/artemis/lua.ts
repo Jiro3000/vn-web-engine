@@ -34,6 +34,9 @@ export interface ArtemisLuaHost {
   setMagicPath?(name: string, root: string): void;
   setTouchLimit?(limit: number): void;
   pointerPosition?: PointerPositionHost;
+  /** 0x140134180: the manager's ordinary foreground load (virtual +8) whose lease is dropped
+   * at once. A pending decode suspends the calling coroutine like a resource tag. */
+  bindSurface?(path: string): void | 'suspended';
   /** Actual native mode1 preload request owner; call returns without waiting for decode. */
   bindSurfaceAsync?(path: string): void;
   /** Cancel a queued binding or release a completed named native binding. */
@@ -41,6 +44,7 @@ export interface ArtemisLuaHost {
   clearSurfaceLoadQueue?(): void;
   /** Missing/non-string Lua argument queries the whole queue; a string queries its name. */
   isLoadingSurface?(path?: string): boolean;
+  scriptStack?(): readonly import('./script.js').ArtemisScriptStackFrame[];
 }
 
 /** Rev.3179 CLua's confirmed byte-string and tag bridge. Unbound methods fail. */
@@ -109,6 +113,18 @@ export class ArtemisLua {
         host.setTouchLimit!(Math.trunc(number));
         return [];
       });
+    if (host.bindSurface)
+      this.vm.bind('bindSurface', (args) => {
+        const value = args[0];
+        if (!(value instanceof Uint8Array)) throw Error('Expected Artemis surface name string');
+        const nul = value.indexOf(0);
+        if (host.bindSurface!(luaText(nul < 0 ? value : value.subarray(0, nul))) === 'suspended') {
+          if (!host.suspendableTags)
+            throw new Error('Artemis surface load suspension requires a coroutine owner');
+          return [true];
+        }
+        return [];
+      });
     if (host.bindSurfaceAsync)
       this.vm.bind('bindSurfaceAsync', (args) => {
         const value = args[0];
@@ -141,6 +157,38 @@ export class ArtemisLua {
         const loading = host.isLoadingSurface!(path);
         if (typeof loading !== 'boolean') throw Error('Expected Artemis surface loading boolean');
         return [loading];
+      });
+    if (host.scriptStack)
+      // 0x1401318a0: {file, index, reservedCommands = {[n] = {command, line, parameter}}} per
+      // caret; byte strings keep exact tag argument bytes.
+      this.vm.bind('getScriptStack', () => {
+        const encoder = new TextEncoder(),
+          stack: LuaTable = new Map();
+        host.scriptStack!().forEach((frame, position) => {
+          const commands: LuaTable = new Map();
+          frame.commands.forEach((tag, offset) => {
+            const parameter: LuaTable = new Map();
+            for (const [key, value] of tag.args)
+              parameter.set(key, tag.bytes?.get(key) ?? encoder.encode(value));
+            commands.set(
+              frame.firstCommand + offset,
+              new Map<string, LuaValue>([
+                ['command', encoder.encode(tag.name)],
+                ['line', tag.sourceLine],
+                ['parameter', parameter],
+              ]),
+            );
+          });
+          stack.set(
+            position + 1,
+            new Map<string, LuaValue>([
+              ['file', encoder.encode(frame.file)],
+              ['index', frame.index],
+              ['reservedCommands', commands],
+            ]),
+          );
+        });
+        return [stack];
       });
     if (host.pointerPosition)
       this.vm.bind('getMousePoint', () => {
@@ -204,6 +252,17 @@ export class ArtemisLua {
             if ok == false then resourceFailure(self, message) end
           end
         end
+      ${
+        host.bindSurface
+          ? `local nativeBindSurface = engine.bindSurface
+        engine.bindSurface = function(self, name)
+          if nativeBindSurface(self, name) then
+            local ok, message = coroutine.yield()
+            if ok == false then resourceFailure(self, message) end
+          end
+        end`
+          : ''
+      }
       `),
         '@artemis/suspendable-tag',
       );

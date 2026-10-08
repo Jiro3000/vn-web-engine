@@ -31,6 +31,14 @@ exit/save handling belong to the host. End of a called script returns to its
 caller. A host provides waits, stop effects, rendering and all remaining services.
 `run(maxSteps)` bounds dispatch; it does not schedule a browser frame.
 
+The tag queue belongs to the current caret (script +0xb68, queue at +0xbe8). A transfer
+(b6520 → b8090) installs a fresh caret, so `jump` drops pending queued tags. `call` and
+handler-only event scopes push the caret with its remaining queue (eb990), and `return`
+restores both (c6580). `stack()` is the source of Lua `getScriptStack` (0x1401318a0):
+saved carets oldest first, then the current one. Each frame is `{file, index,
+reservedCommands}`; each command is `{command, line, parameter}`. Saved frames number commands
+from 1 and the current frame from 0.
+
 `lua.ts` connects shared Lua 5.1 to include, file reads/existence, now, tag,
 enqueueTag, literal variables and live tag filters. Direct/queued Lua tags have
 source line -1 and bypass the script tag filter (`0x14012ca50`). Lua tables holding
@@ -894,6 +902,11 @@ a boolean for a string name or the whole queue for any non-string argument.
 Their hosts must own the real queue and binding lifetimes. Native loading needs
 FIFO preload jobs, prepared surfaces, promotion/wait behavior and cancellation.
 
+`bindSurface` (0x140134180) takes only a string, truncated at NUL. It performs an ordinary
+surface load through the manager's virtual +8 and releases the returned lease immediately. A
+non-string argument is an error. When the host reports the load as suspended, the Lua
+coroutine yields like a suspended tag; without a coroutine owner the call fails.
+
 Message-store/display wiring, links, text effects, vertical rotation and production
 player integration remain separate work; diagnostic progression is not gameplay.
 
@@ -1094,6 +1107,25 @@ Without `rplayer`, the read-ahead glyph copies the layer flag, name and position
 the layer set's virtual +0xf0 (0x1400a4970), which clears layer byte +0x16c. `homing="0"`
 clears homing; any other value sets it. Rendering the glyph during click waits is not
 implemented.
+
+`music.ts` holds the BGM commands on the music manager (script +0x3d60):
+
+| Tag                 | Handler |
+| ------------------- | ------- |
+| `splay`, `sfadein`  | e2390   |
+| `sxfade`            | e29e0   |
+| `sstop`, `sfadeout` | e28a0   |
+| `sfade`             | e2f00   |
+| `span`              | e3140   |
+
+The current slot is +0x3d70. `sxfade` moves it to the fading slot +0x3d74 and fades that
+slot out over `time` after the new file loads. Other plays stop both slots first. Only an
+exact `loop="0"` plays once. A failed load leaves slot 0 and reports through the host.
+Debug skip (+0x3520) bypasses audio for `splay`/`sxfade` but still records history.
+
+Replay history is the save object's loop flag (+0x88) and copied tag (+0x90). `sfade` and
+`span` read `gain`/`pan` through `operator[]`, so an absent value is atoi 0, and they write
+that value into the stored tag. `sstop` clears the loop flag. Replayed commands record nothing.
 
 Graphics feature level is published only through an explicit revision-selected
 owner callback. `--graphics-feature-level=NUMBER` is an optional simulated diagnostic

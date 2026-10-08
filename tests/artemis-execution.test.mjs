@@ -488,6 +488,79 @@ test('Queued tags retain a copy and run before the next script command, across A
   }
 });
 
+test('Each caret keeps its own tag queue; getScriptStack reports saved carets then the current one', () => {
+  const sources = new Map([
+    [
+      'boot',
+      bytes(
+        `[lua]\nfunction setup(e) e:enqueueTag{'call',file='sub'}; e:enqueueTag{'pending',x='1'} end\nfunction grab(e) e:enqueueTag{'cur',y='2'}; local s = e:getScriptStack(); local out = {} for _, f in ipairs(s) do local c = {} for k, v in pairs(f.reservedCommands) do c[#c+1] = k..'='..v.command..':'..v.line..':'..tostring(v.parameter.x or v.parameter.y) end table.sort(c); out[#out+1] = f.file..'@'..f.index..'['..table.concat(c, ',')..']' end frames = table.concat(out, ' | ') end\n[/lua]\n[calllua function="setup"][last][stop]`,
+      ),
+    ],
+    ['sub', bytes('[calllua function="grab"][inside]')],
+  ]);
+  let script;
+  const events = [];
+  const readFile = (p) => sources.get(p) ?? null;
+  const lua = new ArtemisLua({
+    readFile,
+    fileExists: (p) => sources.has(p),
+    now: () => 0,
+    tag: () => {},
+    enqueueTag: (t) => script.enqueue(t),
+    variable: () => '',
+    scriptStack: () => script.stack(),
+  });
+  try {
+    script = new ArtemisScript(lua, {
+      readFile,
+      dispatch: (tag) => {
+        events.push(tag.name);
+        if (tag.name === 'stop') return 'stopped';
+      },
+      pushLocal: () => {},
+      popLocal: () => {},
+    });
+    script.load('boot');
+    assert.equal(script.run(), 'stopped');
+    // The queued call saves the remaining queue with its caret; return restores it.
+    assert.deepEqual(events, ['cur', 'inside', 'pending', 'last', 'stop']);
+    assert.equal(luaText(lua.vm.getGlobal('frames')), 'boot@2[1=pending:-1:1] | sub@1[0=cur:-1:2]');
+    script.enqueue({kind: 'tag', name: 'dropped', args: new Map(), sourceLine: -1});
+    script.jump('sub');
+    assert.equal(script.queuedTags, 0);
+  } finally {
+    lua.close();
+  }
+});
+
+test('Artemis Lua bindSurface accepts only strings, truncates at NUL and suspends with an owner', async () => {
+  const {ArtemisLua} = await import('../dist/engines/artemis/lua.js');
+  const names = [];
+  let suspend = false;
+  const host = {
+    readFile: () => null,
+    fileExists: () => false,
+    now: () => 0,
+    tag: () => {},
+    enqueueTag: () => {},
+    variable: () => '',
+    bindSurface: (name) => {
+      names.push(name);
+      return suspend ? 'suspended' : undefined;
+    },
+  };
+  const lua = new ArtemisLua(host);
+  try {
+    lua.vm.execute(bytes('engine:bindSurface("雪.png\\000ignored")'));
+    assert.deepEqual(names, ['雪.png']);
+    assert.throws(() => lua.vm.execute(bytes('engine:bindSurface(12)')), /surface name string/);
+    suspend = true;
+    assert.throws(() => lua.vm.execute(bytes('engine:bindSurface("a")')), /coroutine owner/);
+  } finally {
+    lua.close();
+  }
+});
+
 test('Literal variables preserve bytes and current-local scope; delete exact key precedes dotted descendants', async () => {
   const {ArtemisVariables} = await import('../dist/engines/artemis/variables.js');
   const variables = new ArtemisVariables();
@@ -3852,7 +3925,7 @@ test('Native script event producer preserves deferred copies, force/latch rules 
 test('Default event handlers use a fresh local scope and filtered priority tag, then restore a waiting script', async () => {
   const {ArtemisScriptEvents} = await import('../dist/engines/artemis/script-events.js');
   const {ArtemisVariables} = await import('../dist/engines/artemis/variables.js');
-  const source = bytes('[wait]\n[mark phase=after]\n[return]'),
+  const source = bytes('[wait]\n[mark phase=after]\n[wait]\n[mark phase=end]\n[return]'),
     vars = new ArtemisVariables();
   vars.pushLocal();
   vars.write('local', 'outer', true);
@@ -3929,6 +4002,30 @@ test('Default event handlers use a fresh local scope and filtered priority tag, 
   script.resume();
   script.step();
   assert.deepEqual(marks.at(-1), ['after', 'outer']);
+  assert.equal(script.step(), 'waiting');
+  // Sound/music frame ticks dispatch the event before the wait deadline ends the wait in the
+  // same frame: the interrupted cursor resumes ready once the handler returns.
+  events.emit(
+    {
+      kind: 'tag',
+      name: 'setonsoundfinish',
+      sourceLine: -1,
+      args: new Map([
+        ['handler', 'callback'],
+        ['id', 'same-frame'],
+      ]),
+    },
+    0,
+    true,
+  );
+  script.resume();
+  assert.equal(script.step(), 'ready');
+  assert.deepEqual(marks.at(-1), ['same-frame', '']);
+  assert.equal(script.step(), 'ready');
+  assert.equal(script.currentFile, 'main.iet');
+  script.step();
+  assert.deepEqual(marks.at(-1), ['end', 'handler']);
+  assert.throws(() => new ArtemisScript(lua, {readFile: () => null}).resume(), /not waiting/);
   lua.close();
 });
 
@@ -4927,4 +5024,116 @@ test('s.clickskip has no startup value and queries create it as integer zero', a
     () => variables.queryLiteral('s.unknown'),
     /Unsupported native Artemis variable s\.unknown/,
   );
+});
+
+test('Music commands follow native splay/sxfade/sstop/sfade/span order, slots and replay history', async () => {
+  const {ArtemisMusic} = await import('../dist/engines/artemis/music.js');
+  const calls = [];
+  let next = 1,
+    debugSkip = false;
+  const music = new ArtemisMusic(
+    '8953562b80608046662bd8c89015d04236b0ba3afee10c36469c11403de3ebaf',
+    {
+      debugSkipActive: () => debugSkip,
+      stopMusic: (...a) => calls.push(['stop', ...a]),
+      prepareMusic: async (file, buffer) => {
+        calls.push(['prepare', file, buffer]);
+        return file === 'missing' ? 0 : next++;
+      },
+      discardPreparedMusic: (i) => calls.push(['discard', i]),
+      setMusicGain: (...a) => calls.push(['gain', ...a]),
+      setMusicPan: (...a) => calls.push(['pan', ...a]),
+      startMusic: (...a) => calls.push(['start', ...a]),
+      musicLoadFailed: (tag) => calls.push(['failed', tag.args.get('file')]),
+    },
+  );
+  const tag = (name, args) => ({kind: 'tag', name, sourceLine: 1, args: new Map(args)});
+  // Absent loop loops; only an exact "0" plays once.
+  assert.equal(
+    await music.dispatch(
+      tag('splay', [
+        ['file', 'a'],
+        ['gain', '500'],
+        ['pan', '-3'],
+        ['time', '200'],
+        ['buffer', '2'],
+      ]),
+    ),
+    true,
+  );
+  assert.deepEqual(calls.splice(0), [
+    ['stop', 0, 0],
+    ['stop', 0, 0],
+    ['prepare', 'a', 2],
+    ['gain', 1, 0, 500, 0],
+    ['pan', 1, -3, 0],
+    ['start', 1, 200, true],
+  ]);
+  assert.equal(music.currentIndex, 1);
+  assert.equal(music.history.playing, true);
+  assert.equal(music.history.tag.args.get('file'), 'a');
+  // sfade inserts an empty gain (atoi 0) and rewrites the stored tag's gain.
+  assert.equal(music.dispatch(tag('sfade', [['time', '30']])), true);
+  assert.deepEqual(calls.splice(0), [['gain', 1, 0, 0, 30]]);
+  assert.equal(music.history.tag.args.get('gain'), '');
+  // span pans the current slot over time and rewrites the stored tag's pan.
+  assert.equal(
+    music.dispatch(
+      tag('span', [
+        ['pan', '7'],
+        ['time', '40'],
+      ]),
+    ),
+    true,
+  );
+  assert.equal(music.dispatch(tag('span', []), false), true);
+  assert.deepEqual(calls.splice(0), [
+    ['pan', 1, 7, 40],
+    ['pan', 1, 0, 0],
+  ]);
+  assert.equal(music.history.tag.args.get('pan'), '7');
+  // sxfade fades the old slot out over time after loading the new one.
+  await music.dispatch(
+    tag('sxfade', [
+      ['file', 'b'],
+      ['time', '100'],
+      ['loop', '0'],
+    ]),
+  );
+  assert.deepEqual(calls.splice(0), [
+    ['stop', 0, 0],
+    ['prepare', 'b', 0],
+    ['stop', 1, 100],
+    ['start', 2, 100, false],
+  ]);
+  assert.deepEqual([music.currentIndex, music.fadingIndex], [2, 1]);
+  assert.equal(music.history.playing, false);
+  assert.equal(music.history.tag.args.get('file'), 'a');
+  // A failed load leaves slot 0, reports and records no history.
+  await music.dispatch(tag('sfadein', [['file', 'missing']]));
+  assert.deepEqual(calls.splice(0), [
+    ['stop', 2, 0],
+    ['stop', 1, 0],
+    ['prepare', 'missing', 0],
+    ['failed', 'missing'],
+  ]);
+  assert.deepEqual([music.currentIndex, music.fadingIndex], [0, 0]);
+  assert.equal(music.history.playing, false);
+  // Debug skip bypasses audio but records history; replay records nothing.
+  debugSkip = true;
+  await music.dispatch(tag('splay', [['file', 'c']]));
+  assert.deepEqual(calls.splice(0), []);
+  assert.equal(music.history.playing, true);
+  assert.equal(music.history.tag.args.get('file'), 'c');
+  assert.equal(music.dispatch(tag('sstop', []), false), true);
+  assert.equal(music.history.playing, true);
+  assert.equal(music.dispatch(tag('sfadeout', [['time', '9']])), true);
+  assert.deepEqual(calls.splice(0), [
+    ['stop', 0, 0],
+    ['stop', 0, 9],
+  ]);
+  assert.equal(music.history.playing, false);
+  assert.equal(music.dispatch(tag('seplay', [])), false);
+  music.clearHistory();
+  assert.deepEqual([music.history.playing, music.history.tag.args.size], [false, 0]);
 });

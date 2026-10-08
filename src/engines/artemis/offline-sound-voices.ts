@@ -112,7 +112,13 @@ export function createArtemisOfflineSoundVoices(
   readFile: (path: string) => Promise<Uint8Array | null>,
   rounding: SseRounding,
   outputRate: number,
-): {effects: ArtemisEffectVoices; render(frames: number): Float32Array[]; close(): void} {
+): {
+  effects: ArtemisEffectVoices;
+  /** Separate BGM manager (script +0x3d60); voices share the output mix. */
+  music: ArtemisEffectVoices;
+  render(frames: number): Float32Array[];
+  close(): void;
+} {
   artemisRevision(hash);
   if (!Number.isInteger(outputRate) || outputRate <= 0)
     throw Error('Invalid offline output sample rate');
@@ -125,33 +131,34 @@ export function createArtemisOfflineSoundVoices(
       wave: (bytes, _mode, path) => ArtemisWaveSource.fromBytes(hash, path, bytes, readFile),
     });
   let closed = false;
-  const effects = new ArtemisEffectVoices(hash, {
-    prepareVoice: async (file, bufferMode) => {
-      let voice: RenderVoice;
-      if (bufferMode === -1) {
-        const clip = await cached.decode(file, bufferMode);
-        if (!clip) return null;
-        voice = new PcmClipRenderer(clip, outputRate);
-      } else {
-        const source = await loader.load(file, bufferMode);
-        if (!source) return null;
-        voice = rollingVoice(hash, source.sound.snapshot(), bufferMode, outputRate);
-      }
-      if (closed) {
-        voice.dispose();
-        throw Error('Offline sound owner closed during preparation');
-      }
-      const dispose = voice.dispose.bind(voice);
-      voice.dispose = () => {
-        dispose();
-        voices.delete(voice);
-      };
-      voices.add(voice);
-      return voice;
-    },
-  });
+  const prepareVoice = async (file: string, bufferMode: number): Promise<RenderVoice | null> => {
+    let voice: RenderVoice;
+    if (bufferMode === -1) {
+      const clip = await cached.decode(file, bufferMode);
+      if (!clip) return null;
+      voice = new PcmClipRenderer(clip, outputRate);
+    } else {
+      const source = await loader.load(file, bufferMode);
+      if (!source) return null;
+      voice = rollingVoice(hash, source.sound.snapshot(), bufferMode, outputRate);
+    }
+    if (closed) {
+      voice.dispose();
+      throw Error('Offline sound owner closed during preparation');
+    }
+    const dispose = voice.dispose.bind(voice);
+    voice.dispose = () => {
+      dispose();
+      voices.delete(voice);
+    };
+    voices.add(voice);
+    return voice;
+  };
+  const effects = new ArtemisEffectVoices(hash, {prepareVoice}),
+    music = new ArtemisEffectVoices(hash, {prepareVoice});
   return {
     effects,
+    music,
     render: (frames) => {
       if (closed) throw Error('Offline sound owner closed');
       if (!Number.isInteger(frames) || frames < 0)
@@ -170,6 +177,7 @@ export function createArtemisOfflineSoundVoices(
       if (closed) return;
       closed = true;
       effects.close();
+      music.close();
       cached.close();
       vorbis.close();
     },

@@ -45,6 +45,12 @@ export interface ArtemisLuaCallErrorReport {
   readonly severity: 1;
   readonly error: unknown;
 }
+export interface ArtemisScriptStackFrame {
+  readonly file: string;
+  readonly index: number;
+  readonly commands: readonly AsbTag[];
+  readonly firstCommand: 0 | 1;
+}
 interface PendingLuaCall {
   readonly task: ArtemisLuaCall;
   readonly filterTag?: AsbTag;
@@ -60,7 +66,11 @@ interface Cursor {
 export class ArtemisScript {
   private cursor: Cursor | null = null;
   private readonly cache = new Map<string, IetProgram>();
-  private readonly callers: (Cursor & {readonly resumeState?: ArtemisScriptState})[] = [];
+  /** Saved carets (c78). Each keeps its own pending tag queue (caret +0x80). */
+  private readonly callers: (Cursor & {
+    readonly resumeState?: ArtemisScriptState;
+    readonly queue: readonly AsbTag[];
+  })[] = [];
   private queue: AsbTag[] = [];
   private queueHead = 0;
   private running = false;
@@ -127,16 +137,29 @@ export class ArtemisScript {
     this.cursor = cursor;
     this.state = 'ready';
   }
+  /** Native transfers assign a fresh caret (b6520 -> b8090), so pending queued tags are
+   * dropped. */
   jump(path = '', label?: string): void {
     this.cursor = this.transfer(path, label);
+    this.clearQueue();
     this.state = 'ready';
+  }
+  private clearQueue(): void {
+    this.queue = [];
+    this.queueHead = 0;
+  }
+  /** Pending tags of the current caret, saved with it by call (eb990). */
+  private takeQueue(): AsbTag[] {
+    const queue = this.queue.slice(this.queueHead);
+    this.clearQueue();
+    return queue;
   }
   call(path = '', label?: string): void {
     if (!this.cursor) throw new Error('Artemis call without a script cursor');
     if (this.callers.length >= 10000) throw new Error('Artemis call depth limit exceeded');
     const destination = this.transfer(path, label);
     this.host.pushLocal?.();
-    this.callers.push({...this.cursor});
+    this.callers.push({...this.cursor, queue: this.takeQueue()});
     this.cursor = destination;
     this.state = 'ready';
   }
@@ -150,7 +173,7 @@ export class ArtemisScript {
       throw Error('Artemis event handler requires local scope owner');
     if (this.callers.length >= 10000) throw Error('Artemis call depth limit exceeded');
     this.host.pushLocal();
-    this.callers.push({...this.cursor, resumeState: this.state});
+    this.callers.push({...this.cursor, resumeState: this.state, queue: this.takeQueue()});
     this.cursor = {
       file: '',
       index: 0,
@@ -166,14 +189,35 @@ export class ArtemisScript {
       return;
     }
     this.host.popLocal?.();
-    const {resumeState, ...cursor} = this.callers.pop()!;
+    // c6580 assigns the saved caret, including its queue, over the current one.
+    const {resumeState, queue, ...cursor} = this.callers.pop()!;
     this.cursor = cursor;
+    this.queue = [...queue];
+    this.queueHead = 0;
     this.state = resumeState ?? 'ready';
   }
   enqueue(tag: AsbTag): void {
     if (this.queue.length - this.queueHead >= 10000)
       throw new Error('Artemis tag queue limit exceeded');
     this.queue.push({...tag, args: new Map(tag.args)});
+  }
+  /** getScriptStack (0x1401318a0) source: saved carets oldest first, then the current caret
+   * (b70 file, b90 index, be8 queue). Saved queues number from 1, the current one from 0. */
+  stack(): ArtemisScriptStackFrame[] {
+    return [
+      ...this.callers.map((caller) => ({
+        file: caller.file,
+        index: caller.index,
+        commands: caller.queue.slice(),
+        firstCommand: 1 as const,
+      })),
+      {
+        file: this.cursor?.file ?? '',
+        index: this.cursor?.index ?? 0,
+        commands: this.queue.slice(this.queueHead),
+        firstCommand: 0 as const,
+      },
+    ];
   }
   get queuedTags(): number {
     return this.queue.length - this.queueHead;
@@ -185,10 +229,22 @@ export class ArtemisScript {
     if (this.state !== 'ready') throw new Error('Artemis script is not ready to wait');
     this.state = 'waiting';
   }
+  /** Ends the current wait. When an event handler scope interrupted the wait, the native run
+   * mode still returns to 0 in that frame; the interrupted cursor resumes ready after the
+   * handler returns. */
   resume(): void {
     if (this.luaSuspended) throw new Error('Use resumeLua for a suspended Artemis callback');
-    if (this.state !== 'waiting') throw new Error('Artemis script is not waiting');
-    this.state = 'ready';
+    if (this.state === 'waiting') {
+      this.state = 'ready';
+      return;
+    }
+    for (let index = this.callers.length - 1; index >= 0; index--) {
+      const caller = this.callers[index]!;
+      if (caller.resumeState !== 'waiting') continue;
+      this.callers[index] = {...caller, resumeState: 'ready'};
+      return;
+    }
+    throw new Error('Artemis script is not waiting');
   }
   get pendingLuaCalls(): number {
     return this.luaCalls.length;
