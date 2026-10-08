@@ -4556,3 +4556,34 @@ test('Native stop shows the wait indicator, enters run mode 3 with the save gate
   stop.dispatch({name: 'stop', args: new Map()});
   assert.deepEqual(log, ['messageIndicator', 'mode3']);
 });
+
+test('Native push handlers deliver slot 0 then slot 1 in key order until a command is delivered', async () => {
+  const {ArtemisKeyBindings} = await import('../dist/engines/artemis/key-bindings.js');
+  const bindings = new ArtemisKeyBindings(() => 'f.iet');
+  const tag = (key, extra = {}) => ({
+    name: 'setonpush',
+    args: new Map(Object.entries({key, handler: 'calllua', ...extra})),
+  });
+  bindings.dispatch(tag('13'));
+  bindings.dispatch(tag('1'));
+  bindings.dispatch(tag('2', {keyrepeat: '1'}));
+  const seen = [];
+  const all = () => true;
+  assert.equal(
+    bindings.deliverPushed(all, (command) => (seen.push(command.args.get('key')), true)),
+    false,
+  );
+  assert.deepEqual(seen, ['1', '13', '2']);
+  seen.length = 0;
+  assert.equal(
+    bindings.deliverPushed(all, (command) => (seen.push(command.args.get('key')), false)),
+    true,
+  );
+  assert.deepEqual(seen, ['1']);
+  seen.length = 0;
+  bindings.deliverPushed(
+    (key, slot) => slot === 1 && key === 2,
+    (command) => (seen.push(command.args.get('key')), false),
+  );
+  assert.deepEqual(seen, ['2']);
+});

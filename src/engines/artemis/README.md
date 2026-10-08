@@ -72,8 +72,10 @@ the per-type enable flag (groups reach every child actor). History uses
 dispatch is a replay. `ArtemisLayerEventSlots` is actor-owned state that actor copies must
 copy. `invoke` calls the stored functor: `ArtemisScriptEvents.emit` (b73e0) with the tag copy,
 the type index as event mode and force set. Pointer hit testing, rollover state and
-penetration belong to the input owner and are not implemented. The probe's
-`--layer-click=<id>` invokes a named layer's click slot at a run mode 3 stop.
+penetration belong to the input owner and are not implemented. `ArtemisKeyBindings.deliverPushed` is the c0560 run mode 1/3
+push-handler slice: slot 0 then slot 1 in ascending key order, ending the frame when a
+command is delivered. The probe's `--layer-event=<id>[:type]` and `--key-push=<key>`
+options apply these at a run mode 3 stop, one per frame, without pointer hit testing.
 
 `modes.ts` owns skip/auto/autosave command state and emits required status/effect
 callbacks (`0x1400d47b0`, `0x1400d4350`, `0x1400ca3d0`). Scheduler, indicator,

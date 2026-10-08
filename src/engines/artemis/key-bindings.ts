@@ -42,6 +42,21 @@ export class ArtemisKeyBindings {
     const tag = this.pushHandlers[slot].get(key);
     return tag ? {...tag, args: new Map(tag.args)} : undefined;
   }
+  /** c0560 run mode 1/3 slice (capture mode 0): slot 0 (map 0x3890, input virtual +0x38)
+   * then slot 1 (map 0x38a0, input virtual +0x18), each in ascending key order. A pushed
+   * key's copied command goes to c6730; a delivered (not failed) command ends the frame's
+   * mode processing, reported here as true. */
+  deliverPushed(
+    pushed: (key: number, slot: 0 | 1) => boolean,
+    dispatch: (command: AsbTag) => boolean,
+  ): boolean {
+    for (const slot of [0, 1] as const)
+      for (const key of [...this.pushHandlers[slot].keys()].sort((a, b) => a - b)) {
+        const command = this.pushHandler(key, slot);
+        if (command && pushed(key, slot) && !dispatch(command)) return true;
+      }
+    return false;
+  }
   dispatch(tag: AsbTag): boolean {
     const p = tag.args;
     if (tag.name === 'setonpush') {

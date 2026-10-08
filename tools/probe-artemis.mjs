@@ -49,6 +49,7 @@ import {BrowserWindowsDynamicLibraryHost} from '../dist/platform/windows-dynamic
 import {ArtemisModes} from '../dist/engines/artemis/modes.js';
 import {ArtemisExec} from '../dist/engines/artemis/exec.js';
 import {ArtemisStop} from '../dist/engines/artemis/stop.js';
+import {artemisInteger} from '../dist/engines/artemis/numbers.js';
 import {createArtemisScriptEvents} from '../dist/engines/artemis/script-events.js';
 import {luaText} from '../dist/core/lua51/runtime.js';
 if (!process.argv[2]) throw new Error('Usage: node tools/probe-artemis.mjs GAME_DIRECTORY');
@@ -69,11 +70,18 @@ const soundDecode = process.argv.slice(3).includes('--sound-decode');
 const soundRender = process.argv.slice(3).includes('--sound-render');
 const nativeIncludeReporting = process.argv.slice(3).includes('--native-include-reporting');
 const nativeCallLuaReporting = process.argv.slice(3).includes('--native-calllua-reporting');
-// Diagnostic clicks on named layers at a run mode 3 stop, in order; no hit testing.
-const layerClicks = process.argv
+// Diagnostic layer events (--layer-event=id[:type], type defaults to click) and pushed
+// keys (--key-push=key, slot 0 edge) at a run mode 3 stop, one per frame in argument order.
+// No pointer hit testing is simulated.
+const probeInputs = process.argv
   .slice(3)
-  .filter((arg) => arg.startsWith('--layer-click='))
-  .map((arg) => arg.slice('--layer-click='.length));
+  .filter((arg) => arg.startsWith('--layer-event=') || arg.startsWith('--key-push='))
+  .map((arg) => {
+    if (arg.startsWith('--key-push='))
+      return {key: artemisInteger(arg.slice('--key-push='.length))};
+    const [id, type = 'click'] = arg.slice('--layer-event='.length).split(':');
+    return {id, type};
+  });
 const shaderPresets = process.argv.slice(3).includes('--shader-presets');
 if (shaderPresets && !metadataLayers) throw Error('--shader-presets requires --image-metadata');
 const graphicsFeatureArgument = process.argv
@@ -755,10 +763,19 @@ try {
         script.run(1000);
         continue;
       }
-      if (layerClicks.length && probeRunMode === 3 && !wait.pending && layerFixture) {
-        const id = layerClicks.shift();
-        modeEffects.push({layerClick: id, simulation: true});
-        layerFixture.invokeLayerEvent(id, 'click', scriptEvents);
+      if (probeInputs.length && probeRunMode === 3 && !wait.pending) {
+        const input = probeInputs.shift();
+        if (input.id !== undefined) {
+          if (!layerFixture) throw Error('Probe layer events require --image-metadata');
+          modeEffects.push({layerEvent: input, simulation: true});
+          layerFixture.invokeLayerEvent(input.id, input.type, scriptEvents);
+        } else {
+          modeEffects.push({keyPush: input.key, simulation: true});
+          keyBindings.deliverPushed(
+            (candidate, slot) => slot === 0 && candidate === input.key,
+            (command) => scriptEvents.dispatch(command),
+          );
+        }
         script.run(1000);
         continue;
       }
