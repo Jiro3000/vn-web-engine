@@ -19,6 +19,10 @@ export interface ArtemisLuaHost {
    * retrying the normal loose-first CArtemisPackFile read on any failure.
    */
   readPlainFile?(path: string): Uint8Array | null;
+  /** Native12d080 level1 reporting returns to the include caller. The concrete
+   * owner supplies logging/debug policy; absent owner retains diagnostic refusal.
+   */
+  reportIncludeError?(path: string, error: unknown): void;
   fileExists(path: string): boolean;
   now(): number;
   tag(tag: AsbTag): void | 'suspended';
@@ -200,13 +204,19 @@ export class ArtemisLua {
           this.vm.executeFile(plain, path, windowsTextFileBytes(plain));
           return;
         }
-      } catch {
+      } catch (error) {
+        if (!this.vm.usable) throw error;
         // 12d590 retries on open/load/pcall failure, preserving prior Lua effects.
       }
     }
     const bytes = this.host.readFile(path);
-    if (bytes === null) throw new Error(`Missing Artemis Lua include ${path}`);
-    this.vm.execute(bytes, `@${path}`);
+    try {
+      if (bytes === null) throw new Error(`Missing Artemis Lua include ${path}`);
+      this.vm.execute(bytes, path); // Native packed luaL_loadbuffer uses the literal filename.
+    } catch (error) {
+      if (!this.vm.usable || !this.host.reportIncludeError) throw error;
+      this.host.reportIncludeError(path, error);
+    }
   }
   get suspendableTags(): boolean {
     return this.host.suspendableTags === true;

@@ -4065,3 +4065,50 @@ test('Native mode release restores first, drains events backwards despite mode c
     ['event', 'out6', 2],
   ]);
 });
+
+test('Native include reporting returns to Lua after the final failure and preserves VM fatal guards', () => {
+  const reports = [];
+  const host = {
+    readFile: (path) =>
+      path === 'broken.lua'
+        ? bytes('partial=9; error("script failed")')
+        : path === 'loop.lua'
+          ? bytes('while true do end')
+          : null,
+    readPlainFile: () => null,
+    reportIncludeError: (path, error) => reports.push([path, error.message]),
+    fileExists: () => false,
+    now: () => 0,
+    tag: () => {},
+    enqueueTag: () => {},
+    variable: () => '',
+  };
+  const lua = new ArtemisLua(host);
+  try {
+    lua.vm.execute(
+      bytes(
+        'engine:include("broken.lua"); assert(partial==9); continued=1; engine:include("missing.lua"); continued=2',
+      ),
+    );
+    assert.equal(lua.vm.getGlobal('continued'), 2);
+    assert.equal(reports.length, 2);
+    assert.match(reports[0][1], /\[string "broken.lua"\]:1: script failed/);
+    assert.match(reports[1][1], /Missing Artemis Lua include/);
+    host.reportIncludeError = () => {
+      throw Error('required error owner refused');
+    };
+    assert.throws(() => lua.include('missing.lua'), /owner refused/);
+  } finally {
+    lua.close();
+  }
+  const guarded = new ArtemisLua(
+    {...host, reportIncludeError: () => assert.fail('fatal VM cannot recover')},
+    1000,
+  );
+  try {
+    assert.throws(() => guarded.include('loop.lua'), /instruction budget/);
+    assert.equal(guarded.vm.usable, false);
+  } finally {
+    guarded.close();
+  }
+});

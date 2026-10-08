@@ -63,6 +63,7 @@ const glyphLayout = process.argv.slice(3).includes('--glyph-layout');
 const surfacePreloads = process.argv.slice(3).includes('--surface-preloads');
 const soundDecode = process.argv.slice(3).includes('--sound-decode');
 const soundRender = process.argv.slice(3).includes('--sound-render');
+const nativeIncludeReporting = process.argv.slice(3).includes('--native-include-reporting');
 const shaderPresets = process.argv.slice(3).includes('--shader-presets');
 if (shaderPresets && !metadataLayers) throw Error('--shader-presets requires --image-metadata');
 const graphicsFeatureArgument = process.argv
@@ -125,6 +126,7 @@ try {
   const events = [],
     nativeTags = [],
     includes = [],
+    luaIncludeErrors = [],
     modeEffects = [];
   // This probe accepts explicit Windows stage dimensions from the real INI;
   // it does not supply defaults or implement the complete native INI loader.
@@ -596,6 +598,17 @@ try {
         }
       : {}),
     suspendableTags,
+    ...(nativeIncludeReporting
+      ? {
+          reportIncludeError: (path, error) => {
+            const message = error instanceof Error ? error.message : String(error);
+            luaIncludeErrors.push({path, message, severity: 1});
+            // Preserve explicit host capability/resource guards in this diagnostic.
+            if (/Unsupported|not implemented|not prepared|budget|cancelled|requires/i.test(message))
+              throw error;
+          },
+        }
+      : {}),
     readPlainFile: (path) => {
       includes.push(path);
       return plainFiles.get(path.replaceAll('\\', '/')) ?? null;
@@ -712,6 +725,8 @@ try {
         preparedFiles: prepared.size,
         preparedBytes,
         compiled,
+        nativeIncludeReporting,
+        luaIncludeErrors,
         luaVersion: luaText(lua.vm.getGlobal('_VERSION')),
         state: script.state,
         refusal,

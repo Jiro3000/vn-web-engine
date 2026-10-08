@@ -81,6 +81,10 @@ export class Lua51 {
   private assertOpen(): void {
     if (this.closed || this.poisoned) throw new Error('Lua VM is closed or interrupted');
   }
+  /** Host owners must not treat a resource guard/trap as a recoverable Lua error. */
+  get usable(): boolean {
+    return !this.closed && !this.poisoned;
+  }
   private bytes(pointer: number, length: number): Uint8Array {
     return new Uint8Array(this.exports.memory.buffer, pointer, length).slice();
   }
