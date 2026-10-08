@@ -3563,9 +3563,8 @@ test('Native script event producer preserves deferred copies, force/latch rules 
   assert.deepEqual(events.emit(tag, 0, false), {status: 'queued'});
   args.set('id', 'changed');
   assert.deepEqual(events.emit(tag, 0, false), {status: 'suppressed'});
-  assert.equal(events.drainOne(), null);
   mode = 1;
-  assert.deepEqual(events.drainOne(), {status: 'delivered', failed: false});
+  assert.deepEqual(events.releasePending(), [false]);
   assert.equal(events.queuedEvents, 0);
   assert.deepEqual(effects[0], ['scope']);
   const queued = effects[1][1];
@@ -3831,4 +3830,238 @@ test('Native Lua includes load plain text first and retry the normal file owner 
   } finally {
     lua.close();
   }
+});
+
+test('Native run mode entry owns click waits, save gates, exit effects and protected mode13', async () => {
+  const {ArtemisRunMode} = await import('../dist/engines/artemis/run-mode.js');
+  const {ArtemisScriptEvents} = await import('../dist/engines/artemis/script-events.js');
+  const {ArtemisModes} = await import('../dist/engines/artemis/modes.js');
+  const {ArtemisSave} = await import('../dist/engines/artemis/save.js');
+  const {ArtemisVariables} = await import('../dist/engines/artemis/variables.js');
+  const hash = '8953562b80608046662bd8c89015d04236b0ba3afee10c36469c11403de3ebaf',
+    effects = [];
+  const modes = new ArtemisModes({
+    writeStatus: () => {},
+    commandSkipChanged: () => {},
+    controlSkipChanged: () => {},
+    automodeChanged: () => {},
+    releaseScheduler: () => {},
+  });
+  const save = new ArtemisSave(new ArtemisVariables(), {
+    beforeScenario: (file) => effects.push(['before', file]),
+    reportEventError: () => assert.fail(),
+    writeScenario: (file, transient) => effects.push(['scenario', file, transient]),
+    writeGlobal: () => effects.push(['global']),
+    writeSystem: () => effects.push(['system']),
+  });
+  const lua = new ArtemisLua({
+    readFile: () => null,
+    fileExists: () => false,
+    now: () => 0,
+    tag: (tag) => effects.push(['callback', tag.name]),
+    enqueueTag: () => {},
+    variable: () => '',
+  });
+  lua.vm.execute(
+    bytes(
+      'function entered(e) e:tag{"in"} end; function left(e) e:tag{"out"} end; engine:setEventHandler{onClickWaitIn="entered", onClickWaitOut="left"}',
+    ),
+  );
+  const events = new ArtemisScriptEvents(hash, {
+    nativeMode: () => run.mode,
+    disabled: () => run.disabled(),
+    latched: (i) => run.latched(i),
+    latch: (i) => run.latch(i),
+    filter: (tag) => {
+      effects.push(['event', tag.name]);
+      return 1;
+    },
+    report: () => assert.fail(),
+    jump: () => assert.fail(),
+    call: () => assert.fail(),
+    enterHandlerScope: () => assert.fail(),
+    enqueueHandler: () => assert.fail(),
+  });
+  let debug = 0,
+    schedulerEnabled = true,
+    disabled = false;
+  const run = new ArtemisRunMode(
+    hash,
+    {current: 0, previous: 0, latches: [true, true]},
+    {
+      modes,
+      save,
+      callbacks: lua.events,
+      events,
+      host: {
+        schedulerFlagEnabled: () => schedulerEnabled,
+        setSchedulerFlag: (active) => effects.push(['flag', active]),
+        eventsDisabled: () => disabled,
+        clearWaitFlags: () => effects.push(['clear']),
+        resumeMessageState: () => effects.push(['message']),
+        debugMode: () => debug,
+        fullscreen: () => true,
+        writeStatus: (key, value) => effects.push(['status', key, value]),
+        registration: (mode, phase) => ({
+          kind: 'tag',
+          name: `${phase}${mode}`,
+          sourceLine: -1,
+          args: new Map(),
+        }),
+        reportCallbackError: (event) => effects.push(['error', event]),
+      },
+    },
+  );
+  try {
+    assert.equal(run.latched(0), true);
+    run.beginEventPhase();
+    assert.equal(run.latched(0), false);
+    assert.equal(run.latched(1), false);
+    modes.autosave = 2;
+    assert.equal(run.enter(1), true);
+    assert.deepEqual(effects, [
+      ['flag', true],
+      ['callback', 'in'],
+      ['before', 'autosave.dat'],
+      ['scenario', 'autosave.dat', false],
+    ]);
+    effects.length = 0;
+    run.enter(0);
+    assert.deepEqual(effects, [['flag', false], ['callback', 'out'], ['clear'], ['message']]);
+    assert.equal(run.previousMode, 1);
+    effects.length = 0;
+    modes.commandSkip = true;
+    run.enter(3);
+    assert.deepEqual(effects, [['flag', false]]);
+    modes.commandSkip = false;
+    debug = 1;
+    run.enter(3);
+    assert.equal(effects.length, 2);
+    debug = 0;
+    modes.skipAllowed = false;
+    modes.commandSkip = true;
+    run.enter(3);
+    assert.deepEqual(effects.slice(-2), [
+      ['before', 'autosave.dat'],
+      ['scenario', 'autosave.dat', false],
+    ]);
+    effects.length = 0;
+    run.enter(14);
+    assert.deepEqual(effects, [
+      ['flag', false],
+      ['status', 's.status.fullscreenatexit', true],
+      ['global'],
+      ['system'],
+    ]);
+    run.enter(13);
+    effects.length = 0;
+    assert.equal(run.enter(0), false);
+    assert.equal(run.mode, 13);
+    assert.equal(effects.length, 0);
+    run.release();
+    assert.equal(run.mode, 14);
+    schedulerEnabled = false;
+    run.enter(1);
+    assert.equal(effects[1][1], false);
+    lua.vm.execute(
+      bytes(
+        'function broken(e) error("failed") end; engine:setEventHandler{onClickWaitIn="broken"}',
+      ),
+    );
+    effects.length = 0;
+    run.enter(1);
+    assert.deepEqual(effects.slice(0, 2), [
+      ['flag', false],
+      ['error', 'onClickWaitIn'],
+    ]);
+    assert.equal(lua.events.handler('onClickWaitIn'), '');
+    run.enter(0xffffffff);
+    assert.equal(run.mode, -1);
+    assert.throws(() => run.enter(0x100000000), /run mode/);
+    disabled = true;
+    assert.equal(run.disabled(), true);
+  } finally {
+    lua.close();
+  }
+});
+
+test('Native mode release restores first, drains events backwards despite mode changes, clears new registrations then emits exit', async () => {
+  const {ArtemisRunMode} = await import('../dist/engines/artemis/run-mode.js');
+  const {ArtemisScriptEvents} = await import('../dist/engines/artemis/script-events.js');
+  const effects = [];
+  const tag = (name) => ({kind: 'tag', name, sourceLine: -1, args: new Map()});
+  let run;
+  const events = new ArtemisScriptEvents(
+    '8953562b80608046662bd8c89015d04236b0ba3afee10c36469c11403de3ebaf',
+    {
+      nativeMode: () => run.mode,
+      disabled: () => false,
+      latched: (i) => run.latched(i),
+      latch: (i) => run.latch(i),
+      filter: (command) => {
+        effects.push(['event', command.name, run.mode]);
+        if (command.name === 'second') {
+          run.enter(2);
+          assert.equal(events.emit(tag('added'), 2, false).status, 'queued');
+          return 2;
+        }
+        return 1;
+      },
+      report: () => assert.fail(),
+      jump: () => assert.fail(),
+      call: () => assert.fail(),
+      enterHandlerScope: () => assert.fail(),
+      enqueueHandler: () => assert.fail(),
+    },
+  );
+  run = new ArtemisRunMode(
+    '8953562b80608046662bd8c89015d04236b0ba3afee10c36469c11403de3ebaf',
+    {current: 1, previous: 0, latches: [false, false]},
+    {
+      events,
+      modes: {},
+      save: {},
+      callbacks: {},
+      host: {
+        schedulerFlagEnabled: () => true,
+        setSchedulerFlag: (active) => effects.push(['flag', active]),
+        eventsDisabled: () => false,
+        clearWaitFlags: () => assert.fail(),
+        resumeMessageState: () => assert.fail(),
+        debugMode: () => assert.fail(),
+        fullscreen: () => assert.fail(),
+        writeStatus: () => assert.fail(),
+        reportCallbackError: () => assert.fail(),
+        registration: (mode, phase) => tag(`${phase}${mode}`),
+      },
+    },
+  );
+  run.enter(5);
+  events.emit(tag('first'), 0, false);
+  events.emit(tag('second'), 1, false);
+  assert.equal(events.queuedEvents, 2);
+  assert.equal(run.latched(0), true);
+  assert.equal(run.latched(1), true);
+  effects.length = 0;
+  run.release();
+  assert.deepEqual(effects, [
+    ['flag', true],
+    ['event', 'second', 1],
+    ['flag', false],
+    ['event', 'first', 2],
+    ['event', 'out5', 2],
+  ]);
+  assert.equal(events.queuedEvents, 0);
+  assert.equal(run.mode, 2);
+  assert.equal(run.latched(0), true); // No release-time relatch/reset.
+  run.beginEventPhase();
+  assert.equal(run.latched(0), false);
+  assert.equal(run.latched(1), false);
+  run.enter(6);
+  effects.length = 0;
+  run.release();
+  assert.deepEqual(effects, [
+    ['flag', false],
+    ['event', 'out6', 2],
+  ]);
 });

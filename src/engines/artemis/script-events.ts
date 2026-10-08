@@ -57,13 +57,17 @@ export class ArtemisScriptEvents {
     this.pending.push(captured);
     return {status: 'queued'};
   }
-  /** Drain one queued registration after the producer makes the mode dispatchable.
-   * Latches were already applied at enqueue time and must not be applied again.
+  /** c6480: after restoring the previous mode, dispatch the captured queue from
+   * back to front, ignoring failed flags, then clear it. No eligibility/latch test
+   * is repeated. Registrations added during this pass are cleared with the queue.
    */
-  drainOne(): ArtemisScriptEventResult | null {
-    if (!this.pending.length || !this.immediate()) return null;
-    const command = this.pending.shift()!;
-    return {status: 'delivered', failed: this.dispatch(command)};
+  releasePending(): readonly boolean[] {
+    const commands = this.pending.slice();
+    const results: boolean[] = [];
+    for (let index = commands.length - 1; index >= 0; index--)
+      results.push(this.dispatch(commands[index]!));
+    this.pending = [];
+    return results;
   }
   clear(): void {
     this.pending = [];

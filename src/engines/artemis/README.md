@@ -1140,3 +1140,15 @@ files succeed without fallback; first-attempt Lua side effects survive. Shared
 Lua51 executeFile/compileFile operate on prepared raw/text bytes and preserve the
 existing explicit bytecode refusal. Hosts without the plain provider retain the
 pack-only subset. Final native error reporting and streaming I/O remain host work.
+
+`run-mode.ts` owns native c70/c74 entry/release rules, wait callback/save gates,
+protected mode13, mode5/6 stored events and mode14 exit status/global save. Initial
+mode fields/latches are explicit inputs; platform/scene/caret effects are required
+host operations. Release restores the previous mode, dispatches pending script
+events in reverse order without repeated eligibility/latch tests, clears the queue,
+then emits the stored exit registration. Failed event flags do not stop that pass.
+
+The frame owner must call beginEventPhase after scene update and before sound/music
+settling, matching c05e2's word30 reset. This does not implement the full frame loop.
+The standalone TimedWait already owns callback/save effects: a unified wait adapter
+must choose one owner before wiring it to RunMode, to avoid duplicate callbacks.
