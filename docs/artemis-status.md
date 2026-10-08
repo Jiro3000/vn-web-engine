@@ -91,7 +91,7 @@ through native voice owners, without an audio device. It supports sound-finish
 registration, then requires a graphics feature owner. An explicitly simulated
 feature-level diagnostic reaches the next unsupported `lyshader` command.
 
-Build and218 focused tests pass. The full1892-test suite has1855 passes and the
+Build and221 focused tests pass. The full1895-test suite has1858 passes and the
 same37 baseline failures, with no new failing names. Synthetic browser checks
 cover real font/image workers, GPU scenes and sound lookup through actual offline
 WebAudio voices. These checks do not establish production game compatibility.
@@ -113,3 +113,8 @@ CLayer shader state now owns ordered constants and retained texture leases.
 All twenty executables also run through the shared DrawList renderer, verified
 against dedicated WebGL outputs. Native reflection/preparation/default constants
 and per-actor ImageGraphics wiring remain separate required work.
+
+Native constant preparation is ordered concatenation, with16-byte grow-only,
+zero-initialized shared storage and persistent trailing coefficients. Copied GPU
+actors share buffers until growth. Native default/unbound slot behavior and full
+per-actor scene wiring remain required before declaring production compatibility.

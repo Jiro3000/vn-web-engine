@@ -1,3 +1,4 @@
+import type {ArtemisShaderConstant} from './shader-properties.js';
 import {artemisRevision} from './revision.js';
 import {artemisShaderFragmentSource, type ArtemisShaderPresetKind} from './raster-shader.js';
 
@@ -14,6 +15,10 @@ export interface ArtemisDrawShaderPreset {
   readonly needsUserTexture: boolean;
   /** Explicit required values, no inferred defaults or native reflection claim. */
   parameters(values: ReadonlyMap<string, readonly number[]>): Float32Array;
+  /** Native render15d120 concatenates vectors in order, ignoring their names. */
+  nativeParameters(values: readonly ArtemisShaderConstant[]): Float32Array;
+  /** Buffer includes native zero initialization/reused padding. Null is slot1 unbound. */
+  bufferParameters(buffer: Float32Array | null): Float32Array;
 }
 /** Adapt reconstructed executables to shared DrawList's atlas/tex/tint/parameters
  * ABI. Per-actor native uniform preparation is a separate caller-owned effect.
@@ -117,6 +122,31 @@ export function createArtemisDrawShaderPreset(
     fragment: source,
     fields: fields.map(({name, size}) => ({name, size})),
     needsUserTexture,
+    bufferParameters(buffer) {
+      const required = fields.reduce((n, field) => n + field.size, 0);
+      if (
+        (buffer?.length ?? 0) < required ||
+        (buffer?.length ?? 0) > 32 ||
+        (buffer && !buffer.every(Number.isFinite))
+      )
+        throw Error('Unsupported Artemis native shader buffer binding');
+      const result = new Float32Array(32);
+      if (buffer) result.set(buffer);
+      return result;
+    },
+    nativeParameters(values) {
+      const flattened = values.flatMap((entry) => [...entry.values]);
+      const required = fields.reduce((n, field) => n + field.size, 0);
+      if (
+        flattened.length < required ||
+        flattened.length > 32 ||
+        !flattened.every((x) => Number.isFinite(Math.fround(x)))
+      )
+        throw Error('Unsupported Artemis native shader constant buffer');
+      const result = new Float32Array(32);
+      result.set(flattened);
+      return result;
+    },
     parameters(values) {
       const result = new Float32Array(32);
       let offset = 0;

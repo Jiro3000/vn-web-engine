@@ -1082,3 +1082,13 @@ the dedicated WebGL executable, including nonzero UV transforms and user texture
 composites. This is executable renderer integration, not native reflection/constant
 buffer packing: missing coefficients are refused and actor preparation/jobs still
 require wiring into ImageGraphics and retained resource owners.
+
+Native15d120 rendering ignores constant names after argument collection and
+concatenates vectors in list order. `nativeParameters` preserves this order;
+`bufferParameters` consumes already prepared native storage. `parameters` remains
+an explicit named-value calibration convenience, not D3D reflection. Native
+constant storage grows in16-byte units, initializes new memory to zero and keeps
+old trailing coefficients on shorter writes. GPU-layer copies share existing
+storage until one grows, matching verified15c850 pointer/refcount copies. Empty
+lists do not update slot1; the graphics binding owner must preserve prior slot1.
+Unbound/undersized reads and nonempty lists of empty vectors remain refused.

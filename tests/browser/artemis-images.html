@@ -4,6 +4,7 @@
 <canvas id="frame" style="width: 256px; height: 128px; image-rendering: pixelated"></canvas>
 <pre id="result">Running synthetic PNG / Lua / raster checks</pre>
 <script type="module">
+  import {ArtemisShaderConstantStorage} from '../../dist/engines/artemis/shader-properties.js';
   import {createArtemisDrawShaderPreset} from '../../dist/engines/artemis/draw-shader.js';
   import {artemisRadialShade} from '../../dist/engines/artemis/radial-shader.js';
   import {ArtemisBrowserRasterShader} from '../../dist/engines/artemis/browser-raster-shader.js';
@@ -1505,7 +1506,11 @@
                   filter: 'nearest',
                   blendState: replaceBlend,
                   fragment: adapter.fragment,
-                  parameters: adapter.parameters(constants),
+                  parameters: adapter.bufferParameters(
+                    new ArtemisShaderConstantStorage(revision).update(
+                      [...constants.values()].map((values, i) => ({name: 'ignored' + i, values})),
+                    ),
+                  ),
                   additionalTextures: adapter.needsUserTexture
                     ? [
                         {

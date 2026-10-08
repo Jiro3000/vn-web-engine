@@ -151,3 +151,35 @@ export class ArtemisShaderProperties<T extends object> {
     for (const entry of prior) entry.lease.release();
   }
 }
+
+/** Native15d120/15e1b0 per-GPU-actor constant storage: concatenate vectors,
+ * round capacity to16bytes, grow with zero initialization, never shrink. Reused
+ * trailing coefficients persist. Empty input does not bind/update slot1.
+ */
+export class ArtemisShaderConstantStorage {
+  private buffer = new Float32Array(0);
+  constructor(private readonly hash: string) {
+    artemisRevision(hash);
+  }
+  /** CGpuLayer15c850 copies shared CPU storage; growth detaches only that copy. */
+  copy(): ArtemisShaderConstantStorage {
+    const copy = new ArtemisShaderConstantStorage(this.hash);
+    copy.buffer = this.buffer;
+    return copy;
+  }
+  get capacityBytes(): number {
+    return this.buffer.byteLength;
+  }
+  update(values: readonly ArtemisShaderConstant[]): Float32Array | null {
+    const flat = values.flatMap((entry) => [...entry.values]);
+    if (flat.length === 0) {
+      if (values.length) throw Error('Unsupported Artemis empty-vector constant buffer');
+      return null;
+    }
+    if (flat.length > 32) throw Error('Unsupported Artemis known-preset constant storage size');
+    const count = Math.ceil(flat.length / 4) * 4;
+    if (this.buffer.length < count) this.buffer = new Float32Array(count);
+    this.buffer.set(flat);
+    return this.buffer.slice();
+  }
+}

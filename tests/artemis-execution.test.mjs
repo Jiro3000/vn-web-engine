@@ -3355,3 +3355,80 @@ test('Draw-list shader binding requires explicit constants and packs blur arrays
   assert.equal(screen.fields.length, 0);
   assert.throws(() => createArtemisDrawShaderPreset(hash, 'unknown'), /Unsupported/);
 });
+
+test('Native shader constant buffer uses list order rather than parameter-name reflection', async () => {
+  const {createArtemisDrawShaderPreset} = await import('../dist/engines/artemis/draw-shader.js');
+  const hash = '8953562b80608046662bd8c89015d04236b0ba3afee10c36469c11403de3ebaf';
+  const raster = createArtemisDrawShaderPreset(hash, 'raster');
+  assert.deepEqual(
+    [
+      ...raster
+        .nativeParameters([
+          {name: 'irrelevant', values: [90, 0]},
+          {name: 'angle', values: [0.125]},
+        ])
+        .slice(0, 3),
+    ],
+    [90, 0, 0.125],
+  );
+  assert.throws(
+    () => raster.nativeParameters([{name: 'size', values: [0.125]}]),
+    /constant buffer/,
+  );
+  const blur = createArtemisDrawShaderPreset(hash, 'blur_v');
+  assert.deepEqual(
+    [
+      ...blur
+        .nativeParameters([
+          {name: 'height', values: [1, 2, 3, 4, 5, 6, 7, 8]},
+          {name: 'weights', values: [0.25]},
+        ])
+        .slice(0, 9),
+    ],
+    [1, 2, 3, 4, 5, 6, 7, 8, 0.25],
+  );
+});
+
+test('Native constant storage grows to sixteen-byte capacity and preserves trailing values on reuse', async () => {
+  const {ArtemisShaderConstantStorage} =
+    await import('../dist/engines/artemis/shader-properties.js');
+  const storage = new ArtemisShaderConstantStorage(
+    '8953562b80608046662bd8c89015d04236b0ba3afee10c36469c11403de3ebaf',
+  );
+  assert.equal(storage.update([]), null);
+  assert.equal(storage.capacityBytes, 0);
+  assert.deepEqual([...storage.update([{name: 'x', values: [1]}])], [1, 0, 0, 0]);
+  assert.equal(storage.capacityBytes, 16);
+  assert.deepEqual(
+    [...storage.update([{name: 'x', values: [2, 3, 4, 5, 6]}])],
+    [2, 3, 4, 5, 6, 0, 0, 0],
+  );
+  assert.equal(storage.capacityBytes, 32);
+  const reduced = storage.update([{name: 'ignored', values: [7]}]);
+  assert.deepEqual([...reduced], [7, 3, 4, 5, 6, 0, 0, 0]);
+  reduced[1] = 999;
+  assert.equal(storage.update([{name: 'x', values: [8]}])[1], 3);
+  assert.equal(storage.update([]), null);
+  assert.equal(storage.capacityBytes, 32);
+});
+
+test('Copied native constant storage shares reused coefficients and detaches on capacity growth', async () => {
+  const {ArtemisShaderConstantStorage} =
+    await import('../dist/engines/artemis/shader-properties.js');
+  const {createArtemisDrawShaderPreset} = await import('../dist/engines/artemis/draw-shader.js');
+  const hash = '8953562b80608046662bd8c89015d04236b0ba3afee10c36469c11403de3ebaf';
+  const old = new ArtemisShaderConstantStorage(hash);
+  old.update([{name: 'x', values: [1, 2, 3, 4]}]);
+  const copy = old.copy();
+  copy.update([{name: 'y', values: [7, 8]}]);
+  assert.deepEqual([...old.update([{name: 'x', values: [9]}])], [9, 8, 3, 4]);
+  copy.update([{name: 'x', values: [1, 2, 3, 4, 5]}]);
+  assert.equal(old.capacityBytes, 16);
+  assert.equal(copy.capacityBytes, 32);
+  assert.deepEqual([...old.update([{name: 'x', values: [10]}])], [10, 8, 3, 4]);
+  const raster = createArtemisDrawShaderPreset(hash, 'raster');
+  const short = new ArtemisShaderConstantStorage(hash);
+  const buf = short.update([{name: 'ignored', values: [90]}]);
+  assert.deepEqual([...raster.bufferParameters(buf).slice(0, 3)], [90, 0, 0]);
+  assert.throws(() => raster.bufferParameters(null), /binding/);
+});
