@@ -157,6 +157,7 @@ try {
     includes = [],
     luaIncludeErrors = [],
     luaCallErrors = [],
+    unknownTagReports = [],
     modeEffects = [];
   // This probe accepts explicit Windows stage dimensions from the real INI;
   // it does not supply defaults or implement the complete native INI loader.
@@ -187,6 +188,11 @@ try {
     stageSize: () => ({width, height}),
     windowDisplay: () => ({width, height, fullscreen: false}),
     applicationArguments: {readApplicationArguments: () => new Map()},
+    messageLayerMeasure: () => {
+      if (!glyphFixture || !messageStage)
+        throw Error('Probe message layer measure requires --glyph-layout');
+      return glyphFixture.get(messageStage.currentLayer()).measure();
+    },
   });
   const executablePaths = [...installation.paths].filter(
     (path) => /\.exe$/i.test(path) && !path.includes('/'),
@@ -792,6 +798,15 @@ try {
               message: new TextDecoder().decode(message),
               severity,
             }),
+          // c5800 unknown command/macro report (c7260 severity 1); the tag returns normally.
+          reportUnknownTag: ({file, tag, message, severity}) =>
+            unknownTagReports.push({
+              file,
+              sourceLine: tag.sourceLine,
+              name: tag.name,
+              message: new TextDecoder('shift_jis').decode(message),
+              severity,
+            }),
         }
       : {}),
   });
@@ -981,6 +996,7 @@ try {
         luaIncludeErrors,
         nativeCallLuaReporting,
         luaCallErrors,
+        unknownTagReports,
         luaVersion: luaText(lua.vm.getGlobal('_VERSION')),
         state: script.state,
         refusal,

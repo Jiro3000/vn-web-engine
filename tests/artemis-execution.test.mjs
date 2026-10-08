@@ -617,6 +617,45 @@ test('Stage variable queries use the current host dimensions and preserve local 
   assert.throws(() => unsupported.dispatch(tag('screen_width')), /provider/);
 });
 
+test('Message layer extent queries truncate the selected layer measure to integers', async () => {
+  const {ArtemisVariables} = await import('../dist/engines/artemis/variables.js');
+  const variables = new ArtemisVariables({
+    stageSize: () => ({width: 1, height: 1}),
+    messageLayerMeasure: () => ({width: 412.75, height: 63.5, lineWidth: -0.5}),
+  });
+  const query = (system) => {
+    variables.dispatch({
+      kind: 'tag',
+      name: 'var',
+      sourceLine: -1,
+      args: new Map([
+        ['name', 't.v'],
+        ['system', system],
+      ]),
+    });
+    return luaText(variables.read('t.v'));
+  };
+  assert.deepEqual(
+    ['get_message_layer_width', 'get_message_layer_height', 'get_message_layer_line_width'].map(
+      query,
+    ),
+    ['412', '63', '0'],
+  );
+  assert.throws(
+    () =>
+      new ArtemisVariables().dispatch({
+        kind: 'tag',
+        name: 'var',
+        sourceLine: -1,
+        args: new Map([
+          ['name', 'x'],
+          ['system', 'get_message_layer_width'],
+        ]),
+      }),
+    /measure provider/,
+  );
+});
+
 test('End of a called script restores its caller; root end requires an exit provider', () => {
   const sources = new Map([
     ['root', bytes('[call file="sub"][done]')],
@@ -4553,6 +4592,51 @@ test('Native calllua reports Lua and lookup failures at severity 1, then continu
   } finally {
     lua.close();
   }
+});
+
+test('Names outside the native command map report the unknown-tag error and continue', () => {
+  const source = bytes(`[achievements name="a"][caption data="c"][stop]`);
+  const run = (host) => {
+    let script;
+    const dispatched = [];
+    const lua = new ArtemisLua({
+      readFile: () => source,
+      fileExists: () => true,
+      now: () => 0,
+      variable: () => '',
+      tag: (tag) => script.executeTag(tag),
+      enqueueTag: () => {},
+    });
+    script = new ArtemisScript(lua, {
+      readFile: () => source,
+      dispatch: (tag) => {
+        dispatched.push(tag.name);
+        if (tag.name === 'stop') return 'stopped';
+      },
+      ...host,
+    });
+    try {
+      script.load('boot');
+      script.run();
+      return {dispatched, state: script.state};
+    } finally {
+      lua.close();
+    }
+  };
+  const reports = [];
+  assert.deepEqual(run({reportUnknownTag: (report) => reports.push(report)}), {
+    dispatched: ['caption', 'stop'],
+    state: 'stopped',
+  });
+  assert.equal(reports.length, 1);
+  assert.equal(reports[0].tag.name, 'achievements');
+  assert.equal(reports[0].severity, 1);
+  assert.equal(
+    new TextDecoder('shift_jis').decode(reports[0].message),
+    '未知のタグ、または未定義のマクロです。',
+  );
+  // Without a report owner the host receives the name and decides.
+  assert.deepEqual(run({}).dispatched, ['achievements', 'caption', 'stop']);
 });
 
 test('Suspended calllua failures close their coroutine, report once and resume the caller', () => {

@@ -212,6 +212,13 @@ It preserves old keys absent from a later map, matching the native handler.
 The shared application argument interface does not inspect the harness process
 command line. The probe supplies an explicit empty application argument fixture.
 
+`get_message_layer_width`, `get_message_layer_height` and `get_message_layer_line_width`
+(`var` handler `0x1400e56a0`) read the selected message layer's text extents through
+`messageLayerMeasure`. They are its virtual +0x140 (widest line up to the current line,
+`0x140149d90`), +0x148 (current line y plus its height when it has glyphs, `0x140149e60`)
+and +0x150 (last line width, `0x140149ea0`), which `ArtemisTextInsertion.measure`
+implements. The float is truncated to int before it is written.
+
 Recording flags and right-click configuration are kept in the mode owner:
 `alreadyread` treats a missing mode as enabled, while `writebacklog` disables on
 missing mode. Exact string `0` disables; `00` remains enabled. `rclick` preserves
@@ -1344,3 +1351,15 @@ non-string error values. Without the owner every failure keeps the strict fault.
 Debug gating (+0x3524/+0x3528), the Lua LogFilter and console output belong to the
 owner. Probe --native-calllua-reporting records reports without that policy.
 Evidence: lua-calllua-error-notes.md.
+
+`reportUnknownTag` is the unknown-command owner of the dispatcher `0x1400c5800`. A tag
+the Lua filter does not take is looked up in the native command map, which `0x1400b9e80`
+fills with the 151 names in `native-tags.ts`. On a miss the dispatcher tries the macro
+stack, then reports c7260 severity 1 with 「未知のタグ、または未定義のマクロです。」
+(`artemisUnknownTagMessage`, Shift_JIS), and the script continues with the next tag.
+The macro stack is empty here because `macroadd` is not implemented. Without the owner
+every name reaches the host `dispatch`, which refuses unsupported names. This is how
+`achievements` behaves when the game's Steam module (`system/extend/auth/steam.lua`,
+which defines `tags.achievements`) is not loaded. The probe's
+--native-calllua-reporting records these reports as `unknownTagReports`.
+Evidence: tag-registry-notes.md.

@@ -1,4 +1,5 @@
 import type {AsbTag} from '../../formats/artemis/asb.js';
+import {artemisNativeTagNames, artemisUnknownTagMessage} from './native-tags.js';
 import {parseAsb} from '../../formats/artemis/asb.js';
 import {
   ARTEMIS_GOTO_TAG,
@@ -31,6 +32,11 @@ export interface ArtemisScriptHost {
    * debug-mode/LogFilter/console policy; absent owner keeps the failure strict.
    */
   reportLuaCallError?(report: ArtemisLuaCallErrorReport): void;
+  /** c5800: a name outside the native command map with no matching macro reaches
+   * c7260(script, 1, tag, "未知のタグ、または未定義のマクロです。") and the tag returns
+   * normally. The owner supplies the report policy; without one every name reaches
+   * `dispatch`, which refuses unsupported names. */
+  reportUnknownTag?(report: ArtemisUnknownTagReport): void;
   /** c5800 strips n leading '$' from an argument value and applies the variable
    * expression evaluator afc60 n times before filtering and dispatch. Absent owner
    * refuses such arguments.
@@ -44,6 +50,13 @@ export interface ArtemisLuaCallErrorReport {
   readonly message: Uint8Array;
   readonly severity: 1;
   readonly error: unknown;
+}
+export interface ArtemisUnknownTagReport {
+  readonly file: string;
+  readonly tag: AsbTag;
+  /** Native Shift_JIS message bytes (0x140372a70). */
+  readonly message: Uint8Array;
+  readonly severity: 1;
 }
 export interface ArtemisScriptStackFrame {
   readonly file: string;
@@ -412,6 +425,16 @@ export class ArtemisScript {
         this.return();
         break;
       default: {
+        // The macro stack (b38..b40) stays empty: macroadd is not implemented here.
+        if (this.host.reportUnknownTag && !artemisNativeTagNames.has(tag.name)) {
+          this.host.reportUnknownTag({
+            file: this.currentFile,
+            tag,
+            message: artemisUnknownTagMessage.slice(),
+            severity: 1,
+          });
+          break;
+        }
         const state = this.host.dispatch(tag);
         if (state === 'suspended') {
           this.state = 'waiting';

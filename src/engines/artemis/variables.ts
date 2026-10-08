@@ -22,7 +22,19 @@ export interface ArtemisVariableHost {
   stageSize(): {width: number; height: number};
   windowDisplay?(): WindowDisplayGeometry;
   applicationArguments?: ApplicationArgumentsHost;
+  /** Selected message layer (stage +0xa0) text extents: virtual +0x140 width (widest line
+   * up to the current one), +0x148 height and +0x150 last-line width, as floats. */
+  messageLayerMeasure?(): {
+    readonly width: number;
+    readonly height: number;
+    readonly lineWidth: number;
+  };
 }
+const messageLayerExtents = {
+  get_message_layer_width: 'width',
+  get_message_layer_height: 'height',
+  get_message_layer_line_width: 'lineWidth',
+} as const;
 
 /** Literal byte-string variables with current-local/global lookup; expressions require a separate evaluator. */
 export class ArtemisVariables {
@@ -139,6 +151,15 @@ export class ArtemisVariables {
       const value = p.get('system') === 'screen_width' ? size.width : size.height;
       if (!Number.isInteger(value) || value < 1 || value > 0x7fffffff)
         throw new Error('Invalid Artemis stage size');
+      this.write(name, String(value), local);
+    } else if (Object.hasOwn(messageLayerExtents, p.get('system') ?? '')) {
+      // e56a0 stores (int)float through the integer setter.
+      if (!this.host?.messageLayerMeasure)
+        throw new Error('Artemis message layer measure provider is not configured');
+      const key = messageLayerExtents[p.get('system') as keyof typeof messageLayerExtents];
+      const value = Math.trunc(this.host.messageLayerMeasure()[key]);
+      if (!Number.isInteger(value) || value < -0x80000000 || value > 0x7fffffff)
+        throw new Error('Unsupported Artemis message layer extent');
       this.write(name, String(value), local);
     } else throw new Error(`Unsupported native Artemis var system ${p.get('system') ?? ''}`);
     return true;
