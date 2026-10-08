@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {Lua51, luaText} from '../dist/core/lua51/runtime.js';
+import {Lua51, LuaRuntimeError, luaText} from '../dist/core/lua51/runtime.js';
 const bytes = (text) => new TextEncoder().encode(text);
 
 test('Lua 5.1 executes closures, environments, byte strings and isolated states', () => {
@@ -250,6 +250,53 @@ test('Prepared loadfile preserves header line numbers, text translation and bina
       windowsTextFileBytes(Uint8Array.of(65, 13, 10, 66, 13, 67, 26, 68)),
       Uint8Array.of(65, 10, 66, 13, 67),
     );
+  } finally {
+    vm.close();
+  }
+});
+
+test('Lua errors carry status, string bytes and the host exception they were raised from', () => {
+  const vm = new Lua51();
+  const refusal = new Error('Unsupported synthetic capability');
+  try {
+    vm.bind('refuse', () => {
+      throw refusal;
+    });
+    vm.execute(
+      bytes(`
+      function luaOnly() local missing; missing() end
+      function direct() engine:refuse() end
+      function rethrown() local ok, e = pcall(engine.refuse, engine); error(e) end
+      function handled() pcall(engine.refuse, engine); error('later') end
+      function tableValue() error({}) end
+      function embedded() error('a\\0b', 0) end
+    `),
+    );
+    const failure = (name) => {
+      const callback = vm.referenceGlobal(name);
+      try {
+        callback.invokeVoid();
+      } catch (error) {
+        return error;
+      } finally {
+        callback.release();
+      }
+      assert.fail('expected Lua error');
+    };
+    const luaOnly = failure('luaOnly');
+    assert.ok(luaOnly instanceof LuaRuntimeError);
+    assert.equal(luaOnly.status, 2);
+    assert.equal(luaOnly.hostCause, undefined);
+    assert.match(luaText(luaOnly.value), /attempt to call local 'missing'/);
+    assert.equal(failure('direct').hostCause, refusal);
+    assert.equal(failure('direct').message, refusal.message);
+    assert.equal(failure('rethrown').hostCause, refusal);
+    assert.equal(failure('handled').hostCause, undefined);
+    const table = failure('tableValue');
+    assert.equal(table.value, null);
+    assert.equal(table.message, 'Lua error 2');
+    assert.deepEqual(failure('embedded').value, Uint8Array.of(97, 0, 98));
+    assert.equal(vm.usable, true);
   } finally {
     vm.close();
   }

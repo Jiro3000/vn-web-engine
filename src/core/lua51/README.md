@@ -13,7 +13,12 @@ reject precompiled bytecode; this embedding does not reproduce the Windows x64
 native bytecode ABI. It is not a full native Lua library replacement.
 
 Host calls preserve coroutine state and reentrant execution. Protected Lua/host
-errors restore the VM stack. A per-call instruction budget is shared across nested
+errors restore the VM stack. A nonzero status throws `LuaRuntimeError` with the Lua
+status, the error string bytes (null for non-string error values) and `hostCause`.
+A host method exception becomes a Lua error carrying its message; when that message
+reaches the outer call unchanged or rethrown with a `chunk:line:` prefix, `hostCause`
+holds the original exception. Owners use it to keep host refusals distinct from
+errors raised by Lua code. A per-call instruction budget is shared across nested
 calls; exhaustion throws across the wasm import, preventing Lua pcall from
 swallowing it, and invalidates that VM. Host table conversion is bounded to
 100,000 visited values per conversion and nesting depth 64. Memory growth is bounded to 64 MiB. These

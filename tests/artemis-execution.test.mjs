@@ -4112,3 +4112,173 @@ test('Native include reporting returns to Lua after the final failure and preser
     guarded.close();
   }
 });
+
+test('Native calllua reports Lua and lookup failures at severity 1, then continues the script', () => {
+  const source = bytes(`[lua]
+    function broken(e) partial=1; authentication(); unreachable=1 end
+    function outer(e) e:tag{'calllua',['function']='missing.deep'}; e:tag{'calllua',['function']='broken'}; outer_done=1 end
+    function valueError(e) error({}) end
+    function embedded(e) error('first\\0second', 0) end
+    notcallable={}
+    [/lua][calllua function="broken"][calllua function="missing"][calllua function="notcallable"][calllua function="outer"][calllua function="embedded"][after][calllua function="valueError"][stop]`);
+  const run = (reporting) => {
+    let script;
+    const reports = [],
+      dispatched = [];
+    const lua = new ArtemisLua({
+      readFile: () => source,
+      fileExists: () => true,
+      now: () => 0,
+      variable: () => '',
+      tag: (tag) => script.executeTag(tag),
+      enqueueTag: () => {},
+    });
+    script = new ArtemisScript(lua, {
+      readFile: () => source,
+      dispatch: (tag) => {
+        if (tag.name === 'unsupported') throw new Error('Unsupported native Artemis tag');
+        dispatched.push(tag.name);
+        if (tag.name === 'stop') return 'stopped';
+      },
+      ...(reporting
+        ? {
+            reportLuaCallError: (report) =>
+              reports.push({
+                file: report.file,
+                function: report.tag.args.get('function'),
+                line: report.tag.sourceLine,
+                message: luaText(report.message),
+                severity: report.severity,
+              }),
+          }
+        : {}),
+    });
+    script.load('boot');
+    return {script, lua, reports, dispatched};
+  };
+  const strict = run(false);
+  try {
+    assert.throws(() => strict.script.run(), /authentication/);
+    assert.equal(strict.script.state, 'faulted');
+  } finally {
+    strict.lua.close();
+  }
+  const reported = run(true);
+  try {
+    assert.throws(() => reported.script.run(), /Lua error 2/);
+    assert.equal(reported.script.state, 'faulted');
+    const notFound = '指定されたfunctionが見つかりません';
+    assert.deepEqual(
+      reported.reports.map(({function: name, message, severity}) => [name, message, severity]),
+      [
+        ['broken', reported.reports[0].message, 1],
+        ['missing', notFound, 1],
+        ['notcallable', notFound, 1],
+        ['missing.deep', notFound, 1],
+        ['broken', reported.reports[0].message, 1],
+        ['embedded', 'first', 1],
+      ],
+    );
+    assert.match(reported.reports[0].message, /attempt to call global 'authentication'/);
+    assert.equal(reported.reports[0].file, 'boot');
+    assert.equal(reported.reports[3].line, -1);
+    assert.equal(reported.lua.vm.getGlobal('partial'), 1);
+    assert.equal(reported.lua.vm.getGlobal('unreachable'), null);
+    assert.equal(reported.lua.vm.getGlobal('outer_done'), 1);
+    assert.deepEqual(reported.dispatched, ['after']);
+  } finally {
+    reported.lua.close();
+  }
+  const refusalSource = bytes(
+    `[lua]function refused(e) e:tag{'unsupported'} end[/lua][calllua function="refused"][stop]`,
+  );
+  let script;
+  const reports = [];
+  const lua = new ArtemisLua({
+    readFile: () => refusalSource,
+    fileExists: () => true,
+    now: () => 0,
+    variable: () => '',
+    tag: (tag) => script.executeTag(tag),
+    enqueueTag: () => {},
+  });
+  script = new ArtemisScript(lua, {
+    readFile: () => refusalSource,
+    dispatch: (tag) => {
+      if (tag.name === 'unsupported') throw new Error('Unsupported native Artemis tag');
+    },
+    reportLuaCallError: (report) => reports.push(report),
+  });
+  try {
+    script.load('boot');
+    assert.throws(() => script.run(), /Unsupported native Artemis tag/);
+    assert.equal(script.state, 'faulted');
+    assert.equal(reports.length, 0);
+  } finally {
+    lua.close();
+  }
+});
+
+test('Suspended calllua failures close their coroutine, report once and resume the caller', () => {
+  const source = bytes(`[lua]
+    function child(e) e:tag{'asset'}; child_after=1; authentication() end
+    function parent(e) e:tag{'calllua',['function']='child'}; parent_done=1 end
+    function failing(e) e:tag{'asset'} end
+    function failingParent(e) e:tag{'calllua',['function']='failing'}; should_not_run=1 end
+  [/lua][calllua function="parent"][calllua function="child"][after][stop]
+  *resource
+  [calllua function="failingParent"][stop]`);
+  let script;
+  const reports = [],
+    dispatched = [];
+  const lua = new ArtemisLua({
+    readFile: () => source,
+    fileExists: () => true,
+    now: () => 0,
+    variable: () => '',
+    suspendableTags: true,
+    tag: (tag) => script.executeTag(tag),
+    enqueueTag: () => {},
+  });
+  script = new ArtemisScript(lua, {
+    readFile: () => source,
+    dispatch: (tag) => {
+      if (tag.name === 'asset') return 'suspended';
+      dispatched.push(tag.name);
+      if (tag.name === 'stop') return 'stopped';
+    },
+    reportLuaCallError: (report) =>
+      reports.push([report.tag.args.get('function'), luaText(report.message)]),
+  });
+  try {
+    script.load('boot');
+    assert.equal(script.run(), 'waiting');
+    assert.equal(script.pendingLuaCalls, 2);
+    assert.equal(script.resumeLua(), 'ready');
+    assert.equal(script.pendingLuaCalls, 0);
+    assert.equal(lua.vm.getGlobal('child_after'), 1);
+    assert.equal(lua.vm.getGlobal('parent_done'), 1);
+    assert.equal(script.run(), 'waiting');
+    assert.equal(script.pendingLuaCalls, 1);
+    assert.equal(script.resumeLua(), 'ready');
+    assert.equal(script.run(), 'stopped');
+    assert.deepEqual(dispatched, ['after', 'stop']);
+    assert.deepEqual(
+      reports.map(([name]) => name),
+      ['child', 'child'],
+    );
+    assert.match(reports[0][1], /attempt to call global 'authentication'/);
+    // Resource failures are host refusals and remain strict through every caller.
+    script.load('boot', 'resource');
+    assert.equal(script.run(), 'waiting');
+    assert.equal(script.pendingLuaCalls, 2);
+    assert.throws(() => script.resumeLua([false, bytes('asset failed')]), /asset failed/);
+    assert.equal(script.state, 'faulted');
+    assert.equal(script.pendingLuaCalls, 0);
+    assert.equal(lua.vm.getGlobal('should_not_run'), null);
+    assert.equal(reports.length, 2);
+  } finally {
+    script.cancelLuaCalls();
+    lua.close();
+  }
+});

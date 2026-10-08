@@ -20,10 +20,24 @@ export interface ArtemisScriptHost {
   popLocal?(): void;
   /** Return with no caller reaches native exit/save handling, supplied by the host. */
   emptyReturn?(): 'stopped' | void;
+  /** Native calllua c84b0: 12c030 catches function lookup and luabind::error failures,
+   * then c7260 reports severity1 and the tag returns normally. The owner supplies the
+   * debug-mode/LogFilter/console policy; absent owner keeps the failure strict.
+   */
+  reportLuaCallError?(report: ArtemisLuaCallErrorReport): void;
+}
+export interface ArtemisLuaCallErrorReport {
+  readonly file: string;
+  readonly tag: AsbTag;
+  /** Native last-error bytes formatted by c84b0's "%s". */
+  readonly message: Uint8Array;
+  readonly severity: 1;
+  readonly error: unknown;
 }
 interface PendingLuaCall {
   readonly task: ArtemisLuaCall;
   readonly filterTag?: AsbTag;
+  readonly callTag?: AsbTag;
 }
 interface Cursor {
   program: IetProgram;
@@ -184,8 +198,17 @@ export class ArtemisScript {
           if (this.dispatchNative(frame.filterTag) === 'suspended') return this.state;
         }
         input = [];
-      } catch (error) {
+      } catch (failure) {
         for (const abandoned of this.luaCalls.splice(index).reverse()) abandoned.task.close();
+        let error = failure;
+        if (frame.callTag)
+          try {
+            this.reportLuaCall(frame.callTag, failure);
+            input = []; // The calllua tag returned; its caller continues normally.
+            continue;
+          } catch (strict) {
+            error = strict;
+          }
         if (!this.luaCalls.length) {
           this.state = 'faulted';
           throw error;
@@ -219,12 +242,22 @@ export class ArtemisScript {
     } else if (this.lua.filterTag(tag)) return;
     return this.dispatchNative(tag);
   }
-  private beginLuaCall(task: ArtemisLuaCall, filterTag?: AsbTag): void | 'suspended' {
+  /** Report a recoverable calllua failure through the owner, otherwise rethrow it. */
+  private reportLuaCall(tag: AsbTag, error: unknown): void {
+    const message = this.host.reportLuaCallError ? this.lua.callErrorMessage(error) : null;
+    if (!message) throw error;
+    this.host.reportLuaCallError!({file: this.currentFile, tag, message, severity: 1, error});
+  }
+  private beginLuaCall(
+    task: ArtemisLuaCall,
+    filterTag?: AsbTag,
+    callTag?: AsbTag,
+  ): void | 'suspended' {
     if (this.luaCalls.length >= 1000) {
       task.close();
       throw new Error('Artemis Lua call depth limit exceeded');
     }
-    const frame = {task, filterTag},
+    const frame = {task, filterTag, callTag},
       index = this.luaCalls.length;
     this.luaCalls.push(frame);
     try {
@@ -242,7 +275,8 @@ export class ArtemisScript {
         return this.dispatchNative(filterTag);
     } catch (error) {
       for (const abandoned of this.luaCalls.splice(index).reverse()) abandoned.task.close();
-      throw error;
+      if (!callTag) throw error;
+      this.reportLuaCall(callTag, error);
     }
   }
   private dispatchNative(tag: AsbTag): void | 'suspended' {
@@ -252,9 +286,18 @@ export class ArtemisScript {
       case 'calllua': {
         const name = tag.args.get('function');
         if (!name) throw new Error('Missing calllua function');
-        if (!this.lua.suspendableTags) this.lua.call(name, tag.args);
-        else return this.beginLuaCall(this.lua.createCall(name, tag.args));
-        break;
+        let task: ArtemisLuaCall;
+        try {
+          if (!this.lua.suspendableTags) {
+            this.lua.call(name, tag.args);
+            break;
+          }
+          task = this.lua.createCall(name, tag.args);
+        } catch (error) {
+          this.reportLuaCall(tag, error);
+          break;
+        }
+        return this.beginLuaCall(task, undefined, tag);
       }
       case 'jump':
         this.jump(tag.args.get('file'), tag.args.get('label'));

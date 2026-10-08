@@ -18,6 +18,23 @@ export function luaText(value: LuaValue | undefined): string {
   return decoder.decode(value);
 }
 
+/** Nonzero Lua status from a protected load, call or resume. `value` holds the error
+ * string bytes; other error values are null. `hostCause` is the host-method exception
+ * the Lua error was raised from, so owners can keep host refusals distinct from
+ * errors produced by Lua code.
+ */
+export class LuaRuntimeError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly value: Uint8Array | null,
+    readonly hostCause?: unknown,
+  ) {
+    super(message);
+    this.name = 'LuaRuntimeError';
+  }
+}
+
 /** Isolated Lua 5.1.5 VM. Platform effects are supplied through explicit engine methods. */
 export class Lua51 {
   private readonly exports: Exports;
@@ -31,6 +48,8 @@ export class Lua51 {
   private closed = false;
   private poisoned = false;
   private callbackState: number | undefined;
+  /** Host-method failures raised as Lua errors during the current outer execution. */
+  private hostFailures: {readonly message: string; readonly error: unknown}[] = [];
   readonly instructionLimit: number;
 
   constructor(instructionLimit = 2_000_000) {
@@ -292,14 +311,19 @@ export class Lua51 {
     this.assertOpen();
     const state = this.current,
       top = this.fn('lua51_top')(state);
+    if (!this.depth) this.hostFailures = [];
     this.depth++;
     try {
       const status = action();
       if (status) {
-        const error = this.read(-1);
-        throw new Error(
-          error instanceof Uint8Array ? new TextDecoder().decode(error) : `Lua error ${status}`,
-        );
+        const value = this.fn('lua51_type')(state, -1) === 4 ? (this.read(-1) as Uint8Array) : null;
+        const message = value ? new TextDecoder().decode(value) : `Lua error ${status}`;
+        let cause: unknown;
+        // Lua error() at level >0 prefixes "chunk:line: " to a rethrown host message.
+        for (const failure of this.hostFailures)
+          if (message === failure.message || message.endsWith(`: ${failure.message}`))
+            cause = failure.error;
+        throw new LuaRuntimeError(message, status, value, cause);
       }
     } catch (error) {
       if (error instanceof WebAssembly.RuntimeError) this.poisoned = true;
@@ -434,7 +458,10 @@ export class Lua51 {
       if (error instanceof WebAssembly.RuntimeError) this.poisoned = true;
       if (this.poisoned) throw error;
       this.fn('lua51_settop')(state, top);
-      this.push(encoder.encode(error instanceof Error ? error.message : String(error)));
+      const message = error instanceof Error ? error.message : String(error);
+      if (this.hostFailures.length >= 64) this.hostFailures.shift();
+      this.hostFailures.push({message, error});
+      this.push(encoder.encode(message));
       return -1; // C calls lua_error after returning from the JavaScript import.
     } finally {
       this.callbackState = old;

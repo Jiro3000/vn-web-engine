@@ -64,6 +64,7 @@ const surfacePreloads = process.argv.slice(3).includes('--surface-preloads');
 const soundDecode = process.argv.slice(3).includes('--sound-decode');
 const soundRender = process.argv.slice(3).includes('--sound-render');
 const nativeIncludeReporting = process.argv.slice(3).includes('--native-include-reporting');
+const nativeCallLuaReporting = process.argv.slice(3).includes('--native-calllua-reporting');
 const shaderPresets = process.argv.slice(3).includes('--shader-presets');
 if (shaderPresets && !metadataLayers) throw Error('--shader-presets requires --image-metadata');
 const graphicsFeatureArgument = process.argv
@@ -127,6 +128,7 @@ try {
     nativeTags = [],
     includes = [],
     luaIncludeErrors = [],
+    luaCallErrors = [],
     modeEffects = [];
   // This probe accepts explicit Windows stage dimensions from the real INI;
   // it does not supply defaults or implement the complete native INI loader.
@@ -644,6 +646,19 @@ try {
     dispatch,
     trace: ({origin, file, tagIndex, tag}) =>
       events.push({origin, file, tagIndex, name: tag.name, sourceLine: tag.sourceLine}),
+    // Diagnostic record of native c84b0 severity1 reports; no debug console/LogFilter policy.
+    ...(nativeCallLuaReporting
+      ? {
+          reportLuaCallError: ({file, tag, message, severity}) =>
+            luaCallErrors.push({
+              file,
+              sourceLine: tag.sourceLine,
+              function: tag.args.get('function'),
+              message: new TextDecoder().decode(message),
+              severity,
+            }),
+        }
+      : {}),
   });
   let refusal = null;
   try {
@@ -727,6 +742,8 @@ try {
         compiled,
         nativeIncludeReporting,
         luaIncludeErrors,
+        nativeCallLuaReporting,
+        luaCallErrors,
         luaVersion: luaText(lua.vm.getGlobal('_VERSION')),
         state: script.state,
         refusal,

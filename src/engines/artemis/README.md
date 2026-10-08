@@ -198,7 +198,8 @@ arguments/locals; its owner resumes after applying the completed resource effect
 `ArtemisScript` drives `calllua` through those coroutines when opted in, suspends
 nested calls, and resumes the deepest call before its callers. `resumeLua` supplies
 completion values, while ordinary timed waits continue using `resume`. Resource
-failures resume with false/error bytes and propagate through the suspended calls.
+failures resume with false/error bytes and propagate through the suspended calls
+as host refusals.
 Loading another script cancels old Lua continuations; the resource owner must also
 cancel or reject stale resource completions. Lua callback return values are discarded.
 
@@ -1158,4 +1159,18 @@ to the include caller. Without that owner, diagnostics retain final refusal.
 Poisoned/closed Lua VMs remain nonrecoverable. Packed loadbuffer uses a literal
 filename chunk name, while plain loadfile uses @filename. The nonvisual probe can
 opt into --native-include-reporting with error records and explicit host guards.
-This does not handle errors in an outer calllua after a successful include.
+
+`reportLuaCallError` is the native calllua owner (c84b0→12c030→c7260). 12c030
+resolves the dotted `function` name from globals; nil/false along the path or a
+non-function result reports the native "function not found" text. Its
+luabind::error catch turns a Lua runtime error with a string value into the
+last-error bytes up to the first NUL. c84b0 reports them at severity1 and the tag
+returns, so the script continues; Lua side effects before the error remain. The
+synchronous path and resource-suspended coroutines behave the same: a failed
+frame is closed and its suspended caller resumes with no values. Host-method
+refusals keep their `LuaRuntimeError.hostCause`, and resource failures are raised
+through a host method, so both stay strict, as do VM traps, the memory cap and
+non-string error values. Without the owner every failure keeps the strict fault.
+Debug gating (+0x3524/+0x3528), the Lua LogFilter and console output belong to the
+owner. Probe --native-calllua-reporting records reports without that policy.
+Evidence: lua-calllua-error-notes.md.

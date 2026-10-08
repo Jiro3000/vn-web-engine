@@ -1,5 +1,6 @@
 import {
   Lua51,
+  LuaRuntimeError,
   luaText,
   type LuaReference,
   type LuaTable,
@@ -182,19 +183,31 @@ export class ArtemisLua {
       host.enqueueTag(luaTag(args[0]));
       return [];
     });
-    if (host.suspendableTags)
+    if (host.suspendableTags) {
+      // Resource failures are raised by a host method so they keep a host cause.
+      this.vm.bind('artemisResourceFailure', (args) => {
+        const message = args[0];
+        throw new Error(
+          message instanceof Uint8Array
+            ? new TextDecoder().decode(message)
+            : 'Artemis resource operation failed',
+        );
+      });
       this.vm.execute(
         new TextEncoder().encode(`
         local nativeTag = engine.tag
+        local resourceFailure = engine.artemisResourceFailure
+        engine.artemisResourceFailure = nil
         engine.tag = function(self, command)
           if nativeTag(self, command) then
             local ok, message = coroutine.yield()
-            if ok == false then error(message or 'Artemis resource operation failed') end
+            if ok == false then resourceFailure(self, message) end
           end
         end
       `),
         '@artemis/suspendable-tag',
       );
+    }
   }
   include(path: string): void {
     if (this.host.readPlainFile) {
@@ -245,16 +258,36 @@ export class ArtemisLua {
     for (const [key, value] of args) params.set(key, new TextEncoder().encode(value));
     return [params];
   }
+  /** Native12c030 last-error bytes for a calllua failure it catches, or null when the
+   * failure must remain strict. Its luabind::error catch converts a string or nil
+   * error value with object_cast<const char*> and assigns up to the first NUL; nil
+   * and other values are not recoverable there. Host refusals, VM traps and the web
+   * memory cap (status4) are never reported as script errors.
+   */
+  callErrorMessage(error: unknown): Uint8Array | null {
+    if (!this.vm.usable) return null;
+    if (error instanceof ArtemisLuaFunctionNotFound) return new TextEncoder().encode(error.message);
+    if (!(error instanceof LuaRuntimeError) || error.hostCause !== undefined || !error.value)
+      return null;
+    if (error.status !== 2 && error.status !== 5) return null;
+    const nul = error.value.indexOf(0);
+    return nul < 0 ? error.value : error.value.subarray(0, nul);
+  }
+  /** 12c030 splits on '.', stops at nil/false and requires a Lua function at the end. */
   private callback(name: string): LuaReference {
     const parts = name.split('.');
     if (parts.some((part) => !part)) throw new Error('Invalid Artemis Lua function path');
     let callback = this.vm.referenceGlobal(parts[0]!);
     try {
-      for (const part of parts.slice(1)) {
-        const next = callback.get(part);
+      for (let index = 1; ; index++) {
+        if (callback.type === 0 || (callback.type === 1 && callback.read() === false))
+          throw new ArtemisLuaFunctionNotFound(name);
+        if (index === parts.length) break;
+        const next = callback.get(parts[index]!);
         callback.release();
         callback = next;
       }
+      if (callback.type !== 6) throw new ArtemisLuaFunctionNotFound(name);
       return callback;
     } catch (error) {
       callback.release();
@@ -305,6 +338,16 @@ export class ArtemisLua {
   }
   close(): void {
     this.vm.close();
+  }
+}
+
+/** 12c030 resolution failure. The message is the native last-error literal at0x140375638;
+ * the UTF-8 form corresponds to its converting branch for the engine text flag.
+ */
+export class ArtemisLuaFunctionNotFound extends Error {
+  constructor(readonly functionName: string) {
+    super('指定されたfunctionが見つかりません');
+    this.name = 'ArtemisLuaFunctionNotFound';
   }
 }
 
