@@ -177,7 +177,10 @@ does. Default event actions and physical input dispatch remain unimplemented.
 input owner's contact-limit operation. It is bound only when that owner exists;
 the nonvisual probe records the configuration and does not simulate touch input.
 
-`event-commands.ts` copies mode/hide/backlog/directory event commands. Label-only
+`event-commands.ts` copies mode/hide/backlog/directory and window-button event
+commands; `delon*` clears the matching slot (native stores an empty block, which event
+dispatch skips). Window buttons are keyed by atoi(`button`), with a separate slot when
+`button` is absent. Label-only
 registrations capture the current script filename; explicit empty filenames are
 preserved. `setonpush` replaces one of two per-key slots: missing/exact-zero
 keyrepeat chooses slot 0, other strings choose slot 1. Registering one slot keeps
