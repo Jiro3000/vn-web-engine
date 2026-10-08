@@ -1,0 +1,144 @@
+import {artemisRevision} from './revision.js';
+import {ARTEMIS_RASTER_FRAGMENT_SOURCE, type ArtemisRasterUniforms} from './raster-shader.js';
+import type {TriangleImage} from '../../graphics/triangle-draw.js';
+
+const vertexSource = `#version 300 es
+precision highp float;
+out vec2 vUv;
+void main() {
+  vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
+  vUv = vec2(p.x, 1.0 - p.y);
+  gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+}`;
+
+/** Actual WebGL executable for the recognized raster program. The caller owns
+ * context/target and sampler policy; shader output is straight RGBA before blending.
+ * This helper uses a dedicated context and does not save another renderer's state.
+ */
+export class ArtemisBrowserRasterShader {
+  private readonly program: WebGLProgram;
+  private readonly texture: WebGLTexture;
+  private readonly vao: WebGLVertexArrayObject;
+  private disposed = false;
+  constructor(
+    hash: string,
+    private readonly gl: WebGL2RenderingContext,
+  ) {
+    artemisRevision(hash);
+    const compile = (type: number, source: string) => {
+      const shader = gl.createShader(type);
+      if (!shader) throw Error('Cannot allocate raster shader');
+      gl.shaderSource(shader, source);
+      gl.compileShader(shader);
+      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+        const error = gl.getShaderInfoLog(shader);
+        gl.deleteShader(shader);
+        throw Error(error ?? 'Raster shader compilation failed');
+      }
+      return shader;
+    };
+    const vertex = compile(gl.VERTEX_SHADER, vertexSource);
+    let fragment: WebGLShader | undefined,
+      program: WebGLProgram | null = null;
+    try {
+      fragment = compile(gl.FRAGMENT_SHADER, ARTEMIS_RASTER_FRAGMENT_SOURCE);
+      program = gl.createProgram();
+      if (!program) throw Error('Cannot allocate raster program');
+      gl.attachShader(program, vertex);
+      gl.attachShader(program, fragment);
+      gl.linkProgram(program);
+      if (!gl.getProgramParameter(program, gl.LINK_STATUS))
+        throw Error(gl.getProgramInfoLog(program) ?? 'Raster program link failed');
+    } catch (error) {
+      if (program) gl.deleteProgram(program);
+      throw error;
+    } finally {
+      gl.deleteShader(vertex);
+      if (fragment) gl.deleteShader(fragment);
+    }
+    this.program = program;
+    const texture = gl.createTexture(),
+      vao = gl.createVertexArray();
+    if (!texture || !vao) {
+      if (texture) gl.deleteTexture(texture);
+      if (vao) gl.deleteVertexArray(vao);
+      gl.deleteProgram(program);
+      throw Error('Cannot allocate raster GPU resources');
+    }
+    this.texture = texture;
+    this.vao = vao;
+  }
+  draw(
+    image: TriangleImage,
+    width: number,
+    height: number,
+    p: ArtemisRasterUniforms,
+    sampler: {readonly filter: 'nearest' | 'linear'; readonly address: 'clamp' | 'repeat'},
+  ): void {
+    if (this.disposed) throw Error('Raster GPU program disposed');
+    if (
+      !Number.isInteger(width) ||
+      !Number.isInteger(height) ||
+      width < 1 ||
+      height < 1 ||
+      !Number.isInteger(image.width) ||
+      !Number.isInteger(image.height) ||
+      image.width < 1 ||
+      image.height < 1 ||
+      image.pixels.length !== image.width * image.height * 4 ||
+      ![p.alpha, p.angle, p.inter, p.size].every(Number.isFinite)
+    )
+      throw Error('Invalid raster GPU input');
+    const gl = this.gl;
+    gl.useProgram(this.program);
+    gl.bindVertexArray(this.vao);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.texture);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    const filter =
+        sampler.filter === 'nearest' ? gl.NEAREST : sampler.filter === 'linear' ? gl.LINEAR : null,
+      address =
+        sampler.address === 'clamp'
+          ? gl.CLAMP_TO_EDGE
+          : sampler.address === 'repeat'
+            ? gl.REPEAT
+            : null;
+    if (filter === null || address === null) throw Error('Unsupported raster sampler policy');
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, address);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, address);
+    gl.texImage2D(
+      gl.TEXTURE_2D,
+      0,
+      gl.RGBA8,
+      image.width,
+      image.height,
+      0,
+      gl.RGBA,
+      gl.UNSIGNED_BYTE,
+      image.pixels as Uint8Array<ArrayBuffer>,
+    );
+    gl.uniform1i(gl.getUniformLocation(this.program, 'uFore'), 0);
+    for (const [name, value] of [
+      ['uAlpha', p.alpha],
+      ['uAngle', p.angle],
+      ['uInter', p.inter],
+      ['uSize', p.size],
+    ] as const)
+      gl.uniform1f(gl.getUniformLocation(this.program, name), value);
+    gl.viewport(0, 0, width, height);
+    gl.disable(gl.BLEND);
+    gl.disable(gl.DEPTH_TEST);
+    gl.disable(gl.SCISSOR_TEST);
+    gl.colorMask(true, true, true, true);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.gl.deleteTexture(this.texture);
+    this.gl.deleteVertexArray(this.vao);
+    this.gl.deleteProgram(this.program);
+  }
+}

@@ -1,5 +1,6 @@
 /** Nonvisual Lua/script diagnostics with optional actual memory asset/PCM providers. No native game process or audio-device output. */
 import {createHash} from 'node:crypto';
+import {createArtemisShaderFixture} from './artemis-shader-fixture.mjs';
 import {createArtemisSurfacePreloadFixture} from './artemis-surface-preload-fixture.mjs';
 import {createArtemisGlyphLayoutFixture} from './artemis-glyph-layout-fixture.mjs';
 import {createArtemisOfflineSoundFixture} from './artemis-offline-sound-fixture.mjs';
@@ -61,6 +62,8 @@ const glyphLayout = process.argv.slice(3).includes('--glyph-layout');
 const surfacePreloads = process.argv.slice(3).includes('--surface-preloads');
 const soundDecode = process.argv.slice(3).includes('--sound-decode');
 const soundRender = process.argv.slice(3).includes('--sound-render');
+const shaderPresets = process.argv.slice(3).includes('--shader-presets');
+if (shaderPresets && !metadataLayers) throw Error('--shader-presets requires --image-metadata');
 const graphicsFeatureArgument = process.argv
   .slice(3)
   .find((value) => value.startsWith('--graphics-feature-level='));
@@ -76,6 +79,7 @@ let fontStack = null,
   glyphFixture = null,
   surfaceFixture = null,
   soundFixture = null,
+  shaderFixture = null,
   sePlay = null,
   ruby = null,
   textCommands = null;
@@ -165,6 +169,10 @@ try {
     soundFixture = soundRender
       ? createArtemisOfflineSoundFixture(executableSha256, (path) => installation.files.read(path))
       : createArtemisSoundDecodeFixture((path) => installation.files.read(path));
+  if (shaderPresets)
+    shaderFixture = createArtemisShaderFixture(executableSha256, (path) =>
+      installation.files.read(path),
+    );
   // Installation-relative read-only namespace; no Windows known-folder resolution or writes.
   if (savePath !== undefined && savePathCsidl === undefined && /^[\w-]+$/.test(savePath))
     initializeArtemisResourcePaths(variables, {dataPath: '', savePath});
@@ -555,6 +563,11 @@ try {
       wait.dispatch(tag)
     )
       return;
+    if (shaderFixture && tag.name === 'lyshader') {
+      if (pendingResource) throw Error('Probe shader resource operation overlaps');
+      pendingResource = shaderFixture.dispatch(tag);
+      return 'suspended';
+    }
     if (sePlay && ['seplay', 'sefadein'].includes(tag.name)) {
       if (pendingResource) throw Error('Probe sound resource operation overlaps');
       pendingResource = sePlay.dispatch(tag);
@@ -692,6 +705,7 @@ try {
         glyphLayoutFixture: glyphFixture?.summary(),
         surfacePreloadFixture: surfaceFixture?.summary(),
         soundDecodeFixture: soundFixture?.summary(),
+        shaderFixture: shaderFixture?.summary(),
         astLoadedByGame,
         astVersion: lua.vm.getGlobal('astver'),
         astTopLevelKeys: ast.size,
@@ -711,5 +725,6 @@ try {
   await glyphFixture?.close();
   await surfaceFixture?.close();
   await soundFixture?.close();
+  shaderFixture?.close();
   await installation.close();
 }

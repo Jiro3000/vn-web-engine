@@ -1006,3 +1006,25 @@ registration itself is supported. It does not invent default event actions.
 Graphics feature level is published only through an explicit revision-selected
 owner callback. `--graphics-feature-level=NUMBER` is an optional simulated diagnostic
 value, recorded as such; it is not a report about browser/Windows GPU capability.
+
+## Named shader resources
+
+`ArtemisShaderLibrary` implements `lyshader` file/compile/registry ownership with
+mandatory compiler and diagnostic services. Shader IDs are independent of layer
+existence. Actor leases retain compiled resources across replacement or library
+shutdown. File misses and compiler errors preserve an existing named program;
+unsupported compiler services propagate. Late compilation after close disposes
+its resource before refusing adoption.
+
+`compileArtemisRasterPreset` selects the reconstructed CPU/GPU raster executable
+only for its exact input SHA-256 and engine revision. Original game shader text is
+not shipped. The program displaces UV1.x by `sin(radians(UV1.y*inter-angle))*size`,
+samples foreground and multiplies only alpha. Back/mask samples and color multiplier
+have no observable contribution in this source. Sampler filtering/addressing belong
+to the host. `ArtemisBrowserRasterShader` provides a real linked WebGL2 program on a
+dedicated context; actor-specific scene binding and parameter jobs remain separate.
+
+`--shader-presets` adds actual known-source CPU executable registration to the
+nonvisual probe. It does not display or shade game image pixels. Its optional
+feature-level input remains explicitly simulated. Unknown HLSL sources are refused;
+this is a verified preset port, not a general HLSL compiler.

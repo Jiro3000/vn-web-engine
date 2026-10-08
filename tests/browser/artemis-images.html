@@ -4,6 +4,7 @@
 <canvas id="frame" style="width: 256px; height: 128px; image-rendering: pixelated"></canvas>
 <pre id="result">Running synthetic PNG / Lua / raster checks</pre>
 <script type="module">
+  import {ArtemisBrowserRasterShader} from '../../dist/engines/artemis/browser-raster-shader.js';
   import {createArtemisRollingVoice} from '../../dist/engines/artemis/browser-rolling-voice.js';
   import {createArtemisBufferedSoundDecoder} from '../../dist/engines/artemis/buffered-sound-decoder.js';
   import {ArtemisWaveSource} from '../../dist/engines/artemis/wave-source.js';
@@ -1174,6 +1175,44 @@
     } finally {
       rollingVoice.dispose();
     }
+    const customCanvas = document.createElement('canvas');
+    customCanvas.width = customCanvas.height = 4;
+    const customGl = customCanvas.getContext('webgl2', {
+      alpha: true,
+      premultipliedAlpha: false,
+      preserveDrawingBuffer: true,
+    });
+    assert(customGl, 'custom raster shader GPU context');
+    const customShader = new ArtemisBrowserRasterShader(revision, customGl),
+      customPixels = new Uint8Array(4 * 4 * 4);
+    for (let y = 0; y < 4; y++)
+      for (let x = 0; x < 4; x++) customPixels.set([x * 40, y * 40, 0, 200], (y * 4 + x) * 4);
+    try {
+      const image = {width: 4, height: 4, pixels: customPixels};
+      for (const shifted of [false, true]) {
+        customShader.draw(
+          image,
+          4,
+          4,
+          {alpha: 0.5, angle: shifted ? 90 : 0, inter: 0, size: shifted ? 0.25 : 0},
+          {filter: 'nearest', address: 'clamp'},
+        );
+        const actual = new Uint8Array(64);
+        customGl.readPixels(0, 0, 4, 4, customGl.RGBA, customGl.UNSIGNED_BYTE, actual);
+        for (let y = 0; y < 4; y++)
+          for (let x = 0; x < 4; x++) {
+            const sourceX = shifted ? Math.max(0, x - 1) : x,
+              expected = [sourceX * 40, (3 - y) * 40, 0, 100];
+            for (let channel = 0; channel < 4; channel++)
+              assert(
+                Math.abs(actual[(y * 4 + x) * 4 + channel] - expected[channel]) <= 1,
+                'actual custom raster GPU ' + shifted + ':' + x + ':' + y + ':' + channel,
+              );
+          }
+      }
+    } finally {
+      customShader.dispose();
+    }
     window.result = {
       passed: true,
       nativeFontWorker: true,
@@ -1185,6 +1224,7 @@
       nativePairedWaveVoiceIntegration: true,
       nativeBufferedSoundDecoderIntegration: true,
       nativeRollingAudioWorklet: true,
+      nativeCustomRasterShader: true,
       nativeStereoAttenuation: true,
       audioDeviceOutput: false,
       nativeFontVersion: [2, 4, 8],

@@ -3030,3 +3030,79 @@ test('Graphics feature publication requires an explicit revision-selected owner 
     /Unsupported Artemis/,
   );
 });
+
+test('Named shader loading compiles real resources, retains actor loans and preserves old programs on failure', async () => {
+  const {ArtemisShaderLibrary} = await import('../dist/engines/artemis/shader-library.js');
+  const {ARTEMIS_3179_EXECUTABLE_SHA256: sha} = await import('../dist/engines/artemis/revision.js');
+  const disposed = [],
+    reports = [],
+    opens = [];
+  let sequence = 0;
+  const library = new ArtemisShaderLibrary(
+    sha,
+    async (path) => {
+      opens.push(path);
+      return path === 'shader' ? new Uint8Array([1]) : null;
+    },
+    {
+      compile: async () => ({shader: {generation: ++sequence}}),
+      dispose: (resource) => disposed.push(resource.generation),
+    },
+    (tag, reason, error) => reports.push({tag, reason, error}),
+  );
+  const tag = {
+    name: 'lyshader',
+    sourceLine: 0,
+    args: new Map([
+      ['id', 'raster'],
+      ['file', 'shader\0ignored'],
+    ]),
+  };
+  assert.equal(await library.dispatch(tag), true);
+  assert.deepEqual(opens, ['shader']);
+  const first = library.bind('raster');
+  assert.equal(first.shader.generation, 1);
+  await library.dispatch(tag);
+  assert.deepEqual(disposed, []);
+  const second = library.bind('raster');
+  assert.equal(second.shader.generation, 2);
+  first.release();
+  first.release();
+  assert.deepEqual(disposed, [1]);
+  await library.dispatch({
+    ...tag,
+    args: new Map([
+      ['id', 'raster'],
+      ['file', 'missing'],
+    ]),
+  });
+  assert.equal(reports[0].reason, 'file');
+  assert.equal(library.bind('unknown'), null);
+  library.close();
+  assert.deepEqual(disposed, [1]);
+  second.release();
+  assert.deepEqual(disposed, [1, 2]);
+  await assert.rejects(() => library.dispatch(tag), /closed/);
+});
+
+test('Executable raster shader uses native UV1 displacement and alpha without changing RGB', async () => {
+  const {artemisRasterCoordinates, artemisRasterShade} =
+    await import('../dist/engines/artemis/raster-shader.js');
+  const p = {alpha: 0.5, angle: 0, inter: 360, size: 0.125};
+  const uv = artemisRasterCoordinates(0.5, 0.25, p);
+  assert.ok(Math.abs(uv[0] - 0.625) < 1e-6);
+  assert.equal(uv[1], 0.25);
+  const seen = [];
+  const pixel = artemisRasterShade(
+    (u, v) => {
+      seen.push([u, v]);
+      return [0.2, 0.4, 0.6, 0.8];
+    },
+    0.5,
+    0.25,
+    p,
+  );
+  assert.deepEqual(seen, [uv]);
+  assert.deepEqual(pixel.slice(0, 3), [0.2, 0.4, 0.6]);
+  assert.ok(Math.abs(pixel[3] - 0.4) < 1e-6);
+});
