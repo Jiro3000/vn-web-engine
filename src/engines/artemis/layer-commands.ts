@@ -12,6 +12,10 @@ export class ArtemisLayerCommands {
   constructor(executableSha256: string) {
     artemisRevision(executableSha256);
   }
+  /** bf210 save-object reset empties the whole registry (+0x68). */
+  clearAll(): void {
+    this.lists.clear();
+  }
   reset(id: string): void {
     this.lists.set(id, []);
   }

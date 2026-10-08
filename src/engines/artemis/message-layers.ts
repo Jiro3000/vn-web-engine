@@ -96,6 +96,18 @@ export class ArtemisMessageLayers<T extends object> {
     }
     this.selectedName = name;
   }
+  /** bf210 stage reset: the message store (+0x80/+0x90) is emptied, then 14f490 creates
+   * "backlog" and "" (mode 0) and selects "". The scene root is replaced by the caller. */
+  reset(): void {
+    if (this.closed) throw Error('Artemis message-layer store closed');
+    for (const [name, entry] of [...this.layers].sort(([a], [b]) => compare(b, a))) {
+      if (entry.layered) this.owner.detachMessageLayer(name);
+      this.owner.releaseMessageLayer(entry.layer);
+    }
+    this.layers.clear();
+    this.selectMessageLayer('backlog');
+    this.selectMessageLayer('');
+  }
   close(): void {
     if (this.closed) return;
     this.closed = true;
@@ -138,6 +150,11 @@ export class ArtemisMessageSelection<T extends object> {
   }
   get depth(): number {
     return this.stack.length;
+  }
+  /** bf210: current name 35e0 = "" and the chgmsg stack 3600 is emptied. */
+  reset(): void {
+    this.stack.length = 0;
+    this.currentName = '';
   }
   dispatch(tag: AsbTag): boolean {
     if (tag.name !== 'chgmsg' && tag.name !== '/chgmsg') return false;

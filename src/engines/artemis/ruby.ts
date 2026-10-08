@@ -39,6 +39,13 @@ export class ArtemisRuby {
     this.main = new Uint8Array();
     this.annotation = new Uint8Array();
   }
+  /** bf210 clears 3770/3778/3798. */
+  reset(): void {
+    if (this.pending) throw Error('Overlapping Artemis ruby operations');
+    this.enabled = false;
+    this.main = new Uint8Array();
+    this.annotation = new Uint8Array();
+  }
   constructor(
     hash: string,
     private readonly host: ArtemisRubyHost,

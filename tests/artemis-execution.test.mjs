@@ -290,6 +290,11 @@ test('Mode commands disable active skip/auto through status and effect services'
     args: new Map(Object.entries(args)),
     sourceLine: -1,
   });
+  // Native construction leaves automode disallowed (+0x32 = 0) until a game allows it.
+  assert.equal(modes.automodeAllowed, false);
+  modes.setAutomode(true);
+  assert.equal(modes.automode, false);
+  modes.automodeAllowed = true;
   modes.setCommandSkip(true);
   modes.setControlSkip(true);
   modes.setAutomode(true);
@@ -4540,7 +4545,7 @@ test('Native stop shows the wait indicator, enters run mode 3 with the save gate
   );
   assert.equal(stop.dispatch({name: 'wait', args: new Map()}), false);
   modes.autosave = 2;
-  modes.setAutomode(true);
+  modes.setAutomode(true, true);
   log.length = 0;
   assert.equal(stop.dispatch({name: 'stop', args: new Map()}), true);
   assert.deepEqual(log.splice(0), [
@@ -4649,4 +4654,145 @@ test('Global and system saves round-trip through native BOW archives and reset k
   assert.equal(variables.lookup('f.scene'), undefined);
   assert.notEqual(variables.lookup('g.clear'), undefined);
   assert.notEqual(variables.lookup('s.bgmvol'), undefined);
+});
+
+test('Native reset saves globals, restarts the boot script and boot loads saved state', async () => {
+  const {ArtemisLua} = await import('../dist/engines/artemis/lua.js');
+  const {ArtemisScript} = await import('../dist/engines/artemis/script.js');
+  const {ArtemisVariables} = await import('../dist/engines/artemis/variables.js');
+  const {ArtemisModes} = await import('../dist/engines/artemis/modes.js');
+  const {ArtemisSave} = await import('../dist/engines/artemis/save.js');
+  const {ArtemisReset} = await import('../dist/engines/artemis/reset.js');
+  const {ArtemisReadHistory, writeArtemisGlobalArchive, writeArtemisSystemArchive} =
+    await import('../dist/engines/artemis/global-save.js');
+  const {packArtemisSaveFile} = await import('../dist/formats/artemis/save-file.js');
+  const files = new Map([
+    [
+      'boot.iet',
+      bytes(
+        `[lua]\nloads = (loads or 0) + 1\nfunction go(e) if not done then done = true; engine:tag{'reset'} end end\n[/lua]\n[mark][call file="sub.iet"][stop]`,
+      ),
+    ],
+    ['sub.iet', bytes('[calllua function="go"][after]')],
+  ]);
+  const variables = new ArtemisVariables();
+  const history = new ArtemisReadHistory();
+  const log = [];
+  const modes = new ArtemisModes({
+    writeStatus: (name, value) => log.push(name + '=' + value),
+    commandSkipChanged: () => {},
+    controlSkipChanged: () => {},
+    automodeChanged: () => {},
+    releaseScheduler: () => {},
+  });
+  const writes = [];
+  const save = new ArtemisSave(variables, {
+    beforeScenario: () => assert.fail(),
+    reportEventError: () => assert.fail(),
+    writeScenario: () => assert.fail(),
+    writeGlobal: () =>
+      writes.push(['saveg.dat', 'G', writeArtemisGlobalArchive(history, variables)]),
+    writeSystem: () => writes.push(['system.dat', 'X', writeArtemisSystemArchive(variables)]),
+  });
+  let lua, script;
+  const stored = new Map();
+  const host = {
+    bootPath: () => 'boot.iet',
+    updateMessageState: () => log.push('message'),
+    releaseScheduler: () => log.push('scheduler'),
+    resetOwners: () => log.push('owners'),
+    applyVolumes: (music, effect) => log.push(['volumes', music, effect]),
+    resetSaveObject: () => log.push('saveObject'),
+    loadBoot: (path) => (log.push('boot'), script.reset(path)),
+    readSaveFile: async (name) => stored.get(name) ?? null,
+    initializeStaticVariables: () => {
+      log.push('statics');
+      variables.write('s.engineversion', '3179');
+    },
+  };
+  const reset = new ArtemisReset(modes, save, variables, history, host);
+  const native = [];
+  const dispatch = (tag) => {
+    if (reset.dispatch(tag)) return;
+    native.push(tag.name);
+    if (tag.name === 'stop') return 'stopped';
+  };
+  lua = new ArtemisLua({
+    readFile: (path) => files.get(path) ?? null,
+    fileExists: () => true,
+    now: () => 0,
+    tag: (tag) => script.executeTag(tag),
+    enqueueTag: (tag) => script.enqueue(tag),
+    variable: () => '',
+  });
+  try {
+    script = new ArtemisScript(lua, {
+      readFile: (path) => files.get(path) ?? null,
+      dispatch,
+      pushLocal: () => variables.pushLocal(),
+      popLocal: () => variables.popLocal(),
+    });
+    // Boot (bf210 flag 0): default volumes, saved files, then the c37e0 statics.
+    variables.write('g.clear', '1');
+    variables.write('s.bgmvol', '640');
+    stored.set(
+      'saveg.dat',
+      await packArtemisSaveFile('G', writeArtemisGlobalArchive(history, variables)),
+    );
+    stored.set('system.dat', await packArtemisSaveFile('X', writeArtemisSystemArchive(variables)));
+    const booted = new ArtemisVariables();
+    const bootReset = new ArtemisReset(modes, save, booted, history, {
+      ...host,
+      initializeStaticVariables: () => log.push('statics'),
+      loadBoot: (path) => log.push(['bootPath', path]),
+    });
+    await bootReset.boot();
+    assert.equal(new TextDecoder().decode(booted.read('s.bgmvol')), '640');
+    assert.equal(new TextDecoder().decode(booted.read('s.sevol')), '1000');
+    assert.equal(new TextDecoder().decode(booted.read('g.clear')), '1');
+    assert.deepEqual(log, [
+      'message',
+      'scheduler',
+      'owners',
+      'statics',
+      ['volumes', 640, 1000],
+      'saveObject',
+      ['bootPath', 'boot.iet'],
+    ]);
+
+    // Reset tag (caad0): forced global save, mode defaults, boot restart, scenario erase.
+    modes.automodeAllowed = true;
+    modes.setAutomode(true);
+    log.length = 0;
+    modes.skipAllowed = false;
+    modes.rightClickAllowed = true;
+    variables.write('f.scene', '1');
+    script.reset('boot.iet');
+    assert.equal(script.run(), 'stopped');
+    assert.equal(lua.vm.getGlobal('loads'), 1); // cached program: inline Lua is not rerun
+    // The interrupted call is dropped; only the second pass reaches [after] and returns.
+    assert.deepEqual(native, ['mark', 'mark', 'after', 'stop']);
+    assert.equal(script.callDepth, 0);
+    assert.deepEqual(
+      writes.map(([name]) => name),
+      ['saveg.dat', 'system.dat'],
+    );
+    assert.deepEqual(log, [
+      'message',
+      's.status.automode=0',
+      'scheduler',
+      'owners',
+      ['volumes', 640, 0],
+      'saveObject',
+      'boot',
+    ]);
+    assert.equal(modes.automodeAllowed, false);
+    assert.equal(modes.skipAllowed, true);
+    assert.equal(modes.rightClickAllowed, false);
+    assert.equal(modes.rightClickScript, 'rclick.iet');
+    assert.equal(variables.lookup('f.scene'), undefined);
+    assert.notEqual(variables.lookup('g.clear'), undefined);
+  } finally {
+    lua.close();
+  }
 });

@@ -163,6 +163,20 @@ trailing scope table. `global-save.ts` serializes `saveg.dat` (section 1 read hi
 section 2 `g.` variables) and `system.dat` (section 1 `s.` variables) and loads them
 without dirtying variables. Scenario (`S`) saves are not implemented.
 
+`reset.ts` implements the engine reset `0x1400bf210`. `dispatch` handles the reset tag
+(`0x1400caad0`): a forced global save, automode off, mode defaults, owner resets through
+the host, volumes from `s.bgmvol`/`s.sevol`, save-object histories, a restart at the
+`ini.Boot` script, then erasure of every variable except `g.`/`s.`. `boot` is the
+application start path: volumes default to 1000, `saveg.dat` and `system.dat` load, then
+the static engine variables are written. Owners expose matching `reset` methods
+(`ArtemisModes`, `ArtemisMessageLayers`/`ArtemisMessageSelection`, `ArtemisFontStack`,
+`ArtemisSceneTweens`, `ArtemisRuby`, `ArtemisTextControls`, `ArtemisEventCommands`,
+`ArtemisEvents.clear`, `ArtemisKeyBindings.resetPushHandlers`, `ArtemisTransition`,
+`ArtemisLayers`, `ArtemisLayerCommands.clearAll`). `ArtemisScript.reset` drops the call
+stack without popping local scopes and keeps the program cache, the tag queue and Lua
+state, so cached inline Lua does not run again. Native construction leaves automode
+disallowed until `[automode allow]`.
+
 Probe `--advance-waits` advances its simulated clock beyond each timed deadline,
 up to 100 waits. It is separate from actual user input and production scheduling.
 The probe uses a windowed shared geometry fixture for fullscreen queries.

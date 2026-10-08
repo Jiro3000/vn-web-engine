@@ -30,6 +30,10 @@ export class ArtemisEventCommands {
   private readonly commands = new Map<ArtemisCommandEvent, AsbTag>();
   private readonly windowButtons = new Map<number | null, AsbTag>();
   constructor(private readonly currentFile: () => string) {}
+  /** bf210 empties the eleven seton* slots (38b0..3ce0); window buttons (3c70/3c80) remain. */
+  reset(): void {
+    this.commands.clear();
+  }
   /** delon* (0x1400e0330) move-assigns an empty block (a2300), which c6730 skips. */
   dispatch(tag: AsbTag): boolean {
     if (tag.name === 'setonwindowbutton' || tag.name === 'delonwindowbutton') {

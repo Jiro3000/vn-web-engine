@@ -20,6 +20,10 @@ export class ArtemisEvents {
         this.handlers.set(event as ArtemisEvent, callback);
     }
   }
+  /** bf210 empties every callback name (3d98..3e58). */
+  clear(): void {
+    this.handlers.clear();
+  }
   handler(event: ArtemisEvent): string {
     return this.handlers.get(event) ?? '';
   }

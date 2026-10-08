@@ -14,17 +14,20 @@ export class ArtemisModes {
   /** Constructor bytes b60/37f0 enable these flags; history collection has a separate owner. */
   alreadyReadEnabled = true;
   writeBacklog = true;
-  rightClickAllowed: boolean | undefined;
-  rightClickScript: string | undefined;
+  /** Constructor/bf210: request dword cc8 = 0 (allow byte ccb), cd0 = "rclick.iet". */
+  rightClickAllowed = false;
+  rightClickScript = 'rclick.iet';
   skipAllowed = true;
   skipUnread = false;
   commandSkip = false;
   controlSkip = false;
-  automodeAllowed = true;
+  /** Constructor dword +0x30 = 0 leaves automode disallowed (byte +0x32) until [automode]. */
+  automodeAllowed = false;
   automode = false;
   automodeLayer: string | null = null;
-  stopAutoByClick = false;
-  stopAutoByStop = false;
+  /** Constructor/bf210 word 3594 = 0x101. */
+  stopAutoByClick = true;
+  stopAutoByStop = true;
   syncSe: string[] = [];
   autosave: 0 | 1 | 2 = 0;
   constructor(private readonly effects: ArtemisModeEffects) {}
@@ -46,6 +49,20 @@ export class ArtemisModes {
     this.automode = active;
     this.effects.writeStatus('s.status.automode', active ? '1' : '0');
     this.effects.automodeChanged(active);
+  }
+  /** bf210 mode fields after automode off and scheduler release (owned by the reset caller).
+   * skipUnread (35b0) and the command/control skip states are not reset. */
+  reset(): void {
+    this.automodeAllowed = false;
+    this.skipAllowed = true;
+    this.automodeLayer = null;
+    this.alreadyReadEnabled = true;
+    this.rightClickAllowed = false;
+    this.rightClickScript = 'rclick.iet';
+    this.autosave = 0;
+    this.stopAutoByClick = this.stopAutoByStop = true;
+    this.syncSe = [];
+    this.writeBacklog = true;
   }
   /** Returns false for commands outside this mode service. */
   dispatch(tag: AsbTag): boolean {

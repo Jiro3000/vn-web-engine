@@ -27,7 +27,7 @@ export class ArtemisSave {
     }
     if (forceGlobal || this.variables.globalDirty) {
       this.effects.writeGlobal();
-      // Native clears sf dirty immediately after saveg.dat, before writing system.dat.
+      // Native clears g. dirty immediately after saveg.dat, before writing system.dat.
       this.variables.clearGlobalDirty();
       this.effects.writeSystem();
     }

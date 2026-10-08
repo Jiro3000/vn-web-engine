@@ -46,6 +46,7 @@ import {
   writeArtemisSystemArchive,
 } from '../dist/engines/artemis/global-save.js';
 import {packArtemisSaveFile} from '../dist/formats/artemis/save-file.js';
+import {ArtemisReset} from '../dist/engines/artemis/reset.js';
 import {ArtemisTimedWait} from '../dist/engines/artemis/wait.js';
 import {ArtemisTextControls} from '../dist/engines/artemis/text-controls.js';
 import {ArtemisKeyBindings} from '../dist/engines/artemis/key-bindings.js';
@@ -164,13 +165,15 @@ try {
     width,
     height,
     savePath,
-    savePathCsidl;
+    savePathCsidl,
+    bootPath = '';
   for (const sourceLine of ini.split(/\r?\n/)) {
     const line = sourceLine.split(';', 1)[0].trim();
     const header = /^\[([^\]]+)\]$/.exec(line);
     if (header) section = header[1].toUpperCase();
     if (section !== 'WINDOWS') continue;
-    const setting = /^(SAVEPATH|SAVEPATH_CSIDL)\s*=\s*(.*)$/.exec(line);
+    const setting = /^(SAVEPATH|SAVEPATH_CSIDL|BOOT)\s*=\s*(.*)$/.exec(line);
+    if (setting?.[1] === 'BOOT') bootPath = setting[2];
     if (setting?.[1] === 'SAVEPATH') savePath = setting[2];
     if (setting?.[1] === 'SAVEPATH_CSIDL') savePathCsidl = setting[2];
     const entry = /^(WIDTH|HEIGHT)\s*=\s*(\d+)$/.exec(line);
@@ -190,13 +193,20 @@ try {
   const executable = await installation.files.read(executablePaths[0]);
   if (executable === null) throw new Error('Missing Artemis executable');
   const executableSha256 = createHash('sha256').update(executable).digest('hex');
-  initializeArtemisVariables(variables, executableSha256);
-  if (simulatedGraphicsFeatureLevel !== null)
-    initializeArtemisGraphicsFeatureLevel(
-      variables,
-      executableSha256,
-      () => simulatedGraphicsFeatureLevel,
-    );
+  // c37e0 static variables run inside the bf210 boot path, after the save-file loads.
+  const initializeStaticVariables = () => {
+    initializeArtemisVariables(variables, executableSha256);
+    if (simulatedGraphicsFeatureLevel !== null)
+      initializeArtemisGraphicsFeatureLevel(
+        variables,
+        executableSha256,
+        () => simulatedGraphicsFeatureLevel,
+      );
+    // Installation-relative read-only namespace; no Windows known-folder resolution or writes.
+    if (savePath !== undefined && savePathCsidl === undefined && /^[\w-]+$/.test(savePath))
+      initializeArtemisResourcePaths(variables, {dataPath: '', savePath});
+    initializeArtemisWindowsVersion(variables, () => systemProfile.readVersion());
+  };
   if (glyphLayout)
     glyphFixture = createArtemisGlyphLayoutFixture(executableSha256, (path) =>
       installation.files.read(path),
@@ -213,11 +223,7 @@ try {
     shaderFixture = createArtemisShaderFixture(executableSha256, (path) =>
       installation.files.read(path),
     );
-  // Installation-relative read-only namespace; no Windows known-folder resolution or writes.
-  if (savePath !== undefined && savePathCsidl === undefined && /^[\w-]+$/.test(savePath))
-    initializeArtemisResourcePaths(variables, {dataPath: '', savePath});
   const systemProfile = new BrowserWindowsSystemProfileHost();
-  initializeArtemisWindowsVersion(variables, () => systemProfile.readVersion());
   // Slots begin empty; --sound-render supplies actual non-device PCM voices.
   const effectSlots = new Map(),
     effectHistory = new Map();
@@ -666,6 +672,7 @@ try {
       pendingResource = shaderFixture.dispatch(tag);
       return 'suspended';
     }
+    if (reset.dispatch(tag)) return;
     if (sePlay && ['seplay', 'sefadein'].includes(tag.name)) {
       if (pendingResource) throw Error('Probe sound resource operation overlaps');
       pendingResource = sePlay.dispatch(tag);
@@ -753,9 +760,53 @@ try {
     report: (kind, command, error) =>
       modeEffects.push({eventError: {kind, name: command.name, error: String(error)}}),
   });
+  const resetOwners = () => {
+    exec.clearRequests();
+    scriptEvents.clear();
+    messageSelection?.reset();
+    if (fontStack) {
+      fontStack.reset(() => ({font: new Map(), simulation: true}));
+      messageHistory.clear();
+      messageHistory.add('').add('backlog');
+    }
+    sceneTweens?.reset();
+    ruby?.reset();
+    textControls.reset();
+    modeEffects.push({cursorVisible: true, reset: true});
+    keyBindings.resetPushHandlers();
+    eventCommands.reset();
+    // New music/effect managers: every effect voice stops and the id map empties.
+    for (const index of new Set(effectSlots.values())) soundFixture?.stopEffect(index, 0);
+    effectSlots.clear();
+    lua.events.clear();
+    layerFixture?.reset();
+    messageStage?.reset();
+  };
+  const reset = new ArtemisReset(modes, save, variables, readHistory, {
+    bootPath: () => bootPath,
+    updateMessageState: () => modeEffects.push({messageStateUpdated: true, reset: true}),
+    releaseScheduler: () => modeEffects.push({releaseScheduler: true, reset: true}),
+    resetOwners,
+    applyVolumes: (music, effect) => modeEffects.push({volumes: {music, effect}, simulation: true}),
+    resetSaveObject: () => {
+      effectHistory.clear();
+      textHistory.clear();
+      savedFonts.clear();
+      remembered.clear();
+      retainedControls.clear();
+      layerFixture?.clearLayerCommands();
+    },
+    loadBoot: (path) => {
+      modeEffects.push({boot: path});
+      script.reset(path);
+    },
+    // SIMULATED storage: the in-memory files written earlier in this probe run.
+    readSaveFile: async (name) => saveFiles.get(name) ?? null,
+    initializeStaticVariables,
+  });
   let refusal = null;
   try {
-    script.load('system/first.iet');
+    await reset.boot();
     script.run(1000);
     while (script.state === 'waiting') {
       if (pendingResource) {

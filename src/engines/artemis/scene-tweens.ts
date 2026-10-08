@@ -58,6 +58,11 @@ export class ArtemisSceneTweens {
   ) {
     artemisRevision(executableSha256);
   }
+  /** bf210 empties the per-message and backlog vector maps (3740..3768). */
+  reset(): void {
+    this.layers.clear();
+    this.backlog.clear();
+  }
   dispatch(tag: AsbTag): boolean {
     if (tag.name !== 'scetween') return false;
     const mode = tag.args.get('mode');

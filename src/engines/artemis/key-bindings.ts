@@ -34,6 +34,11 @@ export class ArtemisKeyBindings {
     const role = this.roles.get(id);
     return role ? {...role, keys: new Set([...role.keys].sort((a, b) => a - b))} : undefined;
   }
+  /** bf210 empties both push maps (3890/38a0); key roles remain. */
+  resetPushHandlers(): void {
+    this.pushHandlers[0].clear();
+    this.pushHandlers[1].clear();
+  }
   /** Owner-side storage of a copied command in native push-map slot 0 or 1. */
   storePushHandler(key: number, slot: 0 | 1, tag: AsbTag): void {
     this.pushHandlers[slot].set(key, {...tag, args: new Map(tag.args)});

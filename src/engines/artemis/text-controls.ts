@@ -34,6 +34,16 @@ export class ArtemisTextControls {
   backlogLayer(messageLayer: string): ArtemisBacklogLayer | undefined {
     return this.backlogLayers.get(messageLayer);
   }
+  /** bf210 restores the constructor configuration (37b8..3808). */
+  reset(): void {
+    this.backlogAllowed = false;
+    this.backlogIncludeFont = true;
+    this.backlogMessageLayer = 'backlog';
+    this.hideAllowed = false;
+    this.hideWindows = new Set();
+    this.backlogHiddenLayers = new Set();
+    this.backlogLayers.clear();
+  }
   dispatch(tag: AsbTag): boolean {
     const p = tag.args;
     if (tag.name === 'hide') {

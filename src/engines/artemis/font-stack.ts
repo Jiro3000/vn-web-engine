@@ -72,6 +72,16 @@ export class ArtemisFontStack<T extends object> {
     if (recordHistory) this.host.recordFontCommand(layer, {...tag, args: new Map(tag.args)});
     return true;
   }
+  /** bf210 3708: every frame is released and "" and "backlog" restart with one frame of
+   * the factory-default CFontProperty (not the current font). */
+  reset(createDefault: () => T): void {
+    if (this.closed) throw Error('Artemis font stack closed');
+    for (const stack of this.layers.values())
+      for (const snapshot of stack) this.host.releaseFontSnapshot(snapshot);
+    this.layers.clear();
+    this.layers.set('', [createDefault()]);
+    this.layers.set('backlog', [createDefault()]);
+  }
   close(): void {
     if (this.closed) return;
     this.closed = true;

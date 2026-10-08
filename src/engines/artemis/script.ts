@@ -117,6 +117,16 @@ export class ArtemisScript {
       throw error;
     }
   }
+  /** bf210 script part: the caller/handler stacks (0xf8, c78) are dropped without popping
+   * local variable scopes (variables +0x70 is not reset), the caret restarts at the boot
+   * file (b68/b70) and c4ad0 loads it through the program cache (0xaf8, kept, so inline
+   * Lua is not re-executed). The tag queue (0xbe8) and Lua callbacks in flight remain. */
+  reset(bootPath: string): void {
+    const cursor = this.transfer(bootPath);
+    this.callers.length = 0;
+    this.cursor = cursor;
+    this.state = 'ready';
+  }
   jump(path = '', label?: string): void {
     this.cursor = this.transfer(path, label);
     this.state = 'ready';

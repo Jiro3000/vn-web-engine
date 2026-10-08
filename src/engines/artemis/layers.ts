@@ -157,6 +157,13 @@ export class ArtemisLayers<T extends object, I extends ArtemisImageDimensions = 
     this.scene.commit();
     this.collect();
   }
+  /** bf210 replaces the stage root (+0x30): both structural views are destroyed. */
+  reset(): void {
+    if (this.closed) throw Error('Artemis layer owner closed');
+    if (this.pending !== null) throw Error('Artemis layer resource operation already pending');
+    this.scene.clear();
+    this.collect();
+  }
   close(): void {
     if (this.closed) return;
     this.closed = true;

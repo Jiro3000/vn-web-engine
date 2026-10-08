@@ -104,6 +104,12 @@ export class ArtemisTransition {
   get tween(): ArtemisTransitionTween | null {
     return this.current;
   }
+  /** bf210: a54b0 finishes the registered tween (its completion runs synchronously),
+   * then +0x3858 is cleared. */
+  reset(): void {
+    this.current?.finish();
+    this.current = null;
+  }
   /** False for other tags; a promise while a rule image loads. */
   dispatch(tag: AsbTag): boolean | Promise<void> {
     if (tag.name !== 'trans') return false;

@@ -227,6 +227,15 @@ export function createMetadataLayerFixture(hash, readFile, runMode = null) {
       effects.push({kind: 'messageAttach', id: name, simulation: true});
     },
     detachMessageActor: (name) => layers.detachActor(name),
+    /** bf210 order: finish the registered transition tween, then replace the scene root. */
+    reset: () => {
+      transition.reset();
+      if (transitionTween?.done) transitionTween = null;
+      layers.reset();
+      effects.push({kind: 'reset', simulation: true});
+    },
+    /** Save-object reset of the layer command registry. */
+    clearLayerCommands: () => layerCommands.clearAll(),
     /** Invokes an actor's stored layer event callback; no pointer hit testing is simulated. */
     invokeLayerEvent: (id, type, sink) => {
       const actor = layers.scene.entry(id)?.value;
