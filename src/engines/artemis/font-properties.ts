@@ -55,11 +55,14 @@ const supported = new Set<string>([
   'stack',
   'layered',
   'show',
-  // Forwarded by Lua styling; applied through separate indent/prohibit tags.
+  // Forwarded by Lua styling; applied through separate indent/prohibit/wordparts tags.
+  // evidence/font-ignored-strings.txt: these literals are referenced only by the tag
+  // registry b9e80 (and range/logicalrange by d0510), never by the font handler.
   'range',
   'logicalrange',
   'indent',
   'prohibit',
+  'wordparts',
 ]);
 
 /** a74d0 font-frame attributes. Omitted values remain owned by the selected font;

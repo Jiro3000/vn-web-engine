@@ -2051,6 +2051,7 @@ test('Artemis font attributes use integer sizes/flags, double-before-float ratio
         ['logicalrange', '1'],
         ['indent', 'indent'],
         ['prohibit', '1'],
+        ['wordparts', '1'],
       ]),
     ),
     {},
