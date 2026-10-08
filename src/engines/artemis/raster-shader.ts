@@ -1,3 +1,15 @@
+import {
+  artemisBlurShade,
+  artemisBlurFragmentSource,
+  type ArtemisBlurKind,
+  type ArtemisBlurUniforms,
+} from './blur-shader.js';
+import {
+  artemisColorShade,
+  artemisColorFragmentSource,
+  type ArtemisColorKind,
+  type ArtemisColorUniforms,
+} from './color-shader.js';
 import {artemisRevision} from './revision.js';
 import {ARTEMIS_SCREEN_FRAGMENT_SOURCE, artemisScreenShade} from './screen-shader.js';
 
@@ -94,6 +106,26 @@ export async function compileArtemisShaderPreset(
       readonly fragmentSource: string;
       readonly shade: typeof artemisScreenShade;
     }
+  | {
+      readonly kind: ArtemisColorKind;
+      readonly fragmentSource: string;
+      readonly shade: (
+        sample: ArtemisShaderSample,
+        u: number,
+        v: number,
+        p: ArtemisColorUniforms,
+      ) => readonly [number, number, number, number];
+    }
+  | {
+      readonly kind: ArtemisBlurKind;
+      readonly fragmentSource: string;
+      readonly shade: (
+        sample: ArtemisShaderSample,
+        u: number,
+        v: number,
+        p: ArtemisBlurUniforms,
+      ) => readonly [number, number, number, number];
+    }
 > {
   artemisRevision(hash);
   const digest = await crypto.subtle.digest('SHA-256', Uint8Array.from(bytes).buffer),
@@ -111,6 +143,30 @@ export async function compileArtemisShaderPreset(
       kind: 'screen',
       fragmentSource: ARTEMIS_SCREEN_FRAGMENT_SOURCE,
       shade: artemisScreenShade,
+    };
+  const colors: Record<string, ArtemisColorKind> = {
+    '36c560ed78d7f48b8f04426b45c1cc18c441e0fbcad9967f0809a26e5c391e9b': 'sepia',
+    a637849ea00721f8aebdf2a197c33c7198951401bc5530fc89bfa13973b31fc6: 'sepia2',
+    '693a8b58386c0b58e7e8cbb9b655ca42d71ce6792db7a6172ad3eac4836c3e1e': 'gray',
+  };
+  const kind = colors[signature];
+  if (kind)
+    return {
+      kind,
+      fragmentSource: artemisColorFragmentSource(kind),
+      shade: (sample, u, v, p) => artemisColorShade(kind, sample, u, v, p),
+    };
+  const blurKind =
+    signature === 'd39f149a08d912ab94ab6770fb4fa082a8df78d8e3ad5fef449ffdbad3b6d799'
+      ? 'blur_h'
+      : signature === '7fc240a2d4ac5f4264661078ab2fa343cd4a17366a859f018941111478a71662'
+        ? 'blur_v'
+        : null;
+  if (blurKind)
+    return {
+      kind: blurKind,
+      fragmentSource: artemisBlurFragmentSource(blurKind),
+      shade: (sample, u, v, p) => artemisBlurShade(blurKind, sample, u, v, p),
     };
   throw Error('Unsupported Artemis custom shader source');
 }

@@ -91,7 +91,7 @@ through native voice owners, without an audio device. It supports sound-finish
 registration, then requires a graphics feature owner. An explicitly simulated
 feature-level diagnostic reaches the next unsupported `lyshader` command.
 
-Build and207 focused tests pass. The full1881-test suite has1844 passes and the
+Build and210 focused tests pass. The full1884-test suite has1847 passes and the
 same37 baseline failures, with no new failing names. Synthetic browser checks
 cover real font/image workers, GPU scenes and sound lookup through actual offline
 WebAudio voices. These checks do not establish production game compatibility.
@@ -99,10 +99,10 @@ WebAudio voices. These checks do not establish production game compatibility.
 Next complete message display/links/effects/jobs, native codec/buffer-mode behavior
 and production scheduler/audio wiring. Remaining commands/transitions/masks,
 media, input, save/load and the production game profile still require implementation
-and real game regression coverage. Engineering completion is roughly50% (a broad
-40–55% estimate), not story coverage or proof of a playable game.
+and real game regression coverage. Engineering completion is roughly54% (a broad
+45–60% estimate), not story coverage or proof of a playable game.
 
-The named shader registry and recognized raster HLSL preset have an executable CPU
-port and actual WebGL2 program. Native `lyshader` registration is independent of
-layer existence. Nonvisual preset probing advances through raster and refuses the
-next unported screen program; scene binding and uniform jobs remain separate.
+The named shader registry and recognized raster, screen, sepia, sepia2, gray and
+blur_h/blur_v HLSL presets have executable CPU ports and actual WebGL2 programs. Native `lyshader` registration is independent of
+layer existence. Nonvisual preset probing advances through blur_h and refuses the
+next unported nega program; scene binding and uniform jobs remain separate.

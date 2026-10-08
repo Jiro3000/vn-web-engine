@@ -1243,6 +1243,60 @@
     } finally {
       screenShader.dispose();
     }
+    for (const kind of ['blur_h', 'blur_v']) {
+      const shader = new ArtemisBrowserRasterShader(revision, customGl, kind);
+      try {
+        shader.draw(
+          {width: 4, height: 4, pixels: customPixels},
+          4,
+          4,
+          {alpha: 0.5, step: 0.25, weights: [0.5, 0.25, 0, 0, 0, 0, 0, 0]},
+          {filter: 'nearest', address: 'clamp'},
+        );
+        const actual = new Uint8Array(64);
+        customGl.readPixels(0, 0, 4, 4, customGl.RGBA, customGl.UNSIGNED_BYTE, actual);
+        for (let y = 0; y < 4; y++)
+          for (let x = 0; x < 4; x++) {
+            const blur = (n) =>
+              (0.5 * n + 0.25 * Math.max(0, n - 1) + 0.25 * Math.min(3, n + 1)) * 40;
+            const expected = [
+              kind === 'blur_h' ? blur(x) : x * 40,
+              kind === 'blur_v' ? blur(3 - y) : (3 - y) * 40,
+              0,
+              100,
+            ];
+            for (let c = 0; c < 4; c++)
+              assert(
+                Math.abs(actual[(y * 4 + x) * 4 + c] - expected[c]) <= 1,
+                'blur GPU ' + kind + ':' + x + ':' + y + ':' + c,
+              );
+          }
+      } finally {
+        shader.dispose();
+      }
+    }
+    for (const kind of ['gray', 'sepia', 'sepia2']) {
+      const shader = new ArtemisBrowserRasterShader(revision, customGl, kind);
+      try {
+        shader.draw(
+          {width: 1, height: 1, pixels: new Uint8Array([51, 102, 153, 204])},
+          4,
+          4,
+          {alpha: 0.5, red: 0.1, green: 0.8, blue: 0.6},
+          {filter: 'nearest', address: 'clamp'},
+        );
+        const actual = new Uint8Array(64);
+        customGl.readPixels(0, 0, 4, 4, customGl.RGBA, customGl.UNSIGNED_BYTE, actual);
+        const g = 0.2 * 0.298912 + 0.4 * 0.586611 + 0.6 * 0.114478;
+        const rgb =
+          kind === 'gray' ? [g, g, g] : [kind === 'sepia2' ? g + 0.1 : g * 0.1, g * 0.8, g * 0.6];
+        const expected = [...rgb.map((x) => Math.round(x * 255)), 102];
+        for (let i = 0; i < 64; i++)
+          assert(Math.abs(actual[i] - expected[i % 4]) <= 1, 'color GPU ' + kind + ':' + i);
+      } finally {
+        shader.dispose();
+      }
+    }
     window.result = {
       passed: true,
       nativeFontWorker: true,

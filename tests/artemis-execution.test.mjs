@@ -3129,3 +3129,44 @@ test('Screen shader uses user alpha in screen RGB while retaining foreground alp
     assert.ok(Math.abs(value - [0.2, 0.4, 0.6, 0.8][index]) < 1e-6),
   );
 });
+
+test('Color presets preserve luminance weights and sepia2 adds only the red channel', async () => {
+  const {artemisColorShade} = await import('../dist/engines/artemis/color-shader.js');
+  const sample = () => [0.2, 0.4, 0.6, 0.8],
+    p = {alpha: 0.5, red: 0.1, green: 0.8, blue: 0.6};
+  const gray = artemisColorShade('gray', sample, 0.5, 0.25, {alpha: 0.5});
+  assert.ok(Math.abs(gray[0] - (0.2 * 0.298912 + 0.4 * 0.586611 + 0.6 * 0.114478)) < 1e-7);
+  assert.equal(gray[0], gray[1]);
+  assert.equal(gray[1], gray[2]);
+  const sepia = artemisColorShade('sepia', sample, 0.5, 0.25, p),
+    added = artemisColorShade('sepia2', sample, 0.5, 0.25, p);
+  assert.ok(Math.abs(sepia[0] - gray[0] * 0.1) < 1e-7);
+  assert.ok(Math.abs(added[0] - (gray[0] + 0.1)) < 1e-7);
+  assert.deepEqual(added.slice(1), sepia.slice(1));
+  assert.equal(added[3], Math.fround(0.4));
+  assert.throws(() => artemisColorShade('sepia', sample, 0, 0, {alpha: 1}), /uniforms/);
+});
+
+test('Blur samples all fifteen taps in native positive-negative order and scales accumulated alpha', async () => {
+  const {artemisBlurShade} = await import('../dist/engines/artemis/blur-shader.js');
+  for (const kind of ['blur_h', 'blur_v']) {
+    const calls = [],
+      p = {alpha: 0.5, step: 0.125, weights: [0, 0.25, 0, 0, 0, 0, 0, 0.25]};
+    const out = artemisBlurShade(
+      kind,
+      (u, v) => {
+        calls.push([u, v]);
+        return [u * u, v * v, 1, 0.8];
+      },
+      0.5,
+      0.5,
+      p,
+    );
+    assert.equal(calls.length, 15);
+    assert.deepEqual(calls[1], kind === 'blur_h' ? [0.625, 0.5] : [0.5, 0.625]);
+    assert.equal(out[2], 1);
+    assert.equal(out[3], Math.fround(0.4));
+    assert.ok(out[kind === 'blur_h' ? 0 : 1] > 0.25);
+    assert.equal(out[kind === 'blur_h' ? 1 : 0], 0.25);
+  }
+});

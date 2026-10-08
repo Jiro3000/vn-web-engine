@@ -1,3 +1,13 @@
+import {
+  artemisBlurFragmentSource,
+  type ArtemisBlurKind,
+  type ArtemisBlurUniforms,
+} from './blur-shader.js';
+import {
+  artemisColorFragmentSource,
+  type ArtemisColorKind,
+  type ArtemisColorUniforms,
+} from './color-shader.js';
 import {artemisRevision} from './revision.js';
 import {ARTEMIS_RASTER_FRAGMENT_SOURCE, type ArtemisRasterUniforms} from './raster-shader.js';
 import {ARTEMIS_SCREEN_FRAGMENT_SOURCE, type ArtemisScreenUniforms} from './screen-shader.js';
@@ -25,7 +35,7 @@ export class ArtemisBrowserRasterShader {
   constructor(
     hash: string,
     private readonly gl: WebGL2RenderingContext,
-    private readonly kind: 'raster' | 'screen' = 'raster',
+    private readonly kind: 'raster' | 'screen' | ArtemisColorKind | ArtemisBlurKind = 'raster',
   ) {
     artemisRevision(hash);
     const compile = (type: number, source: string) => {
@@ -46,7 +56,13 @@ export class ArtemisBrowserRasterShader {
     try {
       fragment = compile(
         gl.FRAGMENT_SHADER,
-        kind === 'raster' ? ARTEMIS_RASTER_FRAGMENT_SOURCE : ARTEMIS_SCREEN_FRAGMENT_SOURCE,
+        kind === 'raster'
+          ? ARTEMIS_RASTER_FRAGMENT_SOURCE
+          : kind === 'screen'
+            ? ARTEMIS_SCREEN_FRAGMENT_SOURCE
+            : kind === 'blur_h' || kind === 'blur_v'
+              ? artemisBlurFragmentSource(kind)
+              : artemisColorFragmentSource(kind),
       );
       program = gl.createProgram();
       if (!program) throw Error('Cannot allocate raster program');
@@ -81,7 +97,7 @@ export class ArtemisBrowserRasterShader {
     image: TriangleImage,
     width: number,
     height: number,
-    p: ArtemisRasterUniforms | ArtemisScreenUniforms,
+    p: ArtemisRasterUniforms | ArtemisScreenUniforms | ArtemisColorUniforms | ArtemisBlurUniforms,
     sampler: {readonly filter: 'nearest' | 'linear'; readonly address: 'clamp' | 'repeat'},
     userImage?: TriangleImage,
   ): void {
@@ -139,7 +155,7 @@ export class ArtemisBrowserRasterShader {
         ['uSize', p.size],
       ] as const)
         gl.uniform1f(gl.getUniformLocation(this.program, name), value);
-    } else {
+    } else if (this.kind === 'screen') {
       if (
         !userImage ||
         userImage.width < 1 ||
@@ -165,6 +181,35 @@ export class ArtemisBrowserRasterShader {
         userImage.pixels as Uint8Array<ArrayBuffer>,
       );
       gl.uniform1i(gl.getUniformLocation(this.program, 'uUser'), 1);
+    }
+    if (this.kind === 'sepia' || this.kind === 'sepia2') {
+      const color = p as ArtemisColorUniforms;
+      if (
+        ![color.red, color.green, color.blue].every(
+          (x) => typeof x === 'number' && Number.isFinite(x),
+        )
+      )
+        throw Error('Missing color uniforms');
+      for (const [name, value] of [
+        ['uRed', color.red!],
+        ['uGreen', color.green!],
+        ['uBlue', color.blue!],
+      ] as const)
+        gl.uniform1f(gl.getUniformLocation(this.program, name), value);
+    }
+    if (this.kind === 'blur_h' || this.kind === 'blur_v') {
+      const blur = p as ArtemisBlurUniforms;
+      if (
+        !blur.weights ||
+        blur.weights.length !== 8 ||
+        ![blur.step, ...blur.weights].every(Number.isFinite)
+      )
+        throw Error('Missing blur uniforms');
+      gl.uniform1fv(
+        gl.getUniformLocation(this.program, 'uWeights[0]'),
+        Float32Array.from(blur.weights),
+      );
+      gl.uniform1f(gl.getUniformLocation(this.program, 'uStep'), blur.step);
     }
     gl.viewport(0, 0, width, height);
     gl.disable(gl.BLEND);

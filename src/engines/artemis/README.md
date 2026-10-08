@@ -1035,3 +1035,12 @@ and color multiplier are unused by the returned color. The exact source signatur
 selects its reconstructed executable through `compileArtemisShaderPreset`.
 The dedicated WebGL helper accepts this preset with an explicit user texture;
 synthetic checks compare GPU output against the CPU screen equation.
+
+The exact-source selector also recognizes `sepia`, `sepia2`, `gray`, `blur_h`
+and `blur_v`. Color luminance uses (.298912,.586611,.114478); sepia2 adds
+its red coefficient while sepia multiplies it. Both multiply green/blue and
+foreground alpha. Gray repeats luminance in RGB. Blur accumulates fifteen taps
+in center, positive, negative order for offsets 1..7, with eight explicit weights
+and a UV step on the selected axis. It scales accumulated alpha after filtering.
+These presets have real CPU references and linked WebGL2 implementations;
+GPU dot/FMA rounding and sampler policy can affect numerical results.
