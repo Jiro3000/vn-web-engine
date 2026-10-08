@@ -197,6 +197,7 @@ export function createMetadataLayerFixture(hash, readFile, runMode = null) {
     },
   });
   return {
+    hasLayer: (id) => !!layers.scene.entry(id),
     /** Runs the registered transition tween from `start` (nonzero uint32) to natural
      * completion and returns the completion tick. */
     finishTransition: (start) => {

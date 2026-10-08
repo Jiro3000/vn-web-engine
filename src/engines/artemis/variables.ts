@@ -5,6 +5,13 @@ import type {ArtemisExpressionValue} from './expression.js';
 
 const encoder = new TextEncoder();
 const empty = new Uint8Array();
+/** System names whose only native writers are runtime paths (no startup initializer), so a
+ * missing name follows the ordinary query path. s.clickskip: c0560 run modes 1/3/4, 2 and 7
+ * set it to integer 1 through 0x1400b0940. */
+const lazySystemVariables = new Set(['s.clickskip']);
+function unsupportedSystem(name: string): boolean {
+  return (name.startsWith('s.') || name.startsWith('ini.')) && !lazySystemVariables.has(name);
+}
 function literal(name: string): void {
   if (!name || /[\0\s$+*/()=]/.test(name))
     throw new Error(`Unsupported Artemis variable expression ${name}`);
@@ -49,7 +56,7 @@ export class ArtemisVariables {
     literal(name);
     const local = this.locals.at(-1);
     const value = local?.get(name) ?? this.global.get(name);
-    if (!value && (name.startsWith('s.') || name.startsWith('ini.')))
+    if (!value && unsupportedSystem(name))
       throw new Error(`Unsupported native Artemis variable ${name}`);
     return (value ?? empty).slice();
   }
@@ -57,8 +64,7 @@ export class ArtemisVariables {
   queryLiteral(name: string): Uint8Array {
     literal(name);
     if (!this.locals.at(-1)?.has(name) && !this.global.has(name)) {
-      if (name.startsWith('s.') || name.startsWith('ini.'))
-        throw new Error(`Unsupported native Artemis variable ${name}`);
+      if (unsupportedSystem(name)) throw new Error(`Unsupported native Artemis variable ${name}`);
       this.write(name, '0');
       this.integers.add(this.global.get(name)!);
     }

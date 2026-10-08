@@ -4849,3 +4849,82 @@ test('Lua var tags store Pluto bytes exactly and the save tag forces a global sa
     'system',
   ]);
 });
+
+test('Glyph tags configure the current message layer and copy the layer glyph to rplayer', async () => {
+  const {ArtemisClickGlyphs} = await import('../dist/engines/artemis/click-glyph.js');
+  let current = 'mw';
+  const cleared = [];
+  const glyphs = new ArtemisClickGlyphs({
+    currentMessageLayer: () => current,
+    setLayerByte16c: (name, value) => cleared.push([name, value]),
+  });
+  const glyph = (args) => ({kind: 'tag', name: 'glyph', sourceLine: 1, args: new Map(args)});
+  assert.equal(glyphs.dispatch({...glyph([]), name: 'trans'}), false);
+  assert.equal(
+    glyphs.dispatch(
+      glyph([
+        ['layer', 'mw.glyph'],
+        ['left', '16'],
+        ['top', '-4'],
+        ['homing', '2'],
+      ]),
+    ),
+    true,
+  );
+  assert.deepEqual(
+    {...glyphs.get('mw')},
+    {
+      homing: true,
+      layer: true,
+      layerName: 'mw.glyph',
+      left: 16,
+      top: -4,
+      rplayer: true,
+      rplayerName: 'mw.glyph',
+      rpleft: 16,
+      rptop: -4,
+    },
+  );
+  assert.deepEqual(cleared, [['mw.glyph', false]]);
+  // Without layer the flag clears but the name stays; explicit rplayer keeps its own position.
+  glyphs.dispatch(
+    glyph([
+      ['rplayer', 'mw.rp'],
+      ['rptop', '7'],
+      ['homing', '0'],
+    ]),
+  );
+  assert.deepEqual(
+    {...glyphs.get('mw')},
+    {
+      homing: false,
+      layer: false,
+      layerName: 'mw.glyph',
+      left: 16,
+      top: -4,
+      rplayer: true,
+      rplayerName: 'mw.rp',
+      rpleft: 16,
+      rptop: 7,
+    },
+  );
+  assert.deepEqual(cleared.at(-1), ['mw.rp', false]);
+  current = 'sub';
+  glyphs.dispatch(glyph([]));
+  assert.equal(glyphs.get('sub').rplayer, false);
+  assert.equal(glyphs.get('mw').rplayerName, 'mw.rp');
+  glyphs.reset();
+  assert.equal(glyphs.get('mw'), undefined);
+});
+
+test('s.clickskip has no startup value and queries create it as integer zero', async () => {
+  const {ArtemisVariables} = await import('../dist/engines/artemis/variables.js');
+  const variables = new ArtemisVariables();
+  assert.equal(variables.lookup('s.clickskip'), undefined);
+  assert.deepEqual(variables.expressionValue('s.clickskip'), {kind: 'integer', value: 0});
+  assert.deepEqual(variables.lookup('s.clickskip'), new TextEncoder().encode('0'));
+  assert.throws(
+    () => variables.queryLiteral('s.unknown'),
+    /Unsupported native Artemis variable s\.unknown/,
+  );
+});

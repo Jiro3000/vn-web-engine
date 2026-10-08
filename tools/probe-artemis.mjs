@@ -46,6 +46,7 @@ import {
   writeArtemisSystemArchive,
 } from '../dist/engines/artemis/global-save.js';
 import {packArtemisSaveFile} from '../dist/formats/artemis/save-file.js';
+import {ArtemisClickGlyphs} from '../dist/engines/artemis/click-glyph.js';
 import {ArtemisReset} from '../dist/engines/artemis/reset.js';
 import {ArtemisTimedWait} from '../dist/engines/artemis/wait.js';
 import {ArtemisTextControls} from '../dist/engines/artemis/text-controls.js';
@@ -250,7 +251,8 @@ try {
           modeEffects.push({
             soundFinishCommand: {name: command.name, args: Object.fromEntries(command.args)},
           });
-          throw Error('Unsupported diagnostic sound-finish script event dispatcher');
+          // f8050 at 0x1400dfe2b/0x1400dff1f: b73e0(script, mode 0, force 1, tag copy).
+          scriptEvents.emit(command, 0, true);
         },
       })
     : null;
@@ -322,6 +324,13 @@ try {
       writeVariable: (name, value) => variables.write(name, value),
     },
   );
+  const clickGlyphs = new ArtemisClickGlyphs({
+    currentMessageLayer: () => messageSelection?.currentMessageLayer() ?? '',
+    setLayerByte16c: (name, value) => {
+      if (layerFixture?.hasLayer(name))
+        modeEffects.push({layerByte16c: {name, value}, simulation: true});
+    },
+  });
   const readHistory = new ArtemisReadHistory();
   const save = new ArtemisSave(variables, {
     beforeScenario: (file) => lua.events.emit('onSave', new Map([['file', file]])),
@@ -674,6 +683,7 @@ try {
     }
     if (reset.dispatch(tag)) return;
     if (save.dispatch(tag)) return;
+    if (clickGlyphs.dispatch(tag)) return;
     if (sePlay && ['seplay', 'sefadein'].includes(tag.name)) {
       if (pendingResource) throw Error('Probe sound resource operation overlaps');
       pendingResource = sePlay.dispatch(tag);
@@ -763,6 +773,7 @@ try {
   });
   const resetOwners = () => {
     exec.clearRequests();
+    clickGlyphs.reset();
     scriptEvents.clear();
     messageSelection?.reset();
     if (fontStack) {

@@ -48,7 +48,10 @@ string writes only on change); deletion preserves the native dirty-flag quirk. `
 sets values without dirtying (save load) and `resetScenario` keeps only `g.`/`s.` names
 (`0x1400b0bd0`, reset tail).
 Literal Lua queries create missing variables as integer zero (0x140157fa0),
-while raw map reads preserve empty absence. Other expressions remain unsupported. Stage-size queries require a configuration/rendering provider.
+while raw map reads preserve empty absence. Other expressions remain unsupported. Unknown `s.`/`ini.` names
+refuse instead of reading zero, except `s.clickskip`: it has no startup initializer, and its
+only native writers are the c0560 click-skip input paths (run modes 1/3/4, 2 and 7), which set
+integer 1 through 0x1400b0940. Those input paths are not implemented yet. Stage-size queries require a configuration/rendering provider.
 `revision.ts` initializes the confirmed static boot variables only after exact
 executable-hash selection. Host Windows-version failure produces native 0.0;
 platform identity/capabilities are never invented.
@@ -1079,8 +1082,18 @@ music; present empty `id` chooses that exact SE slot. Missing slots do nothing.
 The voice owner's native playing flag settles on frame tick, then invokes its
 finish callback once. Explicit stop and fade-out do not emit natural completion.
 The required event dispatcher owns filter/scope/queue semantics of the captured
-command. The probe currently refuses that script dispatcher if a callback fires;
-registration itself is supported. It does not invent default event actions.
+command. The registration functor (f8050 at 0x1400dfe2b/0x1400dff1f) calls b73e0 with event
+mode 0 and force 1, so a firing callback goes through `ArtemisScriptEvents.emit(command, 0,
+true)`. It does not invent default event actions.
+
+`click-glyph.ts` is the glyph tag (0x1400d3290). It updates the CGlyphInfo entry for the
+current message layer (map at script +0x3818, created by 0x1400eb500). `layer` sets the glyph
+layer name; an absent `layer` clears only the flag and keeps the name. `left`/`top` use atoi.
+Without `rplayer`, the read-ahead glyph copies the layer flag, name and position. With
+`rplayer`, it takes that name and the optional `rpleft`/`rptop`. Each named layer is passed to
+the layer set's virtual +0xf0 (0x1400a4970), which clears layer byte +0x16c. `homing="0"`
+clears homing; any other value sets it. Rendering the glyph during click waits is not
+implemented.
 
 Graphics feature level is published only through an explicit revision-selected
 owner callback. `--graphics-feature-level=NUMBER` is an optional simulated diagnostic
