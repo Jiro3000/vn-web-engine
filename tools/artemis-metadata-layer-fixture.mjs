@@ -7,10 +7,12 @@ import {ArtemisLayerCommands} from '../dist/engines/artemis/layer-commands.js';
 import {ArtemisLayerEventSlots, ArtemisLayerEvents} from '../dist/engines/artemis/layer-events.js';
 import {ArtemisDisplayObject} from '../dist/engines/artemis/display-object.js';
 import {ArtemisStage} from '../dist/engines/artemis/stage.js';
+import {ArtemisTransition} from '../dist/engines/artemis/transition.js';
 import {artemisRevision} from '../dist/engines/artemis/revision.js';
 import {readJpegHeader} from '../dist/formats/jpeg/header.js';
 
-export function createMetadataLayerFixture(hash, readFile) {
+/** `runMode` supplies the probe's run mode/wait owner for trans; absent owner refuses it. */
+export function createMetadataLayerFixture(hash, readFile, runMode = null) {
   artemisRevision(hash);
   const loads = [],
     effects = [],
@@ -152,7 +154,62 @@ export function createMetadataLayerFixture(hash, readFile) {
       refreshState = value;
     },
   });
+  const refuseRunMode = () => {
+    throw Error('Unsupported diagnostic Artemis trans run mode owner');
+  };
+  let transitionTween = null;
+  const transition = new ArtemisTransition(hash, {
+    captureMode: () => 0,
+    commit: () => stage.commit(),
+    enterRunMode: (mode) => {
+      effects.push({kind: 'runMode', mode, simulation: true});
+      (runMode?.enter ?? refuseRunMode)(mode);
+    },
+    releaseRunMode: () => {
+      effects.push({kind: 'runModeRelease', simulation: true});
+      (runMode?.release ?? refuseRunMode)();
+    },
+    now: () => runMode?.now() ?? refuseRunMode(),
+    setWaitStart: (ms) => effects.push({kind: 'waitStart', ms, simulation: true}),
+    skipState: () => runMode?.skipState() ?? refuseRunMode(),
+    setTransitionState: (value) => {
+      transitionState = value;
+    },
+    setCrossfade: (value) => effects.push({kind: 'crossfade', value, simulation: true}),
+    stageSize: () => {
+      throw Error('Unsupported diagnostic Artemis rule transition');
+    },
+    loadRule: async () => {
+      // Rule transitions need decoded gray pixels; this fixture never decodes pixels.
+      throw Error('Unsupported diagnostic Artemis rule image decode');
+    },
+    setRuleImage: () => {},
+    ruleImage: () => {
+      throw Error('Unsupported diagnostic Artemis rule transition');
+    },
+    setVague: () => {},
+    setRuleThreshold: () => {},
+    registerTween: (tween) => {
+      transitionTween = tween;
+    },
+    reportError: () => {
+      throw Error('Unsupported diagnostic Artemis trans error report');
+    },
+  });
   return {
+    /** Runs the registered transition tween from `start` (nonzero uint32) to natural
+     * completion and returns the completion tick. */
+    finishTransition: (start) => {
+      const tween = transitionTween;
+      if (!tween || tween.done || !start) throw Error('No pending probe transition');
+      const end = (start + tween.milliseconds) >>> 0;
+      tween.tick(start);
+      tween.tick(end);
+      return end;
+    },
+    get transitionPending() {
+      return !!transitionTween && !transitionTween.done;
+    },
     attachMessageActor: (name, message, messageOwner) => {
       const actor = {
         id: ++sequence,
@@ -170,6 +227,8 @@ export function createMetadataLayerFixture(hash, readFile) {
       effects.push({kind: 'messageAttach', id: name, simulation: true});
     },
     detachMessageActor: (name) => layers.detachActor(name),
+    /** trans runs synchronously except rule loads, which return a promise. */
+    dispatchTransition: (tag) => transition.dispatch(tag),
     accepts: (tag) => ['lyc', 'lyprop', 'lydel', 'flip', 'lyevent'].includes(tag.name),
     dispatch: (tag) =>
       tag.name === 'flip'

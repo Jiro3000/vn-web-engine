@@ -36,6 +36,10 @@ export class ArtemisLinearIntegerTween {
     this.completed = true;
     this.onComplete();
   }
+  /** TTween<int> setter conversion: truncation toward zero. */
+  protected convert(value: number): number {
+    return Math.trunc(value) | 0;
+  }
   tick(now: number): boolean {
     if (!Number.isInteger(now) || now < 0 || now > 0xffffffff)
       throw Error('Unsupported Artemis uint32 tween clock');
@@ -54,8 +58,17 @@ export class ArtemisLinearIntegerTween {
     }
     const elapsed = (now - this.start) >>> 0,
       duration = this.milliseconds >>> 0,
-      value = Math.trunc(this.from + ((this.to - this.from) / duration) * elapsed) | 0;
+      value = this.convert(this.from + ((this.to - this.from) / duration) * elapsed);
     this.apply(value);
     return false;
+  }
+}
+
+/** TTween<float> (0x1400ef000, vtable 0x140369b10: step 0x1400ee310, finish 0x1400ee280)
+ * is the same template as TTween<int> except that interpolated values are rounded to
+ * float32 instead of truncated. Endpoints are stored as float64 from float arguments. */
+export class ArtemisLinearFloatTween extends ArtemisLinearIntegerTween {
+  protected override convert(value: number): number {
+    return Math.fround(value);
   }
 }

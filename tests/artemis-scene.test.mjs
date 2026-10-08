@@ -3835,3 +3835,94 @@ test('lyevent registers tag callbacks, maintains history and propagates group en
   assert.equal(events.dispatch(tag([...click.args, ['type', 'wheel']])), true);
   assert.equal(commands.commands('missing'), undefined);
 });
+
+test('Native trans commits, starts crossfade/rule tweens, tiles rule images and selects input run modes', async () => {
+  const {ArtemisTransition, tileArtemisRule, artemisTransitionErrors} =
+    await import('../dist/engines/artemis/transition.js');
+  const tag = (args) => ({name: 'trans', args: new Map(Object.entries(args))});
+  const log = [];
+  let capture = 0,
+    skip = {allowed: true, command: false, control: false},
+    rule = null;
+  const tweens = [];
+  const stageRule = {width: 4, height: 3, bytesPerPixel: 1, pixels: new Uint8Array(12)};
+  const transition = new ArtemisTransition(revision, {
+    captureMode: () => capture,
+    commit: () => log.push('commit'),
+    enterRunMode: (mode) => log.push('mode' + mode),
+    releaseRunMode: () => log.push('release'),
+    now: () => 0x1_0000_0005,
+    setWaitStart: (ms) => log.push('wait' + ms),
+    skipState: () => skip,
+    setTransitionState: (value) => log.push('state' + value),
+    setCrossfade: (value) => log.push('fade' + value),
+    stageSize: () => ({width: 4, height: 3}),
+    loadRule: async (path) => (log.push('load ' + path), rule),
+    setRuleImage: () => log.push('ruleImage'),
+    ruleImage: () => stageRule,
+    setVague: (value) => log.push('vague' + value),
+    setRuleThreshold: (value) => log.push('threshold' + value),
+    registerTween: (tween) => (tweens.push(tween), log.push('register')),
+    reportError: (_tag, message) =>
+      log.push(message === artemisTransitionErrors.ruleLoad ? 'loadError' : 'formatError'),
+  });
+  assert.equal(transition.dispatch({name: 'flip', args: new Map()}), false);
+  assert.equal(transition.dispatch(tag({type: '0'})), true);
+  assert.deepEqual(log.splice(0), ['commit', 'mode4', 'wait5']);
+  assert.equal(transition.dispatch(tag({type: '1', time: '4', input: '1'})), true);
+  assert.deepEqual(log.splice(0), ['state1', 'fade0', 'register', 'mode2']);
+  tweens[0].tick(10);
+  tweens[0].tick(11);
+  tweens[0].tick(14);
+  assert.deepEqual(log.splice(0), ['fade0', 'fade0.25', 'fade1', 'commit', 'release']);
+  transition.dispatch(tag({type: '1', input: '0'}));
+  assert.equal(log.at(-1), 'mode4');
+  transition.dispatch(tag({type: '1', input: '2'}));
+  assert.equal(log.at(-1), 'mode4');
+  skip = {allowed: true, command: false, control: true};
+  transition.dispatch(tag({type: '1', input: '2'}));
+  assert.equal(log.at(-1), 'mode2');
+  log.length = 0;
+  await transition.dispatch(tag({type: '2', rule: 'r', vague: '64'}));
+  assert.deepEqual(log.splice(0), ['load r', 'loadError']);
+  rule = {width: 3, height: 2, bytesPerPixel: 1, format: 1, pixels: new Uint8Array(6)};
+  await transition.dispatch(tag({type: '2', rule: 'r'}));
+  assert.deepEqual(log.splice(0), ['load r', 'formatError']);
+  rule = {
+    width: 3,
+    height: 2,
+    bytesPerPixel: 1,
+    format: 0,
+    pixels: Uint8Array.of(1, 2, 3, 4, 5, 6),
+  };
+  await transition.dispatch(tag({type: '2', rule: 'r', vague: '64', time: '10'}));
+  assert.deepEqual(stageRule.pixels, Uint8Array.of(1, 2, 3, 1, 4, 5, 6, 4, 1, 2, 3, 1));
+  assert.deepEqual(log.splice(0), [
+    'load r',
+    'state2',
+    'vague64',
+    'threshold-64',
+    'register',
+    'mode2',
+  ]);
+  const ruleTween = transition.tween;
+  assert.equal(ruleTween, tweens.at(-1));
+  ruleTween.finish();
+  assert.deepEqual(log.splice(0), ['threshold319', 'commit', 'release']);
+  rule = {width: 4, height: 3, bytesPerPixel: 1, format: 0, pixels: new Uint8Array(12)};
+  await transition.dispatch(tag({type: '2', rule: 'r'}));
+  assert.equal(log[1], 'ruleImage');
+  log.length = 0;
+  assert.equal(transition.dispatch(tag({type: '3'})), true);
+  capture = 1;
+  assert.equal(transition.dispatch(tag({type: '0'})), true);
+  assert.deepEqual(log, []);
+  const target = {width: 2, height: 1, bytesPerPixel: 2, pixels: new Uint8Array(4)};
+  tileArtemisRule(target, {
+    width: 3,
+    height: 1,
+    bytesPerPixel: 2,
+    pixels: Uint8Array.of(9, 8, 7, 6, 5, 4),
+  });
+  assert.deepEqual(target.pixels, Uint8Array.of(9, 8, 7, 6));
+});

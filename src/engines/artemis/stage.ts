@@ -37,6 +37,11 @@ export class ArtemisStage {
   dispatch(tag: AsbTag): boolean {
     if (tag.name !== 'flip') return false;
     if (state(this.host.captureMode()) !== 0) return true;
+    this.commit();
+    return true;
+  }
+  /** 0x14014f420, also called by trans and its completion callback 0x1400b7440. */
+  commit(): void {
     if (state(this.host.transitionState()) === 2) {
       this.host.clearTransitionRule();
       this.host.resetTransitionLayerValue(0xffffffff);
@@ -45,6 +50,5 @@ export class ArtemisStage {
     this.host.markSceneDirty();
     this.host.commitLayers();
     if (state(this.host.refreshState()) !== 0) this.host.setRefreshState(2);
-    return true;
   }
 }

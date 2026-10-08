@@ -485,8 +485,19 @@ try {
     (name, bytes) => variables.write(name, bytes),
   );
   if (metadataLayers)
-    layerFixture = createMetadataLayerFixture(executableSha256, (path) =>
-      installation.files.read(path),
+    layerFixture = createMetadataLayerFixture(
+      executableSha256,
+      (path) => installation.files.read(path),
+      {
+        enter: () => script.pause(),
+        release: () => script.resume(),
+        now: () => probeTick,
+        skipState: () => ({
+          allowed: modes.skipAllowed,
+          command: modes.commandSkip,
+          control: modes.controlSkip,
+        }),
+      },
     );
   const textHistory = new Map(),
     savedFonts = new Map(),
@@ -568,6 +579,13 @@ try {
           : ['ruby', '/ruby'].includes(tag.name)
             ? ruby.dispatch(tag)
             : textCommands.dispatch(tag);
+      return 'suspended';
+    }
+    if (layerFixture && tag.name === 'trans') {
+      const result = layerFixture.dispatchTransition(tag);
+      if (!(result instanceof Promise)) return;
+      if (pendingResource) throw Error('Probe transition operation overlaps');
+      pendingResource = result;
       return 'suspended';
     }
     if (layerFixture?.accepts(tag)) {
@@ -699,6 +717,13 @@ try {
         }
         if (script.pendingLuaCalls) script.resumeLua();
         else script.resume();
+        script.run(1000);
+        continue;
+      }
+      if (advanceWaits && layerFixture?.transitionPending && advancedWaits < 100) {
+        probeTick = layerFixture.finishTransition((probeTick + 1) >>> 0 || 1);
+        advancedWaits++;
+        soundFixture?.advanceToTick?.(probeTick);
         script.run(1000);
         continue;
       }
