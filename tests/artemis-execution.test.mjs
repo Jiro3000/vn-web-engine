@@ -3182,3 +3182,16 @@ test('RGB preset zeros negative channels, adds nonnegative offsets and nega pres
   for (let i = 0; i < 3; i++) assert.ok(Math.abs(n[i] - (1 - sample()[i])) < 1e-7);
   assert.equal(n[3], Math.fround(0.4));
 });
+
+test('Radial center and zero-size conserve color; zero-fade keeps foreground', async () => {
+  const {artemisRadialShade} = await import('../dist/engines/artemis/radial-shader.js');
+  const p = {alpha: 0.5, ax: 0.5, ay: 0.5, size: 0.5, fade: 1};
+  const center = artemisRadialShade((u, v) => [u, v, 1, 1], 0.5, 0.5, p);
+  assert.deepEqual(center, [0.5, 0.5, 1, 0.5]);
+  const orig = artemisRadialShade((u, v) => [u, v, 1, 1], 0.75, 0.25, {...p, size: 0});
+  assert.deepEqual(orig, [0.75, 0.25, 1, 0.5]);
+  const untouched = artemisRadialShade((u, v) => [u, v, 1, 1], 0.75, 0.25, {...p, fade: 0});
+  assert.deepEqual(untouched, [0.75, 0.25, 1, 0.5]);
+  const inward = artemisRadialShade((u, v) => [u, v, 1, 1], 0.75, 0.25, p);
+  assert.ok(inward[0] < 0.75 && inward[1] > 0.25);
+});

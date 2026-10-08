@@ -1049,3 +1049,10 @@ Nega inverts foreground RGB without changing its alpha before global alpha.
 RGB sets a channel to zero for a negative coefficient, otherwise adds that
 coefficient. Values are not clamped by the shader; output target format decides
 clamping. Both presets require exact original-source signatures.
+
+Radial uses an explicit center, size and fade. Seven inward samples receive1/8
+weight; the original foreground receives1/8+7/8*(1-fade), then the inward sum
+is multiplied by fade. Distance scales the inward step. Alpha scales only after
+accumulation. Zero size and zero fade retain the original foreground. Values
+are not clamped or inferred. CPU and actual GPU outputs are compared on synthetic
+nonzero radial displacement as well as identity cases.

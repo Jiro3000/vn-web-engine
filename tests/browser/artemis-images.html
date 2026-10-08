@@ -4,6 +4,7 @@
 <canvas id="frame" style="width: 256px; height: 128px; image-rendering: pixelated"></canvas>
 <pre id="result">Running synthetic PNG / Lua / raster checks</pre>
 <script type="module">
+  import {artemisRadialShade} from '../../dist/engines/artemis/radial-shader.js';
   import {ArtemisBrowserRasterShader} from '../../dist/engines/artemis/browser-raster-shader.js';
   import {createArtemisRollingVoice} from '../../dist/engines/artemis/browser-rolling-voice.js';
   import {createArtemisBufferedSoundDecoder} from '../../dist/engines/artemis/buffered-sound-decoder.js';
@@ -1275,6 +1276,50 @@
         shader.dispose();
       }
     }
+    const radialShader = new ArtemisBrowserRasterShader(revision, customGl, 'radial');
+    try {
+      for (const fade of [0, 1]) {
+        radialShader.draw(
+          {width: 4, height: 4, pixels: customPixels},
+          4,
+          4,
+          {alpha: 0.5, ax: 0.5, ay: 0.5, size: 0, fade},
+          {filter: 'nearest', address: 'clamp'},
+        );
+        const actual = new Uint8Array(64);
+        customGl.readPixels(0, 0, 4, 4, customGl.RGBA, customGl.UNSIGNED_BYTE, actual);
+        for (let y = 0; y < 4; y++)
+          for (let x = 0; x < 4; x++)
+            for (let c = 0; c < 4; c++)
+              assert(
+                Math.abs(actual[(y * 4 + x) * 4 + c] - [x * 40, (3 - y) * 40, 0, 100][c]) <= 1,
+                'radial zero-size GPU',
+              );
+      }
+      const p = {alpha: 0.5, ax: 0.5, ay: 0.5, size: 1, fade: 1};
+      radialShader.draw({width: 4, height: 4, pixels: customPixels}, 4, 4, p, {
+        filter: 'nearest',
+        address: 'clamp',
+      });
+      const actual = new Uint8Array(64);
+      customGl.readPixels(0, 0, 4, 4, customGl.RGBA, customGl.UNSIGNED_BYTE, actual);
+      const sample = (u, v) => {
+        const x = Math.min(3, Math.max(0, Math.floor(u * 4))),
+          y = Math.min(3, Math.max(0, Math.floor(v * 4)));
+        return [(x * 40) / 255, (y * 40) / 255, 0, 200 / 255];
+      };
+      for (let y = 0; y < 4; y++)
+        for (let x = 0; x < 4; x++) {
+          const expected = artemisRadialShade(sample, (x + 0.5) / 4, (3 - y + 0.5) / 4, p);
+          for (let c = 0; c < 4; c++)
+            assert(
+              Math.abs(actual[(y * 4 + x) * 4 + c] - Math.round(expected[c] * 255)) <= 1,
+              'radial nonzero GPU',
+            );
+        }
+    } finally {
+      radialShader.dispose();
+    }
     for (const kind of ['gray', 'sepia', 'sepia2', 'nega', 'rgb']) {
       const shader = new ArtemisBrowserRasterShader(revision, customGl, kind);
       try {
@@ -1289,7 +1334,13 @@
         customGl.readPixels(0, 0, 4, 4, customGl.RGBA, customGl.UNSIGNED_BYTE, actual);
         const g = 0.2 * 0.298912 + 0.4 * 0.586611 + 0.6 * 0.114478;
         const rgb =
-          kind === 'nega' ? [.8,.6,.4] : kind === 'rgb' ? [.3,1.2,1.2] : kind === 'gray' ? [g,g,g] : [kind === 'sepia2' ? g+.1 : g*.1,g*.8,g*.6];
+          kind === 'nega'
+            ? [0.8, 0.6, 0.4]
+            : kind === 'rgb'
+              ? [0.3, 1.2, 1.2]
+              : kind === 'gray'
+                ? [g, g, g]
+                : [kind === 'sepia2' ? g + 0.1 : g * 0.1, g * 0.8, g * 0.6];
         const expected = [...rgb.map((x) => Math.round(Math.min(1, Math.max(0, x)) * 255)), 102];
         for (let i = 0; i < 64; i++)
           assert(Math.abs(actual[i] - expected[i % 4]) <= 1, 'color GPU ' + kind + ':' + i);

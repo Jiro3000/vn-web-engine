@@ -91,7 +91,7 @@ through native voice owners, without an audio device. It supports sound-finish
 registration, then requires a graphics feature owner. An explicitly simulated
 feature-level diagnostic reaches the next unsupported `lyshader` command.
 
-Build and211 focused tests pass. The full1885-test suite has1848 passes and the
+Build and212 focused tests pass. The full1886-test suite has1849 passes and the
 same37 baseline failures, with no new failing names. Synthetic browser checks
 cover real font/image workers, GPU scenes and sound lookup through actual offline
 WebAudio voices. These checks do not establish production game compatibility.
@@ -103,6 +103,6 @@ and real game regression coverage. Engineering completion is roughly54% (a broad
 45–60% estimate), not story coverage or proof of a playable game.
 
 The named shader registry and recognized raster, screen, sepia, sepia2, gray and
-blur_h/blur_v, nega and rgb HLSL presets have executable CPU ports and actual WebGL2 programs. Native `lyshader` registration is independent of
-layer existence. Nonvisual preset probing advances through blur_v and refuses the
-next unported radial program; scene binding and uniform jobs remain separate.
+blur_h/blur_v, nega, rgb and radial HLSL presets have executable CPU ports and actual WebGL2 programs. Native `lyshader` registration is independent of
+layer existence. Nonvisual preset probing advances through radial and refuses the
+next unported compdk program; scene binding and uniform jobs remain separate.

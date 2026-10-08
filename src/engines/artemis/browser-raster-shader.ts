@@ -1,3 +1,4 @@
+import {ARTEMIS_RADIAL_FRAGMENT_SOURCE, type ArtemisRadialUniforms} from './radial-shader.js';
 import {
   artemisBlurFragmentSource,
   type ArtemisBlurKind,
@@ -35,7 +36,8 @@ export class ArtemisBrowserRasterShader {
   constructor(
     hash: string,
     private readonly gl: WebGL2RenderingContext,
-    private readonly kind: 'raster' | 'screen' | ArtemisColorKind | ArtemisBlurKind = 'raster',
+    private readonly kind:
+      'raster' | 'screen' | ArtemisColorKind | ArtemisBlurKind | 'radial' = 'raster',
   ) {
     artemisRevision(hash);
     const compile = (type: number, source: string) => {
@@ -62,7 +64,9 @@ export class ArtemisBrowserRasterShader {
             ? ARTEMIS_SCREEN_FRAGMENT_SOURCE
             : kind === 'blur_h' || kind === 'blur_v'
               ? artemisBlurFragmentSource(kind)
-              : artemisColorFragmentSource(kind),
+              : kind === 'radial'
+                ? ARTEMIS_RADIAL_FRAGMENT_SOURCE
+                : artemisColorFragmentSource(kind),
       );
       program = gl.createProgram();
       if (!program) throw Error('Cannot allocate raster program');
@@ -97,7 +101,12 @@ export class ArtemisBrowserRasterShader {
     image: TriangleImage,
     width: number,
     height: number,
-    p: ArtemisRasterUniforms | ArtemisScreenUniforms | ArtemisColorUniforms | ArtemisBlurUniforms,
+    p:
+      | ArtemisRasterUniforms
+      | ArtemisScreenUniforms
+      | ArtemisColorUniforms
+      | ArtemisBlurUniforms
+      | ArtemisRadialUniforms,
     sampler: {readonly filter: 'nearest' | 'linear'; readonly address: 'clamp' | 'repeat'},
     userImage?: TriangleImage,
   ): void {
@@ -210,6 +219,18 @@ export class ArtemisBrowserRasterShader {
         Float32Array.from(blur.weights),
       );
       gl.uniform1f(gl.getUniformLocation(this.program, 'uStep'), blur.step);
+    }
+    if (this.kind === 'radial') {
+      const r = p as ArtemisRadialUniforms;
+      if (![r.ax, r.ay, r.size, r.fade].every(Number.isFinite))
+        throw Error('Missing radial uniforms');
+      for (const [name, value] of [
+        ['uAx', r.ax],
+        ['uAy', r.ay],
+        ['uSize', r.size],
+        ['uFade', r.fade],
+      ] as const)
+        gl.uniform1f(gl.getUniformLocation(this.program, name), value);
     }
     gl.viewport(0, 0, width, height);
     gl.disable(gl.BLEND);

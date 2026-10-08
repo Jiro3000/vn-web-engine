@@ -1,3 +1,4 @@
+import {artemisRadialShade, ARTEMIS_RADIAL_FRAGMENT_SOURCE} from './radial-shader.js';
 import {
   artemisBlurShade,
   artemisBlurFragmentSource,
@@ -126,6 +127,11 @@ export async function compileArtemisShaderPreset(
         p: ArtemisBlurUniforms,
       ) => readonly [number, number, number, number];
     }
+  | {
+      readonly kind: 'radial';
+      readonly fragmentSource: string;
+      readonly shade: typeof artemisRadialShade;
+    }
 > {
   artemisRevision(hash);
   const digest = await crypto.subtle.digest('SHA-256', Uint8Array.from(bytes).buffer),
@@ -169,6 +175,12 @@ export async function compileArtemisShaderPreset(
       kind: blurKind,
       fragmentSource: artemisBlurFragmentSource(blurKind),
       shade: (sample, u, v, p) => artemisBlurShade(blurKind, sample, u, v, p),
+    };
+  if (signature === '33f20c759657d25064c273dcc5f55b6d25de00c49d1fc3b4d21fa307f53c3f96')
+    return {
+      kind: 'radial',
+      fragmentSource: ARTEMIS_RADIAL_FRAGMENT_SOURCE,
+      shade: artemisRadialShade,
     };
   throw Error('Unsupported Artemis custom shader source');
 }
