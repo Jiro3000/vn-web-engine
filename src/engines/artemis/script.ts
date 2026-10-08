@@ -1,6 +1,12 @@
 import type {AsbTag} from '../../formats/artemis/asb.js';
 import {parseAsb} from '../../formats/artemis/asb.js';
-import {parseIet, type IetProgram} from '../../formats/artemis/iet.js';
+import {
+  ARTEMIS_GOTO_TAG,
+  ARTEMIS_INDEX_ARG,
+  parseIet,
+  type IetProgram,
+} from '../../formats/artemis/iet.js';
+import {artemisInteger} from './numbers.js';
 import {artemisTagFilterResult, type ArtemisLua, type ArtemisLuaCall} from './lua.js';
 import type {LuaValue} from '../../core/lua51/runtime.js';
 
@@ -25,6 +31,11 @@ export interface ArtemisScriptHost {
    * debug-mode/LogFilter/console policy; absent owner keeps the failure strict.
    */
   reportLuaCallError?(report: ArtemisLuaCallErrorReport): void;
+  /** c5800 strips n leading '$' from an argument value and applies the variable
+   * expression evaluator afc60 n times before filtering and dispatch. Absent owner
+   * refuses such arguments.
+   */
+  evaluateExpression?(expression: string): string;
 }
 export interface ArtemisLuaCallErrorReport {
   readonly file: string;
@@ -234,8 +245,23 @@ export class ArtemisScript {
       throw error;
     }
   }
-  private dispatch(tag: AsbTag): void | 'suspended' {
-    if (!tag.name) return; // Native generated empty handler block has no action.
+  private evaluateArguments(tag: AsbTag): AsbTag {
+    let args: Map<string, string> | null = null;
+    for (const [key, value] of tag.args) {
+      let count = 0;
+      while (value[count] === '$') count++;
+      if (!count) continue;
+      if (!this.host.evaluateExpression)
+        throw new Error('Unsupported Artemis expression argument without an evaluator');
+      let result = value.slice(count);
+      for (; count > 0; count--) result = this.host.evaluateExpression(result);
+      (args ??= new Map(tag.args)).set(key, result);
+    }
+    return args ? {...tag, args} : tag;
+  }
+  private dispatch(source: AsbTag): void | 'suspended' {
+    if (!source.name) return; // Native generated empty handler block has no action.
+    const tag = this.evaluateArguments(source);
     if (this.lua.suspendableTags) {
       const task = this.lua.createTagFilterCall(tag);
       if (task) return this.beginLuaCall(task, {...tag, args: new Map(tag.args)});
@@ -299,6 +325,17 @@ export class ArtemisScript {
         }
         return this.beginLuaCall(task, undefined, tag);
       }
+      // e9fb0: atoi(estimate)==0 writes cursor b90; c7800 writes it unconditionally.
+      // The frame loop has already advanced b90, so the target tag runs next.
+      case 'if':
+      case 'elseif':
+      case 'loop':
+        if (artemisInteger(tag.args.get('estimate') ?? '') !== 0) break;
+      // Falls through to the shared cursor write.
+      case ARTEMIS_GOTO_TAG:
+        if (!this.cursor) throw new Error('Artemis branch without a script cursor');
+        this.cursor.index = artemisInteger(tag.args.get(ARTEMIS_INDEX_ARG) ?? '');
+        break;
       case 'jump':
         this.jump(tag.args.get('file'), tag.args.get('label'));
         break;

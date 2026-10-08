@@ -50,6 +50,13 @@ while raw map reads preserve empty absence. Other expressions remain unsupported
 executable-hash selection. Host Windows-version failure produces native 0.0;
 platform identity/capabilities are never invented.
 
+`parseIet` lowers if/elseif/else/[/if] and loop/[/loop] like the native IET parser
+(`0x14011a740`): conditional and loop tags receive a decimal `\x0bindex` target and
+branch exits become compiler-only `\x0bgoto` tags. `ArtemisScript` writes its cursor for
+if/elseif/loop when atoi(`estimate`) is zero (`0x1400e9fb0`) and for every goto
+(`0x1400c7800`). Arguments starting with `$` are evaluated before filtering through
+`ArtemisScriptHost.evaluateExpression` once per `$`; without an evaluator they are refused.
+
 `modes.ts` owns skip/auto/autosave command state and emits required status/effect
 callbacks (`0x1400d47b0`, `0x1400d4350`, `0x1400ca3d0`). Scheduler, indicator,
 message and save effects still require native service implementations. Nonempty

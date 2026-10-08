@@ -6,6 +6,11 @@ export interface IetProgram {
   readonly labels: ReadonlyMap<string, number>;
 }
 
+/** Compiler-generated jump tag and its decimal target index (0x14036b964, 0x1403718c8).
+ * The 0x0b prefix keeps them out of script-authored names. */
+export const ARTEMIS_GOTO_TAG = '\x0bgoto';
+export const ARTEMIS_INDEX_ARG = '\x0bindex';
+
 /** Confirmed boot grammar. Plain dialogue, @ commands and tag.ini syntax are refused. */
 export function parseIet(bytes: Uint8Array): IetProgram {
   const text = new TextDecoder('utf-8', {fatal: true}).decode(bytes);
@@ -62,6 +67,58 @@ export function parseIet(bytes: Uint8Array): IetProgram {
     const tag: AsbTag = {kind: 'tag', name, sourceLine, args};
     tags.push(tag);
     records.push(tag);
+  };
+  // 0x14011a740 lowers conditionals and loops into compiler-only `\x0bgoto` tags.
+  // Each open if keeps the index of its pending conditional tag (-1 after else) and
+  // the gotos that leave its branches; `\x0bindex` receives a decimal tag index.
+  const conditionals: number[] = [],
+    exits: number[][] = [],
+    loops: number[] = [];
+  const target = (index: number, value: number) =>
+    (tags[index]!.args as Map<string, string>).set(ARTEMIS_INDEX_ARG, String(value));
+  const goto = (value?: number) => {
+    const args = new Map<string, string>();
+    if (value !== undefined) args.set(ARTEMIS_INDEX_ARG, String(value));
+    add(ARTEMIS_GOTO_TAG, 0, args);
+  };
+  const branch = (name: string): boolean => {
+    if (name === 'if') {
+      conditionals.push(tags.length);
+      exits.push([]);
+      return false;
+    }
+    if (name === 'elseif' || name === 'else') {
+      if (!conditionals.length) fail(`${name} without matching if`);
+      if (conditionals.at(-1)! < 0) fail(`${name} after else`);
+      exits.at(-1)!.push(tags.length);
+      goto();
+      target(conditionals.at(-1)!, tags.length);
+      if (name === 'else') {
+        conditionals[conditionals.length - 1] = -1;
+        return true;
+      }
+      conditionals[conditionals.length - 1] = tags.length;
+      return false;
+    }
+    if (name === '/if') {
+      if (!conditionals.length) fail('/if without matching if');
+      const pending = conditionals.pop()!;
+      if (pending >= 0) target(pending, tags.length);
+      for (const exit of exits.pop()!) target(exit, tags.length);
+      return true;
+    }
+    if (name === 'loop') {
+      loops.push(tags.length);
+      return false;
+    }
+    if (name === '/loop') {
+      if (!loops.length) fail('/loop without matching loop');
+      const start = loops.pop()!;
+      goto(start);
+      target(start, tags.length);
+      return true;
+    }
+    return false;
   };
   while (p < text.length) {
     skip();
@@ -126,7 +183,7 @@ export function parseIet(bytes: Uint8Array): IetProgram {
       args.set('script', text.slice(start, p));
       for (let i = 0; i < 6; i++) take();
     }
-    add(name, line, args);
+    if (!branch(name)) add(name, line, args);
   }
   return {records, tags, labels};
 }

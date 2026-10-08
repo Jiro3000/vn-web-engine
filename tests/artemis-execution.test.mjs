@@ -156,6 +156,68 @@ test('Live tag filters consume script tags while direct Lua tags bypass the filt
   }
 });
 
+test('IET conditionals and loops lower to native goto tags and move the cursor', () => {
+  const source = bytes(
+    '[if estimate="0"][a][elseif estimate="1"][b][else][c][/if][d][loop estimate="x"][e][/loop]',
+  );
+  const program = parseIet(source);
+  const goto = '\x0bgoto',
+    index = '\x0bindex';
+  assert.deepEqual(
+    program.tags.map((t) => [t.name, t.args.get(index) ?? null]),
+    [
+      ['if', '3'],
+      ['a', null],
+      [goto, '7'],
+      ['elseif', '6'],
+      ['b', null],
+      [goto, '7'],
+      ['c', null],
+      ['d', null],
+      ['loop', '11'],
+      ['e', null],
+      [goto, '8'],
+    ],
+  );
+  assert.equal(program.tags[2].sourceLine, 0);
+  assert.throws(() => parseIet(bytes('[else]')), /else without matching if/);
+  assert.throws(() => parseIet(bytes('[if][else][elseif]')), /elseif after else/);
+  assert.throws(() => parseIet(bytes('[/loop]')), /loop without matching loop/);
+  const native = [];
+  const readFile = () => source;
+  const dispatch = (tag) => void native.push(tag.name);
+  const lua = new ArtemisLua({
+    readFile,
+    fileExists: () => true,
+    now: () => 0,
+    tag: dispatch,
+    enqueueTag: () => {},
+    variable: () => '',
+  });
+  try {
+    const script = new ArtemisScript(lua, {readFile, dispatch, emptyReturn: () => 'stopped'});
+    script.load('boot');
+    assert.equal(script.run(), 'stopped');
+    assert.deepEqual(native, ['b', 'd']);
+    const expressions = bytes('[x v="$$a" w="b$"]');
+    const seen = [];
+    const evaluated = new ArtemisScript(lua, {
+      readFile: () => expressions,
+      dispatch: (tag) => void seen.push(Object.fromEntries(tag.args)),
+      evaluateExpression: (e) => `(${e})`,
+      emptyReturn: () => 'stopped',
+    });
+    evaluated.load('expressions');
+    evaluated.run();
+    assert.deepEqual(seen, [{v: '((a))', w: 'b$'}]);
+    const strict = new ArtemisScript(lua, {readFile: () => expressions, dispatch});
+    strict.load('expressions');
+    assert.throws(() => strict.run(), /expression argument without an evaluator/);
+  } finally {
+    lua.close();
+  }
+});
+
 test('Mode commands disable active skip/auto through status and effect services', async () => {
   const {ArtemisModes} = await import('../dist/engines/artemis/modes.js');
   const events = [];
