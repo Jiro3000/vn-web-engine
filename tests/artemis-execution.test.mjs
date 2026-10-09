@@ -335,10 +335,15 @@ test('Mode commands disable active skip/auto through status and effect services'
   assert.deepEqual(
     [...modes.automodeLayers],
     [
-      ['mw', {present: false, layer: 'auto'}],
-      ['sub', {present: false, layer: ''}],
+      ['mw', {present: false, name: 'auto'}],
+      ['sub', {present: false, name: ''}],
     ],
   );
+  const fields = modes.saveFields();
+  modes.reset();
+  modes.loadFields(fields);
+  assert.deepEqual(modes.saveFields(), fields);
+  assert.equal(modes.automodeLayers.get('mw').name, 'auto');
   modes.automodeAllowed = false;
   assert.deepEqual(events, [
     ['s.status.commandskip', '0'],
@@ -4445,6 +4450,19 @@ test('Default event handlers use a fresh local scope and filtered priority tag, 
   );
   assert.equal(script.currentFile, '');
   assert.equal(script.callDepth, 1);
+  // Save sections 3/4: the interrupted caret keeps its resume state and the handler caret
+  // its queued handler; restoring them continues identically.
+  const carets = script.carets();
+  assert.deepEqual(
+    carets.map((caret) => [caret.file, caret.resumeState ?? null, caret.queue.map((t) => t.name)]),
+    [
+      ['main.iet', 'waiting', []],
+      ['', null, ['callback']],
+    ],
+  );
+  assert.equal(carets[1].tag, null);
+  script.restoreCarets(carets);
+  assert.deepEqual(script.carets(), carets);
   assert.equal(script.step(), 'ready');
   assert.deepEqual(marks, [['from-event', '']]);
   assert.equal(script.step(), 'waiting');

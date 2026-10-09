@@ -11,10 +11,29 @@ export interface ArtemisModeEffects {
   currentMessageLayer(): string;
 }
 
-/** CIconInfo: `present` is byte +8, `layer` the string +0x10 (kept when `present` clears). */
+/** CIconInfo: `present` is byte +8, `name` the string +0x10 (kept when `present` clears). */
 export interface ArtemisAutomodeLayer {
   present: boolean;
-  layer: string;
+  name: string;
+}
+
+/** Mode fields of the scenario archive (kind 'S'), named as in `ArtemisScenarioRecord`. */
+export interface ArtemisModeSaveFields {
+  readonly automodeAllowed: boolean;
+  readonly automode: boolean;
+  readonly automodeLayers: ReadonlyMap<string, Readonly<ArtemisAutomodeLayer>>;
+  readonly skipAllowed: boolean;
+  readonly commandSkip: boolean;
+  readonly controlSkip: boolean;
+  readonly alreadyRead: boolean;
+  readonly rightClickAllowed: boolean;
+  readonly rightClickScript: string;
+  readonly autosave: number;
+  readonly stopAutoByClick: boolean;
+  readonly stopAutoByStop: boolean;
+  readonly syncSe: readonly string[];
+  readonly skipUnread: boolean;
+  readonly writeBacklog: boolean;
 }
 
 /** Rev.3179 mode command state. Rendering/input effects remain supplied platform services. */
@@ -73,6 +92,54 @@ export class ArtemisModes {
     this.syncSe = [];
     this.writeBacklog = true;
   }
+  saveFields(): ArtemisModeSaveFields {
+    return {
+      automodeAllowed: this.automodeAllowed,
+      automode: this.automode,
+      automodeLayers: new Map([...this.automodeLayers].map(([key, value]) => [key, {...value}])),
+      skipAllowed: this.skipAllowed,
+      commandSkip: this.commandSkip,
+      controlSkip: this.controlSkip,
+      alreadyRead: this.alreadyReadEnabled,
+      rightClickAllowed: this.rightClickAllowed,
+      rightClickScript: this.rightClickScript,
+      autosave: this.autosave,
+      stopAutoByClick: this.stopAutoByClick,
+      stopAutoByStop: this.stopAutoByStop,
+      syncSe: [...this.syncSe],
+      skipUnread: this.skipUnread,
+      writeBacklog: this.writeBacklog,
+    };
+  }
+  /** Loader section reads: present fields are assigned directly, without status writes or
+   * effects (the loader's later 0x1400b7810/0x1400b7ba0/0x1400b7c70 calls are the host's). */
+  loadFields(fields: Partial<ArtemisModeSaveFields>): void {
+    if (
+      fields.autosave !== undefined &&
+      fields.autosave !== 0 &&
+      fields.autosave !== 1 &&
+      fields.autosave !== 2
+    )
+      throw Error('Unsupported Artemis saved autosave mode');
+    if (fields.automodeAllowed !== undefined) this.automodeAllowed = fields.automodeAllowed;
+    if (fields.automode !== undefined) this.automode = fields.automode;
+    if (fields.automodeLayers) {
+      this.automodeLayers.clear();
+      for (const [key, value] of fields.automodeLayers) this.automodeLayers.set(key, {...value});
+    }
+    if (fields.skipAllowed !== undefined) this.skipAllowed = fields.skipAllowed;
+    if (fields.commandSkip !== undefined) this.commandSkip = fields.commandSkip;
+    if (fields.controlSkip !== undefined) this.controlSkip = fields.controlSkip;
+    if (fields.alreadyRead !== undefined) this.alreadyReadEnabled = fields.alreadyRead;
+    if (fields.rightClickAllowed !== undefined) this.rightClickAllowed = fields.rightClickAllowed;
+    if (fields.rightClickScript !== undefined) this.rightClickScript = fields.rightClickScript;
+    if (fields.autosave !== undefined) this.autosave = fields.autosave as 0 | 1 | 2;
+    if (fields.stopAutoByClick !== undefined) this.stopAutoByClick = fields.stopAutoByClick;
+    if (fields.stopAutoByStop !== undefined) this.stopAutoByStop = fields.stopAutoByStop;
+    if (fields.syncSe) this.syncSe = [...fields.syncSe];
+    if (fields.skipUnread !== undefined) this.skipUnread = fields.skipUnread;
+    if (fields.writeBacklog !== undefined) this.writeBacklog = fields.writeBacklog;
+  }
   /** Returns false for commands outside this mode service. */
   dispatch(tag: AsbTag): boolean {
     const p = tag.args;
@@ -98,9 +165,9 @@ export class ArtemisModes {
       case 'automode': {
         const owner = this.effects.currentMessageLayer();
         let entry = this.automodeLayers.get(owner);
-        if (!entry) this.automodeLayers.set(owner, (entry = {present: false, layer: ''}));
+        if (!entry) this.automodeLayers.set(owner, (entry = {present: false, name: ''}));
         entry.present = p.has('layer');
-        if (entry.present) entry.layer = p.get('layer')!;
+        if (entry.present) entry.name = p.get('layer')!;
         if (p.has('stopbyclick')) this.stopAutoByClick = p.get('stopbyclick') !== '0';
         if (p.has('stopbystop')) this.stopAutoByStop = p.get('stopbystop') !== '0';
         if (p.has('syncse')) {

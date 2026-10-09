@@ -66,6 +66,17 @@ export interface ArtemisScriptStackFrame {
   readonly commands: readonly AsbTag[];
   readonly firstCommand: 0 | 1;
 }
+/** A saved CCaret (script +0xb68 and each call-stack entry): file, index, pending queue
+ * and the copy of the tag at the index (+0xa8). */
+export interface ArtemisScriptCaret {
+  readonly file: string;
+  readonly index: number;
+  readonly queue: readonly AsbTag[];
+  readonly tag: AsbTag | null;
+  /** Call-stack frames saved by an event-handler scope resume in this state; the host maps
+   * it to the frame's run mode (+0x108). */
+  readonly resumeState?: ArtemisScriptState;
+}
 interface PendingLuaCall {
   readonly task: ArtemisLuaCall;
   readonly filterTag?: AsbTag;
@@ -215,6 +226,68 @@ export class ArtemisScript {
     if (this.queue.length - this.queueHead >= 10000)
       throw new Error('Artemis tag queue limit exceeded');
     this.queue.push({...tag, args: new Map(tag.args)});
+  }
+  /** Save writer sections 3/4: call-stack carets oldest first, then the current caret.
+   * The native save tag runs synchronously, so a resource-suspended Lua callback is
+   * refused; running Lua callbacks are host frames, not carets. */
+  carets(): ArtemisScriptCaret[] {
+    if (!this.cursor) throw Error('Artemis save without a script cursor');
+    if (this.luaSuspended) throw Error('Unsupported Artemis save during suspended Lua');
+    const caret = (
+      cursor: Cursor,
+      queue: readonly AsbTag[],
+      resumeState?: ArtemisScriptState,
+    ): ArtemisScriptCaret => ({
+      file: cursor.file,
+      index: cursor.index,
+      queue: queue.map((tag) => ({...tag, args: new Map(tag.args)})),
+      tag: cursor.program.tags[cursor.index] ?? null,
+      ...(resumeState ? {resumeState} : {}),
+    });
+    return [
+      ...this.callers.map((caller) => caret(caller, caller.queue, caller.resumeState)),
+      caret(this.cursor, this.queue.slice(this.queueHead)),
+    ];
+  }
+  /** Loader 0x140141b10: replaces the caret and call stack (programs come from the cache
+   * +0xaf8). The loader re-resolves the current caret by its tag copy when the program
+   * changed; a mismatch is refused. Local variable frames are restored by the variables
+   * owner. */
+  restoreCarets(carets: readonly ArtemisScriptCaret[]): void {
+    if (this.running) throw new Error('Artemis caret restore during dispatch');
+    if (!carets.length) throw Error('Artemis save without a current caret');
+    const cursors = carets.map((caret) => {
+      // An event-handler caret has no file and an empty program.
+      const program = caret.file
+        ? this.prepare(caret.file)
+        : {records: [], tags: [], labels: new Map()};
+      return {
+        program,
+        file: caret.file,
+        index: caret.index,
+        queue: caret.queue,
+        ...(caret.resumeState ? {resumeState: caret.resumeState} : {}),
+      };
+    });
+    const current = cursors.at(-1)!;
+    const saved = carets.at(-1)!.tag;
+    const actual = current.program.tags[current.index] ?? null;
+    if (
+      (saved?.name ?? '') !== (actual?.name ?? '') ||
+      (saved && actual && saved.sourceLine !== actual.sourceLine)
+    )
+      throw Error('Unsupported Artemis saved caret relocation');
+    this.cancelLuaCalls();
+    this.callers.length = 0;
+    for (const {queue, ...cursor} of cursors.slice(0, -1))
+      this.callers.push({
+        ...cursor,
+        queue: queue.map((tag) => ({...tag, args: new Map(tag.args)})),
+      });
+    this.cursor = {program: current.program, file: current.file, index: current.index};
+    this.queue = current.queue.map((tag) => ({...tag, args: new Map(tag.args)}));
+    this.queueHead = 0;
+    this.state = 'ready';
   }
   /** getScriptStack (0x1401318a0) source: saved carets oldest first, then the current caret
    * (b70 file, b90 index, be8 queue). Saved queues number from 1, the current one from 0. */
