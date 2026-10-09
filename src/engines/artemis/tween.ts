@@ -373,6 +373,11 @@ export class ArtemisTweenRegistry {
     this.counter = (this.counter + 1) >>> 0;
     return id;
   }
+  /** 0x140149760: true while the id is registered (active or pending), including a
+   * finished tween that no step has removed yet. */
+  has(id: number): boolean {
+    return this.active.has(id) || this.pending.has(id);
+  }
   /** Finishes the active tween with this id, else the pending one; unknown ids are ignored. */
   finish(id: number): void {
     (this.active.get(id) ?? this.pending.get(id))?.finish();

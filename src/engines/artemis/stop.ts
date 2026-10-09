@@ -5,10 +5,10 @@ import type {ArtemisSave} from './save.js';
 export interface ArtemisStopHost {
   /** Script field +0x3520. */
   debugSkipActive(): boolean;
-  /** Caret owner (stage +0xa0) virtual +0x1c8(name, 1): the skip indicator (+0x3718) when
-   * skipping or debug-skipping, otherwise the current message layer's indicator (+0x3730
-   * map at +0x35e0), as in the wait tag 0x1400cc0c0. */
-  showWaitIndicator(skip: boolean): void;
+  /** Current text layer (stage +0xa0) virtual +0x1c8(vector, 1): the skip vector +0x3718
+   * when skipping or debug-skipping, otherwise the current message layer's `in` vector
+   * (+0x3730 map at +0x35e0), as in the wait tag 0x1400cc0c0. */
+  startTextDisplay(skip: boolean): void;
   /** Unless run mode is 13: previous mode c74 = mode, mode c70 = 3 and scheduler +0x30(0).
    * Returns false when mode 13 refused the change. */
   enterStopMode(): boolean;
@@ -27,7 +27,7 @@ export class ArtemisStop {
     const skip =
       (this.modes.skipAllowed && (this.modes.commandSkip || this.modes.controlSkip)) ||
       this.host.debugSkipActive();
-    this.host.showWaitIndicator(skip);
+    this.host.startTextDisplay(skip);
     if (this.host.enterStopMode() && !skip)
       this.save.request(this.modes.autosave === 2 ? 'autosave.dat' : '');
     if (this.modes.automode) this.modes.setAutomode(false);

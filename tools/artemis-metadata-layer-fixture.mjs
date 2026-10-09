@@ -301,6 +301,8 @@ export function createMetadataLayerFixture(hash, readFile, runMode = null) {
     get tweensRegistered() {
       return tweens.size;
     },
+    /** The global tween registry shared with text display tweens. */
+    tweenRegistry: tweens,
     dispatchTween: (tag) => {
       effects.push({kind: 'tween', name: tag.name, id: tag.args.get('id'), simulation: true});
       return layerTweens.dispatch(tag);

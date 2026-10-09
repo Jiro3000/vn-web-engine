@@ -50,6 +50,7 @@ import {packArtemisSaveFile} from '../dist/formats/artemis/save-file.js';
 import {ArtemisClickGlyphs} from '../dist/engines/artemis/click-glyph.js';
 import {ArtemisReset} from '../dist/engines/artemis/reset.js';
 import {ArtemisTimedWait} from '../dist/engines/artemis/wait.js';
+import {ArtemisTextDisplay} from '../dist/engines/artemis/text-display.js';
 import {ArtemisTextControls} from '../dist/engines/artemis/text-controls.js';
 import {ArtemisKeyBindings} from '../dist/engines/artemis/key-bindings.js';
 import {ArtemisEventCommands} from '../dist/engines/artemis/event-commands.js';
@@ -91,6 +92,10 @@ const probeInputs = process.argv
     const [id, type = 'click'] = arg.slice('--layer-event='.length).split(':');
     return {id, type};
   });
+// Diagnostic clicks (--clicks=N) at `@` click-waits: 16 ms frames run until the text
+// display completes, then one run mode 1 click is delivered. No pointer position is used.
+const clickArgument = process.argv.slice(3).find((arg) => arg.startsWith('--clicks='));
+let probeClicks = clickArgument ? artemisInteger(clickArgument.slice('--clicks='.length)) : 0;
 const shaderPresets = process.argv.slice(3).includes('--shader-presets');
 if (shaderPresets && !metadataLayers) throw Error('--shader-presets requires --image-metadata');
 const graphicsFeatureArgument = process.argv
@@ -368,12 +373,76 @@ try {
       );
     },
   });
+  // Text display owners per message resource. Glyph actors are nonvisual property stores;
+  // every logical glyph receives one.
+  const textDisplays = new Map(),
+    displayActors = new WeakMap();
+  const displayActor = (key) => {
+    let actor = displayActors.get(key);
+    if (!actor) {
+      const values = new Map([
+        ['left', 0],
+        ['top', 0],
+        ['alpha', 1],
+        ['xscale', 1],
+        ['yscale', 1],
+        ['rotate', 0],
+      ]);
+      actor = {
+        property: (parameter) => values.get(parameter),
+        setProperty: (parameter, value) => values.set(parameter, value),
+      };
+      displayActors.set(key, actor);
+    }
+    return actor;
+  };
+  const textDisplayHost = (resource) => ({
+    lines: () => glyphFixture.get(resource).displayBlocks(),
+    glyphIndex: (glyph) => glyph.glyphId,
+    glyphCount: () => glyphFixture.get(resource).glyphCount,
+    glyphActor: displayActor,
+    blockActor: displayActor,
+  });
+  const textDisplay = (resource) => {
+    let display = textDisplays.get(resource);
+    if (!display) {
+      if (!glyphFixture || !layerFixture) throw Error('Probe text display requires --glyph-layout');
+      display = new ArtemisTextDisplay(
+        executableSha256,
+        layerFixture.tweenRegistry,
+        textDisplayHost(resource),
+      );
+      textDisplays.set(resource, display);
+    }
+    return display;
+  };
+  const currentTextDisplay = () => {
+    const resource = messageStage?.currentLayer();
+    if (!resource) throw Error('Probe text display has no current text layer');
+    return textDisplay(resource);
+  };
+  const startTextDisplay = (skip) => {
+    const display = currentTextDisplay(),
+      before = display.tweens.length;
+    // The skip vector +0x3718 is zero-initialized and has no decoded writer.
+    display.show(skip ? [] : sceneTweens.snapshot('in'), true);
+    modeEffects.push({
+      textDisplay: messageSelection.currentMessageLayer(),
+      skip,
+      tweens: display.tweens.length - before,
+      start: display.start,
+      simulation: true,
+    });
+  };
   const wait = new ArtemisTimedWait(modes, save, {
     now: () => probeTick,
     debugSkipActive: () => false,
-    hasActiveMessage: () => false,
-    beginWait: (inputEnabled, skipIndicator) => {
-      modeEffects.push({wait: {inputEnabled, skipIndicator}});
+    startTextDisplay,
+    textDisplayComplete: () => currentTextDisplay().complete,
+    finishTextDisplay: () => currentTextDisplay().finish(),
+    writeClickSkip: () => variables.write('s.clickskip', '1'),
+    beginWait: (inputEnabled) => {
+      modeEffects.push({wait: {inputEnabled}});
       script.pause();
     },
     endWait: () => {
@@ -393,7 +462,7 @@ try {
   let probeRunMode = 0;
   const stop = new ArtemisStop(modes, save, {
     debugSkipActive: () => false,
-    showWaitIndicator: (skip) => modeEffects.push({waitIndicator: skip ? 'skip' : 'message'}),
+    startTextDisplay,
     enterStopMode: () => {
       probeRunMode = 3;
       modeEffects.push({runMode: 3, simulation: true});
@@ -412,7 +481,10 @@ try {
     };
     const releaseMessage = (layer) => {
       if (--layer.references < 0) throw Error('Probe message resource released twice');
-      if (layer.references === 0) glyphFixture?.release(layer);
+      if (layer.references === 0) {
+        glyphFixture?.release(layer);
+        textDisplays.delete(layer);
+      }
     };
     messageStage = new ArtemisMessageLayers(executableSha256, '', {
       createMessageLayer: (name) => {
@@ -432,6 +504,8 @@ try {
             foot: new Set(old.prohibition.foot),
           };
         glyphFixture?.copy(old, copy);
+        const display = textDisplays.get(old);
+        if (display) textDisplays.set(copy, display.copy(textDisplayHost(copy)));
         return copy;
       },
       retainMessageLayer: retainMessage,
@@ -625,7 +699,8 @@ try {
       clearText: async (name, out) => {
         if (out && sceneTweens.snapshot('out', name).length)
           throw Error('Native outgoing text effects are not implemented');
-        glyphFixture.get(selectedResource(name)).clearEmptyEffects();
+        const resource = selectedResource(name);
+        if (glyphFixture.get(resource).clearEmptyEffects()) textDisplays.get(resource)?.clear();
       },
       recordTextCommand: recordText,
     });
@@ -875,7 +950,7 @@ try {
     script.run(1000);
     while (script.state === 'waiting') {
       if (pendingResource) {
-        if (resourceResumptions >= 1000) throw Error('Probe resource budget exceeded');
+        if (resourceResumptions >= 100000) throw Error('Probe resource budget exceeded');
         const operation = pendingResource;
         pendingResource = null;
         await operation;
@@ -890,7 +965,7 @@ try {
         script.run(1000);
         continue;
       }
-      if (advanceWaits && layerFixture?.transitionPending && advancedWaits < 100) {
+      if (advanceWaits && layerFixture?.transitionPending && advancedWaits < 10000) {
         probeTick = layerFixture.finishTransition((probeTick + 1) >>> 0 || 1);
         advancedWaits++;
         soundFixture?.advanceToTick?.(probeTick);
@@ -898,7 +973,7 @@ try {
         script.run(1000);
         continue;
       }
-      if (advanceWaits && layerFixture?.tweenSyncPending && advancedWaits < 100) {
+      if (advanceWaits && layerFixture?.tweenSyncPending && advancedWaits < 10000) {
         // Deterministic 16 ms frames until the sync tween's completion ends run mode 4.
         for (let frame = 0; layerFixture.tweenSyncPending; frame++) {
           if (frame >= 100000) throw Error('Probe sync tween did not finish');
@@ -926,7 +1001,35 @@ try {
         script.run(1000);
         continue;
       }
-      if (!advanceWaits || !wait.pending || advancedWaits >= 100) break;
+      if (wait.clickPending && probeClicks > 0) {
+        for (let frame = 0; !currentTextDisplay().complete; frame++) {
+          if (frame >= 100000) throw Error('Probe click-wait display did not finish');
+          probeTick = (probeTick + 16) >>> 0 || 1;
+          soundFixture?.advanceToTick?.(probeTick);
+          layerFixture?.tickTweens(probeTick);
+          wait.tick(probeTick);
+        }
+        probeClicks--;
+        probeTick = (probeTick + 16) >>> 0 || 1;
+        modeEffects.push({click: true, simulation: true});
+        if (!wait.tick(probeTick, true)) throw Error('Probe click did not end the click-wait');
+        script.run(1000);
+        continue;
+      }
+      if (advanceWaits && wait.scenarioPending && advancedWaits < 10000) {
+        // Deterministic 16 ms frames until the text display completes; no click is simulated.
+        for (let frame = 0; ; frame++) {
+          if (frame >= 100000) throw Error('Probe scenario wait did not finish');
+          probeTick = (probeTick + 16) >>> 0 || 1;
+          soundFixture?.advanceToTick?.(probeTick);
+          layerFixture?.tickTweens(probeTick);
+          if (wait.tick(probeTick)) break;
+        }
+        advancedWaits++;
+        script.run(1000);
+        continue;
+      }
+      if (!advanceWaits || !wait.pending || wait.clickPending || advancedWaits >= 10000) break;
       probeTick = (wait.deadlineTick + 1) >>> 0;
       advancedWaits++;
       soundFixture?.advanceToTick?.(probeTick);

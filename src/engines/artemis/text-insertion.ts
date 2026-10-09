@@ -165,9 +165,18 @@ export class ArtemisTextInsertion {
   }
   /** Enclosing owner must actually cancel incoming/previous outgoing jobs and
    * select an empty outgoing descriptor vector before invoking this branch. */
-  clearEmptyEffects(): void {
+  clearEmptyEffects(): boolean {
     this.idle();
-    if (this.wrapping.clear(this.count)) this.count = 0;
+    if (!this.wrapping.clear(this.count)) return false;
+    this.count = 0;
+    return true;
+  }
+  /** Lines (+0x528) and their blocks for the display owner, after the frame layout. */
+  displayBlocks(): readonly (readonly ArtemisTextBlock<ArtemisInsertionGlyphResource>[])[] {
+    this.idle();
+    return this.wrapping
+      .prepareFrame()
+      .map((line) => line.geometry.blocks.map((positioned) => positioned.block));
   }
   snapshotFont(): ArtemisFontAttributes {
     this.idle();

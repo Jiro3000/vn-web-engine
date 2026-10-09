@@ -104,9 +104,9 @@ clock. fullscreen and minimize use shared `WindowStateHost`
 (`src/platform/window-state.ts`); the software-renderer guard and display reset are host
 operations. Unknown commands do nothing.
 
-`stop.ts` owns the stop tag (`0x1400c7bb0`). It shows the wait indicator chosen like the
-wait tag (skip indicator while skipping or debug-skipping, otherwise the message layer's),
-enters run mode 3 through the host (refused from mode 13) with the mode 3 save gate, and
+`stop.ts` owns the stop tag (`0x1400c7bb0`). It starts the text display like the wait
+tag (skip vector while skipping or debug-skipping, otherwise the message layer's `in`
+vector; see [Text display and click-waits](#text-display-and-click-waits)), enters run mode 3 through the host (refused from mode 13) with the mode 3 save gate, and
 turns an active automode off without force. Click consumption of mode 3 belongs to the
 frame owner.
 
@@ -154,12 +154,14 @@ this source tree.
 
 ## Timed waits and save requests
 
-`wait.ts` implements the empty-message timed subset of native wait, including
-input=2 skip/debug-skip bypass, strict absolute uint32 deadline comparison and the
-zero-deadline sentinel. Input=1 enters click-wait: the host receives scheduler/
-indicator state, In callback and the native save request. Completion releases the
-scheduler, emits Out and updates message state. Active message/automode progression,
-scenario, media and click-to-skip remain explicitly unsupported.
+`wait.ts` implements the wait tag and the `@` click-wait together with their run mode
+1/4 frame branch; [Text display and click-waits](#text-display-and-click-waits)
+describes the progression. Timed waits keep the input=2 skip/debug-skip bypass, strict
+absolute uint32 deadline comparison and the zero-deadline sentinel. Input=1 enters
+click-wait: the host receives scheduler state, the In callback and the native save
+request. Completion releases the scheduler, emits Out and updates message state.
+Automode, `scenario=2`, `se`/`video` media waits and skip-mode click-wait progression
+remain explicitly unsupported.
 
 `save.ts` preserves the native save gate: empty filename/force=false/clean sf state
 performs no writes. A nonempty filename emits onSave before the scenario snapshot;
@@ -188,8 +190,9 @@ stack without popping local scopes and keeps the program cache, the tag queue an
 state, so cached inline Lua does not run again. Native construction leaves automode
 disallowed until `[automode allow]`.
 
-Probe `--advance-waits` advances its simulated clock beyond each timed deadline,
-up to 100 waits. It is separate from actual user input and production scheduling.
+Probe `--advance-waits` advances its simulated clock beyond each timed deadline and
+runs 16 ms frames through `scenario=1` waits, up to 10000 waits. `--clicks=N` delivers
+up to N run mode 1 clicks at `@` click-waits, each after the text display completed. It is separate from actual user input and production scheduling.
 The probe uses a windowed shared geometry fixture for fullscreen queries.
 
 ## Virtual paths and application arguments
@@ -870,7 +873,52 @@ survive later mutations. Parameters distinguish whole-layer and per-character ef
 ease names retain native dispatch ids. Diff rounds to float32 before alpha/scale
 division, and time wins over the legacy msec key even when explicitly empty.
 Unknown modes/types do not modify vectors, matching the handler's explicit return.
-This configures future text effects; a text/frame owner must actually apply them.
+`ArtemisTextDisplay` applies the `in` vectors (see below).
+
+## Text display and click-waits
+
+`text-display.ts` is the display progression of a text layer (CLinkableTextLayer
+vtable `0x140376af0`). `show(descriptors, continuing)` is virtual +0x1c8
+(`0x140196b10`): for every descriptor and every character it creates a float tween
+(`0x1401990e0`), registers it in the global `ArtemisTweenRegistry` and keeps the id.
+In-tweens set `value + diff` at once and return to the current value; outgoing tweens
+move from the current value by `diff`. Only blocks whose first main glyph index is at
+least the display start take part, and the display start then becomes the glyph
+counter, so each start animates only text inserted since the previous one. A
+non-continuing start resets the display start to 0 first.
+
+Delays are `delay * order` (int32). The order counts every main glyph of the included
+blocks from 0, including glyphs without an actor; ruby glyphs start at their block's
+first order and advance by `main / ruby` count in float32. `entire*` descriptors
+animate whole blocks with the cumulative main-glyph count of all blocks in the layer
+(`0x140198ce0`). `randomdelay` needs the CRT `rand` stream used by `random_shuffle`
+and is refused. Unknown parameters create no tween but insert id 0, as native does.
+
+`complete` is +0x1e0 (`0x14014a0a0`): true once no kept id is still registered, which
+includes a finished tween until the next registry step removes it. `finish` is +0x1d0
+(`0x140197100`): finish every kept tween, then forget the ids. `clear` follows the
+empty-outgoing branch of `0x1401962d0` after the insertion owner reset its lines:
+finish, then zero the display start together with the glyph counter. `copy` follows the
+CLinkableTextLayer copy, which keeps the display start and the id set.
+`ArtemisTextInsertion.displayBlocks()` supplies the lines and blocks.
+
+The wait tag (`0x1400cc0c0`) and `@` (`0x1400cbf20`) both start the display with
+`continuing` set. A timed wait (flag b98) uses the skip vector while skipping or
+debug-skipping; `scenario=1` (flag b99) always uses the `in` vector and has no
+deadline. The skip vector (script +0x3718) is zero-initialized and has no decoded
+writer, so it shows text without tweens. `@` sets no flag and enters run mode 1 with
+onClickWaitIn and the save gate.
+
+Each frame, `ArtemisTimedWait.tick(now, clicked)` runs the run mode 1/3/4 branch of
+`0x1400c0560`:
+
+1. A click in run mode 1 on a complete display ends the wait; `s.clickskip` is set to 1
+   only when a wait flag is set. A click on an incomplete display finishes it and sets
+   `s.clickskip`.
+2. A passed timed deadline ends the wait.
+3. A `scenario=1` wait ends once the display is complete.
+
+An `@` therefore ends only on a click.
 
 `ArtemisTextBreakControls` dispatches `indent`, `prohibit` and `wordparts` to the
 selected text resource. UTF-8 characters form pairs; duplicate openings replace

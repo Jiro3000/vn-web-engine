@@ -991,8 +991,11 @@ test('Timed wait preserves strict deadline, event/save/message ordering and zero
   const wait = new ArtemisTimedWait(modes, save, {
     now: () => clock,
     debugSkipActive: () => false,
-    hasActiveMessage: () => false,
-    beginWait: (input, skip) => calls.push(['begin', input, skip]),
+    startTextDisplay: (skip) => calls.push(['display', skip]),
+    textDisplayComplete: () => true,
+    finishTextDisplay: () => calls.push('finish'),
+    writeClickSkip: () => calls.push('clickskip'),
+    beginWait: (input) => calls.push(['begin', input]),
     endWait: () => calls.push('end'),
     clickWaitEvent: (kind) => calls.push(kind),
     resumeMessageState: () => calls.push('message'),
@@ -1005,7 +1008,8 @@ test('Timed wait preserves strict deadline, event/save/message ordering and zero
   });
   wait.dispatch(tag({time: '10', input: '1'}));
   assert.deepEqual(calls, [
-    ['begin', true, false],
+    ['display', false],
+    ['begin', true],
     'in',
     ['saveEvent', 'autosave.dat'],
     ['save', 'autosave.dat'],
@@ -1022,7 +1026,7 @@ test('Timed wait preserves strict deadline, event/save/message ordering and zero
   assert.equal(wait.pending, true);
 });
 
-test('Input=2 skip bypasses setup; message/media wait paths fail before effects', async () => {
+test('Input=2 skip bypasses setup; media and scenario=2 wait paths fail before effects', async () => {
   const {ArtemisTimedWait} = await import('../dist/engines/artemis/wait.js');
   const {ArtemisModes} = await import('../dist/engines/artemis/modes.js');
   const {ArtemisSave} = await import('../dist/engines/artemis/save.js');
@@ -1042,11 +1046,13 @@ test('Input=2 skip bypasses setup; message/media wait paths fail before effects'
     writeGlobal: unexpected,
     writeSystem: unexpected,
   });
-  let message = false;
   const wait = new ArtemisTimedWait(modes, save, {
     now: () => 1,
     debugSkipActive: () => false,
-    hasActiveMessage: () => message,
+    startTextDisplay: unexpected,
+    textDisplayComplete: unexpected,
+    finishTextDisplay: unexpected,
+    writeClickSkip: unexpected,
     beginWait: unexpected,
     endWait: unexpected,
     clickWaitEvent: unexpected,
@@ -1062,12 +1068,214 @@ test('Input=2 skip bypasses setup; message/media wait paths fail before effects'
   assert.equal(wait.dispatch(tag({input: '2', video: 'x'})), true);
   assert.equal(wait.pending, false);
   modes.setCommandSkip(false);
-  assert.throws(() => wait.dispatch(tag({video: 'x'})), /media\/scenario/);
-  message = true;
-  assert.throws(() => wait.dispatch(tag({time: '1'})), /message\/automode/);
+  assert.throws(() => wait.dispatch(tag({video: 'x'})), /media waits/);
+  assert.throws(() => wait.dispatch(tag({se: 'x'})), /media waits/);
+  assert.throws(() => wait.dispatch(tag({scenario: '2'})), /scenario=2/);
   assert.equal(wait.pending, false);
 });
 
+const TEXT_DISPLAY_HASH = '8953562b80608046662bd8c89015d04236b0ba3afee10c36469c11403de3ebaf';
+function textDisplayFixture(ArtemisTextDisplay, registry) {
+  const actors = new Map();
+  const actor = (key) => {
+    if (!actors.has(key)) {
+      const values = {left: 0, top: 0, alpha: 1, xscale: 1, yscale: 1, rotate: 0};
+      actors.set(key, {
+        values,
+        property: (name) => values[name],
+        setProperty: (name, value) => (values[name] = value),
+      });
+    }
+    return actors.get(key);
+  };
+  const glyph = (id) => ({glyph: {id}, x: 0, y: 0, advance: 10});
+  const lines = [
+    [
+      {width: 20, height: 10, main: [glyph(0), glyph(1)], ruby: []},
+      {width: 10, height: 10, main: [glyph(2)], ruby: [glyph(3), glyph(4)]},
+    ],
+  ];
+  let count = 5;
+  const display = new ArtemisTextDisplay(TEXT_DISPLAY_HASH, registry, {
+    lines: () => lines,
+    glyphIndex: (g) => g.id,
+    glyphCount: () => count,
+    glyphActor: (g) => actor(g.id),
+    blockActor: (block) => actor(block),
+  });
+  return {
+    display,
+    lines,
+    alpha: (id) => actor(id).values.alpha,
+    blockAlpha: (block) => actor(block).values.alpha,
+    append(id) {
+      lines.push([{width: 10, height: 10, main: [glyph(id)], ruby: []}]);
+      count = id + 1;
+    },
+  };
+}
+const alphaIn = (overrides = {}) => ({
+  parameter: 'alpha',
+  entire: false,
+  ease: 0,
+  diff: -1,
+  time: 100,
+  delay: 10,
+  randomDelay: false,
+  outgoing: false,
+  ...overrides,
+});
+
+test('Text display staggers in-tweens per glyph, continues from the display start and finishes on demand', async () => {
+  const {ArtemisTextDisplay} = await import('../dist/engines/artemis/text-display.js');
+  const {ArtemisTweenRegistry} = await import('../dist/engines/artemis/tween.js');
+  const registry = new ArtemisTweenRegistry(TEXT_DISPLAY_HASH);
+  const fixture = textDisplayFixture(ArtemisTextDisplay, registry);
+  const {display} = fixture;
+  display.show([alphaIn()], true);
+  // In-tweens jump to value + diff at creation.
+  for (const id of [0, 1, 2, 3, 4]) assert.equal(fixture.alpha(id), 0);
+  assert.equal(display.tweens.length, 5);
+  assert.equal(display.start, 5);
+  assert.equal(display.complete, false);
+  registry.tick(1000);
+  registry.tick(1070);
+  // Main glyph delays 0/10/20; ruby glyphs spread their block's main count: 20 and 25.
+  const close = (actual, expected) => assert.ok(Math.abs(actual - expected) < 1e-6, `${actual}`);
+  close(fixture.alpha(0), 0.7);
+  close(fixture.alpha(1), 0.6);
+  close(fixture.alpha(2), 0.5);
+  close(fixture.alpha(3), 0.5);
+  close(fixture.alpha(4), 0.45);
+  registry.tick(1124);
+  assert.equal(display.complete, false);
+  // The last ruby tween ends at 1025 + 100; the step that reaches it unregisters it.
+  registry.tick(1125);
+  assert.equal(display.complete, true);
+  for (const id of [0, 1, 2, 3, 4]) assert.equal(fixture.alpha(id), 1);
+
+  // A continued start only animates glyphs at or after the display start, from order 0.
+  fixture.append(5);
+  display.show([alphaIn()], true);
+  assert.equal(display.tweens.length, 6);
+  assert.equal(fixture.alpha(5), 0);
+  assert.equal(fixture.alpha(0), 1);
+  assert.equal(display.complete, false);
+  display.finish();
+  assert.equal(fixture.alpha(5), 1);
+  assert.equal(display.tweens.length, 0);
+  assert.equal(display.complete, true);
+
+  // `entire*` animates blocks with the cumulative main count of all blocks as order.
+  display.show([alphaIn({entire: true, delay: 100})], false);
+  assert.equal(display.tweens.length, 3);
+  const blocks = fixture.lines.flat();
+  registry.tick(2000);
+  registry.tick(2050);
+  close(fixture.blockAlpha(blocks[0]), 0.5);
+  assert.equal(fixture.blockAlpha(blocks[1]), 0);
+  registry.tick(2250);
+  close(fixture.blockAlpha(blocks[1]), 0.5);
+  assert.equal(fixture.blockAlpha(blocks[2]), 0);
+  display.clear();
+  assert.equal(display.start, 0);
+  assert.equal(display.complete, true);
+  assert.throws(() => display.show([alphaIn({randomDelay: true})], true), /random text display/);
+});
+
+test('Scenario waits end with the text display; @ click-waits finish the display before a click ends them', async () => {
+  const {ArtemisTextDisplay} = await import('../dist/engines/artemis/text-display.js');
+  const {ArtemisTweenRegistry} = await import('../dist/engines/artemis/tween.js');
+  const {ArtemisTimedWait} = await import('../dist/engines/artemis/wait.js');
+  const {ArtemisModes} = await import('../dist/engines/artemis/modes.js');
+  const {ArtemisSave} = await import('../dist/engines/artemis/save.js');
+  const {ArtemisVariables} = await import('../dist/engines/artemis/variables.js');
+  const registry = new ArtemisTweenRegistry(TEXT_DISPLAY_HASH);
+  const fixture = textDisplayFixture(ArtemisTextDisplay, registry);
+  const calls = [];
+  const modes = new ArtemisModes({
+    writeStatus: () => {},
+    commandSkipChanged: () => {},
+    controlSkipChanged: () => {},
+    automodeChanged: () => {},
+    releaseScheduler: () => {},
+  });
+  const save = new ArtemisSave(new ArtemisVariables(), {
+    reportEventError: (error) => calls.push(String(error)),
+    beforeScenario: () => {},
+    writeScenario: (file) => calls.push(['save', file]),
+    writeGlobal: () => {},
+    writeSystem: () => {},
+  });
+  const wait = new ArtemisTimedWait(modes, save, {
+    now: () => 500,
+    debugSkipActive: () => false,
+    startTextDisplay: (skip) => {
+      calls.push(['display', skip]);
+      fixture.display.show(skip ? [] : [alphaIn()], true);
+    },
+    textDisplayComplete: () => fixture.display.complete,
+    finishTextDisplay: () => {
+      calls.push('finish');
+      fixture.display.finish();
+    },
+    writeClickSkip: () => calls.push('clickskip'),
+    beginWait: (input) => calls.push(['begin', input]),
+    endWait: () => calls.push('end'),
+    clickWaitEvent: (kind) => calls.push(kind),
+    resumeMessageState: () => calls.push('message'),
+  });
+  const tag = (name, args = {}) => ({
+    kind: 'tag',
+    name,
+    sourceLine: -1,
+    args: new Map(Object.entries(args)),
+  });
+  wait.dispatch(tag('wait', {scenario: '1', input: '1'}));
+  assert.equal(wait.scenarioPending, true);
+  assert.equal(wait.deadlineTick, 0);
+  assert.deepEqual(calls.splice(0), [['display', false], ['begin', true], 'in']);
+  registry.tick(1000);
+  assert.equal(wait.tick(1000), false);
+  registry.tick(1126);
+  assert.equal(wait.tick(1126), true);
+  assert.deepEqual(calls.splice(0), ['end', 'out', 'message']);
+
+  fixture.append(5);
+  wait.dispatch(tag('@'));
+  assert.equal(wait.clickPending, true);
+  assert.deepEqual(calls.splice(0), [['display', false], ['begin', true], 'in']);
+  // Without flags the wait never ends by itself.
+  registry.tick(2000);
+  registry.tick(3000);
+  assert.equal(wait.tick(3000), false);
+  assert.equal(wait.tick(3001, true), true);
+  // A complete display ends `@` on the click without s.clickskip.
+  assert.deepEqual(calls.splice(0), ['end', 'out', 'message']);
+
+  // An early click finishes the display and marks s.clickskip; the next click ends it.
+  fixture.append(6);
+  wait.dispatch(tag('@'));
+  calls.length = 0;
+  assert.equal(fixture.alpha(6), 0);
+  assert.equal(wait.tick(4000, true), false);
+  assert.deepEqual(calls.splice(0), ['finish', 'clickskip']);
+  assert.equal(fixture.alpha(6), 1);
+  assert.equal(wait.tick(4016, true), true);
+  assert.deepEqual(calls.splice(0), ['end', 'out', 'message']);
+
+  // An early click on a scenario wait finishes the display; the same frame then ends it.
+  fixture.append(7);
+  wait.dispatch(tag('wait', {scenario: '1', input: '1'}));
+  calls.length = 0;
+  assert.equal(wait.tick(5000, true), true);
+  assert.deepEqual(calls.splice(0), ['finish', 'clickskip', 'end', 'out', 'message']);
+  // Timed waits also end on a click once the display is complete, marking s.clickskip.
+  wait.dispatch(tag('wait', {time: '1000', input: '1'}));
+  calls.length = 0;
+  assert.equal(wait.tick(5016, true), true);
+  assert.deepEqual(calls.splice(0), ['clickskip', 'end', 'out', 'message']);
+});
 test('Save callback errors are reported before native save continues, and dirty clears before system failure', async () => {
   const {ArtemisSave} = await import('../dist/engines/artemis/save.js');
   const {ArtemisVariables} = await import('../dist/engines/artemis/variables.js');
@@ -4720,7 +4928,7 @@ test('Native stop shows the wait indicator, enters run mode 3 with the save gate
     {request: (file, transient, force) => (log.push(['save', file, transient, force]), true)},
     {
       debugSkipActive: () => false,
-      showWaitIndicator: (skip) => log.push(skip ? 'skipIndicator' : 'messageIndicator'),
+      startTextDisplay: (skip) => log.push(skip ? 'skipIndicator' : 'messageIndicator'),
       enterStopMode: () => (log.push('mode3'), entered),
     },
   );
