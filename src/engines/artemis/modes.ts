@@ -7,6 +7,14 @@ export interface ArtemisModeEffects {
   /** Host handles auto indicator, pending wait cancellation and registered events. */
   automodeChanged(active: boolean): void;
   releaseScheduler(): void;
+  /** Script +0x35e0: the current message layer name. */
+  currentMessageLayer(): string;
+}
+
+/** CIconInfo: `present` is byte +8, `layer` the string +0x10 (kept when `present` clears). */
+export interface ArtemisAutomodeLayer {
+  present: boolean;
+  layer: string;
 }
 
 /** Rev.3179 mode command state. Rendering/input effects remain supplied platform services. */
@@ -24,7 +32,8 @@ export class ArtemisModes {
   /** Constructor dword +0x30 = 0 leaves automode disallowed (byte +0x32) until [automode]. */
   automodeAllowed = false;
   automode = false;
-  automodeLayer: string | null = null;
+  /** +0x38: automode indicator layer per message layer (find-or-create in `automode`). */
+  readonly automodeLayers = new Map<string, ArtemisAutomodeLayer>();
   /** Constructor/bf210 word 3594 = 0x101. */
   stopAutoByClick = true;
   stopAutoByStop = true;
@@ -55,7 +64,7 @@ export class ArtemisModes {
   reset(): void {
     this.automodeAllowed = false;
     this.skipAllowed = true;
-    this.automodeLayer = null;
+    this.automodeLayers.clear();
     this.alreadyReadEnabled = true;
     this.rightClickAllowed = false;
     this.rightClickScript = 'rclick.iet';
@@ -86,8 +95,12 @@ export class ArtemisModes {
         } else this.skipAllowed = true;
         if (p.has('unread')) this.skipUnread = p.get('unread') !== '0';
         return true;
-      case 'automode':
-        this.automodeLayer = p.has('layer') ? p.get('layer')! : null;
+      case 'automode': {
+        const owner = this.effects.currentMessageLayer();
+        let entry = this.automodeLayers.get(owner);
+        if (!entry) this.automodeLayers.set(owner, (entry = {present: false, layer: ''}));
+        entry.present = p.has('layer');
+        if (entry.present) entry.layer = p.get('layer')!;
         if (p.has('stopbyclick')) this.stopAutoByClick = p.get('stopbyclick') !== '0';
         if (p.has('stopbystop')) this.stopAutoByStop = p.get('stopbystop') !== '0';
         if (p.has('syncse')) {
@@ -101,6 +114,7 @@ export class ArtemisModes {
           this.automodeAllowed = false;
         } else this.automodeAllowed = true;
         return true;
+      }
       case 'autosave': {
         const allow = p.get('allow');
         if (allow === '0' || allow === '1' || allow === '2')

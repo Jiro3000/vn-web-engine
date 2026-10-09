@@ -197,9 +197,15 @@ sections (0x18, 0x19, 0x42/0x43/0x4b/0x4c, 0x1a, 0x35, 0x1c/0x1d) with the nativ
 CScriptBlock layout, and `font-state.ts` serializes font frames as CFontProperty.
 Section 0x1e holds the scenario variables (CArtemisVariables): the expression quote set,
 every variable except `g.`/`s.`/`t.`, and the local frames; loading restores them without
-dirtying and refuses quote sets or frame shapes this runtime does not produce. The
-script-field sections (caret, call stack, modes, message layers, scene tweens), section
-0x41 and the `save`/`load` tag wiring are not implemented yet.
+dirtying and refuses quote sets or frame shapes this runtime does not produce.
+`scenario-archive.ts` encodes the whole kind 'S' archive in writer `0x140140770` order
+as a plain `ArtemisScenarioRecord`: the CCaret and call stack (a caret in run mode 5 or
+above saves its previous mode, a waiting caret saves 0 and its mode), mode flags, icon,
+glyph and CTweenInfo maps, push handlers and event slots, the save object, the 0x41 key
+roles, the variables and an unused CBackLog (saved backlog pages are refused). Reading
+returns only the sections present, so the loader keeps reset values for the rest.
+Capturing the record from the live owners and the `save`/`load` tag wiring are not
+implemented yet.
 
 `reset.ts` implements the engine reset `0x1400bf210`. `dispatch` handles the reset tag
 (`0x1400caad0`): a forced global save, automode off, mode defaults, owner resets through
@@ -876,8 +882,8 @@ Each method is bound only when its host owner exists.
   owner supplies the seed time.
 - `getScriptWaitReason` (`0x1401315b0`) returns a fresh table with one key per set wait
   flag: `time` (the uint32 deadline), `textTween`/`textClearTween` (1), `sound`/`video`
-  (strings). `ArtemisTimedWait.reason` supplies `time` and `textTween`; the other flags
-  belong to unimplemented waits.
+  (strings). `ArtemisTimedWait.reason` supplies `time`, `textTween`, `sound` and `video`;
+  `textClearTween` belongs to the unimplemented `scenario=2` wait.
 - `loadPngComments` (`0x1401345b0`) reads the file through `readResource` and parses its
   `tEXt` chunks with `readArtemisPngComments` (the native CPng comment walk: no CRC
   checks, last keyword wins, success only at `IEND`). Non-string arguments, missing files

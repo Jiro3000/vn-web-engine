@@ -277,6 +277,7 @@ try {
     controlSkipChanged: (active) => modeEffects.push({controlSkip: active}),
     automodeChanged: (active) => modeEffects.push({automode: active}),
     releaseScheduler: () => modeEffects.push({releaseScheduler: true}),
+    currentMessageLayer: () => messageSelection?.currentMessageLayer() ?? '',
   });
   if (soundFixture)
     sePlay = new ArtemisSePlay(executableSha256, {
@@ -835,7 +836,16 @@ try {
     },
     // SIMULATED seed: a fixed Unix time keeps probe runs deterministic.
     random: () => random.next(),
-    scriptWaitReason: () => wait.reason,
+    // Lua receives the se/video ids (ba0/bc8) as strings.
+    scriptWaitReason: () => {
+      const {sound, video, ...reason} = wait.reason;
+      const encoder = new TextEncoder();
+      return {
+        ...reason,
+        ...(sound === undefined ? {} : {sound: encoder.encode(sound)}),
+        ...(video === undefined ? {} : {video: encoder.encode(video)}),
+      };
+    },
     // Unprepared files are read asynchronously, then the Lua call repeats.
     readResource: (path) => {
       const resolved = installation.files.resolvePath(path);
@@ -982,14 +992,17 @@ try {
           runModeHeld = false;
           continue;
         }
-        if (soundRender) {
-          probeTick = (probeTick + 1) >>> 0;
-          soundFixture.advanceToTick(probeTick);
-          layerFixture?.tickTweens(probeTick);
-        }
         if (script.pendingLuaCalls) script.resumeLua();
         else script.resume();
         script.run(1000);
+        // Native loads resources synchronously inside the tag or Lua call; the frame that
+        // advances sound and delivers its finish events runs only once the script settles.
+        if (soundRender && !pendingResource) {
+          probeTick = (probeTick + 1) >>> 0;
+          soundFixture.advanceToTick(probeTick);
+          layerFixture?.tickTweens(probeTick);
+          if (script.state === 'ready') script.run(1000);
+        }
         continue;
       }
       if (advanceWaits && layerFixture?.transitionPending && advancedWaits < 1000000) {

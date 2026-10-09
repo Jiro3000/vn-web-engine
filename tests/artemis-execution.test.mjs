@@ -292,12 +292,14 @@ test('Expression arguments follow native operator passes, CVariant types and var
 test('Mode commands disable active skip/auto through status and effect services', async () => {
   const {ArtemisModes} = await import('../dist/engines/artemis/modes.js');
   const events = [];
+  let layer = 'mw';
   const modes = new ArtemisModes({
     writeStatus: (name, value) => events.push([name, value]),
     commandSkipChanged: (v) => events.push(['commandSkip', v]),
     controlSkipChanged: (v) => events.push(['controlSkip', v]),
     automodeChanged: (v) => events.push(['auto', v]),
     releaseScheduler: () => events.push(['release']),
+    currentMessageLayer: () => layer,
   });
   const tag = (name, args) => ({
     kind: 'tag',
@@ -324,6 +326,20 @@ test('Mode commands disable active skip/auto through status and effect services'
   modes.dispatch(tag('automode', {allow: '0', stopbyclick: '0', stopbystop: '1', syncse: ''}));
   assert.equal(modes.automode, false);
   assert.equal(modes.stopAutoByStop, true);
+  // +0x38 is keyed by the current message layer; without `layer` the name is kept.
+  modes.dispatch(tag('automode', {layer: 'auto'}));
+  layer = 'sub';
+  modes.dispatch(tag('automode', {}));
+  layer = 'mw';
+  modes.dispatch(tag('automode', {}));
+  assert.deepEqual(
+    [...modes.automodeLayers],
+    [
+      ['mw', {present: false, layer: 'auto'}],
+      ['sub', {present: false, layer: ''}],
+    ],
+  );
+  modes.automodeAllowed = false;
   assert.deepEqual(events, [
     ['s.status.commandskip', '0'],
     ['commandSkip', false],
@@ -342,6 +358,7 @@ test('Mode commands disable active skip/auto through status and effect services'
 test('Exec commands force skip/auto, queue frame requests and use window services', async () => {
   const {ArtemisModes} = await import('../dist/engines/artemis/modes.js');
   const {ArtemisExec} = await import('../dist/engines/artemis/exec.js');
+  const layer = '';
   const {BrowserWindowStateHost} = await import('../dist/platform/window-state.js');
   const events = [];
   const modes = new ArtemisModes({
@@ -350,6 +367,7 @@ test('Exec commands force skip/auto, queue frame requests and use window service
     controlSkipChanged: (v) => events.push(['controlSkip', v]),
     automodeChanged: (v) => events.push(['auto', v]),
     releaseScheduler: () => events.push(['release']),
+    currentMessageLayer: () => layer,
   });
   let visibilityState = 'visible';
   let software = false;
@@ -2207,6 +2225,9 @@ test('Artemis Lua random, wait reasons and PNG comments follow the native engine
       'w',
     );
     assert.deepEqual([lua.vm.getGlobal('time'), lua.vm.getGlobal('tween')], [null, 1]);
+    reason = {sound: new TextEncoder().encode('voice')};
+    lua.vm.execute(bytes(`w = engine:getScriptWaitReason(); s = w.sound .. '!'`), 'w');
+    assert.equal(new TextDecoder().decode(lua.vm.getGlobal('s')), 'voice!');
   } finally {
     lua.close();
   }
@@ -5391,6 +5412,207 @@ test('Scenario variables section keeps scenario names and local frames, not g./s
   target.popLocal();
   assert.equal(target.lookup('arg'), undefined);
   assert.throws(() => target.popLocal(), /underflow/);
+});
+
+test('Scenario archive script fields round-trip in native writer order', async () => {
+  const {ArtemisSaveArchiveReader, ArtemisSaveArchiveWriter} =
+    await import('../dist/formats/artemis/save-file.js');
+  const {
+    writeArtemisCaret,
+    readArtemisCaret,
+    writeArtemisScenarioArchive,
+    readArtemisScenarioArchive,
+  } = await import('../dist/engines/artemis/scenario-archive.js');
+  const {ArtemisVariables} = await import('../dist/engines/artemis/variables.js');
+  const {artemisDefaultFontAttributes, writeArtemisFontFrame, readArtemisFontFrame} =
+    await import('../dist/engines/artemis/font-state.js');
+  const {ARTEMIS_3179_EXECUTABLE_SHA256: hash} =
+    await import('../dist/engines/artemis/revision.js');
+  const fonts = {
+    write: writeArtemisFontFrame,
+    read: (archive) => readArtemisFontFrame(hash, archive),
+  };
+  const block = (name, args = {}, line = 1) => ({
+    kind: 'tag',
+    name,
+    sourceLine: line,
+    args: new Map(Object.entries(args)),
+  });
+  const empty = block('', {}, 0);
+  const caret = (patch = {}) => ({
+    file: 'a',
+    index: 5,
+    runMode: 6,
+    previousRunMode: 2,
+    waiting: false,
+    queue: [],
+    tag: empty,
+    ...patch,
+  });
+  // CCaret: run mode 6 (>= 5) saves the previous mode in section 1; a wait saves 0, mode.
+  const caretBytes = (value) => {
+    const writer = new ArtemisSaveArchiveWriter();
+    writeArtemisCaret(writer, value);
+    return [...writer.finish().subarray(0, 21)];
+  };
+  assert.deepEqual(
+    caretBytes(caret()),
+    [2, 0, 0, 0, 2, 0, 0, 0, 1, 0, 0, 0, 0x61, 5, 0, 0, 0, 0, 0, 0, 0],
+  );
+  assert.deepEqual(caretBytes(caret({waiting: true})).slice(0, 8), [0, 0, 0, 0, 6, 0, 0, 0]);
+  assert.deepEqual(caretBytes(caret({runMode: 3})).slice(0, 8), [3, 0, 0, 0, 2, 0, 0, 0]);
+  const deadline = new ArtemisSaveArchiveWriter();
+  deadline.section(5);
+  deadline.u32(9);
+  assert.throws(
+    () => readArtemisCaret(new ArtemisSaveArchiveReader(deadline.finish())),
+    /deadline/,
+  );
+
+  const tween = (parameter, patch = {}) =>
+    Object.freeze({
+      parameter,
+      entire: false,
+      ease: 3,
+      diff: 0.5,
+      time: 300,
+      delay: -1,
+      randomDelay: true,
+      outgoing: false,
+      ...patch,
+    });
+  const glyph = {
+    homing: true,
+    layer: false,
+    rplayer: true,
+    layerName: 'g',
+    rplayerName: 'r',
+    left: -4,
+    top: 8,
+    rpleft: 0,
+    rptop: 12,
+  };
+  const record = {
+    automodeAllowed: true,
+    automode: false,
+    automodeLayers: new Map([
+      ['mw', {present: true, name: 'auto'}],
+      ['sub', {present: false, name: 'kept'}],
+    ]),
+    skipAllowed: true,
+    commandSkip: false,
+    controlSkip: true,
+    macroFiles: ['macro.iet'],
+    alreadyRead: true,
+    caret: caret({queue: [block('print', {data: 'x'}, 4)], tag: block('wait', {time: '1'}, 5)}),
+    callStack: [caret({file: 'b', index: 9, runMode: 0, previousRunMode: 0})],
+    rightClickAllowed: false,
+    rightClickScript: 'menu.iet',
+    autosaveFlag: 1,
+    autosaveValue: 2,
+    autosave: 1,
+    debugMode: 0,
+    debugLevel: 3,
+    stopAutoByClick: true,
+    stopAutoByStop: false,
+    syncSe: ['voice'],
+    skipUnread: false,
+    field35b8: 'x',
+    field35d8: 7,
+    currentMessageLayer: 'mw',
+    messageSelection: ['mw', 'sub'],
+    font: {font: {...artemisDefaultFontAttributes(hash), size: 30}, overflow: 0},
+    sceneTweens: {
+      in: new Map([['mw', [tween('alpha'), tween('left', {entire: true, outgoing: true})]]]),
+      out: new Map(),
+      show: new Map([['mw', []]]),
+      hide: new Map([['b', [tween('rotate', {diff: -90})]]]),
+    },
+    hideFlag: true,
+    hidden: ['sub', 'mw'],
+    backlogLayer: 'backlog',
+    writeBacklog: false,
+    backlogFlag: false,
+    backlogAllowed: false,
+    backlogNames: [],
+    backlogIcons: new Map(),
+    glyphs: new Map([['mw', glyph]]),
+    field3880: 0,
+    pushHandlers: [new Map([[-1, block('call', {file: 'x'})]]), new Map()],
+    eventSlots: Array.from({length: 10}, (_, index) => (index === 2 ? block('jump') : empty)),
+    windowButtons: new Map([[4, block('exit')]]),
+    block3c80: empty,
+    block3ce0: block('setonclick'),
+    luaEventNames: ['a', '', '', '', '', '', 'g'],
+    saveObject: {
+      data: {
+        text: new Map(),
+        fonts: new Map(),
+        retainedIndent: new Map(),
+        pendingIndent: new Map(),
+        retainedProhibit: new Map(),
+        pendingProhibit: new Map(),
+        effects: new Map(),
+      },
+      layerCommands: new Map(),
+      music: {playing: false, tag: empty},
+    },
+    keyRoles: new Map([
+      [1, [13, 32]],
+      [5, []],
+    ]),
+    layeredNames: ['mw'],
+    backlog: {
+      tweens: {
+        backlog_down_in: [tween('top')],
+        backlog_down_out: [],
+        backlog_up_in: [],
+        backlog_up_out: [],
+      },
+    },
+  };
+  const variables = new ArtemisVariables();
+  variables.write('f.route', '2');
+  const writer = new ArtemisSaveArchiveWriter();
+  writeArtemisScenarioArchive(writer, record, variables, fonts);
+  const read = readArtemisScenarioArchive(new ArtemisSaveArchiveReader(writer.finish()), fonts);
+  const {variables: table, caret: readCaret, callStack, hidden, ...rest} = read;
+  const {caret: _caret, callStack: _stack, hidden: _hidden, ...expected} = record;
+  assert.deepEqual(rest, expected);
+  // Sections 1/2 load into +0x108/+0x10c: run modes >= 5 come back as the previous mode.
+  const loaded = ({waiting, runMode, previousRunMode, ...value}) => ({
+    ...value,
+    runMode: waiting ? 0 : runMode < 5 ? runMode : previousRunMode,
+    previousRunMode: waiting ? runMode : previousRunMode,
+  });
+  assert.deepEqual(readCaret, loaded(record.caret));
+  assert.deepEqual(callStack, record.callStack.map(loaded));
+  // std::set<std::string> is written in byte order.
+  assert.deepEqual(hidden, ['mw', 'sub']);
+  assert.deepEqual(
+    table.global.map(([name, value]) => [name, new TextDecoder().decode(value)]),
+    [['f.route', '2']],
+  );
+
+  // Missing sections stay undefined; saved backlog pages are refused.
+  const partial = new ArtemisSaveArchiveWriter();
+  partial.section(0xb);
+  partial.string(new TextEncoder().encode('mw'));
+  const sparse = readArtemisScenarioArchive(new ArtemisSaveArchiveReader(partial.finish()), fonts);
+  assert.equal(sparse.currentMessageLayer, 'mw');
+  assert.equal(sparse.caret, undefined);
+  assert.equal(sparse.backlog, undefined);
+  const pages = new ArtemisSaveArchiveWriter();
+  pages.section(1);
+  pages.u8(1);
+  pages.section(0x1f, true);
+  pages.section(7);
+  pages.u32(1);
+  pages.close();
+  assert.throws(
+    () => readArtemisScenarioArchive(new ArtemisSaveArchiveReader(pages.finish()), fonts),
+    /backlog pages/,
+  );
 });
 
 test('Save archive scopes: scoped sections nest, close in order and are entered by start', async () => {

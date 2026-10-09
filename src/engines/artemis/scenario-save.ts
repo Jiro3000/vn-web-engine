@@ -24,10 +24,10 @@ export interface ArtemisFontFrameCodec<Font extends object> {
 }
 
 /** 0x14009d150: unnamed section, u32 length, bytes. */
-function writeString(archive: ArtemisSaveArchiveWriter, value: string): void {
+export function writeString(archive: ArtemisSaveArchiveWriter, value: string): void {
   archive.string(encoder.encode(value));
 }
-function readString(archive: ArtemisSaveArchiveReader): string {
+export function readString(archive: ArtemisSaveArchiveReader): string {
   return decoder.decode(archive.string());
 }
 
@@ -62,12 +62,12 @@ export function readArtemisScriptBlock(archive: ArtemisSaveArchiveReader): AsbTa
 }
 
 /** Scoped unnamed object section: 0x140008940(archive, 0, 1) … 0x1400a2290. */
-function scoped(archive: ArtemisSaveArchiveWriter, write: () => void): void {
+export function scoped(archive: ArtemisSaveArchiveWriter, write: () => void): void {
   archive.section(0, true);
   write();
   archive.close();
 }
-function enter<T>(archive: ArtemisSaveArchiveReader, read: () => T): T {
+export function enter<T>(archive: ArtemisSaveArchiveReader, read: () => T): T {
   archive.seek(0, true);
   const value = read();
   archive.close();
@@ -75,11 +75,11 @@ function enter<T>(archive: ArtemisSaveArchiveReader, read: () => T): T {
 }
 
 /** 0x140123c70: u32 count, each block scoped. */
-function writeTagVector(archive: ArtemisSaveArchiveWriter, tags: readonly AsbTag[]): void {
+export function writeTagVector(archive: ArtemisSaveArchiveWriter, tags: readonly AsbTag[]): void {
   archive.u32(tags.length);
   for (const tag of tags) scoped(archive, () => writeArtemisScriptBlock(archive, tag));
 }
-function readTagVector(archive: ArtemisSaveArchiveReader): AsbTag[] {
+export function readTagVector(archive: ArtemisSaveArchiveReader): AsbTag[] {
   const tags: AsbTag[] = [];
   for (let count = archive.u32(); count > 0; count--)
     tags.push(enter(archive, () => readArtemisScriptBlock(archive)));
@@ -134,7 +134,7 @@ function readBlockMap(archive: ArtemisSaveArchiveReader, id: number): Map<string
   }
   return map;
 }
-const emptyBlock: AsbTag = {kind: 'tag', name: '', sourceLine: 0, args: new Map()};
+export const emptyBlock: AsbTag = {kind: 'tag', name: '', sourceLine: 0, args: new Map()};
 
 /** Writer 0x140140770 sections for the save object (script +0xd0), in native order:
  * 0x18 +0x08 text, 0x19 +0x18 font frames, 0x42/0x43/0x4b/0x4c +0x28/+0x38/+0x48/+0x58,
@@ -283,13 +283,16 @@ export function writeArtemisScenarioVariables(
   writeVariableTable(archive, QUOTES, global, locals);
   archive.close();
 }
-/** Loader read of section 0x1e. A quote set other than the initialized one is refused:
- * the expression evaluator has a fixed "'" quote. */
-export function readArtemisScenarioVariables(
+export interface ArtemisScenarioVariableTable {
+  readonly global: readonly (readonly [string, Uint8Array])[];
+  readonly locals: readonly (readonly (readonly [string, Uint8Array])[])[];
+}
+/** Loader read of section 0x1e; null when the section is absent. A quote set other than
+ * the initialized one is refused: the expression evaluator has a fixed "'" quote. */
+export function readArtemisScenarioVariableTable(
   archive: ArtemisSaveArchiveReader,
-  variables: ArtemisVariables,
-): void {
-  if (!archive.seek(0x1e, true)) return;
+): ArtemisScenarioVariableTable | null {
+  if (!archive.seek(0x1e, true)) return null;
   const table = readVariableTable(archive);
   archive.close();
   const sameQuotes = (quotes: number[] | null) =>
@@ -301,8 +304,12 @@ export function readArtemisScenarioVariables(
   // Native destroys the current frames before checking section 3 and clears the deque only
   // when it exists; an archive without it would leave dangling frames.
   if (!table.locals) throw new Error('Unsupported Artemis saved variables without local frames');
-  variables.restoreScenario(
-    table.entries,
-    table.locals.map((frame) => frame.entries),
-  );
+  return {global: table.entries, locals: table.locals.map((frame) => frame.entries)};
+}
+export function readArtemisScenarioVariables(
+  archive: ArtemisSaveArchiveReader,
+  variables: ArtemisVariables,
+): void {
+  const table = readArtemisScenarioVariableTable(archive);
+  if (table) variables.restoreScenario(table.global, table.locals);
 }
