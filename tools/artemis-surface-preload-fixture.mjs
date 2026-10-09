@@ -4,6 +4,7 @@ import {createHash} from 'node:crypto';
 import {createNodeBrowserWorker} from './node-browser-worker.mjs';
 import {ArtemisSurfaceManager} from '../dist/engines/artemis/surface-manager.js';
 import {ArtemisImageLoader} from '../dist/engines/artemis/image-loader.js';
+import {artemisPngSurface} from '../dist/engines/artemis/png-surface.js';
 export function createArtemisSurfacePreloadFixture(
   hash,
   readFile,
@@ -51,9 +52,8 @@ export function createArtemisSurfacePreloadFixture(
       extensions: ['png', 'PNG'],
       decode: async (bytes) => {
         if (![137, 80, 78, 71, 13, 10, 26, 10].every((v, i) => bytes[i] === v)) return null;
-        if (![2, 6].includes(bytes[25]))
-          throw Error('Unsupported nonvisual PNG native surface format');
-        return decode('png', bytes);
+        // CPng 0x1401838e0: gray PNGs become format 0 surfaces, others format 2.
+        return artemisPngSurface(await decode('png', bytes));
       },
     },
     {
@@ -87,13 +87,15 @@ export function createArtemisSurfacePreloadFixture(
             path: resource.path,
             width: resource.image.width,
             height: resource.image.height,
-            rgbaSha256: createHash('sha256').update(resource.image.pixels).digest('hex'),
+            format: resource.image.format ?? 2,
+            pixelsSha256: createHash('sha256').update(resource.image.pixels).digest('hex'),
           });
       }
       return resource;
     },
-    // 1649b0: nonzero native formats use four bytes per stored surface pixel.
-    storageBytes: (_, resource) => resource.image.width * resource.image.height * 4,
+    // 1649b0: format 0 stores one byte per pixel, nonzero formats four.
+    storageBytes: (_, resource) =>
+      resource.image.width * resource.image.height * (resource.image.format === 0 ? 1 : 4),
     disposeSurface: (surface) => {
       if (!prepared.delete(surface)) throw Error('Surface disposed twice');
       disposed++;
@@ -106,7 +108,7 @@ export function createArtemisSurfacePreloadFixture(
       sceneRendering: false,
       gameVisualAssetsDisplayed: false,
       rendererPreparation: false,
-      surfaceFormat: 'explicit-nonzero-RGBA8',
+      surfaceFormat: 'native-png-format-0-or-2',
       budgetSource: 'diagnostic-host',
       decodedImages: decoded,
       disposedSurfaces: disposed,

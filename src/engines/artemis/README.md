@@ -1147,11 +1147,12 @@ clearSurfaceLoadQueue hosts. isLoadingSurface(string) queries a name; any non-st
 queries the whole queue and returns a boolean. No queue host is invented by default.
 
 `probe-artemis --surface-preloads` additionally requires --glyph-layout and uses
-a real shared image worker for RGB/RGBA PNG and merged PSD pixels. JPEG and other
-PNG native format branches explicitly refuse in this Node diagnostic. Only metrics
-and hashes are exported; it does not prepare GPU surfaces, display assets or claim
-production rendering. The host's RGBA8 format and512MiB budget are explicit diagnostic
-policies, not inferred settings of the original game. Existing metadata layer
+a real shared image worker for PNG and merged PSD pixels. Gray PNGs become native
+format 0 surfaces (`artemisPngSurface`, one byte per pixel in the 0x1401649b0 storage
+size), all others four bytes per pixel. JPEG explicitly refuses in this Node
+diagnostic. Only metrics and hashes are exported; it does not prepare GPU surfaces,
+display assets or claim production rendering. The 512 MiB budget is an explicit
+diagnostic policy, not an inferred setting of the original game. Existing metadata layer
 fixtures remain simulated and are independent of these pixel resources.
 
 `ArtemisLayers.attachActor` adopts a fresh stage wrapper into the same hierarchical

@@ -3521,9 +3521,10 @@ test('Lua script cache bindings preload a generated PNG through the actual share
   const {png} = await import('./png-fixtures.mjs');
   const encoded = png({width: 2, height: 1, raw: Buffer.from([0, 255, 0, 0, 255, 0, 255, 0, 128])});
   const original = Buffer.from(encoded);
+  const gray = png({width: 2, height: 1, type: 0, raw: Buffer.from([0, 10, 200])});
   const fixture = createArtemisSurfacePreloadFixture(
     revision,
-    async (path) => (path === 'fixture.png' ? encoded : null),
+    async (path) => (path === 'fixture.png' ? encoded : path === 'gray.png' ? gray : null),
     16n,
   );
   const lua = new ArtemisLua({
@@ -3555,10 +3556,17 @@ test('Lua script cache bindings preload a generated PNG through the actual share
       ),
     );
     assert.equal(fixture.summary().decodedImages, 1);
-    assert.equal(fixture.summary().samples[0].rgbaSha256.length, 64);
+    assert.equal(fixture.summary().samples[0].pixelsSha256.length, 64);
+    assert.equal(fixture.summary().samples[0].format, 2);
     assert.equal(fixture.summary().gameVisualAssetsDisplayed, false);
+    // A gray PNG is a native format 0 surface: one byte per pixel, also in storage.
+    const grayImage = await fixture.manager.load('gray');
+    assert.deepEqual([...grayImage.image.pixels], [10, 200]);
+    assert.equal(fixture.summary().samples[1].format, 0);
+    assert.equal(fixture.manager.bytesUsed, 10n);
+    grayImage.lease.release();
     image.lease.release();
-    assert.equal(fixture.manager.bytesUsed, 8n);
+    assert.equal(fixture.manager.bytesUsed, 10n);
   } finally {
     lua.close();
     await fixture.close();
