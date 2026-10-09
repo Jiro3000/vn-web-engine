@@ -11,6 +11,8 @@ import {artemisInteger} from './numbers.js';
 import {artemisTagFilterResult, type ArtemisLua, type ArtemisLuaCall} from './lua.js';
 import type {LuaValue} from '../../core/lua51/runtime.js';
 
+const encoder = new TextEncoder();
+
 export interface ArtemisScriptTrace {
   readonly origin: 'script' | 'queue';
   readonly file: string;
@@ -324,8 +326,11 @@ export class ArtemisScript {
       throw error;
     }
   }
+  /** The evaluated value replaces the argument; exact Lua argument bytes of that key are
+   * replaced by its UTF-8 bytes (code page 2), so byte readers see the result too. */
   private evaluateArguments(tag: AsbTag): AsbTag {
-    let args: Map<string, string> | null = null;
+    let args: Map<string, string> | null = null,
+      bytes: Map<string, Uint8Array> | null = null;
     for (const [key, value] of tag.args) {
       let count = 0;
       while (value[count] === '$') count++;
@@ -335,8 +340,10 @@ export class ArtemisScript {
       let result = value.slice(count);
       for (; count > 0; count--) result = this.host.evaluateExpression(result);
       (args ??= new Map(tag.args)).set(key, result);
+      if (tag.bytes?.has(key)) (bytes ??= new Map(tag.bytes)).set(key, encoder.encode(result));
     }
-    return args ? {...tag, args} : tag;
+    if (!args) return tag;
+    return bytes ? {...tag, args, bytes} : {...tag, args};
   }
   private dispatch(source: AsbTag): void | 'suspended' {
     if (!source.name) return; // Native generated empty handler block has no action.

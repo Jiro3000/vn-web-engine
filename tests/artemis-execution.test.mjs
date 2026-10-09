@@ -219,6 +219,21 @@ test('IET conditionals and loops lower to native goto tags and move the cursor',
     evaluated.load('expressions');
     evaluated.run();
     assert.deepEqual(seen, [{v: '((a))', w: 'b$'}]);
+    // Lua-built tags carry exact argument bytes; byte readers see the evaluated value.
+    const built = [];
+    new ArtemisScript(lua, {
+      readFile,
+      dispatch: (tag) =>
+        void built.push([tag.args.get('data'), new TextDecoder().decode(tag.bytes.get('data'))]),
+      evaluateExpression: (e) => `(${e})`,
+    }).executeTag({
+      kind: 'tag',
+      name: 'var',
+      sourceLine: 0,
+      args: new Map([['data', '$0==0']]),
+      bytes: new Map([['data', bytes('$0==0')]]),
+    });
+    assert.deepEqual(built, [['(0==0)', '(0==0)']]);
     const strict = new ArtemisScript(lua, {readFile: () => expressions, dispatch});
     strict.load('expressions');
     assert.throws(() => strict.run(), /expression argument without an evaluator/);

@@ -70,6 +70,8 @@ branch exits become compiler-only `\x0bgoto` tags. `ArtemisScript` writes its cu
 if/elseif/loop when atoi(`estimate`) is zero (`0x1400e9fb0`) and for every goto
 (`0x1400c7800`). Arguments starting with `$` are evaluated before filtering through
 `ArtemisScriptHost.evaluateExpression` once per `$`; without an evaluator they are refused.
+The result also replaces the exact argument bytes of a Lua-built tag (`AsbTag.bytes`), so
+handlers that read bytes, such as `var` `data`, store the evaluated value.
 
 `expression.ts` is the CCompute evaluator (`0x140157ff0`, substitution `0x1400afc60`) over
 UTF-8 bytes with `'` as the only quote character: integer/hex literals with sign merging,
