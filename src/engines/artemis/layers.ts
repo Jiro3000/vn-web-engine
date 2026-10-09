@@ -446,13 +446,14 @@ export class ArtemisLayers<T extends object, I extends ArtemisImageDimensions = 
    * decoder (CMja, then CTheora) takes the loop flag (`loop` present and not "0"),
    * `delaymargin` goes to slot +0x20, the actor is anchored at its centre, the old layer
    * is deleted (0x1400d6670) and the actor inserted. History empties the id's command
-   * list. CMja (`.mja`) and the fullscreen path without `id` are not implemented. */
+   * list. CMja (`.mja`) is not implemented; the fullscreen path without `id` belongs to
+   * `ArtemisFullscreenVideo`. */
   private async video(input: AsbTag, recordHistory: boolean): Promise<void> {
     const host = this.host;
     if (!host.readVideoFile || !host.createVideoLayer || !host.videoError)
       throw Error('Unsupported Artemis video layer owner');
     const args = input.args;
-    if (!args.has('id')) throw Error('Unsupported Artemis fullscreen video');
+    if (!args.has('id')) throw Error('Artemis fullscreen video belongs to ArtemisFullscreenVideo');
     const file = args.get('file') ?? '';
     const token = ++this.generation;
     this.pending = token;

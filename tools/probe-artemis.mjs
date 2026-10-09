@@ -64,6 +64,8 @@ import {artemisInteger} from '../dist/engines/artemis/numbers.js';
 import {createArtemisScriptEvents} from '../dist/engines/artemis/script-events.js';
 import {luaText} from '../dist/core/lua51/runtime.js';
 import {ArtemisSaveData} from '../dist/engines/artemis/save-data.js';
+import {ArtemisFullscreenVideo} from '../dist/engines/artemis/fullscreen-video.js';
+import {readAsfHeader} from '../dist/formats/asf/header.js';
 if (!process.argv[2]) throw new Error('Usage: node tools/probe-artemis.mjs GAME_DIRECTORY');
 const dialogResultArgument = process.argv
   .slice(3)
@@ -485,6 +487,57 @@ try {
       return true;
     },
   });
+  // SIMULATED device: a fullscreen movie plays for its ASF header duration in probe ticks;
+  // no media is decoded or shown. No input arrives while it plays.
+  let moviePrevious = 0;
+  const moviePlayer = {
+    end: null,
+    get playing() {
+      return this.end !== null && probeTick < this.end;
+    },
+    async play(request) {
+      const bytes = await installation.files.readPlain(request.path);
+      if (!bytes) return false;
+      const header = readAsfHeader(bytes);
+      if (header.duration === null) throw Error('Probe fullscreen movie has no duration');
+      this.end = probeTick + Math.ceil(header.duration);
+      modeEffects.push({
+        fullscreenVideo: request,
+        bytes: bytes.length,
+        duration: header.duration,
+        simulation: true,
+      });
+      return true;
+    },
+    close() {
+      this.end = null;
+    },
+  };
+  const fullscreenVideo = new ArtemisFullscreenVideo(executableSha256, modes, {
+    debugSkipActive: () => false,
+    videoVolume: () => artemisInteger(new TextDecoder().decode(variables.read('s.videovol'))),
+    player: moviePlayer,
+    playbackFailed: (tag) => {
+      throw Error('Probe fullscreen video failed: ' + tag.args.get('file'));
+    },
+    enterVideoMode: () => {
+      if (probeRunMode === 13) return;
+      moviePrevious = probeRunMode;
+      probeRunMode = 7;
+      modeEffects.push({runMode: 7, simulation: true});
+      if (resourceInFlight) runModeHeld = true;
+      else script.pause();
+    },
+    releaseRunMode: () => {
+      if (probeRunMode !== 7) return;
+      probeRunMode = moviePrevious;
+      moviePlayer.end = null;
+      modeEffects.push({runMode: probeRunMode, simulation: true});
+      script.resume();
+    },
+    rolePushed: () => false,
+    writeClickSkip: () => variables.write('s.clickskip', '1'),
+  });
   const messageLayers = new Set(),
     messageHistory = new Set(),
     messageFrames = new Map();
@@ -742,6 +795,11 @@ try {
     if (layerFixture && ['lytween', 'lytweendel', 'tweenset', '/tweenset'].includes(tag.name)) {
       layerFixture.dispatchTween(tag);
       return;
+    }
+    if (fullscreenVideo.accepts(tag)) {
+      if (pendingResource) throw Error('Probe resource operation overlaps');
+      pendingResource = fullscreenVideo.dispatch(tag);
+      return 'suspended';
     }
     if (layerFixture?.accepts(tag)) {
       if (pendingResource) throw Error('Probe resource operation overlaps');
@@ -1022,6 +1080,18 @@ try {
           layerFixture.tickTweens(probeTick);
         }
         advancedWaits++;
+        script.run(1000);
+        continue;
+      }
+      if (probeRunMode === 7) {
+        // Deterministic 16 ms frames of run mode 7 until the movie ends.
+        for (let frame = 0; probeRunMode === 7; frame++) {
+          if (frame >= 10000000) throw Error('Probe fullscreen video did not finish');
+          probeTick = (probeTick + 16) >>> 0 || 1;
+          soundFixture?.advanceToTick?.(probeTick);
+          layerFixture?.tickTweens(probeTick);
+          fullscreenVideo.frame();
+        }
         script.run(1000);
         continue;
       }

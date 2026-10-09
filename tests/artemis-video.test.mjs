@@ -8,6 +8,8 @@ import {ArtemisTimedWait} from '../dist/engines/artemis/wait.js';
 import {ArtemisModes} from '../dist/engines/artemis/modes.js';
 import {ArtemisSave} from '../dist/engines/artemis/save.js';
 import {ArtemisVariables} from '../dist/engines/artemis/variables.js';
+import {ArtemisFullscreenVideo} from '../dist/engines/artemis/fullscreen-video.js';
+import {readAsfHeader, isAsf} from '../dist/formats/asf/header.js';
 import {ARTEMIS_3179_EXECUTABLE_SHA256 as HASH} from '../dist/engines/artemis/revision.js';
 
 const fixture = (name) => readFileSync(new URL(`./fixtures/theora/${name}.ogv`, import.meta.url));
@@ -203,4 +205,136 @@ test('wait video= holds without a text display until the layer stops playing', (
   assert.equal(wait.tick(1016), true);
   assert.equal(wait.pending, false);
   assert.deepEqual(effects, [{begin: false}, {query: '1.0'}, {query: '1.0'}, 'end', 'resume']);
+});
+
+/** Little-endian GUID bytes for the canonical text form. */
+function guidBytes(text) {
+  const bytes = Buffer.from(text.replace(/-/g, ''), 'hex');
+  bytes.subarray(0, 4).reverse();
+  bytes.subarray(4, 6).reverse();
+  bytes.subarray(6, 8).reverse();
+  return bytes;
+}
+function asfHeader({playDuration, preroll, flags = 2, extra = true}) {
+  const object = (guid, body) => {
+    const head = Buffer.alloc(24);
+    guidBytes(guid).copy(head);
+    head.writeBigUInt64LE(BigInt(24 + body.length), 16);
+    return Buffer.concat([head, body]);
+  };
+  const properties = Buffer.alloc(80);
+  properties.writeBigUInt64LE(playDuration, 40);
+  properties.writeBigUInt64LE(preroll, 56);
+  properties.writeUInt32LE(flags, 64);
+  const children = [
+    ...(extra ? [object('5FBF03B5-A92E-11CF-8EE3-00C00C205365', Buffer.alloc(22))] : []),
+    object('8CABDCA1-A947-11CF-8EE4-00C00C205365', properties),
+  ];
+  const head = Buffer.alloc(30);
+  guidBytes('75B22630-668E-11CF-A6D9-00AA0062CE6C').copy(head);
+  const body = Buffer.concat(children);
+  head.writeBigUInt64LE(BigInt(30 + body.length), 16);
+  head.writeUInt32LE(children.length, 24);
+  head[28] = 1;
+  head[29] = 2;
+  return new Uint8Array(Buffer.concat([head, body, Buffer.alloc(50)]));
+}
+
+test('ASF header reader reports the presentation length without decoding media', () => {
+  const bytes = asfHeader({playDuration: 123_450_000n, preroll: 3100n});
+  assert.equal(isAsf(bytes), true);
+  const header = readAsfHeader(bytes);
+  assert.equal(header.duration, 12345 - 3100);
+  assert.equal(header.headerSize, bytes.length - 50);
+  assert.equal(readAsfHeader(asfHeader({playDuration: 1n, preroll: 0n, flags: 1})).duration, null);
+  assert.equal(isAsf(new Uint8Array(16)), false);
+  assert.throws(() => readAsfHeader(bytes.subarray(0, 60)), /ASF header object size/);
+});
+
+test('Fullscreen video tag enters run mode 7 until the movie ends or a skip key closes it', async () => {
+  const events = [];
+  const modes = new ArtemisModes({
+    writeStatus() {},
+    commandSkipChanged() {},
+    controlSkipChanged() {},
+    automodeChanged() {},
+    releaseScheduler() {},
+    currentMessageLayer: () => '',
+  });
+  let playing = false,
+    pushed = -1,
+    debugSkip = false,
+    fails = false,
+    volume = 500;
+  const player = {
+    get playing() {
+      return playing;
+    },
+    async play(request) {
+      events.push(['play', request]);
+      playing = !fails;
+      return !fails;
+    },
+    close() {
+      events.push(['close']);
+      playing = false;
+    },
+  };
+  const video = new ArtemisFullscreenVideo(HASH, modes, {
+    debugSkipActive: () => debugSkip,
+    videoVolume: () => volume,
+    player,
+    playbackFailed: (t) => events.push(['error', t.args.get('file')]),
+    enterVideoMode: () => events.push(['enter']),
+    releaseRunMode: () => events.push(['release']),
+    rolePushed: (role) => role === pushed,
+    writeClickSkip: () => events.push(['clickskip']),
+  });
+  assert.equal(video.accepts(tag('video', {id: 'v', file: 'a'})), false);
+  assert.equal(await video.dispatch(tag('video', {id: 'v', file: 'a'})), false);
+  // skip=0 ignores keys; the movie end releases run mode 7.
+  await video.dispatch(tag('video', {file: 'movie/a.dat', mode: '2', skip: '0'}));
+  assert.deepEqual(events.splice(0), [
+    ['play', {path: 'movie/a.dat', attenuation: -602, renderer: 2}],
+    ['enter'],
+  ]);
+  pushed = 0;
+  assert.equal(video.frame(), false);
+  assert.deepEqual(events.splice(0), []);
+  playing = false;
+  video.frame();
+  assert.deepEqual(events.splice(0), [['release']]);
+  // Defaults: renderer 0 (VMR9) and skip 1, which accepts key role 0 or active skip.
+  volume = 1000;
+  await video.dispatch(tag('video', {file: 'b'}));
+  assert.equal(video.skipMode, 1);
+  assert.deepEqual(events.splice(0), [
+    ['play', {path: 'b', attenuation: 0, renderer: 0}],
+    ['enter'],
+  ]);
+  assert.equal(video.frame(), true);
+  assert.deepEqual(events.splice(0), [['close'], ['release'], ['clickskip']]);
+  pushed = -1;
+  modes.dispatch(tag('skip', {allow: '1'}));
+  modes.setCommandSkip(true);
+  await video.dispatch(tag('video', {file: 'c'}));
+  events.length = 0;
+  assert.equal(video.frame(), true);
+  modes.setCommandSkip(false);
+  // skip=2 accepts key role 1 only; a closed player also releases first (twice in total).
+  await video.dispatch(tag('video', {file: 'd', skip: '2'}));
+  events.length = 0;
+  pushed = 1;
+  playing = false;
+  assert.equal(video.frame(), true);
+  assert.deepEqual(events.splice(0), [['release'], ['close'], ['release'], ['clickskip']]);
+  // Failure reports the native playback error without entering the run mode or
+  // changing +0x3eb8; debug skip skips the tag entirely.
+  fails = true;
+  await video.dispatch(tag('video', {file: 'e', skip: '0'}));
+  assert.deepEqual(events.splice(1), [['error', 'e']]);
+  assert.equal(video.skipMode, 2);
+  debugSkip = true;
+  await video.dispatch(tag('video', {file: 'f'}));
+  assert.deepEqual(events.splice(0), [['play', {path: 'e', attenuation: 0, renderer: 0}]]);
 });
