@@ -149,7 +149,8 @@ suspended on a resource ('held' when the operation entered a run mode). `frame` 
 the run-mode branch of `0x1400c0560`: the clock advances voices, tweens and video layers;
 a pending transition steps (a click finishes a clickable run mode 2 transition); a
 fullscreen movie frame runs; in run modes 1 and 3 the input's layer events and pushed
-keys reach their handlers; the timed wait checks its click, deadline or display
+keys reach their handlers, and a delivered push handler ends the frame, so its click does
+not also end the wait; the timed wait checks its click, deadline or display
 completion; then a ready script runs. While a resource holds the script only the clock
 advances. `acceptsInput` reports run modes 1 and 3. `advanceTo`, `layerEvent` and
 `keyPush` are the individual steps, and
@@ -297,6 +298,15 @@ host's scenario loader, then the `onLoad` handler with `{file}` (a Lua error is 
 and clears it). A loaded file whose tag has `type` continues as the trans tag. Unreadable
 files and refused versions fail without a Lua call. The owner runs the handler through
 `callEvent`, so a callback that issues resource tags finishes before the load returns.
+
+Files in the save directory (SAVEPATH when it is a plain relative name) are host storage:
+`fileExists` and resource reads under that directory consult the stored names, so saved
+thumbnails load like installation files. `screenshot.ts` implements `takess`
+(`0x1400e1cf0`), which renders the scene offscreen into the engine screenshot surface,
+and `savess` (`0x1400e1d90`), which scales that surface to `width`x`height` (stage size by
+default), writes it as PNG (`.png` appended to an unextended name) and evicts the name
+from the image cache. An evicted surface still held by layers stays alive until its last
+holder releases it.
 The engine reset empties the caret, which holds the wait flags: `ArtemisTimedWait.clear`
 drops a pending wait without its release or Out event, so a caret saved inside a wait
 resumes at its tag in run mode 0. The production scenario loader is not wired yet.

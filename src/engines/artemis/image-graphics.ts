@@ -178,6 +178,8 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
     state: number;
     rule?: {texture: number; image: TriangleImage; revision: number};
   } | null = null;
+  /** Engine screenshot surface +0x1c0 at stage size, null until `takeScreenshot`. */
+  private screenshot: CaptureTexture | null = null;
   private nativeSlotOne: Float32Array | null = null;
   private readonly wrappers = new Map<
     ArtemisImageActor['wrapper'],
@@ -857,6 +859,19 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
   ): DrawList {
     return this.render(scene, presentation);
   }
+  /** takess 0x1400e1cf0: renders the committed scene into the screenshot surface; the
+   * presented frame is unchanged. */
+  takeScreenshot(scene: ArtemisScene<ArtemisDisplayActor>): void {
+    this.screenshot ??= this.captureTexture(this.target.width, this.target.height);
+    this.render(scene, null, this.screenshot.image);
+  }
+  /** 0x14014fc10: the screenshot scaled to `width` x `height` as RGBA rows, top row
+   * first, or null before any `takeScreenshot`. */
+  readScreenshot(width: number, height: number): Uint8Array | null {
+    if (!this.screenshot) return null;
+    if (!this.target.readRenderSurface) throw new Error('Artemis screenshot readback missing');
+    return this.target.readRenderSurface(this.screenshot.image, width, height);
+  }
   private stageSurfaces(): NonNullable<ArtemisImageGraphics['stage']> {
     if (!this.stage) {
       const current = this.captureTexture(this.target.width, this.target.height);
@@ -891,6 +906,7 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
   private render(
     scene: ArtemisScene<ArtemisDisplayActor>,
     presentation: ArtemisStagePresentation | null,
+    offscreen?: GpuRenderSurface,
   ): DrawList {
     this.now = null;
     this.draws++;
@@ -1222,6 +1238,12 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
         }
       };
       const stage = presentation && this.stageSurfaces();
+      if (offscreen)
+        commands.push({
+          kind: 'gpu-target',
+          surface: offscreen,
+          clearColor: this.raster.clearColor ?? [0, 0, 0, 1],
+        });
       if (stage) {
         // A transition starts from the frame presented last; before any, from black.
         if (presentation!.state !== 0 && stage.state === 0)
@@ -1237,7 +1259,7 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
         });
       }
       visit(this.nodes(scene), new Float32Array([1, 0, 0, 0, 1, 0]), 1, {
-        surface: stage ? stage.current.image : null,
+        surface: offscreen ?? (stage ? stage.current.image : null),
         width: this.target.width,
         height: this.target.height,
         pendingClear: false,
@@ -1293,7 +1315,13 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
           },
         );
       }
-      const list: DrawList = {sprites: [], commands, clearColor: this.raster.clearColor};
+      if (offscreen) commands.push({kind: 'gpu-target', surface: null});
+      const list: DrawList = {
+        sprites: [],
+        commands,
+        clearColor: this.raster.clearColor,
+        ...(offscreen ? {offscreen: true} : {}),
+      };
       this.target.draw(list, (id) => this.image(id));
       for (const update of updates) update();
       if (stage) {

@@ -93,6 +93,7 @@ function storage(store: IndexedDbStore): ArtemisRuntimeStorage {
   return {
     read: async (name) => (await store.snapshot()).get(name) ?? null,
     write: (name, bytes) => store.update((records) => void records.set(name, bytes.slice())),
+    list: async () => [...(await store.snapshot()).keys()],
   };
 }
 
@@ -175,6 +176,11 @@ function stopped(error: unknown): void {
 function pageTrace() {
   if (!location.hash.includes('trace')) return undefined;
   const entries: unknown[] = [];
+  // Latest lyevent registration per layer and event type.
+  const events = new Map<string, Record<string, string>>();
+  // Tag counts, and save, load, selection, reset, video and music tags in order.
+  const counts = new Map<string, number>();
+  const notable: unknown[] = [];
   const push = (entry: unknown) => {
     entries.push(entry);
     if (entries.length > 400) entries.splice(0, 200);
@@ -182,13 +188,27 @@ function pageTrace() {
   Object.assign(window, {
     artemisTrace: {
       entries,
+      events: () => Object.fromEntries(events),
+      counts: () => Object.fromEntries(counts),
+      notable,
+      saves: async () =>
+        [...((await installation?.saves.snapshot()) ?? [])].map(([name, bytes]) => [
+          name,
+          bytes.byteLength,
+        ]),
       state: () => player?.state ?? null,
       hitTest: (x: number, y: number) => player?.hitTest(x, y) ?? [],
     },
   });
   return {
-    tag: (tag: {name: string; args: ReadonlyMap<string, string>}) =>
-      push({tag: tag.name, args: Object.fromEntries(tag.args)}),
+    tag: (tag: {name: string; args: ReadonlyMap<string, string>}) => {
+      const args = Object.fromEntries(tag.args);
+      if (tag.name === 'lyevent') events.set(`${args.id} ${args.type}`, args);
+      counts.set(tag.name, (counts.get(tag.name) ?? 0) + 1);
+      if (/save|load|sel|reset|video|movie|bgm|exit/i.test(tag.name) && notable.length < 2000)
+        notable.push({t: Math.round(performance.now()), tag: tag.name, args});
+      push({tag: tag.name, args});
+    },
     effect: (effect: object) => push(effect),
     script: (step: object) => push({step}),
   };

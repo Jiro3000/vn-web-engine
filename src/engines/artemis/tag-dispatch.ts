@@ -61,6 +61,7 @@ export interface ArtemisTagOwners {
   readonly clickGlyphs: SyncOwner;
   readonly music?: {dispatch(tag: AsbTag, recordHistory?: boolean): boolean | Promise<unknown>};
   readonly sePlay?: ResourceOwner;
+  readonly screenshots?: {dispatch(tag: AsbTag): boolean | Promise<boolean>};
 }
 
 /** Native command dispatch (the tag map consulted by 0x1400c5800) over the owners. A tag
@@ -127,6 +128,11 @@ export function createArtemisTagDispatch(
     }
     if (owners.sePlay && (tag.name === 'seplay' || tag.name === 'sefadein'))
       return pending(owners.sePlay.dispatch(tag, recordHistory));
+    if (owners.screenshots) {
+      const result = owners.screenshots.dispatch(tag);
+      if (result === true) return;
+      if (result) return pending(result);
+    }
     throw new Error(`Unsupported native Artemis tag ${tag.name}`);
   };
 }

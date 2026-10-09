@@ -353,6 +353,25 @@
       drawOrderPixel.join(',') === '0,255,0,255',
       'native ascending GPU preparation order mismatch',
     );
+    // takess renders the committed scene offscreen; savess reads it back top row first.
+    assert(graphics.readScreenshot(4, 2) === null, 'screenshot existed before takess');
+    await layers.dispatch(
+      command('lyc', {id: '1', file: 'missing', width: '4', height: '1', color: '0000ff'}),
+    );
+    await layers.dispatch(command('lyprop', {id: '1', top: '1'}));
+    stage.dispatch(command('flip'));
+    graphics.takeScreenshot(layers.scene);
+    assert(
+      [...canvas.getContext('2d').getImageData(0, 1, 1, 1).data].join(',') === '0,255,0,255',
+      'takess changed the presented frame',
+    );
+    const shot = graphics.readScreenshot(4, 2);
+    assert(
+      [...shot.subarray(0, 4)].join(',') === '0,255,0,255' &&
+        [...shot.subarray(16, 20)].join(',') === '0,0,255,255',
+      'screenshot rows are not top first',
+    );
+    assert(graphics.readScreenshot(2, 1).length === 8, 'scaled screenshot size mismatch');
     layers.close();
     // Format-2 intermediate shaders replace straight RGBA using a GPU background snapshot.
     let nativeCapturedCases = 0;

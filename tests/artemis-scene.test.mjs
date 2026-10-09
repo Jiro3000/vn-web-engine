@@ -3410,6 +3410,76 @@ async function preloadFixture(budget = 16n, decode) {
   return {manager, loaded, disposed, created};
 }
 
+test('Artemis surface eviction forgets the cache entry while holders keep their loans', async () => {
+  const {manager, disposed} = await preloadFixture();
+  const held = await manager.load('held');
+  (await manager.load('idle')).lease.release();
+  assert.equal(manager.bytesUsed, 16n);
+  manager.evict('idle');
+  manager.evict('held');
+  manager.evict('absent');
+  assert.equal(manager.bytesUsed, 0n);
+  assert.equal(disposed.length, 1);
+  const fresh = await manager.load('held'); // The forgotten name decodes again.
+  assert.notEqual(fresh.image, held.image);
+  held.lease.release();
+  assert.equal(disposed.length, 2);
+  assert.equal(disposed[1].resource.image, held.image);
+  fresh.lease.release();
+  assert.equal(manager.bytesUsed, 8n);
+});
+
+test('Artemis savess writes the scaled screenshot as PNG in the save directory', async () => {
+  const {ArtemisScreenshots} = await import('../dist/engines/artemis/screenshot.js');
+  const {decodePng} = await import('../dist/formats/png/decode.js');
+  const events = [],
+    files = new Map();
+  let taken = false;
+  const owner = new ArtemisScreenshots(revision, {
+    stageSize: () => ({width: 4, height: 2}),
+    take: () => void (taken = true),
+    read: (width, height) => {
+      events.push(['read', width, height]);
+      return taken
+        ? Uint8Array.from({length: width * height * 4}, (_, index) => index & 0xff)
+        : null;
+    },
+    writeSaveFile: async (name, bytes) => void files.set(name, bytes),
+    evictSurface: (name) => events.push(['evict', name]),
+    invalidSize: (tag) => events.push(['invalid', tag.name]),
+    missingScreenshot: (tag) => events.push(['missing', tag.name]),
+  });
+  const tag = (name, args = {}) => ({
+    kind: 'tag',
+    name,
+    sourceLine: 1,
+    args: new Map(Object.entries(args)),
+  });
+  assert.equal(await owner.dispatch(tag('savess', {file: 'early'})), true);
+  assert.equal(owner.dispatch(tag('takess')), true);
+  assert.equal(taken, true);
+  await owner.dispatch(tag('savess', {file: 'thumb', width: '0'}));
+  await owner.dispatch(tag('savess', {file: 'thumb'}));
+  await owner.dispatch(tag('savess', {file: 'big.jpg', width: '3', height: '1'}));
+  await owner.dispatch(tag('savess', {file: 'dir.x\\name', width: '1', height: '1'}));
+  assert.equal(owner.dispatch(tag('lyc')), false);
+  assert.deepEqual(events, [
+    ['read', 4, 2],
+    ['missing', 'savess'],
+    ['invalid', 'savess'],
+    ['read', 4, 2],
+    ['evict', 'thumb'],
+    ['read', 3, 1],
+    ['evict', 'big.jpg'],
+    ['read', 1, 1],
+    ['evict', 'dir.x\\name'],
+  ]);
+  assert.deepEqual([...files.keys()], ['thumb.png', 'big.jpg', 'dir.x\\name.png']);
+  const png = await decodePng(files.get('big.jpg'));
+  assert.deepEqual([png.width, png.height], [3, 1]);
+  assert.deepEqual([...png.pixels], [...Array(12).keys()]);
+});
+
 test('Artemis preload queue shares real surfaces with foreground loans and keeps one explicit script binding', async () => {
   const {manager, loaded, disposed} = await preloadFixture();
   manager.bindSurfaceAsync('a');

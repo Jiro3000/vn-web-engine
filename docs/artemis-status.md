@@ -22,6 +22,8 @@ Other executables are refused by hash.
   voices. It covers boot, the prologue with its fullscreen movies, the title, scenario
   text with click-waits, choices through layer events, and a scenario save/load round
   trip. It displays no game assets and opens no audio device.
+- Screenshots: `takess`/`savess` render offscreen and write PNG thumbnails into save
+  storage, which the save directory overlays on installation files.
 - Synthetic browser checks (`tests/browser/artemis-images.html`): GPU scenes, shaders,
   font and image workers, sound lookup through offline Web Audio voices, the pointer
   hit test and the stage crossfade.

@@ -44,6 +44,8 @@ export class ArtemisSurfaceManager<S extends object> implements ArtemisImageSour
   private readonly active = new Map<string, Entry<S>>();
   private readonly idle = new Map<string, Entry<S>>();
   private readonly identities = new Set<S>();
+  /** Entries the cache forgot while loaned; disposed when their last loan releases. */
+  private readonly evicted = new Set<Entry<S>>();
   private readonly queue: Job<S>[] = [];
   private readonly waiters = new Set<() => void>();
   private readonly failures: {name: string; error: unknown}[] = [];
@@ -102,7 +104,14 @@ export class ArtemisSurfaceManager<S extends object> implements ArtemisImageSour
     entry.loans++;
   }
   private release(entry: Entry<S>): void {
-    if (this.active.get(entry.name) !== entry) return;
+    if (this.active.get(entry.name) !== entry) {
+      if (this.evicted.has(entry) && --entry.loans === 0) {
+        this.evicted.delete(entry);
+        this.identities.delete(entry.surface);
+        this.host.disposeSurface(entry.surface, entry.resource);
+      }
+      return;
+    }
     if (--entry.loans !== 0) return;
     this.active.delete(entry.name);
     if (this.closed || this.total > this.budgetBytes) this.discard(entry);
@@ -262,6 +271,24 @@ export class ArtemisSurfaceManager<S extends object> implements ArtemisImageSour
       if (entry.bindings) entry.bindings--;
       this.release(entry);
     }
+  }
+  /** Slot +0x28 (0x140011080): the cache forgets `name` and its bytes leave the usage
+   * total. An idle surface is disposed; loaned surfaces stay with their holders until
+   * the last release. Queued loads are unaffected. */
+  evict(name: string): void {
+    this.open();
+    surfaceName(name);
+    const idle = this.idle.get(name);
+    if (idle) {
+      this.idle.delete(name);
+      this.discard(idle);
+      return;
+    }
+    const entry = this.active.get(name);
+    if (!entry) return;
+    this.active.delete(name);
+    this.total -= entry.bytes;
+    this.evicted.add(entry);
   }
   async load(name: string): Promise<ArtemisLoadedImage | null> {
     this.open();

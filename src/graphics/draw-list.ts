@@ -72,6 +72,8 @@ export interface DrawList {
   commands?: DrawCommand[];
   /** Initial framebuffer RGBA; omitted preserves the ordinary opaque black clear. */
   clearColor?: readonly [number, number, number, number];
+  /** Draws only into GPU surfaces: the presented canvas keeps its content. */
+  offscreen?: boolean;
 }
 /** Shared raster resource preparation and draw-list presentation contract. */
 export interface DrawListTarget {
@@ -81,6 +83,8 @@ export interface DrawListTarget {
   /** Eagerly compile/link an executable triangle program on the actual target. */
   prepareTriangleShader?(fragment: string, additionalTextureCount: number): void;
   prepareRenderSurface?(surface: GpuRenderSurface): void;
+  /** RGBA rows, top row first, of a prepared GPU surface scaled to `width` x `height`. */
+  readRenderSurface?(surface: GpuRenderSurface, width: number, height: number): Uint8Array;
   draw(list: DrawList, texture: (id: number) => TriangleImage): void;
   invalidate(image: object): void;
 }

@@ -544,6 +544,7 @@ void main(){vec4 sampled=texture(atlas,tex);if(maskMode.w!=0.)sampled.rgb=vec3(1
       present: (surface: HTMLCanvasElement | undefined, after?: DrawCommand) => void;
     },
   ): void {
+    if (list.offscreen && layers) throw new Error('Offscreen draw list cannot present layers');
     const clear = list.clearColor ?? [0, 0, 0, 1];
     if (clear.length !== 4 || !clear.every(Number.isFinite))
       throw new Error('Invalid draw-list clear color');
@@ -555,8 +556,10 @@ void main(){vec4 sampled=texture(atlas,tex);if(maskMode.w!=0.)sampled.rgb=vec3(1
     this.activeHeight = this.height;
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.framebuffer!);
     gl.viewport(0, 0, this.width, this.height);
-    gl.clearColor(clear[0]!, clear[1]!, clear[2]!, clear[3]!);
-    gl.clear(gl.COLOR_BUFFER_BIT);
+    if (!list.offscreen) {
+      gl.clearColor(clear[0]!, clear[1]!, clear[2]!, clear[3]!);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+    }
     const copies = new Map<number, TriangleImage>(),
       used = new Set<object>(),
       get = (id: number) => {
@@ -782,6 +785,7 @@ void main(){vec4 sampled=texture(atlas,tex);if(maskMode.w!=0.)sampled.rgb=vec3(1
       }
       publish();
       if (this.activeRenderSurface) throw new Error('Draw list must return from its GPU surface');
+      if (list.offscreen) return;
       if (layers) present();
       gl.bindFramebuffer(gl.READ_FRAMEBUFFER, this.framebuffer!);
       gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
@@ -860,6 +864,25 @@ void main(){vec4 sampled=texture(atlas,tex);if(maskMode.w!=0.)sampled.rgb=vec3(1
       if (framebuffer) gl.deleteFramebuffer(framebuffer);
       throw error;
     } finally {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.activeFramebuffer!);
+    }
+  }
+  /** RGBA rows, top row first, of a prepared GPU surface scaled to `width` x `height`
+   * with linear filtering. */
+  readRenderSurface(surface: GpuRenderSurface, width: number, height: number): Uint8Array {
+    const gl = this.initialize();
+    if (gl.isContextLost()) throw new Error('Graphics context lost');
+    const framebuffer = this.renderSurfaces.get(surface);
+    if (!framebuffer) throw new Error('GPU surface is not prepared on this target');
+    const active = [this.activeFramebuffer, this.activeWidth, this.activeHeight] as const;
+    this.activeFramebuffer = framebuffer;
+    this.activeWidth = surface.width;
+    this.activeHeight = surface.height;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+    try {
+      return this.capture(width, height).pixels;
+    } finally {
+      [this.activeFramebuffer, this.activeWidth, this.activeHeight] = active;
       gl.bindFramebuffer(gl.FRAMEBUFFER, this.activeFramebuffer!);
     }
   }

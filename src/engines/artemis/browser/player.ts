@@ -115,7 +115,8 @@ export class ArtemisBrowserPlayer {
     this.canvas.setAttribute('aria-label', 'Game screen');
     this.canvas.style.cssText = 'touch-action:none;user-select:none;-webkit-touch-callout:none';
     this.panel.append(this.canvas);
-    const read = (path: string) => files.read(path);
+    // Save directory paths read the save storage, as native reads its real files.
+    const read = (path: string) => this.runtime?.readSaveDirectoryFile(path) ?? files.read(path);
     this.painter = new ArtemisGlyphPainter(hash);
     this.fonts = new ArtemisFileFonts(hash, {
       readFontFile: read,
@@ -237,6 +238,13 @@ export class ArtemisBrowserPlayer {
       glyphs: this.glyphs,
       surfaces: this.surfaces,
       shaders: {dispatch: (tag) => this.shaders.dispatch(tag)},
+      screenshots: {
+        take: () => {
+          if (!this.graphics || !this.layers) throw Error('Artemis takess before the stage');
+          this.graphics.takeScreenshot(this.layers.layers.scene);
+        },
+        read: (width, height) => this.graphics?.readScreenshot(width, height) ?? null,
+      },
       sound: artemisRuntimeSound(this.sound, (now) => {
         this.sound.effects.tick(now);
         this.sound.music.tick(now);

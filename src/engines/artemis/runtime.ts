@@ -63,6 +63,7 @@ import {applyArtemisScenario, captureArtemisScenario} from './scenario-state.js'
 import {ArtemisSceneTweens} from './scene-tweens.js';
 import {ArtemisScript} from './script.js';
 import {createArtemisScriptEvents} from './script-events.js';
+import {ArtemisScreenshots} from './screenshot.js';
 import {ArtemisSePlay, type ArtemisSePlayHost} from './se-play.js';
 import {ArtemisSeStop} from './se-stop.js';
 import {ArtemisSoundFinish} from './sound-finish.js';
@@ -112,6 +113,9 @@ export interface ArtemisRuntimeFiles {
 export interface ArtemisRuntimeStorage {
   read(name: string): Promise<Uint8Array | null>;
   write(name: string, bytes: Uint8Array): void | Promise<void>;
+  /** The stored names; without it the save directory appears empty to `isFileExists`
+   * until files are written. */
+  list?(): Promise<readonly string[]>;
 }
 /** Layer graphics owner: the layer tags plus the frame and scene services the runtime
  * drives. */
@@ -178,6 +182,14 @@ export interface ArtemisRuntimeSurfaces {
   unbindSurface(name: string): void;
   clearSurfaceLoadQueue(): void;
   isLoadingSurface(name?: string): boolean;
+  /** Slot +0x28: the cache forgets `name`. */
+  evict(name: string): void;
+}
+/** The engine screenshot surface (+0x1c0) of `takess`/`savess`. */
+export interface ArtemisRuntimeScreenshots {
+  take(): void;
+  /** Scaled RGBA rows, top row first; null before any `take`. */
+  read(width: number, height: number): Uint8Array | null;
 }
 /** Effect and music voices (script +0x3d88/+0x3d60 managers). */
 export type ArtemisRuntimeSound = Omit<
@@ -208,6 +220,8 @@ export interface ArtemisRuntimeServices {
   readonly glyphs: ArtemisRuntimeGlyphs;
   readonly surfaces: ArtemisRuntimeSurfaces;
   readonly sound: ArtemisRuntimeSound;
+  /** `takess`/`savess` owner; without it the tags are refused. */
+  readonly screenshots?: ArtemisRuntimeScreenshots;
   /** `lyshader` owner; without it the tag is refused. */
   readonly shaders?: {dispatch(tag: AsbTag): Promise<unknown>};
   readonly moviePlayer: FullscreenMoviePlayer;
@@ -248,6 +262,8 @@ export interface ArtemisRuntimeTrace {
     tagIndex: number;
     name: string;
     sourceLine: number;
+    /** The Lua function of a `calllua` step. */
+    function?: string;
   }): void;
   include?(path: string): void;
   effect?(effect: object): void;
@@ -347,7 +363,8 @@ export class ArtemisRuntime {
           }
         }
       }
-    return new ArtemisRuntime(services, readSystemIni(iniBytes), prepared, plain, bytes);
+    const saveNames = new Set(await services.storage.list?.());
+    return new ArtemisRuntime(services, readSystemIni(iniBytes), prepared, plain, bytes, saveNames);
   }
 
   private constructor(
@@ -356,11 +373,18 @@ export class ArtemisRuntime {
     readonly prepared: Map<string, Uint8Array>,
     plainFiles: ReadonlyMap<string, Uint8Array>,
     readonly preparedBytes: number,
+    /** Names in the save directory storage. */
+    private readonly saveNames: Set<string>,
   ) {
     const hash = services.executableSha256,
       {files, sound, glyphs} = services,
       {width, height} = ini;
     const trace = (effect: object) => services.trace?.effect?.(effect);
+    // Installation-relative save directory; no Windows known-folder resolution.
+    const saveDirectory = (this.saveDirectory =
+      ini.savePath !== undefined && ini.savePathCsidl === undefined && /^[\w-]+$/.test(ini.savePath)
+        ? ini.savePath
+        : undefined);
     const readFile = (path: string) => {
       path = files.resolvePath(path);
       const bytes = prepared.get(path);
@@ -386,13 +410,8 @@ export class ArtemisRuntime {
       initializeArtemisVariables(variables, hash);
       if (services.graphicsFeatureLevel)
         initializeArtemisGraphicsFeatureLevel(variables, hash, services.graphicsFeatureLevel);
-      // Installation-relative read-only namespace; no Windows known-folder resolution.
-      if (
-        ini.savePath !== undefined &&
-        ini.savePathCsidl === undefined &&
-        /^[\w-]+$/.test(ini.savePath)
-      )
-        initializeArtemisResourcePaths(variables, {dataPath: '', savePath: ini.savePath});
+      if (saveDirectory !== undefined)
+        initializeArtemisResourcePaths(variables, {dataPath: '', savePath: saveDirectory});
       initializeArtemisWindowsVersion(variables, services.windowsVersion);
     };
     // Effect id map (script +0x3d88) and the save object.
@@ -824,6 +843,21 @@ export class ArtemisRuntime {
       enqueue: (tag) => script.enqueue(tag),
       recordPrintCommand: recordText,
     });
+    const screenshots =
+      services.screenshots &&
+      new ArtemisScreenshots(hash, {
+        stageSize: () => ({width, height}),
+        take: () => services.screenshots!.take(),
+        read: (w, h) => services.screenshots!.read(w, h),
+        writeSaveFile: (name, bytes) => this.writeSaveFile(name, bytes),
+        evictSurface: (name) => services.surfaces.evict(name),
+        invalidSize: (tag) => {
+          throw Error(`Artemis ${tag.name} size is invalid`);
+        },
+        missingScreenshot: (tag) => {
+          throw Error(`Artemis ${tag.name} ran before takess`);
+        },
+      });
     // Reset and load are built after the Lua runtime that this dispatcher feeds.
     let dispatchTag: ReturnType<typeof createArtemisTagDispatch> | undefined;
     const createDispatch = () =>
@@ -859,6 +893,7 @@ export class ArtemisRuntime {
           clickGlyphs,
           music,
           sePlay,
+          screenshots,
         },
         suspend,
       );
@@ -916,7 +951,12 @@ export class ArtemisRuntime {
         return 'suspended';
       },
       reportError: services.reportError,
-      fileExists: (path) => files.paths.has(files.resolvePath(path)),
+      fileExists: (path) => {
+        const name = this.saveFileName(path);
+        return name === undefined
+          ? files.paths.has(files.resolvePath(path))
+          : this.saveNames.has(name);
+      },
       setMagicPath: (name, root) => {
         files.setMagicPath(name, root);
         trace({magicPath: {name, root}});
@@ -953,6 +993,7 @@ export class ArtemisRuntime {
           tagIndex,
           name: tag.name,
           sourceLine: tag.sourceLine,
+          ...(tag.name === 'calllua' ? {function: tag.args.get('function') ?? ''} : {}),
         }),
       ...(services.reportLuaCallError ? {reportLuaCallError: services.reportLuaCallError} : {}),
       ...(services.reportUnknownTag ? {reportUnknownTag: services.reportUnknownTag} : {}),
@@ -1221,7 +1262,8 @@ export class ArtemisRuntime {
   /** One real-time frame in the order of the run-mode branch of 0x1400c0560: the clock
    * advances sound, tweens and video layers; a transition steps (a click finishes a
    * clickable run mode 2 transition); a fullscreen movie frame runs; pointer layer events
-   * and pushed keys reach their handlers in run modes 1 and 3; the wait checks its click,
+   * and pushed keys reach their handlers in run modes 1 and 3, and a delivered push handler
+   * ends the frame (its click does not reach the wait); the wait checks its click,
    * deadline or display completion; then a ready script runs up to `steps` tags. While a
    * resource load holds the script only the clock advances; `settleResource` resumes it. */
   frame(now: number, input: ArtemisFrameInput, steps = 1000): void {
@@ -1236,7 +1278,8 @@ export class ArtemisRuntime {
       if (this.mode === 7) this.fullscreenVideo.frame();
       if (this.acceptsInput) {
         for (const event of input.layerEvents) this.layerEvent(event.id, event.type);
-        for (const key of input.keys) this.keyPush(key);
+        // A delivered push handler ends the frame before the wait sees the click.
+        if (this.keyPush(input.keys)) return;
       }
       if (this.wait.pending) this.wait.tick(now, input.click);
       if (this.script.state === 'ready') this.script.run(steps);
@@ -1254,10 +1297,12 @@ export class ArtemisRuntime {
     const delivered = this.layers.invokeLayerEvent(id, type, this.scriptEvents);
     this.services.trace?.effect?.({layerEvent: {id, type, delivered, script: this.script.state}});
   }
-  /** Delivers a pushed key edge on slot 0 to the `keypush` handlers. */
-  keyPush(key: number): void {
-    this.keyBindings.deliverPushed(
-      (candidate, slot) => slot === 0 && candidate === key,
+  /** Delivers pushed key edges to the slot 0 `keypush` handlers in ascending key order;
+   * true when a handler command was delivered, which ends the frame. */
+  keyPush(keys: number | readonly number[]): boolean {
+    const pushed = typeof keys === 'number' ? [keys] : keys;
+    return this.keyBindings.deliverPushed(
+      (candidate, slot) => slot === 0 && pushed.includes(candidate),
       (command) => this.scriptEvents.dispatch(command),
     );
   }
@@ -1272,8 +1317,29 @@ export class ArtemisRuntime {
   }
   private store(name: string, kind: 'S' | 'G' | 'X', archive: Uint8Array): void {
     this.saveWrites.push(
-      packArtemisSaveFile(kind, archive).then((bytes) => this.services.storage.write(name, bytes)),
+      packArtemisSaveFile(kind, archive).then((bytes) => this.writeSaveFile(name, bytes)),
     );
+  }
+  private async writeSaveFile(name: string, bytes: Uint8Array): Promise<void> {
+    await this.services.storage.write(name, bytes);
+    this.saveNames.add(name);
+  }
+  /** The SaveDataPath directory (system.ini SAVEPATH), when it is installation-relative. */
+  private readonly saveDirectory: string | undefined;
+  /** The storage name of a path inside the save directory, otherwise undefined. */
+  private saveFileName(path: string): string | undefined {
+    const directory = this.saveDirectory;
+    if (directory === undefined) return undefined;
+    const normalized = path.replaceAll('\\', '/');
+    const prefix = normalized.slice(0, directory.length + 1).toLowerCase();
+    return prefix === `${directory.toLowerCase()}/`
+      ? normalized.slice(directory.length + 1)
+      : undefined;
+  }
+  /** A save directory file from save storage; undefined for paths outside it. */
+  readSaveDirectoryFile(path: string): Promise<Uint8Array | null> | undefined {
+    const name = this.saveFileName(path);
+    return name === undefined ? undefined : this.services.storage.read(name);
   }
   close(): void {
     for (const close of this.closers) close();
