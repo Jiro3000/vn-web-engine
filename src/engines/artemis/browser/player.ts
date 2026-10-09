@@ -12,6 +12,9 @@ import {MessageBoxTextDialogHost} from '../../../platform/text-dialog.js';
 import {FreeTypeWorker} from '../../../text/freetype-worker-client.js';
 import {BrowserFullscreenMoviePlayer} from '../../../video/fullscreen-movie.js';
 import {createArtemisBrowserSoundVoices} from '../browser-sound-voices.js';
+import {ArtemisDrawShaderResource} from '../draw-shader.js';
+import {compileArtemisShaderPreset} from '../raster-shader.js';
+import {ArtemisShaderLibrary} from '../shader-library.js';
 import type {ArtemisFiles} from '../files.js';
 import {ArtemisFileFonts} from '../file-fonts.js';
 import {ArtemisGlyphPainter} from '../glyph-paint-client.js';
@@ -20,7 +23,12 @@ import type {ArtemisImageGraphics} from '../image-graphics.js';
 import {ArtemisImageLoader, type ArtemisLoadedImage} from '../image-loader.js';
 import type {ArtemisLayerEventType} from '../layer-events.js';
 import {artemisPngSurface} from '../png-surface.js';
-import {ArtemisRuntime, type ArtemisFrameInput, type ArtemisRuntimeStorage} from '../runtime.js';
+import {
+  ArtemisRuntime,
+  type ArtemisFrameInput,
+  type ArtemisRuntimeStorage,
+  type ArtemisRuntimeTrace,
+} from '../runtime.js';
 import {ArtemisRuntimeGlyphOwner} from '../runtime-glyphs.js';
 import {artemisRuntimeSound} from '../runtime-sound.js';
 import {ArtemisSurfaceManager} from '../surface-manager.js';
@@ -37,10 +45,14 @@ export interface ArtemisBrowserPlayerOptions {
   readonly storage: ArtemisRuntimeStorage;
   /** The Windows version the page reports to the game; null reports none. */
   readonly windowsVersion: {readonly major: number; readonly minor: number} | null;
+  /** The Direct3D feature level the page reports for its renderer. */
+  readonly graphicsFeatureLevel: number;
   /** The page's display host. */
   readonly display: {toggleFullscreen(): void};
   /** Surface manager budget in bytes. */
   readonly surfaceBudget?: bigint;
+  /** Diagnostic stream of tags, script steps and owner effects. */
+  readonly trace?: ArtemisRuntimeTrace;
   diagnostic(message: string): void;
   /** The game stopped with an error. */
   exit(error: unknown): void;
@@ -71,6 +83,7 @@ export class ArtemisBrowserPlayer {
   private readonly surfaces: ArtemisSurfaceManager<object>;
   private readonly sound: ReturnType<typeof createArtemisBrowserSoundVoices>;
   private readonly movie: BrowserFullscreenMoviePlayer;
+  private readonly shaders: ArtemisShaderLibrary<ArtemisDrawShaderResource>;
   private runtime: ArtemisRuntime | null = null;
   private layers: ArtemisBrowserLayers | null = null;
   private graphics: ArtemisImageGraphics | null = null;
@@ -168,6 +181,26 @@ export class ArtemisBrowserPlayer {
       },
     ]);
     const report = (message: string) => options.diagnostic(message);
+    // Named shaders: the original sources select WebGL ports of their programs.
+    this.shaders = new ArtemisShaderLibrary<ArtemisDrawShaderResource>(
+      hash,
+      read,
+      {
+        compile: async (_, bytes) => {
+          const {kind} = await compileArtemisShaderPreset(hash, bytes);
+          const target = this.target;
+          if (!target) throw Error('Artemis shader loaded before the stage');
+          return {
+            shader: new ArtemisDrawShaderResource(hash, kind, (fragment, count) =>
+              target.prepareTriangleShader(fragment, count),
+            ),
+          };
+        },
+        dispose: (shader) => shader.dispose(),
+      },
+      (tag, reason, error) =>
+        report(`Shader ${reason} failure: ${tag.args.get('file') ?? ''} ${error ?? ''}`.trim()),
+    );
     this.bindInput();
     this.open = ArtemisRuntime.open({
       executableSha256: hash,
@@ -192,6 +225,7 @@ export class ArtemisBrowserPlayer {
           loadRule: async (path) => (await ruleImages.load(path))?.image ?? null,
           readVideoFile: read,
           clock: {now: () => this.now},
+          shaderPrograms: {bind: (id) => this.shaders.bind(id)},
           glyphs: this.glyphs,
           textProperties: (key) => this.runtime?.textProperties(key),
           report,
@@ -202,6 +236,7 @@ export class ArtemisBrowserPlayer {
       },
       glyphs: this.glyphs,
       surfaces: this.surfaces,
+      shaders: {dispatch: (tag) => this.shaders.dispatch(tag)},
       sound: artemisRuntimeSound(this.sound, (now) => {
         this.sound.effects.tick(now);
         this.sound.music.tick(now);
@@ -225,6 +260,7 @@ export class ArtemisBrowserPlayer {
       pointer: {readPointerPosition: () => this.pointer},
       dynamicLibraries: new BrowserWindowsDynamicLibraryHost(),
       windowsVersion: () => options.windowsVersion,
+      graphicsFeatureLevel: () => options.graphicsFeatureLevel,
       applyVolumes: (music, effect) => {
         this.sound.music.setGroupGain(music);
         this.sound.effects.setGroupGain(effect);
@@ -233,12 +269,53 @@ export class ArtemisBrowserPlayer {
       setLayerByte16c: () => {},
       // Touch input arrives as mouse input; there is no touch contact limit.
       setTouchLimit: () => {},
+      // Native script error reports (c84b0, c7260, 0x14012d080 level 1): the game logs them
+      // and continues. Engine refusals (unsupported behavior) still stop the game.
+      reportIncludeError: (path, error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        if (/Unsupported|not implemented|not prepared|budget|cancelled|requires/i.test(message))
+          throw error;
+        report(`Include error in ${path}: ${message}`);
+      },
+      reportLuaCallError: ({file, tag, message}) =>
+        report(`${file}:${tag.sourceLine} ${new TextDecoder().decode(message)}`),
+      reportUnknownTag: ({file, tag, message}) =>
+        report(
+          `${file}:${tag.sourceLine} ${tag.name}: ${new TextDecoder('shift_jis').decode(message)}`,
+        ),
       reportError: (message) => report(new TextDecoder('shift_jis').decode(message)),
+      ...(options.trace ? {trace: options.trace} : {}),
     });
     this.open.catch(() => {});
   }
   /** Settles before `start`; a failure reaches `exit` when the game starts. */
   private readonly open: Promise<ArtemisRuntime>;
+
+  /** Run mode, script, resource and wait state for diagnostics. */
+  get state(): object | null {
+    const runtime = this.runtime;
+    return (
+      runtime && {
+        runMode: runtime.runMode,
+        settling: this.settling,
+        resourcePending: runtime.resourcePending,
+        script: runtime.script.state,
+        file: runtime.script.currentFile,
+        queuedTags: runtime.script.queuedTags,
+        luaCalls: runtime.script.pendingLuaCalls,
+        wait: runtime.wait.pending ? runtime.wait.reason : null,
+        pointer: this.pointer,
+        hovered: this.hovered,
+        clickable: this.layers?.eventLayers('click', true),
+      }
+    );
+  }
+  /** Layer ids at a stage point, topmost first, for diagnostics. */
+  hitTest(x: number, y: number): string[] {
+    return this.layers && this.graphics
+      ? this.graphics.hitTest(this.layers.layers.scene, x, y)
+      : [];
+  }
 
   /** Call from the Play button handler so audio starts inside the user gesture. */
   start(): void {
@@ -297,10 +374,12 @@ export class ArtemisBrowserPlayer {
       this.settling = false;
     })().catch((error: unknown) => this.fail(error));
   }
-  /** Rollover and rollout follow the topmost hit layer with a registered pointer event. */
+  /** Rollover and rollout follow the topmost hit layer with a registered pointer event
+   * while the runtime takes pointer events, so a layer under a still pointer receives its
+   * rollover once input resumes. */
   private hover(): void {
-    const {layers, graphics} = this;
-    if (!layers || !graphics) return;
+    const {layers, graphics, runtime} = this;
+    if (!layers || !graphics || !runtime?.acceptsInput) return;
     const candidates = new Set([
       ...layers.eventLayers('click', true),
       ...layers.eventLayers('rollover', true),
@@ -398,6 +477,7 @@ export class ArtemisBrowserPlayer {
     this.movie.close();
     this.runtime?.close();
     this.sound.close();
+    this.shaders.close();
     this.glyphs.close();
     void this.glyphBlocks.close().catch(() => {});
     void this.fonts.close().catch(() => {});

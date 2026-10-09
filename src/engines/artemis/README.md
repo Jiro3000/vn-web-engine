@@ -151,7 +151,8 @@ a pending transition steps (a click finishes a clickable run mode 2 transition);
 fullscreen movie frame runs; in run modes 1 and 3 the input's layer events and pushed
 keys reach their handlers; the timed wait checks its click, deadline or display
 completion; then a ready script runs. While a resource holds the script only the clock
-advances. `advanceTo`, `layerEvent` and `keyPush` are the individual steps, and
+advances. `acceptsInput` reports run modes 1 and 3. `advanceTo`, `layerEvent` and
+`keyPush` are the individual steps, and
 `save`/`load` with `scenarioArchive()` and `flushSaves()` serve save tooling. `runMode` is
 the native mode (0 script, 3 stop, 7 video, 13 load).
 
@@ -166,16 +167,27 @@ insertion per message resource over a glyph block source.
 canvas (`WebGLDrawTarget` sized from system.ini), the surface manager over the PNG, JPEG
 and merged PSD decoders (decoded off the main thread), FreeType glyph rasterization and
 painting in workers, Web Audio voices (`browser-sound-voices.ts`), the fullscreen movie
-player, message-box dialogs and the window, caption and cursor hosts. The page decides
-the Windows version reported to the game (`ui/runtimes/artemis.ts`). Each animation
-frame runs `runtime.frame` with the input gathered since the last frame, settles resource
-operations, and presents the stage with `drawStage`.
+player, message-box dialogs, the window, caption and cursor hosts, and the shader library
+(`shader-library.ts`) whose presets compile into WebGL triangle shaders. The page decides
+the Windows version and the graphics feature level reported to the game
+(`ui/runtimes/artemis.ts`). Each animation frame runs `runtime.frame` with the input
+gathered since the last frame, settles resource operations, and presents the stage with
+`drawStage`.
+
+Native script error reports become diagnostics and the script continues: Lua call errors
+(`c84b0`), unknown tags (`c7260`) and include errors, except include failures that come
+from an unsupported or unprepared owner, which stop the game. The page passes a `trace`
+stream when its address contains `#trace`: `window.artemisTrace` keeps the last tags,
+script steps and owner effects, `state()` reports the run mode, script, wait and pointer
+state, and `hitTest(x, y)` the layers at a stage point.
 
 `browser/layers.ts` builds the layer system over `ArtemisImageGraphics`. Message layers
 are text actors (`createTextLayer`) whose sprites come from the insertion's display lines:
 each glyph is placed at its font `left`/`top`, line, block and glyph offsets, with the
 text display's animated `left`, `top`, `xscale`, `yscale`, `rotate` and `alpha` applied
-about the glyph origin; invisible fonts draw nothing.
+about the glyph origin; invisible fonts draw nothing. While a `print` loads glyphs the
+layer keeps the sprites from before the insertion, as the synchronous native insertion
+never shows a partial line.
 
 `ArtemisImageGraphics.drawStage` renders the scene into a stage surface and presents it.
 When a transition starts the last presented frame is kept; state 1 crossfades from it by
@@ -188,7 +200,9 @@ right button is role 1 and `VK_RBUTTON`; keys are pushed by virtual-key code.
 point, topmost first: the point maps through the inverse local matrix into the image
 bounds, then the clickable threshold gates the pixel alpha (`0x14017b6a0`). The player
 sends rollout and rollover when the topmost hit layer with a registered pointer event
-changes, and a click event to it on a press.
+changes, and a click event to it on a press. Hover is tracked only while the runtime
+accepts input, so a layer that appears under a still pointer receives its rollover once
+the script stops.
 
 ## Verification and remaining work
 

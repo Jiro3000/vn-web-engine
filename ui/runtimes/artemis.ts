@@ -17,6 +17,9 @@ import {activeArtemisGame, artemisSaveNamespace} from '../player/artemis-library
 /** The Windows version this page reports to games (Windows 10, 10.0). Games that check the
  * version see a supported system instead of the unknown one a browser would report. */
 const REPORTED_WINDOWS_VERSION = {major: 10, minor: 0};
+/** The WebGL 2 renderer implements the engine's Direct3D 11 path, so the page reports
+ * D3D_FEATURE_LEVEL_11_0. */
+const REPORTED_GRAPHICS_FEATURE_LEVEL = 0xb000;
 
 function element<T extends HTMLElement>(id: string): T {
   return document.getElementById(id) as T;
@@ -97,7 +100,9 @@ async function loadInstallation(cached: CachedInstallation): Promise<void> {
   closeInstallation();
   selectedInstallation = null;
   const byPath = new Map<string, ByteSource>();
-  for (const entry of cached.files) byPath.set(pfsPathKey(entry.path), entry.source);
+  // Installation paths are rooted ('/hatsuyuki.pfs'); archive names are relative.
+  for (const entry of cached.files)
+    byPath.set(pfsPathKey(entry.path).replace(/^\/+/, ''), entry.source);
   const bases = [...byPath.keys()].filter((path) => !path.includes('/') && /\.pfs$/.test(path));
   if (bases.length !== 1)
     throw new Error('Choose the game folder, including its base .pfs archive.');
@@ -165,6 +170,30 @@ function stopped(error: unknown): void {
   updateControls();
 }
 
+/** `#trace` in the page address keeps the last runtime tags and effects in
+ * `window.artemisTrace` for diagnostics. */
+function pageTrace() {
+  if (!location.hash.includes('trace')) return undefined;
+  const entries: unknown[] = [];
+  const push = (entry: unknown) => {
+    entries.push(entry);
+    if (entries.length > 400) entries.splice(0, 200);
+  };
+  Object.assign(window, {
+    artemisTrace: {
+      entries,
+      state: () => player?.state ?? null,
+      hitTest: (x: number, y: number) => player?.hitTest(x, y) ?? [],
+    },
+  });
+  return {
+    tag: (tag: {name: string; args: ReadonlyMap<string, string>}) =>
+      push({tag: tag.name, args: Object.fromEntries(tag.args)}),
+    effect: (effect: object) => push(effect),
+    script: (step: object) => push({step}),
+  };
+}
+
 play.onclick = () => {
   if (!installation || busy || saveBusy || started) return;
   const {executableSha256, files, paths, saves} = installation;
@@ -176,7 +205,9 @@ play.onclick = () => {
     paths,
     storage: storage(saves),
     windowsVersion: REPORTED_WINDOWS_VERSION,
+    graphicsFeatureLevel: REPORTED_GRAPHICS_FEATURE_LEVEL,
     display: displayHost,
+    trace: pageTrace(),
     diagnostic: (message) => console.warn(`[Artemis] ${message}`),
     exit: stopped,
   });

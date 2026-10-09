@@ -1189,6 +1189,37 @@ async function cachedLayerFixture(budget = 0n, source) {
   return {...f, graphics, layers: new ArtemisLayers(revision, f.cache, graphics)};
 }
 
+test('Artemis layer owner and graphics share one texture allocation', async () => {
+  const {createArtemisBrowserLayers} = await import('../dist/engines/artemis/browser/layers.js');
+  const {createArtemisImageLoader} = await import('../dist/engines/artemis/image-loader.js');
+  const bytes = await syntheticImage();
+  const target = {width: 4, height: 2, prepareImage() {}, invalidate() {}, draw() {}};
+  const {owner, graphics} = createArtemisBrowserLayers({
+    executableSha256: revision,
+    target,
+    raster: {filter: 'nearest', blend: straightBlend},
+    images: createArtemisImageLoader(revision, async (path) => (path === 'a.png' ? bytes : null)),
+    runMode: {},
+    loadRule: async () => null,
+    readVideoFile: async () => null,
+    clock: {now: () => 1},
+    glyphs: {},
+    textProperties: () => undefined,
+    report: (message) => assert.fail(message),
+  });
+  await owner.layers.dispatch(command('lyc', {id: '1', file: 'a.png'}));
+  const layer = owner.layers.scene.entry('1').value;
+  // A texture the graphics owner allocates itself (glyphs, rules, captures, shader inputs).
+  const own = {width: 1, height: 1, pixels: new Uint8Array(4)};
+  const separate = graphics.createImageLayer({image: own}, {x: 0, y: 0});
+  assert.notEqual(separate.texture, layer.texture);
+  assert.equal(graphics.image(separate.texture), own);
+  assert.notEqual(graphics.image(layer.texture), own);
+  graphics.releaseImageLayer(separate);
+  await owner.layers.dispatch(command('lyprop', {id: '1', left: '1'}));
+  assert.equal(graphics.image(owner.layers.scene.entry('1').value.texture).width, 2);
+});
+
 test('Artemis cache loans belong to outer wrappers across current/retained actor copies and multiple layers', async () => {
   const {cache, layers, loaded, disposed} = await cachedLayerFixture();
   await layers.dispatch(command('lyc', {id: '1', file: 'a'}));

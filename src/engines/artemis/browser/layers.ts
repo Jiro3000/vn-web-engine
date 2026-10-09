@@ -121,6 +121,9 @@ function textSource(
   let revision = 0,
     previous: ArtemisTextSprite[] = [];
   const sprites = () => {
+    // Native insertion is synchronous: frames during an asynchronous glyph load keep the
+    // text from before the insertion.
+    if (options.glyphs.peek(message)?.busy) return previous;
     const next = artemisTextSprites(options, message);
     const same =
       next.length === previous.length &&

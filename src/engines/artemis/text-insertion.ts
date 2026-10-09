@@ -193,6 +193,10 @@ export class ArtemisTextInsertion {
   get glyphCount(): number {
     return this.count;
   }
+  /** An insertion or published frame is in progress; layout reads wait for its end. */
+  get busy(): boolean {
+    return this.pending || this.publishing;
+  }
   async insert(input: Uint8Array): Promise<ArtemisPrintResult> {
     this.idle();
     const bytes = Uint8Array.from(input),

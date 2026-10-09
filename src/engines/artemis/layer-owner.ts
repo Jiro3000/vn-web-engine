@@ -117,14 +117,21 @@ export class ArtemisLayerOwner<
       recordLayerProperties: (tag) => commands.record(tag),
       appendLayerCommand: (id, tag) => commands.append(id, tag),
     }));
-    // Actor copies carry their event slots (CArtemisLayer +0x100).
-    const layerHost: ArtemisLayerHost<T, I> = Object.create(graphics);
-    layerHost.copyImageLayer = (old) => {
+    // Actor copies carry their event slots (CArtemisLayer +0x100). Every other member
+    // delegates with the graphics owner as `this`, so its state (texture ids) stays single.
+    const copyImageLayer = (old: T): T => {
       const actor = graphics.copyImageLayer(old);
       const slots = this.slots.get(old);
       if (slots) this.slots.set(actor, slots.copy());
       return actor;
     };
+    const layerHost = new Proxy(graphics, {
+      get: (target, key) => {
+        if (key === 'copyImageLayer') return copyImageLayer;
+        const value: unknown = Reflect.get(target, key, target);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    }) as ArtemisLayerHost<T, I>;
     const layers = (this.layers = new ArtemisLayers(hash, host.images, layerHost));
     this.events = new ArtemisLayerEvents(layers.scene, commands, {
       slots: (actor) => this.eventSlots(actor),

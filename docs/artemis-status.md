@@ -12,8 +12,11 @@ Other executables are refused by hash.
 - Browser player (`src/engines/artemis/browser/`, page `artemis.html`, controller
   `ui/runtimes/artemis.ts`): WebGL stage with image, animation, video, group and text
   layers, crossfade and rule transitions, FreeType glyphs, Web Audio effect and music
-  voices, message-box dialogs, IndexedDB save storage and pointer/keyboard input with
-  image hit testing. The page reports Windows 10 as the system version.
+  voices, named shaders, message-box dialogs, IndexedDB save storage and
+  pointer/keyboard input with image hit testing. The page reports Windows 10 and
+  Direct3D feature level 11_0. Over the real installation it boots, takes the language
+  choice, reaches the title menu, starts a new game and advances voiced scenario text
+  through click-waits (nonvisual check: `#trace` diagnostics and canvas hashes only).
 - Nonvisual probe (`tools/probe-artemis.mjs`): runs the same runtime over actual
   font, glyph, image and Vorbis workers, header-only layer geometry and offline PCM
   voices. It covers boot, the prologue with its fullscreen movies, the title, scenario

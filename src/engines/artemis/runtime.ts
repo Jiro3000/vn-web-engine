@@ -1164,6 +1164,10 @@ export class ArtemisRuntime {
   get runMode(): number {
     return this.mode;
   }
+  /** Pointer layer events and pushed keys reach their handlers (run modes 1 and 3). */
+  get acceptsInput(): boolean {
+    return this.mode === 1 || this.mode === 3;
+  }
   /** A tag or Lua call is suspended on a resource operation. */
   get resourcePending(): boolean {
     return this.pendingResource !== null;
@@ -1230,7 +1234,7 @@ export class ArtemisRuntime {
         else this.layers.tickTransition(now);
       }
       if (this.mode === 7) this.fullscreenVideo.frame();
-      if (this.mode === 1 || this.mode === 3) {
+      if (this.acceptsInput) {
         for (const event of input.layerEvents) this.layerEvent(event.id, event.type);
         for (const key of input.keys) this.keyPush(key);
       }
@@ -1247,7 +1251,8 @@ export class ArtemisRuntime {
   }
   /** Delivers a layer event (`lyevent` callback) to the script. */
   layerEvent(id: string, type: ArtemisLayerEventType): void {
-    this.layers.invokeLayerEvent(id, type, this.scriptEvents);
+    const delivered = this.layers.invokeLayerEvent(id, type, this.scriptEvents);
+    this.services.trace?.effect?.({layerEvent: {id, type, delivered, script: this.script.state}});
   }
   /** Delivers a pushed key edge on slot 0 to the `keypush` handlers. */
   keyPush(key: number): void {
