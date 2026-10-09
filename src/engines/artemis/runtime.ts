@@ -14,7 +14,7 @@ import type {FullscreenMoviePlayer} from '../../video/fullscreen-movie.js';
 import {ArtemisCaption} from './caption.js';
 import {ArtemisClickGlyphs} from './click-glyph.js';
 import {ArtemisDialog} from './dialog.js';
-import {ArtemisEventCommands} from './event-commands.js';
+import {ArtemisEventCommands, type ArtemisCommandEvent} from './event-commands.js';
 import {ArtemisExec} from './exec.js';
 import {artemisExpressionBytes} from './expression.js';
 import {artemisFontProperties} from './font-properties.js';
@@ -444,11 +444,29 @@ export class ArtemisRuntime {
         scriptEvents.emit(command, 0, true);
       },
     });
+    const modeEvent = (event: ArtemisCommandEvent) => {
+      const command = eventCommands.command(event);
+      if (command) scriptEvents.dispatch(command);
+    };
     const modes = (this.modes = new ArtemisModes({
       writeStatus: (name, value) => (variables.write(name, value), trace({name, value})),
-      commandSkipChanged: (active) => trace({commandSkip: active}),
-      controlSkipChanged: (active) => trace({controlSkip: active}),
-      automodeChanged: (active) => trace({automode: active}),
+      // b7ba0/b7c70/b7810 end with c6730 of the registered in/out command.
+      commandSkipChanged: (active) => {
+        trace({commandSkip: active});
+        modeEvent(active ? 'setoncommandskipin' : 'setoncommandskipout');
+      },
+      controlSkipChanged: (active) => {
+        trace({controlSkip: active});
+        modeEvent(active ? 'setoncontrolskipin' : 'setoncontrolskipout');
+      },
+      automodeChanged: (active, indicator) => {
+        trace({automode: active});
+        // On, a present indicator with a name; off, any name: layer virtual +0xf0.
+        if (indicator.name && (!active || indicator.present))
+          throw Error('Artemis automode indicator layer is not implemented');
+        if (!active) wait.clearAutomodeDeadline();
+        modeEvent(active ? 'setonautomodein' : 'setonautomodeout');
+      },
       releaseScheduler: () => trace({releaseScheduler: true}),
       currentMessageLayer: () => messageSelection.currentMessageLayer(),
     }));
@@ -605,6 +623,8 @@ export class ArtemisRuntime {
       effectIndex: (id) => effectSlots.get(id),
       effectPlaying: (index) => sound.effectPlaying(index),
       videoPlaying: (id) => layers.videoPlaying(id),
+      automodeWait: () =>
+        artemisInteger(new TextDecoder().decode(variables.read('s.automodewait'))),
     }));
     const stop = new ArtemisStop(modes, save, {
       debugSkipActive: () => false,
@@ -1323,6 +1343,20 @@ export class ArtemisRuntime {
       this.services.trace?.effect?.({enterFrameError: String(error)});
     }
     if (this.resourcePending) return;
+    // Mode roles (0x1400c0560 before the run mode switch): a decided stop role ends
+    // automode (role 10 with stopbyclick, else 11) or command skip (13) and the frame;
+    // control skip follows role 14 held.
+    const modes = this.modes;
+    if (modes.automode && this.roleDecided(modes.stopAutoByClick ? 10 : 11)) {
+      modes.setAutomode(false);
+      return;
+    }
+    if (modes.commandSkip && this.roleDecided(13)) {
+      modes.setCommandSkip(false);
+      return;
+    }
+    const control = this.roleHeld(14);
+    if (control !== modes.controlSkip) modes.setControlSkip(control);
     if (this.layers.transitionPending) {
       if (this.mode === 2 && this.roleDecided(0)) {
         this.layers.finishTransition(now || 1);
@@ -1337,11 +1371,31 @@ export class ArtemisRuntime {
         (command) => this.scriptEvents.dispatch(command),
       );
       if (delivered) return;
+      // Role 9 starts automode, role 12 command skip (unforced); either ends the frame.
+      if (this.roleDecided(9)) {
+        modes.setAutomode(true);
+        return;
+      }
+      if (this.roleDecided(12)) {
+        modes.setCommandSkip(true);
+        return;
+      }
     }
     const mode = this.mode;
+    // Run mode 1 clicks on role 0 or while skipping (0x1400b5170).
     if (this.wait.pending && (mode === 1 || mode === 3 || mode === 4))
-      this.wait.tick(now, mode === 1 && this.roleDecided(0));
+      this.wait.tick(now, mode === 1 && (this.roleDecided(0) || this.skipping), mode === 1);
     if (this.script.state === 'ready') this.script.run(steps);
+  }
+  /** 0x1400b5170: skip is allowed and command or control skip is on (debug skip has no
+   * owner). */
+  get skipping(): boolean {
+    const modes = this.modes;
+    return modes.skipAllowed && (modes.commandSkip || modes.controlSkip);
+  }
+  /** Role `role` held this frame (0x1400acec0 for role 14 over the input owner). */
+  roleHeld(role: number): boolean {
+    return this.keyBindings.roleActive(role, 'down', (kind, key) => this.input.query(kind, key));
   }
   /** Role `role` decided this frame (0x1400b5690 over the input owner). */
   roleDecided(role: number): boolean {

@@ -25,8 +25,10 @@ export interface ArtemisTimedWaitHost {
   /** Script se map +0x3d88: the sound index registered by seplay for `id`. */
   effectIndex?(id: string): number | undefined;
   /** 0x1400adcf0: the sound manager's player state for `index` is nonzero (a missing
-   * player is 0). */
+   * player is 0). The modeled players have one nonzero state, playing (1). */
   effectPlaying?(index: number): boolean;
+  /** `s.automodewait` through the variable integer getter (virtual +0x10). */
+  automodeWait?(): number;
 }
 function integer(value: string): number {
   const token = /^[\t\n\v\f\r ]*([+-]?\d+)/.exec(value);
@@ -56,9 +58,15 @@ export interface ArtemisWaitFlags {
  * bc4, id bc8) starts no text display and ends once layer `id` is no longer a playing
  * video. `se=<id>` (flag b9b, index bc0) looks the id up in the seplay map; an unknown id
  * sets no wait, otherwise the wait starts no text display and ends once the sound
- * manager reports that index stopped (0x1400adcf0). `se` with `time`, `scenario=2`,
- * automode, skip-mode click-wait progression and the debug-skip frame branch need owners
- * that are not implemented. */
+ * manager reports that index stopped (0x1400adcf0).
+ *
+ * Skip and automode change no wait setup except the display vector; they act in the run
+ * mode 1 frame. An active skip (0x1400b5170) is a click every frame. In automode a
+ * flagless wait (`@`) whose display has completed gets the deadline b94 =
+ * `s.automodewait` + now; when it passes, the wait ends unless an id of the syncse list
+ * names a playing se. Turning automode off clears the deadline of a flagless wait.
+ * `se` with `time`, `scenario=2` and the debug-skip frame branch need owners that are not
+ * implemented. */
 export class ArtemisTimedWait {
   private active = false;
   private inputEnabled = false;
@@ -139,8 +147,6 @@ export class ArtemisTimedWait {
     const video = sound ? undefined : p.get('video');
     const scenario = video === undefined && !sound ? integer(p.get('scenario') ?? '0') : 0;
     if (scenario === 2) throw new Error('Artemis scenario=2 waits are not implemented');
-    if (this.modes.automode)
-      throw new Error('Artemis automode wait progression is not implemented');
     if (video !== undefined && !this.host.videoPlaying)
       throw new Error('Unsupported Artemis video wait owner');
     this.scenario = scenario === 1;
@@ -168,8 +174,6 @@ export class ArtemisTimedWait {
    * then the open-coded run mode 1 entry (c74 = c70, c70 = 1, onClickWaitIn, save gate). */
   private clickWait(): void {
     if (this.active) throw new Error('Artemis timed wait is already pending');
-    if (this.modes.automode)
-      throw new Error('Artemis automode wait progression is not implemented');
     const skip =
       (this.modes.skipAllowed && (this.modes.commandSkip || this.modes.controlSkip)) ||
       this.host.debugSkipActive();
@@ -183,26 +187,34 @@ export class ArtemisTimedWait {
     this.host.clickWaitEvent('in');
     if (!skip) this.save.request(this.modes.autosave === 2 ? 'autosave.dat' : '');
   }
-  /** One frame of 0x1400c0560 for this wait. `clicked` is the run mode 1 click query
-   * (b5690 key 0 or b5170); other run modes ignore it. Native compares absolute uint32
-   * deadlines strictly; zero is the disabled sentinel. */
-  tick(now: number, clicked = false): boolean {
+  /** One frame of 0x1400c0560 for this wait. `inputFrame` is run mode 1, where `clicked`
+   * is the click query (b5690 role 0, or an active skip b5170); other run modes ignore
+   * both. Native compares absolute uint32 deadlines strictly; zero is the disabled
+   * sentinel. */
+  tick(now: number, clicked = false, inputFrame = clicked): boolean {
     if (!this.active) return false;
     if (this.host.debugSkipActive())
       throw Error('Artemis debug-skip wait frame is not implemented');
-    if (this.click && this.modes.skipAllowed && (this.modes.commandSkip || this.modes.controlSkip))
-      throw Error('Artemis skip click-wait progression is not implemented');
-    if (this.inputEnabled && clicked) {
-      if (this.host.textDisplayComplete()) {
-        // b98/b99 mark s.clickskip; `@` sets no wait flag.
-        if (!this.click) this.host.writeClickSkip();
-        this.end();
-        return true;
+    if (inputFrame && this.inputEnabled) {
+      if (clicked) {
+        if (this.host.textDisplayComplete()) {
+          // b98/b99 mark s.clickskip; `@` sets no wait flag.
+          if (!this.click) this.host.writeClickSkip();
+          this.end();
+          return true;
+        }
+        this.host.finishTextDisplay();
+        this.host.writeClickSkip();
       }
-      this.host.finishTextDisplay();
-      this.host.writeClickSkip();
+      // The click glyph placement 0x1400b6820 of this branch is a separate owner.
+      if (this.click && this.deadline === 0 && this.modes.automode) {
+        if (this.host.textDisplayComplete()) {
+          if (!this.host.automodeWait) throw Error('Unsupported Artemis automode wait owner');
+          this.deadline = (this.host.automodeWait() + (now >>> 0)) >>> 0;
+        }
+      }
     }
-    if (this.deadline && this.deadline < now >>> 0) {
+    if (this.deadline && this.deadline < now >>> 0 && !this.syncSeHeld()) {
       this.end();
       return true;
     }
@@ -220,6 +232,21 @@ export class ArtemisTimedWait {
       return true;
     }
     return false;
+  }
+  /** In automode, an id of the syncse list registered by seplay whose player state is
+   * playing holds a passed deadline. */
+  private syncSeHeld(): boolean {
+    if (!this.modes.automode) return false;
+    return this.modes.syncSe.some((id) => {
+      if (!this.host.effectIndex || !this.host.effectPlaying)
+        throw Error('Unsupported Artemis syncse owner');
+      const index = this.host.effectIndex(id);
+      return index !== undefined && this.host.effectPlaying(index);
+    });
+  }
+  /** b7810 turning automode off: a wait without flags (`@`, or none) loses its deadline. */
+  clearAutomodeDeadline(): void {
+    if (!this.active || this.click) this.deadline = 0;
   }
   /** The wait flags of the current caret, cleared for a new caret (call, event handler
    * scope, jump); undefined when no wait is pending. */

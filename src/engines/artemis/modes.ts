@@ -4,8 +4,9 @@ export interface ArtemisModeEffects {
   writeStatus(name: string, value: string): void;
   commandSkipChanged(active: boolean): void;
   controlSkipChanged(active: boolean): void;
-  /** Host handles auto indicator, pending wait cancellation and registered events. */
-  automodeChanged(active: boolean): void;
+  /** b7810 after the status write: the indicator layer of the current message layer's
+   * entry, the automode deadline of a flagless wait (off) and the in/out event. */
+  automodeChanged(active: boolean, indicator: Readonly<ArtemisAutomodeLayer>): void;
   releaseScheduler(): void;
   /** Script +0x35e0: the current message layer name. */
   currentMessageLayer(): string;
@@ -72,11 +73,21 @@ export class ArtemisModes {
     this.effects.writeStatus('s.status.controlskip', active ? '1' : '0');
     this.effects.controlSkipChanged(active);
   }
+  /** 0x1400b7810. The indicator entry is found or created (0x1400ebf10) before the
+   * status write. */
   setAutomode(active: boolean, force = false): void {
     if ((active && !force && !this.automodeAllowed) || active === this.automode) return;
     this.automode = active;
+    const indicator = this.automodeLayer();
     this.effects.writeStatus('s.status.automode', active ? '1' : '0');
-    this.effects.automodeChanged(active);
+    this.effects.automodeChanged(active, indicator);
+  }
+  /** 0x1400ebf10 on +0x38 with the current message layer +0x35e0: find or create. */
+  private automodeLayer(): ArtemisAutomodeLayer {
+    const owner = this.effects.currentMessageLayer();
+    let entry = this.automodeLayers.get(owner);
+    if (!entry) this.automodeLayers.set(owner, (entry = {present: false, name: ''}));
+    return entry;
   }
   /** bf210 mode fields after automode off and scheduler release (owned by the reset caller).
    * skipUnread (35b0) and the command/control skip states are not reset. */
@@ -163,18 +174,14 @@ export class ArtemisModes {
         if (p.has('unread')) this.skipUnread = p.get('unread') !== '0';
         return true;
       case 'automode': {
-        const owner = this.effects.currentMessageLayer();
-        let entry = this.automodeLayers.get(owner);
-        if (!entry) this.automodeLayers.set(owner, (entry = {present: false, name: ''}));
+        const entry = this.automodeLayer();
         entry.present = p.has('layer');
         if (entry.present) entry.name = p.get('layer')!;
         if (p.has('stopbyclick')) this.stopAutoByClick = p.get('stopbyclick') !== '0';
         if (p.has('stopbystop')) this.stopAutoByStop = p.get('stopbystop') !== '0';
-        if (p.has('syncse')) {
-          if (p.get('syncse'))
-            throw new Error('Nonempty automode syncse list parsing is not implemented');
-          this.syncSe = [];
-        }
+        // 0x1400a0770 with delimiter ",": fields between delimiters, empty ones included,
+        // so an empty value is one empty id. A comma is never a Shift_JIS trail byte.
+        if (p.has('syncse')) this.syncSe = p.get('syncse')!.split('\0', 1)[0]!.split(',');
         if (p.get('allow') === '0') {
           this.setAutomode(false);
           this.effects.releaseScheduler();

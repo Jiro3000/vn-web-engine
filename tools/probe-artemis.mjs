@@ -38,6 +38,20 @@ const probeInputs = process.argv
     const [id, type = 'click'] = arg.slice('--layer-event='.length).split(':');
     return {id, type};
   });
+// --layer-event-at=N:id[:type] and --key-push-at=N:key (repeatable, argument order): before
+// the Nth delivered click, raise the layer event (type defaults to click) or push the key
+// (slot 0 edge) at the click-wait instead, one per frame. No pointer hit testing.
+const timedInputs = process.argv
+  .slice(3)
+  .filter((arg) => arg.startsWith('--layer-event-at=') || arg.startsWith('--key-push-at='))
+  .map((arg) => {
+    if (arg.startsWith('--key-push-at=')) {
+      const [at, key] = arg.slice('--key-push-at='.length).split(':');
+      return {at: artemisInteger(at), key: artemisInteger(key)};
+    }
+    const [at, id, type = 'click'] = arg.slice('--layer-event-at='.length).split(':');
+    return {at: artemisInteger(at), id, type};
+  });
 // Diagnostic clicks (--clicks=N) at `@` click-waits: 16 ms frames run until the text
 // display completes, then one run mode 1 click is delivered. No pointer position is used.
 // The last --clicks argument wins.
@@ -275,6 +289,8 @@ try {
   };
   // Deterministic 16 ms frame.
   const frame = () => runtime.advanceTo((runtime.now + 16) >>> 0 || 1);
+  // Durations of click-waits that automode ended, in milliseconds.
+  const automodeWaits = [];
   let refusal = null;
   try {
     await runtime.boot();
@@ -356,6 +372,31 @@ try {
         continue;
       }
       if (wait.clickPending && probeClicks > 0) {
+        const timed = timedInputs.findIndex((input) => input.at === deliveredClicks);
+        if (timed >= 0) {
+          const [{id, type, key}] = timedInputs.splice(timed, 1);
+          if (id === undefined) {
+            modeEffects.push({keyPush: key, click: deliveredClicks, simulation: true});
+            runtime.keyPush(key);
+          } else {
+            modeEffects.push({layerEvent: {id, type}, click: deliveredClicks, simulation: true});
+            runtime.layerEvent(id, type);
+          }
+          script.run(1000);
+          continue;
+        }
+        if (runtime.modes.automode) {
+          // Automode: 16 ms run mode 1 frames without a click until the wait ends.
+          const start = runtime.now;
+          for (let count = 0; wait.clickPending && runtime.modes.automode; count++) {
+            if (count >= 100000) throw Error('Probe automode click-wait did not finish');
+            frame();
+            if (wait.pending) wait.tick(runtime.now, false, true);
+          }
+          automodeWaits.push((runtime.now - start) >>> 0);
+          script.run(1000);
+          continue;
+        }
         for (let count = 0; !runtime.textDisplayComplete; count++) {
           if (count >= 100000) throw Error('Probe click-wait display did not finish');
           frame();
@@ -435,6 +476,7 @@ try {
         dialogRequests: dialogs,
         saveLoad: saveLoadReport,
         autoChoices: autoChoiceLog,
+        automodeWaits,
         saveFiles: Object.fromEntries(
           [...saveFiles].map(([name, bytes]) => [name, {bytes: bytes.length}]),
         ),

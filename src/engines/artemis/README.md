@@ -99,11 +99,24 @@ event receives it. `ArtemisKeyBindings.deliverPushed` is the c0560 run mode 1/3
 push-handler slice: slot 0 (decide query) then slot 1 (push query) in ascending key order,
 ending the frame when a command is delivered. The probe's `--layer-event=<id>[:type]` and `--key-push=<key>`
 options apply these at a run mode 3 stop, one per frame, without pointer hit testing.
+`--layer-event-at=<n>:<id>[:type]` and `--key-push-at=<n>:<key>` apply them at the click-wait
+before the nth probe click instead. In automode the probe ends click-waits with run mode 1
+frames without a click and reports their durations as `automodeWaits`.
 
 `modes.ts` owns skip/auto/autosave command state and emits required status/effect
-callbacks (`0x1400d47b0`, `0x1400d4350`, `0x1400ca3d0`). Scheduler, indicator,
-message and save effects still require native service implementations. Nonempty
-syncse is refused until its audio behavior is implemented.
+callbacks (`0x1400d47b0`, `0x1400d4350`, `0x1400ca3d0`). The setters (`0x1400b7810`
+automode, `0x1400b7ba0` command skip, `0x1400b7c70` control skip) write
+`s.status.<mode>` and run the registered `setonautomodein/out`,
+`setoncommandskipin/out` or `setoncontrolskipin/out` command. The automode setter
+first finds or creates the indicator entry of the current message layer; showing or
+hiding a named indicator layer is refused because the indicator owner is not
+implemented. `syncse` is split at commas with empty fields kept (`0x1400a0770`), so an
+empty value is one empty id.
+
+Each frame (`0x1400c0560`, after onEnterFrame) the runtime applies the mode key roles:
+a decided role 10 (stopbyclick) or 11 ends automode, role 13 ends command skip, and
+either ends the frame; control skip follows role 14 held. In run modes 1 and 3, after
+push handlers, role 9 starts automode and role 12 command skip, ending the frame.
 
 `exec.ts` owns the exec tag (`0x1400d52c0`). automode/skip force the mode setters
 (absent mode enables auto and toggles skip; exactly `0` disables). rclick/hide/backlog
@@ -288,8 +301,8 @@ is missing, is not a video layer or has finished playing (see [Video layers](#vi
 registered returns without a wait or run-mode change; otherwise the wait starts no text
 display, reports `sound` as its wait reason, counts as a wait flag for `s.clickskip` and
 ends on the first frame where the sound manager reports that index stopped (a missing
-player counts as stopped). Automode, `scenario=2`, `se` with `time` and skip-mode
-click-wait progression remain explicitly unsupported.
+player counts as stopped). `scenario=2` and `se` with `time` remain explicitly
+unsupported.
 
 `save.ts` preserves the native save gate: empty filename/force=false/clean sf state
 performs no writes. A nonempty filename emits onSave before the scenario snapshot;
@@ -1192,16 +1205,22 @@ deadline. The skip vector (script +0x3718) is zero-initialized and has no decode
 writer, so it shows text without tweens. `@` sets no flag and enters run mode 1 with
 onClickWaitIn and the save gate.
 
-Each frame, `ArtemisTimedWait.tick(now, clicked)` runs the run mode 1/3/4 branch of
-`0x1400c0560`:
+Each frame, `ArtemisTimedWait.tick(now, clicked, inputFrame)` runs the run mode 1/3/4
+branch of `0x1400c0560`:
 
 1. A click in run mode 1 on a complete display ends the wait; `s.clickskip` is set to 1
    only when a wait flag is set. A click on an incomplete display finishes it and sets
-   `s.clickskip`.
-2. A passed timed deadline ends the wait.
-3. A `scenario=1` wait ends once the display is complete.
+   `s.clickskip`. An active skip (`0x1400b5170`: skip allowed and command or control
+   skip on) is a click every frame.
+2. In run mode 1 with automode on, a flagless wait (`@`) whose display is complete and
+   that has no deadline gets the deadline `s.automodewait` + now. Turning automode off
+   clears it.
+3. A passed deadline ends the wait, unless automode is on and an id of the syncse list
+   names a seplay sound that is still playing.
+4. A `scenario=1` wait ends once the display is complete.
 
-An `@` therefore ends only on a click.
+Outside automode an `@` therefore ends only on a click. The click glyph placement
+(`0x1400b6820`) of the automode branch belongs to the click glyph owner.
 
 `ArtemisTextBreakControls` dispatches `indent`, `prohibit` and `wordparts` to the
 selected text resource. UTF-8 characters form pairs; duplicate openings replace

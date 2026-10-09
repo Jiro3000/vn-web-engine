@@ -325,6 +325,10 @@ test('Mode commands disable active skip/auto through status and effect services'
   assert.equal(modes.commandSkip, false);
   modes.dispatch(tag('automode', {allow: '0', stopbyclick: '0', stopbystop: '1', syncse: ''}));
   assert.equal(modes.automode, false);
+  // 0x1400a0770 keeps empty fields: an empty list is one empty id.
+  assert.deepEqual(modes.syncSe, ['']);
+  modes.dispatch(tag('automode', {syncse: 'v1,,v2'}));
+  assert.deepEqual(modes.syncSe, ['v1', '', 'v2']);
   assert.equal(modes.stopAutoByStop, true);
   // +0x38 is keyed by the current message layer; without `layer` the name is kept.
   modes.dispatch(tag('automode', {layer: 'auto'}));
@@ -1110,6 +1114,87 @@ test('Input=2 skip bypasses setup; unowned video, se and scenario=2 waits fail b
   assert.throws(() => wait.dispatch(tag({se: 'x', video: 'x'})), /se wait owner/);
   assert.throws(() => wait.dispatch(tag({scenario: '2'})), /scenario=2/);
   assert.equal(wait.pending, false);
+});
+
+test('Automode gives a completed click-wait the s.automodewait deadline; syncse se holds it; skip clicks', async () => {
+  const {ArtemisTimedWait} = await import('../dist/engines/artemis/wait.js');
+  const {ArtemisModes} = await import('../dist/engines/artemis/modes.js');
+  const {ArtemisSave} = await import('../dist/engines/artemis/save.js');
+  const {ArtemisVariables} = await import('../dist/engines/artemis/variables.js');
+  const calls = [];
+  let complete = false;
+  const playing = new Set();
+  const modes = new ArtemisModes({
+    writeStatus: () => {},
+    commandSkipChanged: () => {},
+    controlSkipChanged: () => {},
+    automodeChanged: (active) => calls.push(['auto', active]),
+    releaseScheduler: () => {},
+    currentMessageLayer: () => 'mw',
+  });
+  const save = new ArtemisSave(new ArtemisVariables(), {
+    reportEventError: () => {},
+    beforeScenario: () => {},
+    writeScenario: () => {},
+    writeGlobal: () => {},
+    writeSystem: () => {},
+  });
+  const wait = new ArtemisTimedWait(modes, save, {
+    now: () => 0,
+    debugSkipActive: () => false,
+    startTextDisplay: (skip) => calls.push(['display', skip]),
+    textDisplayComplete: () => complete,
+    finishTextDisplay: () => ((complete = true), calls.push('finish')),
+    writeClickSkip: () => calls.push('clickskip'),
+    beginWait: () => {},
+    endWait: () => calls.push('end'),
+    clickWaitEvent: () => {},
+    resumeMessageState: () => {},
+    effectIndex: (id) => ({voice: 3})[id],
+    effectPlaying: (index) => playing.has(index),
+    automodeWait: () => 500,
+  });
+  const tag = (name, args = {}) => ({
+    kind: 'tag',
+    name,
+    sourceLine: -1,
+    args: new Map(Object.entries(args)),
+  });
+  modes.automodeAllowed = true;
+  modes.dispatch(tag('automode', {syncse: 'missing,voice'}));
+  modes.setAutomode(true);
+  wait.dispatch(tag('@'));
+  calls.length = 0;
+  // No deadline while the display runs or outside run mode 1.
+  assert.equal(wait.tick(1000, false, true), false);
+  complete = true;
+  assert.equal(wait.tick(1000), false);
+  assert.equal(wait.deadlineTick, 0);
+  assert.equal(wait.tick(1000, false, true), false);
+  assert.equal(wait.deadlineTick, 1500);
+  // A playing syncse id holds the passed deadline until the sound stops.
+  playing.add(3);
+  assert.equal(wait.tick(1501, false, true), false);
+  playing.delete(3);
+  assert.equal(wait.tick(1502, false, true), true);
+  assert.deepEqual(calls.splice(0), ['end']);
+  // Turning automode off clears the deadline of a flagless wait.
+  wait.dispatch(tag('@'));
+  wait.tick(2000, false, true);
+  assert.equal(wait.deadlineTick, 2500);
+  modes.setAutomode(false);
+  wait.clearAutomodeDeadline();
+  assert.equal(wait.deadlineTick, 0);
+  assert.equal(wait.tick(3000, false, true), false);
+  // An active skip is the click: an incomplete display finishes, then the wait ends.
+  complete = false;
+  assert.equal(wait.tick(3001, true, true), false);
+  assert.equal(wait.tick(3002, true, true), true);
+  calls.length = 0;
+  modes.dispatch(tag('skip', {allow: '1'}));
+  modes.setCommandSkip(true);
+  wait.dispatch(tag('wait', {time: '1000', input: '1'}));
+  assert.deepEqual(calls.splice(0), [['display', true]]);
 });
 
 test('wait se= follows the seplay index until the sound stops; unknown ids set no wait', async () => {
@@ -5213,6 +5298,7 @@ test('Native stop shows the wait indicator, enters run mode 3 with the save gate
     commandSkipChanged: () => {},
     controlSkipChanged: () => {},
     releaseScheduler: () => {},
+    currentMessageLayer: () => 'mw',
   });
   let entered = true;
   const stop = new ArtemisStop(
@@ -5837,6 +5923,7 @@ test('Native reset saves globals, restarts the boot script and boot loads saved 
     controlSkipChanged: () => {},
     automodeChanged: () => {},
     releaseScheduler: () => {},
+    currentMessageLayer: () => 'mw',
   });
   const writes = [];
   const save = new ArtemisSave(variables, {
