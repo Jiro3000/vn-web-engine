@@ -244,8 +244,36 @@
     assert(pixels.slice(0, 4).join(',') === '0,0,0,255', 'transparent red changed the frame');
     assert(pixels.slice(4, 8).join(',') === '0,128,0,255', 'shared GPU alpha/color mismatch');
     assert(uploads === 1, 'committed image was uploaded again');
+    // Pointer hit test: inverse matrix into the image bounds, then the clickable threshold
+    // gates the pixel alpha (transparent red, half-opaque green).
+    const hits = (x, y) => graphics.hitTest(layers.scene, x, y).join(',');
+    assert(hits(0, 0) === '2' && hits(1.5, 0.5) === '2', 'threshold 0 hit test missed');
+    assert(hits(2, 0) === '' && hits(-0.5, 0) === '' && hits(0, 1) === '', 'hit outside image');
+    const hitDisplay = layers.scene.entry('2').value.display;
+    hitDisplay.apply({clickablethreshold: 1});
+    assert(hits(0, 0) === '' && hits(1, 0) === '2', 'alpha threshold hit test mismatch');
+    hitDisplay.apply({clickablethreshold: 0});
+    // Stage presentation: state 1 crossfades from the frame presented when it started.
+    const presentation = (state, crossfade) => ({
+      state,
+      crossfade,
+      vague: 0,
+      threshold: 0,
+      rule: null,
+      ruleRevision: 0,
+    });
+    const stagePixel = () => [...canvas.getContext('2d').getImageData(1, 0, 1, 1).data].join(',');
+    graphics.drawStage(layers.scene, presentation(0, 0));
+    assert(stagePixel() === '0,128,0,255', 'stage frame differs from the committed frame');
     await layers.dispatch(command('lyprop', {id: '2', visible: '0'}));
     stage.dispatch(command('flip'));
+    graphics.drawStage(layers.scene, presentation(1, 0));
+    assert(stagePixel() === '0,128,0,255', 'crossfade did not start from the presented frame');
+    graphics.drawStage(layers.scene, presentation(1, 0.5));
+    const half = stagePixel().split(',').map(Number);
+    assert(Math.abs(half[1] - 64) <= 1 && half[3] === 255, 'crossfade midpoint mismatch');
+    graphics.drawStage(layers.scene, presentation(1, 1));
+    assert(stagePixel() === '0,0,0,255', 'crossfade did not end at the new frame');
     graphics.drawCommitted(layers.scene);
     assert(
       [...tracked].every((texture) => !deleted.includes(texture)),

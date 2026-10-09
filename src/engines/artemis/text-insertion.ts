@@ -173,10 +173,14 @@ export class ArtemisTextInsertion {
   }
   /** Lines (+0x528) and their blocks for the display owner, after the frame layout. */
   displayBlocks(): readonly (readonly ArtemisTextBlock<ArtemisInsertionGlyphResource>[])[] {
+    return this.displayLines().map((line) =>
+      line.geometry.blocks.map((positioned) => positioned.block),
+    );
+  }
+  /** The display lines with their row Y and positioned blocks (14c5d0 without publishing). */
+  displayLines(): readonly ArtemisWrappedLine<ArtemisInsertionGlyphResource>[] {
     this.idle();
-    return this.wrapping
-      .prepareFrame()
-      .map((line) => line.geometry.blocks.map((positioned) => positioned.block));
+    return this.wrapping.prepareFrame();
   }
   snapshotFont(): ArtemisFontAttributes {
     this.idle();

@@ -1,6 +1,7 @@
 /** Actual PCM voices/rendering for nonvisual control-flow diagnostics. */
 import {createHash} from 'node:crypto';
 import {createArtemisOfflineSoundVoices} from '../dist/engines/artemis/offline-sound-voices.js';
+import {artemisRuntimeSound} from '../dist/engines/artemis/runtime-sound.js';
 export function createArtemisOfflineSoundFixture(hash, readFile) {
   const files = [],
     samples = [],
@@ -47,31 +48,19 @@ export function createArtemisOfflineSoundFixture(hash, readFile) {
       delta -= milliseconds;
     }
   };
+  const sound = artemisRuntimeSound(owner, advanceToTick);
   return {
+    ...sound,
     prepareEffect: async (file, bufferMode) => {
-      const index = await owner.effects.prepareEffect(file, bufferMode);
+      const index = await sound.prepareEffect(file, bufferMode);
       samples.push({file, bufferMode, index});
       return index;
     },
-    discardPreparedEffect: (index) => owner.effects.discardPreparedEffect(index),
-    stopEffect: (index, time) => owner.effects.stopEffect(index, time),
-    setEffectGain: (index, scope, gain) => owner.effects.setEffectGain(index, scope, gain),
-    setEffectPan: (index, pan, time) => owner.effects.setEffectPan(index, pan, time),
-    startEffect: (index, time, loop) => owner.effects.startEffect(index, time, loop),
-    setFinishCallback: (index, callback) => owner.effects.setFinishCallback(index, callback),
-    effectPlaying: (index) => owner.effects.isPlaying(index),
     prepareMusic: async (file, bufferMode) => {
-      const index = await owner.music.prepareEffect(file, bufferMode);
+      const index = await sound.prepareMusic(file, bufferMode);
       samples.push({music: true, file, bufferMode, index});
       return index;
     },
-    discardPreparedMusic: (index) => owner.music.discardPreparedEffect(index),
-    stopMusic: (index, time) => owner.music.stopEffect(index, time),
-    setMusicGain: (index, scope, gain, time) => owner.music.setEffectGain(index, scope, gain, time),
-    setMusicPan: (index, pan, time) => owner.music.setEffectPan(index, pan, time),
-    startMusic: (index, time, loop) => owner.music.startEffect(index, time, loop),
-    setMusicFinishCallback: (index, callback) => owner.music.setFinishCallback(index, callback),
-    advanceToTick,
     summary: () => ({
       soundDecode: 'actual-codec-native-PCM16',
       offlinePcmRendering: true,

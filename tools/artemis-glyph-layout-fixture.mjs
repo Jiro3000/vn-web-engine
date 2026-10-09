@@ -6,8 +6,7 @@ import {FreeTypeWorker} from '../dist/text/freetype-worker-client.js';
 import {ArtemisGlyphPainter} from '../dist/engines/artemis/glyph-paint-client.js';
 import {ArtemisFileFonts} from '../dist/engines/artemis/file-fonts.js';
 import {ArtemisTextGlyphs} from '../dist/engines/artemis/text-glyphs.js';
-import {ArtemisTextInsertion} from '../dist/engines/artemis/text-insertion.js';
-import {artemisDefaultFontAttributes} from '../dist/engines/artemis/font-state.js';
+import {ArtemisRuntimeGlyphOwner} from '../dist/engines/artemis/runtime-glyphs.js';
 export function createArtemisGlyphLayoutFixture(hash, readFont) {
   const fontWorker = new FreeTypeWorker(() =>
       createNodeBrowserWorker(new URL('../dist/text/freetype-worker.js', import.meta.url)),
@@ -18,8 +17,7 @@ export function createArtemisGlyphLayoutFixture(hash, readFont) {
       ),
     );
   const openedFonts = [],
-    samples = [],
-    owners = new Map();
+    samples = [];
   let rasterJobs = 0;
   const fonts = new ArtemisFileFonts(hash, {
     readFontFile: async (path) => {
@@ -45,57 +43,23 @@ export function createArtemisGlyphLayoutFixture(hash, readFont) {
     },
   });
   const glyphs = new ArtemisTextGlyphs(hash, fonts, painter);
-  const style = (resource) => ({
-    ...artemisDefaultFontAttributes(hash),
-    ...Object.fromEntries(resource.font),
+  const owner = new ArtemisRuntimeGlyphOwner(hash, glyphs, (resource, block) => {
+    if (samples.length < 128)
+      samples.push({
+        layer: resource.name,
+        mainGlyphs: block.main.length,
+        rubyGlyphs: block.ruby.length,
+        width: block.width,
+        height: block.height,
+        paintedSha256: [...block.main, ...block.ruby]
+          .filter((g) => g.glyph.surface.image)
+          .map((g) => createHash('sha256').update(g.glyph.surface.image.pixels).digest('hex')),
+      });
   });
-  const host = (resource) => ({
-    loadBlock: async (...args) => {
-      const block = await glyphs.load(...args);
-      if (samples.length < 128)
-        samples.push({
-          layer: resource.name,
-          mainGlyphs: block.main.length,
-          rubyGlyphs: block.ruby.length,
-          width: block.width,
-          height: block.height,
-          paintedSha256: [...block.main, ...block.ruby]
-            .filter((g) => g.glyph.surface.image)
-            .map((g) => createHash('sha256').update(g.glyph.surface.image.pixels).digest('hex')),
-        });
-      return block;
-    },
-    publishFrame: async () => {
-      throw Error('Nonvisual glyph fixture cannot publish visual frames');
-    },
-  });
-  const get = (resource) => {
-    let owner = owners.get(resource);
-    if (!owner) {
-      owner = new ArtemisTextInsertion(hash, style(resource), host(resource));
-      owners.set(resource, owner);
-    }
-    owner.setStyle(style(resource));
-    owner.setIndentation(
-      resource.indentation ?? {pairs: new Map(), range: 0, logicalRange: false, nest: false},
-    );
-    owner.setWordParts(resource.wordParts ?? new Set());
-    owner.setProhibitedCharacters(
-      resource.prohibition?.head ?? new Set(),
-      resource.prohibition?.foot ?? new Set(),
-    );
-    return owner;
-  };
   return {
-    get,
-    copy: (old, resource) => {
-      const owner = owners.get(old);
-      if (owner) owners.set(resource, owner.copy(host(resource)));
-    },
-    release: (resource) => {
-      owners.get(resource)?.close();
-      owners.delete(resource);
-    },
+    get: (resource) => owner.get(resource),
+    copy: (old, resource) => owner.copy(old, resource),
+    release: (resource) => owner.release(resource),
     summary: () => ({
       glyphLayout: 'actual-workers-nonvisual',
       sceneRendering: false,
@@ -103,15 +67,14 @@ export function createArtemisGlyphLayoutFixture(hash, readFont) {
       rasterJobs,
       openedFonts,
       samples,
-      layers: [...owners].map(([resource, owner]) => ({
+      layers: owner.entries().map(([resource, insertion]) => ({
         name: resource.name,
-        glyphCount: owner.glyphCount,
-        ...owner.measure(),
+        glyphCount: insertion.glyphCount,
+        ...insertion.measure(),
       })),
     }),
     close: async () => {
-      for (const owner of owners.values()) owner.close();
-      owners.clear();
+      owner.close();
       await glyphs.close();
       await fonts.close();
       painter.close();

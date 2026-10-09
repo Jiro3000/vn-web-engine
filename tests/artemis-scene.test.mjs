@@ -3313,7 +3313,7 @@ test('Native rt/rp maintain history/backlog before actual clear and replay suppr
   }
 });
 
-test('Opt-in nonvisual glyph fixture performs actual worker jobs and refuses visual publication', async () => {
+test('Opt-in nonvisual glyph fixture performs actual worker jobs without publishing frames', async () => {
   const {createArtemisGlyphLayoutFixture} =
     await import('../tools/artemis-glyph-layout-fixture.mjs');
   const {rectangleFont} = await import('./freetype-fixtures.mjs');
@@ -3340,7 +3340,8 @@ test('Opt-in nonvisual glyph fixture performs actual worker jobs and refuses vis
     fixture.copy(resource, copy);
     fixture.release(resource);
     assert.equal(fixture.get(copy).glyphCount, 1);
-    await assert.rejects(fixture.get(copy).prepareFrame(), /cannot publish visual/);
+    // Frames are drawn from the insertion's display lines; preparing one publishes nothing.
+    await fixture.get(copy).prepareFrame();
     const summary = fixture.summary();
     assert.equal(summary.rasterJobs, 1);
     assert.equal(summary.sceneRendering, false);

@@ -5,14 +5,8 @@
  */
 import {createHash} from 'node:crypto';
 import {ArtemisImageLoader} from '../dist/engines/artemis/image-loader.js';
-import {ArtemisLayers} from '../dist/engines/artemis/layers.js';
-import {ArtemisLayerCommands} from '../dist/engines/artemis/layer-commands.js';
-import {ArtemisLayerEventSlots, ArtemisLayerEvents} from '../dist/engines/artemis/layer-events.js';
+import {ArtemisLayerOwner} from '../dist/engines/artemis/layer-owner.js';
 import {ArtemisDisplayObject} from '../dist/engines/artemis/display-object.js';
-import {ArtemisStage} from '../dist/engines/artemis/stage.js';
-import {ArtemisTransition} from '../dist/engines/artemis/transition.js';
-import {ArtemisLayerTweens} from '../dist/engines/artemis/layer-tweens.js';
-import {ArtemisTweenRegistry} from '../dist/engines/artemis/tween.js';
 import {ArtemisShaderProperties} from '../dist/engines/artemis/shader-properties.js';
 import {artemisRevision} from '../dist/engines/artemis/revision.js';
 import {readJpegHeader} from '../dist/formats/jpeg/header.js';
@@ -30,8 +24,7 @@ export function createMetadataLayerFixture(hash, readFile, runMode = null) {
     // Video decoders shared by actor copies, with their reference counts.
     videos = new Map();
   let sequence = 0,
-    transitionState = 0,
-    refreshState = 0;
+    tweenFrames = 0;
   const dimensions = (width, height) => {
     if (![width, height].every((n) => Number.isInteger(n) && n > 0 && n <= 0x7fffffff))
       throw Error('Invalid probe image metadata dimensions');
@@ -80,7 +73,7 @@ export function createMetadataLayerFixture(hash, readFile, runMode = null) {
       return resource;
     },
   };
-  const host = {
+  const graphics = (registry) => ({
     creationMode: () => 0,
     createImageLayer(resource, anchor) {
       const display = new ArtemisDisplayObject(hash);
@@ -154,7 +147,7 @@ export function createMetadataLayerFixture(hash, readFile, runMode = null) {
     },
     appendLayerCommand: (id, tag) => {
       effects.push({kind: 'appendCommand', id, name: tag.name});
-      layerCommands.append(id, tag);
+      registry.appendLayerCommand(id, tag);
     },
     copyImageLayer(old) {
       if (!actors.has(old)) throw Error('Probe actor released');
@@ -164,7 +157,6 @@ export function createMetadataLayerFixture(hash, readFile, runMode = null) {
         animation: old.animation?.copy(),
         display: old.display.copy(),
         properties: {...old.properties},
-        events: old.events?.copy(),
         shader: old.shader?.copy(),
       };
       if (actor.kind === 'message') actor.messageOwner.retain(actor.message);
@@ -224,16 +216,16 @@ export function createMetadataLayerFixture(hash, readFile, runMode = null) {
     },
     clearLayerCommands: (ids) => {
       effects.push({kind: 'clearCommands', ids});
-      layerCommands.clear(ids);
+      registry.clearLayerCommands(ids);
     },
     resetLayerCommands: (id, tag) => {
       effects.push({kind: 'resetCommands', id});
-      layerCommands.reset(id, tag);
+      registry.resetLayerCommands(id, tag);
     },
     // lyprop (and lytween's synthesized end state) outside replay: coalescing record b9cd0.
     recordLayerProperties: (tag) => {
       effects.push({kind: 'recordProperties', id: tag.args.get('id')});
-      layerCommands.record(tag);
+      registry.recordLayerProperties(tag);
     },
     imageLoadFailed: (tag) => {
       throw Error('Probe image metadata missing: ' + tag.args.get('file'));
@@ -241,34 +233,7 @@ export function createMetadataLayerFixture(hash, readFile, runMode = null) {
     layerNotFound: (tag) => {
       throw Error('Probe layer missing: ' + tag.args.get('id'));
     },
-  };
-  const layers = new ArtemisLayers(hash, source, host);
-  // lyevent/lytween lists; lyprop records are simulated effects above.
-  const layerCommands = new ArtemisLayerCommands(hash);
-  const layerEvents = new ArtemisLayerEvents(layers.scene, layerCommands, {
-    slots: (actor) => (actor.events ??= new ArtemisLayerEventSlots()),
   });
-  const stage = new ArtemisStage(hash, {
-    captureMode: () => 0,
-    transitionState: () => transitionState,
-    clearTransitionRule: () => effects.push({kind: 'clearTransitionRule', simulation: true}),
-    resetTransitionLayerValue: (value) =>
-      effects.push({kind: 'resetTransitionValue', value, simulation: true}),
-    setTransitionState: (value) => {
-      transitionState = value;
-    },
-    markSceneDirty: () => effects.push({kind: 'sceneDirty', simulation: true}),
-    commitLayers: () => layers.commit(),
-    refreshState: () => refreshState,
-    setRefreshState: (value) => {
-      refreshState = value;
-    },
-  });
-  const refuseRunMode = () => {
-    throw Error('Unsupported diagnostic Artemis trans run mode owner');
-  };
-  let transitionTween = null,
-    stageRule = null;
   // Rule images use the stage loader; only PNG has a decoded native surface here.
   const ruleSource = new ArtemisImageLoader(readFile, [
     {
@@ -288,27 +253,25 @@ export function createMetadataLayerFixture(hash, readFile, runMode = null) {
       },
     })),
   ]);
-  const transition = new ArtemisTransition(hash, {
-    captureMode: () => 0,
-    commit: () => stage.commit(),
-    enterRunMode: (mode) => {
-      effects.push({kind: 'runMode', mode, simulation: true});
-      (runMode?.enter ?? refuseRunMode)(mode);
-    },
-    releaseRunMode: () => {
-      effects.push({kind: 'runModeRelease', simulation: true});
-      (runMode?.release ?? refuseRunMode)();
-    },
-    now: () => runMode?.now() ?? refuseRunMode(),
-    setWaitStart: (ms) => effects.push({kind: 'waitStart', ms, simulation: true}),
-    skipState: () => runMode?.skipState() ?? refuseRunMode(),
-    setTransitionState: (value) => {
-      transitionState = value;
-    },
-    setCrossfade: (value) => effects.push({kind: 'crossfade', value, simulation: true}),
-    stageSize: () => {
-      if (!runMode?.stageSize) throw Error('Unsupported diagnostic Artemis rule transition');
-      return runMode.stageSize();
+  const refuseRunMode = () => {
+    throw Error('Unsupported diagnostic Artemis trans run mode owner');
+  };
+  const owner = new ArtemisLayerOwner(hash, {
+    createGraphics: graphics,
+    images: source,
+    runMode: {
+      enter: () => (runMode?.enter ?? refuseRunMode)(),
+      release: () => (runMode?.release ?? refuseRunMode)(),
+      now: () => runMode?.now() ?? refuseRunMode(),
+      emit: (tag) => {
+        if (!runMode?.emit) throw Error('Unsupported diagnostic Artemis tween event owner');
+        runMode.emit(tag);
+      },
+      stageSize: () => {
+        if (!runMode?.stageSize) throw Error('Unsupported diagnostic Artemis rule transition');
+        return runMode.stageSize();
+      },
+      skipState: () => runMode?.skipState() ?? refuseRunMode(),
     },
     loadRule: async (path) => {
       const resource = await ruleSource.load(path);
@@ -323,94 +286,7 @@ export function createMetadataLayerFixture(hash, readFile, runMode = null) {
       });
       return image;
     },
-    setRuleImage: (image) => {
-      stageRule = image;
-      effects.push({kind: 'ruleImage', replaced: true});
-    },
-    ruleImage: () => {
-      const {width, height} = runMode.stageSize();
-      // Stage +0x50 is created with the stage at stage size, one gray byte per pixel.
-      if (stageRule?.width !== width || stageRule?.height !== height)
-        stageRule = {width, height, bytesPerPixel: 1, pixels: new Uint8Array(width * height)};
-      effects.push({kind: 'ruleImage', replaced: false});
-      return stageRule;
-    },
-    setVague: () => {},
-    setRuleThreshold: () => {},
-    registerTween: (tween) => {
-      transitionTween = tween;
-    },
-    reportError: () => {
-      throw Error('Unsupported diagnostic Artemis trans error report');
-    },
-  });
-  const tweens = new ArtemisTweenRegistry(hash);
-  let tweenSync = false,
-    tweenFrames = 0;
-  const layerTweens = new ArtemisLayerTweens(hash, layers.scene, tweens, layerCommands, {
-    // Per-frame values update the actor geometry without one effect record per frame.
-    applyImageProperties(id, actor, patch) {
-      actor.display.apply(patch);
-      Object.assign(actor.properties, patch);
-      tweenFrames++;
-    },
-    layerNotFound: host.layerNotFound,
-    enterRunMode: (mode) => {
-      effects.push({kind: 'runMode', mode, simulation: true});
-      tweenSync = true;
-      (runMode?.enter ?? refuseRunMode)(mode);
-    },
-    endSyncWait: () => {
-      effects.push({kind: 'tweenSyncEnd', simulation: true});
-      tweenSync = false;
-      (runMode?.release ?? refuseRunMode)();
-    },
-    deleteLayer: (tag, recordHistory) => {
-      effects.push({kind: 'tweenDelete', id: tag.args.get('id'), simulation: true});
-      layers.deleteLayer(tag.args.get('id') ?? '', recordHistory);
-    },
-    emitEvent: (tag) => {
-      effects.push({kind: 'tweenEvent', id: tag.args.get('id'), simulation: true});
-      if (!runMode?.emit) throw Error('Unsupported diagnostic Artemis tween event owner');
-      runMode.emit(tag);
-    },
-    recordLayerProperties: host.recordLayerProperties,
-  });
-  return {
-    /** Steps every registered layer tween and updates every video at the probe clock. */
-    tickTweens: (now) => {
-      tweens.tick(now);
-      for (const video of videos.keys()) video.update(now);
-    },
-    /** wait video= frame check: layer `id` is a video layer that is still playing. */
-    videoPlaying: (id) => layers.scene.entry(id)?.value?.video?.playing === true,
-    get tweenSyncPending() {
-      return tweenSync;
-    },
-    get tweensRegistered() {
-      return tweens.size;
-    },
-    /** The global tween registry shared with text display tweens. */
-    tweenRegistry: tweens,
-    dispatchTween: (tag) => {
-      effects.push({kind: 'tween', name: tag.name, id: tag.args.get('id'), simulation: true});
-      return layerTweens.dispatch(tag);
-    },
-    hasLayer: (id) => !!layers.scene.entry(id),
-    /** Runs the registered transition tween from `start` (nonzero uint32) to natural
-     * completion and returns the completion tick. */
-    finishTransition: (start) => {
-      const tween = transitionTween;
-      if (!tween || tween.done || !start) throw Error('No pending probe transition');
-      const end = (start + tween.milliseconds) >>> 0;
-      tween.tick(start);
-      tween.tick(end);
-      return end;
-    },
-    get transitionPending() {
-      return !!transitionTween && !transitionTween.done;
-    },
-    attachMessageActor: (name, message, messageOwner) => {
+    createMessageActor: (message, messageOwner) => {
       const actor = {
         id: ++sequence,
         kind: 'message',
@@ -422,59 +298,57 @@ export function createMetadataLayerFixture(hash, readFile, runMode = null) {
       };
       messageOwner.retain(message);
       actors.add(actor);
-      if (!layers.attachActor(name, actor))
-        throw Error('Probe message scene attachment blocked: ' + name);
-      effects.push({kind: 'messageAttach', id: name, simulation: true});
+      return actor;
     },
-    detachMessageActor: (name) => layers.detachActor(name),
-    /** bf210 order: finish the registered transition tween, then replace the scene root. */
-    reset: () => {
-      transition.reset();
-      if (transitionTween?.done) transitionTween = null;
-      layers.reset();
-      effects.push({kind: 'reset', simulation: true});
+    // Per-frame values update the actor geometry without one effect record per frame.
+    applyTweenProperties(id, actor, patch) {
+      actor.display.apply(patch);
+      Object.assign(actor.properties, patch);
+      tweenFrames++;
     },
+    videoOf: (actor) => actor.video,
+    trace: (effect) => effects.push(effect),
+  });
+  const layers = owner.layers,
+    layerCommands = owner.commands;
+  return {
+    /** Steps every registered layer tween and updates every video at the probe clock. */
+    tickTweens: (now) => owner.tickTweens(now),
+    /** wait video= frame check: layer `id` is a video layer that is still playing. */
+    videoPlaying: (id) => owner.videoPlaying(id),
+    get tweenSyncPending() {
+      return owner.tweenSyncPending;
+    },
+    get tweensRegistered() {
+      return owner.tweenRegistry.size;
+    },
+    /** The global tween registry shared with text display tweens. */
+    tweenRegistry: owner.tweenRegistry,
+    dispatchTween: (tag) => owner.dispatchTween(tag),
+    hasLayer: (id) => owner.hasLayer(id),
+    /** Runs the registered transition tween from `start` (nonzero uint32) to natural
+     * completion and returns the completion tick. */
+    finishTransition: (start) => owner.finishTransition(start),
+    tickTransition: (now) => owner.tickTransition(now),
+    get transitionPending() {
+      return owner.transitionPending;
+    },
+    attachMessageActor: (name, message, messageOwner) =>
+      owner.attachMessageActor(name, message, messageOwner),
+    detachMessageActor: (name) => owner.detachMessageActor(name),
+    reset: () => owner.reset(),
     /** Save-object reset of the layer command registry. */
-    clearLayerCommands: () => layerCommands.clearAll(),
+    clearLayerCommands: () => owner.clearLayerCommands(),
     /** Save-object +0x68 layer command registry for the scenario save and load. */
-    snapshotLayerCommands: () => layerCommands.snapshot(),
-    restoreLayerCommands: (snapshot) => layerCommands.restore(snapshot),
-    /** Ids in native child order whose actor has an enabled `click` event and whose layer and
-     * ancestors are visible. Diagnostic choice discovery, not native hit testing. */
-    clickableLayers: () => {
-      const visible = (id) => {
-        const parts = id.split('.');
-        for (let length = 1; length <= parts.length; length++) {
-          const value = layers.scene.entry(parts.slice(0, length).join('.'))?.value;
-          if (value?.properties && value.properties.visible === false) return false;
-        }
-        return true;
-      };
-      return layers.scene
-        .entries()
-        .filter(({id, value}) => value?.events?.isEnabled('click') && visible(id))
-        .map(({id}) => id);
-    },
+    snapshotLayerCommands: () => owner.snapshotLayerCommands(),
+    restoreLayerCommands: (snapshot) => owner.restoreLayerCommands(snapshot),
+    /** Diagnostic choice discovery, not native hit testing. */
+    clickableLayers: () => owner.clickableLayers(),
     /** Invokes an actor's stored layer event callback; no pointer hit testing is simulated. */
-    invokeLayerEvent: (id, type, sink) => {
-      const actor = layers.scene.entry(id)?.value;
-      if (!actor?.events) throw Error('Probe layer has no events: ' + id);
-      if (!actor.events.isEnabled(type)) throw Error('Probe layer event disabled: ' + id);
-      return actor.events.invoke(type, sink);
-    },
-    /** trans runs synchronously except rule loads, which return a promise. */
-    dispatchTransition: (tag) => transition.dispatch(tag),
-    accepts: (tag) =>
-      ['lyc', 'lyprop', 'lydel', 'flip', 'lyevent', 'anime', 'animedel', 'video'].includes(
-        tag.name,
-      ),
-    /** `recordHistory` false is the native replay flag of the scenario loader. */
-    dispatch: (tag, recordHistory = true) =>
-      tag.name === 'flip'
-        ? Promise.resolve(stage.dispatch(tag))
-        : tag.name === 'lyevent'
-          ? Promise.resolve(layerEvents.dispatch(tag, !recordHistory))
-          : layers.dispatch(tag, recordHistory),
+    invokeLayerEvent: (id, type, sink) => owner.invokeLayerEvent(id, type, sink),
+    dispatchTransition: (tag) => owner.dispatchTransition(tag),
+    accepts: (tag) => owner.accepts(tag),
+    dispatch: (tag, recordHistory = true) => owner.dispatch(tag, recordHistory),
     snapshot: () => ({
       mode: 'metadata-only fixture',
       pixelDecode: false,
@@ -518,9 +392,9 @@ export function createMetadataLayerFixture(hash, readFile, runMode = null) {
               pixelsSha256: createHash('sha256').update(entry.value.video.pixels).digest('hex'),
             }
           : null,
-        events: entry.value?.events
+        events: entry.value
           ? ['click', 'rollover', 'rollout', 'dragin', 'drag', 'dragout'].filter((type) =>
-              entry.value.events.callback(type),
+              owner.eventSlots(entry.value).callback(type),
             )
           : [],
       })),
@@ -529,6 +403,6 @@ export function createMetadataLayerFixture(hash, readFile, runMode = null) {
         commands: tags.map((tag) => Object.fromEntries(tag.args)),
       })),
     }),
-    close: () => layers.close(),
+    close: () => owner.close(),
   };
 }

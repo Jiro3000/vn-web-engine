@@ -21,6 +21,7 @@ import type {ArtemisAnimationFrames} from './animation-layer.js';
 import {ArtemisDisplayObject, artemisDisplayPoint} from './display-object.js';
 import {artemisRevision} from './revision.js';
 import type {ArtemisTheoraVideo} from './video.js';
+import type {ArtemisStagePresentation} from './layer-owner.js';
 import {
   artemisHasRasterEffects,
   type ArtemisRasterPolicy,
@@ -54,12 +55,49 @@ export interface ArtemisAnimationActor extends Omit<ArtemisGroupActor, 'texture'
   readonly texture: null;
   readonly animation: ArtemisAnimationFrames<ArtemisDisplayActor>;
 }
+/** One painted glyph of a text layer: its image, its layer-local 2x3 matrix (row-major
+ * `[a, b, tx, c, d, ty]`) and opacity. */
+export interface ArtemisTextSprite {
+  readonly image: TriangleImage;
+  readonly matrix: Float32Array;
+  readonly alpha: number;
+}
+/** The text of a message layer (CLinkableTextLayer) as glyph sprites. `revision` changes
+ * whenever the sprites would. Actor copies share the source and each holds a loan. */
+export interface ArtemisTextSource {
+  readonly revision: number;
+  sprites(): readonly ArtemisTextSprite[];
+  retain(): void;
+  release(): void;
+}
+/** A message-layer actor: CLayer geometry whose content is its text. */
+export interface ArtemisTextActor extends Omit<ArtemisGroupActor, 'texture'> {
+  readonly texture: null;
+  readonly text: ArtemisTextSource;
+}
 export interface ArtemisImageShaderPrograms {
   bind(id: string): {shader: ArtemisDrawShaderResource; release(): void} | null;
 }
-export type ArtemisDisplayActor = ArtemisImageActor | ArtemisGroupActor | ArtemisAnimationActor;
+export type ArtemisDisplayActor =
+  ArtemisImageActor | ArtemisGroupActor | ArtemisAnimationActor | ArtemisTextActor;
 function isAnimation(actor: ArtemisDisplayActor): actor is ArtemisAnimationActor {
   return 'animation' in actor;
+}
+function isText(actor: ArtemisDisplayActor): actor is ArtemisTextActor {
+  return 'text' in actor;
+}
+/** `outer` after `inner` for row-major 2x3 matrices. */
+function compose(outer: Float32Array, inner: Float32Array): Float32Array {
+  const [a, b, c, d, e, g] = outer as unknown as number[];
+  const [p, q, r, s, t, u] = inner as unknown as number[];
+  return new Float32Array([
+    f(f(a! * p!) + f(b! * s!)),
+    f(f(a! * q!) + f(b! * t!)),
+    f(f(f(a! * r!) + f(b! * u!)) + c!),
+    f(f(d! * p!) + f(e! * s!)),
+    f(f(d! * q!) + f(e! * t!)),
+    f(f(f(d! * r!) + f(e! * u!)) + g!),
+  ]);
 }
 export type ArtemisLayerServices = Pick<
   ArtemisLayerHost<ArtemisDisplayActor>,
@@ -129,6 +167,17 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
   private readonly changes = new WeakMap<ArtemisDisplayActor, number>();
   private nextChange = 1;
   private readonly shaderTextureResources = new WeakSet<object>();
+  /** Glyph images drawn by text actors, with the draw that last used them. */
+  private readonly glyphTextures = new Map<TriangleImage, {id: number; draw: number}>();
+  private draws = 0;
+  /** Stage surfaces: the frame being drawn and the frame a transition starts from. */
+  private stage: {
+    current: CaptureTexture;
+    previous: CaptureTexture;
+    drawn: boolean;
+    state: number;
+    rule?: {texture: number; image: TriangleImage; revision: number};
+  } | null = null;
   private nativeSlotOne: Float32Array | null = null;
   private readonly wrappers = new Map<
     ArtemisImageActor['wrapper'],
@@ -314,6 +363,22 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
     this.actors.add(actor);
     return actor;
   }
+  createTextLayer(text: ArtemisTextSource): ArtemisTextActor {
+    const actor: ArtemisTextActor = {
+      texture: null,
+      text,
+      raster: {layerMode: 'normal', negative: false, grayscale: false, colorMultiply: 0xffffff},
+      clip: {left: 0, top: 0, width: 0, height: 0, right: 0, bottom: 0},
+      display: new ArtemisDisplayObject(this.hash),
+      shaderState: new ArtemisShaderProperties<object>(this.hash),
+      shaderConstants: new ArtemisShaderConstantStorage(this.hash),
+      wrapper: {alpha: 1},
+    };
+    text.retain();
+    this.wrappers.set(actor.wrapper, {references: 1, lease: undefined});
+    this.actors.add(actor);
+    return actor;
+  }
   animationFrames(
     actor: ArtemisDisplayActor,
   ): ArtemisAnimationFrames<ArtemisDisplayActor> | undefined {
@@ -342,6 +407,7 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
       raster: {...old.raster},
       ...(isAnimation(old) ? {animation: old.animation.copy()} : {}),
     };
+    if (isText(old)) old.text.retain();
     if (old.texture !== null) this.check(old).references++;
     this.wrappers.get(actor.wrapper)!.references++;
     this.actors.add(actor);
@@ -486,6 +552,7 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
     this.actors.delete(actor);
     actor.shaderState.close();
     if (isAnimation(actor)) actor.animation.close();
+    if (isText(actor)) actor.text.release();
     if (texture && --texture.references === 0) {
       this.textures.delete(texture.id);
       if (!texture.video) this.images.delete(texture.image);
@@ -508,6 +575,17 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
     this.checkActor(actor);
     const capture = this.wrappers.get(actor.wrapper)!.capture;
     if (capture) this.releaseCapture(capture);
+  }
+  private glyphTexture(image: TriangleImage): number {
+    let texture = this.glyphTextures.get(image);
+    if (!texture) {
+      this.target.prepareImage(image);
+      texture = {id: this.nextTexture++, draw: this.draws};
+      this.glyphTextures.set(image, texture);
+      this.textures.set(texture.id, {id: texture.id, image, references: 0, managed: true});
+    }
+    texture.draw = this.draws;
+    return texture.id;
   }
   private releaseCapture(capture: GroupCapture): void {
     const storage = capture.storage;
@@ -585,6 +663,25 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
           );
           continue;
         }
+        if (actor && isText(actor)) {
+          const matrix = actor.display.matrix(parent, this.raster.trig);
+          for (const sprite of actor.text.sprites()) {
+            const local = compose(matrix, sprite.matrix),
+              w = f(sprite.image.width - 1),
+              h = f(sprite.image.height - 1);
+            if (sprite.image.width === 0 || sprite.image.height === 0) continue;
+            for (const [x, y] of [
+              [0, 0],
+              [w, 0],
+              [w, h],
+              [0, h],
+            ]) {
+              const point = artemisDisplayPoint(local, x!, y!);
+              add(point[0], point[1]);
+            }
+          }
+          continue;
+        }
         if (!actor || actor.texture === null) continue;
         const texture = this.check(actor),
           width = actor.clip.width !== 0 ? actor.clip.width : f(texture.image.width),
@@ -607,6 +704,92 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
     visit(nodes, new Float32Array([1, 0, 0, 0, 1, 0]));
     return rect;
   }
+  /** Ids of the visible image, animation and text layers under stage point (x, y), topmost
+   * first. A point hits an image when it maps into the image bounds through the inverse
+   * local matrix; the actor's clickable threshold then gates the pixel alpha (image hit
+   * test 0x14017b6a0). Text layers hit on their glyph rectangles. */
+  hitTest(scene: ArtemisScene<ArtemisDisplayActor>, x: number, y: number): string[] {
+    const hits: string[] = [];
+    const inside = (
+      matrix: Float32Array,
+      image: TriangleImage,
+      left: number,
+      top: number,
+      width: number,
+      height: number,
+      display: ArtemisDisplayObject,
+    ) => {
+      const [a, b, tx, c, d, ty] = matrix as unknown as number[];
+      const determinant = a! * d! - b! * c!;
+      if (determinant === 0) return false;
+      const dx = x - tx!,
+        dy = y - ty!,
+        u = (d! * dx - b! * dy) / determinant,
+        v = (a! * dy - c! * dx) / determinant;
+      if (!(u >= 0 && v >= 0 && u < width && v < height)) return false;
+      return display.hitsAlpha(() => {
+        const px = Math.floor(u + left),
+          py = Math.floor(v + top),
+          stride = image.width * image.height;
+        if (px < 0 || py < 0 || px >= image.width || py >= image.height || !stride) return 0;
+        const bytes = image.pixels.length / stride;
+        // Format 0 surfaces keep one byte per pixel; GPU surfaces keep no CPU pixels.
+        if (bytes === 4) return image.pixels[(py * image.width + px) * 4 + 3]!;
+        if (bytes === 1) return image.pixels[py * image.width + px]!;
+        return 0;
+      });
+    };
+    const visit = (nodes: readonly RenderNode[], parent: Float32Array, id?: string) => {
+      for (const node of nodes) {
+        const actor = node.actor;
+        if (!actor) {
+          if (node.group) visit(node.children, parent);
+          continue;
+        }
+        const p = actor.display.properties;
+        if (!p.visible || p.xscale <= 0 || p.yscale <= 0) continue;
+        const matrix = actor.display.matrix(parent, this.raster.trig);
+        if (isAnimation(actor)) {
+          visit(
+            [{id: node.id, actor: this.animationFrame(actor), group: false, children: []}],
+            matrix,
+            node.id,
+          );
+          continue;
+        }
+        if (isText(actor)) {
+          if (
+            actor.text
+              .sprites()
+              .some((sprite) =>
+                inside(
+                  compose(matrix, sprite.matrix),
+                  sprite.image,
+                  0,
+                  0,
+                  sprite.image.width,
+                  sprite.image.height,
+                  actor.display,
+                ),
+              )
+          )
+            hits.push(id ?? node.id);
+          continue;
+        }
+        if (actor.texture === null) {
+          visit(node.children, matrix);
+          continue;
+        }
+        const image = this.check(actor).image,
+          width = actor.clip.width !== 0 ? actor.clip.width : image.width,
+          height = actor.clip.height !== 0 ? actor.clip.height : image.height;
+        if (inside(matrix, image, actor.clip.left, actor.clip.top, width, height, actor.display))
+          hits.push(id ?? node.id);
+      }
+    };
+    visit(this.nodes(scene), new Float32Array([1, 0, 0, 0, 1, 0]));
+    return hits.reverse();
+  }
   private fingerprint(node: RenderNode, capture: GroupCapture): unknown[] {
     const signature: unknown[] = [node.actor?.clip, capture.revision];
     const visit = (nodes: readonly RenderNode[]) => {
@@ -621,6 +804,8 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
         if (child.actor && isAnimation(child.actor)) {
           const frame = this.animationFrame(child.actor);
           signature.push(frame, frame.display.propertyRevision, this.changes.get(frame));
+        } else if (child.actor && isText(child.actor)) {
+          signature.push(child.actor.text, child.actor.text.revision);
         } else if (child.actor?.texture === null)
           signature.push(this.wrappers.get(child.actor.wrapper)?.capture?.revision);
         else if (child.actor) signature.push(this.videoFrame(child.actor));
@@ -660,7 +845,55 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
   }
   /** Retained GPU preparation in ascending native child order. */
   drawCommitted(scene: ArtemisScene<ArtemisDisplayActor>): DrawList {
+    return this.render(scene, null);
+  }
+  /** Draws the committed scene into the stage surface, then presents it through the
+   * transition: state 1 mixes from the frame presented when the transition started by
+   * `crossfade`; state 2 reveals each pixel as `threshold` passes its rule value, ramping
+   * over `vague` on either side (the threshold tweens from -vague to 255+vague). */
+  drawStage(
+    scene: ArtemisScene<ArtemisDisplayActor>,
+    presentation: ArtemisStagePresentation,
+  ): DrawList {
+    return this.render(scene, presentation);
+  }
+  private stageSurfaces(): NonNullable<ArtemisImageGraphics['stage']> {
+    if (!this.stage) {
+      const current = this.captureTexture(this.target.width, this.target.height);
+      const previous = this.captureTexture(this.target.width, this.target.height);
+      this.stage = {current, previous, drawn: false, state: 0};
+    }
+    return this.stage;
+  }
+  private stageRule(
+    stage: NonNullable<ArtemisImageGraphics['stage']>,
+    presentation: ArtemisStagePresentation,
+  ): number {
+    const rule = presentation.rule;
+    if (!rule || rule.bytesPerPixel !== 1)
+      throw Error('Artemis rule transition without a gray rule');
+    if (stage.rule?.revision !== presentation.ruleRevision) {
+      if (stage.rule) {
+        this.target.invalidate(stage.rule.image);
+        this.textures.delete(stage.rule.texture);
+      }
+      const pixels = new Uint8Array(rule.width * rule.height * 4);
+      for (let index = 0; index < rule.width * rule.height; index++)
+        pixels.fill(rule.pixels[index]!, index * 4, index * 4 + 4);
+      const image: TriangleImage = {width: rule.width, height: rule.height, pixels};
+      this.target.prepareImage(image);
+      const texture = this.nextTexture++;
+      this.textures.set(texture, {id: texture, image, references: 0, managed: true});
+      stage.rule = {texture, image, revision: presentation.ruleRevision};
+    }
+    return stage.rule.texture;
+  }
+  private render(
+    scene: ArtemisScene<ArtemisDisplayActor>,
+    presentation: ArtemisStagePresentation | null,
+  ): DrawList {
     this.now = null;
+    this.draws++;
     for (const texture of this.textures.values()) if (texture.video) texture.video.updated = false;
     const commands: DrawCommand[] = [],
       updates: (() => void)[] = [];
@@ -850,7 +1083,7 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
             continue;
           }
           this.checkActor(actor);
-          if (node.group !== (actor.texture === null && !isAnimation(actor)))
+          if (node.group !== (actor.texture === null && !isAnimation(actor) && !isText(actor)))
             throw new Error('Unsupported Artemis group raster owner');
           const p = actor.display.properties;
           if (p.xscale <= 0 || p.yscale <= 0) continue;
@@ -865,6 +1098,31 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
               alpha,
               context,
             );
+            continue;
+          }
+          if (isText(actor)) {
+            const none: ArtemisImageClip = {
+              left: 0,
+              top: 0,
+              width: 0,
+              height: 0,
+              right: 0,
+              bottom: 0,
+            };
+            for (const sprite of actor.text.sprites()) {
+              const spriteAlpha = f(alpha * sprite.alpha);
+              if (sprite.image.width === 0 || sprite.image.height === 0 || spriteAlpha < 2 ** -23)
+                continue;
+              quad(
+                this.glyphTexture(sprite.image),
+                compose(matrix, sprite.matrix),
+                spriteAlpha,
+                actor.raster,
+                none,
+                context,
+                actor,
+              );
+            }
             continue;
           }
           if (actor.texture !== null) {
@@ -963,15 +1221,92 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
           );
         }
       };
+      const stage = presentation && this.stageSurfaces();
+      if (stage) {
+        // A transition starts from the frame presented last; before any, from black.
+        if (presentation!.state !== 0 && stage.state === 0)
+          commands.push(
+            stage.drawn
+              ? {kind: 'gpu-copy', source: stage.current.image, destination: stage.previous.image}
+              : {kind: 'gpu-target', surface: stage.previous.image, clearColor: [0, 0, 0, 1]},
+          );
+        commands.push({
+          kind: 'gpu-target',
+          surface: stage.current.image,
+          clearColor: this.raster.clearColor ?? [0, 0, 0, 1],
+        });
+      }
       visit(this.nodes(scene), new Float32Array([1, 0, 0, 0, 1, 0]), 1, {
-        surface: null,
+        surface: stage ? stage.current.image : null,
         width: this.target.width,
         height: this.target.height,
         pendingClear: false,
       });
+      if (stage) {
+        const state = presentation!.state;
+        const corners = [
+          [-1, 1, 0, 0],
+          [1, 1, 1, 0],
+          [-1, -1, 0, 1],
+          [1, -1, 1, 1],
+        ];
+        const vertices = new Float32Array(36),
+          uv = new Float32Array(8);
+        corners.forEach(([x, y, u, v], index) => {
+          vertices.set([x!, y!, 0, 1, 1, 1, 1, u!, v!], index * 9);
+          uv.set([u!, v!], index * 2);
+        });
+        const additional =
+          state === 1 || state === 2
+            ? [{texture: stage.previous.id, uv, filter: 'nearest' as const}]
+            : [];
+        if (state === 2)
+          additional.push({texture: this.stageRule(stage, presentation!), uv, filter: 'nearest'});
+        commands.push(
+          {kind: 'gpu-target', surface: null},
+          {
+            kind: 'triangles',
+            texture: stage.current.id,
+            vertices,
+            topology: 'triangle-strip',
+            normalizedUV: true,
+            transform: identity.slice(),
+            depthClip: false,
+            filter: 'nearest',
+            blendState: {
+              color: {source: 'one', destination: 'zero', operation: 'add'},
+              alpha: {source: 'one', destination: 'zero', operation: 'add'},
+            },
+            fragment:
+              state === 1
+                ? 'vec4 shade(vec4 s,vec4 t){vec4 b=texture(additionalAtlas0,additionalUV0);return vec4(mix(b.rgb,s.rgb,parameters[0].x),1.);}'
+                : state === 2
+                  ? 'vec4 shade(vec4 s,vec4 t){vec4 b=texture(additionalAtlas0,additionalUV0);float r=texture(additionalAtlas1,additionalUV1).r*255.;float v=parameters[0].y;float a=v>0.?clamp((parameters[0].x-r+v)/(2.*v),0.,1.):step(r,parameters[0].x);return vec4(mix(b.rgb,s.rgb,a),1.);}'
+                  : 'vec4 shade(vec4 s,vec4 t){return vec4(s.rgb,1.);}',
+            parameters: new Float32Array([
+              state === 2 ? presentation!.threshold : presentation!.crossfade,
+              presentation!.vague,
+              ...new Float32Array(30),
+            ]),
+            additionalTextures: additional.length ? additional : undefined,
+            discardTransparent: false,
+          },
+        );
+      }
       const list: DrawList = {sprites: [], commands, clearColor: this.raster.clearColor};
       this.target.draw(list, (id) => this.image(id));
       for (const update of updates) update();
+      if (stage) {
+        stage.drawn = true;
+        stage.state = presentation!.state;
+      }
+      // Glyph images no text actor drew leave the GPU; capture surfaces keep their pixels.
+      for (const [image, texture] of this.glyphTextures)
+        if (texture.draw !== this.draws) {
+          this.glyphTextures.delete(image);
+          this.textures.delete(texture.id);
+          this.target.invalidate(image);
+        }
       return list;
     } finally {
       for (const loan of shaderLoans) loan.release();

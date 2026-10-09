@@ -87,8 +87,10 @@ the per-type enable flag (groups reach every child actor). History uses
 `ArtemisLayerCommands` (`erase` = `0x140144960`, `append`, coalescing `record`) unless the
 dispatch is a replay. `ArtemisLayerEventSlots` is actor-owned state that actor copies must
 copy. `invoke` calls the stored functor: `ArtemisScriptEvents.emit` (b73e0) with the tag copy,
-the type index as event mode and force set. Pointer hit testing, rollover state and
-penetration belong to the input owner and are not implemented. `ArtemisKeyBindings.deliverPushed` is the c0560 run mode 1/3
+the type index as event mode and force set. The browser player is the input owner: it
+hit-tests the pointer (`ArtemisImageGraphics.hitTest`, see below) and tracks rollover
+state; penetration is not implemented, so only the topmost hit layer with a registered
+event receives it. `ArtemisKeyBindings.deliverPushed` is the c0560 run mode 1/3
 push-handler slice: slot 0 then slot 1 in ascending key order, ending the frame when a
 command is delivered. The probe's `--layer-event=<id>[:type]` and `--key-push=<key>`
 options apply these at a run mode 3 stop, one per frame, without pointer hit testing.
@@ -120,13 +122,73 @@ Native metamethod-based callback lookup is not reproduced by the raw-field bridg
 
 `mouse.ts` dispatches cursor visibility/position through shared `CursorHost` and
 implements the native unsigned auto-hide deadline. Native pointer activity resets
-and browser window coordinate mapping remain unconnected.
+remain unconnected; the browser player maps page coordinates to stage coordinates.
 
 `dialog.ts` supplies UTF-8 message dialogs through shared `TextDialogHost`. It
 pauses script progress and writes the returned native result before the host resumes.
 Text fields and their encoding/truncation remain unsupported. Full scheduler effects
-are supplied by the host (`0x1400c91e0`, `0x1400b7460`). There is no browser dialog UI
-wired to this integration yet.
+are supplied by the host (`0x1400c91e0`, `0x1400b7460`). In the browser,
+`MessageBoxTextDialogHost` (`src/platform/text-dialog.ts`) presents requests as OK or
+OK/Cancel message boxes.
+
+## Engine runtime
+
+`runtime.ts` is the engine object of `0x1400b9e80`. `ArtemisRuntime.open(services)` reads
+system.ini ([WINDOWS] WIDTH/HEIGHT/BOOT/SAVEPATH) and the Lua/AST/script corpus, which
+the script reads synchronously, then builds every tag owner, the Lua runtime, the script,
+the tag dispatch (`tag-dispatch.ts`), reset, save and load. The services supply what the
+native engine took from Windows and its devices: installation files, save storage, the
+layer graphics owner, text glyphs, surfaces, effect/music voices, shaders, the fullscreen
+movie player, dialogs, window state and caption, cursor and pointer, dynamic libraries,
+the Windows version and the graphics feature level. Error reports and the optional
+`trace` stream (tags, script steps, includes, owner effects) are diagnostics.
+
+The host drives frames through the runtime: `boot()`, then `frame(now, input)` once per
+display frame, and `settleResource()` whenever `resourcePending` reports a tag or Lua call
+suspended on a resource ('held' when the operation entered a run mode). `frame` follows
+the run-mode branch of `0x1400c0560`: the clock advances voices, tweens and video layers;
+a pending transition steps (a click finishes a clickable run mode 2 transition); a
+fullscreen movie frame runs; in run modes 1 and 3 the input's layer events and pushed
+keys reach their handlers; the timed wait checks its click, deadline or display
+completion; then a ready script runs. While a resource holds the script only the clock
+advances. `advanceTo`, `layerEvent` and `keyPush` are the individual steps, and
+`save`/`load` with `scenarioArchive()` and `flushSaves()` serve save tooling. `runMode` is
+the native mode (0 script, 3 stop, 7 video, 13 load).
+
+Runtime service adapters shared by the browser player and the probe:
+`runtime-sound.ts` maps the effect (+0x3d88) and music (+0x3d60) managers onto the
+runtime sound service; `runtime-glyphs.ts` (`ArtemisRuntimeGlyphOwner`) keeps one text
+insertion per message resource over a glyph block source.
+
+## Browser player
+
+`browser/player.ts` (`ArtemisBrowserPlayer`) composes the runtime for a page: the stage
+canvas (`WebGLDrawTarget` sized from system.ini), the surface manager over the PNG, JPEG
+and merged PSD decoders (decoded off the main thread), FreeType glyph rasterization and
+painting in workers, Web Audio voices (`browser-sound-voices.ts`), the fullscreen movie
+player, message-box dialogs and the window, caption and cursor hosts. The page decides
+the Windows version reported to the game (`ui/runtimes/artemis.ts`). Each animation
+frame runs `runtime.frame` with the input gathered since the last frame, settles resource
+operations, and presents the stage with `drawStage`.
+
+`browser/layers.ts` builds the layer system over `ArtemisImageGraphics`. Message layers
+are text actors (`createTextLayer`) whose sprites come from the insertion's display lines:
+each glyph is placed at its font `left`/`top`, line, block and glyph offsets, with the
+text display's animated `left`, `top`, `xscale`, `yscale`, `rotate` and `alpha` applied
+about the glyph origin; invisible fonts draw nothing.
+
+`ArtemisImageGraphics.drawStage` renders the scene into a stage surface and presents it.
+When a transition starts the last presented frame is kept; state 1 crossfades from it by
+the transition value, state 2 reveals by the rule image against threshold and vague
+(`a = clamp((t - r + v) / 2v)`, or a step when vague is 0).
+
+Pointer input: a left button press is the run mode 1 click, role 0 and `VK_LBUTTON`; the
+right button is role 1 and `VK_RBUTTON`; keys are pushed by virtual-key code.
+`hitTest(scene, x, y)` returns visible image, animation and text layers under a stage
+point, topmost first: the point maps through the inverse local matrix into the image
+bounds, then the clickable threshold gates the pixel alpha (`0x14017b6a0`). The player
+sends rollout and rollover when the topmost hit layer with a registered pointer event
+changes, and a click event to it on a press.
 
 ## Verification and remaining work
 
@@ -139,18 +201,19 @@ node tools/probe-artemis.mjs GAME_DIRECTORY
 ```
 
 The verifier checks real archive indexes, ASB records and loose precedence without
-extracting or rendering media. The probe preloads script/text resources, compiles
-Lua/AST sources in the actual wasm VM, and runs boot until the first unsupported
-service. It uses a deterministic clock and explicit Windows INI stage dimensions;
-it is not a production filesystem, clock or complete INI loader. The actual game
+extracting or rendering media. The probe runs `ArtemisRuntime` over nonvisual services
+(image metadata layers, actual glyph layout, surface decode, offline PCM voices, optional
+`--shader-presets` CPU shaders) until the first unsupported service. It uses a
+deterministic clock and in-memory save storage; it is not a production filesystem,
+clock or complete INI loader. The actual game
 `readScriptFile` load-only path validates AST loading; this is not story execution.
 By default dialogs remain pending. `--dialog-result=0` or `--dialog-result=1`
 explicitly supplies a simulated outcome for a separate probe, recorded in its JSON.
 Probe cursor/scheduler effects are record-only and do not represent production effects.
 
-Remaining work includes native system variables/events,
-full IET compilation, AST story execution, text/media/save services and UI wiring.
-The integration is not playable. Shared platform/media services must remain in
+Remaining work includes native system variables/events, full IET compilation, layer
+event penetration and drag events, and the click glyph. The player page is
+`artemis.html`. Shared platform/media services must remain in
 the shared layers. Evidence and game resources are local-only and are not part of
 this source tree.
 
@@ -224,8 +287,7 @@ The engine reset empties the caret, which holds the wait flags: `ArtemisTimedWai
 drops a pending wait without its release or Out event, so a caret saved inside a wait
 resumes at its tag in run mode 0. The production scenario loader is not wired yet.
 
-`tools/probe-artemis.mjs --save-load-at=N` (with `--glyph-layout` and `--async-lua`)
-saves a scenario archive before the Nth delivered click, loads it through `ArtemisLoad`
+`tools/probe-artemis.mjs --save-load-at=N` saves a scenario archive before the Nth delivered click, loads it through `ArtemisLoad`
 and continues from the restored caret instead of clicking. It requires the loaded state
 to match the saved one with the caret written as loaded, and a second load of that state
 to reproduce it; both loads run the game's `onLoad` handler. The report is `saveLoad`.
@@ -354,8 +416,8 @@ consume/fallthrough, and native dispatch receives the original arguments. Extra
 returns are discarded, matching native single-result callbacks. Event filters
 and inline includes remain synchronous. Lua 5.1
 cannot yield across a protected C-call boundary; such asynchronous paths refuse.
-The default owner keeps the original synchronous callback path. Probe `--async-lua`
-checks the coroutine path through the actual boot without loading/rendering assets.
+The default owner keeps the original synchronous callback path. `ArtemisRuntime` always
+uses the coroutine path.
 
 `image-loader.ts` resolves resources asynchronously with native extension preference,
 then content sniffing of the exact file, then appended-extension candidates. Codec
@@ -896,7 +958,7 @@ order and errors, the wait, the fullscreen tag and frame branch, and the ASF rea
 Image codecs/resources and layer hosts can select a logical image-dimensions type;
 the ordinary raster owner retains the default straight-RGBA type. This permits an
 explicit geometry-only owner without fake pixel buffers or GPU allocations.
-`tools/probe-artemis.mjs --image-metadata --async-lua` uses such a record-only
+`tools/probe-artemis.mjs` uses such a record-only layer
 fixture, reads encoded resource headers and drives the actual layer lifecycle,
 property parser, scene commit and suspended Lua. It never decodes image pixels or
 presents game media. Its JSON declares the fixture, nonvisual mode and resource
@@ -1177,13 +1239,10 @@ confirmed no outgoing descriptors: it conditionally resets lines/counters while
 retaining indentation stacks and newline state. It is not a replacement for
 animation scheduling or a complete CLinkable clear.
 
-The default real metadata-only probe continues to refuse print. Optional
-`--glyph-layout` (requires `--async-lua --image-metadata`) uses the actual font and
-glyph workers through the Node browser-worker adapter, returning metrics and hashes
-without displaying game assets. Calibration print/rp pass, then `bindSurfaceAsync`
-is refused. Lua exposes this strict-string/NUL-terminated void binding only when
-an actual preload host is supplied; the probe supplies none. Optional
-`unbindSurface` requires a strict NUL-terminated name; `isLoadingSurface` returns
+The probe uses the actual font and glyph workers through the Node browser-worker
+adapter, returning metrics and hashes without displaying game assets. Lua exposes the
+strict-string/NUL-terminated void `bindSurfaceAsync` binding only when an actual
+preload host is supplied. Optional `unbindSurface` requires a strict NUL-terminated name; `isLoadingSurface` returns
 a boolean for a string name or the whole queue for any non-string argument.
 Their hosts must own the real queue and binding lifetimes. Native loading needs
 FIFO preload jobs, prepared surfaces, promotion/wait behavior and cancellation.
@@ -1222,7 +1281,7 @@ Lua exposes optional strict-string bindSurfaceAsync/unbindSurface and no-argumen
 clearSurfaceLoadQueue hosts. isLoadingSurface(string) queries a name; any non-string
 queries the whole queue and returns a boolean. No queue host is invented by default.
 
-`probe-artemis --surface-preloads` additionally requires --glyph-layout and uses
+`probe-artemis` uses
 a real shared image worker for PNG and merged PSD pixels. Gray PNGs become native
 format 0 surfaces (`artemisPngSurface`, one byte per pixel in the 0x1401649b0 storage
 size), all others four bytes per pixel. JPEG explicitly refuses in this Node
@@ -1258,10 +1317,9 @@ returns before history. Non-loop sounds replace history with the native empty
 block. Load failure reports without writing a new slot or history. Cancellation
 releases a completed, unadopted sound and suppresses stale script effects.
 
-The required prepare/gain/pan/start services own actual playback. Optional
-`--sound-decode` requires --surface-preloads in the diagnostic and uses the shared
-Vorbis worker to decode real PCM, exporting hashes and metadata. It opens no audio
-graph/device and explicitly refuses startEffect. Decoding :sysse/none.ogg succeeds
+The required prepare/gain/pan/start services own actual playback. The probe
+uses the shared Vorbis worker to decode real PCM, exporting hashes and metadata. It
+opens no audio graph/device. Decoding :sysse/none.ogg succeeds
 at48000Hz/stereo/11685frames; this is not evidence of native PCM rounding parity or
 game playback. `ArtemisVariables.lookup` supports non-inserting, owned-byte lookup
 for optional named gains without inventing missing system variables.
@@ -1374,7 +1432,7 @@ commands have completion fences for tests and callers that must observe state.
 processor without opening an audio context or device. Its caller renders explicit
 sample-frame blocks and supplies scheduler ticks. Cached clips use the shared
 `PcmClipRenderer`; frame positions advance from consumed samples, not timers.
-`--sound-render` enables this diagnostic after `--sound-decode`, reports PCM hashes
+The probe renders through it, reports PCM hashes
 and explicit clock/rounding policy, and can pass real `seplay` control flow.
 
 `ArtemisSoundFinish` captures copied set/del registrations. Missing `id` chooses
@@ -1596,3 +1654,12 @@ every name reaches the host `dispatch`, which refuses unsupported names. This is
 which defines `tags.achievements`) is not loaded. The probe's
 --native-calllua-reporting records these reports as `unknownTagReports`.
 Evidence: tag-registry-notes.md.
+
+`tag-dispatch.ts` is that host `dispatch`: `createArtemisTagDispatch(owners, suspend)`
+consults the tag owners in a fixed order (text, transition and layer tweens, fullscreen
+video, layers, message and font owners, the synchronous command owners, shaders, reset,
+save, load, click glyphs, music, effect sounds) and refuses a tag no owner takes. A tag
+that loads resources passes its promise to `suspend` and returns `'suspended'`; the
+runtime resumes the script once that promise settles. The second argument is the loader's
+replay flag. Owners that need message layers, glyph text, sound or graphics are optional;
+without them their tags reach the refusal.
