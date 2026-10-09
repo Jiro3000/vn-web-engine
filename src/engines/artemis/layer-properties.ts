@@ -1,5 +1,5 @@
 import {artemisShaderProperties, type ArtemisShaderPropertyPatch} from './shader-properties.js';
-import {artemisHexUint32, artemisDecimal} from './numbers.js';
+import {artemisHexUint32, artemisDecimal, artemisInteger} from './numbers.js';
 
 export type ArtemisLayerMode = 'normal' | 'add' | 'screen' | 'multiply';
 /** Native TRect<float> stores dimensions and inclusive endpoints independently. */
@@ -32,6 +32,8 @@ export interface ArtemisLayerPropertyPatch {
   colormultiply?: number;
   clip?: ArtemisImageClip;
   intermediateRender?: {enabled: boolean; format?: 1 | 2};
+  /** 0x1400d76d0 atoi, forwarded by CArtemisLayer +0xe8 (0x1400b2e10) to the inner actors. */
+  clickablethreshold?: number;
 }
 const numeric = [
   'left',
@@ -53,6 +55,7 @@ const supported = new Set<string>([
   'colormultiply',
   'clip',
   'intermediate_render',
+  'clickablethreshold',
   // Game Lua forwards its creation argument table to lyprop. Native d76d0 /
   // 115650 never query these keys; keep the recorded tag without reloading.
   'file',
@@ -110,6 +113,8 @@ export function artemisLayerProperties(
           : float;
     if (key === 'alpha') patch.wrapperAlpha = Math.fround(double / 255);
   }
+  if (args.has('clickablethreshold'))
+    patch.clickablethreshold = artemisInteger(args.get('clickablethreshold')!);
   for (const key of flags) if (args.has(key)) patch[key] = args.get(key) !== '0';
   const mode = args.get('layermode');
   if (mode === 'normal' || mode === 'add' || mode === 'screen' || mode === 'multiply')

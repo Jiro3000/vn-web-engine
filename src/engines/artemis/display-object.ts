@@ -28,6 +28,8 @@ export class ArtemisDisplayObject {
   private world = new Float32Array([1, 0, 0, 0, 1, 0]);
   private matrixDirty = true;
   private stateRevision = 0;
+  /** CLayer +0x168 (`clickablethreshold`, setter 0x1400a4960). Not a drawn property. */
+  private threshold = 0;
   private state: ArtemisDisplayProperties = {
     left: 0,
     top: 0,
@@ -58,9 +60,24 @@ export class ArtemisDisplayObject {
     result.world = this.world.slice();
     result.matrixDirty = this.matrixDirty;
     result.stateRevision = this.stateRevision;
+    result.threshold = this.threshold;
     return result;
   }
+  get clickableThreshold(): number {
+    return this.threshold;
+  }
+  /** Pixel test at the end of image hit test 0x14017b6a0, after the point is inside the
+   * image: threshold 0 hits without reading the pixel; otherwise the pixel's alpha byte
+   * must reach the threshold as an unsigned comparison (negative thresholds never hit). */
+  hitsAlpha(alpha: () => number): boolean {
+    return this.threshold === 0 || this.threshold >>> 0 <= alpha();
+  }
   apply(patch: ArtemisLayerPropertyPatch): void {
+    if (patch.clickablethreshold !== undefined) {
+      if (patch.clickablethreshold !== (patch.clickablethreshold | 0))
+        throw new Error('Invalid Artemis clickable threshold');
+      this.threshold = patch.clickablethreshold;
+    }
     const next = {...this.state};
     for (const key of Object.keys(next) as (keyof ArtemisDisplayProperties)[]) {
       const value = patch[key];

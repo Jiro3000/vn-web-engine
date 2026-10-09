@@ -94,7 +94,8 @@ const probeInputs = process.argv
   });
 // Diagnostic clicks (--clicks=N) at `@` click-waits: 16 ms frames run until the text
 // display completes, then one run mode 1 click is delivered. No pointer position is used.
-const clickArgument = process.argv.slice(3).find((arg) => arg.startsWith('--clicks='));
+// The last --clicks argument wins.
+const clickArgument = process.argv.slice(3).findLast((arg) => arg.startsWith('--clicks='));
 let probeClicks = clickArgument ? artemisInteger(clickArgument.slice('--clicks='.length)) : 0;
 const shaderPresets = process.argv.slice(3).includes('--shader-presets');
 if (shaderPresets && !metadataLayers) throw Error('--shader-presets requires --image-metadata');
@@ -955,7 +956,7 @@ try {
     script.run(1000);
     while (script.state === 'waiting') {
       if (pendingResource) {
-        if (resourceResumptions >= 100000) throw Error('Probe resource budget exceeded');
+        if (resourceResumptions >= 10000000) throw Error('Probe resource budget exceeded');
         const operation = pendingResource;
         pendingResource = null;
         resourceInFlight = true;
@@ -979,7 +980,7 @@ try {
         script.run(1000);
         continue;
       }
-      if (advanceWaits && layerFixture?.transitionPending && advancedWaits < 10000) {
+      if (advanceWaits && layerFixture?.transitionPending && advancedWaits < 1000000) {
         probeTick = layerFixture.finishTransition((probeTick + 1) >>> 0 || 1);
         advancedWaits++;
         soundFixture?.advanceToTick?.(probeTick);
@@ -987,7 +988,7 @@ try {
         script.run(1000);
         continue;
       }
-      if (advanceWaits && layerFixture?.tweenSyncPending && advancedWaits < 10000) {
+      if (advanceWaits && layerFixture?.tweenSyncPending && advancedWaits < 1000000) {
         // Deterministic 16 ms frames until the sync tween's completion ends run mode 4.
         for (let frame = 0; layerFixture.tweenSyncPending; frame++) {
           if (frame >= 100000) throw Error('Probe sync tween did not finish');
@@ -1030,7 +1031,7 @@ try {
         script.run(1000);
         continue;
       }
-      if (advanceWaits && wait.scenarioPending && advancedWaits < 10000) {
+      if (advanceWaits && wait.scenarioPending && advancedWaits < 1000000) {
         // Deterministic 16 ms frames until the text display completes; no click is simulated.
         for (let frame = 0; ; frame++) {
           if (frame >= 100000) throw Error('Probe scenario wait did not finish');
@@ -1043,7 +1044,7 @@ try {
         script.run(1000);
         continue;
       }
-      if (!advanceWaits || !wait.pending || wait.clickPending || advancedWaits >= 10000) break;
+      if (!advanceWaits || !wait.pending || wait.clickPending || advancedWaits >= 1000000) break;
       probeTick = (wait.deadlineTick + 1) >>> 0;
       advancedWaits++;
       soundFixture?.advanceToTick?.(probeTick);

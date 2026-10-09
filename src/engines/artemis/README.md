@@ -506,6 +506,14 @@ uses the full texture, including adjacent texels at a clip boundary. Node tests
 check retained state, inclusive bounds and endpoint rounding; the synthetic GPU
 fixture checks the rebased cropped quad and actual linear-sampled framebuffer.
 
+`lyprop clickablethreshold` is read with `atoi` in `0x1400d76d0` and forwarded by the
+CArtemisLayer setter `0x1400b2e10` to the inner actors, which store it at +0x168
+(`0x1400a4960`); actor copies keep it. `ArtemisDisplayObject.clickableThreshold` holds
+the value and `hitsAlpha` is the pixel step of image hit test `0x14017b6a0`: threshold
+0 hits without reading the pixel, otherwise the alpha byte must reach the threshold as
+an unsigned comparison. Pointer selection of the hit actor belongs to the pointer owner.
+`draggable` (+0x16c) is not implemented and refuses.
+
 `lyprop layermode` preserves the native exact spellings `normal`, `add`, `screen`
 and `multiply`; any other value leaves the old mode intact (`0x140115650`). Mode
 state belongs to the inner image actor and is copied independently of its shared

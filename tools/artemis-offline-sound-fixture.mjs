@@ -31,7 +31,7 @@ export function createArtemisOfflineSoundFixture(hash, readFile) {
     while (delta > 0) {
       const milliseconds = Math.min(delta, 16),
         frames = milliseconds * 48;
-      if (renderedFrames + frames > 200000000)
+      if (renderedFrames + frames > 2000000000)
         throw Error('Probe offline PCM frame budget exceeded');
       lastTick = (lastTick + milliseconds) >>> 0;
       owner.effects.tick(lastTick);

@@ -397,6 +397,25 @@ test('Artemis layer number conversion preserves decimal prefixes, float32 bounda
     assert.throws(() => artemisLayerProperties(new Map([['left', value]])), /property number/);
 });
 
+test('Clickable thresholds use atoi, survive actor copies and gate the alpha hit test', async () => {
+  const {artemisLayerProperties} = await import('../dist/engines/artemis/layer-properties.js');
+  const {ArtemisDisplayObject} = await import('../dist/engines/artemis/display-object.js');
+  const display = new ArtemisDisplayObject(revision);
+  let reads = 0;
+  const alpha = (value) => () => (reads++, value);
+  assert.equal(display.hitsAlpha(alpha(0)), true);
+  assert.equal(reads, 0);
+  const revisionBefore = display.propertyRevision;
+  display.apply(artemisLayerProperties(new Map([['clickablethreshold', ' 128px']])));
+  assert.equal(display.clickableThreshold, 128);
+  assert.equal(display.propertyRevision, revisionBefore);
+  const copy = display.copy();
+  assert.deepEqual([copy.hitsAlpha(alpha(127)), copy.hitsAlpha(alpha(128))], [false, true]);
+  display.apply(artemisLayerProperties(new Map([['clickablethreshold', '-1']])));
+  assert.equal(display.hitsAlpha(alpha(255)), false);
+  assert.equal(copy.clickableThreshold, 128);
+});
+
 test('Artemis missing-image fallback preserves native RGB/ARGB color forms and decimal dimensions', async () => {
   const {layers, events} = await layerFixture(async () => null);
   try {
