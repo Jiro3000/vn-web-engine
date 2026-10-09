@@ -115,12 +115,27 @@ const probeInputs = process.argv
 // The last --clicks argument wins.
 const clickArgument = process.argv.slice(3).findLast((arg) => arg.startsWith('--clicks='));
 let probeClicks = clickArgument ? artemisInteger(clickArgument.slice('--clicks='.length)) : 0;
-// --save-load-at=N: before the Nth delivered click, save a scenario file, load it and save
-// again; the two archives must match byte for byte.
+// --save-load-at=N: before the Nth delivered click, save a scenario file and load it; the
+// loaded state must match the saved one (see the Artemis README).
 const saveLoadArgument = process.argv.slice(3).findLast((arg) => arg.startsWith('--save-load-at='));
 const saveLoadAt = saveLoadArgument
   ? artemisInteger(saveLoadArgument.slice('--save-load-at='.length))
   : null;
+// --auto-choice=PREFIX (repeatable) with --auto-choices=N: once the scripted inputs are used
+// up at a run mode 3 stop, pick the first visible layer with an enabled click event whose id
+// starts with a prefix (prefix order, then native child order) and deliver rollover, click
+// and key push 1, at most N times. A diagnostic route policy, not player input.
+const autoChoicePrefixes = process.argv
+  .slice(3)
+  .filter((arg) => arg.startsWith('--auto-choice='))
+  .map((arg) => arg.slice('--auto-choice='.length));
+const autoChoicesArgument = process.argv
+  .slice(3)
+  .findLast((arg) => arg.startsWith('--auto-choices='));
+let autoChoices = autoChoicesArgument
+  ? artemisInteger(autoChoicesArgument.slice('--auto-choices='.length))
+  : 0;
+const autoChoiceLog = [];
 const shaderPresets = process.argv.slice(3).includes('--shader-presets');
 if (shaderPresets && !metadataLayers) throw Error('--shader-presets requires --image-metadata');
 const graphicsFeatureArgument = process.argv
@@ -1344,6 +1359,25 @@ try {
         script.run(1000);
         continue;
       }
+      if (
+        !probeInputs.length &&
+        autoChoices > 0 &&
+        autoChoicePrefixes.length &&
+        probeRunMode === 3 &&
+        !wait.pending &&
+        layerFixture
+      ) {
+        const clickable = layerFixture.clickableLayers();
+        const id = autoChoicePrefixes
+          .map((prefix) => clickable.find((candidate) => candidate.startsWith(prefix)))
+          .find((candidate) => candidate !== undefined);
+        if (id !== undefined) {
+          autoChoices--;
+          autoChoiceLog.push({id, click: deliveredClicks, tags: nativeTags.length});
+          modeEffects.push({autoChoice: id, simulation: true});
+          probeInputs.push({id, type: 'rollover'}, {id, type: 'click'}, {key: 1});
+        }
+      }
       if (probeInputs.length && probeRunMode === 3 && !wait.pending) {
         const input = probeInputs.shift();
         if (input.id !== undefined) {
@@ -1452,6 +1486,7 @@ try {
         executableSha256,
         dialogRequests: dialogs,
         saveLoad: saveLoadReport,
+        autoChoices: autoChoiceLog,
         saveFiles: Object.fromEntries(
           [...saveFiles].map(([name, bytes]) => [name, {bytes: bytes.length}]),
         ),

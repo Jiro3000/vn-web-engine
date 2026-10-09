@@ -439,6 +439,22 @@ export function createMetadataLayerFixture(hash, readFile, runMode = null) {
     /** Save-object +0x68 layer command registry for the scenario save and load. */
     snapshotLayerCommands: () => layerCommands.snapshot(),
     restoreLayerCommands: (snapshot) => layerCommands.restore(snapshot),
+    /** Ids in native child order whose actor has an enabled `click` event and whose layer and
+     * ancestors are visible. Diagnostic choice discovery, not native hit testing. */
+    clickableLayers: () => {
+      const visible = (id) => {
+        const parts = id.split('.');
+        for (let length = 1; length <= parts.length; length++) {
+          const value = layers.scene.entry(parts.slice(0, length).join('.'))?.value;
+          if (value?.properties && value.properties.visible === false) return false;
+        }
+        return true;
+      };
+      return layers.scene
+        .entries()
+        .filter(({id, value}) => value?.events?.isEnabled('click') && visible(id))
+        .map(({id}) => id);
+    },
     /** Invokes an actor's stored layer event callback; no pointer hit testing is simulated. */
     invokeLayerEvent: (id, type, sink) => {
       const actor = layers.scene.entry(id)?.value;
