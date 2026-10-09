@@ -461,6 +461,10 @@ try {
       }
     },
     resumeMessageState: () => modeEffects.push({resumeMessageState: true}),
+    videoPlaying: (id) => {
+      if (!layerFixture) throw Error('Probe video waits require --image-metadata');
+      return layerFixture.videoPlaying(id);
+    },
   });
   // Run mode 3 has no click/frame owner in this probe: stop pauses at an input boundary.
   let probeRunMode = 0;
@@ -1067,8 +1071,28 @@ try {
         script.run(1000);
         continue;
       }
+      if (advanceWaits && wait.videoPending && advancedWaits < 1000000) {
+        // Deterministic 16 ms frames decode the video until it stops playing; no click.
+        for (let frame = 0; ; frame++) {
+          if (frame >= 100000) throw Error('Probe video wait did not finish');
+          probeTick = (probeTick + 16) >>> 0 || 1;
+          soundFixture?.advanceToTick?.(probeTick);
+          layerFixture?.tickTweens(probeTick);
+          if (wait.tick(probeTick)) break;
+        }
+        advancedWaits++;
+        script.run(1000);
+        continue;
+      }
       if (!advanceWaits || !wait.pending || wait.clickPending || advancedWaits >= 1000000) break;
-      probeTick = (wait.deadlineTick + 1) >>> 0;
+      // 16 ms frames up to the deadline keep sound and video layers advancing meanwhile.
+      const deadline = (wait.deadlineTick + 1) >>> 0;
+      while (((deadline - probeTick) | 0) > 16) {
+        probeTick = (probeTick + 16) >>> 0 || 1;
+        soundFixture?.advanceToTick?.(probeTick);
+        layerFixture?.tickTweens(probeTick);
+      }
+      if (((deadline - probeTick) | 0) > 0) probeTick = deadline;
       advancedWaits++;
       soundFixture?.advanceToTick?.(probeTick);
       layerFixture?.tickTweens(probeTick);

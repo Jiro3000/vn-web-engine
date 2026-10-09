@@ -1041,7 +1041,7 @@ test('Timed wait preserves strict deadline, event/save/message ordering and zero
   assert.equal(wait.pending, true);
 });
 
-test('Input=2 skip bypasses setup; media and scenario=2 wait paths fail before effects', async () => {
+test('Input=2 skip bypasses setup; unowned video, se and scenario=2 waits fail before effects', async () => {
   const {ArtemisTimedWait} = await import('../dist/engines/artemis/wait.js');
   const {ArtemisModes} = await import('../dist/engines/artemis/modes.js');
   const {ArtemisSave} = await import('../dist/engines/artemis/save.js');
@@ -1083,8 +1083,8 @@ test('Input=2 skip bypasses setup; media and scenario=2 wait paths fail before e
   assert.equal(wait.dispatch(tag({input: '2', video: 'x'})), true);
   assert.equal(wait.pending, false);
   modes.setCommandSkip(false);
-  assert.throws(() => wait.dispatch(tag({video: 'x'})), /media waits/);
-  assert.throws(() => wait.dispatch(tag({se: 'x'})), /media waits/);
+  assert.throws(() => wait.dispatch(tag({video: 'x'})), /video wait owner/);
+  assert.throws(() => wait.dispatch(tag({se: 'x', video: 'x'})), /se waits/);
   assert.throws(() => wait.dispatch(tag({scenario: '2'})), /scenario=2/);
   assert.equal(wait.pending, false);
 });

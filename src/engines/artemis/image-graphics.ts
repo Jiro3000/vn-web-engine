@@ -20,6 +20,7 @@ import type {ArtemisScene} from './scene.js';
 import type {ArtemisAnimationFrames} from './animation-layer.js';
 import {ArtemisDisplayObject, artemisDisplayPoint} from './display-object.js';
 import {artemisRevision} from './revision.js';
+import type {ArtemisTheoraVideo} from './video.js';
 import {
   artemisHasRasterEffects,
   type ArtemisRasterPolicy,
@@ -70,12 +71,16 @@ export type ArtemisLayerServices = Pick<
   | 'animationError'
   | 'appendLayerCommand'
   | 'layerNotFound'
+  | 'readVideoFile'
+  | 'videoError'
 >;
 interface Texture {
   readonly id: number;
   readonly image: TriangleImage;
   references: number;
   readonly managed: boolean;
+  /** Video actor decoder; `uploaded` is the decoder revision held by the GPU texture. */
+  readonly video?: {readonly decoder: ArtemisTheoraVideo; uploaded: number; updated: boolean};
 }
 interface RenderNode {
   readonly id: string;
@@ -180,6 +185,55 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
   animationError(tag: AsbTag, error: 'not-found' | 'mode'): void {
     if (!this.services.animationError) throw Error('Unsupported Artemis animation error owner');
     this.services.animationError(tag, error);
+  }
+  readVideoFile(path: string): Promise<Uint8Array | null> {
+    if (!this.services.readVideoFile) throw Error('Unsupported Artemis video file owner');
+    return this.services.readVideoFile(path);
+  }
+  videoError(tag: AsbTag, error: 'not-found' | 'unsupported'): void {
+    if (!this.services.videoError) throw Error('Unsupported Artemis video error owner');
+    this.services.videoError(tag, error);
+  }
+  /** Video actor: an image actor whose texture is the decoder's RGBA surface. Copies share
+   * the decoder; releasing the last reference closes it. */
+  createVideoLayer(
+    decoder: ArtemisTheoraVideo,
+    anchor: {readonly x: number; readonly y: number},
+  ): ArtemisImageActor {
+    if (!this.clock) throw Error('Artemis video layers require a clock owner');
+    const image: TriangleImage = {
+      width: decoder.width,
+      height: decoder.height,
+      pixels: decoder.pixels,
+    };
+    this.target.prepareImage(image);
+    const texture: Texture = {
+      id: this.nextTexture++,
+      image,
+      references: 1,
+      managed: false,
+      video: {decoder, uploaded: decoder.revision, updated: false},
+    };
+    this.textures.set(texture.id, texture);
+    const display = new ArtemisDisplayObject(this.hash);
+    display.apply({anchorx: anchor.x, anchory: anchor.y});
+    const actor: ArtemisImageActor = {
+      texture: texture.id,
+      display,
+      shaderState: new ArtemisShaderProperties<object>(this.hash),
+      shaderConstants: new ArtemisShaderConstantStorage(this.hash),
+      wrapper: {alpha: 1},
+      raster: {layerMode: 'normal', negative: false, grayscale: false, colorMultiply: 0xffffff},
+      clip: {left: 0, top: 0, width: 0, height: 0, right: 0, bottom: 0},
+    };
+    this.wrappers.set(actor.wrapper, {references: 1, lease: undefined});
+    this.actors.add(actor);
+    return actor;
+  }
+  /** The video decoder of a video actor, or undefined for any other actor. */
+  videoOf(actor: ArtemisDisplayActor): ArtemisTheoraVideo | undefined {
+    this.checkActor(actor);
+    return actor.texture === null ? undefined : this.textures.get(actor.texture)!.video?.decoder;
   }
   appendLayerCommand(id: string, tag: AsbTag): void {
     if (!this.services.appendLayerCommand) throw Error('Unsupported Artemis layer command owner');
@@ -434,7 +488,8 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
     if (isAnimation(actor)) actor.animation.close();
     if (texture && --texture.references === 0) {
       this.textures.delete(texture.id);
-      this.images.delete(texture.image);
+      if (!texture.video) this.images.delete(texture.image);
+      texture.video?.decoder.close();
       if (!texture.managed) this.target.invalidate(texture.image);
     }
     const wrapper = this.wrappers.get(actor.wrapper)!;
@@ -568,6 +623,7 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
           signature.push(frame, frame.display.propertyRevision, this.changes.get(frame));
         } else if (child.actor?.texture === null)
           signature.push(this.wrappers.get(child.actor.wrapper)?.capture?.revision);
+        else if (child.actor) signature.push(this.videoFrame(child.actor));
         visit(child.children);
       }
     };
@@ -584,9 +640,28 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
     if (actor.animation.update(this.now)) this.changes.set(actor, this.nextChange++);
     return actor.animation.frame();
   }
+  /** Video update (CTheora slot +0x10) once per draw with the draw's clock sample; a new
+   * decoder revision re-uploads the texture. Returns the uploaded revision. */
+  private videoFrame(actor: ArtemisImageActor): number | undefined {
+    const video = this.check(actor).video;
+    if (!video) return undefined;
+    if (!video.updated) {
+      if (this.now === null) this.now = this.clock!.now() >>> 0;
+      video.decoder.update(this.now);
+      video.updated = true;
+      if (video.decoder.revision !== video.uploaded) {
+        const image = this.check(actor).image;
+        this.target.invalidate(image);
+        this.target.prepareImage(image);
+        video.uploaded = video.decoder.revision;
+      }
+    }
+    return video.uploaded;
+  }
   /** Retained GPU preparation in ascending native child order. */
   drawCommitted(scene: ArtemisScene<ArtemisDisplayActor>): DrawList {
     this.now = null;
+    for (const texture of this.textures.values()) if (texture.video) texture.video.updated = false;
     const commands: DrawCommand[] = [],
       updates: (() => void)[] = [];
     const shaderLoans: {release(): void}[] = [];
@@ -793,6 +868,7 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
             continue;
           }
           if (actor.texture !== null) {
+            this.videoFrame(actor);
             const image = this.check(actor).image;
             if (image.width > 0 && image.height > 0)
               quad(actor.texture, matrix, alpha, actor.raster, actor.clip, context, actor);

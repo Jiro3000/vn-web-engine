@@ -11,6 +11,7 @@ import {artemisLayerProperties, type ArtemisLayerPropertyPatch} from './layer-pr
 import {createSolidImage} from '../../graphics/solid-image.js';
 import {artemisHexUint32, artemisInteger} from './numbers.js';
 import {ArtemisAnimationFrames} from './animation-layer.js';
+import {ArtemisTheoraVideo, artemisVideoMaskName} from './video.js';
 
 function dimension(value: string): number {
   const token = /^[\t\n\v\f\r ]*([+-]?\d+)/.exec(value);
@@ -81,6 +82,12 @@ export interface ArtemisLayerHost<
   animationError?(tag: AsbTag, error: 'not-found' | 'mode'): void;
   /** Appends the tag to the id's command list (save object +0x68). */
   appendLayerCommand?(id: string, tag: AsbTag): void;
+  /** Pack-file open used by the video tag; null when the name does not exist. */
+  readVideoFile?(path: string): Promise<Uint8Array | null>;
+  /** Renderer vtbl+0x60 video actor holding the decoder (actor +0x88). */
+  createVideoLayer?(video: ArtemisTheoraVideo, anchor: {readonly x: number; readonly y: number}): T;
+  /** c7260 with 0x140372540 (`not-found`) or 0x140372518 (`unsupported`). */
+  videoError?(tag: AsbTag, error: 'not-found' | 'unsupported'): void;
 }
 
 /** anime keys that 0x140115650 never queries. */
@@ -206,8 +213,13 @@ export class ArtemisLayers<T extends object, I extends ArtemisImageDimensions = 
   /** `recordHistory` is the native replay flag; it applies to lydel/animedel and anime. */
   async dispatch(input: AsbTag, recordHistory = true): Promise<boolean> {
     if (this.closed) throw new Error('Artemis layer owner closed');
-    if (!['lyc', 'lydel', 'lyprop', 'anime', 'animedel'].includes(input.name)) return false;
+    if (!['lyc', 'lydel', 'lyprop', 'anime', 'animedel', 'video'].includes(input.name))
+      return false;
     if (this.pending !== null) throw new Error('Artemis layer resource operation already pending');
+    if (input.name === 'video') {
+      await this.video(input, recordHistory);
+      return true;
+    }
     if (input.name === 'anime') {
       await this.animation(input, recordHistory);
       return true;
@@ -429,5 +441,61 @@ export class ArtemisLayers<T extends object, I extends ArtemisImageDimensions = 
     // The layer's CAnimationLayer is updated in place, shared by any retained copy node.
     frames.add(frame, artemisInteger(read('time')));
     if (recordHistory) host.appendLayerCommand(id, tag);
+  }
+  /** video 0x1400e4650 with `id`: open `file`, then `file.mja`, then `file.ogv`; the
+   * decoder (CMja, then CTheora) takes the loop flag (`loop` present and not "0"),
+   * `delaymargin` goes to slot +0x20, the actor is anchored at its centre, the old layer
+   * is deleted (0x1400d6670) and the actor inserted. History empties the id's command
+   * list. CMja (`.mja`) and the fullscreen path without `id` are not implemented. */
+  private async video(input: AsbTag, recordHistory: boolean): Promise<void> {
+    const host = this.host;
+    if (!host.readVideoFile || !host.createVideoLayer || !host.videoError)
+      throw Error('Unsupported Artemis video layer owner');
+    const args = input.args;
+    if (!args.has('id')) throw Error('Unsupported Artemis fullscreen video');
+    const file = args.get('file') ?? '';
+    const token = ++this.generation;
+    this.pending = token;
+    let video: ArtemisTheoraVideo | null;
+    try {
+      let name = '',
+        bytes: Uint8Array | null = null;
+      for (const candidate of [file, file + '.mja', file + '.ogv']) {
+        bytes = await host.readVideoFile(candidate);
+        if (token !== this.generation) throw Error('Artemis layer resource operation cancelled');
+        if (bytes) {
+          name = candidate;
+          break;
+        }
+      }
+      if (!bytes) return host.videoError(input, 'not-found');
+      const loop = args.has('loop') && args.get('loop') !== '0';
+      const mask = await host.readVideoFile(artemisVideoMaskName(name));
+      if (token !== this.generation) throw Error('Artemis layer resource operation cancelled');
+      video = ArtemisTheoraVideo.open(this.hash, bytes, loop, mask);
+      if (!video) {
+        // CMja is tried first natively; its format is not implemented here.
+        if (!/^OggS/.test(String.fromCharCode(...bytes.subarray(0, 4))))
+          throw Error('Unsupported Artemis MJA video');
+        return host.videoError(input, 'unsupported');
+      }
+    } finally {
+      if (this.pending === token) this.pending = null;
+    }
+    if (args.has('delaymargin')) video.setDelayMargin(artemisInteger(args.get('delaymargin')!));
+    const layer = host.createVideoLayer(video, {
+      x: Math.fround(Math.fround(video.width) * 0.5),
+      y: Math.fround(Math.fround(video.height) * 0.5),
+    });
+    this.owned.add(layer);
+    const id = args.get('id')!;
+    try {
+      if (recordHistory) this.remove(id);
+      else this.scene.remove(id);
+      this.scene.set(id, layer);
+    } finally {
+      this.collect();
+    }
+    if (recordHistory) host.resetLayerCommands(id);
   }
 }

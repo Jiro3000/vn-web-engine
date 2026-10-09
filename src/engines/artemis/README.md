@@ -162,8 +162,10 @@ describes the progression. Timed waits keep the input=2 skip/debug-skip bypass, 
 absolute uint32 deadline comparison and the zero-deadline sentinel. Input=1 enters
 click-wait: the host receives scheduler state, the In callback and the native save
 request. Completion releases the scheduler, emits Out and updates message state.
-Automode, `scenario=2`, `se`/`video` media waits and skip-mode click-wait progression
-remain explicitly unsupported.
+`video=<id>` waits start no text display and end on the first frame where layer `id`
+is missing, is not a video layer or has finished playing (see [Video layers](#video-layers)).
+Automode, `scenario=2`, `se` waits and skip-mode click-wait progression remain explicitly
+unsupported.
 
 `save.ts` preserves the native save gate: empty filename/force=false/clean sf state
 performs no writes. A nonempty filename emits onSave before the scenario snapshot;
@@ -782,6 +784,36 @@ their own.
 `ArtemisImageGraphics` draws an animation actor with its own geometry and only the
 current frame as a child. Each `drawCommitted` samples its `clock` once and updates every
 drawn animation first, as the native draw passes (`0x1400b1240`, `0x1400b12a0`) do.
+
+## Video layers
+
+`video.ts` models the native CTheora object (vtable `0x1403636f8`) behind the `video`
+tag's layer path (`0x1400e4650` with `id`), decoding through `src/formats/theora`.
+
+- Open order is `file`, `file.mja`, `file.ogv`; a missing file reports
+  `videoError('not-found')`, a non-Theora Ogg reports `videoError('unsupported')`. CMja
+  (`.mja`) data and the fullscreen path without `id` are refused explicitly.
+- The `_m` mask (`stem_m.ext` of the opened name) decodes alongside; its luma is the
+  alpha channel at the main stream's picture offsets. Without a mask alpha is 0xff.
+- `loop` is on when present and not exactly `"0"`. `delaymargin` enables frame skipping:
+  when the clock is more than one frame behind and the delay exceeds the margin, the
+  target jumps by up to ceil(fps) frames and only intra frames are decoded on the way.
+- `update(now)` is slot +0x10: frame k is shown from `start + k * 1000/fps` ms (float32
+  arithmetic, as native). When data is exhausted and the target passes the last frame the
+  decoder closes and `onFinish` runs; `playing` turns false.
+- Conversion uses the native integer tables and 4:2:0 chroma indexing for every pixel
+  format, producing the picture region in RGBA.
+
+The layer is anchored at its centre, replaces the old layer like `lydel`, and outside
+replay empties the id's command list. `image-graphics.ts` draws a video actor as an
+image actor whose texture is re-uploaded when the decoder revision changes; the decoder
+is updated once per draw with the draw's clock sample, and closed when its last actor
+copy is released. `wait video=<id>` is described in
+[Timed waits and save requests](#timed-waits-and-save-requests).
+
+`tests/artemis-video.test.mjs` checks frame timing, conversion and mask alpha against an
+independent statement of the native formulas, delaymargin skipping, looping, the open
+order and errors, and the wait.
 
 ## Nonvisual resource geometry probe
 

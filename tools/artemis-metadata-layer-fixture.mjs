@@ -1,6 +1,7 @@
 /** Read-only geometry fixture for control-flow probing. It decodes only transition rule
- * images into native gray bytes, which are reported as hashes; it never prepares GPU
- * resources, displays game media or claims production rendering.
+ * images into native gray bytes and video layers through the native CTheora model, both
+ * reported as hashes and counters; it never prepares GPU resources, displays game media
+ * or claims production rendering.
  */
 import {createHash} from 'node:crypto';
 import {ArtemisImageLoader} from '../dist/engines/artemis/image-loader.js';
@@ -25,7 +26,9 @@ export function createMetadataLayerFixture(hash, readFile, runMode = null) {
   artemisRevision(hash);
   const loads = [],
     effects = [],
-    actors = new Set();
+    actors = new Set(),
+    // Video decoders shared by actor copies, with their reference counts.
+    videos = new Map();
   let sequence = 0,
     transitionState = 0,
     refreshState = 0;
@@ -120,6 +123,32 @@ export function createMetadataLayerFixture(hash, readFile, runMode = null) {
       return actor;
     },
     animationFrames: (actor) => actor.animation,
+    readVideoFile: async (path) => {
+      const bytes = await readFile(path);
+      loads.push({name: path, kind: 'video', bytes: bytes?.length ?? null});
+      return bytes;
+    },
+    createVideoLayer(video, anchor) {
+      const display = new ArtemisDisplayObject(hash);
+      display.apply({anchorx: anchor.x, anchory: anchor.y});
+      const actor = {
+        id: ++sequence,
+        kind: 'video',
+        video,
+        width: video.width,
+        height: video.height,
+        display,
+        wrapper: {alpha: 1},
+        properties: {},
+      };
+      videos.set(video, 1);
+      actors.add(actor);
+      effects.push({kind: 'video', width: video.width, height: video.height, mask: video.hasMask});
+      return actor;
+    },
+    videoError: (tag, error) => {
+      throw Error(`Probe video ${error}: ` + tag.args.get('file'));
+    },
     animationError: (tag, error) => {
       throw Error(`Probe animation ${error}: ` + tag.args.get('id'));
     },
@@ -139,6 +168,7 @@ export function createMetadataLayerFixture(hash, readFile, runMode = null) {
         shader: old.shader?.copy(),
       };
       if (actor.kind === 'message') actor.messageOwner.retain(actor.message);
+      if (actor.video) videos.set(actor.video, videos.get(actor.video) + 1);
       actors.add(actor);
       return actor;
     },
@@ -182,6 +212,14 @@ export function createMetadataLayerFixture(hash, readFile, runMode = null) {
       actor.shader?.close();
       actor.animation?.close();
       if (actor.kind === 'message') actor.messageOwner.release(actor.message);
+      if (actor.video) {
+        const references = videos.get(actor.video) - 1;
+        if (references) videos.set(actor.video, references);
+        else {
+          videos.delete(actor.video);
+          actor.video.close();
+        }
+      }
       effects.push({kind: 'release', actor: actor.id});
     },
     clearLayerCommands: (ids) => {
@@ -336,8 +374,13 @@ export function createMetadataLayerFixture(hash, readFile, runMode = null) {
     recordLayerProperties: host.recordLayerProperties,
   });
   return {
-    /** Steps every registered layer tween at the probe clock. */
-    tickTweens: (now) => tweens.tick(now),
+    /** Steps every registered layer tween and updates every video at the probe clock. */
+    tickTweens: (now) => {
+      tweens.tick(now);
+      for (const video of videos.keys()) video.update(now);
+    },
+    /** wait video= frame check: layer `id` is a video layer that is still playing. */
+    videoPlaying: (id) => layers.scene.entry(id)?.value?.video?.playing === true,
     get tweenSyncPending() {
       return tweenSync;
     },
@@ -400,7 +443,9 @@ export function createMetadataLayerFixture(hash, readFile, runMode = null) {
     /** trans runs synchronously except rule loads, which return a promise. */
     dispatchTransition: (tag) => transition.dispatch(tag),
     accepts: (tag) =>
-      ['lyc', 'lyprop', 'lydel', 'flip', 'lyevent', 'anime', 'animedel'].includes(tag.name),
+      ['lyc', 'lyprop', 'lydel', 'flip', 'lyevent', 'anime', 'animedel', 'video'].includes(
+        tag.name,
+      ),
     dispatch: (tag) =>
       tag.name === 'flip'
         ? Promise.resolve(stage.dispatch(tag))
@@ -439,6 +484,15 @@ export function createMetadataLayerFixture(hash, readFile, runMode = null) {
                 name: texture.name,
                 path: texture.resource.path,
               })),
+            }
+          : null,
+        video: entry.value?.video
+          ? {
+              playing: entry.value.video.playing,
+              mask: entry.value.video.hasMask,
+              ...entry.value.video.frame,
+              revision: entry.value.video.revision,
+              pixelsSha256: createHash('sha256').update(entry.value.video.pixels).digest('hex'),
             }
           : null,
         events: entry.value?.events

@@ -19,6 +19,9 @@ export interface ArtemisTimedWaitHost {
   clickWaitEvent(kind: 'in' | 'out'): void;
   /** 0x1400b6cf0 update after native state 0 clears wait flags. */
   resumeMessageState(): void;
+  /** Root layer lookup +0x140 cast to a video layer (0x1400f53d0), then its +0x208:
+   * false when the layer is missing, is not a video layer or has finished playing. */
+  videoPlaying?(id: string): boolean;
 }
 function integer(value: string): number {
   const token = /^[\t\n\v\f\r ]*([+-]?\d+)/.exec(value);
@@ -35,9 +38,10 @@ function integer(value: string): number {
  * (flag b99) ends once the current text display has completed. `@` sets no wait flag and
  * ends only on a click. All of them start the text display first. In run mode 1 a click
  * on a complete display ends the wait (writing `s.clickskip` when a wait flag is set); a
- * click on an incomplete display finishes it and writes `s.clickskip`. `scenario=2`,
- * `se`, `video`, automode, skip-mode click-wait progression and the debug-skip frame
- * branch need owners that are not implemented. */
+ * click on an incomplete display finishes it and writes `s.clickskip`. `video=<id>` (flag
+ * bc4, id bc8) starts no text display and ends once layer `id` is no longer a playing
+ * video. `scenario=2`, `se`, automode, skip-mode click-wait progression and the
+ * debug-skip frame branch need owners that are not implemented. */
 export class ArtemisTimedWait {
   private active = false;
   private inputEnabled = false;
@@ -45,6 +49,8 @@ export class ArtemisTimedWait {
   private scenario = false;
   /** `@`: no wait flag is set. */
   private click = false;
+  /** bc4/bc8: the layer id of a `video=` wait. */
+  private video: string | null = null;
   constructor(
     private readonly modes: ArtemisModes,
     private readonly save: ArtemisSave,
@@ -57,6 +63,10 @@ export class ArtemisTimedWait {
   get scenarioPending(): boolean {
     return this.active && this.scenario;
   }
+  /** A `video=` wait is pending (flag bc4). */
+  get videoPending(): boolean {
+    return this.active && this.video !== null;
+  }
   /** An `@` click-wait is pending. */
   get clickPending(): boolean {
     return this.active && this.click;
@@ -65,10 +75,12 @@ export class ArtemisTimedWait {
     return this.deadline;
   }
   /** Wait flags read by Lua `getScriptWaitReason` (0x1401315b0): `time` is b98 with the
-   * uint32 deadline b94; `textTween` is b99. textClearTween (b9a), sound (b9b) and video
-   * (bc4) belong to the unimplemented scenario=2 and media waits and are never set here. */
-  get reason(): {readonly time?: number; readonly textTween?: true} {
+   * uint32 deadline b94; `textTween` is b99; `video` is bc4 with the id bc8.
+   * textClearTween (b9a) and sound (b9b) belong to the unimplemented scenario=2 and se
+   * waits and are never set here. */
+  get reason(): {readonly time?: number; readonly textTween?: true; readonly video?: string} {
     if (!this.active || this.click) return {};
+    if (this.video !== null) return {video: this.video};
     return this.scenario ? {textTween: true} : {time: this.deadline};
   }
   dispatch(tag: AsbTag): boolean {
@@ -84,16 +96,21 @@ export class ArtemisTimedWait {
     // Native input=2 bypasses all wait setup while skip/debug-skip is active.
     if (input === 2 && (skipping || debugSkip)) return true;
     if (this.active) throw new Error('Artemis timed wait is already pending');
-    if (p.has('se') || p.has('video')) throw new Error('Artemis media waits are not implemented');
-    const scenario = integer(p.get('scenario') ?? '0');
+    if (p.has('se')) throw new Error('Artemis se waits are not implemented');
+    const video = p.get('video');
+    const scenario = video === undefined ? integer(p.get('scenario') ?? '0') : 0;
     if (scenario === 2) throw new Error('Artemis scenario=2 waits are not implemented');
     if (this.modes.automode)
       throw new Error('Artemis automode wait progression is not implemented');
+    if (video !== undefined && !this.host.videoPlaying)
+      throw new Error('Unsupported Artemis video wait owner');
     this.scenario = scenario === 1;
     this.click = false;
     this.deadline = 0;
+    this.video = video ?? null;
+    // The video branch starts no text display.
     if (this.scenario) this.host.startTextDisplay(false);
-    else {
+    else if (video === undefined) {
       this.deadline = (integer(p.get('time') ?? '0') + this.host.now()) >>> 0;
       this.host.startTextDisplay(skipping || debugSkip);
     }
@@ -153,6 +170,10 @@ export class ArtemisTimedWait {
       this.end();
       return true;
     }
+    if (this.video !== null && !this.host.videoPlaying!(this.video)) {
+      this.end();
+      return true;
+    }
     return false;
   }
   /** c6160(0): scheduler release precedes Out, then wait flags/message update. */
@@ -162,6 +183,7 @@ export class ArtemisTimedWait {
     this.deadline = 0;
     this.scenario = false;
     this.click = false;
+    this.video = null;
     this.active = false;
     this.host.resumeMessageState();
   }
