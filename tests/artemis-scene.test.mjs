@@ -554,6 +554,7 @@ const straightBlend = {
 async function rasterFixture(
   rasterPolicy = {filter: 'nearest', blend: straightBlend},
   surfaces = false,
+  clock = undefined,
 ) {
   const {ArtemisImageGraphics} = await import('../dist/engines/artemis/image-graphics.js');
   const {ArtemisLayers} = await import('../dist/engines/artemis/layers.js');
@@ -599,8 +600,12 @@ async function rasterFixture(
       recordLayerProperties: (tag) => effects.push(['record', tag.args.get('id')]),
       imageLoadFailed: (tag) => effects.push(['missing image', tag.args.get('file')]),
       layerNotFound: (tag) => effects.push(['missing layer', tag.args.get('id')]),
+      animationError: (tag, error) => effects.push(['animation', error, tag.args.get('id')]),
+      appendLayerCommand: (id, tag) => effects.push(['append', id, Object.fromEntries(tag.args)]),
     },
     rasterPolicy,
+    undefined,
+    clock,
   );
   const layers = new ArtemisLayers(
     revision,
@@ -667,6 +672,83 @@ test('Artemis raster owner prepares real decoded images, shares actor copies and
     assert.equal(graphics.drawCommitted(layers.scene).commands.length, 0);
     assert.throws(() => graphics.image(old.texture), /released/);
     assert.throws(() => graphics.copyImageLayer(old), /not owned|released/);
+  } finally {
+    layers.close();
+  }
+});
+
+test('Artemis anime builds a timed animation layer that draws its current frame by the clock', async () => {
+  let now = 1000;
+  const {graphics, layers, effects, invalidated, prepared} = await rasterFixture(undefined, false, {
+    now: () => now,
+  });
+  const uv = () => {
+    const quads = graphics.drawCommitted(layers.scene).commands;
+    assert.equal(quads.length, 1);
+    return [...quads[0].vertices].filter((_, i) => i % 9 >= 7);
+  };
+  const whole = [0, 0, 1, 0, 0, 1, 1, 1],
+    right = [0.5, 0, 1, 0, 0.5, 1, 1, 1];
+  try {
+    const anime = (args) => layers.dispatch(command('anime', {id: 'a', ...args}));
+    await anime({mode: 'init', file: 'synthetic', clip: '0,0,2,1', loop: '1'});
+    await anime({mode: 'add', file: 'synthetic', clip: '1,0,1,1', time: '100'});
+    await anime({mode: 'add', file: 'synthetic', clip: '0,0,2,1'}); // key 0 is ignored
+    await anime({mode: 'end', time: '200'});
+    await anime({mode: 'other'});
+    await layers.dispatch(command('anime', {id: 'missing', mode: 'end', time: '1'}));
+    assert.deepEqual(invalidated, [prepared[2]]);
+    assert.deepEqual(effects, [
+      ['reset', 'a'],
+      ['append', 'a', {id: 'a', mode: 'add', file: 'synthetic', clip: '1,0,1,1', time: '100'}],
+      ['append', 'a', {id: 'a', mode: 'add', file: 'synthetic', clip: '0,0,2,1', time: ''}],
+      ['append', 'a', {id: 'a', mode: 'end', time: '200'}],
+      ['animation', 'mode', 'a'],
+      ['animation', 'not-found', 'missing'],
+    ]);
+    const actor = layers.scene.entry('a').value,
+      frames = graphics.animationFrames(actor);
+    assert.deepEqual(
+      frames.entries().map(([time, frame]) => [time, frame !== null]),
+      [
+        [0, true],
+        [100, true],
+        [200, false],
+      ],
+    );
+    layers.commit();
+    assert.deepEqual(uv(), whole); // first draw starts the clock at 1000
+    now = 1099;
+    assert.deepEqual(uv(), whole);
+    now = 1100;
+    assert.deepEqual(uv(), right);
+    now = 1250; // end marker at 1200: one remaining loop restarts from key 0
+    assert.deepEqual(uv(), whole);
+    now = 1300;
+    assert.deepEqual(uv(), right);
+    now = 9000; // loop count exhausted: the last frame stays
+    assert.deepEqual(uv(), right);
+    assert.deepEqual(frames.state, {key: 100, loops: 0, started: true});
+
+    // A property edit copies the layer; the copy shares frames and advances on its own.
+    await layers.dispatch(command('lyprop', {id: 'a', left: '1'}));
+    const copy = layers.scene.entry('a').value;
+    assert.notEqual(copy, actor);
+    const frame = frames.entries()[0][1];
+    layers.commit();
+    assert.deepEqual(uv(), right);
+    assert.equal(graphics.copyImageLayer(frame) !== frame, true);
+    await layers.dispatch(command('lyc', {id: 'plain', file: 'synthetic'}));
+    await layers.dispatch(command('anime', {id: 'plain', mode: 'end', time: '5'}));
+    assert.deepEqual(effects.at(-1), ['animation', 'not-found', 'plain']);
+    await layers.dispatch(command('animedel', {id: 'a'}));
+    assert.deepEqual(effects.at(-1), ['clear', 'a']);
+    layers.commit();
+    assert.equal(layers.scene.entry('a'), undefined);
+    assert.throws(() => frames.frame(), /closed/);
+    // Loads 0-3: frame 0, frame 100, the ignored key-0 frame (released at once), plain.
+    // Deletion releases frame 100; the extra copy keeps frame 0.
+    assert.deepEqual(invalidated, [prepared[2], prepared[1]]);
   } finally {
     layers.close();
   }

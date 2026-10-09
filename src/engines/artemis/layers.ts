@@ -9,7 +9,8 @@ import type {
 import {ArtemisScene} from './scene.js';
 import {artemisLayerProperties, type ArtemisLayerPropertyPatch} from './layer-properties.js';
 import {createSolidImage} from '../../graphics/solid-image.js';
-import {artemisHexUint32} from './numbers.js';
+import {artemisHexUint32, artemisInteger} from './numbers.js';
+import {ArtemisAnimationFrames} from './animation-layer.js';
 
 function dimension(value: string): number {
   const token = /^[\t\n\v\f\r ]*([+-]?\d+)/.exec(value);
@@ -71,13 +72,26 @@ export interface ArtemisLayerHost<
   resetLayerCommands(id: string): void;
   /** Native load failure reports a script error and leaves the old layer intact. */
   imageLoadFailed(tag: AsbTag): void;
+  /** CAnimationLayer allocation (0x140101520, 0x1400b0db0) around its frame map. The
+   * owner closes the frames on release and copies them (sharing frames) on copy. */
+  createAnimationLayer?(frames: ArtemisAnimationFrames<T>): T;
+  /** 0x1400f8820: dynamic cast of a scene actor to CAnimationLayer. */
+  animationFrames?(layer: T): ArtemisAnimationFrames<T> | undefined;
+  /** c7260 with 0x140372360 (`not-found`) or 0x1403723a0 (`mode`). */
+  animationError?(tag: AsbTag, error: 'not-found' | 'mode'): void;
+  /** Appends the tag to the id's command list (save object +0x68). */
+  appendLayerCommand?(id: string, tag: AsbTag): void;
 }
+
+/** anime keys that 0x140115650 never queries. */
+const animationKeys = new Set(['mode', 'time', 'loop']);
 
 /** Ordinary image-backed lyc/lydel and image/direct-group lyprop subset.
  * Raster resources and command registrations remain required owner effects.
  */
 export class ArtemisLayers<T extends object, I extends ArtemisImageDimensions = TriangleImage> {
   readonly scene: ArtemisScene<T>;
+  private readonly hash: string;
   private generation = 0;
   private pending: number | null = null;
   private closed = false;
@@ -89,6 +103,7 @@ export class ArtemisLayers<T extends object, I extends ArtemisImageDimensions = 
     private readonly images: ArtemisImageSource<I>,
     private readonly host: ArtemisLayerHost<T, I>,
   ) {
+    this.hash = executableSha256;
     this.scene = new ArtemisScene(
       executableSha256,
       (layer) => this.released.push({kind: 'actor', layer}),
@@ -188,10 +203,20 @@ export class ArtemisLayers<T extends object, I extends ArtemisImageDimensions = 
       this.collect();
     }
   }
-  async dispatch(input: AsbTag): Promise<boolean> {
+  /** `recordHistory` is the native replay flag; it applies to lydel/animedel and anime. */
+  async dispatch(input: AsbTag, recordHistory = true): Promise<boolean> {
     if (this.closed) throw new Error('Artemis layer owner closed');
-    if (input.name !== 'lyc' && input.name !== 'lydel' && input.name !== 'lyprop') return false;
+    if (!['lyc', 'lydel', 'lyprop', 'anime', 'animedel'].includes(input.name)) return false;
     if (this.pending !== null) throw new Error('Artemis layer resource operation already pending');
+    if (input.name === 'anime') {
+      await this.animation(input, recordHistory);
+      return true;
+    }
+    // lydel and animedel both bind 0x1400d6670.
+    if (input.name === 'animedel') {
+      this.deleteLayer(input.args.get('id') ?? '', recordHistory);
+      return true;
+    }
     const tag: AsbTag = {...input, args: new Map(input.args)};
     const id = tag.args.get('id') ?? '';
     // Validate the supported key subset before any owner effects or asynchronous reads.
@@ -268,7 +293,8 @@ export class ArtemisLayers<T extends object, I extends ArtemisImageDimensions = 
     }
     if (tag.name === 'lydel') {
       try {
-        this.remove(id);
+        if (recordHistory) this.remove(id);
+        else this.scene.remove(id);
       } finally {
         this.collect();
       }
@@ -312,5 +338,96 @@ export class ArtemisLayers<T extends object, I extends ArtemisImageDimensions = 
         if (this.pending === token) this.pending = null;
       }
     }
+  }
+  /** anime 0x1400ddc70 outside capture mode. `init`/`add` load `file` as a frame actor
+   * (anchor at its centre, then the tag's 115650 properties); `init` replaces the layer
+   * with a fresh CAnimationLayer holding the frame at key 0, `add` stores the frame at
+   * `time` and `end` stores the end marker at `time` in the existing animation. History:
+   * `init` empties the id's command list, `add`/`end` append the tag. Error paths record
+   * nothing. std::map operator[] reads insert empty values into the recorded tag. */
+  private async animation(input: AsbTag, recordHistory: boolean): Promise<void> {
+    const host = this.host;
+    if (
+      !host.createAnimationLayer ||
+      !host.animationFrames ||
+      !host.animationError ||
+      !host.appendLayerCommand
+    )
+      throw Error('Unsupported Artemis animation layer owner');
+    if (host.creationMode() !== 0) throw Error('Unsupported Artemis capture-mode animation');
+    const args = new Map(input.args),
+      tag: AsbTag = {...input, args};
+    const read = (key: string): string => {
+      if (!args.has(key)) args.set(key, '');
+      return args.get(key)!;
+    };
+    const mode = read('mode');
+    let frame: T | null = null;
+    if (mode === 'init' || mode === 'add') {
+      const file = read('file');
+      if (args.has('mask')) throw Error('Unsupported Artemis animation mask owner');
+      const token = ++this.generation;
+      this.pending = token;
+      let resource: ArtemisLoadedImage<I | TriangleImage> | null = null;
+      try {
+        resource = await this.images.load(file);
+        if (token !== this.generation) throw Error('Artemis layer resource operation cancelled');
+        if (resource === null) return host.imageLoadFailed(tag);
+        frame = host.createImageLayer(resource, {
+          x: Math.fround(Math.fround(resource.image.width) * 0.5),
+          y: Math.fround(Math.fround(resource.image.height) * 0.5),
+        });
+        resource = null;
+      } finally {
+        try {
+          resource?.lease?.release();
+        } finally {
+          if (this.pending === token) this.pending = null;
+        }
+      }
+      try {
+        const properties = new Map([...args].filter(([key]) => !animationKeys.has(key)));
+        host.applyImageProperties(args.get('id') ?? '', frame, artemisLayerProperties(properties));
+      } catch (error) {
+        host.releaseImageLayer(frame);
+        throw error;
+      }
+    }
+    if (mode === 'init') {
+      const frames = ArtemisAnimationFrames.create<T>(this.hash, (value) =>
+        host.releaseImageLayer(value),
+      );
+      let layer: T;
+      try {
+        frames.reset(frame!);
+        if (args.has('loop')) frames.setLoop(artemisInteger(args.get('loop')!));
+        layer = host.createAnimationLayer(frames);
+      } catch (error) {
+        frames.close();
+        throw error;
+      }
+      this.owned.add(layer);
+      const id = read('id');
+      try {
+        if (recordHistory) this.remove(id);
+        else this.scene.remove(id);
+        this.scene.set(id, layer);
+      } finally {
+        this.collect();
+      }
+      if (recordHistory) host.resetLayerCommands(id);
+      return;
+    }
+    if (mode !== 'add' && mode !== 'end') return host.animationError(tag, 'mode');
+    const id = read('id'),
+      value = this.scene.entry(id)?.value,
+      frames = value === undefined ? undefined : host.animationFrames(value);
+    if (!frames) {
+      if (frame) host.releaseImageLayer(frame);
+      return host.animationError(tag, 'not-found');
+    }
+    // The layer's CAnimationLayer is updated in place, shared by any retained copy node.
+    frames.add(frame, artemisInteger(read('time')));
+    if (recordHistory) host.appendLayerCommand(id, tag);
   }
 }

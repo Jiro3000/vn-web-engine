@@ -101,11 +101,33 @@ export function createMetadataLayerFixture(hash, readFile, runMode = null) {
       actors.add(actor);
       return actor;
     },
+    // CAnimationLayer with the shared frame map; frames are ordinary image actors.
+    createAnimationLayer(animation) {
+      const actor = {
+        id: ++sequence,
+        kind: 'animation',
+        animation,
+        display: new ArtemisDisplayObject(hash),
+        wrapper: {alpha: 1},
+        properties: {},
+      };
+      actors.add(actor);
+      return actor;
+    },
+    animationFrames: (actor) => actor.animation,
+    animationError: (tag, error) => {
+      throw Error(`Probe animation ${error}: ` + tag.args.get('id'));
+    },
+    appendLayerCommand: (id, tag) => {
+      effects.push({kind: 'appendCommand', id, name: tag.name});
+      layerCommands.append(id, tag);
+    },
     copyImageLayer(old) {
       if (!actors.has(old)) throw Error('Probe actor released');
       const actor = {
         ...old,
         id: ++sequence,
+        animation: old.animation?.copy(),
         display: old.display.copy(),
         properties: {...old.properties},
         events: old.events?.copy(),
@@ -153,6 +175,7 @@ export function createMetadataLayerFixture(hash, readFile, runMode = null) {
     releaseImageLayer(actor) {
       if (!actors.delete(actor)) throw Error('Probe actor released twice');
       actor.shader?.close();
+      actor.animation?.close();
       if (actor.kind === 'message') actor.messageOwner.release(actor.message);
       effects.push({kind: 'release', actor: actor.id});
     },
@@ -331,7 +354,8 @@ export function createMetadataLayerFixture(hash, readFile, runMode = null) {
     },
     /** trans runs synchronously except rule loads, which return a promise. */
     dispatchTransition: (tag) => transition.dispatch(tag),
-    accepts: (tag) => ['lyc', 'lyprop', 'lydel', 'flip', 'lyevent'].includes(tag.name),
+    accepts: (tag) =>
+      ['lyc', 'lyprop', 'lydel', 'flip', 'lyevent', 'anime', 'animedel'].includes(tag.name),
     dispatch: (tag) =>
       tag.name === 'flip'
         ? Promise.resolve(stage.dispatch(tag))
@@ -353,6 +377,15 @@ export function createMetadataLayerFixture(hash, readFile, runMode = null) {
         width: entry.value?.width ?? null,
         height: entry.value?.height ?? null,
         properties: entry.value?.display.properties ?? null,
+        // Frame map keys with frame paths; null marks the cycle end.
+        animation: entry.value?.animation
+          ? {
+              ...entry.value.animation.state,
+              frames: entry.value.animation
+                .entries()
+                .map(([time, frame]) => ({time, path: frame?.path ?? null})),
+            }
+          : null,
         shader: entry.value?.shader
           ? {
               name: entry.value.shader.shaderName,

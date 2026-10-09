@@ -17,6 +17,7 @@ import type {
 } from './layer-properties.js';
 import type {ArtemisLoadedImage} from './image-loader.js';
 import type {ArtemisScene} from './scene.js';
+import type {ArtemisAnimationFrames} from './animation-layer.js';
 import {ArtemisDisplayObject, artemisDisplayPoint} from './display-object.js';
 import {artemisRevision} from './revision.js';
 import {
@@ -45,10 +46,20 @@ export interface ArtemisGroupActor {
   readonly display: ArtemisDisplayObject;
   readonly wrapper: {alpha: number};
 }
+/** CAnimationLayer: its own CLayer geometry, drawing only the current frame actor as a
+ * child (draw passes 0x1400b1240/0x1400b12a0). Its texture, clip and raster state are
+ * stored by 115650 but never drawn. */
+export interface ArtemisAnimationActor extends Omit<ArtemisGroupActor, 'texture'> {
+  readonly texture: null;
+  readonly animation: ArtemisAnimationFrames<ArtemisDisplayActor>;
+}
 export interface ArtemisImageShaderPrograms {
   bind(id: string): {shader: ArtemisDrawShaderResource; release(): void} | null;
 }
-export type ArtemisDisplayActor = ArtemisImageActor | ArtemisGroupActor;
+export type ArtemisDisplayActor = ArtemisImageActor | ArtemisGroupActor | ArtemisAnimationActor;
+function isAnimation(actor: ArtemisDisplayActor): actor is ArtemisAnimationActor {
+  return 'animation' in actor;
+}
 export type ArtemisLayerServices = Pick<
   ArtemisLayerHost<ArtemisDisplayActor>,
   | 'creationMode'
@@ -56,6 +67,8 @@ export type ArtemisLayerServices = Pick<
   | 'resetLayerCommands'
   | 'recordLayerProperties'
   | 'imageLoadFailed'
+  | 'animationError'
+  | 'appendLayerCommand'
   | 'layerNotFound'
 >;
 interface Texture {
@@ -126,6 +139,8 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
     private readonly services: ArtemisLayerServices,
     private readonly raster: ArtemisRasterPolicy,
     private readonly shaderPrograms?: ArtemisImageShaderPrograms,
+    /** timeGetTime after timeBeginPeriod(1); required only to draw animation layers. */
+    private readonly clock?: {now(): number},
   ) {
     this.hash = artemisRevision(executableSha256).executableSha256;
     if (![target.width, target.height].every((n) => Number.isInteger(n) && n > 0))
@@ -161,6 +176,14 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
   }
   layerNotFound(tag: AsbTag): void {
     this.services.layerNotFound(tag);
+  }
+  animationError(tag: AsbTag, error: 'not-found' | 'mode'): void {
+    if (!this.services.animationError) throw Error('Unsupported Artemis animation error owner');
+    this.services.animationError(tag, error);
+  }
+  appendLayerCommand(id: string, tag: AsbTag): void {
+    if (!this.services.appendLayerCommand) throw Error('Unsupported Artemis layer command owner');
+    this.services.appendLayerCommand(id, tag);
   }
   createImageLayer(
     resource: ArtemisLoadedImage,
@@ -220,6 +243,29 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
     this.actors.add(actor);
     return actor;
   }
+  createAnimationLayer(
+    animation: ArtemisAnimationFrames<ArtemisDisplayActor>,
+  ): ArtemisAnimationActor {
+    const actor: ArtemisAnimationActor = {
+      texture: null,
+      animation,
+      raster: {layerMode: 'normal', negative: false, grayscale: false, colorMultiply: 0xffffff},
+      clip: {left: 0, top: 0, width: 0, height: 0, right: 0, bottom: 0},
+      display: new ArtemisDisplayObject(this.hash),
+      shaderState: new ArtemisShaderProperties<object>(this.hash),
+      shaderConstants: new ArtemisShaderConstantStorage(this.hash),
+      wrapper: {alpha: 1},
+    };
+    this.wrappers.set(actor.wrapper, {references: 1, lease: undefined});
+    this.actors.add(actor);
+    return actor;
+  }
+  animationFrames(
+    actor: ArtemisDisplayActor,
+  ): ArtemisAnimationFrames<ArtemisDisplayActor> | undefined {
+    this.checkActor(actor);
+    return isAnimation(actor) ? actor.animation : undefined;
+  }
   private checkActor(actor: ArtemisDisplayActor): void {
     if (!this.actors.has(actor))
       throw new Error('Artemis image actor is not owned or was released');
@@ -240,6 +286,7 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
       shaderState: old.shaderState.copy(),
       shaderConstants: old.shaderConstants.copy(),
       raster: {...old.raster},
+      ...(isAnimation(old) ? {animation: old.animation.copy()} : {}),
     };
     if (old.texture !== null) this.check(old).references++;
     this.wrappers.get(actor.wrapper)!.references++;
@@ -384,6 +431,7 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
     const texture = actor.texture === null ? undefined : this.check(actor);
     this.actors.delete(actor);
     actor.shaderState.close();
+    if (isAnimation(actor)) actor.animation.close();
     if (texture && --texture.references === 0) {
       this.textures.delete(texture.id);
       this.images.delete(texture.image);
@@ -475,6 +523,13 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
           visit(node.children, actor ? actor.display.matrix(parent, this.raster.trig) : parent);
           continue;
         }
+        if (actor && isAnimation(actor)) {
+          visit(
+            [{id: node.id, actor: actor.animation.frame(), group: false, children: []}],
+            actor.display.matrix(parent, this.raster.trig),
+          );
+          continue;
+        }
         if (!actor || actor.texture === null) continue;
         const texture = this.check(actor),
           width = actor.clip.width !== 0 ? actor.clip.width : f(texture.image.width),
@@ -508,7 +563,10 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
           child.actor?.shaderState.propertyRevision,
           child.actor ? this.changes.get(child.actor) : undefined,
         );
-        if (child.actor?.texture === null)
+        if (child.actor && isAnimation(child.actor)) {
+          const frame = this.animationFrame(child.actor);
+          signature.push(frame, frame.display.propertyRevision, this.changes.get(frame));
+        } else if (child.actor?.texture === null)
           signature.push(this.wrappers.get(child.actor.wrapper)?.capture?.revision);
         visit(child.children);
       }
@@ -516,8 +574,19 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
     visit(node.children);
     return signature;
   }
+  private now: number | null = null;
+  /** Native update (0x140156400) precedes each draw pass; one clock sample per draw. */
+  private animationFrame(actor: ArtemisAnimationActor): ArtemisDisplayActor {
+    if (this.now === null) {
+      if (!this.clock) throw Error('Artemis animation layers require a clock owner');
+      this.now = this.clock.now() >>> 0;
+    }
+    if (actor.animation.update(this.now)) this.changes.set(actor, this.nextChange++);
+    return actor.animation.frame();
+  }
   /** Retained GPU preparation in ascending native child order. */
   drawCommitted(scene: ArtemisScene<ArtemisDisplayActor>): DrawList {
+    this.now = null;
     const commands: DrawCommand[] = [],
       updates: (() => void)[] = [];
     const shaderLoans: {release(): void}[] = [];
@@ -706,13 +775,23 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
             continue;
           }
           this.checkActor(actor);
-          if (node.group !== (actor.texture === null))
+          if (node.group !== (actor.texture === null && !isAnimation(actor)))
             throw new Error('Unsupported Artemis group raster owner');
           const p = actor.display.properties;
           if (p.xscale <= 0 || p.yscale <= 0) continue;
           const matrix = actor.display.worldMatrix(parent, this.raster.trig),
             alpha = f(parentAlpha * p.alpha);
           if (!p.visible || alpha < 2 ** -23) continue;
+          if (isAnimation(actor)) {
+            const frame = this.animationFrame(actor);
+            visit(
+              [{id: node.id, actor: frame, group: false, children: []}],
+              matrix,
+              alpha,
+              context,
+            );
+            continue;
+          }
           if (actor.texture !== null) {
             const image = this.check(actor).image;
             if (image.width > 0 && image.height > 0)

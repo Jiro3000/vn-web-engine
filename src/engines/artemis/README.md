@@ -725,6 +725,36 @@ owner keeps2x3 and paints expected RGB. This validates ownership and metadata
 policy, not byte-exact equality to the native JPEG library's DCT/color rounding.
 No real game JPEG was decoded or rendered.
 
+## Animation layers
+
+`anime` (`0x1400ddc70`) builds frame animations; `animedel` binds the `lydel` body
+(`0x1400d6670`). `ArtemisLayers.dispatch` handles both. Outside capture mode:
+
+- `init` and `add` load `file` into a frame actor (anchor at the image centre, then the
+  tag's `0x140115650` properties such as `clip`). A failed load reports the
+  file-not-found error. `mask` requires an owner that does not exist yet.
+- `init` deletes the id through the `lydel` body and inserts a new `CAnimationLayer`
+  holding the frame at key 0. `loop` sets the loop count (default -1, endless).
+- `add` stores the frame at key `time` of the existing animation; key 0 is ignored and
+  the frame released. `end` stores the end marker at `time`. Both update the layer in
+  place. A missing id or a non-animation layer reports
+  「指定されたアニメーションが見つかりません。」; any other `mode` reports the mode error.
+- History: `init` empties the id's command list; `add` and `end` append the tag, which
+  carries the empty values inserted by `std::map::operator[]` reads. Error paths record
+  nothing.
+
+`ArtemisAnimationFrames` (`animation-layer.ts`) is the `CAnimationLayer` state: a map
+from uint32 milliseconds to reference-counted frames, the start time, the current key and
+the loop count. `update(now)` (`0x140156400`) starts the clock on its first call and
+moves through every key whose time has elapsed. At the end marker it either stops on the
+last frame (loop count 0) or decrements a positive count, moves the start time by the
+marker key and restarts from key 0. Copies (`0x1400b0e90`) share frames but advance on
+their own.
+
+`ArtemisImageGraphics` draws an animation actor with its own geometry and only the
+current frame as a child. Each `drawCommitted` samples its `clock` once and updates every
+drawn animation first, as the native draw passes (`0x1400b1240`, `0x1400b12a0`) do.
+
 ## Nonvisual resource geometry probe
 
 Image codecs/resources and layer hosts can select a logical image-dimensions type;
@@ -746,6 +776,8 @@ Unknown/unimplemented actual property keys continue to refuse.
 The fixture records shader name, constants and texture leases through
 `ArtemisShaderProperties` without compiling programs. It steps layer tweens whenever the
 probe clock advances, and advances 16 ms frames while a `sync` tween holds run mode 4.
+Animation layers are recorded with their frame keys and paths; the fixture never draws
+them.
 Lua `.ipt` animation tables are preloaded with the other script sources.
 
 The real nonvisual probe, with explicit simulated dialog result and timed waits,
