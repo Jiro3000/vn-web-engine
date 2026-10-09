@@ -67,6 +67,8 @@ export class ArtemisFiles {
     return path;
   }
   async open(path: string): Promise<ByteSource | null> {
+    // The loose open 0x1401658c0 fails on an empty name, and no archive key is empty.
+    if (!path) return null;
     path = this.resolvePath(path);
     if (path.endsWith('/')) return null;
     const loose = await this.lookup(segments(path));

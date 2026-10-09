@@ -95,6 +95,8 @@ test('Artemis overlays continue across numeric gaps, retain the winning key and 
   assert.equal(Buffer.from(await files.read('script\\雪.ast')).toString(), 'late');
   assert.equal((await files.read('system/auth.lua')).byteLength, 0);
   assert.equal(await files.read('absent'), null);
+  // An empty name fails like the native loose open, so lyc can fall back to color.
+  assert.equal(await files.read(''), null);
   await assert.rejects(files.open('../outside'), /Unsupported/);
   await assert.rejects(files.open(':bg/file'), /Unsupported/);
 });
