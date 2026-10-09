@@ -164,8 +164,12 @@ click-wait: the host receives scheduler state, the In callback and the native sa
 request. Completion releases the scheduler, emits Out and updates message state.
 `video=<id>` waits start no text display and end on the first frame where layer `id`
 is missing, is not a video layer or has finished playing (see [Video layers](#video-layers)).
-Automode, `scenario=2`, `se` waits and skip-mode click-wait progression remain explicitly
-unsupported.
+`se=<id>` looks the id up in the seplay id→sound-index map. An id that was never
+registered returns without a wait or run-mode change; otherwise the wait starts no text
+display, reports `sound` as its wait reason, counts as a wait flag for `s.clickskip` and
+ends on the first frame where the sound manager reports that index stopped (a missing
+player counts as stopped). Automode, `scenario=2`, `se` with `time` and skip-mode
+click-wait progression remain explicitly unsupported.
 
 `save.ts` preserves the native save gate: empty filename/force=false/clean sf state
 performs no writes. A nonempty filename emits onSave before the scenario snapshot;

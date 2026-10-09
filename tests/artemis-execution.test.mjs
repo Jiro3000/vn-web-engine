@@ -1084,8 +1084,93 @@ test('Input=2 skip bypasses setup; unowned video, se and scenario=2 waits fail b
   assert.equal(wait.pending, false);
   modes.setCommandSkip(false);
   assert.throws(() => wait.dispatch(tag({video: 'x'})), /video wait owner/);
-  assert.throws(() => wait.dispatch(tag({se: 'x', video: 'x'})), /se waits/);
+  assert.throws(() => wait.dispatch(tag({se: 'x', video: 'x'})), /se wait owner/);
   assert.throws(() => wait.dispatch(tag({scenario: '2'})), /scenario=2/);
+  assert.equal(wait.pending, false);
+});
+
+test('wait se= follows the seplay index until the sound stops; unknown ids set no wait', async () => {
+  const {ArtemisTimedWait} = await import('../dist/engines/artemis/wait.js');
+  const {ArtemisModes} = await import('../dist/engines/artemis/modes.js');
+  const {ArtemisSave} = await import('../dist/engines/artemis/save.js');
+  const {ArtemisVariables} = await import('../dist/engines/artemis/variables.js');
+  const modes = new ArtemisModes({
+    writeStatus: () => {},
+    commandSkipChanged: () => {},
+    controlSkipChanged: () => {},
+    automodeChanged: () => {},
+    releaseScheduler: () => {},
+  });
+  const unexpected = () => assert.fail('unexpected effect');
+  const effects = [],
+    saves = [];
+  const save = new ArtemisSave(new ArtemisVariables(), {
+    reportEventError: unexpected,
+    beforeScenario: unexpected,
+    writeScenario: unexpected,
+    writeGlobal: unexpected,
+    writeSystem: unexpected,
+  });
+  save.request = (name) => saves.push(name);
+  let playing = true,
+    complete = true;
+  const wait = new ArtemisTimedWait(modes, save, {
+    now: () => 1,
+    debugSkipActive: () => false,
+    startTextDisplay: unexpected,
+    textDisplayComplete: () => complete,
+    finishTextDisplay: () => effects.push('finish'),
+    writeClickSkip: () => effects.push('clickskip'),
+    beginWait: (input) => effects.push({begin: input}),
+    endWait: () => effects.push('end'),
+    clickWaitEvent: (kind) => effects.push({event: kind}),
+    resumeMessageState: () => effects.push('resume'),
+    effectIndex: (id) => ({3: 7})[id],
+    effectPlaying: (index) => (effects.push({query: index}), playing),
+  });
+  const tag = (args) => ({
+    kind: 'tag',
+    name: 'wait',
+    sourceLine: -1,
+    args: new Map(Object.entries(args)),
+  });
+  // An id seplay never registered returns before any wait state, even with `time`.
+  assert.equal(wait.dispatch(tag({se: '9', time: '100', input: '1'})), true);
+  assert.equal(wait.pending, false);
+  assert.deepEqual(effects, []);
+  assert.throws(() => wait.dispatch(tag({se: '3', time: '100'})), /timed se/);
+
+  assert.equal(wait.dispatch(tag({se: '3', input: '1', video: 'v', scenario: '1'})), true);
+  assert.equal(wait.soundPending, true);
+  assert.equal(wait.videoPending, false);
+  assert.deepEqual(wait.reason, {sound: '3'});
+  assert.equal(wait.tick(16), false);
+  playing = false;
+  assert.equal(wait.tick(32), true);
+  assert.deepEqual(effects, [
+    {begin: true},
+    {event: 'in'},
+    {query: 7},
+    {query: 7},
+    'end',
+    {event: 'out'},
+    'resume',
+  ]);
+  assert.deepEqual(saves, ['']);
+
+  // input=1: a click on a complete display ends it and writes s.clickskip (flag b9b).
+  effects.length = 0;
+  playing = true;
+  wait.dispatch(tag({se: '3', input: '1'}));
+  assert.equal(wait.tick(48, true), true);
+  assert.deepEqual(effects, [
+    {begin: true},
+    {event: 'in'},
+    'clickskip',
+    'end',
+    {event: 'out'},
+    'resume',
+  ]);
   assert.equal(wait.pending, false);
 });
 

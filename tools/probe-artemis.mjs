@@ -461,6 +461,11 @@ try {
       }
     },
     resumeMessageState: () => modeEffects.push({resumeMessageState: true}),
+    effectIndex: (id) => effectSlots.get(id),
+    effectPlaying: (index) => {
+      if (!soundFixture?.effectPlaying) throw Error('Probe se waits require --sound-render');
+      return soundFixture.effectPlaying(index);
+    },
     videoPlaying: (id) => {
       if (!layerFixture) throw Error('Probe video waits require --image-metadata');
       return layerFixture.videoPlaying(id);
@@ -1071,10 +1076,10 @@ try {
         script.run(1000);
         continue;
       }
-      if (advanceWaits && wait.videoPending && advancedWaits < 1000000) {
-        // Deterministic 16 ms frames decode the video until it stops playing; no click.
+      if (advanceWaits && (wait.videoPending || wait.soundPending) && advancedWaits < 1000000) {
+        // Deterministic 16 ms frames play the video or se until it stops; no click.
         for (let frame = 0; ; frame++) {
-          if (frame >= 100000) throw Error('Probe video wait did not finish');
+          if (frame >= 100000) throw Error('Probe video/se wait did not finish');
           probeTick = (probeTick + 16) >>> 0 || 1;
           soundFixture?.advanceToTick?.(probeTick);
           layerFixture?.tickTweens(probeTick);

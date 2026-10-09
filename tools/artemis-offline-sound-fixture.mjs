@@ -59,6 +59,7 @@ export function createArtemisOfflineSoundFixture(hash, readFile) {
     setEffectPan: (index, pan, time) => owner.effects.setEffectPan(index, pan, time),
     startEffect: (index, time, loop) => owner.effects.startEffect(index, time, loop),
     setFinishCallback: (index, callback) => owner.effects.setFinishCallback(index, callback),
+    effectPlaying: (index) => owner.effects.isPlaying(index),
     prepareMusic: async (file, bufferMode) => {
       const index = await owner.music.prepareEffect(file, bufferMode);
       samples.push({music: true, file, bufferMode, index});

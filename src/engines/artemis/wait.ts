@@ -22,6 +22,11 @@ export interface ArtemisTimedWaitHost {
   /** Root layer lookup +0x140 cast to a video layer (0x1400f53d0), then its +0x208:
    * false when the layer is missing, is not a video layer or has finished playing. */
   videoPlaying?(id: string): boolean;
+  /** Script se map +0x3d88: the sound index registered by seplay for `id`. */
+  effectIndex?(id: string): number | undefined;
+  /** 0x1400adcf0: the sound manager's player state for `index` is nonzero (a missing
+   * player is 0). */
+  effectPlaying?(index: number): boolean;
 }
 function integer(value: string): number {
   const token = /^[\t\n\v\f\r ]*([+-]?\d+)/.exec(value);
@@ -40,8 +45,11 @@ function integer(value: string): number {
  * on a complete display ends the wait (writing `s.clickskip` when a wait flag is set); a
  * click on an incomplete display finishes it and writes `s.clickskip`. `video=<id>` (flag
  * bc4, id bc8) starts no text display and ends once layer `id` is no longer a playing
- * video. `scenario=2`, `se`, automode, skip-mode click-wait progression and the
- * debug-skip frame branch need owners that are not implemented. */
+ * video. `se=<id>` (flag b9b, index bc0) looks the id up in the seplay map; an unknown id
+ * sets no wait, otherwise the wait starts no text display and ends once the sound
+ * manager reports that index stopped (0x1400adcf0). `se` with `time`, `scenario=2`,
+ * automode, skip-mode click-wait progression and the debug-skip frame branch need owners
+ * that are not implemented. */
 export class ArtemisTimedWait {
   private active = false;
   private inputEnabled = false;
@@ -51,6 +59,8 @@ export class ArtemisTimedWait {
   private click = false;
   /** bc4/bc8: the layer id of a `video=` wait. */
   private video: string | null = null;
+  /** b9b/ba0/bc0: the se id and sound index of an `se=` wait. */
+  private sound: {readonly id: string; readonly index: number} | null = null;
   constructor(
     private readonly modes: ArtemisModes,
     private readonly save: ArtemisSave,
@@ -62,6 +72,10 @@ export class ArtemisTimedWait {
   /** A `scenario=1` wait is pending (flag b99). */
   get scenarioPending(): boolean {
     return this.active && this.scenario;
+  }
+  /** An `se=` wait is pending (flag b9b). */
+  get soundPending(): boolean {
+    return this.active && this.sound !== null;
   }
   /** A `video=` wait is pending (flag bc4). */
   get videoPending(): boolean {
@@ -75,11 +89,17 @@ export class ArtemisTimedWait {
     return this.deadline;
   }
   /** Wait flags read by Lua `getScriptWaitReason` (0x1401315b0): `time` is b98 with the
-   * uint32 deadline b94; `textTween` is b99; `video` is bc4 with the id bc8.
-   * textClearTween (b9a) and sound (b9b) belong to the unimplemented scenario=2 and se
-   * waits and are never set here. */
-  get reason(): {readonly time?: number; readonly textTween?: true; readonly video?: string} {
+   * uint32 deadline b94; `textTween` is b99; `sound` is b9b with the se id ba0; `video`
+   * is bc4 with the id bc8. textClearTween (b9a) belongs to the unimplemented scenario=2
+   * wait and is never set here. */
+  get reason(): {
+    readonly time?: number;
+    readonly textTween?: true;
+    readonly sound?: string;
+    readonly video?: string;
+  } {
     if (!this.active || this.click) return {};
+    if (this.sound !== null) return {sound: this.sound.id};
     if (this.video !== null) return {video: this.video};
     return this.scenario ? {textTween: true} : {time: this.deadline};
   }
@@ -96,9 +116,19 @@ export class ArtemisTimedWait {
     // Native input=2 bypasses all wait setup while skip/debug-skip is active.
     if (input === 2 && (skipping || debugSkip)) return true;
     if (this.active) throw new Error('Artemis timed wait is already pending');
-    if (p.has('se')) throw new Error('Artemis se waits are not implemented');
-    const video = p.get('video');
-    const scenario = video === undefined ? integer(p.get('scenario') ?? '0') : 0;
+    let sound: {id: string; index: number} | null = null;
+    if (p.has('se')) {
+      if (!this.host.effectIndex || !this.host.effectPlaying)
+        throw new Error('Unsupported Artemis se wait owner');
+      const id = p.get('se')!,
+        index = this.host.effectIndex(id);
+      // An se id seplay never registered sets no wait and leaves the run mode alone.
+      if (index === undefined) return true;
+      if (p.has('time')) throw new Error('Artemis timed se waits are not implemented');
+      sound = {id, index};
+    }
+    const video = sound ? undefined : p.get('video');
+    const scenario = video === undefined && !sound ? integer(p.get('scenario') ?? '0') : 0;
     if (scenario === 2) throw new Error('Artemis scenario=2 waits are not implemented');
     if (this.modes.automode)
       throw new Error('Artemis automode wait progression is not implemented');
@@ -108,9 +138,10 @@ export class ArtemisTimedWait {
     this.click = false;
     this.deadline = 0;
     this.video = video ?? null;
-    // The video branch starts no text display.
+    this.sound = sound;
+    // The se and video branches start no text display.
     if (this.scenario) this.host.startTextDisplay(false);
-    else if (video === undefined) {
+    else if (video === undefined && !sound) {
       this.deadline = (integer(p.get('time') ?? '0') + this.host.now()) >>> 0;
       this.host.startTextDisplay(skipping || debugSkip);
     }
@@ -170,6 +201,11 @@ export class ArtemisTimedWait {
       this.end();
       return true;
     }
+    if (this.sound !== null) {
+      if (this.host.effectPlaying!(this.sound.index)) return false;
+      this.end();
+      return true;
+    }
     if (this.video !== null && !this.host.videoPlaying!(this.video)) {
       this.end();
       return true;
@@ -184,6 +220,7 @@ export class ArtemisTimedWait {
     this.scenario = false;
     this.click = false;
     this.video = null;
+    this.sound = null;
     this.active = false;
     this.host.resumeMessageState();
   }
