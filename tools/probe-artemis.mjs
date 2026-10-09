@@ -278,7 +278,14 @@ try {
   let refusal = null;
   try {
     await runtime.boot();
-    while (script.state === 'waiting') {
+    let readySlices = 0;
+    while (script.state === 'waiting' || script.state === 'ready') {
+      if (script.state === 'ready') {
+        // A slice that used up its step budget leaves the script ready.
+        if (++readySlices >= 10000000) throw Error('Probe script slice budget exceeded');
+        script.run(1000);
+        continue;
+      }
       if (runtime.resourcePending) {
         if (resourceResumptions >= 10000000) throw Error('Probe resource budget exceeded');
         const settled = await runtime.settleResource();
@@ -373,7 +380,7 @@ try {
         for (let count = 0; ; count++) {
           if (count >= 100000) throw Error('Probe scenario wait did not finish');
           frame();
-          if (wait.tick(runtime.now)) break;
+          if (!wait.pending || wait.tick(runtime.now)) break;
         }
         advancedWaits++;
         script.run(1000);
@@ -384,7 +391,7 @@ try {
         for (let count = 0; ; count++) {
           if (count >= 100000) throw Error('Probe video/se wait did not finish');
           frame();
-          if (wait.tick(runtime.now)) break;
+          if (!wait.pending || wait.tick(runtime.now)) break;
         }
         advancedWaits++;
         script.run(1000);
@@ -396,7 +403,8 @@ try {
       while (((deadline - runtime.now) | 0) > 16) frame();
       advancedWaits++;
       runtime.advanceTo(((deadline - runtime.now) | 0) > 0 ? deadline : runtime.now);
-      if (!wait.tick(runtime.now)) break;
+      // A sound-finish handler may end the wait during the frames.
+      if (wait.pending && !wait.tick(runtime.now)) break;
       script.run(1000);
     }
   } catch (error) {
