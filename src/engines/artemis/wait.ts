@@ -64,6 +64,13 @@ export class ArtemisTimedWait {
   get deadlineTick(): number {
     return this.deadline;
   }
+  /** Wait flags read by Lua `getScriptWaitReason` (0x1401315b0): `time` is b98 with the
+   * uint32 deadline b94; `textTween` is b99. textClearTween (b9a), sound (b9b) and video
+   * (bc4) belong to the unimplemented scenario=2 and media waits and are never set here. */
+  get reason(): {readonly time?: number; readonly textTween?: true} {
+    if (!this.active || this.click) return {};
+    return this.scenario ? {textTween: true} : {time: this.deadline};
+  }
   dispatch(tag: AsbTag): boolean {
     if (tag.name === '@') {
       this.clickWait();

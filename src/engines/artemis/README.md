@@ -804,6 +804,25 @@ now creates the header-verified1920x1080 `:bg/black.png` layer and applies its
 forwarded properties. It stops at missing `getMousePoint`. This is control-flow
 progress through initialization, not playable game output or a rendered frame.
 
+## Lua random, wait reason and PNG comments
+
+Each method is bound only when its host owner exists.
+
+- `random` (`0x14012eb30`) returns the next sample of the script's boost::mt19937
+  (seeded with `(int)time(NULL)`) through a uniform [0, 0xffff] distribution.
+  `ArtemisRandom` reproduces it on the shared `Mt19937` (`src/core/mt19937.ts`); the
+  owner supplies the seed time.
+- `getScriptWaitReason` (`0x1401315b0`) returns a fresh table with one key per set wait
+  flag: `time` (the uint32 deadline), `textTween`/`textClearTween` (1), `sound`/`video`
+  (strings). `ArtemisTimedWait.reason` supplies `time` and `textTween`; the other flags
+  belong to unimplemented waits.
+- `loadPngComments` (`0x1401345b0`) reads the file through `readResource` and parses its
+  `tEXt` chunks with `readArtemisPngComments` (the native CPng comment walk: no CRC
+  checks, last keyword wins, success only at `IEND`). Non-string arguments, missing files
+  and unreadable files report the native Shift-JIS messages (`artemisLuaErrors`) at level
+  1 through `reportError` and return nil. With a coroutine owner a pending read suspends
+  the caller and the call repeats after the read completes.
+
 ## Lua pointer query
 
 `getMousePoint` is bound only when the Lua host supplies the shared

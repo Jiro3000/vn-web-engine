@@ -12,6 +12,7 @@ import {ArtemisEvents} from './events.js';
 import type {AsbTag} from '../../formats/artemis/asb.js';
 import type {PointerPositionHost} from '../../input/cursor-host.js';
 import {windowsTextFileBytes} from '../../platform/windows-text-file.js';
+import {readArtemisPngComments} from './png-comments.js';
 
 export interface ArtemisLuaHost {
   /** Synchronous prepared byte sources; null means the file does not exist. */
@@ -45,7 +46,37 @@ export interface ArtemisLuaHost {
   /** Missing/non-string Lua argument queries the whole queue; a string queries its name. */
   isLoadingSurface?(path?: string): boolean;
   scriptStack?(): readonly import('./script.js').ArtemisScriptStackFrame[];
+  /** Lua `random` (0x14012eb30): the script's uniform [0, 0xffff] sample (ArtemisRandom). */
+  random?(): number;
+  /** Lua `getScriptWaitReason` (0x1401315b0): the script wait flags (ArtemisTimedWait.reason). */
+  scriptWaitReason?(): {
+    readonly time?: number;
+    readonly textTween?: true;
+    readonly textClearTween?: true;
+    readonly sound?: Uint8Array;
+    readonly video?: Uint8Array;
+  };
+  /** Blocking CArtemisPackFile read used by `loadPngComments`; null is an open failure. A
+   * pending read suspends the calling coroutine and the call is repeated on resume. */
+  readResource?(path: string): Uint8Array | null | 'suspended';
+  /** 0x14012d490 level 1 report of a native Shift-JIS message (converted only when the
+   * script text mode +0xaf0 is nonzero, which this owner does not model). */
+  reportError?(message: Uint8Array): void;
 }
+// 0x140375c08, 0x140375b78 and 0x140375ba8 (Shift-JIS).
+const sjis = (hex: string) =>
+  Uint8Array.from(hex.match(/../g)!.map((byte) => Number.parseInt(byte, 16)));
+const pngCommentsPrefix = '6c6f6164506e67436f6d6d656e7473';
+export const artemisLuaErrors = {
+  pngCommentsArgument: sjis(pngCommentsPrefix + '82cc88f8909482aa957390b382c582b7'),
+  pngCommentsMissing: sjis(
+    pngCommentsPrefix + '82c591ce8fdb82cc837483408343838b82aa8ca982c282a982e882dc82b982f1',
+  ),
+  pngCommentsUnreadable: sjis(
+    pngCommentsPrefix +
+      '82c591ce8fdb82cc837483408343838b82a982e7835283818393836782f093c782dd8d9e82df82dc82b982f1',
+  ),
+} as const;
 
 /** Rev.3179 CLua's confirmed byte-string and tag bridge. Unbound methods fail. */
 export class ArtemisLua {
@@ -209,6 +240,50 @@ export class ArtemisLua {
         ];
       });
     this.vm.bind('now', () => [Math.trunc(host.now()) & 0x7fffffff]);
+    if (host.random)
+      this.vm.bind('random', () => {
+        const value = host.random!();
+        if (!Number.isInteger(value) || value < 0 || value > 0xffff)
+          throw Error('Invalid Artemis random value');
+        return [value];
+      });
+    if (host.scriptWaitReason)
+      this.vm.bind('getScriptWaitReason', () => {
+        const reason = host.scriptWaitReason!();
+        const table: LuaTable = new Map();
+        // b94 is pushed as (double)(uint32).
+        if (reason.time !== undefined) table.set('time', reason.time >>> 0);
+        if (reason.textTween) table.set('textTween', 1);
+        if (reason.textClearTween) table.set('textClearTween', 1);
+        if (reason.sound) table.set('sound', reason.sound);
+        if (reason.video) table.set('video', reason.video);
+        return [table];
+      });
+    if (host.readResource && host.reportError)
+      // With a coroutine owner it returns (suspended, result) and the wrapper below repeats
+      // suspended calls.
+      this.vm.bind('loadPngComments', (args) => {
+        const value = args[0];
+        const result = (table: LuaTable | null) =>
+          host.suspendableTags ? [false, table] : [table];
+        const report = (message: Uint8Array) => {
+          host.reportError!(message);
+          return result(null);
+        };
+        // luabind type 4: only Lua strings; numbers are not converted.
+        if (!(value instanceof Uint8Array)) return report(artemisLuaErrors.pngCommentsArgument);
+        const nul = value.indexOf(0);
+        const bytes = host.readResource!(luaText(nul < 0 ? value : value.subarray(0, nul)));
+        if (bytes === 'suspended') {
+          if (!host.suspendableTags)
+            throw new Error('Artemis resource read suspension requires a coroutine owner');
+          return [true];
+        }
+        if (bytes === null) return report(artemisLuaErrors.pngCommentsMissing);
+        const comments = readArtemisPngComments(bytes);
+        if (!comments) return report(artemisLuaErrors.pngCommentsUnreadable);
+        return result(new Map<string | number | boolean, LuaValue>(comments));
+      });
     this.vm.bind('file', (args) => [host.readFile(luaText(args[0]))]);
     this.vm.bind('isFileExists', (args) => [host.fileExists(luaText(args[0]))]);
     this.vm.bind('include', (args) => {
@@ -252,6 +327,19 @@ export class ArtemisLua {
             if ok == false then resourceFailure(self, message) end
           end
         end
+      ${
+        host.readResource && host.reportError
+          ? `local nativeLoadPngComments = engine.loadPngComments
+        engine.loadPngComments = function(self, path)
+          while true do
+            local suspended, result = nativeLoadPngComments(self, path)
+            if not suspended then return result end
+            local ok, message = coroutine.yield()
+            if ok == false then resourceFailure(self, message) end
+          end
+        end`
+          : ''
+      }
       ${
         host.bindSurface
           ? `local nativeBindSurface = engine.bindSurface

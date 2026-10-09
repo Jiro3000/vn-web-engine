@@ -59,6 +59,7 @@ import {BrowserWindowsDynamicLibraryHost} from '../dist/platform/windows-dynamic
 import {ArtemisModes} from '../dist/engines/artemis/modes.js';
 import {ArtemisExec} from '../dist/engines/artemis/exec.js';
 import {ArtemisStop} from '../dist/engines/artemis/stop.js';
+import {ArtemisRandom} from '../dist/engines/artemis/random.js';
 import {artemisInteger} from '../dist/engines/artemis/numbers.js';
 import {createArtemisScriptEvents} from '../dist/engines/artemis/script-events.js';
 import {luaText} from '../dist/core/lua51/runtime.js';
@@ -801,6 +802,7 @@ try {
     }
     throw new Error(`Unsupported native Artemis tag ${tag.name}`);
   };
+  const random = new ArtemisRandom(executableSha256, 1733961600);
   lua = new ArtemisLua({
     ...(surfaceFixture
       ? {
@@ -838,6 +840,27 @@ try {
       includes.push(path);
       return readFile(path);
     },
+    // SIMULATED seed: a fixed Unix time keeps probe runs deterministic.
+    random: () => random.next(),
+    scriptWaitReason: () => wait.reason,
+    // Unprepared files are read asynchronously, then the Lua call repeats.
+    readResource: (path) => {
+      const resolved = installation.files.resolvePath(path);
+      if (prepared.has(resolved)) return prepared.get(resolved);
+      if (!installation.paths.has(resolved)) return null;
+      if (pendingResource) throw Error('Probe Lua resource read overlaps');
+      pendingResource = installation.files.read(path).then((bytes) => {
+        if (bytes === null) throw Error('Probe Lua resource disappeared: ' + path);
+        prepared.set(resolved, bytes);
+      });
+      return 'suspended';
+    },
+    reportError: (message) =>
+      luaCallErrors.push({
+        engineMethod: true,
+        message: new TextDecoder('shift_jis').decode(message),
+        severity: 1,
+      }),
     fileExists: (path) => installation.paths.has(installation.files.resolvePath(path)),
     setMagicPath: (name, root) => {
       installation.files.setMagicPath(name, root);

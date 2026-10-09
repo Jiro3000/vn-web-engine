@@ -2028,6 +2028,90 @@ test('Suspended tag filters preserve original native arguments and first-result 
   }
 });
 
+test('Artemis Lua random, wait reasons and PNG comments follow the native engine methods', async () => {
+  const {Mt19937} = await import('../dist/core/mt19937.js');
+  const {ArtemisRandom} = await import('../dist/engines/artemis/random.js');
+  const {artemisLuaErrors} = await import('../dist/engines/artemis/lua.js');
+  const {ARTEMIS_3179_EXECUTABLE_SHA256} = await import('../dist/engines/artemis/revision.js');
+  const {png, chunk} = await import('./png-fixtures.mjs');
+  // Reference MT19937 outputs for the default seed 5489.
+  const mt = new Mt19937(5489);
+  assert.deepEqual([mt.next(), mt.next()], [3499211612, 581869302]);
+  for (let i = 2; i < 9999; i++) mt.next();
+  assert.equal(mt.next(), 4123659995);
+  const random = new ArtemisRandom(ARTEMIS_3179_EXECUTABLE_SHA256, 5489.9);
+  assert.equal(random.next(), 3499211612 % 0x10000);
+  const text = (keyword, value) =>
+    chunk('tEXt', Buffer.concat([Buffer.from(keyword + '\0'), value]));
+  const files = new Map([
+    [
+      'fg.png',
+      png({
+        width: 1,
+        height: 1,
+        raw: Buffer.from([0, 1, 2, 3, 4]),
+        extras: [
+          text('comment', Buffer.from('old')),
+          text('comment', Buffer.from('pos,10,20\0ignored')),
+          text('Title', Buffer.from([0x82, 0xa0])),
+        ],
+      }),
+    ],
+    ['bad.png', Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0])],
+  ]);
+  const reports = [];
+  let reason = {};
+  const lua = new ArtemisLua({
+    readFile: () => null,
+    fileExists: () => false,
+    now: () => 0,
+    variable: () => '',
+    tag: () => {},
+    enqueueTag: () => {},
+    random: () => random.next(),
+    scriptWaitReason: () => reason,
+    readResource: (path) => files.get(path) ?? null,
+    reportError: (message) => reports.push(message),
+  });
+  try {
+    lua.vm.execute(
+      bytes(`r = engine:random()
+        p = engine:loadPngComments('fg.png'); c = p.comment; t = p.Title
+        missing = engine:loadPngComments('none.png')
+        bad = engine:loadPngComments('bad.png')
+        arg = engine:loadPngComments(1)
+        w0 = engine:getScriptWaitReason()`),
+      'methods',
+    );
+    assert.equal(lua.vm.getGlobal('r'), 581869302 % 0x10000);
+    assert.deepEqual(new TextDecoder().decode(lua.vm.getGlobal('c')), 'pos,10,20');
+    assert.deepEqual([...lua.vm.getGlobal('t')], [0x82, 0xa0]);
+    assert.equal(lua.vm.getGlobal('missing'), null);
+    assert.equal(lua.vm.getGlobal('bad'), null);
+    assert.equal(lua.vm.getGlobal('arg'), null);
+    assert.deepEqual(reports, [
+      artemisLuaErrors.pngCommentsMissing,
+      artemisLuaErrors.pngCommentsUnreadable,
+      artemisLuaErrors.pngCommentsArgument,
+    ]);
+    reason = {time: 0xfffffff0};
+    lua.vm.execute(
+      bytes(`w = engine:getScriptWaitReason(); time = w.time; tween = w.textTween`),
+      'w',
+    );
+    assert.equal(lua.vm.getGlobal('time'), 0xfffffff0);
+    assert.equal(lua.vm.getGlobal('tween'), null);
+    reason = {textTween: true};
+    lua.vm.execute(
+      bytes(`w = engine:getScriptWaitReason(); time = w.time; tween = w.textTween`),
+      'w',
+    );
+    assert.deepEqual([lua.vm.getGlobal('time'), lua.vm.getGlobal('tween')], [null, 1]);
+  } finally {
+    lua.close();
+  }
+});
+
 test('Artemis Lua mouse points use live providers, native float32 widening and fresh named coordinate tables', () => {
   let reads = 0;
   const point = {x: 16777217, y: -0.1};
