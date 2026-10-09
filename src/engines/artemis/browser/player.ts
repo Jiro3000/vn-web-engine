@@ -34,6 +34,7 @@ import {artemisRuntimeSound} from '../runtime-sound.js';
 import {ArtemisSurfaceManager} from '../surface-manager.js';
 import {ArtemisTextGlyphs} from '../text-glyphs.js';
 import {createArtemisBrowserLayers, type ArtemisBrowserLayers} from './layers.js';
+import {VirtualKeyState} from '../../../input/virtual-keys.js';
 
 export interface ArtemisBrowserPlayerOptions {
   readonly document: Document;
@@ -58,9 +59,8 @@ export interface ArtemisBrowserPlayerOptions {
   exit(error: unknown): void;
 }
 
-const VK_LBUTTON = 1,
-  VK_RBUTTON = 2;
-const NO_INPUT: ArtemisFrameInput = {click: false, cancel: false, layerEvents: [], keys: []};
+// Mouse buttons 0..2 as virtual keys; the wheel notches are keys 136 (up) and 137 (down).
+const VK_BUTTONS = [1, 4, 2] as const;
 /** The browser's float trigonometry for layer rotation; the native engine uses the CRT
  * sinf/cosf, which agree with correctly rounded results for ordinary angles. */
 const trig = (radians: number) => ({
@@ -97,12 +97,12 @@ export class ArtemisBrowserPlayer {
   /** Pointer position in stage coordinates. */
   private pointer = {x: 0, y: 0};
   private hovered: string | null = null;
-  private pending: {
-    click: boolean;
-    cancel: boolean;
-    layerEvents: {id: string; type: ArtemisLayerEventType}[];
-    keys: number[];
-  } = {click: false, cancel: false, layerEvents: [], keys: []};
+  private pending: {layerEvents: {id: string; type: ArtemisLayerEventType}[]} = {
+    layerEvents: [],
+  };
+  private readonly keys = new VirtualKeyState();
+  private wheel: (136 | 137)[] = [];
+  private pointerInside = false;
   private readonly abort = new AbortController();
 
   constructor(private readonly options: ArtemisBrowserPlayerOptions) {
@@ -361,8 +361,16 @@ export class ArtemisBrowserPlayer {
       if (this.settling) runtime.advanceTo(this.now);
       else {
         this.hover();
-        const input = this.pending;
-        this.pending = {click: false, cancel: false, layerEvents: [], keys: []};
+        const input: ArtemisFrameInput = {
+          sample: {
+            down: this.keys.sample(),
+            wheel: this.wheel,
+            pointerInside: this.pointerInside,
+          },
+          layerEvents: this.pending.layerEvents,
+        };
+        this.pending = {layerEvents: []};
+        this.wheel = [];
         runtime.frame(this.now, input);
         if (runtime.resourcePending) this.settle(runtime);
       }
@@ -425,7 +433,17 @@ export class ArtemisBrowserPlayer {
     panel.addEventListener(
       'pointermove',
       (event) => {
-        if (game(event)) this.pointer = this.point(event);
+        if (!game(event)) return;
+        this.pointer = this.point(event);
+        this.pointerInside = true;
+      },
+      {signal},
+    );
+    // The canvas is the client area of the key 1 and 2 queries.
+    canvas.addEventListener(
+      'pointerleave',
+      () => {
+        this.pointerInside = false;
       },
       {signal},
     );
@@ -434,22 +452,38 @@ export class ArtemisBrowserPlayer {
       (event) => {
         if (!game(event)) return;
         this.pointer = this.point(event);
+        this.pointerInside = true;
         canvas.focus({preventScroll: true});
+        const key = VK_BUTTONS[event.button as 0 | 1 | 2];
+        if (key !== undefined) this.keys.press(key);
         if (event.button === 0) {
-          this.pending.click = true;
-          this.pending.keys.push(VK_LBUTTON);
           this.hover();
           if (
             this.hovered !== null &&
             this.layers?.eventLayers('click', true).includes(this.hovered)
           )
             this.pending.layerEvents.push({id: this.hovered, type: 'click'});
-        } else if (event.button === 2) {
-          this.pending.cancel = true;
-          this.pending.keys.push(VK_RBUTTON);
         }
       },
       {signal},
+    );
+    // A button released anywhere is up.
+    for (const type of ['pointerup', 'pointercancel'] as const)
+      this.options.document.addEventListener(
+        type,
+        (event) => {
+          const key = VK_BUTTONS[event.button as 0 | 1 | 2];
+          if (key !== undefined) this.keys.release(key);
+        },
+        {signal},
+      );
+    canvas.addEventListener(
+      'wheel',
+      (event) => {
+        if (event.deltaY) this.wheel.push(event.deltaY < 0 ? 136 : 137);
+        event.preventDefault();
+      },
+      {signal, passive: false},
     );
     panel.addEventListener(
       'contextmenu',
@@ -461,16 +495,18 @@ export class ArtemisBrowserPlayer {
     canvas.addEventListener(
       'keydown',
       (event) => {
-        if (event.repeat || event.altKey || event.metaKey) return;
+        if (event.repeat || event.metaKey) return;
         // Virtual-key codes: KeyboardEvent.keyCode carries the Windows VK for these keys.
         const key = event.keyCode;
         if (key > 0 && key < 256) {
-          this.pending.keys.push(key);
+          this.keys.press(key);
           event.preventDefault();
         }
       },
       {signal},
     );
+    canvas.addEventListener('keyup', (event) => this.keys.release(event.keyCode), {signal});
+    canvas.addEventListener('blur', () => this.keys.releaseAll(), {signal});
   }
   private fail(error: unknown): void {
     if (this.closed) return;

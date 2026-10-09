@@ -62,6 +62,16 @@ export interface ArtemisLuaHost {
   /** 0x14012d490 level 1 report of a native Shift-JIS message (converted only when the
    * script text mode +0xaf0 is nonzero, which this owner does not model). */
   reportError?(message: Uint8Array): void;
+  /** CArtemisInput queries and `overrideKey` (ArtemisInput). */
+  input?: Pick<import('./input.js').ArtemisInput, 'query' | 'override'>;
+  /** Lua `getScriptStatus`/`setScriptStatus` (0x140131480): run mode c70 of the current
+   * caret; the setter stores c74 = c70, c70 = `mode`. */
+  scriptStatus?(): number;
+  setScriptStatus?(mode: number): void;
+  /** Lua `getFrameNumber`: the frame counter +0xf0. */
+  frameNumber?(): number;
+  /** The touch device: `getTouchCount` (virtual +0x18) and `setUseTouchHold` (+0x30). */
+  touch?: {count(): number; setHold(enabled: boolean): void};
 }
 // 0x140375c08, 0x140375b78 and 0x140375ba8 (Shift-JIS).
 const sjis = (hex: string) =>
@@ -77,6 +87,15 @@ export const artemisLuaErrors = {
       '82c591ce8fdb82cc837483408343838b82a982e7835283818393836782f093c782dd8d9e82df82dc82b982f1',
   ),
 } as const;
+// `<name>の引数が不正です` (0x140375910..0x140375d68).
+const argumentError = (name: string) =>
+  sjis(
+    [...new TextEncoder().encode(name)].map((byte) => byte.toString(16).padStart(2, '0')).join('') +
+      '82cc88f8909482aa957390b382c582b7',
+  );
+/** luabind number conversion to a native int (cvttsd2si: out of range is 0x80000000). */
+const nativeInt = (value: number) =>
+  Number.isFinite(value) && Math.abs(value) < 2 ** 31 ? Math.trunc(value) : -0x80000000;
 
 /** Rev.3179 CLua's confirmed byte-string and tag bridge. Unbound methods fail. */
 export class ArtemisLua {
@@ -240,6 +259,64 @@ export class ArtemisLua {
         ];
       });
     this.vm.bind('now', () => [Math.trunc(host.now()) & 0x7fffffff]);
+    if (host.input && host.reportError) {
+      const input = host.input;
+      // Each query takes a Lua number (type 3); another argument reports and returns nil.
+      for (const [name, kind] of [
+        ['isPush', 'push'],
+        ['isDown', 'down'],
+        ['isDownEdge', 'downEdge'],
+        ['isUpEdge', 'upEdge'],
+        ['isDecide', 'decide'],
+      ] as const) {
+        const error = argumentError(name);
+        this.vm.bind(name, (args) => {
+          const key = args[0];
+          if (typeof key !== 'number') {
+            host.reportError!(error);
+            return [];
+          }
+          return [input.query(kind, nativeInt(key))];
+        });
+      }
+      const overrideError = argumentError('overrideKey');
+      this.vm.bind('overrideKey', (args) => {
+        const table = args[0];
+        if (!(table instanceof Map)) {
+          host.reportError!(overrideError);
+          return [];
+        }
+        // Only number fields count; other field types leave the default.
+        const field = (name: string) => {
+          const value = table.get(name);
+          return typeof value === 'number' ? nativeInt(value) : undefined;
+        };
+        if (!input.override(field('key'), field('status'))) host.reportError!(overrideError);
+        return [];
+      });
+    }
+    if (host.scriptStatus && host.setScriptStatus && host.reportError) {
+      this.vm.bind('getScriptStatus', () => [host.scriptStatus!()]);
+      const error = argumentError('setScriptStatus');
+      this.vm.bind('setScriptStatus', (args) => {
+        const mode = args[0];
+        if (typeof mode !== 'number') host.reportError!(error);
+        else host.setScriptStatus!(nativeInt(mode));
+        return [];
+      });
+    }
+    if (host.frameNumber) this.vm.bind('getFrameNumber', () => [host.frameNumber!() & 0x7fffffff]);
+    if (host.touch && host.reportError) {
+      const touch = host.touch;
+      this.vm.bind('getTouchCount', () => [touch.count() | 0]);
+      const error = argumentError('setUseTouchHold');
+      this.vm.bind('setUseTouchHold', (args) => {
+        const enabled = args[0];
+        if (typeof enabled !== 'boolean') host.reportError!(error);
+        else touch.setHold(enabled);
+        return [];
+      });
+    }
     if (host.random)
       this.vm.bind('random', () => {
         const value = host.random!();

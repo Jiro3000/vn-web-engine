@@ -12,6 +12,13 @@ const lazySystemVariables = new Set(['s.clickskip']);
 function unsupportedSystem(name: string): boolean {
   return (name.startsWith('s.') || name.startsWith('ini.')) && !lazySystemVariables.has(name);
 }
+/** MSVC `atoi`: leading whitespace, optional sign, decimal digits; saturates at int32. */
+function atoi(text: string): number {
+  const match = /^[\t\n\v\f\r ]*([+-]?)(\d*)/.exec(text)!;
+  let value = 0;
+  for (const digit of match[2]!) value = Math.min(value * 10 + Number(digit), 0x80000000);
+  return match[1] === '-' ? -value : Math.min(value, 0x7fffffff);
+}
 function literal(name: string): void {
   if (!name || /[\0\s$+*/()=]/.test(name))
     throw new Error(`Unsupported Artemis variable expression ${name}`);
@@ -29,6 +36,9 @@ export interface ArtemisVariableHost {
     readonly height: number;
     readonly lineWidth: number;
   };
+  /** Wall clock in milliseconds since the Unix epoch (CRT `_time64`); local calendar fields
+   * follow the host time zone like `_localtime64`. Defaults to `Date.now`. */
+  now?(): number;
 }
 const messageLayerExtents = {
   get_message_layer_width: 'width',
@@ -150,6 +160,9 @@ export class ArtemisVariables {
     if (target.has(name)) target.delete(name);
     else for (const key of target.keys()) if (key.startsWith(name + '.')) target.delete(key);
   }
+  private unixTime(): number {
+    return Math.floor((this.host?.now?.() ?? Date.now()) / 1000);
+  }
   dispatch(tag: AsbTag): boolean {
     if (tag.name !== 'var') return false;
     const p = tag.args,
@@ -185,6 +198,22 @@ export class ArtemisVariables {
       if (!Number.isInteger(value) || value < -0x80000000 || value > 0x7fffffff)
         throw new Error('Unsupported Artemis message layer extent');
       this.write(name, String(value), local);
+    } else if (p.get('system') === 'unixtime')
+      // 0x14019a970 `_time64`, stored through the 32-bit integer setter.
+      this.write(name, String(this.unixTime() | 0), local);
+    else if (p.get('system') === 'date') {
+      // 0x14019a980: `_localtime64` of the 32-bit `unixtime` argument (atoi) or the clock.
+      const seconds = p.has('unixtime') ? atoi(p.get('unixtime')!) >>> 0 : this.unixTime() >>> 0;
+      const date = new Date(seconds * 1000);
+      const fields: [string, number][] = [
+        ['year', date.getFullYear()],
+        ['month', date.getMonth() + 1],
+        ['day', date.getDate()],
+        ['hour', date.getHours()],
+        ['minute', date.getMinutes()],
+        ['second', date.getSeconds()],
+      ];
+      for (const [field, value] of fields) this.write(`${name}.${field}`, String(value), local);
     } else throw new Error(`Unsupported native Artemis var system ${p.get('system') ?? ''}`);
     return true;
   }

@@ -25,7 +25,9 @@ import type {ArtemisTheoraVideo} from './video.js';
 /** The script services the layer owner uses: the transition and sync-tween run modes, the
  * frame clock, tween completion events, the stage size and the skip state. */
 export interface ArtemisLayerRunModeHost {
-  enter(): void;
+  /** c6160 entry: c74 = c70, c70 = `mode`. */
+  enter(mode: number): void;
+  /** c6480: c70 = c74, then the deferred script events. */
   release(): void;
   now(): number;
   emit(tag: AsbTag): void;
@@ -158,7 +160,7 @@ export class ArtemisLayerOwner<
       commit: () => stage.commit(),
       enterRunMode: (mode) => {
         trace({kind: 'runMode', mode, simulation: true});
-        runMode.enter();
+        runMode.enter(mode);
       },
       releaseRunMode: () => {
         trace({kind: 'runModeRelease', simulation: true});
@@ -219,12 +221,13 @@ export class ArtemisLayerOwner<
       enterRunMode: (mode) => {
         trace({kind: 'runMode', mode, simulation: true});
         this.tweenSync = true;
-        runMode.enter();
+        runMode.enter(mode);
       },
       endSyncWait: () => {
         trace({kind: 'tweenSyncEnd', simulation: true});
         this.tweenSync = false;
-        runMode.release();
+        // b5be0: c74 = c70, c70 = 0.
+        runMode.enter(0);
       },
       deleteLayer: (tag, recordHistory) => {
         trace({kind: 'tweenDelete', id: tag.args.get('id'), simulation: true});
@@ -358,6 +361,11 @@ export class ArtemisLayerOwner<
       .map(({id}) => id);
   }
   /** Invokes an actor's stored layer event callback. */
+  /** The layer exists and has an enabled `type` event. */
+  hasLayerEvent(id: string, type: ArtemisLayerEventType): boolean {
+    const actor = this.layers.scene.entry(id)?.value;
+    return !!actor && !!this.slots.get(actor)?.isEnabled(type);
+  }
   invokeLayerEvent(id: string, type: ArtemisLayerEventType, sink: ArtemisLayerEventSink): boolean {
     const actor = this.layers.scene.entry(id)?.value;
     const slots = actor && this.slots.get(actor);

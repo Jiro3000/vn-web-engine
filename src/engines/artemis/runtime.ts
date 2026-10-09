@@ -78,7 +78,8 @@ import {ArtemisTextCommands} from './text-commands.js';
 import {ArtemisTextControls} from './text-controls.js';
 import {ArtemisTextDisplay} from './text-display.js';
 import type {ArtemisTextInsertion} from './text-insertion.js';
-import {ArtemisTimedWait} from './wait.js';
+import {ArtemisTimedWait, type ArtemisWaitFlags} from './wait.js';
+import {ArtemisInput, type ArtemisInputSample} from './input.js';
 import {ArtemisVariables} from './variables.js';
 
 /** Font-stack frame: attribute overrides over the 0x140193720 defaults and the overflow
@@ -141,6 +142,7 @@ export interface ArtemisRuntimeLayers extends ArtemisLayerTagOwner {
   ): void;
   detachMessageActor(name: string): void;
   clickableLayers(): string[];
+  hasLayerEvent(id: string, type: ArtemisLayerEventType): boolean;
   invokeLayerEvent(id: string, type: ArtemisLayerEventType, sink: ArtemisLayerEventSink): unknown;
   reset(): void;
   clearLayerCommands(): void;
@@ -150,19 +152,16 @@ export interface ArtemisRuntimeLayers extends ArtemisLayerTagOwner {
 }
 /** Input delivered with one frame. */
 export interface ArtemisFrameInput {
-  /** The left button was pushed (role 0, the run mode 1 click query). */
-  readonly click: boolean;
-  /** The right button was pushed (role 1). */
-  readonly cancel: boolean;
+  /** The device sample of the frame's input update. */
+  readonly sample: ArtemisInputSample;
   /** Layer events from pointer hit testing, in delivery order. */
   readonly layerEvents: readonly {readonly id: string; readonly type: ArtemisLayerEventType}[];
-  /** Virtual-key codes pushed this frame (VK_LBUTTON 1 for a left click). */
-  readonly keys: readonly number[];
 }
 /** What the layer owner receives from the runtime. */
 export interface ArtemisRuntimeLayerHost {
-  /** Transition and sync-tween run modes. */
-  enter(): void;
+  /** Transition and sync-tween run modes: c6160 entry (c74 = c70, c70 = `mode`) and the
+   * c6480 release (c70 = c74, then the deferred events). */
+  enter(mode: number): void;
   release(): void;
   now(): number;
   emit(tag: AsbTag): void;
@@ -241,6 +240,9 @@ export interface ArtemisRuntimeServices {
   /** The click-glyph byte +0x16c of a message layer. */
   readonly setLayerByte16c: (name: string, value: boolean) => void;
   readonly setTouchLimit: (limit: number) => void;
+  /** The touch device of Lua `getTouchCount`/`setUseTouchHold`; absent is a device with no
+   * touch points that ignores the hold setting. */
+  readonly touch?: {count(): number; setHold(enabled: boolean): void};
   /** Native include errors (0x14012d080 level 1); without it they fault. */
   readonly reportIncludeError?: (path: string, error: unknown) => void;
   /** Native callLua and unknown-tag reports (c84b0/c7260); without them they fault. */
@@ -317,8 +319,17 @@ export class ArtemisRuntime {
   readonly load: ArtemisLoad;
   readonly scriptEvents: ReturnType<typeof createArtemisScriptEvents>;
   readonly compiled: number;
-  /** Native run mode (script +0xc70): 0 script, 3 stop, 7 video, 13 load. */
-  private mode = 0;
+  /** Native run mode c70 of the current caret: 0 script, 1 click wait, 2 transition, 3
+   * stop, 4 wait, 7 video, 13 load. */
+  private get mode(): number {
+    return this.script?.runMode ?? 0;
+  }
+  /** CArtemisInput, updated once a frame. */
+  readonly input = new ArtemisInput();
+  /** The frame counter +0xf0. */
+  frameNumber = 0;
+  /** Pointer layer events for the next frame's window update. */
+  private layerEventQueue: {readonly id: string; readonly type: ArtemisLayerEventType}[] = [];
   /** Milliseconds (uint32, timeGetTime) of the current frame. */
   now = 1;
   private pendingResource: Promise<unknown> | null = null;
@@ -328,8 +339,6 @@ export class ArtemisRuntime {
   private readonly closers: (() => void)[] = [];
   private readonly currentTextDisplay: () => ArtemisTextDisplay<unknown>;
   private readonly displayProperties = new WeakMap<object, Map<string, number>>();
-  /** The input of the frame being run. */
-  private input: ArtemisFrameInput = {click: false, cancel: false, layerEvents: [], keys: []};
   /** Changes whenever a glyph or block display property changes. */
   textRevision = 0;
   private readonly writeScenario: (asLoaded: boolean) => Uint8Array;
@@ -574,12 +583,15 @@ export class ArtemisRuntime {
       textDisplayComplete: () => currentTextDisplay().complete,
       finishTextDisplay: () => currentTextDisplay().finish(),
       writeClickSkip: () => variables.write('s.clickskip', '1'),
+      // Run mode 1 waits for input, 4 for its deadline or condition; c6160(0) ends both.
       beginWait: (inputEnabled) => {
         trace({wait: {inputEnabled}});
+        script.enterRunMode(inputEnabled ? 1 : 4);
         script.pause();
       },
       endWait: () => {
         trace({waitEnd: true});
+        script.enterRunMode(0);
         script.resume();
       },
       clickWaitEvent: (kind) => {
@@ -598,13 +610,12 @@ export class ArtemisRuntime {
       debugSkipActive: () => false,
       startTextDisplay,
       enterStopMode: () => {
-        this.mode = 3;
+        script.enterRunMode(3);
         trace({runMode: 3, simulation: true});
         script.pause();
         return true;
       },
     });
-    let moviePrevious = 0;
     const fullscreenVideo = (this.fullscreenVideo = new ArtemisFullscreenVideo(hash, modes, {
       debugSkipActive: () => false,
       videoVolume: () => artemisInteger(new TextDecoder().decode(variables.read('s.videovol'))),
@@ -614,21 +625,20 @@ export class ArtemisRuntime {
       },
       enterVideoMode: () => {
         if (this.mode === 13) return;
-        moviePrevious = this.mode;
-        this.mode = 7;
+        script.enterRunMode(7);
         trace({runMode: 7, simulation: true});
         if (this.resourceInFlight) this.runModeHeld = true;
         else script.pause();
       },
       releaseRunMode: () => {
         if (this.mode !== 7) return;
-        this.mode = moviePrevious;
+        script.releaseRunMode();
         services.moviePlayer.close();
         trace({runMode: this.mode, simulation: true});
+        this.scriptEvents.releasePending();
         script.resume();
       },
-      // Role 0 (decide) is the left button, role 1 (cancel) the right button.
-      rolePushed: (role) => (role === 0 ? this.input.click : this.input.cancel),
+      rolePushed: (role) => this.roleDecided(role),
       writeClickSkip: () => variables.write('s.clickskip', '1'),
     }));
     const messageHistory = new Set<string>(),
@@ -776,8 +786,18 @@ export class ArtemisRuntime {
     const layers = (this.layers = services.createLayers({
       // A rule trans enters its run mode after the asynchronous rule load; the resource
       // wait then becomes the run mode wait instead of resuming.
-      enter: () => (this.resourceInFlight ? (this.runModeHeld = true) : script.pause()),
-      release: () => script.resume(),
+      enter: (mode) => {
+        script.enterRunMode(mode);
+        // b5be0 ends a sync tween with run mode 0.
+        if (mode === 0) script.resume();
+        else if (this.resourceInFlight) this.runModeHeld = true;
+        else script.pause();
+      },
+      release: () => {
+        script.releaseRunMode();
+        this.scriptEvents.releasePending();
+        if (this.mode === 0) script.resume();
+      },
       now: () => this.now,
       emit: (tag) => scriptEvents.emit(tag, 0, true),
       stageSize: () => ({width, height}),
@@ -968,6 +988,11 @@ export class ArtemisRuntime {
       enqueueTag: (tag) => script.enqueue(tag),
       variable: (name) => variables.queryLiteral(name),
       scriptStack: () => script.stack(),
+      input: this.input,
+      scriptStatus: () => this.mode,
+      setScriptStatus: (mode) => this.setScriptStatus(mode),
+      frameNumber: () => this.frameNumber,
+      touch: services.touch ?? {count: () => 0, setHold: () => {}},
     });
     this.closers.unshift(() => lua.close());
     let compiled = 0;
@@ -997,6 +1022,10 @@ export class ArtemisRuntime {
         }),
       ...(services.reportLuaCallError ? {reportLuaCallError: services.reportLuaCallError} : {}),
       ...(services.reportUnknownTag ? {reportUnknownTag: services.reportUnknownTag} : {}),
+      caretFields: {
+        take: () => wait.take(),
+        restore: (fields) => wait.restore(fields as ArtemisWaitFlags | undefined),
+      },
     });
     const scriptEvents = (this.scriptEvents = createArtemisScriptEvents(hash, lua, script, {
       nativeMode: () => this.mode,
@@ -1109,15 +1138,7 @@ export class ArtemisRuntime {
       const record = captureArtemisScenario(
         scenarioOwners(),
         scenarioScalars,
-        {
-          mode: asLoaded ? 0 : this.mode,
-          previous: 0,
-          waiting: !asLoaded && wait.pending,
-          frameMode: (state) => {
-            if (state) throw Error('Artemis scenario save inside an event-handler scope');
-            return 0;
-          },
-        },
+        {asLoaded, waiting: wait.pending, frameWaiting: (fields) => fields !== undefined},
         null,
       );
       const writer = new ArtemisSaveArchiveWriter();
@@ -1142,13 +1163,13 @@ export class ArtemisRuntime {
       loadBacklog: (backlog: unknown) => trace({backlogLoad: backlog ? 'empty' : null}),
       enterLoadMode: (caret: ArtemisLoadedCaret | undefined) => {
         loadPrevious = caret ? caret.runMode : this.mode;
-        this.mode = 13;
+        this.script.setRunMode(13);
         trace({runMode: 13, simulation: true});
       },
       frameState: () => undefined,
       refreshGlyphLayer: (name: string) => trace({glyphLayerRefresh: name, simulation: true}),
       finishLoad: () => {
-        this.mode = loadPrevious;
+        this.script.setRunMode(loadPrevious);
         trace({runMode: this.mode, loadFinished: true, simulation: true});
       },
       selectMessageLayer: (name: string, mode: -1 | 0 | 1) =>
@@ -1231,12 +1252,23 @@ export class ArtemisRuntime {
     if (!operation) throw Error('No Artemis resource operation is pending');
     this.pendingResource = null;
     this.resourceInFlight = true;
+    const script = this.script;
+    const restored = script.restoredCarets;
     try {
       await operation;
     } finally {
       this.resourceInFlight = false;
     }
-    const script = this.script;
+    // A load replaced the suspended caret and its Lua callers; the loaded caret runs.
+    if (script.restoredCarets !== restored) {
+      if (this.runModeHeld) {
+        this.runModeHeld = false;
+        if (script.state === 'ready') script.pause();
+        return 'held';
+      }
+      if (script.state === 'ready') script.run(1000);
+      return 'resumed';
+    }
     if (this.runModeHeld) {
       this.runModeHeld = false;
       // The native tag returns at once: a Lua caller runs to its end, then the script
@@ -1259,32 +1291,72 @@ export class ArtemisRuntime {
     this.services.sound.advanceToTick(now);
     this.layers.tickTweens(now);
   }
-  /** One real-time frame in the order of the run-mode branch of 0x1400c0560: the clock
-   * advances sound, tweens and video layers; a transition steps (a click finishes a
-   * clickable run mode 2 transition); a fullscreen movie frame runs; pointer layer events
-   * and pushed keys reach their handlers in run modes 1 and 3, and a delivered push handler
-   * ends the frame (its click does not reach the wait); the wait checks its click,
-   * deadline or display completion; then a ready script runs up to `steps` tags. While a
-   * resource load holds the script only the clock advances; `settleResource` resumes it. */
+  /** One real-time frame in the order of 0x1400c0560: the frame counter; the window
+   * update delivers the pointer layer events of the previous frame's input (it precedes the
+   * input update, and each event's script event is immediate or deferred by run mode); the
+   * input update; the clock advances sound, tweens and video layers; Lua `onEnterFrame` runs (a
+   * failing handler is cleared); then the run mode branch. Run mode 2 steps the transition,
+   * which role 0 decided finishes; run mode 7 runs the fullscreen movie frame; run modes 1
+   * and 3 deliver the push handlers (slot 0 on decide, slot 1 on
+   * push), and a delivered handler ends the frame; the wait (run modes 1, 3 and 4) checks
+   * the role 0 decision in run mode 1, its deadline or display completion; then a ready
+   * script runs up to `steps` tags. While a resource load holds the script only the input
+   * and clock advance; `settleResource` resumes it. */
   frame(now: number, input: ArtemisFrameInput, steps = 1000): void {
-    this.input = input;
+    this.frameNumber = (this.frameNumber + 1) >>> 0;
+    if (!this.resourcePending) {
+      const events = this.layerEventQueue;
+      this.layerEventQueue = [];
+      // The window update raises events from the current layers: an event of a layer
+      // deleted or changed since the pointer input is not raised.
+      for (const event of events)
+        if (this.layers.hasLayerEvent(event.id, event.type)) this.layerEvent(event.id, event.type);
+        else this.services.trace?.effect?.({layerEvent: {...event, dropped: true}});
+    }
+    this.layerEventQueue.push(...input.layerEvents);
+    this.input.update(now, input.sample);
+    this.advanceTo(now);
+    if (this.resourcePending) return;
     try {
-      this.advanceTo(now);
-      if (this.resourcePending) return;
-      if (this.layers.transitionPending) {
-        if (this.mode === 2 && input.click) this.layers.finishTransition(now || 1);
-        else this.layers.tickTransition(now);
-      }
-      if (this.mode === 7) this.fullscreenVideo.frame();
-      if (this.acceptsInput) {
-        for (const event of input.layerEvents) this.layerEvent(event.id, event.type);
-        // A delivered push handler ends the frame before the wait sees the click.
-        if (this.keyPush(input.keys)) return;
-      }
-      if (this.wait.pending) this.wait.tick(now, input.click);
-      if (this.script.state === 'ready') this.script.run(steps);
-    } finally {
-      this.input = {click: false, cancel: false, layerEvents: [], keys: []};
+      this.lua.events.emit('onEnterFrame');
+    } catch (error) {
+      this.services.trace?.effect?.({enterFrameError: String(error)});
+    }
+    if (this.resourcePending) return;
+    if (this.layers.transitionPending) {
+      if (this.mode === 2 && this.roleDecided(0)) {
+        this.layers.finishTransition(now || 1);
+        this.variables.write('s.clickskip', '1');
+      } else this.layers.tickTransition(now);
+    }
+    if (this.mode === 7) this.fullscreenVideo.frame();
+    if (this.acceptsInput) {
+      // A delivered push handler ends the frame before the wait sees the click.
+      const delivered = this.keyBindings.deliverPushed(
+        (key, slot) => this.input.query(slot === 0 ? 'decide' : 'push', key),
+        (command) => this.scriptEvents.dispatch(command),
+      );
+      if (delivered) return;
+    }
+    const mode = this.mode;
+    if (this.wait.pending && (mode === 1 || mode === 3 || mode === 4))
+      this.wait.tick(now, mode === 1 && this.roleDecided(0));
+    if (this.script.state === 'ready') this.script.run(steps);
+  }
+  /** Role `role` decided this frame (0x1400b5690 over the input owner). */
+  roleDecided(role: number): boolean {
+    return this.keyBindings.roleActive(role, 'decide', (kind, key) => this.input.query(kind, key));
+  }
+  /** Lua `setScriptStatus`: c74 = c70, c70 = `mode`. A nonzero mode holds a ready script; mode
+   * 0 runs a waiting script, and the wait flags no longer apply. */
+  private setScriptStatus(mode: number): void {
+    const script = this.script;
+    script.enterRunMode(mode);
+    if (mode !== 0) {
+      if (script.state === 'ready') script.pause();
+    } else if (script.state === 'waiting' && !script.pendingLuaCalls) {
+      this.wait.clear();
+      script.resume();
     }
   }
   /** Display properties (left, top, alpha, xscale, yscale, rotate) of a glyph or block

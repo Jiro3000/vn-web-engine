@@ -260,7 +260,7 @@ export function createMetadataLayerFixture(hash, readFile, runMode = null) {
     createGraphics: graphics,
     images: source,
     runMode: {
-      enter: () => (runMode?.enter ?? refuseRunMode)(),
+      enter: (mode) => (runMode?.enter ?? refuseRunMode)(mode),
       release: () => (runMode?.release ?? refuseRunMode)(),
       now: () => runMode?.now() ?? refuseRunMode(),
       emit: (tag) => {
@@ -344,6 +344,7 @@ export function createMetadataLayerFixture(hash, readFile, runMode = null) {
     restoreLayerCommands: (snapshot) => owner.restoreLayerCommands(snapshot),
     /** Diagnostic choice discovery, not native hit testing. */
     clickableLayers: () => owner.clickableLayers(),
+    hasLayerEvent: (id, type) => owner.hasLayerEvent(id, type),
     /** Invokes an actor's stored layer event callback; no pointer hit testing is simulated. */
     invokeLayerEvent: (id, type, sink) => owner.invokeLayerEvent(id, type, sink),
     dispatchTransition: (tag) => owner.dispatchTransition(tag),

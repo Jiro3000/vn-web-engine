@@ -44,6 +44,10 @@ export interface ArtemisScriptHost {
    * refuses such arguments.
    */
   evaluateExpression?(expression: string): string;
+  /** Host-owned caret fields (the wait flags b94..bc8 of CCaret). `take` returns the
+   * current caret's fields and clears them for a new caret; `restore` reinstates the fields
+   * of a returning caret. */
+  caretFields?: {take(): unknown; restore(fields: unknown): void};
 }
 export interface ArtemisLuaCallErrorReport {
   readonly file: string;
@@ -73,9 +77,14 @@ export interface ArtemisScriptCaret {
   readonly index: number;
   readonly queue: readonly AsbTag[];
   readonly tag: AsbTag | null;
-  /** Call-stack frames saved by an event-handler scope resume in this state; the host maps
-   * it to the frame's run mode (+0x108). */
+  /** Call-stack frames saved by an event-handler scope resume in this state. */
   readonly resumeState?: ArtemisScriptState;
+  /** +0x108 / +0x10c: run mode c70 and the previous mode c74 (0 when absent). */
+  readonly runMode?: number;
+  readonly previousRunMode?: number;
+  /** A call-stack frame's host caret fields (`ArtemisScriptHost.caretFields`); the current
+   * caret's fields stay with the host. */
+  readonly fields?: unknown;
 }
 interface PendingLuaCall {
   readonly task: ArtemisLuaCall;
@@ -86,6 +95,11 @@ interface Cursor {
   program: IetProgram;
   file: string;
   index: number;
+  /** CCaret +0x108/+0x10c: run mode c70 and the previous mode c74. A new caret is 0/0. */
+  mode: number;
+  previousMode: number;
+  /** Host caret fields saved with a caller (`ArtemisScriptHost.caretFields`). */
+  fields?: unknown;
 }
 
 /** Script cursor/queue execution. Native rendering, waits and exit/save effects require host dispatch. */
@@ -103,6 +117,9 @@ export class ArtemisScript {
   private readonly luaCalls: PendingLuaCall[] = [];
   private luaSuspended = false;
   state: ArtemisScriptState = 'ended';
+  /** Counts `restoreCarets`: a resource operation that loaded a save has replaced the
+   * caret it suspended. */
+  restoredCarets = 0;
   get currentFile(): string {
     return this.cursor?.file ?? '';
   }
@@ -140,13 +157,14 @@ export class ArtemisScript {
     const program = this.prepare(path);
     const index = !label ? 0 : program.labels.get(label);
     if (index === undefined) throw new Error(`Missing Artemis label ${path}:${label}`);
-    return {program, file: path, index};
+    return {program, file: path, index, mode: 0, previousMode: 0};
   }
   load(path: string, label?: string): void {
     if (this.running) throw new Error('Use jump/call for script transfers during dispatch');
     try {
       this.cancelLuaCalls();
       this.cursor = this.transfer(path, label);
+      this.host.caretFields?.take();
       this.state = 'ready';
     } catch (error) {
       this.state = 'faulted';
@@ -161,12 +179,14 @@ export class ArtemisScript {
     const cursor = this.transfer(bootPath);
     this.callers.length = 0;
     this.cursor = cursor;
+    this.host.caretFields?.take();
     this.state = 'ready';
   }
   /** Native transfers assign a fresh caret (b6520 -> b8090), so pending queued tags are
    * dropped. */
   jump(path = '', label?: string): void {
     this.cursor = this.transfer(path, label);
+    this.host.caretFields?.take();
     this.clearQueue();
     this.state = 'ready';
   }
@@ -184,8 +204,9 @@ export class ArtemisScript {
     if (!this.cursor) throw new Error('Artemis call without a script cursor');
     if (this.callers.length >= 10000) throw new Error('Artemis call depth limit exceeded');
     const destination = this.transfer(path, label);
+    const fields = this.host.caretFields?.take();
     this.host.pushLocal?.();
-    this.callers.push({...this.cursor, queue: this.takeQueue()});
+    this.callers.push({...this.cursor, fields, queue: this.takeQueue()});
     this.cursor = destination;
     this.state = 'ready';
   }
@@ -199,11 +220,14 @@ export class ArtemisScript {
       throw Error('Artemis event handler requires local scope owner');
     if (this.callers.length >= 10000) throw Error('Artemis call depth limit exceeded');
     this.host.pushLocal();
-    this.callers.push({...this.cursor, resumeState: this.state, queue: this.takeQueue()});
+    const fields = this.host.caretFields?.take();
+    this.callers.push({...this.cursor, fields, resumeState: this.state, queue: this.takeQueue()});
     this.cursor = {
       file: '',
       index: 0,
       program: {records: [], tags: [], labels: new Map()},
+      mode: 0,
+      previousMode: 0,
     };
     this.state = 'ready';
   }
@@ -216,8 +240,9 @@ export class ArtemisScript {
     }
     this.host.popLocal?.();
     // c6580 assigns the saved caret, including its queue, over the current one.
-    const {resumeState, queue, ...cursor} = this.callers.pop()!;
+    const {resumeState, queue, fields, ...cursor} = this.callers.pop()!;
     this.cursor = cursor;
+    this.host.caretFields?.restore(fields);
     this.queue = [...queue];
     this.queueHead = 0;
     this.state = resumeState ?? 'ready';
@@ -243,6 +268,9 @@ export class ArtemisScript {
       queue: queue.map((tag) => ({...tag, args: new Map(tag.args)})),
       tag: cursor.program.tags[cursor.index] ?? null,
       ...(resumeState ? {resumeState} : {}),
+      runMode: cursor.mode,
+      previousRunMode: cursor.previousMode,
+      ...(cursor.fields !== undefined ? {fields: cursor.fields} : {}),
     });
     return [
       ...this.callers.map((caller) => caret(caller, caller.queue, caller.resumeState)),
@@ -265,6 +293,8 @@ export class ArtemisScript {
         program,
         file: caret.file,
         index: caret.index,
+        mode: caret.runMode ?? 0,
+        previousMode: caret.previousRunMode ?? 0,
         queue: caret.queue,
         ...(caret.resumeState ? {resumeState: caret.resumeState} : {}),
       };
@@ -278,13 +308,21 @@ export class ArtemisScript {
     )
       throw Error('Unsupported Artemis saved caret relocation');
     this.cancelLuaCalls();
+    this.restoredCarets++;
     this.callers.length = 0;
     for (const {queue, ...cursor} of cursors.slice(0, -1))
       this.callers.push({
         ...cursor,
         queue: queue.map((tag) => ({...tag, args: new Map(tag.args)})),
       });
-    this.cursor = {program: current.program, file: current.file, index: current.index};
+    this.cursor = {
+      program: current.program,
+      file: current.file,
+      index: current.index,
+      mode: current.mode,
+      previousMode: current.previousMode,
+    };
+    this.host.caretFields?.take();
     this.queue = current.queue.map((tag) => ({...tag, args: new Map(tag.args)}));
     this.queueHead = 0;
     this.state = 'ready';
@@ -306,6 +344,27 @@ export class ArtemisScript {
         firstCommand: 0 as const,
       },
     ];
+  }
+  /** Run mode c70 of the current caret. Transfers install a new caret in mode 0; a return
+   * restores the caller's caret with its mode. */
+  get runMode(): number {
+    return this.cursor?.mode ?? 0;
+  }
+  /** c6160 entry: c74 = c70, c70 = `mode`. */
+  enterRunMode(mode: number): void {
+    if (!this.cursor) throw Error('Artemis run mode without a caret');
+    this.cursor.previousMode = this.cursor.mode;
+    this.cursor.mode = mode;
+  }
+  /** c6480 release: c70 = c74. */
+  releaseRunMode(): void {
+    if (!this.cursor) throw Error('Artemis run mode without a caret');
+    this.cursor.mode = this.cursor.previousMode;
+  }
+  /** Assigns c70 alone (the loader's run mode 13 bracket restores the saved mode). */
+  setRunMode(mode: number): void {
+    if (!this.cursor) throw Error('Artemis run mode without a caret');
+    this.cursor.mode = mode;
   }
   get queuedTags(): number {
     return this.queue.length - this.queueHead;

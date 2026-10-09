@@ -49,8 +49,8 @@ const defaultRoles: readonly (readonly [number, readonly number[]])[] = [
 ];
 
 /** Native role configuration (CArtemisKeyConfig ordinary key map +0x10 and the 136/137
- * flag maps +0x20/+0x30) and deletion of both push-handler maps. Frame sampling and
- * special-code interpretation are separate input-owner work.
+ * flag maps +0x20/+0x30), the role queries over the input owner and both push-handler
+ * maps.
  */
 export class ArtemisKeyBindings {
   private readonly ordinary = new Map<number, Set<number>>();
@@ -86,6 +86,23 @@ export class ArtemisKeyBindings {
       special137 = this.special137.has(id);
     if (!keys && !special136 && !special137) return undefined;
     return {keys: new Set([...(keys ?? [])].sort((a, b) => a - b)), special136, special137};
+  }
+  /** Role query over input `kind` (0x1400ad130 with decide, 0x1400acec0 with down): the
+   * 136 flag asks key 0x88, the 137 flag key 0x89, then each ordinary key ascending, until
+   * one answers. The click query 0x1400b5690 (`decide`) also refuses Alt+Enter: a role
+   * holding key 13 is not decided while Alt (0x12) is down and Enter decided. */
+  roleActive(
+    id: number,
+    kind: 'decide' | 'down',
+    query: (kind: 'decide' | 'down', key: number) => boolean,
+  ): boolean {
+    const keys = [...(this.ordinary.get(id) ?? [])].sort((a, b) => a - b);
+    const active =
+      (this.special136.has(id) && query(kind, 0x88)) ||
+      (this.special137.has(id) && query(kind, 0x89)) ||
+      keys.some((key) => query(kind, key));
+    if (!active || kind === 'down') return active;
+    return !(keys.includes(13) && query('down', 0x12) && query('decide', 13));
   }
   /** Section 0x41 (0x1400f4f90): the ordinary key map, roles and keys ascending. */
   keyRoles(): Map<number, number[]> {

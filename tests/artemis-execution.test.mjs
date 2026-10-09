@@ -4379,6 +4379,75 @@ test('Native script event producer preserves deferred copies, force/latch rules 
   assert.deepEqual(events.emit(tag, 0, true), {status: 'suppressed'});
   assert.equal(events.dispatch({...tag, name: ''}), true);
 });
+test('Run mode and wait flags belong to each caret across calls, handler scopes and saves', () => {
+  const sources = new Map([
+    ['main.iet', bytes('[call file="sub.iet"][wait][return]')],
+    ['sub.iet', bytes('[wait][return]')],
+  ]);
+  let flags;
+  const lua = new ArtemisLua({readFile: () => null, fileExists: () => true, now: () => 0});
+  const script = new ArtemisScript(lua, {
+    readFile: (path) => sources.get(path) ?? null,
+    pushLocal: () => {},
+    popLocal: () => {},
+    emptyReturn: () => 'ended',
+    dispatch: (tag) => (tag.name === 'wait' ? 'waiting' : assert.fail(tag.name)),
+    caretFields: {
+      take: () => {
+        const taken = flags;
+        flags = undefined;
+        return taken;
+      },
+      restore: (restored) => (flags = restored),
+    },
+  });
+  try {
+    script.load('main.iet');
+    script.enterRunMode(4);
+    flags = 'main wait';
+    assert.equal(script.step(), 'ready');
+    // A call installs a new caret: mode 0 and no wait flags.
+    assert.deepEqual([script.currentFile, script.runMode, flags], ['sub.iet', 0, undefined]);
+    assert.equal(script.step(), 'waiting');
+    script.enterRunMode(1);
+    flags = 'sub wait';
+    script.enterEventHandlerScope();
+    assert.deepEqual([script.runMode, flags], [0, undefined]);
+    script.enterRunMode(3);
+    const carets = script.carets();
+    assert.deepEqual(
+      carets.map((c) => [
+        c.file,
+        c.runMode,
+        c.previousRunMode,
+        c.fields ?? null,
+        c.resumeState ?? null,
+      ]),
+      [
+        ['main.iet', 4, 0, 'main wait', null],
+        ['sub.iet', 1, 0, 'sub wait', 'waiting'],
+        ['', 3, 0, null, null],
+      ],
+    );
+    // Restored carets keep their modes; the loader clears every wait flag.
+    script.restoreCarets(carets);
+    assert.deepEqual(
+      script.carets().map((c) => [c.runMode, c.fields ?? null]),
+      [
+        [4, null],
+        [1, null],
+        [3, null],
+      ],
+    );
+    script.restoreCarets(carets.slice(0, -1).concat({...carets[2], runMode: 0}));
+    script.return();
+    assert.deepEqual([script.currentFile, script.runMode, script.state], ['sub.iet', 1, 'waiting']);
+    script.releaseRunMode();
+    assert.equal(script.runMode, 0);
+  } finally {
+    lua.close();
+  }
+});
 test('Default event handlers use a fresh local scope and filtered priority tag, then restore a waiting script', async () => {
   const {ArtemisScriptEvents} = await import('../dist/engines/artemis/script-events.js');
   const {ArtemisVariables} = await import('../dist/engines/artemis/variables.js');
@@ -6216,8 +6285,21 @@ test('Scenario save captures every owner and load restores them through the arch
   };
   const a = owners();
   a.script.restoreCarets([
-    {file: 'sub.ast', index: 4, queue: [], tag: tag('call', {file: 'x'}), resumeState: 'waiting'},
-    {file: 'main.ast', index: 9, queue: [tag('print', {data: 'q'})], tag: tag('@', {}, 7)},
+    {
+      file: 'sub.ast',
+      index: 4,
+      queue: [],
+      tag: tag('call', {file: 'x'}),
+      resumeState: 'waiting',
+      runMode: 4,
+    },
+    {
+      file: 'main.ast',
+      index: 9,
+      queue: [tag('print', {data: 'q'})],
+      tag: tag('@', {}, 7),
+      runMode: 1,
+    },
   ]);
   for (const t of [
     tag('automode', {allow: '1', layer: 'auto'}),
@@ -6264,7 +6346,7 @@ test('Scenario save captures every owner and load restores them through the arch
     field3880: 0,
     font: font(26),
   };
-  const runMode = {mode: 1, previous: 0, waiting: false, frameMode: (s) => (s ? 4 : 0)};
+  const runMode = {waiting: false, frameWaiting: (fields) => fields !== undefined};
   const saved = captureArtemisScenario(a, scalars, runMode, null);
   assert.deepEqual(
     saved.callStack.map((c) => c.runMode),

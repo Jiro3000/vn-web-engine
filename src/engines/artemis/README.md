@@ -59,7 +59,12 @@ Literal Lua queries create missing variables as integer zero (0x140157fa0),
 while raw map reads preserve empty absence. Other expressions remain unsupported. Unknown `s.`/`ini.` names
 refuse instead of reading zero, except `s.clickskip`: it has no startup initializer, and its
 only native writers are the c0560 click-skip input paths (run modes 1/3/4, 2 and 7), which set
-integer 1 through 0x1400b0940. Those input paths are not implemented yet. Stage-size queries require a configuration/rendering provider.
+integer 1 through 0x1400b0940: the wait click, the run mode 2 transition click and the run
+mode 7 movie end. Stage-size queries require a configuration/rendering provider.
+`system=unixtime` stores `_time64` through the 32-bit integer setter and `system=date`
+writes `.year`, `.month`, `.day`, `.hour`, `.minute` and `.second` from `_localtime64` of
+the `unixtime` argument (`atoi`, read as unsigned) or of the clock (0x14019a970,
+0x14019a980). The clock is the host's `now` (`Date.now` by default) in the host time zone.
 `revision.ts` initializes the confirmed static boot variables only after exact
 executable-hash selection. Host Windows-version failure produces native 0.0;
 platform identity/capabilities are never invented.
@@ -91,8 +96,8 @@ the type index as event mode and force set. The browser player is the input owne
 hit-tests the pointer (`ArtemisImageGraphics.hitTest`, see below) and tracks rollover
 state; penetration is not implemented, so only the topmost hit layer with a registered
 event receives it. `ArtemisKeyBindings.deliverPushed` is the c0560 run mode 1/3
-push-handler slice: slot 0 then slot 1 in ascending key order, ending the frame when a
-command is delivered. The probe's `--layer-event=<id>[:type]` and `--key-push=<key>`
+push-handler slice: slot 0 (decide query) then slot 1 (push query) in ascending key order,
+ending the frame when a command is delivered. The probe's `--layer-event=<id>[:type]` and `--key-push=<key>`
 options apply these at a run mode 3 stop, one per frame, without pointer hit testing.
 
 `modes.ts` owns skip/auto/autosave command state and emits required status/effect
@@ -145,17 +150,50 @@ the Windows version and the graphics feature level. Error reports and the option
 
 The host drives frames through the runtime: `boot()`, then `frame(now, input)` once per
 display frame, and `settleResource()` whenever `resourcePending` reports a tag or Lua call
-suspended on a resource ('held' when the operation entered a run mode). `frame` follows
-the run-mode branch of `0x1400c0560`: the clock advances voices, tweens and video layers;
-a pending transition steps (a click finishes a clickable run mode 2 transition); a
-fullscreen movie frame runs; in run modes 1 and 3 the input's layer events and pushed
-keys reach their handlers, and a delivered push handler ends the frame, so its click does
-not also end the wait; the timed wait checks its click, deadline or display
-completion; then a ready script runs. While a resource holds the script only the clock
-advances. `acceptsInput` reports run modes 1 and 3. `advanceTo`, `layerEvent` and
-`keyPush` are the individual steps, and
-`save`/`load` with `scenarioArchive()` and `flushSaves()` serve save tooling. `runMode` is
-the native mode (0 script, 3 stop, 7 video, 13 load).
+suspended on a resource ('held' when the operation entered a run mode; a load that
+replaced the suspended caret runs the loaded caret instead of resuming). `frame` follows
+`0x1400c0560`:
+
+1. The frame counter (Lua `getFrameNumber`) increments.
+2. The window update delivers the layer events of the previous frame's pointer input.
+   Each event's script event is immediate or deferred by the run mode; an event whose
+   layer was deleted or lost that event since is not raised.
+3. The input update samples `input.sample` into `ArtemisInput` and clears the
+   `overrideKey` overrides.
+4. The clock advances voices, tweens and video layers, and Lua `onEnterFrame` runs (a
+   failing handler is cleared).
+5. The run-mode branch: a pending transition steps (role 0 decided finishes a run mode 2
+   transition); run mode 7 runs the fullscreen movie frame; run modes 1 and 3 deliver the
+   push handlers, and a delivered handler ends the frame; the wait (run modes 1, 3 and 4)
+   checks role 0 decided in run mode 1, its deadline or display completion; then a ready
+   script runs.
+
+Delivering pointer events one frame late keeps the native order of a button press: the
+push handler of the press is queued first and ends its frame, and the layer click's
+handler scope, raised next frame, runs above it. While a resource holds the script only
+the input and clock advance. `acceptsInput` reports run modes 1 and 3. `advanceTo`,
+`layerEvent` and `keyPush` are the individual steps, and `save`/`load` with
+`scenarioArchive()` and `flushSaves()` serve save tooling. `runMode` is the current caret's
+native mode (0 script, 1 click wait, 2 transition, 3 stop, 4 wait, 7 video, 13 load).
+
+`input.ts` is CArtemisInput. Keys 0..0xff hold 0 idle, 1 pressed this update, 2 held,
+3 held past the 500 ms repeat delay and 4 released this update; wheel notches (136 up,
+137 down) persist until a push, down or down-edge query sees them; joystick keys
+0x100..0x13f stay 0. Push answers states 1 and 3, down 1..3, down edge 1, up edge 4 and
+decide the down edge (rev.3179 has no writer for the up-edge decide set). Keys 1 and 2
+require the pointer inside the client area, and a false key 1 query repeats for the tap
+key 0x8a. Lua `overrideKey{key, status}` sets a one-update override of `status & 0x3e | 1`
+(bit 1 push .. bit 5 decide) for one key or every key; status -1 clears it and keys from
+0x140 are refused. Lua `isPush`, `isDown`, `isDownEdge`, `isUpEdge` and `isDecide` query
+it; `getScriptStatus`/`setScriptStatus` read and enter the current caret's run mode
+(entering 0 ends a script wait); `getTouchCount` and `setUseTouchHold` use the host's
+touch device. Wrong argument types report `<name>の引数が不正です`.
+
+The run mode (c70, previous mode c74) and the wait flags (b94..bc8) belong to the caret.
+`call` and an event-handler scope save the caller's caret with its mode, wait flags and
+tag queue and start a new caret in mode 0 without wait flags; `return` restores them.
+`ArtemisScript.caretFields` lets the runtime hand the wait owner's flags to each saved
+caret.
 
 Runtime service adapters shared by the browser player and the probe:
 `runtime-sound.ts` maps the effect (+0x3d88) and music (+0x3d60) managers onto the
@@ -195,8 +233,12 @@ When a transition starts the last presented frame is kept; state 1 crossfades fr
 the transition value, state 2 reveals by the rule image against threshold and vague
 (`a = clamp((t - r + v) / 2v)`, or a step when vague is 0).
 
-Pointer input: a left button press is the run mode 1 click, role 0 and `VK_LBUTTON`; the
-right button is role 1 and `VK_RBUTTON`; keys are pushed by virtual-key code.
+Input is polled like `GetAsyncKeyState`: the player keeps a `VirtualKeyState`
+(`src/input/virtual-keys.ts`) of the held mouse buttons (`VK_LBUTTON`, `VK_RBUTTON`,
+`VK_MBUTTON`) and keys (by `KeyboardEvent.keyCode`), and samples it once per frame; a key
+pressed and released between two frames is reported held once. Wheel notches become keys
+136/137, the pointer leaving the canvas clears the inside flag and focus loss releases
+every key. Which role a key serves is game configuration (`keyconfig`).
 `hitTest(scene, x, y)` returns visible image, animation and text layers under a stage
 point, topmost first: the point maps through the inverse local matrix into the image
 bounds, then the clickable threshold gates the pixel alpha (`0x14017b6a0`). The player
@@ -286,8 +328,9 @@ returns only the sections present, so the loader keeps reset values for the rest
 reads each owner's `saveFields` (modes, key roles and push handlers, seton slots, message
 selection, scene tweens, text controls, glyphs, Lua event names, save object) plus the host
 scalars (+0x3628 font, macro list, debug fields) and the carets: the last caret is the
-current one, earlier carets are the call stack whose run mode the host derives from the
-frame's resume state. `applyArtemisScenario` is loader `0x140141b10` after the archive
+current one, earlier carets are the call stack, each with its own run mode and with the
+wait flags it saved, so a save inside an event-handler scope records the interrupted
+carets as the native writer does. `applyArtemisScenario` is loader `0x140141b10` after the archive
 read: the `bf210` reset, plain assignment of each present section (absent sections keep
 the reset values; key roles rebuild the constructor defaults and replace only the ordinary
 keys), variables, carets, run mode 13, the tag replay with the glyph layer refresh between
@@ -309,7 +352,8 @@ from the image cache. An evicted surface still held by layers stays alive until 
 holder releases it.
 The engine reset empties the caret, which holds the wait flags: `ArtemisTimedWait.clear`
 drops a pending wait without its release or Out event, so a caret saved inside a wait
-resumes at its tag in run mode 0. The production scenario loader is not wired yet.
+resumes at its tag in run mode 0. The runtime's load tag runs the scenario loader; the
+loaded carets keep their saved run modes and resume ready.
 
 `tools/probe-artemis.mjs --save-load-at=N` saves a scenario archive before the Nth delivered click, loads it through `ArtemisLoad`
 and continues from the restored caret instead of clicking. It requires the loaded state
@@ -384,8 +428,9 @@ owner to clear every native collection. Configuration is not message/backlog ren
 codes 136/137 as separate flags. `keyconfig` clears the role first; missing keys
 leave it empty, while explicit empty keys add ordinary code 0. `delonpush` removes
 both native handler-map slots, using integer-zero for a missing key. Stored command
-arguments are copied. Physical input sampling, special-code interpretation,
-frame dispatch remain separate input-owner work.
+arguments are copied. `roleActive` answers a role through the input owner's decide or
+down query: flag 136, flag 137, then the ordinary keys ascending. A decided role holding
+Enter is refused while Alt is down and Enter decided (Alt+Enter is the fullscreen key).
 
 `setEventFilter` retains a live Lua function independently of the tag-filter table.
 `filterEvent` supplies the engine, event name and named arguments and preserves the

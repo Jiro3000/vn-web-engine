@@ -95,14 +95,14 @@ export interface ArtemisScenarioScalars<Font extends object> {
   readonly font: Font;
 }
 
-/** Native run mode fields for the caret record. */
+/** Caret record inputs the script does not own: the wait flags (b94..bc8 of each caret). */
 export interface ArtemisScenarioRunMode {
-  readonly mode: number;
-  readonly previous: number;
-  /** Any caret wait flag (timed, scenario, se or video wait) is set. */
+  /** Write the current caret as the loader restores it: run mode 0, no wait flag. */
+  readonly asLoaded?: boolean;
+  /** Any wait flag (timed, scenario, se or video wait) of the current caret is set. */
   readonly waiting: boolean;
-  /** The run mode of a call-stack frame resuming in `state`. */
-  frameMode(state: ArtemisScriptState | undefined): number;
+  /** A call-stack frame's saved host caret fields include a set wait flag. */
+  frameWaiting(fields: unknown): boolean;
 }
 
 const emptyBlock: AsbTag = {kind: 'tag', name: '', sourceLine: 0, args: new Map()};
@@ -120,9 +120,9 @@ export function captureArtemisScenario<Font extends object>(
   const record = (caret: ArtemisScriptCaret, current: boolean): ArtemisCaretRecord => ({
     file: caret.file,
     index: caret.index,
-    runMode: current ? runMode.mode : runMode.frameMode(caret.resumeState),
-    previousRunMode: current ? runMode.previous : 0,
-    waiting: current && runMode.waiting,
+    runMode: current && runMode.asLoaded ? 0 : (caret.runMode ?? 0),
+    previousRunMode: current && runMode.asLoaded ? 0 : (caret.previousRunMode ?? 0),
+    waiting: current ? !runMode.asLoaded && runMode.waiting : runMode.frameWaiting(caret.fields),
     queue: caret.queue,
     tag: caret.tag ?? emptyBlock,
   });
@@ -291,6 +291,8 @@ export async function applyArtemisScenario<Font extends object>(
       index: caret.index,
       queue: caret.queue,
       tag: caret.tag.name ? caret.tag : null,
+      runMode: caret.runMode,
+      previousRunMode: caret.previousRunMode,
       resumeState,
     });
     owners.script.restoreCarets([

@@ -205,7 +205,10 @@ function pageTrace() {
       const args = Object.fromEntries(tag.args);
       if (tag.name === 'lyevent') events.set(`${args.id} ${args.type}`, args);
       counts.set(tag.name, (counts.get(tag.name) ?? 0) + 1);
-      if (/save|load|sel|reset|video|movie|bgm|exit/i.test(tag.name) && notable.length < 2000)
+      if (
+        /save|load|sel|reset|video|movie|bgm|exit|^print$/i.test(tag.name) &&
+        notable.length < 2000
+      )
         notable.push({t: Math.round(performance.now()), tag: tag.name, args});
       push({tag: tag.name, args});
     },

@@ -36,6 +36,15 @@ function integer(value: string): number {
   return number;
 }
 
+/** Saved wait flags of a caller caret. */
+export interface ArtemisWaitFlags {
+  readonly inputEnabled: boolean;
+  readonly deadline: number;
+  readonly scenario: boolean;
+  readonly click: boolean;
+  readonly video: string | null;
+  readonly sound: {readonly id: string; readonly index: number} | null;
+}
 /** wait tag 0x1400cc0c0, click-wait tag `@` 0x1400cbf20, run-mode entry 0x1400c6160
  * (1 with input=1 or `@`, else 4) and the run mode 1/3/4 frame branch of 0x1400c0560.
  *
@@ -211,6 +220,36 @@ export class ArtemisTimedWait {
       return true;
     }
     return false;
+  }
+  /** The wait flags of the current caret, cleared for a new caret (call, event handler
+   * scope, jump); undefined when no wait is pending. */
+  take(): ArtemisWaitFlags | undefined {
+    const flags = this.active
+      ? {
+          inputEnabled: this.inputEnabled,
+          deadline: this.deadline,
+          scenario: this.scenario,
+          click: this.click,
+          video: this.video,
+          sound: this.sound,
+        }
+      : undefined;
+    this.clear();
+    return flags;
+  }
+  /** Reinstates the wait flags of a returning caret (c6580). */
+  restore(flags: ArtemisWaitFlags | undefined): void {
+    this.clear();
+    if (!flags) return;
+    ({
+      inputEnabled: this.inputEnabled,
+      deadline: this.deadline,
+      scenario: this.scenario,
+      click: this.click,
+      video: this.video,
+      sound: this.sound,
+    } = flags);
+    this.active = true;
   }
   /** bf210 empties the caret (script+0xb68), whose fields b94..bc8 are these wait flags.
    * No scheduler release, Out event or message update runs; reset performs its own. */
