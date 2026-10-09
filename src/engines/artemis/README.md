@@ -180,9 +180,26 @@ Persistence is a host effect.
 `src/formats/artemis/save-file.ts` reads and writes the native `BOW` container
 (`0x14013f940`/`0x14013fde0`: kind `G`/`X`/`S`, version 1003, zlib archive; 1001 raw
 archives load, 1000 legacy archives are rejected) and the sectioned archive with its
-trailing scope table. `global-save.ts` serializes `saveg.dat` (section 1 read history,
+trailing scope table. Scoped sections nest: each scope records its own section ids, the
+table lists scopes in closing order with the root last, and the reader enters scopes in
+order of their start offsets. `global-save.ts` serializes `saveg.dat` (section 1 read history,
 section 2 `g.` variables) and `system.dat` (section 1 `s.` variables) and loads them
-without dirtying variables. Scenario (`S`) saves are not implemented.
+without dirtying variables.
+
+Scenario (`S`) saves are in progress. `save-data.ts` is the save object (script +0xd0):
+per message layer text commands since the last clear (+0x08), the font frames copied at
+that clear (+0x18), indent/wordparts and prohibit commands pending (+0x38/+0x58) and
+promoted by a clear (+0x28/+0x48), and looping se tags (+0x78); the layer command
+registry (+0x68) and the BGM record (+0x88/+0x90) stay in their owners.
+`replayArtemisScenario` replays these histories in the order of loader `0x140141b10`,
+every tag with the replay flag. `scenario-save.ts` writes and reads their archive
+sections (0x18, 0x19, 0x42/0x43/0x4b/0x4c, 0x1a, 0x35, 0x1c/0x1d) with the native
+CScriptBlock layout, and `font-state.ts` serializes font frames as CFontProperty.
+Section 0x1e holds the scenario variables (CArtemisVariables): the expression quote set,
+every variable except `g.`/`s.`/`t.`, and the local frames; loading restores them without
+dirtying and refuses quote sets or frame shapes this runtime does not produce. The
+script-field sections (caret, call stack, modes, message layers, scene tweens), section
+0x41 and the `save`/`load` tag wiring are not implemented yet.
 
 `reset.ts` implements the engine reset `0x1400bf210`. `dispatch` handles the reset tag
 (`0x1400caad0`): a forced global save, automode off, mode defaults, owner resets through

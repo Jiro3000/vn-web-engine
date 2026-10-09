@@ -63,6 +63,7 @@ import {ArtemisRandom} from '../dist/engines/artemis/random.js';
 import {artemisInteger} from '../dist/engines/artemis/numbers.js';
 import {createArtemisScriptEvents} from '../dist/engines/artemis/script-events.js';
 import {luaText} from '../dist/core/lua51/runtime.js';
+import {ArtemisSaveData} from '../dist/engines/artemis/save-data.js';
 if (!process.argv[2]) throw new Error('Usage: node tools/probe-artemis.mjs GAME_DIRECTORY');
 const dialogResultArgument = process.argv
   .slice(3)
@@ -243,7 +244,7 @@ try {
   const systemProfile = new BrowserWindowsSystemProfileHost();
   // Slots begin empty; --sound-render supplies actual non-device PCM voices.
   const effectSlots = new Map(),
-    effectHistory = new Map();
+    saveData = new ArtemisSaveData();
   const seStop = new ArtemisSeStop(executableSha256, {
     effectIndex: (id) => effectSlots.get(id),
     stopEffect:
@@ -251,8 +252,8 @@ try {
       (() => {
         throw Error('Unsupported Artemis diagnostic sound voice owner');
       }),
-    hasEffectHistory: (id) => effectHistory.has(id),
-    deleteEffectHistory: (id) => effectHistory.delete(id),
+    hasEffectHistory: (id) => saveData.hasEffect(id),
+    deleteEffectHistory: (id) => saveData.deleteEffect(id),
   });
   const soundFinish = soundRender
     ? new ArtemisSoundFinish(executableSha256, {
@@ -288,7 +289,7 @@ try {
         const value = variables.lookup('s.segain.' + id);
         return value === undefined ? undefined : Number(new TextDecoder().decode(value));
       },
-      replaceEffectHistory: (id, tag) => effectHistory.set(id, tag),
+      replaceEffectHistory: (id, tag) => saveData.replaceEffect(id, tag),
       effectLoadFailed: () => {
         throw Error('Artemis actual sound load failed');
       },
@@ -618,11 +619,7 @@ try {
         },
         rememberTextCommand: (layer, slot, tag) => {
           modeEffects.push({textReplaySlot: slot, messageLayer: layer, simulation: true});
-          if (glyphLayout) {
-            const slots = remembered.get(layer) ?? new Map();
-            slots.set(slot, {...tag, args: new Map(tag.args)});
-            remembered.set(layer, slots);
-          }
+          if (glyphLayout) saveData.rememberText(layer, slot, tag);
         },
       })
     : null;
@@ -664,15 +661,7 @@ try {
         }),
       },
     );
-  const textHistory = new Map(),
-    savedFonts = new Map(),
-    remembered = new Map(),
-    retainedControls = new Map();
-  const recordText = (name, tag) => {
-    const tags = textHistory.get(name) ?? [];
-    tags.push({...tag, args: new Map(tag.args)});
-    textHistory.set(name, tags);
-  };
+  const recordText = (name, tag) => saveData.recordText(name, tag);
   const selectedResource = (name) => {
     if (name !== messageSelection.currentMessageLayer())
       throw Error('Probe selected message resource changed');
@@ -703,14 +692,9 @@ try {
       captureBacklog: () => {
         throw Error('Native backlog resource snapshot not implemented in nonvisual glyph fixture');
       },
-      clearCommandHistory: (name) => textHistory.set(name, []),
-      saveCurrentFontHistory: (name) => savedFonts.set(name, fontStack.borrowFrames(name)),
-      promoteRememberedTextCommands: (name) => {
-        if (remembered.has(name)) {
-          retainedControls.set(name, new Map(remembered.get(name)));
-          remembered.delete(name);
-        }
-      },
+      clearCommandHistory: (name) => saveData.clearText(name),
+      saveCurrentFontHistory: (name) => saveData.saveFonts(name, fontStack.borrowFrames(name)),
+      promoteRememberedTextCommands: (name) => saveData.promoteText(name),
       forceImmediateClear: () => modes.skipAllowed && (modes.commandSkip || modes.controlSkip),
       clearText: async (name, out) => {
         if (out && sceneTweens.snapshot('out', name).length)
@@ -966,12 +950,8 @@ try {
     resetOwners,
     applyVolumes: (music, effect) => modeEffects.push({volumes: {music, effect}, simulation: true}),
     resetSaveObject: () => {
-      effectHistory.clear();
+      saveData.clear();
       music?.clearHistory();
-      textHistory.clear();
-      savedFonts.clear();
-      remembered.clear();
-      retainedControls.clear();
       layerFixture?.clearLayerCommands();
     },
     loadBoot: (path) => {

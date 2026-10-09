@@ -5169,6 +5169,277 @@ test('Native push handlers deliver slot 0 then slot 1 in key order until a comma
   assert.deepEqual(seen, ['2']);
 });
 
+test('Scenario load replays the save-object histories in native loader order', async () => {
+  const {ArtemisSaveData, replayArtemisScenario} =
+    await import('../dist/engines/artemis/save-data.js');
+  const {ArtemisLayerCommands} = await import('../dist/engines/artemis/layer-commands.js');
+  const {ARTEMIS_3179_EXECUTABLE_SHA256} = await import('../dist/engines/artemis/revision.js');
+  const block = (name, args = {}) => ({
+    kind: 'tag',
+    name,
+    sourceLine: 1,
+    args: new Map(Object.entries(args)),
+  });
+  const data = new ArtemisSaveData();
+  // Layer "b" is cleared: its indent is promoted to the retained slot and its text restarts.
+  data.recordText('b', block('print', {data: 'old'}));
+  data.rememberText('b', 'indent', block('indent', {pair: '「」'}));
+  data.clearText('b');
+  data.saveFonts('b', [{size: 20}, {size: 24}]);
+  data.promoteText('b');
+  data.rememberText('b', 'prohibit', block('prohibit', {head: '、'}));
+  data.recordText('b', block('sceout'));
+  data.recordText('b', block('print', {data: 'B'}));
+  // "a" sorts first (std::map byte order); its scein cancels nothing seen before it.
+  data.recordText('a', block('print', {data: 'A'}));
+  data.recordText('a', block('scein'));
+  data.saveFonts('a', []);
+  data.replaceEffect('rain', block('seplay', {id: 'rain', loop: '1'}));
+  data.replaceEffect('door', null);
+  const commands = new ArtemisLayerCommands(ARTEMIS_3179_EXECUTABLE_SHA256);
+  commands.append('1', block('lyprop', {id: '1', alpha: '0'}));
+  commands.append('1', block('lyc', {id: '1', file: 'x'}));
+  commands.append('0', block('anime', {id: '0'}));
+
+  const calls = [];
+  let current = 'msg';
+  const snapshot = data.snapshot();
+  assert.deepEqual([...snapshot.text.keys()], ['a', 'b']);
+  assert.deepEqual([...snapshot.retainedIndent.keys()], ['b']);
+  assert.deepEqual([...snapshot.pendingProhibit.keys()], ['b']);
+  assert.equal(snapshot.retainedProhibit.size, 0);
+  await replayArtemisScenario(
+    snapshot,
+    ['backlog'],
+    commands.snapshot(),
+    {playing: true, tag: block('splay', {file: 'bgm'})},
+    {
+      selectMessageLayer: (name, mode) => calls.push(`select ${name} ${mode}`),
+      currentMessageLayer: () => current,
+      setCurrentMessageLayer: (name) => (current = name),
+      replaceFontFrames: (fonts) => calls.push(`fonts ${[...fonts.keys()]}`),
+      applyFontFrame: (name, frame) => calls.push(`font ${name} ${frame.size}`),
+      dispatch: (tag) => calls.push(`${tag.name} ${[...tag.args.values()].join(',')}`),
+      applySceneTween: (out) => calls.push(`tween ${current} ${out ? 'out' : 'in'}`),
+      writeCurrentMessageLayerVariable: (name) => calls.push(`variable ${name}`),
+    },
+  );
+  assert.deepEqual(calls, [
+    'select backlog 1',
+    'fonts a,b',
+    'select b 0',
+    'font b 24',
+    'select b 0',
+    'indent 「」',
+    'select a 0',
+    'print A',
+    'tween a in',
+    'select b 0',
+    'print B',
+    'tween b out',
+    'select msg 0',
+    'variable msg',
+    'anime 0',
+    'lyc 1,x',
+    'lyprop 1,0',
+    'splay bgm',
+    'seplay rain,1',
+  ]);
+  assert.equal(current, 'msg');
+  const restored = new ArtemisSaveData();
+  restored.restore(snapshot);
+  assert.deepEqual(restored.snapshot(), snapshot);
+  data.clear();
+  assert.equal(data.hasEffect('rain'), false);
+  assert.equal(data.textCommands('b'), undefined);
+});
+
+test('Scenario save object sections round-trip in the native archive layout', async () => {
+  const {ArtemisSaveArchiveReader, ArtemisSaveArchiveWriter} =
+    await import('../dist/formats/artemis/save-file.js');
+  const {writeArtemisScriptBlock, writeArtemisSaveObject, readArtemisSaveObject} =
+    await import('../dist/engines/artemis/scenario-save.js');
+  const block = (name, args = {}, line = 1) => ({
+    kind: 'tag',
+    name,
+    sourceLine: line,
+    args: new Map(Object.entries(args)),
+  });
+  // CScriptBlock: section 2 line, 3 name, 4 count then key/value strings.
+  const single = new ArtemisSaveArchiveWriter();
+  single.section(0, true);
+  writeArtemisScriptBlock(single, block('ab', {k: 'v'}, 7));
+  single.close();
+  const bytes = single.finish();
+  const words = new DataView(bytes.buffer, bytes.byteOffset);
+  assert.deepEqual(
+    [...bytes.subarray(0, 24)],
+    [7, 0, 0, 0, 2, 0, 0, 0, 0x61, 0x62, 1, 0, 0, 0, 1, 0, 0, 0, 0x6b, 1, 0, 0, 0, 0x76],
+  );
+  // Table: the object scope (start 0, sections 2→0, 3→4, 4→10), then the empty root.
+  const table = [];
+  for (let offset = 24; offset < bytes.length; offset += 4)
+    table.push(words.getUint32(offset, true));
+  assert.deepEqual(table, [2, 0, 3, 2, 0, 3, 4, 4, 10, 0, 0, 24]);
+
+  const {artemisDefaultFontAttributes, writeArtemisFontFrame, readArtemisFontFrame} =
+    await import('../dist/engines/artemis/font-state.js');
+  const {ARTEMIS_3179_EXECUTABLE_SHA256: hash} =
+    await import('../dist/engines/artemis/revision.js');
+  const codec = {
+    write: writeArtemisFontFrame,
+    read: (archive) => readArtemisFontFrame(hash, archive),
+  };
+  const base = artemisDefaultFontAttributes(hash);
+  // Defaults include the Shift-JIS face bytes, which are kept as bytes.
+  const frame = (patch, overflow) => ({font: {...base, ...patch}, overflow});
+  const state = {
+    data: {
+      text: new Map([['msg', [block('print', {data: 'x'}), block('sceout')]]]),
+      fonts: new Map([
+        [
+          'msg',
+          [
+            frame({}, 0),
+            frame(
+              {
+                face: 'Noto',
+                size: 30,
+                layermode: 'screen',
+                align: 'right',
+                alpha: 0.5,
+                hung: false,
+                color: 0xff112233,
+              },
+              -1,
+            ),
+          ],
+        ],
+        ['sub', []],
+      ]),
+      retainedIndent: new Map([['msg', block('indent', {pair: '「」'})]]),
+      pendingIndent: new Map(),
+      retainedProhibit: new Map(),
+      pendingProhibit: new Map([['msg', block('prohibit', {head: '、'})]]),
+      effects: new Map([
+        ['door', null],
+        ['rain', block('seplay', {id: 'rain', loop: '1'})],
+      ]),
+    },
+    layerCommands: new Map([
+      ['1', [block('lyc', {id: '1', file: 'x'}), block('lyprop', {id: '1'})]],
+    ]),
+    music: {playing: true, tag: block('splay', {file: 'bgm', loop: '1'}, 9)},
+  };
+  const writer = new ArtemisSaveArchiveWriter();
+  writeArtemisSaveObject(writer, state, codec);
+  const read = readArtemisSaveObject(new ArtemisSaveArchiveReader(writer.finish()), codec);
+  assert.deepEqual(read, state);
+  // A missing BGM block and absent sections keep the reset values.
+  const quiet = new ArtemisSaveArchiveWriter();
+  writeArtemisSaveObject(quiet, {...state, music: {playing: false, tag: block('')}}, codec);
+  assert.equal(
+    readArtemisSaveObject(new ArtemisSaveArchiveReader(quiet.finish()), codec).music.playing,
+    false,
+  );
+  const empty = new ArtemisSaveArchiveWriter();
+  empty.section(9);
+  const none = readArtemisSaveObject(new ArtemisSaveArchiveReader(empty.finish()), codec);
+  assert.equal(none.data.text.size + none.layerCommands.size + none.data.effects.size, 0);
+});
+
+test('Scenario variables section keeps scenario names and local frames, not g./s./t.', async () => {
+  const {ArtemisSaveArchiveReader, ArtemisSaveArchiveWriter} =
+    await import('../dist/formats/artemis/save-file.js');
+  const {writeArtemisScenarioVariables, readArtemisScenarioVariables} =
+    await import('../dist/engines/artemis/scenario-save.js');
+  const {ArtemisVariables} = await import('../dist/engines/artemis/variables.js');
+  const text = (value) => new TextDecoder().decode(value);
+  const source = new ArtemisVariables();
+  for (const [name, value] of [
+    ['f.flag', '1'],
+    ['g.done', '1'],
+    ['s.vol', '5'],
+    ['t.tmp', 'x'],
+  ])
+    source.write(name, value);
+  source.pushLocal();
+  source.write('arg', 'local', true);
+  const writer = new ArtemisSaveArchiveWriter();
+  writer.section(1);
+  writer.u8(0);
+  writeArtemisScenarioVariables(writer, source);
+  const bytes = writer.finish();
+
+  const target = new ArtemisVariables();
+  for (const [name, value] of [
+    ['f.flag', '0'],
+    ['f.other', '9'],
+    ['g.done', '0'],
+    ['t.tmp', 'y'],
+  ])
+    target.write(name, value);
+  target.clearGlobalDirty();
+  readArtemisScenarioVariables(new ArtemisSaveArchiveReader(bytes), target);
+  assert.equal(text(target.read('f.flag')), '1');
+  assert.equal(target.lookup('f.other'), undefined);
+  // The reset tail keeps g./s.; t. names are neither saved nor kept.
+  assert.equal(text(target.read('g.done')), '0');
+  assert.equal(target.lookup('t.tmp'), undefined);
+  assert.equal(target.globalDirty, false);
+  assert.equal(text(target.lookup('arg')), 'local');
+  target.popLocal();
+  assert.equal(target.lookup('arg'), undefined);
+  assert.throws(() => target.popLocal(), /underflow/);
+});
+
+test('Save archive scopes: scoped sections nest, close in order and are entered by start', async () => {
+  const {ArtemisSaveArchiveReader, ArtemisSaveArchiveWriter} =
+    await import('../dist/formats/artemis/save-file.js');
+  const writer = new ArtemisSaveArchiveWriter();
+  writer.section(1);
+  writer.u8(7);
+  // Section 3 opens a scope at its own offset; inside it, two unnamed object scopes.
+  writer.section(3, true);
+  writer.u32(2);
+  for (const value of [10, 20]) {
+    writer.section(0, true);
+    writer.section(2);
+    writer.u32(value);
+    writer.close();
+  }
+  writer.close();
+  writer.section(4);
+  writer.u32(99);
+  const bytes = writer.finish();
+  const view = new DataView(bytes.buffer);
+  const table = view.getUint32(bytes.length - 4, true);
+  // Scopes in closing order: the two objects, section 3's scope, then the root.
+  assert.deepEqual(
+    [...Array(19)].map((_, index) => view.getUint32(table + index * 4, true)),
+    [4, 5, 1, 2, 5, 9, 1, 2, 9, 1, 0, 0, 3, 1, 0, 3, 1, 4, 13],
+  );
+  const reader = new ArtemisSaveArchiveReader(bytes);
+  assert.equal(reader.seek(4), true);
+  assert.equal(reader.u32(), 99);
+  assert.equal(reader.seek(1), true);
+  assert.equal(reader.u8(), 7);
+  assert.equal(reader.seek(2), false);
+  assert.equal(reader.seek(3, true), true);
+  assert.equal(reader.u32(), 2);
+  const values = [];
+  for (let count = 2; count > 0; count--) {
+    reader.seek(0, true);
+    assert.equal(reader.seek(2), true);
+    values.push(reader.u32());
+    reader.close();
+  }
+  reader.close();
+  assert.deepEqual(values, [10, 20]);
+  assert.throws(() => reader.close(), /underflow/);
+  assert.throws(() => writer.close(), /underflow/);
+});
+
 test('Global and system saves round-trip through native BOW archives and reset keeps g./s. variables', async () => {
   const {ArtemisVariables} = await import('../dist/engines/artemis/variables.js');
   const {

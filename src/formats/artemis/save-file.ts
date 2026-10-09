@@ -8,17 +8,27 @@
  *
  * Archive (0x140008940, 0x14018e1e0, 0x14018d6c0, 0x14018d9f0): little-endian uint32 values
  * and length-prefixed byte strings. Sections record the stream offset for a numeric id in
- * the current scope. Closing the archive appends the scope table (uint32 scope count; per
- * scope uint32 start, uint32 section count, then id/offset pairs) and the table offset.
+ * the innermost scope; a scoped section also opens a nested scope at that offset. Closing
+ * the archive appends the scope table (uint32 scope count; per scope uint32 start, uint32
+ * section count, then id/offset pairs; nested scopes in closing order, the root last) and
+ * the table offset.
  */
 
 export type ArtemisSaveKind = 'G' | 'X' | 'S';
 export const ARTEMIS_SAVE_VERSION = 1003;
 
+interface ArchiveScope {
+  readonly start: number;
+  readonly sections: Map<number, number>;
+}
+
 export class ArtemisSaveArchiveWriter {
   private bytes = new Uint8Array(256);
   private length = 0;
-  private readonly sections = new Map<number, number>();
+  /** Open scopes; the root (start 0) is first. */
+  private readonly open: ArchiveScope[] = [{start: 0, sections: new Map()}];
+  /** Closed scopes in closing order (+0x48). */
+  private readonly closed: ArchiveScope[] = [];
   private reserve(count: number): void {
     if (this.length + count <= this.bytes.length) return;
     let size = this.bytes.length * 2;
@@ -27,9 +37,20 @@ export class ArtemisSaveArchiveWriter {
     grown.set(this.bytes.subarray(0, this.length));
     this.bytes = grown;
   }
-  /** 0x140008940 with a nonzero id: id → current offset in the current scope. */
-  section(id: number): void {
-    this.sections.set(id >>> 0, this.length);
+  /** 0x140008940: a nonzero id records the current offset in the innermost scope; `scoped`
+   * then opens a nested scope starting at that offset. */
+  section(id: number, scoped = false): void {
+    if (id) this.open[this.open.length - 1]!.sections.set(id >>> 0, this.length);
+    if (scoped) this.open.push({start: this.length, sections: new Map()});
+  }
+  /** 0x1400a2290: closes the innermost scope. */
+  close(): void {
+    if (this.open.length < 2) throw new Error('Artemis save archive scope underflow');
+    this.closed.push(this.open.pop()!);
+  }
+  u8(value: number): void {
+    this.reserve(1);
+    this.bytes[this.length++] = value & 0xff;
   }
   u32(value: number): void {
     this.reserve(4);
@@ -43,15 +64,21 @@ export class ArtemisSaveArchiveWriter {
     this.bytes.set(value, this.length);
     this.length += value.length;
   }
-  /** 0x14013f940 archive close: the single root scope (start 0) and the table offset. */
+  /** 0x14013f940 archive close: the root scope closes last, then 0x14018e1e0 writes every
+   * scope (uint32 count; per scope start, section count, id/offset pairs) and the table
+   * offset. */
   finish(): Uint8Array {
+    if (this.open.length !== 1) throw new Error('Artemis save archive has open scopes');
     const table = this.length;
-    this.u32(1);
-    this.u32(0);
-    this.u32(this.sections.size);
-    for (const [id, offset] of this.sections) {
-      this.u32(id);
-      this.u32(offset);
+    const scopes = [...this.closed, this.open[0]!];
+    this.u32(scopes.length);
+    for (const scope of scopes) {
+      this.u32(scope.start);
+      this.u32(scope.sections.size);
+      for (const [id, offset] of scope.sections) {
+        this.u32(id);
+        this.u32(offset);
+      }
     }
     this.u32(table);
     return this.bytes.slice(0, this.length);
@@ -61,35 +88,57 @@ export class ArtemisSaveArchiveWriter {
 export class ArtemisSaveArchiveReader {
   private offset = 0;
   private readonly view: DataView;
-  private readonly sections = new Map<number, number>();
+  /** 0x14018d6c0: scopes ordered by start; entering a scoped section takes the next one. */
+  private readonly pending: ArchiveScope[];
+  private readonly stack: ArchiveScope[] = [];
   constructor(private readonly bytes: Uint8Array) {
     this.view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     if (bytes.length < 4) throw new Error('Truncated Artemis save archive');
     this.offset = this.view.getUint32(bytes.length - 4, true);
-    const scopes = this.u32();
-    // 0x14018d6c0 orders scopes by start and makes the first one current.
-    let first: {start: number; sections: Map<number, number>} | null = null;
-    for (let scope = 0; scope < scopes; scope++) {
+    const scopes: ArchiveScope[] = [];
+    for (let count = this.u32(); count > 0; count--) {
       const start = this.u32(),
-        count = this.u32(),
         sections = new Map<number, number>();
-      for (let index = 0; index < count; index++) {
+      for (let index = this.u32(); index > 0; index--) {
         const id = this.u32();
         sections.set(id, this.u32());
       }
-      if (!first || start < first.start) first = {start, sections};
+      scopes.push({start, sections});
     }
-    if (scopes !== 1 || !first || first.start !== 0)
-      throw new Error('Unsupported nested Artemis save archive scopes');
-    for (const [id, offset] of first.sections) this.sections.set(id, offset);
+    if (!scopes.length) throw new Error('Artemis save archive has no scopes');
+    // Equal starts keep table order (std::multimap insertion).
+    this.pending = scopes
+      .map((scope, index) => ({scope, index}))
+      .sort((a, b) => a.scope.start - b.scope.start || a.index - b.index)
+      .map(({scope}) => scope);
+    this.stack.push(this.pending.shift()!);
     this.offset = 0;
   }
-  /** 0x14018d9f0: false when the current scope has no such section. */
-  seek(id: number): boolean {
-    const offset = this.sections.get(id >>> 0);
-    if (offset === undefined) return false;
-    this.offset = offset;
+  /** 0x14018d9f0: false when the innermost scope has no such section (nothing changes).
+   * Otherwise the offset moves to it; `scoped` then enters the next scope by start and
+   * moves to that scope's start. Id 0 with `scoped` only enters. */
+  seek(id: number, scoped = false): boolean {
+    if (id) {
+      const offset = this.stack[this.stack.length - 1]!.sections.get(id >>> 0);
+      if (offset === undefined) return false;
+      this.offset = offset;
+    }
+    if (scoped) {
+      const scope = this.pending.shift();
+      if (!scope) throw new Error('Artemis save archive scope overflow');
+      this.stack.push(scope);
+      this.offset = scope.start;
+    }
     return true;
+  }
+  /** 0x1400a2290 while reading: leaves the innermost scope. */
+  close(): void {
+    if (this.stack.length < 2) throw new Error('Artemis save archive scope underflow');
+    this.stack.pop();
+  }
+  u8(): number {
+    if (this.offset + 1 > this.bytes.length) throw new Error('Truncated Artemis save archive');
+    return this.bytes[this.offset++]!;
   }
   u32(): number {
     if (this.offset + 4 > this.bytes.length) throw new Error('Truncated Artemis save archive');

@@ -114,6 +114,30 @@ export class ArtemisVariables {
   restore(name: string, value: Uint8Array): void {
     this.global.set(name, value.slice());
   }
+  /** Scenario save 0x1400aff10: every variable not starting with "g.", "s." or "t.", for
+   * the global table and then each local frame (oldest first). */
+  scenarioEntries(): {
+    readonly global: [string, Uint8Array][];
+    readonly locals: [string, Uint8Array][][];
+  } {
+    const entries = (table: Map<string, Uint8Array>): [string, Uint8Array][] =>
+      [...table]
+        .filter(([name]) => !['g.', 's.', 't.'].some((prefix) => name.startsWith(prefix)))
+        .map(([name, value]) => [name, value.slice()]);
+    return {global: entries(this.global), locals: this.locals.map(entries)};
+  }
+  /** Scenario load 0x1400b0370: the reset tail, then find-or-insert with the string setter
+   * (no dirty mark); local frames are replaced by the saved frames. */
+  restoreScenario(
+    global: readonly (readonly [string, Uint8Array])[],
+    locals: readonly (readonly (readonly [string, Uint8Array])[])[],
+  ): void {
+    this.resetScenario();
+    for (const [name, value] of global) this.global.set(name, value.slice());
+    this.locals.length = 0;
+    for (const frame of locals)
+      this.locals.push(new Map(frame.map(([name, value]) => [name, value.slice()])));
+  }
   /** Variables virtual +0x38 (0x1400b0bd0), the reset tag tail: every global variable
    * except g. and s. names is erased. Local scopes are separate and unchanged. */
   resetScenario(): void {
