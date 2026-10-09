@@ -229,6 +229,10 @@ saves a scenario archive before the Nth delivered click, loads it through `Artem
 and continues from the restored caret instead of clicking. It requires the loaded state
 to match the saved one with the caret written as loaded, and a second load of that state
 to reproduce it; both loads run the game's `onLoad` handler. The report is `saveLoad`.
+`--auto-choice=PREFIX` (repeatable) with `--auto-choices=N` continues a route once the
+scripted `--layer-event`/`--key-push` inputs are used up: at a run mode 3 stop it picks the
+first visible layer with an enabled click event whose id starts with a prefix and delivers
+rollover, click and key push 1 (report `autoChoices`).
 
 `reset.ts` implements the engine reset `0x1400bf210`. `dispatch` handles the reset tag
 (`0x1400caad0`): a forced global save, automode off, mode defaults, owner resets through
