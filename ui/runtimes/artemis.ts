@@ -178,7 +178,7 @@ function pageTrace() {
   const entries: unknown[] = [];
   // Latest lyevent registration per layer and event type.
   const events = new Map<string, Record<string, string>>();
-  // Tag counts, and save, load, selection, reset, video and music tags in order.
+  // Tag counts, and save, load, selection, reset, video and music tags and mode changes in order.
   const counts = new Map<string, number>();
   const notable: unknown[] = [];
   const push = (entry: unknown) => {
@@ -212,7 +212,15 @@ function pageTrace() {
         notable.push({t: Math.round(performance.now()), tag: tag.name, args});
       push({tag: tag.name, args});
     },
-    effect: (effect: object) => push(effect),
+    effect: (effect: object) => {
+      // Skip and automode changes join the ordered notable list.
+      if (
+        ['automode', 'commandSkip', 'controlSkip'].some((key) => key in effect) &&
+        notable.length < 2000
+      )
+        notable.push({t: Math.round(performance.now()), effect});
+      push(effect);
+    },
     script: (step: object) => push({step}),
   };
 }
