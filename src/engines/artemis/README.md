@@ -439,7 +439,15 @@ errors), replaces or tiles (`tileArtemisRule`, `0x140171140`) the stage rule ima
 state 2 and tweens the threshold from `-vague` to `vague+255`. Both tweens complete through
 stage commit and run mode release. `input` selects run mode 2 (clickable) or 4. The frame
 owner ticks registered tweens and finishes `tween` on a mode 2 click. Transition rendering
-and rule pixel decoding are host work.
+is host work.
+
+`png-surface.ts` (`artemisPngSurface`) converts a decoded PNG into the native CPng image
+(`0x1401838e0`): colour type 0 (gray) becomes format 0 with one byte per pixel (low depths
+bit-replicated, 16-bit high byte, gray tRNS ignored); every other colour type becomes
+format 2 with four bytes per pixel. Rule hosts load rule images through the stage loader
+and pass this surface to `trans`, so only gray PNG rules are accepted. The probe's metadata
+fixture decodes rule images this way and records only their path, format, size and
+SHA-256.
 
 The flip prefix is present as a Ghidra label rather than a canonical function;
 its saved raw bytes/instructions confirm the capture-mode branch and tail jump.

@@ -4009,6 +4009,41 @@ test('Native trans commits, starts crossfade/rule tweens, tiles rule images and 
   assert.deepEqual(target.pixels, Uint8Array.of(9, 8, 7, 6));
 });
 
+test('Native PNG surfaces keep gray images as one-byte format 0 rule images', async () => {
+  const {artemisPngSurface} = await import('../dist/engines/artemis/png-surface.js');
+  const {decodePng} = await import('../dist/formats/png/decode.js');
+  const {png, chunk} = await import('./png-fixtures.mjs');
+  const surface = async (options) => artemisPngSurface(await decodePng(png(options)));
+  // 2-bit gray expands by bit replication; tRNS does not reach the gray bytes.
+  const low = await surface({
+    width: 4,
+    height: 1,
+    depth: 2,
+    type: 0,
+    raw: Buffer.from([0, 0b00011011]),
+    extras: [chunk('tRNS', Buffer.from([0, 1]))],
+  });
+  assert.deepEqual(
+    {format: low.format, bytesPerPixel: low.bytesPerPixel, pixels: [...low.pixels]},
+    {format: 0, bytesPerPixel: 1, pixels: [0, 85, 170, 255]},
+  );
+  const deep = await surface({
+    width: 2,
+    height: 1,
+    depth: 16,
+    type: 0,
+    raw: Buffer.from([0, 0x12, 0xff, 0xab, 0x01]),
+  });
+  assert.deepEqual([...deep.pixels], [0x12, 0xab]);
+  for (const [type, raw] of [
+    [2, [0, 1, 2, 3]],
+    [4, [0, 7, 9]],
+  ]) {
+    const color = await surface({width: 1, height: 1, type, raw: Buffer.from(raw)});
+    assert.deepEqual([color.format, color.bytesPerPixel, color.pixels.length], [2, 4, 4]);
+  }
+});
+
 test('Layer event slots invoke the stored callback functor with the type index and force', async () => {
   const {ArtemisLayerEventSlots} = await import('../dist/engines/artemis/layer-events.js');
   const slots = new ArtemisLayerEventSlots();

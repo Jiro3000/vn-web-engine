@@ -121,6 +121,8 @@ let messageStage = null,
   messageSelection = null;
 let layerFixture = null,
   pendingResource = null,
+  resourceInFlight = false,
+  runModeHeld = false,
   resourceResumptions = 0;
 let probeTick = 1,
   advancedWaits = 0;
@@ -637,10 +639,13 @@ try {
       executableSha256,
       (path) => installation.files.read(path),
       {
-        enter: () => script.pause(),
+        // A rule trans enters its run mode after the asynchronous rule load; the resource
+        // wait then becomes the run mode wait instead of resuming.
+        enter: () => (resourceInFlight ? (runModeHeld = true) : script.pause()),
         release: () => script.resume(),
         now: () => probeTick,
         emit: (tag) => scriptEvents.emit(tag, 0, true),
+        stageSize: () => ({width, height}),
         skipState: () => ({
           allowed: modes.skipAllowed,
           command: modes.commandSkip,
@@ -953,8 +958,17 @@ try {
         if (resourceResumptions >= 100000) throw Error('Probe resource budget exceeded');
         const operation = pendingResource;
         pendingResource = null;
-        await operation;
+        resourceInFlight = true;
+        try {
+          await operation;
+        } finally {
+          resourceInFlight = false;
+        }
         resourceResumptions++;
+        if (runModeHeld) {
+          runModeHeld = false;
+          continue;
+        }
         if (soundRender) {
           probeTick = (probeTick + 1) >>> 0;
           soundFixture.advanceToTick(probeTick);

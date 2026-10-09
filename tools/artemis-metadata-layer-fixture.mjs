@@ -1,6 +1,8 @@
-/** Read-only geometry fixture for control-flow probing. It never decodes pixels,
- * prepares GPU resources, displays game media or claims production rendering.
+/** Read-only geometry fixture for control-flow probing. It decodes only transition rule
+ * images into native gray bytes, which are reported as hashes; it never prepares GPU
+ * resources, displays game media or claims production rendering.
  */
+import {createHash} from 'node:crypto';
 import {ArtemisImageLoader} from '../dist/engines/artemis/image-loader.js';
 import {ArtemisLayers} from '../dist/engines/artemis/layers.js';
 import {ArtemisLayerCommands} from '../dist/engines/artemis/layer-commands.js';
@@ -13,9 +15,12 @@ import {ArtemisTweenRegistry} from '../dist/engines/artemis/tween.js';
 import {ArtemisShaderProperties} from '../dist/engines/artemis/shader-properties.js';
 import {artemisRevision} from '../dist/engines/artemis/revision.js';
 import {readJpegHeader} from '../dist/formats/jpeg/header.js';
+import {decodePng} from '../dist/formats/png/decode.js';
+import {artemisPngSurface} from '../dist/engines/artemis/png-surface.js';
 
-/** `runMode` supplies the probe's run mode/wait owner for trans and sync tweens, and
- * `emit` for tween completion events; an absent owner refuses them. */
+/** `runMode` supplies the probe's run mode/wait owner for trans and sync tweens, `emit`
+ * for tween completion events and `stageSize` for rule transitions; an absent owner
+ * refuses them. */
 export function createMetadataLayerFixture(hash, readFile, runMode = null) {
   artemisRevision(hash);
   const loads = [],
@@ -221,7 +226,27 @@ export function createMetadataLayerFixture(hash, readFile, runMode = null) {
   const refuseRunMode = () => {
     throw Error('Unsupported diagnostic Artemis trans run mode owner');
   };
-  let transitionTween = null;
+  let transitionTween = null,
+    stageRule = null;
+  // Rule images use the stage loader; only PNG has a decoded native surface here.
+  const ruleSource = new ArtemisImageLoader(readFile, [
+    {
+      extensions: ['png', 'PNG'],
+      decode: async (bytes) => {
+        if (![137, 80, 78, 71, 13, 10, 26, 10].every((v, i) => bytes[i] === v)) return null;
+        return artemisPngSurface(await decodePng(bytes));
+      },
+    },
+    ...[
+      ['jpg', 'jpeg', 'JPG', 'JPEG'],
+      ['psd', 'PSD'],
+    ].map((extensions) => ({
+      extensions,
+      decode: async () => {
+        throw Error(`Unsupported diagnostic Artemis ${extensions[0]} rule image`);
+      },
+    })),
+  ]);
   const transition = new ArtemisTransition(hash, {
     captureMode: () => 0,
     commit: () => stage.commit(),
@@ -241,15 +266,33 @@ export function createMetadataLayerFixture(hash, readFile, runMode = null) {
     },
     setCrossfade: (value) => effects.push({kind: 'crossfade', value, simulation: true}),
     stageSize: () => {
-      throw Error('Unsupported diagnostic Artemis rule transition');
+      if (!runMode?.stageSize) throw Error('Unsupported diagnostic Artemis rule transition');
+      return runMode.stageSize();
     },
-    loadRule: async () => {
-      // Rule transitions need decoded gray pixels; this fixture never decodes pixels.
-      throw Error('Unsupported diagnostic Artemis rule image decode');
+    loadRule: async (path) => {
+      const resource = await ruleSource.load(path);
+      const image = resource?.image ?? null;
+      effects.push({
+        kind: 'ruleLoad',
+        path: resource?.path ?? null,
+        format: image?.format ?? null,
+        width: image?.width ?? null,
+        height: image?.height ?? null,
+        sha256: image ? createHash('sha256').update(image.pixels).digest('hex') : null,
+      });
+      return image;
     },
-    setRuleImage: () => {},
+    setRuleImage: (image) => {
+      stageRule = image;
+      effects.push({kind: 'ruleImage', replaced: true});
+    },
     ruleImage: () => {
-      throw Error('Unsupported diagnostic Artemis rule transition');
+      const {width, height} = runMode.stageSize();
+      // Stage +0x50 is created with the stage at stage size, one gray byte per pixel.
+      if (stageRule?.width !== width || stageRule?.height !== height)
+        stageRule = {width, height, bytesPerPixel: 1, pixels: new Uint8Array(width * height)};
+      effects.push({kind: 'ruleImage', replaced: false});
+      return stageRule;
     },
     setVague: () => {},
     setRuleThreshold: () => {},
