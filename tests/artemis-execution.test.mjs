@@ -6124,3 +6124,306 @@ test('Music commands follow native splay/sxfade/sstop/sfade/span order, slots an
   music.clearHistory();
   assert.deepEqual([music.history.playing, music.history.tag.args.size], [false, 0]);
 });
+
+test('Scenario save captures every owner and load restores them through the archive', async () => {
+  const {ArtemisSaveArchiveReader, ArtemisSaveArchiveWriter} =
+    await import('../dist/formats/artemis/save-file.js');
+  const {writeArtemisScenarioArchive, readArtemisScenarioArchive} =
+    await import('../dist/engines/artemis/scenario-archive.js');
+  const {captureArtemisScenario, applyArtemisScenario} =
+    await import('../dist/engines/artemis/scenario-state.js');
+  const {ArtemisModes} = await import('../dist/engines/artemis/modes.js');
+  const {ArtemisKeyBindings} = await import('../dist/engines/artemis/key-bindings.js');
+  const {ArtemisEventCommands} = await import('../dist/engines/artemis/event-commands.js');
+  const {ArtemisMessageLayers, ArtemisMessageSelection} =
+    await import('../dist/engines/artemis/message-layers.js');
+  const {ArtemisTextControls} = await import('../dist/engines/artemis/text-controls.js');
+  const {ArtemisSceneTweens} = await import('../dist/engines/artemis/scene-tweens.js');
+  const {ArtemisClickGlyphs} = await import('../dist/engines/artemis/click-glyph.js');
+  const {ArtemisEvents} = await import('../dist/engines/artemis/events.js');
+  const {ArtemisSaveData} = await import('../dist/engines/artemis/save-data.js');
+  const {ArtemisLayerCommands} = await import('../dist/engines/artemis/layer-commands.js');
+  const {ArtemisVariables} = await import('../dist/engines/artemis/variables.js');
+  const {artemisDefaultFontAttributes, writeArtemisFontFrame, readArtemisFontFrame} =
+    await import('../dist/engines/artemis/font-state.js');
+  const {ARTEMIS_3179_EXECUTABLE_SHA256: hash} =
+    await import('../dist/engines/artemis/revision.js');
+  const fonts = {write: writeArtemisFontFrame, read: (a) => readArtemisFontFrame(hash, a)};
+  const font = (size) => ({font: {...artemisDefaultFontAttributes(hash), size}, overflow: 0});
+  const tag = (name, args = {}, sourceLine = 1) => ({
+    kind: 'tag',
+    name,
+    sourceLine,
+    args: new Map(Object.entries(args)),
+  });
+  const owners = () => {
+    const stage = new ArtemisMessageLayers(hash, '', {
+      createMessageLayer: (id) => ({id}),
+      copyMessageLayer: (layer) => ({...layer}),
+      retainMessageLayer() {},
+      releaseMessageLayer() {},
+      attachMessageLayer() {},
+      detachMessageLayer() {},
+    });
+    let carets = [];
+    const selection = new ArtemisMessageSelection(stage, {
+      nextMessageLayerId: () => 'auto',
+      ensureMessageHistory() {},
+      deleteMessageHistory() {},
+      publishCurrentMessageLayer() {},
+      selectionChanged() {},
+      stackUnderflow() {},
+      messageStateUpdated() {},
+    });
+    const current = () => selection.currentMessageLayer();
+    let history = {playing: false, tag: tag('', {}, 0)};
+    return {
+      modes: new ArtemisModes({
+        writeStatus() {},
+        commandSkipChanged() {},
+        controlSkipChanged() {},
+        automodeChanged() {},
+        releaseScheduler() {},
+        currentMessageLayer: current,
+      }),
+      script: {
+        carets: () => carets,
+        restoreCarets: (value) => (carets = value),
+      },
+      keyBindings: new ArtemisKeyBindings(() => 'main.ast'),
+      eventCommands: new ArtemisEventCommands(() => 'main.ast'),
+      messageLayers: stage,
+      messageSelection: selection,
+      textControls: new ArtemisTextControls({
+        currentMessageLayer: current,
+        messageLayerExists: (id) => stage.messageLayerExists(id),
+        selectMessageLayer: (id) => stage.selectMessageLayer(id),
+        clearBacklog() {},
+      }),
+      sceneTweens: new ArtemisSceneTweens(hash, current),
+      clickGlyphs: new ArtemisClickGlyphs({currentMessageLayer: current, setLayerByte16c() {}}),
+      events: new ArtemisEvents(() => {}),
+      saveData: new ArtemisSaveData(),
+      layerCommands: new ArtemisLayerCommands(hash),
+      music: {
+        get history() {
+          return history;
+        },
+        restoreHistory: (value) => (history = value),
+      },
+      variables: new ArtemisVariables(),
+    };
+  };
+  const a = owners();
+  a.script.restoreCarets([
+    {file: 'sub.ast', index: 4, queue: [], tag: tag('call', {file: 'x'}), resumeState: 'waiting'},
+    {file: 'main.ast', index: 9, queue: [tag('print', {data: 'q'})], tag: tag('@', {}, 7)},
+  ]);
+  for (const t of [
+    tag('automode', {allow: '1', layer: 'auto'}),
+    tag('skip', {allow: '1', unread: '1'}),
+    tag('rclick', {allow: '1', file: 'r.ast'}),
+    tag('autosave', {allow: '2'}),
+    tag('writebacklog', {mode: '0'}),
+  ])
+    a.modes.dispatch(t);
+  a.keyBindings.dispatch(tag('keyconfig', {role: '3', keys: '5,136'}));
+  a.keyBindings.dispatch(tag('setonpush', {key: '27', label: 'esc'}));
+  a.keyBindings.dispatch(tag('setonpush', {key: '13', keyrepeat: '1', file: 'k.ast'}));
+  a.eventCommands.dispatch(tag('setonhidein', {label: 'h'}));
+  a.eventCommands.dispatch(tag('setondirchg', {file: 'd.ast'}));
+  a.eventCommands.dispatch(tag('setonwindowbutton', {button: '2', label: 'w'}));
+  a.eventCommands.dispatch(tag('setonwindowbutton', {label: 'none'}));
+  a.messageSelection.dispatch(tag('chgmsg', {id: 'mw', layered: '1'}));
+  a.messageSelection.dispatch(tag('chgmsg', {id: 'sub'}));
+  a.textControls.dispatch(tag('hide', {allow: '1', window: 'mw,sub'}));
+  a.textControls.dispatch(tag('backlog', {allow: '1', layer: 'bl', hide: 'x', includefont: '0'}));
+  a.sceneTweens.dispatch(
+    tag('scetween', {mode: 'add', type: 'in', param: 'alpha', diff: '255', time: '300'}),
+  );
+  a.sceneTweens.dispatch(tag('scetween', {mode: 'init', type: 'hide'}));
+  a.clickGlyphs.dispatch(tag('glyph', {layer: 'g', left: '3', top: '4'}));
+  a.events.register([
+    ['onSave', 'sv_save'],
+    ['onClickWait', 'cw'],
+  ]);
+  a.saveData.recordText('sub', tag('print', {data: 'hello'}));
+  a.saveData.saveFonts('mw', [font(24), font(28)]);
+  a.layerCommands.append('bg', tag('lyc', {id: 'bg', file: 'bg01'}));
+  a.music.restoreHistory({playing: true, tag: tag('splay', {file: 'bgm01', loop: '1'})});
+  a.variables.write('f.flag', '7');
+
+  const scalars = {
+    macroFiles: ['macro.iet'],
+    autosaveFlag: 0,
+    autosaveValue: 0,
+    debugMode: 1,
+    debugLevel: 2,
+    field35b8: '',
+    field35d8: 0,
+    field3880: 0,
+    font: font(26),
+  };
+  const runMode = {mode: 1, previous: 0, waiting: false, frameMode: (s) => (s ? 4 : 0)};
+  const saved = captureArtemisScenario(a, scalars, runMode, null);
+  assert.deepEqual(
+    saved.callStack.map((c) => c.runMode),
+    [4],
+  );
+  assert.equal(saved.caret.tag.name, '@');
+  assert.deepEqual([...saved.keyRoles.get(3)], [5]);
+  assert.equal(saved.eventSlots[6].args.get('label'), 'h');
+  assert.equal(saved.eventSlots[0].name, '');
+  assert.deepEqual(saved.layeredNames, ['mw']);
+  assert.deepEqual(saved.messageSelection, ['', 'mw']);
+  assert.deepEqual(saved.luaEventNames, ['', 'cw', '', 'sv_save', '', '', '']);
+
+  const writer = new ArtemisSaveArchiveWriter();
+  writeArtemisScenarioArchive(writer, saved, a.variables, fonts);
+  const loaded = readArtemisScenarioArchive(new ArtemisSaveArchiveReader(writer.finish()), fonts);
+  const b = owners();
+  b.modes.dispatch(tag('skip', {allow: '0'}));
+  b.keyBindings.dispatch(tag('setonpush', {key: '1', label: 'stale'}));
+  const effects = [];
+  let restoredScalars = null;
+  let loadMode = null;
+  await applyArtemisScenario(b, loaded, {
+    reset: () => effects.push('reset'),
+    loadScalars: (value) => (restoredScalars = value),
+    loadBacklog: (value) => effects.push(['backlog', value ?? null]),
+    enterLoadMode: (caret) => {
+      loadMode = {mode: caret.runMode, previous: caret.previousRunMode};
+      effects.push('mode13');
+    },
+    frameState: (mode) => (mode ? 'waiting' : undefined),
+    refreshGlyphLayer: (name) => effects.push(['glyph', name]),
+    finishLoad: () => effects.push('release'),
+    selectMessageLayer: (name, mode) => b.messageLayers.selectMessageLayer(name, mode),
+    currentMessageLayer: () => b.messageSelection.currentMessageLayer(),
+    setCurrentMessageLayer: (name) => b.messageSelection.loadFields({current: name}),
+    replaceFontFrames() {},
+    applyFontFrame() {},
+    dispatch: (t) => effects.push(['replay', t.name]),
+    applySceneTween() {},
+    writeCurrentMessageLayerVariable() {},
+  });
+  assert.deepEqual(effects, [
+    'reset',
+    ['backlog', null],
+    'mode13',
+    ['replay', 'print'],
+    ['replay', 'lyc'],
+    // The glyph refresh visits the layer name, then the rplayer name it was copied to.
+    ['glyph', 'g'],
+    ['glyph', 'g'],
+    ['replay', 'splay'],
+    'release',
+  ]);
+  assert.deepEqual(loadMode, {mode: 1, previous: 0});
+  // The saved +0x3628 font and the other host scalars come back as written.
+  const reloaded = captureArtemisScenario(b, restoredScalars, runMode, null);
+  assert.deepEqual(reloaded, saved);
+  assert.equal(new TextDecoder().decode(b.variables.read('f.flag')), '7');
+  assert.equal(b.keyBindings.pushHandler(1, 0), undefined);
+  // Ordinary keys come from the save; the 136/137 flags keep the constructor defaults.
+  assert.deepEqual(b.keyBindings.role(3), {
+    keys: new Set([5]),
+    special136: false,
+    special137: false,
+  });
+  assert.equal(b.keyBindings.role(0).special136, true);
+});
+
+test('Load tag forces a global save, dispatches the archive kind, calls onLoad and continues as trans', async () => {
+  const {ArtemisSaveArchiveWriter, packArtemisSaveFile} =
+    await import('../dist/formats/artemis/save-file.js');
+  const {ArtemisLoad} = await import('../dist/engines/artemis/load.js');
+  const {ArtemisSave} = await import('../dist/engines/artemis/save.js');
+  const {ArtemisEvents} = await import('../dist/engines/artemis/events.js');
+  const {ArtemisVariables} = await import('../dist/engines/artemis/variables.js');
+  const {ArtemisReadHistory, writeArtemisSystemArchive} =
+    await import('../dist/engines/artemis/global-save.js');
+  const tag = (name, args = {}) => ({
+    kind: 'tag',
+    name,
+    sourceLine: 1,
+    args: new Map(Object.entries(args)),
+  });
+  const effects = [];
+  const variables = new ArtemisVariables();
+  const save = new ArtemisSave(variables, {
+    beforeScenario() {},
+    reportEventError() {},
+    writeScenario: (file) => effects.push(['scenario', file]),
+    writeGlobal: () => effects.push('saveg'),
+    writeSystem: () => effects.push('system'),
+  });
+  let failOnLoad = false;
+  const events = new ArtemisEvents(() => assert.fail('onLoad runs through the load host'));
+  const source = new ArtemisVariables();
+  source.write('s.vol', '3');
+  const scenario = new ArtemisSaveArchiveWriter();
+  scenario.section(2);
+  scenario.u32(9);
+  const files = new Map([
+    ['sys.dat', await packArtemisSaveFile('X', writeArtemisSystemArchive(source))],
+    ['00.dat', await packArtemisSaveFile('S', scenario.finish())],
+    ['bad.dat', new Uint8Array([0x42, 0x4f, 0x57, 0x53, 0xe7, 3, 0, 0])],
+  ]);
+  const load = new ArtemisLoad(save, new ArtemisReadHistory(), variables, events, {
+    readSaveFile: async (name) => files.get(name) ?? null,
+    loadScenario: async (archive) => {
+      assert.ok(archive.seek(2));
+      effects.push(['loader', archive.u32()]);
+    },
+    // The handler's resource work settles before the load continues.
+    callEvent: async (name, args) => {
+      effects.push(['lua', name, args.get('file')]);
+      await Promise.resolve();
+      if (failOnLoad) throw new Error('boom');
+      effects.push('lua-done');
+    },
+    reportEventError: (handler, error) => effects.push(['error', handler, error.message]),
+    transition: (t) => {
+      effects.push(['trans', t.name, t.args.get('type')]);
+      return true;
+    },
+  });
+  events.register([['onLoad', 'on_load']]);
+
+  assert.equal(await load.dispatch(tag('load', {file: 'missing.dat', type: '1'})), true);
+  // The forced global save runs before the open; a failed open neither calls Lua nor trans.
+  assert.deepEqual(effects.splice(0), ['saveg', 'system']);
+  await load.dispatch(tag('load', {file: 'bad.dat'}));
+  assert.deepEqual(effects.splice(0), ['saveg', 'system']);
+
+  await load.dispatch(tag('load', {file: 'sys.dat'}));
+  assert.equal(new TextDecoder().decode(variables.read('s.vol')), '3');
+  assert.deepEqual(effects.splice(0), [
+    'saveg',
+    'system',
+    ['lua', 'on_load', 'sys.dat'],
+    'lua-done',
+  ]);
+
+  await load.dispatch(tag('load', {file: '00.dat', type: '1', time: '300'}));
+  assert.deepEqual(effects.splice(0), [
+    'saveg',
+    'system',
+    ['loader', 9],
+    ['lua', 'on_load', '00.dat'],
+    'lua-done',
+    ['trans', 'trans', '1'],
+  ]);
+
+  failOnLoad = true;
+  assert.equal(await load.load('00.dat', false), true);
+  assert.deepEqual(effects.splice(0), [
+    ['loader', 9],
+    ['lua', 'on_load', '00.dat'],
+    ['error', 'on_load', 'boom'],
+  ]);
+  // The failed handler is cleared.
+  await load.load('00.dat', false);
+  assert.deepEqual(effects.splice(0), [['loader', 9]]);
+});

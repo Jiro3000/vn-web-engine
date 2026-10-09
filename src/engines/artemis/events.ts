@@ -24,6 +24,20 @@ export class ArtemisEvents {
   clear(): void {
     this.handlers.clear();
   }
+  /** Scenario archive sections 0x22, 0x26, 0x32, 0x45, 0x46, 0x54, 0x50: the callback
+   * names at +0x3d98..+0x3e58, which follow `ARTEMIS_EVENTS` order. */
+  saveFields(): string[] {
+    return ARTEMIS_EVENTS.map((event) => this.handler(event));
+  }
+  /** Loader reads assign the present names. */
+  loadFields(names: readonly (string | undefined)[]): void {
+    names.forEach((name, index) => {
+      if (name === undefined) return;
+      const event = ARTEMIS_EVENTS[index];
+      if (!event) throw Error('Unsupported Artemis saved event name');
+      this.handlers.set(event, name);
+    });
+  }
   handler(event: ArtemisEvent): string {
     return this.handlers.get(event) ?? '';
   }
@@ -34,16 +48,37 @@ export class ArtemisEvents {
     try {
       this.invoke(callback, args);
     } catch (error) {
-      // Native frame/wait owners disable their failed frame or click-wait callback.
-      if (
-        event === 'onEnterFrame' ||
-        event === 'onClickWaitIn' ||
-        event === 'onClickWaitOut' ||
-        event === 'onSave'
-      )
-        this.handlers.set(event, '');
+      this.fail(event);
       throw error;
     }
     return true;
+  }
+  /** `emit` through an owner-supplied invoker that can wait for resource work a callback
+   * starts (native loads it synchronously inside the call). */
+  async emitAsync(
+    event: ArtemisEvent,
+    args: ReadonlyMap<string, string>,
+    invoke: (name: string, args: ReadonlyMap<string, string>) => Promise<void>,
+  ): Promise<boolean> {
+    const callback = this.handler(event);
+    if (!callback) return false;
+    try {
+      await invoke(callback, args);
+    } catch (error) {
+      this.fail(event);
+      throw error;
+    }
+    return true;
+  }
+  /** Native frame/wait, save and load owners disable their failed callback. */
+  private fail(event: ArtemisEvent): void {
+    if (
+      event === 'onEnterFrame' ||
+      event === 'onClickWaitIn' ||
+      event === 'onClickWaitOut' ||
+      event === 'onSave' ||
+      event === 'onLoad'
+    )
+      this.handlers.set(event, '');
   }
 }

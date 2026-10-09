@@ -46,7 +46,21 @@ import {
   writeArtemisGlobalArchive,
   writeArtemisSystemArchive,
 } from '../dist/engines/artemis/global-save.js';
-import {packArtemisSaveFile} from '../dist/formats/artemis/save-file.js';
+import {ArtemisSaveArchiveWriter, packArtemisSaveFile} from '../dist/formats/artemis/save-file.js';
+import {
+  readArtemisScenarioArchive,
+  writeArtemisScenarioArchive,
+} from '../dist/engines/artemis/scenario-archive.js';
+import {
+  applyArtemisScenario,
+  captureArtemisScenario,
+} from '../dist/engines/artemis/scenario-state.js';
+import {ArtemisLoad} from '../dist/engines/artemis/load.js';
+import {
+  artemisDefaultFontAttributes,
+  readArtemisFontFrame,
+  writeArtemisFontFrame,
+} from '../dist/engines/artemis/font-state.js';
 import {ArtemisClickGlyphs} from '../dist/engines/artemis/click-glyph.js';
 import {ArtemisReset} from '../dist/engines/artemis/reset.js';
 import {ArtemisTimedWait} from '../dist/engines/artemis/wait.js';
@@ -101,6 +115,12 @@ const probeInputs = process.argv
 // The last --clicks argument wins.
 const clickArgument = process.argv.slice(3).findLast((arg) => arg.startsWith('--clicks='));
 let probeClicks = clickArgument ? artemisInteger(clickArgument.slice('--clicks='.length)) : 0;
+// --save-load-at=N: before the Nth delivered click, save a scenario file, load it and save
+// again; the two archives must match byte for byte.
+const saveLoadArgument = process.argv.slice(3).findLast((arg) => arg.startsWith('--save-load-at='));
+const saveLoadAt = saveLoadArgument
+  ? artemisInteger(saveLoadArgument.slice('--save-load-at='.length))
+  : null;
 const shaderPresets = process.argv.slice(3).includes('--shader-presets');
 if (shaderPresets && !metadataLayers) throw Error('--shader-presets requires --image-metadata');
 const graphicsFeatureArgument = process.argv
@@ -363,8 +383,12 @@ try {
   const save = new ArtemisSave(variables, {
     beforeScenario: (file) => lua.events.emit('onSave', new Map([['file', file]])),
     reportEventError: (error) => modeEffects.push({saveEventError: String(error)}),
-    writeScenario: () => {
-      throw new Error('Artemis scenario save serialization is not implemented');
+    // The archive is written synchronously; SIMULATED storage keeps the packed file.
+    writeScenario: (file) => {
+      const archive = writeProbeScenario();
+      saveWrites.push(
+        packArtemisSaveFile('S', archive).then((bytes) => saveFiles.set(file, bytes)),
+      );
     },
     // Archives are snapshotted synchronously; SIMULATED storage keeps the packed files in
     // memory and the loop awaits the pending compression.
@@ -645,8 +669,11 @@ try {
         messageStage.currentLayer().font = new Map(snapshot.font);
       },
       releaseFontSnapshot: () => modeEffects.push({fontSnapshotReleased: true, simulation: true}),
-      recordFontCommand: (name, tag) =>
-        modeEffects.push({fontCommand: tag.name, messageLayer: name, simulation: true}),
+      // cd380/cd460/cd950 append the tag to the save object's per-layer +0x08 history.
+      recordFontCommand: (name, tag) => {
+        modeEffects.push({fontCommand: tag.name, messageLayer: name, simulation: true});
+        if (glyphLayout) recordText(name, tag);
+      },
       stackUnderflow: (name) => modeEffects.push({fontStackUnderflow: name, simulation: true}),
     });
   const sceneTweens = messageSelection
@@ -773,16 +800,17 @@ try {
         recordPrintCommand: recordText,
       })
     : null;
-  const dispatch = (tag) => {
+  // `recordHistory` false is the native replay flag (c5800 third argument) of the loader.
+  const dispatch = (tag, recordHistory = true) => {
     nativeTags.push({name: tag.name, args: Object.fromEntries(tag.args)});
     if (glyphFixture && ['print', 'ruby', '/ruby', 'rt', 'rp'].includes(tag.name)) {
       if (pendingResource) throw Error('Probe text resource operation overlaps');
       pendingResource =
         tag.name === 'print'
-          ? print.dispatch(tag)
+          ? print.dispatch(tag, recordHistory)
           : ['ruby', '/ruby'].includes(tag.name)
-            ? ruby.dispatch(tag)
-            : textCommands.dispatch(tag);
+            ? ruby.dispatch(tag, recordHistory)
+            : textCommands.dispatch(tag, recordHistory);
       return 'suspended';
     }
     if (layerFixture && tag.name === 'trans') {
@@ -803,14 +831,14 @@ try {
     }
     if (layerFixture?.accepts(tag)) {
       if (pendingResource) throw Error('Probe resource operation overlaps');
-      pendingResource = layerFixture.dispatch(tag);
+      pendingResource = layerFixture.dispatch(tag, recordHistory);
       return 'suspended';
     }
     if (
       messageSelection?.dispatch(tag) ||
-      fontStack?.dispatch(tag) ||
+      fontStack?.dispatch(tag, recordHistory) ||
       sceneTweens?.dispatch(tag) ||
-      textBreakControls?.dispatch(tag)
+      textBreakControls?.dispatch(tag, recordHistory)
     )
       return;
     if (dialog.dispatch(tag)) return;
@@ -823,7 +851,7 @@ try {
       exec.dispatch(tag) ||
       variables.dispatch(tag) ||
       caption.dispatch(tag) ||
-      seStop.dispatch(tag) ||
+      seStop.dispatch(tag, recordHistory) ||
       soundFinish?.dispatch(tag) ||
       mouse.dispatch(tag) ||
       wait.dispatch(tag) ||
@@ -837,9 +865,14 @@ try {
     }
     if (reset.dispatch(tag)) return;
     if (save.dispatch(tag)) return;
+    if (tag.name === 'load') {
+      if (pendingResource) throw Error('Probe load operation overlaps');
+      pendingResource = load.dispatch(tag);
+      return 'suspended';
+    }
     if (clickGlyphs.dispatch(tag)) return;
     if (music) {
-      const result = music.dispatch(tag);
+      const result = music.dispatch(tag, recordHistory);
       if (result === true) return;
       if (result) {
         if (pendingResource) throw Error('Probe sound resource operation overlaps');
@@ -849,7 +882,7 @@ try {
     }
     if (sePlay && ['seplay', 'sefadein'].includes(tag.name)) {
       if (pendingResource) throw Error('Probe sound resource operation overlaps');
-      pendingResource = sePlay.dispatch(tag);
+      pendingResource = sePlay.dispatch(tag, recordHistory);
       return 'suspended';
     }
     throw new Error(`Unsupported native Artemis tag ${tag.name}`);
@@ -1008,6 +1041,7 @@ try {
       music.reset();
     }
     lua.events.clear();
+    wait.clear();
     layerFixture?.reset();
     messageStage?.reset();
   };
@@ -1030,6 +1064,214 @@ try {
     readSaveFile: async (name) => saveFiles.get(name) ?? null,
     initializeStaticVariables,
   });
+  // Scenario save/load owners. SIMULATED: probe font frames are attribute patches over the
+  // 193720 defaults; the codec writes the patched attributes and reads back the attributes
+  // that differ from the defaults.
+  const probeFontCodec = {
+    write: (archive, frame) =>
+      writeArtemisFontFrame(archive, {
+        font: {
+          ...artemisDefaultFontAttributes(executableSha256),
+          ...Object.fromEntries(frame.font),
+        },
+        overflow: frame.overflow ?? 0,
+      }),
+    read: (archive) => {
+      const frame = readArtemisFontFrame(executableSha256, archive),
+        defaults = artemisDefaultFontAttributes(executableSha256);
+      const font = new Map(
+        Object.entries(frame.font).filter(
+          ([key, value]) => JSON.stringify(value) !== JSON.stringify(defaults[key]),
+        ),
+      );
+      return {font, overflow: frame.overflow, simulation: true};
+    },
+  };
+  const emptyTag = {kind: 'tag', name: '', sourceLine: 0, args: new Map()};
+  // Script fields without an owner in this probe: no macro stack, right-click script or
+  // debug console; +0x3628 is the default font property.
+  const scenarioScalars = {
+    macroFiles: [],
+    autosaveFlag: 0,
+    autosaveValue: 0,
+    debugMode: 0,
+    debugLevel: 0,
+    field35b8: '',
+    field35d8: 0,
+    field3880: 0,
+    font: {font: new Map(), simulation: true},
+  };
+  const scenarioOwners = () => {
+    if (!messageStage || !messageSelection || !sceneTweens || !fontStack)
+      throw Error('Probe scenario save requires message layers (--glyph-layout)');
+    return {
+      modes,
+      script,
+      keyBindings,
+      eventCommands,
+      messageLayers: messageStage,
+      messageSelection,
+      textControls,
+      sceneTweens,
+      clickGlyphs,
+      events: lua.events,
+      saveData,
+      layerCommands: {
+        snapshot: () => layerFixture?.snapshotLayerCommands() ?? new Map(),
+        restore: (snapshot) => {
+          if (layerFixture) layerFixture.restoreLayerCommands(snapshot);
+          else if (snapshot.size) throw Error('Probe layer commands require --image-metadata');
+        },
+      },
+      music: music ?? {
+        history: {playing: false, tag: emptyTag},
+        restoreHistory: (history) => {
+          if (history.playing) throw Error('Probe BGM history requires --sound-render');
+        },
+      },
+      variables,
+    };
+  };
+  /** `asLoaded` writes the caret as the loader restores it: run mode 0, no wait flag. */
+  function writeProbeScenario(asLoaded = false) {
+    const record = captureArtemisScenario(
+      scenarioOwners(),
+      scenarioScalars,
+      {
+        mode: asLoaded ? 0 : probeRunMode,
+        previous: 0,
+        waiting: !asLoaded && wait.pending,
+        frameMode: (state) => {
+          if (state) throw Error('Probe scenario save inside an event-handler scope');
+          return 0;
+        },
+      },
+      null,
+    );
+    const writer = new ArtemisSaveArchiveWriter();
+    writeArtemisScenarioArchive(writer, record, variables, probeFontCodec);
+    return writer.finish();
+  }
+  // A tag dispatched inside another resource operation (loader replay, load tag trans)
+  // completes its own suspension before the caller continues.
+  const dispatchNested = async (tag, recordHistory) => {
+    if (dispatch(tag, recordHistory) !== 'suspended') return;
+    const operation = pendingResource;
+    pendingResource = null;
+    await operation;
+  };
+  let loadPrevious = 0;
+  const scenarioLoadHost = {
+    reset: () => reset.engineReset(),
+    loadScalars: (scalars) => {
+      for (const [name, value] of Object.entries(scalars))
+        if (value !== undefined) scenarioScalars[name] = value;
+    },
+    loadBacklog: (backlog) => modeEffects.push({backlogLoad: backlog ? 'empty' : null}),
+    enterLoadMode: (caret) => {
+      loadPrevious = caret ? caret.runMode : probeRunMode;
+      probeRunMode = 13;
+      modeEffects.push({runMode: 13, simulation: true});
+    },
+    frameState: () => undefined,
+    refreshGlyphLayer: (name) => modeEffects.push({glyphLayerRefresh: name, simulation: true}),
+    finishLoad: () => {
+      probeRunMode = loadPrevious;
+      modeEffects.push({runMode: probeRunMode, loadFinished: true, simulation: true});
+    },
+    selectMessageLayer: (name, mode) => messageStage.selectMessageLayer(name, mode),
+    currentMessageLayer: () => messageSelection.currentMessageLayer(),
+    setCurrentMessageLayer: (name) => messageSelection.loadFields({current: name}),
+    replaceFontFrames: (fonts) => fontStack.replaceFrames(fonts),
+    applyFontFrame: (_name, frame) => {
+      messageStage.currentLayer().font = new Map(frame.font);
+    },
+    dispatch: (tag) => dispatchNested(tag, false),
+    applySceneTween: (out) =>
+      modeEffects.push({sceneTween: out ? 'out' : 'in', replay: true, simulation: true}),
+    writeCurrentMessageLayerVariable: (name) => variables.write('s.current_message_layer', name),
+  };
+  const load = new ArtemisLoad(save, readHistory, variables, lua.events, {
+    // SIMULATED storage: the in-memory files written earlier in this probe run.
+    readSaveFile: async (name) => saveFiles.get(name) ?? null,
+    loadScenario: async (archive) => {
+      await applyArtemisScenario(
+        scenarioOwners(),
+        readArtemisScenarioArchive(archive, probeFontCodec),
+        scenarioLoadHost,
+      );
+      // The round trip compares the state the loader restored, before `onLoad` runs.
+      if (captureLoaded) loadedArchive = writeProbeScenario();
+    },
+    // Native loads the handler's resources synchronously inside the call; here each
+    // suspension awaits its resource operation before the callback resumes.
+    callEvent: async (name, args) => {
+      if (!lua.suspendableTags) return lua.call(name, args);
+      const task = lua.createCall(name, args);
+      try {
+        for (;;) {
+          const waiting = script.state === 'waiting';
+          if (task.resume().status !== 'yielded') return;
+          if (!pendingResource || script.pendingLuaCalls)
+            throw Error('Probe onLoad suspended without its own resource operation');
+          const operation = pendingResource;
+          pendingResource = null;
+          await operation;
+          if (!waiting && script.state === 'waiting') script.resume();
+        }
+      } finally {
+        task.close();
+      }
+    },
+    reportEventError: (handler, error) =>
+      modeEffects.push({loadEventError: {handler, error: String(error)}}),
+    transition: (tag) => dispatchNested(tag, true),
+  });
+  let deliveredClicks = 0,
+    saveLoadReport = null,
+    captureLoaded = false,
+    loadedArchive = null;
+  const saveLoadRoundTrip = async () => {
+    const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
+    // A caret saved inside a wait loads at the same tag in run mode 0 with its wait flags
+    // clear, so the first load changes the caret. Loading the archive of that loaded state
+    // must restore it unchanged. Each load then runs the game's `onLoad` handler.
+    const loadFile = async (file) => {
+      captureLoaded = true;
+      loadedArchive = null;
+      try {
+        if (!(await load.load(file, true))) throw Error('Probe scenario load failed');
+      } finally {
+        captureLoaded = false;
+      }
+      if (!loadedArchive) throw Error('Probe scenario load did not run the scenario loader');
+      if (wait.pending || script.state !== 'ready')
+        throw Error('Probe scenario load did not resume the restored caret');
+      return loadedArchive;
+    };
+    save.request('probe-roundtrip.dat', true, true);
+    await Promise.all(saveWrites);
+    // After the save, which ran the game's `onSave` handler first.
+    const before = writeProbeScenario();
+    const expected = writeProbeScenario(true);
+    const loaded = await loadFile('probe-roundtrip.dat');
+    saveFiles.set('probe-roundtrip-2.dat', await packArtemisSaveFile('S', loaded));
+    const reloaded = await loadFile('probe-roundtrip-2.dat');
+    saveLoadReport = {
+      click: deliveredClicks,
+      archiveBytes: before.length,
+      saved: hash(before),
+      loaded: hash(loaded),
+      reloaded: hash(reloaded),
+      restored: hash(loaded) === hash(expected),
+      stable: hash(loaded) === hash(reloaded),
+      runMode: probeRunMode,
+      callDepth: script.callDepth,
+      files: ['probe-roundtrip.dat', 'probe-roundtrip-2.dat'],
+    };
+    if (!saveLoadReport.restored || !saveLoadReport.stable)
+      throw Error('Probe scenario save/load round trip differs');
+  };
   let refusal = null;
   try {
     await reset.boot();
@@ -1048,6 +1290,13 @@ try {
         resourceResumptions++;
         if (runModeHeld) {
           runModeHeld = false;
+          // The native tag returns at once: a Lua caller runs to its end, then the script
+          // waits in the held run mode until its owner releases it.
+          if (script.pendingLuaCalls) {
+            script.resumeLua();
+            if (pendingResource) throw Error('Probe Lua resource work in a held run mode');
+            if (script.state === 'ready') script.pause();
+          }
           continue;
         }
         if (script.pendingLuaCalls) script.resumeLua();
@@ -1119,6 +1368,13 @@ try {
           layerFixture?.tickTweens(probeTick);
           wait.tick(probeTick);
         }
+        if (saveLoadAt !== null && deliveredClicks === saveLoadAt && !saveLoadReport) {
+          // The loaded caret resumes at the tag after the click-wait instead of a click.
+          await saveLoadRoundTrip();
+          script.run(1000);
+          continue;
+        }
+        deliveredClicks++;
         probeClicks--;
         probeTick = (probeTick + 16) >>> 0 || 1;
         modeEffects.push({click: true, simulation: true});
@@ -1195,6 +1451,7 @@ try {
       {
         executableSha256,
         dialogRequests: dialogs,
+        saveLoad: saveLoadReport,
         saveFiles: Object.fromEntries(
           [...saveFiles].map(([name, bytes]) => [name, {bytes: bytes.length}]),
         ),

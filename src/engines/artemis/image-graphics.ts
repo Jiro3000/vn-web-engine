@@ -170,8 +170,8 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
   clearLayerCommands(ids: readonly string[]): void {
     this.services.clearLayerCommands(ids);
   }
-  resetLayerCommands(id: string): void {
-    this.services.resetLayerCommands(id);
+  resetLayerCommands(id: string, tag: AsbTag): void {
+    this.services.resetLayerCommands(id, tag);
   }
   recordLayerProperties(tag: AsbTag): void {
     this.services.recordLayerProperties(tag);

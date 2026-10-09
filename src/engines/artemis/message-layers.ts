@@ -96,6 +96,13 @@ export class ArtemisMessageLayers<T extends object> {
     }
     this.selectedName = name;
   }
+  /** Scenario archive section 0x40: names of the layered message layers, in map order. */
+  layeredNames(): string[] {
+    return [...this.layers]
+      .filter(([, entry]) => entry.layered)
+      .map(([name]) => name)
+      .sort(compare);
+  }
   /** bf210 stage reset: the message store (+0x80/+0x90) is emptied, then 14f490 creates
    * "backlog" and "" (mode 0) and selects "". The scene root is replaced by the caller. */
   reset(): void {
@@ -155,6 +162,15 @@ export class ArtemisMessageSelection<T extends object> {
   reset(): void {
     this.stack.length = 0;
     this.currentName = '';
+  }
+  /** Scenario archive sections 0xb (+0x35e0) and 0xc (+0x3600, oldest first). */
+  saveFields(): {readonly current: string; readonly stack: readonly string[]} {
+    return {current: this.currentName, stack: [...this.stack]};
+  }
+  /** Loader section reads: plain assignment; the scenario replay selects the layers. */
+  loadFields(fields: {readonly current?: string; readonly stack?: readonly string[]}): void {
+    if (fields.current !== undefined) this.currentName = fields.current;
+    if (fields.stack) this.stack.splice(0, this.stack.length, ...fields.stack);
   }
   dispatch(tag: AsbTag): boolean {
     if (tag.name !== 'chgmsg' && tag.name !== '/chgmsg') return false;

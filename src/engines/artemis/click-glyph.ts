@@ -58,6 +58,15 @@ export class ArtemisClickGlyphs {
   reset(): void {
     this.entries.clear();
   }
+  /** Scenario archive section 0x12: copies of the map entries. */
+  saveFields(): Map<string, ArtemisClickGlyph> {
+    return new Map([...this.entries].map(([name, glyph]) => [name, {...glyph}]));
+  }
+  /** Loader read replaces the map. */
+  loadFields(glyphs: ReadonlyMap<string, Readonly<ArtemisClickGlyph>>): void {
+    this.entries.clear();
+    for (const [name, glyph] of glyphs) this.entries.set(name, {...glyph});
+  }
   dispatch(tag: AsbTag): boolean {
     if (tag.name !== 'glyph') return false;
     const args = tag.args;

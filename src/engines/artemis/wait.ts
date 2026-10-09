@@ -212,6 +212,17 @@ export class ArtemisTimedWait {
     }
     return false;
   }
+  /** bf210 empties the caret (script+0xb68), whose fields b94..bc8 are these wait flags.
+   * No scheduler release, Out event or message update runs; reset performs its own. */
+  clear(): void {
+    this.inputEnabled = false;
+    this.deadline = 0;
+    this.scenario = false;
+    this.click = false;
+    this.video = null;
+    this.sound = null;
+    this.active = false;
+  }
   /** c6160(0): scheduler release precedes Out, then wait flags/message update. */
   private end(): void {
     this.host.endWait();

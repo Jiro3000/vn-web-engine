@@ -42,6 +42,15 @@ const eases = [
     'bounce',
   ].flatMap((family) => ['easein_', 'easeout_', 'easeinout_'].map((kind) => kind + family)),
 ];
+const messageTweenTypes = ['in', 'out', 'show', 'hide'] as const;
+export type ArtemisMessageTweenType = (typeof messageTweenTypes)[number];
+const backlogTweenTypes = [
+  'backlog_down_in',
+  'backlog_down_out',
+  'backlog_up_in',
+  'backlog_up_out',
+] as const;
+export type ArtemisBacklogTweenType = (typeof backlogTweenTypes)[number];
 function tweenType(value: string | undefined): ArtemisTweenType | undefined {
   return artemisTweenTypes.find((type) => type === value);
 }
@@ -105,6 +114,44 @@ export class ArtemisSceneTweens {
     messageLayer = this.currentMessageLayer(),
   ): readonly ArtemisTweenDescriptor[] {
     return this.vector(type, messageLayer).slice();
+  }
+  /** Scenario archive sections 0xd, 0xe, 0x3b, 0x3c: the per-message `in`, `out`, `show`
+   * and `hide` maps (+0x3730..+0x3760), including created empty vectors. */
+  saveFields(): Record<ArtemisMessageTweenType, Map<string, ArtemisTweenDescriptor[]>> {
+    const fields = Object.fromEntries(
+      messageTweenTypes.map((type) => [type, new Map<string, ArtemisTweenDescriptor[]>()]),
+    ) as Record<ArtemisMessageTweenType, Map<string, ArtemisTweenDescriptor[]>>;
+    for (const [layer, map] of this.layers)
+      for (const [type, vector] of map)
+        if (!type.startsWith('backlog_'))
+          fields[type as ArtemisMessageTweenType].set(layer, vector.slice());
+    return fields;
+  }
+  /** Loader reads replace the four per-message maps. */
+  loadFields(
+    fields: Readonly<
+      Record<ArtemisMessageTweenType, ReadonlyMap<string, readonly ArtemisTweenDescriptor[]>>
+    >,
+  ): void {
+    this.layers.clear();
+    for (const type of messageTweenTypes)
+      for (const [layer, vector] of fields[type]) {
+        let map = this.layers.get(layer);
+        if (!map) this.layers.set(layer, (map = new Map()));
+        map.set(type, vector.slice());
+      }
+  }
+  /** CBackLog tween vectors (section 0x1f). */
+  backlogFields(): Record<ArtemisBacklogTweenType, ArtemisTweenDescriptor[]> {
+    return Object.fromEntries(
+      backlogTweenTypes.map((type) => [type, (this.backlog.get(type) ?? []).slice()]),
+    ) as Record<ArtemisBacklogTweenType, ArtemisTweenDescriptor[]>;
+  }
+  loadBacklogFields(
+    fields: Readonly<Record<ArtemisBacklogTweenType, readonly ArtemisTweenDescriptor[]>>,
+  ): void {
+    this.backlog.clear();
+    for (const type of backlogTweenTypes) this.backlog.set(type, fields[type].slice());
   }
   private vector(type: ArtemisTweenType, messageLayer?: string): ArtemisTweenDescriptor[] {
     let map = this.backlog;

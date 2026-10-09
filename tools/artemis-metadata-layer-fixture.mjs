@@ -226,12 +226,15 @@ export function createMetadataLayerFixture(hash, readFile, runMode = null) {
       effects.push({kind: 'clearCommands', ids});
       layerCommands.clear(ids);
     },
-    resetLayerCommands: (id) => {
+    resetLayerCommands: (id, tag) => {
       effects.push({kind: 'resetCommands', id});
-      layerCommands.reset(id);
+      layerCommands.reset(id, tag);
     },
-    recordLayerProperties: (tag) =>
-      effects.push({kind: 'recordProperties', id: tag.args.get('id')}),
+    // lyprop (and lytween's synthesized end state) outside replay: coalescing record b9cd0.
+    recordLayerProperties: (tag) => {
+      effects.push({kind: 'recordProperties', id: tag.args.get('id')});
+      layerCommands.record(tag);
+    },
     imageLoadFailed: (tag) => {
       throw Error('Probe image metadata missing: ' + tag.args.get('file'));
     },
@@ -433,6 +436,9 @@ export function createMetadataLayerFixture(hash, readFile, runMode = null) {
     },
     /** Save-object reset of the layer command registry. */
     clearLayerCommands: () => layerCommands.clearAll(),
+    /** Save-object +0x68 layer command registry for the scenario save and load. */
+    snapshotLayerCommands: () => layerCommands.snapshot(),
+    restoreLayerCommands: (snapshot) => layerCommands.restore(snapshot),
     /** Invokes an actor's stored layer event callback; no pointer hit testing is simulated. */
     invokeLayerEvent: (id, type, sink) => {
       const actor = layers.scene.entry(id)?.value;
@@ -446,12 +452,13 @@ export function createMetadataLayerFixture(hash, readFile, runMode = null) {
       ['lyc', 'lyprop', 'lydel', 'flip', 'lyevent', 'anime', 'animedel', 'video'].includes(
         tag.name,
       ),
-    dispatch: (tag) =>
+    /** `recordHistory` false is the native replay flag of the scenario loader. */
+    dispatch: (tag, recordHistory = true) =>
       tag.name === 'flip'
         ? Promise.resolve(stage.dispatch(tag))
         : tag.name === 'lyevent'
-          ? Promise.resolve(layerEvents.dispatch(tag))
-          : layers.dispatch(tag),
+          ? Promise.resolve(layerEvents.dispatch(tag, !recordHistory))
+          : layers.dispatch(tag, recordHistory),
     snapshot: () => ({
       mode: 'metadata-only fixture',
       pixelDecode: false,

@@ -972,6 +972,23 @@ test('Artemis layer command history coalesces the newest matching name across in
   assert.equal(store.commands('2')[0].args.get('left'), '10');
   store.record(command('lyprop', {top: 'missing id'}));
   assert.equal(store.snapshot().size, 1);
+  // Exact argument bytes follow the value that overwrote them.
+  const bytes = (text) => new TextEncoder().encode(text);
+  store.record({
+    ...command('lyprop', {id: '3', clip: '1', file: 'f'}),
+    bytes: new Map([
+      ['clip', bytes('1')],
+      ['file', bytes('f')],
+    ]),
+  });
+  store.record(command('lyprop', {id: '3', clip: '2'}));
+  store.record({
+    ...command('lyprop', {id: '3', alpha: '9'}),
+    bytes: new Map([['alpha', bytes('9')]]),
+  });
+  const [merged] = store.commands('3');
+  assert.deepEqual(Object.fromEntries(merged.args), {id: '3', clip: '2', file: 'f', alpha: '9'});
+  assert.deepEqual([...merged.bytes.keys()], ['file', 'alpha']);
 });
 
 test('Artemis keyed layer command coalescing requires every selected argument and preserves separate raw ids', async () => {
@@ -994,10 +1011,16 @@ test('Artemis keyed layer command coalescing requires every selected argument an
   store.clear(['02']);
   assert.equal(store.commands('02'), undefined);
   assert.equal(store.commands('2').length, 3);
-  store.reset('2');
-  assert.deepEqual(store.commands('2'), []);
-  store.reset('\u{10000}');
-  store.reset('\ue000');
+  // lyc, anime init and video replace the list with a copy of their tag.
+  const created = command('lyc', {id: '2', file: 'a'});
+  store.reset('2', created);
+  created.args.set('file', 'external mutation');
+  assert.deepEqual(
+    store.commands('2').map((tag) => [tag.name, tag.args.get('file')]),
+    [['lyc', 'a']],
+  );
+  store.reset('\u{10000}', command('lyc', {id: '\u{10000}'}));
+  store.reset('\ue000', command('lyc', {id: '\ue000'}));
   assert.deepEqual([...store.snapshot().keys()], ['2', '\ue000', '\u{10000}']);
 });
 

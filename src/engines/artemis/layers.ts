@@ -65,12 +65,14 @@ export interface ArtemisLayerHost<
     patch: ArtemisShaderPropertyPatch,
     textures?: readonly {name: string; lease: ArtemisShaderTextureLease<object>}[],
   ): void;
+  /** lyprop outside replay: coalescing record (0x1400b9cd0) into the id's command list. */
   recordLayerProperties(tag: AsbTag): void;
   layerNotFound(tag: AsbTag): void;
   /** Remove the selected native layer command registrations, after structural deletion. */
   clearLayerCommands(ids: readonly string[]): void;
-  /** Native ordinary lyc replaces this id's command list with an empty list. */
-  resetLayerCommands(id: string): void;
+  /** lyc, anime `init` and video outside replay: the id's command list becomes a copy of
+   * the creating tag alone (0x1400edec0). */
+  resetLayerCommands(id: string, tag: AsbTag): void;
   /** Native load failure reports a script error and leaves the old layer intact. */
   imageLoadFailed(tag: AsbTag): void;
   /** CAnimationLayer allocation (0x140101520, 0x1400b0db0) around its frame map. The
@@ -295,7 +297,7 @@ export class ArtemisLayers<T extends object, I extends ArtemisImageDimensions = 
             shader,
             shader.textures === undefined ? undefined : textures,
           );
-        this.host.recordLayerProperties(tag);
+        if (recordHistory) this.host.recordLayerProperties(tag);
       } finally {
         for (const entry of textures) entry.lease.release();
         if (generation !== null && this.pending === generation) this.pending = null;
@@ -338,7 +340,7 @@ export class ArtemisLayers<T extends object, I extends ArtemisImageDimensions = 
       try {
         this.remove(id);
         this.scene.set(id, layer);
-        this.host.resetLayerCommands(id);
+        if (recordHistory) this.host.resetLayerCommands(id, tag);
       } finally {
         this.collect();
       }
@@ -355,7 +357,7 @@ export class ArtemisLayers<T extends object, I extends ArtemisImageDimensions = 
    * (anchor at its centre, then the tag's 115650 properties); `init` replaces the layer
    * with a fresh CAnimationLayer holding the frame at key 0, `add` stores the frame at
    * `time` and `end` stores the end marker at `time` in the existing animation. History:
-   * `init` empties the id's command list, `add`/`end` append the tag. Error paths record
+   * `init` replaces the id's command list with the tag, `add`/`end` append it. Error paths record
    * nothing. std::map operator[] reads insert empty values into the recorded tag. */
   private async animation(input: AsbTag, recordHistory: boolean): Promise<void> {
     const host = this.host;
@@ -427,7 +429,7 @@ export class ArtemisLayers<T extends object, I extends ArtemisImageDimensions = 
       } finally {
         this.collect();
       }
-      if (recordHistory) host.resetLayerCommands(id);
+      if (recordHistory) host.resetLayerCommands(id, tag);
       return;
     }
     if (mode !== 'add' && mode !== 'end') return host.animationError(tag, 'mode');
@@ -445,8 +447,8 @@ export class ArtemisLayers<T extends object, I extends ArtemisImageDimensions = 
   /** video 0x1400e4650 with `id`: open `file`, then `file.mja`, then `file.ogv`; the
    * decoder (CMja, then CTheora) takes the loop flag (`loop` present and not "0"),
    * `delaymargin` goes to slot +0x20, the actor is anchored at its centre, the old layer
-   * is deleted (0x1400d6670) and the actor inserted. History empties the id's command
-   * list. CMja (`.mja`) is not implemented; the fullscreen path without `id` belongs to
+   * is deleted (0x1400d6670) and the actor inserted. History replaces the id's command
+   * list with the tag. CMja (`.mja`) is not implemented; the fullscreen path without `id` belongs to
    * `ArtemisFullscreenVideo`. */
   private async video(input: AsbTag, recordHistory: boolean): Promise<void> {
     const host = this.host;
@@ -497,6 +499,6 @@ export class ArtemisLayers<T extends object, I extends ArtemisImageDimensions = 
     } finally {
       this.collect();
     }
-    if (recordHistory) host.resetLayerCommands(id);
+    if (recordHistory) host.resetLayerCommands(id, input);
   }
 }

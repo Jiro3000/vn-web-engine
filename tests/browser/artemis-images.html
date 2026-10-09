@@ -138,8 +138,8 @@
           commandRegistry.clear(ids);
           effects.push(['clear', ...ids]);
         },
-        resetLayerCommands: (id) => {
-          commandRegistry.reset(id);
+        resetLayerCommands: (id, tag) => {
+          commandRegistry.reset(id, tag);
           effects.push(['reset', id]);
         },
         recordLayerProperties: (tag) => {
@@ -263,7 +263,10 @@
       refused = error.message.includes('Texture upload failed');
     }
     assert(
-      commandRegistry.commands('2')[0].args.get('visible') === '0',
+      commandRegistry
+        .commands('2')
+        .map((tag) => `${tag.name}:${tag.args.get('visible') ?? ''}`)
+        .join() === 'lyc:,lyprop:0',
       'property command registry was not updated',
     );
     assert(refused, 'oversized texture was accepted');
@@ -433,7 +436,7 @@
       {
         creationMode: () => 0,
         clearLayerCommands: (ids) => commandRegistry.clear(ids),
-        resetLayerCommands: (id) => commandRegistry.reset(id),
+        resetLayerCommands: (id, tag) => commandRegistry.reset(id, tag),
         recordLayerProperties: (tag) => commandRegistry.record(tag),
         imageLoadFailed: () => {
           throw new Error('synthetic native image missing');

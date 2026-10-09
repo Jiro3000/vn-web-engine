@@ -153,14 +153,15 @@ export interface ArtemisScenarioReplayHost<Font extends object> {
  * layer command registry (`lyc`/`anime`/`video` first, then the rest), BGM and se. Every
  * tag goes through the dispatcher with the replay flag; empty blocks are skipped as the
  * dispatcher returns on an empty name. The pre-1003 `colormultiply` fixup does not apply
- * to archives of this version. The loader host owns what follows the layer commands
- * natively: the script +0x3818 layer refresh. */
+ * to archives of this version. `afterLayerCommands` runs between the layer
+ * commands and BGM, where the loader refreshes the +0x3818 glyph layers. */
 export async function replayArtemisScenario<Font extends object>(
   data: ArtemisSaveDataSnapshot<Font>,
   layered: readonly string[],
   layerCommands: ReadonlyMap<string, readonly AsbTag[]>,
   music: ArtemisMusicHistory,
   host: ArtemisScenarioReplayHost<Font>,
+  afterLayerCommands: () => void = () => {},
 ): Promise<void> {
   const dispatch = async (tag: AsbTag) => {
     if (tag.name) await host.dispatch(tag);
@@ -196,6 +197,7 @@ export async function replayArtemisScenario<Font extends object>(
   for (const first of [true, false])
     for (const tags of layerCommands.values())
       for (const tag of tags) if (creates.has(tag.name) === first) await dispatch(tag);
+  afterLayerCommands();
   if (music.playing) await dispatch(music.tag);
   for (const tag of data.effects.values()) if (tag) await dispatch(tag);
 }

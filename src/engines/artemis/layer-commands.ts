@@ -16,8 +16,9 @@ export class ArtemisLayerCommands {
   clearAll(): void {
     this.lists.clear();
   }
-  reset(id: string): void {
-    this.lists.set(id, []);
+  /** 0x1400edec0 move-assigned to the id: a list holding only a copy of `tag`. */
+  reset(id: string, tag: AsbTag): void {
+    this.lists.set(id, [copy(tag)]);
   }
   clear(ids: readonly string[]): void {
     for (const id of ids) this.lists.delete(id);
@@ -43,8 +44,21 @@ export class ArtemisLayerCommands {
         continue;
       const merged = new Map(old.args);
       for (const [key, value] of tag.args) merged.set(key, value);
+      // Native argument values are byte strings: an overwritten key takes the new value's
+      // exact bytes, or none when the new value is plain text.
+      let bytes = old.bytes;
+      if (bytes || tag.bytes) {
+        const values = new Map(bytes);
+        for (const key of tag.args.keys()) {
+          const exact = tag.bytes?.get(key);
+          if (exact) values.set(key, exact);
+          else values.delete(key);
+        }
+        bytes = values;
+      }
       // Native only overwrites the argument map, retaining the earlier line/name.
-      list[index] = {...old, args: merged};
+      const {bytes: _bytes, ...rest} = old;
+      list[index] = {...rest, args: merged, ...(bytes?.size ? {bytes} : {})};
       return;
     }
     list.push(copy(tag));

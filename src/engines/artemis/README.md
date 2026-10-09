@@ -204,8 +204,31 @@ above saves its previous mode, a waiting caret saves 0 and its mode), mode flags
 glyph and CTweenInfo maps, push handlers and event slots, the save object, the 0x41 key
 roles, the variables and an unused CBackLog (saved backlog pages are refused). Reading
 returns only the sections present, so the loader keeps reset values for the rest.
-Capturing the record from the live owners and the `save`/`load` tag wiring are not
-implemented yet.
+`scenario-state.ts` connects the record to the live owners. `captureArtemisScenario`
+reads each owner's `saveFields` (modes, key roles and push handlers, seton slots, message
+selection, scene tweens, text controls, glyphs, Lua event names, save object) plus the host
+scalars (+0x3628 font, macro list, debug fields) and the carets: the last caret is the
+current one, earlier carets are the call stack whose run mode the host derives from the
+frame's resume state. `applyArtemisScenario` is loader `0x140141b10` after the archive
+read: the `bf210` reset, plain assignment of each present section (absent sections keep
+the reset values; key roles rebuild the constructor defaults and replace only the ordinary
+keys), variables, carets, run mode 13, the tag replay with the glyph layer refresh between
+the layer commands and BGM, then the run-mode release. `load.ts` is the save-file
+reader `0x14013fde0` and the load tag `0x1400ca740`: an optional forced global save, the
+file from the host's save directory, kinds G/X into read history and variables, S to the
+host's scenario loader, then the `onLoad` handler with `{file}` (a Lua error is reported
+and clears it). A loaded file whose tag has `type` continues as the trans tag. Unreadable
+files and refused versions fail without a Lua call. The owner runs the handler through
+`callEvent`, so a callback that issues resource tags finishes before the load returns.
+The engine reset empties the caret, which holds the wait flags: `ArtemisTimedWait.clear`
+drops a pending wait without its release or Out event, so a caret saved inside a wait
+resumes at its tag in run mode 0. The production scenario loader is not wired yet.
+
+`tools/probe-artemis.mjs --save-load-at=N` (with `--glyph-layout` and `--async-lua`)
+saves a scenario archive before the Nth delivered click, loads it through `ArtemisLoad`
+and continues from the restored caret instead of clicking. It requires the loaded state
+to match the saved one with the caret written as loaded, and a second load of that state
+to reproduce it; both loads run the game's `onLoad` handler. The report is `saveLoad`.
 
 `reset.ts` implements the engine reset `0x1400bf210`. `dispatch` handles the reset tag
 (`0x1400caad0`): a forced global save, automode off, mode defaults, owner resets through
@@ -492,11 +515,14 @@ services (`0x140144570`, called by `0x1400b9cd0`). Missing id does not record a
 command. Recording scans backward for the newest same-name command whose selected
 comparison keys exist and match in both argument maps. It merges incoming
 arguments into that record without replacing the earlier line/name; intervening
-commands do not prevent merging. Ordinary properties use an empty comparison-key
-set. Other registration owners can supply their native key sets.
+commands do not prevent merging. An overwritten argument takes the incoming exact bytes
+(or none for plain text). Ordinary properties use an empty comparison-key set. Other
+registration owners can supply their native key sets. Outside replay, `lyprop` and
+`lytween` record through this coalescing path.
 
 Lists preserve raw id strings, so numeric aliases remain separate registry keys.
-Reset creates an empty list; deletion removes exact selected ids. Returned history
+Reset (`0x1400edec0`, used by `lyc`, anime `init` and video outside replay) makes the
+list a copy of the creating tag alone; deletion removes exact selected ids. Returned history
 and UTF-8-byte-ordered snapshots copy argument maps. These data are inputs for the
 native save owner; the registry does not serialize them as a substitute save format.
 The browser fixture connects actual reset/clear/property recording to this registry.
@@ -819,7 +845,7 @@ tag's layer path (`0x1400e4650` with `id`), decoding through `src/formats/theora
 
 - Open order is `file`, `file.mja`, `file.ogv`; a missing file reports
   `videoError('not-found')`, a non-Theora Ogg reports `videoError('unsupported')`. CMja
-  (`.mja`) data and the fullscreen path without `id` are refused explicitly.
+  (`.mja`) data is refused explicitly.
 - The `_m` mask (`stem_m.ext` of the opened name) decodes alongside; its luma is the
   alpha channel at the main stream's picture offsets. Without a mask alpha is 0xff.
 - `loop` is on when present and not exactly `"0"`. `delaymargin` enables frame skipping:
@@ -838,9 +864,28 @@ is updated once per draw with the draw's clock sample, and closed when its last 
 copy is released. `wait video=<id>` is described in
 [Timed waits and save requests](#timed-waits-and-save-requests).
 
+### Fullscreen video
+
+`fullscreen-video.ts` owns the `video` tag without `id` and the run mode 7 frame branch.
+The tag does nothing while debug-skipping; otherwise it plays `file` through the shared
+`FullscreenMoviePlayer` (`src/video/fullscreen-movie.ts`) with `mode` (default 0) as the
+renderer selector and `s.videovol` converted by `artemisSoundAttenuation`. A failed open
+reports the native playback error 「再生に失敗しました。」 and leaves the run mode alone;
+otherwise `skip` (default 1) is stored and run mode 7 is entered (not from mode 13).
+Every mode 7 frame releases the run mode once the player has stopped; skip 1 also ends
+the movie on key role 0 or active skip, skip 2 on key role 1, closing the player,
+releasing the run mode and writing `s.clickskip`.
+
+The native player is a DirectShow graph rendering the loose file. The game's movies are
+ASF/WMV (`src/formats/asf/header.ts` reads their duration without decoding).
+`BrowserFullscreenMoviePlayer` plays what the browser can decode over the game element
+and otherwise reports the movie as unsupported to the host and completes it, so the
+scenario continues as after the movie's end. The probe plays a movie for its ASF header
+duration in 16 ms frames without decoding it.
+
 `tests/artemis-video.test.mjs` checks frame timing, conversion and mask alpha against an
 independent statement of the native formulas, delaymargin skipping, looping, the open
-order and errors, and the wait.
+order and errors, the wait, the fullscreen tag and frame branch, and the ASF reader.
 
 ## Nonvisual resource geometry probe
 

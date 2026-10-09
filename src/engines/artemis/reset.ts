@@ -81,11 +81,15 @@ export class ArtemisReset {
     this.host.initializeStaticVariables();
     this.finish(boot);
   }
+  /** bf210 with flag 1, as the reset tag and scenario loader 0x140141b10 call it. */
+  engineReset(): void {
+    this.finish(this.begin());
+  }
   /** caad0: forced global save, bf210(flag 1), then every variable except g./s. erased. */
   dispatch(tag: AsbTag): boolean {
     if (tag.name !== 'reset') return false;
     this.save.request('', false, true);
-    this.finish(this.begin());
+    this.engineReset();
     this.variables.resetScenario();
     return true;
   }

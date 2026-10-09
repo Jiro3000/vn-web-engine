@@ -13,26 +13,107 @@ export interface ArtemisKeyRole {
   readonly special136: boolean;
   readonly special137: boolean;
 }
-interface Role {
-  keys: Set<number>;
-  special136: boolean;
-  special137: boolean;
-}
+/** CArtemisKeyConfig constructor 0x1400c2bc0, in insertion order through the add helper
+ * 0x1400acbb0 (136 → +0x20 flag, 137 → +0x30 flag, other codes → +0x10 ordinary set). */
+const defaultRoles: readonly (readonly [number, readonly number[]])[] = [
+  [0, [1, 136, 13]],
+  [1, [2, 27]],
+  [2, [2, 27]],
+  [3, [32]],
+  [4, [1, 137, 13, 2, 27, 32, 136, 38, 40, 65, 16, 17]],
+  [5, [136, 38]],
+  [6, [2, 27]],
+  [7, [136, 38]],
+  [8, [137, 40]],
+  [9, [65]],
+  [10, [1, 137, 13, 2, 27, 32, 136, 38, 40, 65, 16, 17]],
+  [11, [2, 27, 32, 136, 38, 40, 65, 16, 17]],
+  [12, [16]],
+  [13, [1, 137, 13, 2, 27, 32, 136, 38, 40, 65, 16, 17]],
+  [14, [17]],
+  [0, [0x8a]],
+  [1, [0x8b]],
+  [2, [0x8b]],
+  [3, [0x9a]],
+  [4, [0x8a, 0x8b, 0x9a, 0x97, 0x99, 0x8f, 0x98, 0x8c]],
+  [5, [0x97]],
+  [6, [0x8b]],
+  [7, [0x97]],
+  [8, [0x99]],
+  [9, [0x8f]],
+  [10, [0x8a, 0x8b, 0x9a, 0x97, 0x99, 0x8f, 0x98, 0x8c]],
+  [11, [0x8b, 0x9a, 0x97, 0x99, 0x8f, 0x98, 0x8c]],
+  [12, [0x98]],
+  [13, [0x8a, 0x8b, 0x9a, 0x97, 0x99, 0x8f, 0x98, 0x8c]],
+  [14, [0x8c]],
+];
 
-/** Native role configuration and deletion of both push-handler maps.
- * Frame sampling and special-code interpretation are separate input-owner work.
+/** Native role configuration (CArtemisKeyConfig ordinary key map +0x10 and the 136/137
+ * flag maps +0x20/+0x30) and deletion of both push-handler maps. Frame sampling and
+ * special-code interpretation are separate input-owner work.
  */
 export class ArtemisKeyBindings {
-  private readonly roles = new Map<number, Role>();
+  private readonly ordinary = new Map<number, Set<number>>();
+  private readonly special136 = new Set<number>();
+  private readonly special137 = new Set<number>();
   private readonly pushHandlers = [new Map<number, AsbTag>(), new Map<number, AsbTag>()] as const;
   constructor(
     private readonly currentFile: () => string = () => {
       throw new Error('Artemis event registration requires the current script file');
     },
-  ) {}
+  ) {
+    this.constructDefaults();
+  }
+  private constructDefaults(): void {
+    this.ordinary.clear();
+    this.special136.clear();
+    this.special137.clear();
+    for (const [role, keys] of defaultRoles) for (const key of keys) this.add(role, key);
+  }
+  /** 0x1400acbb0. */
+  private add(role: number, key: number): void {
+    if (key === 136) this.special136.add(role);
+    else if (key === 137) this.special137.add(role);
+    else {
+      let keys = this.ordinary.get(role);
+      if (!keys) this.ordinary.set(role, (keys = new Set()));
+      keys.add(key);
+    }
+  }
   role(id: number): ArtemisKeyRole | undefined {
-    const role = this.roles.get(id);
-    return role ? {...role, keys: new Set([...role.keys].sort((a, b) => a - b))} : undefined;
+    const keys = this.ordinary.get(id);
+    const special136 = this.special136.has(id),
+      special137 = this.special137.has(id);
+    if (!keys && !special136 && !special137) return undefined;
+    return {keys: new Set([...(keys ?? [])].sort((a, b) => a - b)), special136, special137};
+  }
+  /** Section 0x41 (0x1400f4f90): the ordinary key map, roles and keys ascending. */
+  keyRoles(): Map<number, number[]> {
+    return new Map(
+      [...this.ordinary]
+        .sort(([a], [b]) => a - b)
+        .map(([role, keys]) => [role, [...keys].sort((a, b) => a - b)]),
+    );
+  }
+  /** Loader: a newly constructed key configuration (0x1400f5d60) whose ordinary map is
+   * cleared and read (0x1400b5830); the 136/137 maps keep the constructor defaults. */
+  loadKeyRoles(roles: ReadonlyMap<number, readonly number[]>): void {
+    this.constructDefaults();
+    this.ordinary.clear();
+    for (const [role, keys] of roles) this.ordinary.set(role, new Set(keys));
+  }
+  /** Sections 0x38 and 0x4e: copies of both push-handler maps. */
+  pushHandlerMaps(): [Map<number, AsbTag>, Map<number, AsbTag>] {
+    const copy = (map: ReadonlyMap<number, AsbTag>) =>
+      new Map([...map].map(([key, tag]) => [key, {...tag, args: new Map(tag.args)}]));
+    return [copy(this.pushHandlers[0]), copy(this.pushHandlers[1])];
+  }
+  loadPushHandlers(
+    maps: readonly [ReadonlyMap<number, AsbTag>, ReadonlyMap<number, AsbTag>],
+  ): void {
+    this.resetPushHandlers();
+    for (const slot of [0, 1] as const)
+      for (const [key, tag] of maps[slot]) this.storePushHandler(key, slot, tag);
   }
   /** bf210 empties both push maps (3890/38a0); key roles remain. */
   resetPushHandlers(): void {
@@ -80,16 +161,11 @@ export class ArtemisKeyBindings {
     if (tag.name !== 'keyconfig') return false;
     if (!p.has('role')) throw new Error('Missing Artemis keyconfig role');
     const id = integer(p.get('role')!);
-    const role: Role = {keys: new Set(), special136: false, special137: false};
     // Native clears ordinary keys and both special flags even when keys is absent.
-    this.roles.set(id, role);
-    if (p.has('keys'))
-      for (const token of p.get('keys')!.split(',')) {
-        const key = integer(token);
-        if (key === 136) role.special136 = true;
-        else if (key === 137) role.special137 = true;
-        else role.keys.add(key);
-      }
+    this.ordinary.set(id, new Set());
+    this.special136.delete(id);
+    this.special137.delete(id);
+    if (p.has('keys')) for (const token of p.get('keys')!.split(',')) this.add(id, integer(token));
     return true;
   }
 }
