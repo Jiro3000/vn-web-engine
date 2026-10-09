@@ -351,6 +351,39 @@ export interface ArtemisRegisteredTween {
   finish(): void;
 }
 
+/** CTweenQueue (vtable 0x140369e78), a deque of tweens registered as one entry. Step
+ * 0x1400a57b0 runs only the front tween; when it is done it is destroyed and the next one
+ * steps with the same clock, so the queued tweens play one after another and each one's
+ * timing starts on its first step. Empty reports done. Cancel 0x1400a58c0 marks every
+ * tween done without applying a value; finish 0x1400a5990 finishes each in order; both
+ * then empty the queue. */
+export class ArtemisTweenQueue implements ArtemisRegisteredTween {
+  private readonly tweens: ArtemisTween[] = [];
+  constructor(hash: string) {
+    artemisRevision(hash);
+  }
+  get size(): number {
+    return this.tweens.length;
+  }
+  /** 0x1400a56f0 push_back. */
+  append(tween: ArtemisTween): void {
+    this.tweens.push(tween);
+  }
+  tick(now: number): boolean {
+    while (this.tweens.length) {
+      if (!this.tweens[0]!.tick(now)) return false;
+      this.tweens.shift();
+    }
+    return true;
+  }
+  cancel(): void {
+    for (const tween of this.tweens.splice(0)) tween.cancel();
+  }
+  finish(): void {
+    for (const tween of this.tweens.splice(0)) tween.finish();
+  }
+}
+
 /** Global tween registry: register 0x1400a5360, frame step 0x14019aa00, finish 0x1400a54b0.
  * Ids come from one global uint32 counter. Registrations made while stepping go to a
  * pending map that is merged after the step. Steps visit tweens in registration order

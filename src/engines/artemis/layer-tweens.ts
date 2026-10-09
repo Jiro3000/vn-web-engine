@@ -2,7 +2,12 @@ import type {AsbTag} from '../../formats/artemis/asb.js';
 import type {ArtemisLayerCommands} from './layer-commands.js';
 import type {ArtemisLayerPropertyPatch} from './layer-properties.js';
 import type {ArtemisScene, ArtemisSceneLayer} from './scene.js';
-import {ArtemisFloatTween, artemisEaseId, type ArtemisTweenRegistry} from './tween.js';
+import {
+  ArtemisFloatTween,
+  ArtemisTweenQueue,
+  artemisEaseId,
+  type ArtemisTweenRegistry,
+} from './tween.js';
 import {artemisDecimal, artemisInteger} from './numbers.js';
 import {artemisRevision} from './revision.js';
 
@@ -32,12 +37,22 @@ function decimal(value: string): number {
   return number;
 }
 
-/** lytween 0x1400da830 and lytweendel 0x1400dd3a0 for direct scene layers, outside tween
- * groups (script +0x3860 is never created here). The setter holds the layer node, so a
- * replaced or deleted layer keeps animating its detached actors until the tween ends.
- * Per-layer id sets mirror CArtemisLayer +0xf0. */
+/** lytween 0x1400da830, lytweendel 0x1400dd3a0, tweenset 0x1400dd840 and /tweenset
+ * 0x1400dd8f0 for direct scene layers. The setter holds the layer node, so a replaced or
+ * deleted layer keeps animating its detached actors until the tween ends. Per-layer id
+ * sets mirror CArtemisLayer +0xf0.
+ *
+ * `tweenset` opens a CTweenQueue at script +0x3860 when none is open. While it is open,
+ * lytween neither applies the start value nor registers the tween: it appends it to the
+ * queue and adds the tag's `id` to the id set +0x3868. `/tweenset` registers the queue,
+ * closes it and adds the queue id to the layer of every collected id (ids without a
+ * layer are skipped), then clears the set. The root (`!`) and alias (`~`) fallbacks of
+ * that lookup are refused like the lytween owner fallbacks. */
 export class ArtemisLayerTweens<T> {
   private readonly ids = new WeakMap<ArtemisSceneLayer<T>, Set<number>>();
+  private queue: ArtemisTweenQueue | null = null;
+  /** std::set<string> +0x3868. */
+  private readonly queued = new Set<string>();
   constructor(
     private readonly hash: string,
     private readonly scene: ArtemisScene<T>,
@@ -50,6 +65,8 @@ export class ArtemisLayerTweens<T> {
   dispatch(input: AsbTag, recordHistory = true): boolean {
     if (input.name === 'lytween') this.start(input, recordHistory);
     else if (input.name === 'lytweendel') this.remove(input, recordHistory);
+    else if (input.name === 'tweenset') this.queue ??= new ArtemisTweenQueue(this.hash);
+    else if (input.name === '/tweenset') this.close();
     else return false;
     return true;
   }
@@ -116,11 +133,14 @@ export class ArtemisLayerTweens<T> {
       yoyo,
       loopDelay,
     });
-    // Outside a tween group the start value is applied at creation.
-    set(from);
-    let ids = this.ids.get(layer);
-    if (!ids) this.ids.set(layer, (ids = new Set()));
-    ids.add(this.registry.register(tween));
+    if (this.queue) {
+      this.queue.append(tween);
+      this.queued.add(id);
+    } else {
+      // Outside a tween group the start value is applied at creation.
+      set(from);
+      this.add(layer, this.registry.register(tween));
+    }
     if (sync) this.host.enterRunMode(4);
     if (!recordHistory) return;
     if (loop === -1 || yoyo === -1 || remove) {
@@ -138,6 +158,24 @@ export class ArtemisLayerTweens<T> {
         [param, args.get(end)!],
       ]),
     });
+  }
+  private add(layer: ArtemisSceneLayer<T>, tween: number): void {
+    let ids = this.ids.get(layer);
+    if (!ids) this.ids.set(layer, (ids = new Set()));
+    ids.add(tween);
+  }
+  private close(): void {
+    if (!this.queue) return;
+    const tween = this.registry.register(this.queue);
+    this.queue = null;
+    // Every collected layer receives the same id, so the set order is not observable.
+    for (const id of this.queued) {
+      const layer = this.scene.layer(id);
+      if (layer) this.add(layer, tween);
+      else if (id === '!') throw Error('Unsupported Artemis root layer tween group');
+      else if (id.startsWith('~')) throw Error('Unsupported Artemis layer alias tween group');
+    }
+    this.queued.clear();
   }
   private remove(input: AsbTag, recordHistory: boolean): void {
     const id = input.args.get('id') ?? '';

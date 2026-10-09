@@ -599,11 +599,11 @@ merged after the step. The frame step `0x14019aa00` destroys tweens that report 
 Finish `0x1400a54b0` searches the active map, then the pending map. Steps visit tweens in
 registration order.
 
-`layer-tweens.ts` implements `lytween` (`0x1400da830`) and `lytweendel` (`0x1400dd3a0`)
-for direct scene layers:
+`layer-tweens.ts` implements `lytween` (`0x1400da830`), `lytweendel` (`0x1400dd3a0`),
+`tweenset` (`0x1400dd840`) and `/tweenset` (`0x1400dd8f0`) for direct scene layers:
 
 - Missing ids report the native layer-not-found error. Root (`!`) and alias (`~`)
-  owners and tween groups are refused as unsupported.
+  owners are refused as unsupported.
 - `param` selects `left`, `top`, `alpha` (/255), `xscale`/`yscale` (/100) or `rotate`.
   Any other parameter returns without registration or history.
 - Duration is `time`, else `msec`. Absent `id`, `from`, `to`, `param` and `time` are
@@ -619,6 +619,13 @@ for direct scene layers:
   Otherwise an `lyprop` with the end value string is recorded.
 - `lytweendel` finishes every tween registered on the layer and erases its `lytween`
   commands.
+- `tweenset` opens a tween group (`ArtemisTweenQueue`, CTweenQueue) unless one is open.
+  While it is open, `lytween` appends its tween to the group instead of registering it,
+  applies no start value and collects the tag `id`; sync, completion and history are
+  unchanged. `/tweenset` registers the group as one registry entry and adds that id to the
+  layer of every collected id; ids without a layer are skipped. The group steps only its
+  front tween, so the tweens play one after another, each starting on its first step;
+  finishing the group finishes every remaining tween in order.
 
 ## Ordinary group display properties
 

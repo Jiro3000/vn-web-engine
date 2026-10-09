@@ -4272,3 +4272,72 @@ test('Artemis lytween animates current and retained actors, then syncs, deletes,
     layers.close();
   }
 });
+
+test('Artemis tween groups queue layer tweens, play them in order and share one registry id', async () => {
+  const {ArtemisLayerTweens} = await import('../dist/engines/artemis/layer-tweens.js');
+  const {ArtemisLayerCommands} = await import('../dist/engines/artemis/layer-commands.js');
+  const {ArtemisTweenRegistry} = await import('../dist/engines/artemis/tween.js');
+  const image = await syntheticImage();
+  const {layers} = await layerFixture(async (path) => (path === 'synthetic.png' ? image : null));
+  const registry = new ArtemisTweenRegistry(revision),
+    log = [];
+  const tweens = new ArtemisLayerTweens(
+    revision,
+    layers.scene,
+    registry,
+    new ArtemisLayerCommands(revision),
+    {
+      applyImageProperties: (id, actor, patch) => log.push([id, patch]),
+      layerNotFound: (tag) => log.push(['missing', tag.args.get('id')]),
+      enterRunMode: () => {},
+      endSyncWait: () => {},
+      deleteLayer: () => {},
+      emitEvent: (tag) => log.push(['event', tag.args.get('label')]),
+      recordLayerProperties: (tag) => log.push(['lyprop', Object.fromEntries(tag.args)]),
+    },
+  );
+  const take = () => log.splice(0);
+  try {
+    for (const id of ['a', 'b']) {
+      await layers.dispatch(command('lyc', {id, file: 'synthetic'}));
+      layers.commit();
+    }
+    take();
+    tweens.dispatch(command('tweenset'));
+    tweens.dispatch(command('lytween', {id: 'a', param: 'left', from: '0', to: '10', time: '10'}));
+    tweens.dispatch(command('tweenset'));
+    tweens.dispatch(
+      command('lytween', {id: 'b', param: 'top', from: '0', to: '20', time: '10', label: 'x'}),
+    );
+    tweens.dispatch(command('lytween', {id: 'none', param: 'left'}));
+    // No start value is applied and nothing is registered while the group is open;
+    // the end-state history is still recorded.
+    assert.deepEqual(take(), [
+      ['lyprop', {id: 'a', left: '10'}],
+      ['lyprop', {id: 'b', top: '20'}],
+      ['missing', 'none'],
+    ]);
+    assert.equal(registry.size, 0);
+    tweens.dispatch(command('/tweenset'));
+    tweens.dispatch(command('/tweenset'));
+    assert.equal(registry.size, 1);
+    registry.tick(100);
+    registry.tick(110);
+    // The second tween starts on the step that destroys the first.
+    assert.deepEqual(take(), [
+      ['a', {left: 0}],
+      ['a', {left: 10}],
+      ['b', {top: 0}],
+    ]);
+    // Deleting the tweens of either layer finishes the whole queue in order.
+    tweens.dispatch(command('lytweendel', {id: 'b'}));
+    assert.deepEqual(take(), [
+      ['b', {top: 20}],
+      ['event', 'x'],
+    ]);
+    registry.tick(120);
+    assert.equal(registry.size, 0);
+  } finally {
+    layers.close();
+  }
+});

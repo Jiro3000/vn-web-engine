@@ -745,7 +745,7 @@ try {
       pendingResource = result;
       return 'suspended';
     }
-    if (layerFixture && (tag.name === 'lytween' || tag.name === 'lytweendel')) {
+    if (layerFixture && ['lytween', 'lytweendel', 'tweenset', '/tweenset'].includes(tag.name)) {
       layerFixture.dispatchTween(tag);
       return;
     }
