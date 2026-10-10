@@ -7,8 +7,8 @@ import type {MovieResponse} from './worker-protocol.js';
 const PREFETCH_FRAMES = 8;
 /**
  * Decoded video kept ahead of the clock, within the frame bound below. One worker batch of a
- * large stream (1080p Windows Media) takes up to about 0.3 s, longer than eight frames last,
- * so a frame-count prefetch alone stops the clock repeatedly while the worker idles.
+ * large stream (1080p Windows Media) can take a few hundred milliseconds, longer than eight
+ * frames last, so a frame-count prefetch alone stops the clock while the worker idles.
  */
 const VIDEO_PREFETCH_SECONDS = 0.5;
 /**
@@ -46,6 +46,10 @@ export class StreamMovieVoice {
     decodeMs: 0,
     maxDecodeMs: 0,
     maxWaitMs: 0,
+    shown: 0,
+    skipped: 0,
+    lateMsSum: 0,
+    maxLateMs: 0,
     videoStalls: 0,
     audioStalls: 0,
   };
@@ -61,17 +65,27 @@ export class StreamMovieVoice {
   get metadata(): MovieInfo | undefined {
     return this.info;
   }
-  /** Diagnostic: worker batches and their decode time, and clock stops because the decoded
-   * video or audio ran out. */
+  /** Diagnostic: worker batches and their decode time, clock stops because the decoded video
+   * or audio ran out, pictures selected and skipped, how late each selected picture's time
+   * is on the audio clock, and the context's output latency. */
   get decoding(): {
     batches: number;
     decodeMs: number;
     maxDecodeMs: number;
     maxWaitMs: number;
+    shown: number;
+    skipped: number;
+    lateMsSum: number;
+    maxLateMs: number;
+    outputLatencyMs: number;
     videoStalls: number;
     audioStalls: number;
   } {
-    return {...this.counters};
+    const context = this.context as AudioContext & {outputLatency?: number};
+    return {
+      ...this.counters,
+      outputLatencyMs: ((context.outputLatency || 0) + (context.baseLatency || 0)) * 1000,
+    };
   }
   private failWorker(worker: Worker, error: unknown): void {
     if (this.disposed || this.worker !== worker || this.failure !== undefined) return;
@@ -222,8 +236,18 @@ export class StreamMovieVoice {
         this.wanted = false;
       }
     }
-    while (this.frames.length && this.frames[0]!.at <= position)
-      this.current = this.frames.shift()!.frame;
+    let selected: {at: number; frame: YuvFrame} | undefined;
+    while (this.frames.length && this.frames[0]!.at <= position) {
+      if (selected) this.counters.skipped++;
+      selected = this.frames.shift()!;
+    }
+    if (selected) {
+      this.current = selected.frame;
+      const late = (position - selected.at) * 1000;
+      this.counters.shown++;
+      this.counters.lateMsSum += late;
+      this.counters.maxLateMs = Math.max(this.counters.maxLateMs, late);
+    }
     while (this.audio.length && this.audio[0]!.at + this.audio[0]!.buffer.duration <= position) {
       const chunk = this.audio.shift()!;
       chunk.node?.disconnect();

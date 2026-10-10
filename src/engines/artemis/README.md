@@ -1103,11 +1103,15 @@ decode. `BrowserFullscreenMoviePlayer` streams an ASF file through the shared so
 movie player: `AsfMovie` (`src/formats/asf/movie.ts`) decodes it in the movie worker
 with the Windows Media decoder (`wasm/windows-media/`), the audio clock paces the
 pictures and a canvas covering the game element shows them. The game's muxer places WMA
-blocks up to the ASF preroll (1451 ms) behind the video of the same time, so the reader
-decodes audio as it reads packets and holds video objects compressed until packets a
-preroll later are read (`AsfPrerollQueue`); a batch then never ends with its audio
-behind its frames, and the clock does not stop for audio while the worker idles. The player stops at the
-movie's duration. Other containers play in a `<video>` element. A movie that neither
+blocks up to the ASF preroll (1451 or 3000 ms) behind the video of the same time, so the
+reader decodes audio as it reads packets and holds video objects compressed until packets
+a preroll later are read (`AsfPrerollQueue`); a batch then never ends with its audio
+behind its frames. Each batch decodes at most eight video objects, and four reads stay in
+flight ahead of demuxing, so neither a low-bitrate stretch nor a slow read of the file
+keeps the worker past the decoded video ahead of the clock. Pictures and audio share one
+clock, the audio context's time: a picture is selected once the clock reaches its
+presentation time, so the decoded audio ahead is buffer depth, not an offset. The player
+stops at the movie's duration. Other containers play in a `<video>` element. A movie that neither
 path can play is reported to the host as unsupported and completes, so the scenario
 continues as after the movie's end. The probe plays a movie for its ASF header duration
 in 16 ms frames without decoding it.
