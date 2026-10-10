@@ -181,8 +181,9 @@ function pageTrace() {
   // Tag counts, and save, load, selection, reset, video and music tags and mode changes in order.
   const counts = new Map<string, number>();
   const notable: unknown[] = [];
-  const push = (entry: unknown) => {
-    entries.push(entry);
+  // Every entry carries the page time in milliseconds.
+  const push = (entry: object) => {
+    entries.push({t: Math.round(performance.now()), ...entry});
     if (entries.length > 400) entries.splice(0, 200);
   };
   Object.assign(window, {

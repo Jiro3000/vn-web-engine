@@ -2599,6 +2599,65 @@ test('Native glyph pipeline validates before allocation, retries failed paint an
   }
 });
 
+test('Native glyph blocks overlap font and paint jobs in a bounded window and keep glyph order', async () => {
+  const {ArtemisTextGlyphs} = await import('../dist/engines/artemis/text-glyphs.js');
+  const {ArtemisFileFonts} = await import('../dist/engines/artemis/file-fonts.js');
+  const {rectangleFont, createNodeFontWorker, createNodeGlyphPainter} =
+    await import('./freetype-fixtures.mjs');
+  const hash = '8953562b80608046662bd8c89015d04236b0ba3afee10c36469c11403de3ebaf';
+  const worker = await createNodeFontWorker(),
+    painter = await createNodeGlyphPainter(hash);
+  const fonts = new ArtemisFileFonts(hash, {
+    readFontFile: async () => rectangleFont(),
+    openFontFace: (bytes) => worker.open(bytes),
+  });
+  let active = 0,
+    peak = 0;
+  const loader = new ArtemisTextGlyphs(hash, fonts, {
+    paint: async (...args) => {
+      peak = Math.max(peak, ++active);
+      try {
+        await new Promise((resolve) => setTimeout(resolve, 1));
+        return await painter.paint(...args);
+      } finally {
+        active--;
+      }
+    },
+  });
+  const text = Array.from({length: 40}, (_, i) => String.fromCodePoint(0x4e00 + i)).join('');
+  try {
+    const block = await loader.load(text, '', {
+      face: 'synthetic.ttf',
+      rubyface: 'synthetic.ttf',
+      size: 32,
+      rubysize: 0,
+      shadow: 0,
+      outline: 0,
+      rubyshadow: 0,
+      rubyoutline: 0,
+      spacetop: 0,
+      spacemiddle: 0,
+      spacebottom: 0,
+      kerning: 0,
+      rubykerning: 0,
+      color: 0xffffff,
+      shadowcolor: 0,
+      outlinecolor: 0,
+      styleBits: 0,
+    });
+    assert.deepEqual(
+      block.main.map((g) => g.glyph.codePoint),
+      Array.from(text, (c) => c.codePointAt(0)),
+    );
+    assert.ok(peak > 1 && peak <= 16, `paint jobs in flight: ${peak}`);
+  } finally {
+    await loader.close();
+    await fonts.close();
+    painter.close();
+    worker.close();
+  }
+});
+
 test('Native UTF-8 print runs preserve ASCII words, explicit wordparts and overflow byte offsets', async () => {
   const {artemisUtf8TextRuns} = await import('../dist/engines/artemis/text-runs.js');
   const hash = '8953562b80608046662bd8c89015d04236b0ba3afee10c36469c11403de3ebaf';

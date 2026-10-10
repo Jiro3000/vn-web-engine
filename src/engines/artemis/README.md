@@ -260,7 +260,9 @@ each glyph is placed at its font `left`/`top`, line, block and glyph offsets, wi
 text display's animated `left`, `top`, `xscale`, `yscale`, `rotate` and `alpha` applied
 about the glyph origin; invisible fonts draw nothing. While a `print` loads glyphs the
 layer keeps the sprites from before the insertion, as the synchronous native insertion
-never shows a partial line.
+never shows a partial line. A block's glyph jobs overlap in a window of 16 per main or ruby
+stream (`text-glyphs.ts`), below the 64-job budgets of the font and paint workers, and the
+block keeps glyph order.
 
 `ArtemisImageGraphics.drawStage` renders the scene into a stage surface and presents it.
 When a transition starts the last presented frame is kept; state 1 crossfades from it by

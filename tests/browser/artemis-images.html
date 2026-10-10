@@ -299,7 +299,7 @@
     );
     assert(refused, 'oversized texture was accepted');
     assert(
-      created.length === before.created + 1 && deleted.length === before.deleted + 1,
+      created.length - deleted.length === before.created - before.deleted,
       'failed upload leaked its texture',
     );
     await layers.dispatch(command('lydel', {id: '2'}));

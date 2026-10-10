@@ -34,6 +34,7 @@ const emptyGlyph = (codePoint: number): ArtemisTextGlyphResource =>
     codePoint,
     surface: Object.freeze({image: null, left: 0, top: 0, advance: 0}),
   });
+const glyphWindow = 16;
 interface Cached {
   promise: Promise<ArtemisTextGlyphResource>;
   bytes: number;
@@ -110,8 +111,11 @@ export class ArtemisTextGlyphs {
         outline = ruby ? snapshot.rubyoutline : snapshot.outline;
       const font = await this.font(path, size, snapshot.styleBits);
       if (renderer) renderer.opened = true;
-      const output: ArtemisBlockGlyph<ArtemisTextGlyphResource>[] = [];
+      // Glyph jobs overlap in a bounded window instead of one worker round trip per
+      // glyph; main and ruby together stay below the 64-job font and paint budgets.
+      const pending: Promise<ArtemisTextGlyphResource>[] = [];
       for (const symbol of symbols) {
+        if (pending.length >= glyphWindow) await pending[pending.length - glyphWindow];
         this.assertOpen();
         const codePoint = symbol.codePointAt(0)!;
         const key = JSON.stringify([
@@ -161,10 +165,10 @@ export class ArtemisTextGlyphs {
           this.trim();
           cached = entry;
         }
-        const glyph = await cached.promise;
-        output.push({glyph, advance: glyph.surface.advance});
+        pending.push(cached.promise);
       }
-      return output;
+      const glyphs = await Promise.all(pending);
+      return glyphs.map((glyph) => ({glyph, advance: glyph.surface.advance}));
     };
     // Size changes are atomic in each worker job; simultaneous main/ruby owners
     // can safely borrow one file face without drawing at another stream's size.

@@ -21,6 +21,7 @@ export class WebGLDrawTarget implements DrawListTarget {
   private buffer: WebGLBuffer | undefined;
   private readonly programs = new Map<string, DrawProgram>();
   private maxTextureUnits = 0;
+  private maxTextureSize = 0;
   private readonly samplers = new Map<string, WebGLSampler>();
   private readonly images = new Map<object, WebGLTexture>();
   private readonly renderSurfaces = new Map<GpuRenderSurface, WebGLFramebuffer>();
@@ -63,6 +64,7 @@ export class WebGLDrawTarget implements DrawListTarget {
     this.gl = gl;
     this.surface = canvas;
     this.maxTextureUnits = gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS);
+    this.maxTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE);
     const framebuffer = gl.createFramebuffer(),
       buffer = gl.createBuffer(),
       color = gl.createTexture();
@@ -193,6 +195,19 @@ void main(){vec4 sampled=texture(atlas,tex);if(maskMode.w!=0.)sampled.rgb=vec3(1
     gl.activeTexture(gl.TEXTURE0 + unit);
     let texture = this.images.get(image);
     if (!texture) {
+      // The upload arguments are validated here instead of reading gl.getError(), which
+      // synchronizes with the GPU process for every new texture (each glyph image).
+      const {width, height, pixels} = image;
+      if (
+        !Number.isInteger(width) ||
+        !Number.isInteger(height) ||
+        width < 0 ||
+        height < 0 ||
+        width > this.maxTextureSize ||
+        height > this.maxTextureSize ||
+        pixels.byteLength < width * height * 4
+      )
+        throw new Error('Texture upload failed');
       texture = gl.createTexture() ?? undefined;
       if (!texture) throw new Error('Cannot allocate texture');
       try {
@@ -211,7 +226,6 @@ void main(){vec4 sampled=texture(atlas,tex);if(maskMode.w!=0.)sampled.rgb=vec3(1
           gl.UNSIGNED_BYTE,
           image.pixels,
         );
-        if (gl.getError() !== gl.NO_ERROR) throw new Error('Texture upload failed');
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
       } catch (error) {
@@ -937,5 +951,6 @@ void main(){vec4 sampled=texture(atlas,tex);if(maskMode.w!=0.)sampled.rgb=vec3(1
     this.framebuffer = undefined;
     this.color = undefined;
     this.maxTextureUnits = 0;
+    this.maxTextureSize = 0;
   }
 }
