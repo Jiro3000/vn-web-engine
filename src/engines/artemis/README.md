@@ -99,11 +99,12 @@ penetration flag for click/rollover), reset stores an empty callback, enable/dis
 the per-type enable flag (groups reach every child actor). History uses
 `ArtemisLayerCommands` (`erase` = `0x140144960`, `append`, coalescing `record`) unless the
 dispatch is a replay. `ArtemisLayerEventSlots` is actor-owned state that actor copies must
-copy. `invoke` calls the stored functor: `ArtemisScriptEvents.emit` (b73e0) with the tag copy,
-the type index as event mode and force set. The browser player is the input owner: it
-hit-tests the pointer (`ArtemisImageGraphics.hitTest`, see below) and tracks rollover
-state; penetration is not implemented, so only the topmost hit layer with a registered
-event receives it. `ArtemisKeyBindings.deliverPushed` is the c0560 run mode 1/3
+copy, including the pointer-inside flag and drag start. `invoke` calls the stored functor:
+`ArtemisScriptEvents.emit` (b73e0) with the tag copy, the type index as event mode and the
+penetration flag as force. A click or rollover without penetration takes the script's event
+latch for its mode (+0x30/+0x31), so later clicks or rollovers of the same frame are
+suppressed; penetrating events pass through to the layers below. The runtime clears both
+latches after the input update. `ArtemisKeyBindings.deliverPushed` is the c0560 run mode 1/3
 push-handler slice: slot 0 (decide query) then slot 1 (push query) in ascending key order,
 ending the frame when a command is delivered. The probe's `--layer-event=<id>[:type]` and `--key-push=<key>`
 options apply these at a run mode 3 stop, one per frame, without pointer hit testing.
@@ -193,9 +194,7 @@ Delivering pointer events one frame late keeps the native order of a button pres
 push handler of the press is queued first and ends its frame, and the layer click's
 handler scope, raised next frame, runs above it. A press sampled in the frame whose window
 update raises a rollover is not pushed: the rollover handler scope is in run mode 0 until it
-returns, so the layer click alone follows. Hosts raise rollover only while `acceptsInput`,
-so a pointer that rests on a button while a screen opens gets its rollover once input
-resumes. While a resource holds the script only
+returns, so the layer click alone follows. While a resource holds the script only
 the input and clock advance. `acceptsInput` reports run modes 1 and 3. `advanceTo`,
 `layerEvent` and `keyPush` are the individual steps, and `save`/`load` with
 `scenarioArchive()` and `flushSaves()` serve save tooling. `runMode` is the current caret's
@@ -277,18 +276,17 @@ pressed and released between two frames is reported held once. Wheel notches bec
 every key. Which role a key serves is game configuration (`keyconfig`).
 `hitTest(scene, x, y)` returns visible image, animation and text layers under a stage
 point, topmost first: the point maps through the inverse local matrix into the image
-bounds, then the clickable threshold gates the pixel alpha (`0x14017b6a0`). The player
-sends rollout and rollover when the topmost hit layer with a registered pointer event
-changes, and a click event to it on a press. Hover is tracked only while the runtime
-accepts input, so a layer that appears under a still pointer receives its rollover once
-the script stops.
-Each frame the player also passes the pointer and every hit layer id to the runtime, which
-runs the draggable half of the per-actor pointer update (`0x140179f50`) after its input
-update: `ArtemisLayerOwner.updateDrag` starts a visible draggable layer under the pointer on
-the key 1 down edge (`dragin`, `0x140179e80`), then moves its left/top by the pointer
-offset since the press, clamped into its drag area unless all four edges are zero. It raises
-`drag` while key 1 is down and `dragout` on release. Drag moves write no layer command, and
-a draggable layer receives no click.
+bounds, then the clickable threshold gates the pixel alpha (`0x14017b6a0`). Each frame the
+player passes the pointer and the hit layer ids to the runtime, whose window update runs
+the per-actor pointer update (`0x140179f50`, `ArtemisLayerOwner.updatePointer`) in every
+run mode but 9, before the input update, so it reads the key states of the previous one.
+Hit layers go first, topmost first, then the other actors with a draggable flag or an armed
+click, rollover or rollout callback. Each actor keeps its own inside flag: `rollover` when
+the pointer enters it, `rollout` when it leaves, and `click` when it is inside, not
+draggable and key 1 is decided. An idle draggable actor under the pointer starts on the key
+1 down edge (`dragin`, `0x140179e80`), then moves its left/top by the pointer offset since
+the press, clamped into its drag area unless all four edges are zero. It raises `drag`
+while key 1 is down and `dragout` on release. Drag moves write no layer command.
 
 ## Verification and remaining work
 
@@ -311,8 +309,8 @@ By default dialogs remain pending. `--dialog-result=0` or `--dialog-result=1`
 explicitly supplies a simulated outcome for a separate probe, recorded in its JSON.
 Probe cursor/scheduler effects are record-only and do not represent production effects.
 
-Remaining work includes native system variables/events, full IET compilation, layer
-event penetration and drag events, and the click glyph. The player page is
+Remaining work includes native system variables/events, full IET compilation and the
+click glyph. The player page is
 `artemis.html`. Shared platform/media services must remain in
 the shared layers. Evidence and game resources are local-only and are not part of
 this source tree.

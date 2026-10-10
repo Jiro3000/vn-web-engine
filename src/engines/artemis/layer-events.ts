@@ -26,11 +26,23 @@ export interface ArtemisLayerEventSink {
   emit(command: AsbTag, mode: number, force: boolean): unknown;
 }
 
+/** A drag in progress: the pointer and the layer's left/top at its start. */
+export interface ArtemisLayerDrag {
+  readonly x: number;
+  readonly y: number;
+  readonly left: number;
+  readonly top: number;
+}
+
 /** Per-actor event state of CLayer: six callbacks and enable bytes (+0x280..0x285, all
- * enabled by constructor 0x1400a3640). Actor copies (0x1400a4eb0) copy this state. */
+ * enabled by constructor 0x1400a3640), the pointer-inside flag of the last pointer update
+ * (+0x286, initially clear) and the drag start (+0x288 pointer, -1,-1 when idle; +0x298
+ * layer position). Actor copies (0x1400a4eb0) copy all of it. */
 export class ArtemisLayerEventSlots {
   private readonly callbacks: (ArtemisLayerEventCallback | null)[] = Array(6).fill(null);
   private readonly enabled: boolean[] = Array(6).fill(true);
+  inside = false;
+  drag: ArtemisLayerDrag | null = null;
   callback(type: ArtemisLayerEventType): ArtemisLayerEventCallback | null {
     const callback = this.callbacks[ARTEMIS_LAYER_EVENT_TYPES.indexOf(type)];
     return callback ? {...callback, command: copyTag(callback.command)} : null;
@@ -47,12 +59,13 @@ export class ArtemisLayerEventSlots {
     this.enabled[type] = enabled;
   }
   /** The stored functor (f8050/f8210) calls b73e0 with the tag copy, the type index as event
-   * mode and force 1. Empty slots do nothing. Pointer hit testing, enable bytes, rollover
-   * state and penetration belong to the pointer owner that selects the slot. */
+   * mode and the penetration flag as force: a click or rollover without penetration takes
+   * its event latch, so later ones of the same pointer update are suppressed. Empty slots
+   * do nothing. */
   invoke(type: ArtemisLayerEventType, sink: ArtemisLayerEventSink): boolean {
     const callback = this.callback(type);
     if (!callback) return false;
-    sink.emit(callback.command, ARTEMIS_LAYER_EVENT_TYPES.indexOf(type), true);
+    sink.emit(callback.command, ARTEMIS_LAYER_EVENT_TYPES.indexOf(type), callback.penetration);
     return true;
   }
   copy(): ArtemisLayerEventSlots {
@@ -61,6 +74,8 @@ export class ArtemisLayerEventSlots {
       copy.callbacks[type] = this.callbacks[type]!;
       copy.enabled[type] = this.enabled[type]!;
     }
+    copy.inside = this.inside;
+    copy.drag = this.drag;
     return copy;
   }
 }

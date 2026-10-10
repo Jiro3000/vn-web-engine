@@ -21,7 +21,6 @@ import {ArtemisGlyphPainter} from '../glyph-paint-client.js';
 import {createArtemisOrdinaryGpuRaster} from '../gpu-raster.js';
 import type {ArtemisImageGraphics} from '../image-graphics.js';
 import {ArtemisImageLoader, type ArtemisLoadedImage} from '../image-loader.js';
-import type {ArtemisLayerEventType} from '../layer-events.js';
 import {artemisPngSurface} from '../png-surface.js';
 import {
   ArtemisRuntime,
@@ -98,10 +97,8 @@ export class ArtemisBrowserPlayer {
   private closed = false;
   /** Pointer position in stage coordinates. */
   private pointer = {x: 0, y: 0};
+  /** Diagnostic: the topmost hit layer with a registered pointer event. */
   private hovered: string | null = null;
-  private pending: {layerEvents: {id: string; type: ArtemisLayerEventType}[]} = {
-    layerEvents: [],
-  };
   private readonly keys = new VirtualKeyState();
   private wheel: (136 | 137)[] = [];
   private pointerInside = false;
@@ -367,28 +364,19 @@ export class ArtemisBrowserPlayer {
       this.now = this.clock();
       if (this.settling) runtime.advanceTo(this.now);
       else {
-        this.hover();
+        const hits =
+          this.layers && this.graphics
+            ? this.graphics.hitTest(this.layers.layers.scene, this.pointer.x, this.pointer.y)
+            : [];
+        this.hover(hits);
         const input: ArtemisFrameInput = {
           sample: {
             down: this.keys.sample(),
             wheel: this.wheel,
             pointerInside: this.pointerInside,
           },
-          layerEvents: this.pending.layerEvents,
-          ...(this.layers && this.graphics
-            ? {
-                pointer: {
-                  ...this.pointer,
-                  hits: this.graphics.hitTest(
-                    this.layers.layers.scene,
-                    this.pointer.x,
-                    this.pointer.y,
-                  ),
-                },
-              }
-            : {}),
+          pointer: {...this.pointer, hits},
         };
-        this.pending = {layerEvents: []};
         this.wheel = [];
         runtime.frame(this.now, input);
         if (runtime.resourcePending) this.settle(runtime);
@@ -409,28 +397,17 @@ export class ArtemisBrowserPlayer {
       this.settling = false;
     })().catch((error: unknown) => this.fail(error));
   }
-  /** Rollover and rollout follow the topmost hit layer with a registered pointer event
-   * while the runtime takes pointer events, so a layer under a still pointer receives its
-   * rollover once input resumes. */
-  private hover(): void {
-    const {layers, graphics, runtime} = this;
-    if (!layers || !graphics || !runtime?.acceptsInput) return;
+  /** The runtime raises pointer events itself (`ArtemisLayerOwner.updatePointer`); this
+   * tracks the layer it would raise rollover for while it accepts input. */
+  private hover(hits: readonly string[]): void {
+    const {layers, runtime} = this;
+    if (!layers || !runtime?.acceptsInput) return;
     const candidates = new Set([
       ...layers.eventLayers('click', true),
       ...layers.eventLayers('rollover', true),
       ...layers.eventLayers('rollout', true),
     ]);
-    const hit =
-      graphics
-        .hitTest(layers.layers.scene, this.pointer.x, this.pointer.y)
-        .find((id) => candidates.has(id)) ?? null;
-    if (hit === this.hovered) return;
-    const previous = this.hovered;
-    this.hovered = hit;
-    if (previous !== null && layers.eventLayers('rollout', true).includes(previous))
-      this.pending.layerEvents.push({id: previous, type: 'rollout'});
-    if (hit !== null && layers.eventLayers('rollover', true).includes(hit))
-      this.pending.layerEvents.push({id: hit, type: 'rollover'});
+    this.hovered = hits.find((id) => candidates.has(id)) ?? null;
   }
   private point(event: MouseEvent): {x: number; y: number} {
     const {canvas} = this;
@@ -475,15 +452,6 @@ export class ArtemisBrowserPlayer {
         canvas.focus({preventScroll: true});
         const key = VK_BUTTONS[event.button as 0 | 1 | 2];
         if (key !== undefined) this.keys.press(key);
-        if (event.button === 0) {
-          this.hover();
-          if (
-            this.hovered !== null &&
-            this.layers?.eventLayers('click', true).includes(this.hovered) &&
-            !this.layers.isDraggable(this.hovered)
-          )
-            this.pending.layerEvents.push({id: this.hovered, type: 'click'});
-        }
       },
       {signal},
     );

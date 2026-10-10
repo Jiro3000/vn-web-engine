@@ -96,11 +96,6 @@ export class ArtemisLayerOwner<
   readonly tweenRegistry: ArtemisTweenRegistry;
   readonly graphics: ArtemisLayerHost<T, I>;
   private readonly slots = new WeakMap<T, ArtemisLayerEventSlots>();
-  /** CLayer +0x288 start pointer (both -1 when idle) and +0x298 start position. */
-  private readonly drags = new WeakMap<
-    T,
-    {readonly x: number; readonly y: number; readonly left: number; readonly top: number}
-  >();
   private readonly events: ArtemisLayerEvents<T>;
   private readonly stage: ArtemisStage;
   private readonly transition: ArtemisTransition;
@@ -384,11 +379,7 @@ export class ArtemisLayerOwner<
     }
     return true;
   }
-  /** The layer exists and has an enabled `type` event. */
-  hasLayerEvent(id: string, type: ArtemisLayerEventType): boolean {
-    const actor = this.layers.scene.entry(id)?.value;
-    return !!actor && !!this.slots.get(actor)?.isEnabled(type);
-  }
+  /** Invokes an actor's stored layer event callback. */
   invokeLayerEvent(id: string, type: ArtemisLayerEventType, sink: ArtemisLayerEventSink): boolean {
     const actor = this.layers.scene.entry(id)?.value;
     const slots = actor && this.slots.get(actor);
@@ -396,57 +387,73 @@ export class ArtemisLayerOwner<
     if (!slots.isEnabled(type)) throw Error('Artemis layer event disabled: ' + id);
     return slots.invoke(type, sink);
   }
-  /** The draggable half of the per-actor pointer update 0x140179f50 for every visible
-   * draggable layer, in child order. An idle layer under the pointer starts on the key 1
-   * down edge (0x140179e80): `dragin`, then the pointer and the layer's left/top are kept.
-   * A dragging layer moves by the pointer offset since the start, clamped into its drag
-   * area unless all four edges are zero, and raises `drag` while key 1 is down; otherwise
-   * it raises `dragout` and becomes idle. Moves set the actor's left/top without a command
-   * record. Returns the events whose slot holds an enabled callback, in order. */
-  updateDrag(
+  /** The per-actor pointer update 0x140179f50 over every actor with a draggable flag or an
+   * enabled click, rollover or rollout callback: hit layers first, topmost first, then the
+   * rest in child order. With `inside` from the hit test, an actor raises `click` when inside,
+   * not draggable and key 1 is decided; `rollover` when inside and previously outside;
+   * `rollout` when outside and previously inside. An idle draggable actor under the pointer
+   * starts on the key 1 down edge (`dragin`, 0x140179e80) and keeps the pointer and its
+   * left/top; a dragging actor moves by the pointer offset since the start, clamped into its
+   * drag area unless all four edges are zero, and raises `drag` while key 1 is down or
+   * `dragout` and becomes idle. Moves set left/top without a command record. Returns the
+   * raised events whose slot holds an enabled callback, in order. */
+  updatePointer(
     pointer: {readonly x: number; readonly y: number},
-    inside: (id: string) => boolean,
-    keys: {readonly downEdge: boolean; readonly down: boolean},
+    hits: readonly string[],
+    keys: {readonly decide: boolean; readonly downEdge: boolean; readonly down: boolean},
   ): {readonly id: string; readonly type: ArtemisLayerEventType}[] {
     const events: {id: string; type: ArtemisLayerEventType}[] = [];
     const f = Math.fround;
-    const raise = (id: string, actor: T, type: ArtemisLayerEventType) => {
+    const hit = new Set(hits);
+    const entries = this.layers.scene.entries();
+    const order = [
+      ...hits.flatMap((id) => entries.filter((entry) => entry.id === id)),
+      ...entries.filter((entry) => !hit.has(entry.id)),
+    ];
+    for (const {id, value: actor} of order) {
+      if (actor === undefined) continue;
       const slots = this.slots.get(actor);
-      if (slots?.isEnabled(type) && slots.callback(type)) events.push({id, type});
-    };
-    for (const {id, value: actor} of this.layers.scene.entries()) {
-      if (actor === undefined || !this.visible(id)) continue;
       const display = this.host.displayOf?.(actor);
-      if (!display?.draggable) continue;
-      const start = this.drags.get(actor);
-      if (!start) {
-        if (inside(id) && keys.downEdge) {
-          raise(id, actor, 'dragin');
-          const {left, top} = display.properties;
-          this.drags.set(actor, {x: f(pointer.x), y: f(pointer.y), left, top});
+      const draggable = !!display?.draggable;
+      const armed = (type: ArtemisLayerEventType) =>
+        !!slots?.isEnabled(type) && slots.callback(type) !== null;
+      if (!slots && !draggable) continue;
+      if (!draggable && !armed('click') && !armed('rollover') && !armed('rollout')) continue;
+      const state = this.eventSlots(actor);
+      const raise = (type: ArtemisLayerEventType) => {
+        if (armed(type)) events.push({id, type});
+      };
+      const inside = hit.has(id);
+      if (inside && !draggable && keys.decide) raise('click');
+      if (inside && !state.inside) raise('rollover');
+      if (!inside && state.inside) raise('rollout');
+      if (draggable && display) {
+        const start = state.drag;
+        if (!start) {
+          if (inside && keys.downEdge) {
+            raise('dragin');
+            const {left, top} = display.properties;
+            state.drag = {x: f(pointer.x), y: f(pointer.y), left, top};
+          }
+        } else {
+          let x = f(start.left + f(f(pointer.x) - start.x)),
+            y = f(start.top + f(f(pointer.y) - start.y));
+          const area = display.dragArea;
+          if (area.left || area.top || area.right || area.bottom) {
+            x = Math.min(area.right, Math.max(area.left, x));
+            y = Math.min(area.bottom, Math.max(area.top, y));
+          }
+          this.host.applyTweenProperties(id, actor, {left: x, top: y});
+          if (keys.down) raise('drag');
+          else {
+            raise('dragout');
+            state.drag = null;
+          }
         }
-        continue;
       }
-      let x = f(start.left + f(f(pointer.x) - start.x)),
-        y = f(start.top + f(f(pointer.y) - start.y));
-      const area = display.dragArea;
-      if (area.left || area.top || area.right || area.bottom) {
-        x = Math.min(area.right, Math.max(area.left, x));
-        y = Math.min(area.bottom, Math.max(area.top, y));
-      }
-      this.host.applyTweenProperties(id, actor, {left: x, top: y});
-      if (keys.down) raise(id, actor, 'drag');
-      else {
-        raise(id, actor, 'dragout');
-        this.drags.delete(actor);
-      }
+      state.inside = inside;
     }
     return events;
-  }
-  /** Draggable layers raise drag events instead of `click` (0x140179f50). */
-  isDraggable(id: string): boolean {
-    const actor = this.layers.scene.entry(id)?.value;
-    return actor !== undefined && !!this.host.displayOf?.(actor).draggable;
   }
   /** trans runs synchronously except rule loads, which return a promise. */
   dispatchTransition(tag: AsbTag): boolean | Promise<void> {

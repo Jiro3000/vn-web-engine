@@ -1272,7 +1272,7 @@ test('Artemis layer owner and graphics share one texture allocation', async () =
   assert.equal(graphics.image(owner.layers.scene.entry('1').value.texture).width, 2);
 });
 
-test('Artemis draggable layers start on a press inside, follow the pointer within the drag area and end on release', async () => {
+async function browserLayerOwner() {
   const {createArtemisBrowserLayers} = await import('../dist/engines/artemis/browser/layers.js');
   const {createArtemisImageLoader} = await import('../dist/engines/artemis/image-loader.js');
   const bytes = await syntheticImage();
@@ -1290,22 +1290,28 @@ test('Artemis draggable layers start on a press inside, follow the pointer withi
     textProperties: () => undefined,
     report: (message) => assert.fail(message),
   });
+  return owner;
+}
+const lyevent = (id, type, extra = {}) =>
+  command('lyevent', {id, type, mode: 'init', handler: 'calllua', function: type, ...extra});
+
+test('Artemis draggable layers start on a press inside, follow the pointer within the drag area and end on release', async () => {
+  const owner = await browserLayerOwner();
   await owner.layers.dispatch(command('lyc', {id: '1', file: 'a.png'}));
   await owner.layers.dispatch(command('lyc', {id: '2', file: 'a.png'}));
   await owner.layers.dispatch(
     command('lyprop', {id: '1', left: '10', top: '20', draggable: '1', dragarea: '0,0,30,25'}),
   );
-  for (const type of ['dragin', 'drag', 'dragout'])
-    await owner.dispatch(
-      command('lyevent', {id: '1', type, mode: 'init', handler: 'calllua', function: type}),
-    );
+  for (const type of ['dragin', 'drag', 'dragout', 'click'])
+    await owner.dispatch(lyevent('1', type));
   const position = (id) => {
     const {left, top} = owner.layerInfo(id).display.properties;
     return [left, top];
   };
   const step = (x, y, hits, downEdge, down) =>
-    owner.updateDrag({x, y}, (id) => hits.includes(id), {downEdge, down});
-  // A press outside the layer, or a held key without its down edge, does not start a drag.
+    owner.updatePointer({x, y}, hits, {decide: downEdge, downEdge, down});
+  // A press outside the layer, or a held key without its down edge, does not start a drag;
+  // a draggable layer raises no click.
   assert.deepEqual(step(5, 5, [], true, true), []);
   assert.deepEqual(step(12, 22, ['1'], false, true), []);
   assert.deepEqual(step(12, 22, ['1'], true, true), [{id: '1', type: 'dragin'}]);
@@ -1321,18 +1327,70 @@ test('Artemis draggable layers start on a press inside, follow the pointer withi
   // Idle again: movement without a new press leaves the layer in place.
   assert.deepEqual(step(20, 20, ['1'], false, true), []);
   assert.deepEqual(position('1'), [0, 25]);
-  // Draggable layers raise no click; non-draggable layers never drag.
-  assert.equal(owner.isDraggable('1'), true);
-  assert.equal(owner.isDraggable('2'), false);
+  // A layer without the draggable flag never drags.
   assert.deepEqual(step(1, 1, ['2'], true, true), []);
-  // An empty drag area (all edges zero) does not clamp; a hidden layer does not drag.
+  // An empty drag area (all edges zero) does not clamp.
   await owner.layers.dispatch(command('lyprop', {id: '1', dragarea: '0,0,0,0'}));
   step(0, 0, ['1'], true, true);
   step(-40, 100, [], false, true);
   assert.deepEqual(position('1'), [-40, 125]);
-  step(-40, 100, [], false, false);
-  await owner.layers.dispatch(command('lyprop', {id: '1', visible: '0'}));
-  assert.deepEqual(step(0, 0, ['1'], true, true), []);
+});
+
+test('Artemis pointer updates raise rollover, rollout and click per layer, and a click without penetration suppresses the layers below it', async () => {
+  const {ArtemisScriptEvents} = await import('../dist/engines/artemis/script-events.js');
+  const owner = await browserLayerOwner();
+  for (const id of ['1', '2', '3'])
+    await owner.layers.dispatch(command('lyc', {id, file: 'a.png'}));
+  await owner.dispatch(lyevent('3', 'click'));
+  await owner.dispatch(lyevent('3', 'rollover'));
+  await owner.dispatch(lyevent('3', 'rollout'));
+  await owner.dispatch(lyevent('2', 'click', {penetration: '1'}));
+  await owner.dispatch(lyevent('1', 'click'));
+  await owner.dispatch(lyevent('1', 'rollover'));
+  const latches = [false, false],
+    delivered = [];
+  const events = new ArtemisScriptEvents(revision, {
+    nativeMode: () => 1,
+    disabled: () => false,
+    latched: (mode) => latches[mode],
+    latch: (mode) => (latches[mode] = true),
+    filter: () => 0,
+    report: (kind, _command, error) => assert.fail(`${kind}: ${error}`),
+    jump: () => false,
+    call: () => false,
+    enterHandlerScope: () => {},
+    enqueueHandler: () => {},
+  });
+  const update = (hits) =>
+    owner
+      .updatePointer({x: 0, y: 0}, hits, {decide: false, downEdge: false, down: false})
+      .map(({id, type}) => `${id}:${type}`);
+  // Every hit layer gets its own rollover, topmost first; leaving raises rollout.
+  assert.deepEqual(update(['3', '1']), ['3:rollover', '1:rollover']);
+  assert.deepEqual(update(['3', '1']), []);
+  assert.deepEqual(update(['1']), ['3:rollout']);
+  // A press raises click on every hit layer in hit order; the stored callbacks decide which
+  // reach the script: 3 has no penetration and takes the click latch, 2 penetrates (force)
+  // and 1 is suppressed.
+  const raised = owner.updatePointer({x: 0, y: 0}, ['3', '2', '1'], {
+    decide: true,
+    downEdge: true,
+    down: true,
+  });
+  assert.deepEqual(
+    raised.map(({id, type}) => `${id}:${type}`),
+    ['3:click', '3:rollover', '2:click', '1:click'],
+  );
+  latches.fill(false);
+  const sink = {
+    emit: (command, mode, force) => {
+      const result = events.emit(command, mode, force);
+      delivered.push(`${command.args.get('id')}:${result.status}`);
+      return result;
+    },
+  };
+  for (const {id, type} of raised) owner.invokeLayerEvent(id, type, sink);
+  assert.deepEqual(delivered, ['3:delivered', '3:delivered', '2:delivered', '1:suppressed']);
 });
 
 test('Artemis cache loans belong to outer wrappers across current/retained actor copies and multiple layers', async () => {

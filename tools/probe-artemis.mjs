@@ -416,7 +416,8 @@ try {
               const now = (runtime.now + 16) >>> 0 || 1;
               runtime.frame(now, {
                 sample: {down: new Set(count ? [] : [1]), pointerInside: true},
-                layerEvents: count ? [] : [{id, type: 'click'}],
+                // The pointer rests on the layer; the press is raised in the next update.
+                pointer: {x: 0, y: 0, hits: [id]},
               });
             }
           } else {

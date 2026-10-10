@@ -147,12 +147,11 @@ export interface ArtemisRuntimeLayers extends ArtemisLayerTagOwner {
   ): void;
   detachMessageActor(name: string): void;
   clickableLayers(): string[];
-  updateDrag(
+  updatePointer(
     pointer: {readonly x: number; readonly y: number},
-    inside: (id: string) => boolean,
-    keys: {readonly downEdge: boolean; readonly down: boolean},
+    hits: readonly string[],
+    keys: {readonly decide: boolean; readonly downEdge: boolean; readonly down: boolean},
   ): readonly {readonly id: string; readonly type: ArtemisLayerEventType}[];
-  hasLayerEvent(id: string, type: ArtemisLayerEventType): boolean;
   invokeLayerEvent(id: string, type: ArtemisLayerEventType, sink: ArtemisLayerEventSink): unknown;
   reset(): void;
   clearLayerCommands(): void;
@@ -164,9 +163,8 @@ export interface ArtemisRuntimeLayers extends ArtemisLayerTagOwner {
 export interface ArtemisFrameInput {
   /** The device sample of the frame's input update. */
   readonly sample: ArtemisInputSample;
-  /** Layer events from pointer hit testing, in delivery order. */
-  readonly layerEvents: readonly {readonly id: string; readonly type: ArtemisLayerEventType}[];
-  /** The pointer in stage pixels and the layer ids its hit test reaches, for layer drag. */
+  /** The pointer in stage pixels and the layer ids its hit test reaches over the current
+   * layers, topmost first. */
   readonly pointer?: {readonly x: number; readonly y: number; readonly hits: readonly string[]};
 }
 /** What the layer owner receives from the runtime. */
@@ -340,8 +338,9 @@ export class ArtemisRuntime {
   readonly input = new ArtemisInput();
   /** The frame counter +0xf0. */
   frameNumber = 0;
-  /** Pointer layer events for the next frame's window update. */
-  private layerEventQueue: {readonly id: string; readonly type: ArtemisLayerEventType}[] = [];
+  /** Script +0x30/+0x31: a click (event mode 0) or rollover (1) without penetration was
+   * raised in this frame's window update (b73e0); cleared after the input update. */
+  private readonly eventLatches = [false, false];
   /** Milliseconds (uint32, timeGetTime) of the current frame. */
   now = 1;
   private pendingResource: Promise<unknown> | null = null;
@@ -1097,8 +1096,10 @@ export class ArtemisRuntime {
     const scriptEvents = (this.scriptEvents = createArtemisScriptEvents(hash, lua, script, {
       nativeMode: () => this.mode,
       disabled: () => false,
-      latched: () => false,
-      latch: () => {},
+      latched: (mode) => this.eventLatches[mode]!,
+      latch: (mode) => {
+        this.eventLatches[mode] = true;
+      },
       report: (kind, command, error) =>
         trace({eventError: {kind, name: command.name, error: String(error)}}),
     }));
@@ -1363,9 +1364,10 @@ export class ArtemisRuntime {
     this.layers.tickTweens(now);
   }
   /** One real-time frame in the order of 0x1400c0560: the frame counter; the window
-   * update delivers the pointer layer events of the previous frame's input (it precedes the
-   * input update, and each event's script event is immediate or deferred by run mode); the
-   * input update; the clock advances sound, tweens and video layers; Lua `onEnterFrame` runs (a
+   * update runs the per-actor pointer update (`ArtemisLayerOwner.updatePointer`) with the
+   * key states of the previous input update, in every run mode but 9 (each raised event's
+   * script event is immediate or deferred by run mode); the input update; the event
+   * latches clear; the clock advances sound, tweens and video layers; Lua `onEnterFrame` runs (a
    * failing handler is cleared); then the run mode branch. Run mode 2 steps the transition,
    * which role 0 decided finishes; run mode 7 runs the fullscreen movie frame; run modes 1
    * and 3 deliver the push handlers (slot 0 on decide, slot 1 on
@@ -1376,27 +1378,17 @@ export class ArtemisRuntime {
   frame(now: number, input: ArtemisFrameInput, steps = 1000): void {
     if (this.exited) throw Error('Artemis frame after the application exit');
     this.frameNumber = (this.frameNumber + 1) >>> 0;
-    if (!this.resourcePending) {
-      const events = this.layerEventQueue;
-      this.layerEventQueue = [];
-      // The window update raises events from the current layers: an event of a layer
-      // deleted or changed since the pointer input is not raised.
-      for (const event of events)
-        if (this.layers.hasLayerEvent(event.id, event.type)) this.layerEvent(event.id, event.type);
-        else this.services.trace?.effect?.({layerEvent: {...event, dropped: true}});
-    }
-    this.layerEventQueue.push(...input.layerEvents);
-    this.input.update(now, input.sample);
-    // Draggable layers follow the pointer in the per-actor update (0x140179f50).
     const pointer = input.pointer;
-    if (pointer && !this.resourcePending && this.acceptsInput) {
-      const hits = new Set(pointer.hits);
-      for (const event of this.layers.updateDrag(pointer, (id) => hits.has(id), {
+    if (pointer && !this.resourcePending && this.mode !== 9)
+      for (const event of this.layers.updatePointer(pointer, pointer.hits, {
+        decide: this.input.query('decide', 1),
         downEdge: this.input.query('downEdge', 1),
         down: this.input.query('down', 1),
       }))
         this.layerEvent(event.id, event.type);
-    }
+    this.input.update(now, input.sample);
+    // c0560 clears both latches after the window and input updates.
+    this.eventLatches.fill(false);
     this.advanceTo(now);
     if (this.resourcePending) return;
     try {
