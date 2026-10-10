@@ -50,6 +50,7 @@ export interface ArtemisTagOwners {
   readonly variables: SyncOwner;
   readonly caption: SyncOwner;
   readonly seStop: HistoryOwner;
+  readonly seAdjust: HistoryOwner;
   readonly soundFinish?: SyncOwner;
   readonly mouse: SyncOwner;
   readonly wait: SyncOwner;
@@ -112,6 +113,7 @@ export function createArtemisTagDispatch(
       owners.variables.dispatch(tag) ||
       owners.caption.dispatch(tag) ||
       owners.seStop.dispatch(tag, recordHistory) ||
+      owners.seAdjust.dispatch(tag, recordHistory) ||
       owners.soundFinish?.dispatch(tag) ||
       owners.mouse.dispatch(tag) ||
       owners.wait.dispatch(tag) ||

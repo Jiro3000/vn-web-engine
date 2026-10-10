@@ -193,7 +193,10 @@ export function readArtemisSaveObject<Font extends object>(
     pendingProhibit = readBlockMap(archive, 0x4c);
   const layerCommands = readTagVectorMap(archive, 0x1a);
   const effects = new Map<string, AsbTag | null>(
-    [...readBlockMap(archive, 0x35)].map(([key, tag]) => [key, tag.name ? tag : null]),
+    [...readBlockMap(archive, 0x35)].map(([key, tag]) => [
+      key,
+      tag.name || tag.args.size ? tag : null,
+    ]),
   );
   let music: ArtemisMusicHistory = {playing: false, tag: emptyBlock};
   if (archive.seek(0x1c) && archive.u8()) {

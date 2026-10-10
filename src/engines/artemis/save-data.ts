@@ -35,7 +35,8 @@ export class ArtemisSaveData<Font extends object> {
     indent: new Map<string, AsbTag>(),
     prohibit: new Map<string, AsbTag>(),
   };
-  /** +0x78: per se id, the looping seplay tag or null (native empty block). */
+  /** +0x78: per se id, the looping seplay tag, or null for the native empty block. A
+   * nameless tag is an empty block that `sefade`/`sepan` gave arguments. */
   private readonly effects = new Map<string, AsbTag | null>();
 
   /** bf210 save-object reset of these fields. */
@@ -88,6 +89,13 @@ export class ArtemisSaveData<Font extends object> {
   }
   deleteEffect(id: string): void {
     this.effects.delete(id);
+  }
+  /** operator[](id) on +0x78, then the block's `key` argument (`sefade`/`sepan`). */
+  setEffectArgument(id: string, key: string, value: string): void {
+    const tag = this.effects.get(id),
+      args = new Map(tag?.args);
+    args.set(key, value);
+    this.effects.set(id, {...(tag ?? {kind: 'tag', name: '', sourceLine: 0}), args});
   }
 
   snapshot(): ArtemisSaveDataSnapshot<Font> {
@@ -199,5 +207,6 @@ export async function replayArtemisScenario<Font extends object>(
       for (const tag of tags) if (creates.has(tag.name) === first) await dispatch(tag);
   afterLayerCommands();
   if (music.playing) await dispatch(music.tag);
-  for (const tag of data.effects.values()) if (tag) await dispatch(tag);
+  // Empty blocks, with or without arguments, replay nothing.
+  for (const tag of data.effects.values()) if (tag?.name) await dispatch(tag);
 }

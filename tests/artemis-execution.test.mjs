@@ -3269,6 +3269,53 @@ async function sePlayFixture(overrides = {}) {
   return {controller, calls, history, slots, tag};
 }
 
+test('Artemis sefade/sepan move a known voice over time and copy the value into its save-object block', async () => {
+  const {ArtemisSeAdjust} = await import('../dist/engines/artemis/se-adjust.js');
+  const {ArtemisSaveData} = await import('../dist/engines/artemis/save-data.js');
+  const data = new ArtemisSaveData(),
+    calls = [];
+  const slots = new Map([['vo', 4]]);
+  const adjust = new ArtemisSeAdjust(
+    '8953562b80608046662bd8c89015d04236b0ba3afee10c36469c11403de3ebaf',
+    {
+      effectIndex: (id) => slots.get(id),
+      setEffectGain: (...args) => calls.push(['gain', ...args]),
+      setEffectPan: (...args) => calls.push(['pan', ...args]),
+      setEffectHistoryArgument: (id, key, value) => data.setEffectArgument(id, key, value),
+    },
+  );
+  const tag = (name, args) => ({
+    kind: 'tag',
+    name,
+    sourceLine: 1,
+    args: new Map(Object.entries(args)),
+  });
+  data.replaceEffect('vo', tag('seplay', {id: 'vo', file: 'a.ogg', loop: '1', gain: '1000'}));
+  assert.equal(adjust.dispatch(tag('sefade', {id: 'vo', gain: '500', time: '200'})), true);
+  assert.equal(adjust.dispatch(tag('sepan', {id: 'vo', pan: '-300'})), true);
+  // An unknown id moves no voice; operator[] still creates its block.
+  adjust.dispatch(tag('sefade', {id: 'gone', time: 'x'}));
+  // Replay moves the voice and leaves the history alone.
+  adjust.dispatch(tag('sefade', {id: 'vo', gain: '700'}), false);
+  assert.equal(adjust.dispatch(tag('sestop', {id: 'vo'})), false);
+  assert.deepEqual(calls, [
+    ['gain', 4, 0, 500, 200],
+    ['pan', 4, -300, 0],
+    ['gain', 4, 0, 700, 0],
+  ]);
+  const effects = data.snapshot().effects;
+  assert.deepEqual(Object.fromEntries(effects.get('vo').args), {
+    id: 'vo',
+    file: 'a.ogg',
+    loop: '1',
+    gain: '500',
+    pan: '-300',
+  });
+  assert.equal(effects.get('vo').name, 'seplay');
+  assert.equal(effects.get('gone').name, '');
+  assert.deepEqual([...effects.get('gone').args], [['gain', '']]);
+});
+
 test('Artemis SE preparation, dual gains, pan, fade-in and loop replay history follow native service order', async () => {
   const {controller, calls, history, slots, tag} = await sePlayFixture();
   const input = tag({

@@ -68,6 +68,7 @@ import {createArtemisScriptEvents} from './script-events.js';
 import {ArtemisScreenshots} from './screenshot.js';
 import {ArtemisSePlay, type ArtemisSePlayHost} from './se-play.js';
 import {ArtemisSeStop} from './se-stop.js';
+import {ArtemisSeAdjust} from './se-adjust.js';
 import {ArtemisSoundFinish} from './sound-finish.js';
 import {ArtemisStop} from './stop.js';
 import {createArtemisTagDispatch, type ArtemisLayerTagOwner} from './tag-dispatch.js';
@@ -437,6 +438,12 @@ export class ArtemisRuntime {
       stopEffect: (index, milliseconds) => sound.stopEffect(index, milliseconds),
       hasEffectHistory: (id) => saveData.hasEffect(id),
       deleteEffectHistory: (id) => saveData.deleteEffect(id),
+    });
+    const seAdjust = new ArtemisSeAdjust(hash, {
+      effectIndex: (id) => effectSlots.get(id),
+      setEffectGain: (index, scope, gain, time) => sound.setEffectGain(index, scope, gain, time),
+      setEffectPan: (index, pan, time) => sound.setEffectPan(index, pan, time),
+      setEffectHistoryArgument: (id, key, value) => saveData.setEffectArgument(id, key, value),
     });
     const soundFinish = new ArtemisSoundFinish(hash, {
       currentFile: () => script.currentFile,
@@ -938,6 +945,7 @@ export class ArtemisRuntime {
           variables,
           caption,
           seStop,
+          seAdjust,
           soundFinish,
           mouse,
           wait,

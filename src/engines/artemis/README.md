@@ -1452,6 +1452,12 @@ returns before history. Non-loop sounds replace history with the native empty
 block. Load failure reports without writing a new slot or history. Cancellation
 releases a completed, unadopted sound and suppresses stale script effects.
 
+`ArtemisSeAdjust` (`se-adjust.ts`) follows e3ee0 for sefade and e4220 for sepan: a known
+id moves its voice gain (scope 0) or pan over `time` (absent: 0); absent `gain`/`pan`
+read as 0. Outside replay the value is written into the id's save-object block through
+operator[], which creates an empty block for an id without history. Such nameless blocks
+keep their arguments through scenario saves and replay nothing on load.
+
 The required prepare/gain/pan/start services own actual playback. The probe
 uses the shared Vorbis worker to decode real PCM, exporting hashes and metadata. It
 opens no audio graph/device. Decoding :sysse/none.ogg succeeds

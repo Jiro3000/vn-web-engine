@@ -12,7 +12,7 @@ export interface ArtemisSePlayHost {
   prepareEffect(file: string, bufferMode: number): Promise<number>;
   discardPreparedEffect(index: number): void;
   setEffectIndex(id: string, index: number): void;
-  setEffectGain(index: number, scope: 0 | 1, gain: number): void;
+  setEffectGain(index: number, scope: 0 | 1, gain: number, milliseconds?: number): void;
   setEffectPan(index: number, pan: number, milliseconds: number): void;
   effectGainVariable(id: string): number | undefined;
   startEffect(index: number, milliseconds: number, loop: boolean): void;

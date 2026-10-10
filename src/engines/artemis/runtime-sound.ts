@@ -18,7 +18,7 @@ export function artemisRuntimeSound(
     prepareEffect: (file, bufferMode) => effects.prepareEffect(file, bufferMode),
     discardPreparedEffect: (index) => effects.discardPreparedEffect(index),
     stopEffect: (index, time) => effects.stopEffect(index, time),
-    setEffectGain: (index, scope, gain) => effects.setEffectGain(index, scope, gain),
+    setEffectGain: (index, scope, gain, time) => effects.setEffectGain(index, scope, gain, time),
     setEffectPan: (index, pan, time) => effects.setEffectPan(index, pan, time),
     startEffect: (index, time, loop) => effects.startEffect(index, time, loop),
     setFinishCallback: (index, callback) => effects.setFinishCallback(index, callback),
