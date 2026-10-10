@@ -1,3 +1,4 @@
+import type {ArtemisLayerInfo} from './layer-info.js';
 import type {AsbTag} from '../../formats/artemis/asb.js';
 import {
   ArtemisSaveArchiveReader,
@@ -132,6 +133,8 @@ export interface ArtemisRuntimeLayers extends ArtemisLayerTagOwner {
   tickTransition(now: number): void;
   videoPlaying(id: string): boolean;
   hasLayer(id: string): boolean;
+  /** `var system=get_layer_info`: layer `id`'s actor fields, undefined without the layer. */
+  layerInfo(id: string): ArtemisLayerInfo | undefined;
   attachMessageActor(
     name: string,
     message: ArtemisMessageResource,
@@ -413,6 +416,7 @@ export class ArtemisRuntime {
       windowDisplay: () => ({width, height, fullscreen: false}),
       applicationArguments: {readApplicationArguments: () => new Map()},
       messageLayerMeasure: () => glyphs.get(messageStage.currentLayer()).measure(),
+      layerInfo: (id) => layers.layerInfo(id),
     }));
     // c37e0 static variables run inside the bf210 boot path, after the save-file loads.
     const initializeStaticVariables = () => {

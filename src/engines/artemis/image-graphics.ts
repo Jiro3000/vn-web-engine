@@ -1,3 +1,4 @@
+import {artemisLayerExtent, type ArtemisLayerInfo} from './layer-info.js';
 import {
   ArtemisShaderProperties,
   ArtemisShaderConstantStorage,
@@ -285,6 +286,27 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
   videoOf(actor: ArtemisDisplayActor): ArtemisTheoraVideo | undefined {
     this.checkActor(actor);
     return actor.texture === null ? undefined : this.textures.get(actor.texture)!.video?.decoder;
+  }
+  /** `var system=get_layer_info` of a CLayer (image, color or video actor). Groups,
+   * animation and text actors read other native getters and are refused. */
+  layerInfo(actor: ArtemisDisplayActor): ArtemisLayerInfo {
+    this.checkActor(actor);
+    if (actor.texture === null || isText(actor))
+      throw new Error('Unsupported Artemis layer info actor');
+    const image = this.textures.get(actor.texture)!.image;
+    const surface = {width: image.width, height: image.height};
+    return {
+      display: actor.display,
+      ...artemisLayerExtent(surface, actor.clip),
+      surface,
+      clip: actor.clip,
+      layerMode: actor.raster.layerMode,
+      negative: actor.raster.negative,
+      grayscale: actor.raster.grayscale,
+      colorMultiply: actor.raster.colorMultiply,
+      shader: actor.shaderState.shaderName,
+      shaderConstants: actor.shaderState.constantValues(),
+    };
   }
   appendLayerCommand(id: string, tag: AsbTag): void {
     if (!this.services.appendLayerCommand) throw Error('Unsupported Artemis layer command owner');

@@ -2,6 +2,7 @@ import type {ApplicationArgumentsHost} from '../../platform/application-argument
 import type {WindowDisplayGeometry} from '../../platform/window-display.js';
 import type {AsbTag} from '../../formats/artemis/asb.js';
 import type {ArtemisExpressionValue} from './expression.js';
+import {artemisLayerInfoFields, type ArtemisLayerInfo} from './layer-info.js';
 
 const encoder = new TextEncoder();
 const empty = new Uint8Array();
@@ -39,6 +40,9 @@ export interface ArtemisVariableHost {
   /** Wall clock in milliseconds since the Unix epoch (CRT `_time64`); local calendar fields
    * follow the host time zone like `_localtime64`. Defaults to `Date.now`. */
   now?(): number;
+  /** The scene actor of layer `id` (CArtemisLayer find-by-id 0x1401857c0, then the node's
+   * current actor), or undefined when no layer has that id. */
+  layerInfo?(id: string): ArtemisLayerInfo | undefined;
 }
 const messageLayerExtents = {
   get_message_layer_width: 'width',
@@ -220,6 +224,15 @@ export class ArtemisVariables {
       if (!p.has('source')) throw new Error('Missing Artemis var source');
       const source = tag.bytes?.get('source') ?? new TextEncoder().encode(p.get('source')!);
       this.write(name, String(mode === '1' ? utf8Characters(source) : source.length | 0), local);
+    } else if (p.get('system') === 'get_layer_info') {
+      // e56a0 with `id`: 0x140116ee0 writes the actor's fields below `name.`; an unknown id
+      // writes nothing. `style` only selects the keys of the id-less enumeration.
+      if (!p.has('id')) throw new Error('Unsupported Artemis layer enumeration');
+      if (!this.host?.layerInfo) throw new Error('Artemis layer info provider is not configured');
+      const info = this.host.layerInfo(p.get('id')!);
+      if (info)
+        for (const [key, value] of artemisLayerInfoFields(info))
+          this.write(`${name}.${key}`, value, local);
     } else if (p.get('system') === 'unixtime')
       // 0x14019a970 `_time64`, stored through the 32-bit integer setter.
       this.write(name, String(this.unixTime() | 0), local);

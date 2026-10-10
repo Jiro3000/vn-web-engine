@@ -197,6 +197,7 @@ export function createArtemisBrowserLayers(options: ArtemisBrowserLayerOptions):
       graphics!.createTextLayer(textSource(options, message, messageOwner)),
     applyTweenProperties: (id, actor, patch) => graphics!.applyImageProperties(id, actor, patch),
     videoOf: (actor) => graphics!.videoOf(actor),
+    layerInfo: (actor) => graphics!.layerInfo(actor),
   });
   return {owner, graphics: graphics!};
 }

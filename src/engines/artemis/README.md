@@ -65,6 +65,14 @@ mode 7 movie end. Stage-size queries require a configuration/rendering provider.
 writes `.year`, `.month`, `.day`, `.hour`, `.minute` and `.second` from `_localtime64` of
 the `unixtime` argument (`atoi`, read as unsigned) or of the clock (0x14019a970,
 0x14019a980). The clock is the host's `now` (`Date.now` by default) in the host time zone.
+`system=get_layer_info` with `id` (`layer-info.ts`, 0x140116ee0) writes the current actor
+of that layer below `name.`: truncated `left`/`top`/`width`/`height`, `alpha`×255,
+anchors, scales×100, `rotate`, the flags, `surfacewidth`/`surfaceheight` when the actor
+has a surface, `clip` and `dragarea` as MSVC `%.9g` float lists, `layermode` (normal 0,
+add 1, multiply 2, screen 4), raster flags, `colormultiply`, the shader name and
+`shaderconstant.*`, `clickablethreshold` and `draggable`. A CLayer's width is 0 without a
+surface, else the nonzero clip width, else the surface width (height alike). An unknown id
+writes nothing. Group, animation and text actors and the id-less enumeration are refused.
 `revision.ts` initializes the confirmed static boot variables only after exact
 executable-hash selection. Host Windows-version failure produces native 0.0;
 platform identity/capabilities are never invented.

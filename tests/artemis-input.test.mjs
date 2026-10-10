@@ -6,6 +6,7 @@ import {ArtemisLua} from '../dist/engines/artemis/lua.js';
 import {ArtemisVariables} from '../dist/engines/artemis/variables.js';
 import {VirtualKeyState} from '../dist/input/virtual-keys.js';
 import {luaText} from '../dist/core/lua51/runtime.js';
+import {ARTEMIS_3179_EXECUTABLE_SHA256} from '../dist/engines/artemis/revision.js';
 
 const kinds = ['push', 'down', 'downEdge', 'upEdge', 'decide'];
 const answers = (input, key) => kinds.filter((kind) => input.query(kind, key));
@@ -282,4 +283,126 @@ test('var system=length stores source bytes, or UTF-8 characters for mode 1', ()
     () => length('t.e', [['mode', '1']], Uint8Array.of(0x41, 0xe3, 0x81)),
     /ends inside a character/,
   );
+});
+
+test('var system=get_layer_info writes a CLayer actor in native key order', async () => {
+  const {ArtemisDisplayObject} = await import('../dist/engines/artemis/display-object.js');
+  const {artemisFloatText, artemisLayerExtent} =
+    await import('../dist/engines/artemis/layer-info.js');
+  const display = new ArtemisDisplayObject(ARTEMIS_3179_EXECUTABLE_SHA256);
+  display.apply({left: -20.75, top: 3, alpha: 254 / 255, xscale: 0.5, visible: false});
+  display.apply({
+    draggable: true,
+    dragarea: {left: 1, top: 2, width: 3, height: 3, right: 3, bottom: 4},
+  });
+  const clip = {left: 0.5, top: 0, width: 0, height: 0, right: 0, bottom: 0};
+  const surface = {width: 1, height: 1};
+  const queried = [];
+  const variables = new ArtemisVariables({
+    stageSize: () => ({width: 1, height: 1}),
+    layerInfo: (id) => {
+      queried.push(id);
+      if (id !== '500.sample') return undefined;
+      return {
+        display,
+        ...artemisLayerExtent(surface, clip),
+        surface,
+        clip,
+        layerMode: 'screen',
+        negative: true,
+        grayscale: false,
+        colorMultiply: 0xffffffff,
+        shader: 'blur',
+        shaderConstants: [{name: 'c', values: [Math.fround(0.1), 1e9]}],
+      };
+    },
+  });
+  const tag = (args) => ({kind: 'tag', name: 'var', sourceLine: -1, args: new Map(args)});
+  variables.dispatch(
+    tag([
+      ['name', 't.ly'],
+      ['system', 'get_layer_info'],
+      ['id', '500.sample'],
+      ['style', 'map'],
+    ]),
+  );
+  const read = (key) => luaText(variables.read(`t.ly.${key}`));
+  assert.deepEqual(
+    [
+      'left',
+      'top',
+      'width',
+      'height',
+      'alpha',
+      'xscale',
+      'yscale',
+      'visible',
+      'surfacewidth',
+      'clip',
+      'layermode',
+      'negative',
+      'colormultiply',
+      'shader',
+      'shaderconstant.size',
+      'shaderconstant.0.name',
+      'shaderconstant.0.data.size',
+      'shaderconstant.0.data.0',
+      'shaderconstant.0.data.1',
+      'draggable',
+      'dragarea',
+    ].map(read),
+    [
+      '-20',
+      '3',
+      '1',
+      '1',
+      '254',
+      '50',
+      '100',
+      '0',
+      '1',
+      '0.5,0,0,0',
+      '4',
+      '1',
+      '-1',
+      'blur',
+      '1',
+      'c',
+      '2',
+      '0.100000001',
+      '1e+09',
+      '1',
+      '1,2,3,4',
+    ],
+  );
+  // An unknown id writes nothing; the id-less enumeration is refused.
+  variables.dispatch(
+    tag([
+      ['name', 't.no'],
+      ['system', 'get_layer_info'],
+      ['id', 'missing'],
+    ]),
+  );
+  assert.equal(variables.lookup('t.no.left'), undefined);
+  assert.deepEqual(queried, ['500.sample', 'missing']);
+  assert.throws(
+    () =>
+      variables.dispatch(
+        tag([
+          ['name', 't.e'],
+          ['system', 'get_layer_info'],
+        ]),
+      ),
+    /layer enumeration/,
+  );
+  // MSVC %.9g: fixed notation for exponents -4..8, trimmed zeros, two exponent digits.
+  assert.deepEqual([0.0001, 0.00001, 123456789, -0, 2.5, Infinity, NaN].map(artemisFloatText), [
+    '0.0001',
+    '1e-05',
+    '123456789',
+    '-0',
+    '2.5',
+    'inf',
+    'nan',
+  ]);
 });

@@ -8,6 +8,7 @@ import {ArtemisImageLoader} from '../dist/engines/artemis/image-loader.js';
 import {ArtemisLayerOwner} from '../dist/engines/artemis/layer-owner.js';
 import {ArtemisDisplayObject} from '../dist/engines/artemis/display-object.js';
 import {ArtemisShaderProperties} from '../dist/engines/artemis/shader-properties.js';
+import {artemisLayerExtent} from '../dist/engines/artemis/layer-info.js';
 import {artemisRevision} from '../dist/engines/artemis/revision.js';
 import {readJpegHeader} from '../dist/formats/jpeg/header.js';
 import {decodePng} from '../dist/formats/png/decode.js';
@@ -307,6 +308,27 @@ export function createMetadataLayerFixture(hash, readFile, runMode = null) {
       tweenFrames++;
     },
     videoOf: (actor) => actor.video,
+    // CLayer getters over the recorded properties; groups, animation and message actors
+    // read other native getters.
+    layerInfo(actor) {
+      if (actor.kind !== 'image' && actor.kind !== 'video')
+        throw Error('Unsupported Artemis layer info actor');
+      const props = actor.properties,
+        surface = {width: actor.width, height: actor.height};
+      const clip = props.clip ?? {left: 0, top: 0, width: 0, height: 0, right: 0, bottom: 0};
+      return {
+        display: actor.display,
+        ...artemisLayerExtent(surface, clip),
+        surface,
+        clip,
+        layerMode: props.layermode ?? 'normal',
+        negative: props.negative ?? false,
+        grayscale: props.grayscale ?? false,
+        colorMultiply: props.colormultiply ?? 0xffffff,
+        shader: actor.shader?.shaderName ?? '',
+        shaderConstants: actor.shader?.constantValues() ?? [],
+      };
+    },
     trace: (effect) => effects.push(effect),
   });
   const layers = owner.layers,
@@ -326,6 +348,7 @@ export function createMetadataLayerFixture(hash, readFile, runMode = null) {
     tweenRegistry: owner.tweenRegistry,
     dispatchTween: (tag) => owner.dispatchTween(tag),
     hasLayer: (id) => owner.hasLayer(id),
+    layerInfo: (id) => owner.layerInfo(id),
     /** Runs the registered transition tween from `start` (nonzero uint32) to natural
      * completion and returns the completion tick. */
     finishTransition: (start) => owner.finishTransition(start),

@@ -1,3 +1,4 @@
+import type {ArtemisLayerInfo} from './layer-info.js';
 import type {AsbTag} from '../../formats/artemis/asb.js';
 import type {TriangleImage} from '../../graphics/triangle-draw.js';
 import type {ArtemisImageDimensions, ArtemisImageSource} from './image-loader.js';
@@ -60,6 +61,8 @@ export interface ArtemisLayerOwnerHost<T extends object, I extends ArtemisImageD
   applyTweenProperties(id: string, actor: T, patch: ArtemisLayerPropertyPatch): void;
   /** The video decoder a video actor holds. */
   videoOf(actor: T): ArtemisTheoraVideo | undefined;
+  /** The fields `var system=get_layer_info` reads from an actor. */
+  layerInfo?(actor: T): ArtemisLayerInfo;
   /** Transition presentation state the renderer reads. */
   setCrossfade?(value: number): void;
   setVague?(value: number): void;
@@ -285,6 +288,13 @@ export class ArtemisLayerOwner<
   }
   hasLayer(id: string): boolean {
     return !!this.layers.scene.entry(id);
+  }
+  /** `var system=get_layer_info`: the current actor of layer `id`, undefined without one. */
+  layerInfo(id: string): ArtemisLayerInfo | undefined {
+    const actor = this.layers.scene.entry(id)?.value;
+    if (actor === undefined) return undefined;
+    if (!this.host.layerInfo) throw new Error('Unsupported Artemis layer info owner');
+    return this.host.layerInfo(actor);
   }
   /** The registered transition tween is still running. */
   get transitionPending(): boolean {
