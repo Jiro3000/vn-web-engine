@@ -247,6 +247,15 @@ export class ArtemisTimedWait {
       return index !== undefined && this.host.effectPlaying(index);
     });
   }
+  /** A b94 write by a run mode owner other than the wait tags (`trans type="0"`): a wait
+   * without flags or input whose frame branch ends it once the deadline has passed. The
+   * owner has already entered the run mode. */
+  setDeadline(ms: number): void {
+    if (this.active) throw new Error('Artemis timed wait is already pending');
+    this.clear();
+    this.deadline = ms >>> 0;
+    this.active = true;
+  }
   /** b7810 turning automode off: a wait without flags (`@`, or none) loses its deadline. */
   clearAutomodeDeadline(): void {
     if (!this.active || this.click) this.deadline = 0;

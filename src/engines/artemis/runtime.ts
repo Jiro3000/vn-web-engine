@@ -176,6 +176,8 @@ export interface ArtemisRuntimeLayerHost {
   enter(mode: number): void;
   release(): void;
   now(): number;
+  /** Wait timestamp b94 of the current caret. */
+  setWaitStart(ms: number): void;
   emit(tag: AsbTag): void;
   stageSize(): {readonly width: number; readonly height: number};
   skipState(): {readonly allowed: boolean; readonly command: boolean; readonly control: boolean};
@@ -850,6 +852,7 @@ export class ArtemisRuntime {
         if (this.mode === 0) script.resume();
       },
       now: () => this.now,
+      setWaitStart: (ms) => wait.setDeadline(ms),
       emit: (tag) => scriptEvents.emit(tag, 0, true),
       stageSize: () => ({width, height}),
       skipState: () => ({

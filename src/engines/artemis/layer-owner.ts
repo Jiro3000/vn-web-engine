@@ -32,6 +32,8 @@ export interface ArtemisLayerRunModeHost {
   /** c6480: c70 = c74, then the deferred script events. */
   release(): void;
   now(): number;
+  /** Wait timestamp b94 of the current caret. */
+  setWaitStart(ms: number): void;
   emit(tag: AsbTag): void;
   stageSize(): {readonly width: number; readonly height: number};
   skipState(): {readonly allowed: boolean; readonly command: boolean; readonly control: boolean};
@@ -173,7 +175,7 @@ export class ArtemisLayerOwner<
         runMode.release();
       },
       now: () => runMode.now(),
-      setWaitStart: (ms) => trace({kind: 'waitStart', ms, simulation: true}),
+      setWaitStart: (ms) => runMode.setWaitStart(ms),
       skipState: () => runMode.skipState(),
       setTransitionState: (value) => {
         this.transitionState = value;

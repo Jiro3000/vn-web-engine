@@ -1319,6 +1319,48 @@ test('Automode gives a completed click-wait the s.automodewait deadline; syncse 
   assert.deepEqual(calls.splice(0), [['display', true]]);
 });
 
+test('A trans type=0 deadline ends its run mode 4 wait once passed, without input events', async () => {
+  const {ArtemisTimedWait} = await import('../dist/engines/artemis/wait.js');
+  const {ArtemisModes} = await import('../dist/engines/artemis/modes.js');
+  const {ArtemisSave} = await import('../dist/engines/artemis/save.js');
+  const {ArtemisVariables} = await import('../dist/engines/artemis/variables.js');
+  const calls = [];
+  const modes = new ArtemisModes({
+    writeStatus: () => {},
+    commandSkipChanged: () => {},
+    controlSkipChanged: () => {},
+    automodeChanged: () => {},
+    releaseScheduler: () => {},
+    currentMessageLayer: () => 'mw',
+  });
+  const save = new ArtemisSave(new ArtemisVariables(), {
+    reportEventError: () => {},
+    beforeScenario: () => {},
+    writeScenario: () => {},
+    writeGlobal: () => {},
+    writeSystem: () => {},
+  });
+  const wait = new ArtemisTimedWait(modes, save, {
+    now: () => 0,
+    debugSkipActive: () => false,
+    startTextDisplay: () => calls.push('display'),
+    textDisplayComplete: () => true,
+    finishTextDisplay: () => calls.push('finish'),
+    writeClickSkip: () => calls.push('clickskip'),
+    beginWait: () => calls.push('begin'),
+    endWait: () => calls.push('end'),
+    clickWaitEvent: (kind) => calls.push(kind),
+    resumeMessageState: () => calls.push('message'),
+  });
+  wait.setDeadline(100);
+  assert.equal(wait.pending, true);
+  assert.deepEqual(wait.reason, {time: 100});
+  assert.equal(wait.tick(100), false);
+  assert.equal(wait.tick(101), true);
+  assert.equal(wait.pending, false);
+  assert.deepEqual(calls, ['end', 'message']);
+});
+
 test('wait se= follows the seplay index until the sound stops; unknown ids set no wait', async () => {
   const {ArtemisTimedWait} = await import('../dist/engines/artemis/wait.js');
   const {ArtemisModes} = await import('../dist/engines/artemis/modes.js');

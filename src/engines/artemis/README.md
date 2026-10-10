@@ -671,7 +671,8 @@ Native entries: flip prefix `0x1400e10a0` and helper `0x14014f420`.
 
 `transition.ts` implements native `trans` (`0x1400e10c0`). `ArtemisStage.commit` is the
 shared stage commit `0x14014f420`. Type `0` commits, enters run mode 4 and writes the wait
-timestamp. Type `1` sets transition state 1 and registers a float crossfade tween (0 to 1
+timestamp b94 = now; the wait owner (`ArtemisTimedWait.setDeadline`) ends that flagless wait
+in the first frame after the timestamp, as c0560 does for any passed b94. Type `1` sets transition state 1 and registers a float crossfade tween (0 to 1
 over `time`, `ArtemisLinearFloatTween`) that writes the transition layer value. Type `2`
 loads the `rule` image (load failure and non-gray formats report the native severity-1
 errors), replaces or tiles (`tileArtemisRule`, `0x140171140`) the stage rule image, sets

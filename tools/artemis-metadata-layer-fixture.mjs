@@ -264,6 +264,7 @@ export function createMetadataLayerFixture(hash, readFile, runMode = null) {
       enter: (mode) => (runMode?.enter ?? refuseRunMode)(mode),
       release: () => (runMode?.release ?? refuseRunMode)(),
       now: () => runMode?.now() ?? refuseRunMode(),
+      setWaitStart: (ms) => (runMode?.setWaitStart ?? refuseRunMode)(ms),
       emit: (tag) => {
         if (!runMode?.emit) throw Error('Unsupported diagnostic Artemis tween event owner');
         runMode.emit(tag);
