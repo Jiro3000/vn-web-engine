@@ -41,6 +41,8 @@ export interface ArtemisModeSaveFields {
 export class ArtemisModes {
   /** Constructor bytes b60/37f0 enable these flags; history collection has a separate owner. */
   alreadyReadEnabled = true;
+  /** Byte b61: `s.status.alreadyread` was last written 1 by the read check. */
+  alreadyReadStatus = false;
   writeBacklog = true;
   /** Constructor/bf210: request dword cc8 = 0 (allow byte ccb), cd0 = "rclick.iet". */
   rightClickAllowed = false;
@@ -73,6 +75,24 @@ export class ArtemisModes {
     this.effects.writeStatus('s.status.controlskip', active ? '1' : '0');
     this.effects.controlSkipChanged(active);
   }
+  /** The read check of 0x1400c0560 before a caret tag runs: a read tag writes
+   * `s.status.alreadyread` 1 once; an unread tag ends command skip unless skip of unread
+   * text is on (b7ba0 with force 0), then `markUnread` follows if the caret still has a
+   * file. */
+  readTag(read: boolean): void {
+    if (read) {
+      if (!this.alreadyReadStatus) {
+        this.effects.writeStatus('s.status.alreadyread', '1');
+        this.alreadyReadStatus = true;
+      }
+    } else if (!this.skipUnread) this.setCommandSkip(false);
+  }
+  /** The unread tag is marked; a set status latch writes `s.status.alreadyread` 0. */
+  markUnread(): void {
+    if (!this.alreadyReadStatus) return;
+    this.effects.writeStatus('s.status.alreadyread', '0');
+    this.alreadyReadStatus = false;
+  }
   /** 0x1400b7810. The indicator entry is found or created (0x1400ebf10) before the
    * status write. */
   setAutomode(active: boolean, force = false): void {
@@ -96,6 +116,7 @@ export class ArtemisModes {
     this.skipAllowed = true;
     this.automodeLayers.clear();
     this.alreadyReadEnabled = true;
+    this.alreadyReadStatus = false;
     this.rightClickAllowed = false;
     this.rightClickScript = 'rclick.iet';
     this.autosave = 0;

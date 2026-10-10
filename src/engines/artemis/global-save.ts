@@ -8,17 +8,25 @@ import type {ArtemisVariables} from './variables.js';
 const encoder = new TextEncoder();
 const decoder = new TextDecoder('utf-8', {fatal: true});
 
-/** Script field +0xb50: per-file sets of uint32 values persisted in saveg.dat section 1.
- * The script-side producer of these values is a separate owner. */
+/** Script field +0xb50: per-file sets of read caret tag indices (std::map of
+ * unordered_set<int>), persisted in saveg.dat section 1. The frame loop marks them
+ * (`ArtemisScript` host `beforeCaretTag`). */
 export class ArtemisReadHistory {
   private readonly files = new Map<string, Set<number>>();
   entries(): [string, number[]][] {
     return [...this.files].map(([file, values]) => [file, [...values]]);
   }
+  /** 0x1400ebb70 (map operator[]) then the set lookup: the file entry is created. */
+  has(file: string, value: number): boolean {
+    return this.entry(file).has(value >>> 0);
+  }
   add(file: string, value: number): void {
+    this.entry(file).add(value >>> 0);
+  }
+  private entry(file: string): Set<number> {
     let values = this.files.get(file);
     if (!values) this.files.set(file, (values = new Set()));
-    values.add(value >>> 0);
+    return values;
   }
   /** Loaded file entry (native writers never repeat a file). */
   set(file: string, values: readonly number[]): void {

@@ -364,6 +364,94 @@ test('Mode commands disable active skip/auto through status and effect services'
   assert.equal(modes.dispatch(tag('unknown', {})), false);
 });
 
+test('The caret read check marks tags per file and ends command skip on unread text', async () => {
+  const {ArtemisModes} = await import('../dist/engines/artemis/modes.js');
+  const {ArtemisReadHistory} = await import('../dist/engines/artemis/global-save.js');
+  const events = [];
+  let script,
+    enterScope = false;
+  const modes = new ArtemisModes({
+    writeStatus: (name, value) => name === 's.status.alreadyread' && events.push(value),
+    commandSkipChanged: (active) => {
+      events.push(`skip ${active}`);
+      // A setoncommandskipout handler scope leaves an empty caret; the tag waits.
+      if (enterScope) script.enterEventHandlerScope();
+    },
+    controlSkipChanged: () => {},
+    automodeChanged: () => {},
+    releaseScheduler: () => {},
+    currentMessageLayer: () => '',
+  });
+  const history = new ArtemisReadHistory();
+  const ran = [];
+  const lua = new ArtemisLua({
+    readFile: () => null,
+    fileExists: () => false,
+    now: () => 0,
+    tag: () => {},
+    enqueueTag: () => {},
+    variable: () => '',
+  });
+  try {
+    script = new ArtemisScript(lua, {
+      readFile: () => bytes('[a][alreadyread mode="1"][b][stop]'),
+      pushLocal: () => {},
+      popLocal: () => {},
+      dispatch: (tag) => {
+        ran.push(tag.name);
+        if (modes.dispatch(tag)) return;
+        if (tag.name === 'stop') return 'stopped';
+      },
+      // The runtime wiring of 0x1400c0560.
+      beforeCaretTag: (file, index, tag) => {
+        if (!modes.alreadyReadEnabled || tag.name === 'alreadyread') return;
+        const read = history.has(file, index);
+        modes.readTag(read);
+        if (read || script.currentFile !== file) return;
+        history.add(file, index);
+        modes.markUnread();
+      },
+    });
+    const play = () => {
+      ran.length = 0;
+      script.load('s.iet');
+      return script.run();
+    };
+    modes.setCommandSkip(true);
+    enterScope = true;
+    events.length = 0;
+    assert.equal(play(), 'stopped');
+    assert.deepEqual(ran, ['a', 'alreadyread', 'b', 'stop']);
+    assert.deepEqual(events, ['skip false']);
+    // The alreadyread tag itself is never marked.
+    assert.deepEqual(history.entries(), [['s.iet', [0, 2, 3]]]);
+    enterScope = false;
+    events.length = 0;
+    modes.setCommandSkip(true);
+    assert.equal(play(), 'stopped');
+    // Read text keeps command skip and writes the status once.
+    assert.deepEqual(events, ['skip true', '1']);
+    assert.equal(modes.commandSkip, true);
+    history.set('s.iet', [0, 3]);
+    events.length = 0;
+    assert.equal(play(), 'stopped');
+    assert.deepEqual(events, ['skip false', '0', '1']);
+    // Skip of unread text keeps command skip; a disabled check marks nothing.
+    modes.dispatch({kind: 'tag', name: 'skip', args: new Map([['unread', '1']]), sourceLine: -1});
+    history.clear();
+    modes.setCommandSkip(true);
+    play();
+    assert.equal(modes.commandSkip, true);
+    history.clear();
+    modes.alreadyReadEnabled = false;
+    script.load('s.iet');
+    script.step();
+    assert.deepEqual(history.entries(), []);
+  } finally {
+    lua.close();
+  }
+});
+
 test('Exec commands force skip/auto, queue frame requests and use window services', async () => {
   const {ArtemisModes} = await import('../dist/engines/artemis/modes.js');
   const {ArtemisExec} = await import('../dist/engines/artemis/exec.js');

@@ -439,8 +439,17 @@ Recording flags and right-click configuration are kept in the mode owner:
 `alreadyread` treats a missing mode as enabled, while `writebacklog` disables on
 missing mode. Exact string `0` disables; `00` remains enabled. `rclick` preserves
 its script filename when omitted and replaces it even with an explicit empty value.
-These command flags do not implement history collection, backlog rendering or
-right-click dispatch by themselves.
+These command flags do not implement backlog rendering or right-click dispatch by
+themselves.
+
+While `alreadyread` is enabled, the frame loop (`0x1400c0560`) checks every caret tag of a
+named file before it runs; queued tags and the `alreadyread` tag itself are exempt. The read
+history (`ArtemisReadHistory`, script +0xb50, `saveg.dat` section 1) holds the read tag
+indices per file. A read tag writes `s.status.alreadyread` 1 once (latch byte b61). An
+unread tag ends command skip unless `skip unread=1` is in effect; control skip is not
+affected. If that leaves the caret with its file (a `setoncommandskipout` handler scope
+leaves an empty caret and the tag waits), the tag is marked and a set latch writes
+`s.status.alreadyread` 0. The script calls the check through the host `beforeCaretTag`.
 
 `text-controls.ts` handles UTF-8 backlog/hide configuration. It preserves empty
 comma-separated names, literal whitespace, include-font state and per-current-layer

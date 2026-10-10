@@ -1050,6 +1050,16 @@ export class ArtemisRuntime {
         take: () => wait.take(),
         restore: (fields) => wait.restore(fields as ArtemisWaitFlags | undefined),
       },
+      beforeCaretTag: (file, index, tag) => {
+        if (!modes.alreadyReadEnabled || tag.name === 'alreadyread') return;
+        const read = readHistory.has(file, index);
+        modes.readTag(read);
+        // An unread tag is marked while the caret keeps its file (a command skip out
+        // handler scope leaves an empty caret).
+        if (read || script.currentFile !== file) return;
+        readHistory.add(file, index);
+        modes.markUnread();
+      },
     });
     const scriptEvents = (this.scriptEvents = createArtemisScriptEvents(hash, lua, script, {
       nativeMode: () => this.mode,

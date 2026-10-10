@@ -48,6 +48,9 @@ export interface ArtemisScriptHost {
    * current caret's fields and clears them for a new caret; `restore` reinstates the fields
    * of a returning caret. */
   caretFields?: {take(): unknown; restore(fields: unknown): void};
+  /** 0x1400c0560 before a caret tag of a named file runs (queued tags are exempt): the
+   * already-read check. An event scope it enters leaves an empty caret, and the tag waits. */
+  beforeCaretTag?(file: string, index: number, tag: AsbTag): void;
 }
 export interface ArtemisLuaCallErrorReport {
   readonly file: string;
@@ -600,6 +603,19 @@ export class ArtemisScript {
       } catch (error) {
         this.state = 'faulted';
         throw error;
+      }
+    }
+    if (!queued && cursor!.file && this.host.beforeCaretTag) {
+      try {
+        this.host.beforeCaretTag(cursor!.file, cursor!.index, tag);
+      } catch (error) {
+        this.state = 'faulted';
+        throw error;
+      }
+      if (this.cursor !== cursor) {
+        if (!this.cursor?.file) return this.state;
+        this.state = 'faulted';
+        throw Error('Unsupported Artemis caret change in the read check');
       }
     }
     this.running = true;
