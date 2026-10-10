@@ -407,7 +407,17 @@ to reproduce it; both loads run the game's `onLoad` handler. The report is `save
 `--auto-choice=PREFIX` (repeatable) with `--auto-choices=N` continues a route once the
 scripted `--layer-event`/`--key-push` inputs are used up: at a run mode 3 stop it picks the
 first visible layer with an enabled click event whose id starts with a prefix and presses it
-like `--press-at` (real runtime frames, key 1 down then released; report `autoChoices`).
+like `--press-at` (report `autoChoices`). `--press-at` delivers a browser pointer press in real
+runtime frames once the text display completes: the pointer rests on the layer for half a
+second, one frame samples key 1 down and the pointer stays for another half second. Game
+Lua acts on a button in the key push handler that follows the layer's click handler.
+`--screenshots` simulates the screenshot surface so that save tags with thumbnails, such
+as a quick save, write their files. `--save-dir=DIR`
+starts the save directory with DIR's files and writes it back at the end, so a later run
+continues from the global and system data of an earlier one. `--report-dir=DIR` writes every
+report array longer than 10000 entries (also inside a top-level object) to an NDJSON file in
+DIR, one entry per line, and `DIR/report.json` names the file in its place; long routes keep
+every entry without one report string past the engine's string limit.
 
 `reset.ts` implements the engine reset `0x1400bf210`. `dispatch` handles the reset tag
 (`0x1400caad0`): a forced global save, automode off, mode defaults, owner resets through

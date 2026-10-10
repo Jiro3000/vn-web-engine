@@ -56,8 +56,9 @@ const probeInputs = process.argv
 // (slot 0 edge) at the click-wait instead, one per frame. --stop-event-at=N:id[:type] and
 // --stop-key-at=N:key wait instead for run mode 3 without a pending wait after at least N
 // delivered clicks (game dialogs and menus stop the script). --press-at=N:id instead runs
-// real runtime frames like a browser pointer press: one frame samples key 1 down with the
-// layer's click event, then four frames release it. No pointer hit testing.
+// real runtime frames like a browser pointer press once the text display completes: the
+// pointer rests on the layer for 30 frames, one frame samples key 1 down and 30 frames
+// release it. No pointer hit testing.
 const timedPrefixes = [
   '--layer-event-at=',
   '--key-push-at=',
@@ -377,15 +378,23 @@ try {
   };
   // Deterministic 16 ms frame.
   const frame = () => runtime.advanceTo((runtime.now + 16) >>> 0 || 1);
-  // A browser pointer press on a layer: one 16 ms frame samples key 1 down, four release it.
-  // The pointer rests on the layer; the press is raised in the next update.
-  const pointerPress = (id) => {
-    for (let count = 0; count < 5; count++) {
+  // A browser pointer press on a layer, as ArtemisBrowserPlayer delivers it: the pointer moves
+  // onto the layer and rests there for 30 16 ms frames (half a second), then one frame samples
+  // key 1 down and the pointer stays on the layer for 30 more frames. The press is raised in
+  // the next update. Each frame runs the script itself; pending resources settle before the
+  // next frame, as in the browser. Game Lua records a button click in its click handler and
+  // acts on it in the key push handler that runs after it.
+  const pointerPress = async (id) => {
+    for (let count = -30; count < 31; count++) {
       const now = (runtime.now + 16) >>> 0 || 1;
       runtime.frame(now, {
         sample: {down: new Set(count ? [] : [1]), pointerInside: true},
         pointer: {x: 0, y: 0, hits: [id]},
       });
+      while (runtime.resourcePending) {
+        await runtime.settleResource();
+        resourceResumptions++;
+      }
     }
   };
   // Durations of click-waits that automode ended, in milliseconds.
@@ -467,7 +476,7 @@ try {
         const input = probeInputs.shift();
         if (input.type === 'press') {
           modeEffects.push({press: input.id, simulation: true});
-          pointerPress(input.id);
+          await pointerPress(input.id);
         } else if (input.id !== undefined) {
           modeEffects.push({layerEvent: input, simulation: true});
           runtime.layerEvent(input.id, input.type);
@@ -486,8 +495,15 @@ try {
             modeEffects.push({keyPush: key, click: deliveredClicks, simulation: true});
             runtime.keyPush(key);
           } else if (type === 'press') {
+            // As for a probe click, the text display completes first: game Lua treats a
+            // key 1 press during the reveal as a plain click.
+            for (let count = 0; !runtime.textDisplayComplete; count++) {
+              if (count >= 100000) throw Error('Probe click-wait display did not finish');
+              frame();
+              wait.tick(runtime.now);
+            }
             modeEffects.push({press: id, click: deliveredClicks, simulation: true});
-            pointerPress(id);
+            await pointerPress(id);
           } else {
             modeEffects.push({layerEvent: {id, type}, click: deliveredClicks, simulation: true});
             runtime.layerEvent(id, type);
