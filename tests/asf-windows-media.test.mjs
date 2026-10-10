@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import test from 'node:test';
-import {AsfDemuxer, readAsfLayout} from '../dist/formats/asf/demux.js';
+import {AsfDemuxer, AsfPrerollQueue, readAsfLayout} from '../dist/formats/asf/demux.js';
 import {WindowsMediaDecoder} from '../dist/video/windows-media.js';
 import {openMovieStream} from '../dist/video/movie.js';
 
@@ -199,6 +199,25 @@ test('ASF demuxer reassembles media objects across packets and payload layouts',
     [[6]],
   );
   assert.throws(() => demuxer.packet(new Uint8Array(PACKET - 1)), /Truncated ASF data packet/);
+});
+
+test('ASF preroll queue releases video after audio muxed up to a preroll late', () => {
+  // Video (2) every 500 ms; each audio (1) block covers 1000 ms and is muxed after the video
+  // of its end time.
+  const objects = [];
+  for (let time = 0; time <= 3000; time += 500) {
+    objects.push({stream: 2, time});
+    if (time >= 1000 && time % 1000 === 0) objects.push({stream: 1, time: time - 1000});
+  }
+  const queue = new AsfPrerollQueue(1000, 2);
+  const order = [];
+  for (const object of objects) order.push(...queue.push([object]));
+  order.push(...queue.flush());
+  // Each video object follows the audio block that covers its time.
+  assert.deepEqual(
+    order.map((o) => `${o.stream}@${o.time}`),
+    ['1@0', '2@0', '2@500', '1@1000', '2@1000', '2@1500', '1@2000', '2@2000', '2@2500', '2@3000'],
+  );
 });
 
 test('Windows Media decoder decodes WMA audio from an ASF file to planar float', () => {

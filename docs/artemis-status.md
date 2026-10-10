@@ -22,6 +22,9 @@ Other executables are refused by hash.
   voices. It covers boot, the prologue with its fullscreen movies, the title, scenario
   text with click-waits, choices through layer events, and a scenario save/load round
   trip. It displays no game assets and opens no audio device.
+- Fullscreen movies: ASF files (WMV3 with WMA Standard, Pro or Lossless audio) decode
+  in the movie worker with the Windows Media wasm decoder and play on the audio clock
+  over a canvas; other containers play in a `<video>` element.
 - Screenshots: `takess`/`savess` render offscreen and write PNG thumbnails into save
   storage, which the save directory overlays on installation files.
 - Synthetic browser checks (`tests/browser/artemis-images.html`): GPU scenes, shaders,
@@ -32,5 +35,3 @@ Other executables are refused by hash.
 
 - Layer event penetration and drag events; the click glyph (layer byte +0x16c).
 - Nonempty `syncse`, scenario mode 2, `macroadd`, text-field dialogs.
-- Fullscreen ASF movies play only where the browser supports the container; otherwise
-  they complete immediately with a diagnostic.

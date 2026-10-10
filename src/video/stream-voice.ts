@@ -6,13 +6,20 @@ import type {MovieResponse} from './worker-protocol.js';
 /** Decoded frames kept ahead of the clock. */
 const PREFETCH_FRAMES = 8;
 /**
+ * Decoded video kept ahead of the clock, within the frame bound below. One worker batch of a
+ * large stream (1080p Windows Media) takes up to about 0.3 s, longer than eight frames last,
+ * so a frame-count prefetch alone stops the clock repeatedly while the worker idles.
+ */
+const VIDEO_PREFETCH_SECONDS = 0.5;
+/**
  * Some streams mux their audio about a second behind the video (Fairytale Requiem's
  * movies), so keeping audio decoded ahead takes more frames than the normal prefetch.
  * Decoding continues until this much audio is ahead of the clock, within the frame
  * bound; a thinner margin underruns whenever one worker round trip is slow.
  */
 const AUDIO_PREFETCH_SECONDS = 0.5;
-const AUDIO_WAIT_FRAMES = 64;
+/** Frame bound of the time-based video and audio prefetch. */
+const PREFETCH_FRAME_LIMIT = 64;
 
 /** Bounded worker decoding with a Web Audio clock. No VM state or game policy. */
 export class StreamMovieVoice {
@@ -34,6 +41,15 @@ export class StreamMovieVoice {
   private disposed = false;
   private failure: unknown;
   private current: YuvFrame | undefined;
+  private readonly counters = {
+    batches: 0,
+    decodeMs: 0,
+    maxDecodeMs: 0,
+    maxWaitMs: 0,
+    videoStalls: 0,
+    audioStalls: 0,
+  };
+  private pulledAt = 0;
   constructor(
     private readonly context: AudioContext,
     private readonly source: WorkerSource,
@@ -44,6 +60,18 @@ export class StreamMovieVoice {
   }
   get metadata(): MovieInfo | undefined {
     return this.info;
+  }
+  /** Diagnostic: worker batches and their decode time, and clock stops because the decoded
+   * video or audio ran out. */
+  get decoding(): {
+    batches: number;
+    decodeMs: number;
+    maxDecodeMs: number;
+    maxWaitMs: number;
+    videoStalls: number;
+    audioStalls: number;
+  } {
+    return {...this.counters};
   }
   private failWorker(worker: Worker, error: unknown): void {
     if (this.disposed || this.worker !== worker || this.failure !== undefined) return;
@@ -79,6 +107,13 @@ export class StreamMovieVoice {
         if (b.type === 'error') throw new Error(b.message);
         if (b.type === 'seeking') return;
         this.pulling = false;
+        this.counters.batches++;
+        this.counters.decodeMs += b.decodeMs;
+        this.counters.maxDecodeMs = Math.max(this.counters.maxDecodeMs, b.decodeMs);
+        this.counters.maxWaitMs = Math.max(
+          this.counters.maxWaitMs,
+          performance.now() - this.pulledAt,
+        );
         this.info = b.info;
         this.done = b.done;
         for (const frame of b.frames) {
@@ -120,6 +155,7 @@ export class StreamMovieVoice {
       }
     };
     this.pulling = true;
+    this.pulledAt = performance.now();
     this.done = false;
     worker.postMessage({type: 'open', source: this.source, seek: 0});
   }
@@ -173,6 +209,8 @@ export class StreamMovieVoice {
         audioFinished ? Infinity : this.availableAudio(info),
       );
       if (position >= available && !this.done) {
+        if (!videoFinished && this.videoEnd <= available) this.counters.videoStalls++;
+        else this.counters.audioStalls++;
         this.offset = available;
         this.freeze();
         this.offset = available;
@@ -198,9 +236,12 @@ export class StreamMovieVoice {
       !this.done &&
       !this.pulling &&
       (this.frames.length < PREFETCH_FRAMES ||
-        (this.frames.length < AUDIO_WAIT_FRAMES && info && this.audioShort(info, position)))
+        (this.frames.length < PREFETCH_FRAME_LIMIT &&
+          info &&
+          (this.videoEnd - position < VIDEO_PREFETCH_SECONDS || this.audioShort(info, position))))
     ) {
       this.pulling = true;
+      this.pulledAt = performance.now();
       this.worker!.postMessage({type: 'pull'});
     }
     if (

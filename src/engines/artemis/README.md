@@ -1102,7 +1102,11 @@ ASF files with WMV3 video and WMA Standard, Pro or Lossless audio, which browser
 decode. `BrowserFullscreenMoviePlayer` streams an ASF file through the shared software
 movie player: `AsfMovie` (`src/formats/asf/movie.ts`) decodes it in the movie worker
 with the Windows Media decoder (`wasm/windows-media/`), the audio clock paces the
-pictures and a canvas covering the game element shows them. The player stops at the
+pictures and a canvas covering the game element shows them. The game's muxer places WMA
+blocks up to the ASF preroll (1451 ms) behind the video of the same time, so the reader
+decodes audio as it reads packets and holds video objects compressed until packets a
+preroll later are read (`AsfPrerollQueue`); a batch then never ends with its audio
+behind its frames, and the clock does not stop for audio while the worker idles. The player stops at the
 movie's duration. Other containers play in a `<video>` element. A movie that neither
 path can play is reported to the host as unsupported and completes, so the scenario
 continues as after the movie's end. The probe plays a movie for its ASF header duration
@@ -1112,7 +1116,8 @@ in 16 ms frames without decoding it.
 independent statement of the native formulas, the same frames through the worker,
 delaymargin skipping, looping, the open
 order and errors, the wait, the fullscreen tag and frame branch, and the ASF reader.
-`tests/asf-windows-media.test.mjs` covers the ASF demuxer and decoder.
+`tests/asf-windows-media.test.mjs` covers the ASF demuxer, the preroll decoding order and
+the decoder.
 
 ## Nonvisual resource geometry probe
 

@@ -70,6 +70,10 @@ export class BrowserStreamMoviePlayer {
     const snapshot = this.voice.snapshot();
     return snapshot.status === 6 ? this.info.duration : snapshot.positionMs / 1000;
   }
+  /** Diagnostic counters of the decoder and its clock. */
+  get decoding(): StreamMovieVoice['decoding'] {
+    return this.voice.decoding;
+  }
   volume(value: number): void {
     this.voice.volume(value);
   }

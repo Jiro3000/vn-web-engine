@@ -7,19 +7,29 @@ import type {
   MovieStream,
 } from '../../video/movie-types.js';
 import {WindowsMediaDecoder} from '../../video/windows-media.js';
-import {AsfDemuxer, readAsfLayout, type AsfLayout, type AsfStream} from './demux.js';
+import {
+  AsfDemuxer,
+  AsfPrerollQueue,
+  readAsfLayout,
+  type AsfLayout,
+  type AsfMediaObject,
+  type AsfStream,
+} from './demux.js';
 
 /** Packets read per batch. */
 const PACKETS = 64;
 
 /** ASF movie with one Windows Media video stream and at most one audio stream. Frames carry
- * their presentation times; audio is contiguous from the first audio object's time. */
+ * their presentation times; audio is contiguous from the first audio object's time. Packets
+ * are read a preroll ahead of video decoding (`AsfPrerollQueue`): audio is decoded as it is
+ * read and video waits compressed, so each batch carries the audio for its frames. */
 export class AsfMovie implements MovieStream {
   readonly info: MovieInfo;
   private readonly demuxer: AsfDemuxer;
   private readonly video: WindowsMediaDecoder;
   private readonly audio: WindowsMediaDecoder | null;
   private packet = 0;
+  private readonly order: AsfPrerollQueue;
   /** First audio object time, then the first decoded audio time (the decoder's own
    * presentation time when it reports one) that all later audio follows contiguously. */
   private audioObject: number | null = null;
@@ -47,6 +57,7 @@ export class AsfMovie implements MovieStream {
       sampleCount: audioStream ? Math.ceil(duration * audioStream.sampleRate) : 0,
     };
     this.demuxer = new AsfDemuxer(layout);
+    this.order = new AsfPrerollQueue(Number(layout.preroll), videoStream.number);
     this.video = new WindowsMediaDecoder(videoStream);
     try {
       this.audio = audioStream ? new WindowsMediaDecoder(audioStream) : null;
@@ -79,21 +90,23 @@ export class AsfMovie implements MovieStream {
       audio: MoviePcm[] = [];
     if (this.done) return {frames, audio, info: this.info, done: true, progress: 1};
     const {packetSize, packetCount, dataOffset} = this.layout;
-    const count = Math.min(PACKETS, packetCount - this.packet);
-    const bytes = await this.source.read(dataOffset + this.packet * packetSize, count * packetSize);
-    for (let i = 0; i < count; i++)
-      for (const object of this.demuxer.packet(
-        bytes.subarray(i * packetSize, (i + 1) * packetSize),
-      )) {
-        if (object.stream === this.videoStream.number)
-          this.pictures(this.video.decode(object.data, object.time, object.key), frames);
-        else if (this.audio && object.stream === this.audioStream!.number) {
-          this.audioObject ??= object.time;
-          this.samples(this.audio.decode(object.data, object.time, object.key), audio);
-        }
-      }
-    this.packet += count;
+    // Reads until video is released, so a batch is empty only while the first preroll loads.
+    let video = false;
+    while (!video && this.packet < packetCount) {
+      const count = Math.min(PACKETS, packetCount - this.packet);
+      const bytes = await this.source.read(
+        dataOffset + this.packet * packetSize,
+        count * packetSize,
+      );
+      this.packet += count;
+      for (let i = 0; i < count; i++)
+        for (const object of this.order.push(
+          this.demuxer.packet(bytes.subarray(i * packetSize, (i + 1) * packetSize)),
+        ))
+          video = this.decode(object, frames, audio) || video;
+    }
     if (this.packet >= packetCount) {
+      for (const object of this.order.flush()) this.decode(object, frames, audio);
       this.pictures(this.video.decode(null), frames);
       if (this.audio) this.samples(this.audio.decode(null), audio);
       this.video.close();
@@ -101,6 +114,19 @@ export class AsfMovie implements MovieStream {
       this.done = true;
     }
     return {frames, audio, info: this.info, done: this.done, progress: this.packet / packetCount};
+  }
+
+  /** Decodes one object; true for a video object. */
+  private decode(object: AsfMediaObject, frames: MovieFrame[], audio: MoviePcm[]): boolean {
+    if (object.stream === this.videoStream.number) {
+      this.pictures(this.video.decode(object.data, object.time, object.key), frames);
+      return true;
+    }
+    if (this.audio && object.stream === this.audioStream!.number) {
+      this.audioObject ??= object.time;
+      this.samples(this.audio.decode(object.data, object.time, object.key), audio);
+    }
+    return false;
   }
 
   private pictures(output: ReturnType<WindowsMediaDecoder['decode']>, frames: MovieFrame[]) {

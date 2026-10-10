@@ -74,14 +74,21 @@ export class BrowserFullscreenMoviePlayer implements FullscreenMoviePlayer {
   get playing(): boolean {
     return this.video !== null || this.stream !== null;
   }
-  /** Diagnostic: position and duration in seconds, and pictures drawn, of a software movie. */
-  get progress(): {position: number; duration: number; frames: number} | null {
+  /** Diagnostic: position and duration in seconds, pictures drawn and decoder counters of a
+   * software movie. */
+  get progress(): {
+    position: number;
+    duration: number;
+    frames: number;
+    decoding: BrowserStreamMoviePlayer['decoding'];
+  } | null {
     const stream = this.stream;
     return stream
       ? {
           position: stream.player.position,
           duration: stream.player.info.duration,
           frames: stream.frames,
+          decoding: stream.player.decoding,
         }
       : null;
   }

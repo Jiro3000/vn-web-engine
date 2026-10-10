@@ -268,3 +268,35 @@ export class AsfDemuxer {
     return out;
   }
 }
+
+/** Decoding order for demuxed objects. A muxer may place an object up to the preroll after
+ * objects of other streams with the same presentation time (WMA blocks a preroll behind the
+ * video). Objects of the held stream wait until an object more than a preroll later has been
+ * read; objects of other streams pass at once, so they reach their decoders ahead of the held
+ * stream's objects of the same time. */
+export class AsfPrerollQueue {
+  private readonly queued: AsfMediaObject[] = [];
+  private readTime = -Infinity;
+  constructor(
+    private readonly preroll: number,
+    private readonly held: number,
+  ) {}
+
+  /** Objects in decoding order once `objects`, the next demuxed objects, have been read. */
+  push(objects: readonly AsfMediaObject[]): AsfMediaObject[] {
+    const out: AsfMediaObject[] = [];
+    for (const object of objects) {
+      this.readTime = Math.max(this.readTime, object.time);
+      if (object.stream === this.held) this.queued.push(object);
+      else out.push(object);
+    }
+    while (this.queued.length && this.readTime - this.queued[0]!.time > this.preroll)
+      out.push(this.queued.shift()!);
+    return out;
+  }
+
+  /** Releases the held objects at the end of the data. */
+  flush(): AsfMediaObject[] {
+    return this.queued.splice(0);
+  }
+}
