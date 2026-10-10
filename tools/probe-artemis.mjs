@@ -44,17 +44,20 @@ const probeInputs = process.argv
   });
 // --layer-event-at=N:id[:type] and --key-push-at=N:key (repeatable, argument order): before
 // the Nth delivered click, raise the layer event (type defaults to click) or push the key
-// (slot 0 edge) at the click-wait instead, one per frame. No pointer hit testing.
+// (slot 0 edge) at the click-wait instead, one per frame. --stop-event-at=N:id[:type] and
+// --stop-key-at=N:key wait instead for run mode 3 without a pending wait after at least N
+// delivered clicks (game dialogs and menus stop the script). No pointer hit testing.
+const timedPrefixes = ['--layer-event-at=', '--key-push-at=', '--stop-event-at=', '--stop-key-at='];
 const timedInputs = process.argv
   .slice(3)
-  .filter((arg) => arg.startsWith('--layer-event-at=') || arg.startsWith('--key-push-at='))
+  .filter((arg) => timedPrefixes.some((prefix) => arg.startsWith(prefix)))
   .map((arg) => {
-    if (arg.startsWith('--key-push-at=')) {
-      const [at, key] = arg.slice('--key-push-at='.length).split(':');
-      return {at: artemisInteger(at), key: artemisInteger(key)};
-    }
-    const [at, id, type = 'click'] = arg.slice('--layer-event-at='.length).split(':');
-    return {at: artemisInteger(at), id, type};
+    const stop = arg.startsWith('--stop-');
+    const [at, ...rest] = arg.slice(arg.indexOf('=') + 1).split(':');
+    if (arg.startsWith('--key-push-at=') || arg.startsWith('--stop-key-at='))
+      return {at: artemisInteger(at), key: artemisInteger(rest[0]), stop};
+    const [id, type = 'click'] = rest;
+    return {at: artemisInteger(at), id, type, stop};
   });
 // Diagnostic clicks (--clicks=N) at `@` click-waits: 16 ms frames run until the text
 // display completes, then one run mode 1 click is delivered. No pointer position is used.
@@ -109,7 +112,8 @@ try {
   const executable = await installation.files.read(executablePaths[0]);
   if (executable === null) throw new Error('Missing Artemis executable');
   const executableSha256 = createHash('sha256').update(executable).digest('hex');
-  const read = (path) => installation.files.read(path);
+  // Save directory paths read the probe's save storage, like the browser player.
+  const read = (path) => runtime?.readSaveDirectoryFile(path) ?? installation.files.read(path);
   glyphFixture = createArtemisGlyphLayoutFixture(executableSha256, read);
   surfaceFixture = createArtemisSurfacePreloadFixture(executableSha256, read);
   soundFixture = createArtemisOfflineSoundFixture(executableSha256, read);
@@ -374,6 +378,11 @@ try {
           probeInputs.push({id, type: 'rollover'}, {id, type: 'click'}, {key: 1});
         }
       }
+      const stopInput = timedInputs.findIndex((input) => input.stop && input.at <= deliveredClicks);
+      if (!probeInputs.length && stopInput >= 0 && runtime.runMode === 3 && !wait.pending) {
+        const [{id, type, key}] = timedInputs.splice(stopInput, 1);
+        probeInputs.push(id === undefined ? {key} : {id, type});
+      }
       if (probeInputs.length && runtime.runMode === 3 && !wait.pending) {
         const input = probeInputs.shift();
         if (input.id !== undefined) {
@@ -387,7 +396,7 @@ try {
         continue;
       }
       if (wait.clickPending && probeClicks > 0) {
-        const timed = timedInputs.findIndex((input) => input.at === deliveredClicks);
+        const timed = timedInputs.findIndex((input) => !input.stop && input.at === deliveredClicks);
         if (timed >= 0) {
           const [{id, type, key}] = timedInputs.splice(timed, 1);
           if (id === undefined) {
