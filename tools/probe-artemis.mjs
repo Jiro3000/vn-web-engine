@@ -1,6 +1,15 @@
 /** Nonvisual diagnostics of the Artemis runtime over actual memory asset/PCM providers. No
  * native game process, picture output or audio-device output. */
 import {createHash} from 'node:crypto';
+import {
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+  openSync,
+  writeSync,
+  closeSync,
+} from 'node:fs';
 import {createArtemisShaderFixture} from './artemis-shader-fixture.mjs';
 import {createArtemisSurfacePreloadFixture} from './artemis-surface-preload-fixture.mjs';
 import {createArtemisGlyphLayoutFixture} from './artemis-glyph-layout-fixture.mjs';
@@ -102,6 +111,60 @@ const simulatedGraphicsFeatureLevel =
 let resourceResumptions = 0,
   advancedWaits = 0;
 const saveFiles = new Map();
+// --save-dir=DIR: the save directory starts with DIR's files and is written back to DIR at
+// the end, so a later run continues from this run's global and system data.
+const saveDir = process.argv
+  .slice(3)
+  .findLast((arg) => arg.startsWith('--save-dir='))
+  ?.slice('--save-dir='.length);
+if (saveDir !== undefined) {
+  mkdirSync(saveDir, {recursive: true});
+  for (const name of readdirSync(saveDir)) saveFiles.set(name, readFileSync(`${saveDir}/${name}`));
+}
+// --report-dir=DIR: every array in the report, or in one of its objects, longer than 10000
+// entries is written to DIR/<key>.ndjson (DIR/<key>.<field>.ndjson), one entry per line, and
+// the report (also DIR/report.json) names the file in its place.
+// Nothing is dropped, and the report never becomes one string past the engine limit.
+const reportDir = process.argv
+  .slice(3)
+  .findLast((arg) => arg.startsWith('--report-dir='))
+  ?.slice('--report-dir='.length);
+const reportText = (report) => {
+  if (reportDir === undefined) return JSON.stringify(report, null, 2);
+  mkdirSync(reportDir, {recursive: true});
+  const stream = (name, value) => {
+    const fd = openSync(`${reportDir}/${name}.ndjson`, 'w');
+    try {
+      for (let start = 0; start < value.length; start += 10000)
+        writeSync(
+          fd,
+          value
+            .slice(start, start + 10000)
+            .map((entry) => JSON.stringify(entry) + '\n')
+            .join(''),
+        );
+    } finally {
+      closeSync(fd);
+    }
+    return {ndjson: `${name}.ndjson`, length: value.length};
+  };
+  const large = (value) => Array.isArray(value) && value.length > 10000;
+  const summary = {};
+  for (const [key, value] of Object.entries(report)) {
+    if (large(value)) summary[key] = stream(key, value);
+    else if (value && typeof value === 'object' && !Array.isArray(value))
+      summary[key] = Object.fromEntries(
+        Object.entries(value).map(([field, item]) => [
+          field,
+          large(item) ? stream(`${key}.${field}`, item) : item,
+        ]),
+      );
+    else summary[key] = value;
+  }
+  const text = JSON.stringify(summary, null, 2);
+  writeFileSync(`${reportDir}/report.json`, text);
+  return text;
+};
 const installation = await openArtemisInstallation(process.argv[2]);
 let runtime, glyphFixture, surfaceFixture, soundFixture, shaderFixture, layerFixture;
 try {
@@ -526,68 +589,66 @@ try {
   }
   if (astLoadedByGame !== true) throw new Error('Game AST loader did not confirm the source');
   const ast = lua.vm.getGlobal('ast');
+  if (saveDir !== undefined)
+    for (const [name, bytes] of saveFiles) writeFileSync(`${saveDir}/${name}`, bytes);
   console.log(
-    JSON.stringify(
-      {
-        executableSha256,
-        dialogRequests: dialogs,
-        saveLoad: saveLoadReport,
-        autoChoices: autoChoiceLog,
-        automodeWaits,
-        probeLua,
-        saveFiles: Object.fromEntries(
-          [...saveFiles].map(([name, bytes]) => [name, {bytes: bytes.length}]),
-        ),
-        dialogPending: runtime.dialog.pending,
-        simulatedDialogResult,
-        graphicsFeatureLevel:
-          simulatedGraphicsFeatureLevel === null
-            ? null
-            : {value: simulatedGraphicsFeatureLevel, simulation: true},
-        advanceWaits,
-        advancedWaits,
-        timedWaitPending: wait.pending,
-        effectMode: 'record-only',
-        metadataLayerFixture: layerFixture.snapshot(),
-        fontStackFixture: {
-          depth: runtime.fontStack.depth(),
-          fontRendering: false,
-          simulation: true,
-        },
-        messageSelectionFixture: {
-          current: runtime.messageSelection.currentMessageLayer(),
-          depth: runtime.messageSelection.depth,
-          presentation: false,
-          simulation: true,
-        },
-        pointerPositionFixture: {x: 0, y: 0, simulation: true},
-        resourceResumptions,
-        preparedFiles: runtime.prepared.size,
-        preparedBytes: runtime.preparedBytes,
-        compiled: runtime.compiled,
-        nativeIncludeReporting,
-        luaIncludeErrors,
-        nativeCallLuaReporting,
-        luaCallErrors,
-        unknownTagReports,
-        luaVersion: luaText(lua.vm.getGlobal('_VERSION')),
-        state: script.state,
-        refusal,
-        events,
-        nativeTags,
-        includes,
-        modeEffects,
-        glyphLayoutFixture: glyphFixture.summary(),
-        surfacePreloadFixture: surfaceFixture.summary(),
-        soundDecodeFixture: soundFixture.summary(),
-        shaderFixture: shaderFixture?.summary(),
-        astLoadedByGame,
-        astVersion: lua.vm.getGlobal('astver'),
-        astTopLevelKeys: ast.size,
+    reportText({
+      executableSha256,
+      dialogRequests: dialogs,
+      saveLoad: saveLoadReport,
+      autoChoices: autoChoiceLog,
+      automodeWaits,
+      probeLua,
+      saveFiles: Object.fromEntries(
+        [...saveFiles].map(([name, bytes]) => [name, {bytes: bytes.length}]),
+      ),
+      dialogPending: runtime.dialog.pending,
+      simulatedDialogResult,
+      graphicsFeatureLevel:
+        simulatedGraphicsFeatureLevel === null
+          ? null
+          : {value: simulatedGraphicsFeatureLevel, simulation: true},
+      advanceWaits,
+      advancedWaits,
+      timedWaitPending: wait.pending,
+      effectMode: 'record-only',
+      metadataLayerFixture: layerFixture.snapshot(),
+      fontStackFixture: {
+        depth: runtime.fontStack.depth(),
+        fontRendering: false,
+        simulation: true,
       },
-      null,
-      2,
-    ),
+      messageSelectionFixture: {
+        current: runtime.messageSelection.currentMessageLayer(),
+        depth: runtime.messageSelection.depth,
+        presentation: false,
+        simulation: true,
+      },
+      pointerPositionFixture: {x: 0, y: 0, simulation: true},
+      resourceResumptions,
+      preparedFiles: runtime.prepared.size,
+      preparedBytes: runtime.preparedBytes,
+      compiled: runtime.compiled,
+      nativeIncludeReporting,
+      luaIncludeErrors,
+      nativeCallLuaReporting,
+      luaCallErrors,
+      unknownTagReports,
+      luaVersion: luaText(lua.vm.getGlobal('_VERSION')),
+      state: script.state,
+      refusal,
+      events,
+      nativeTags,
+      includes,
+      modeEffects,
+      glyphLayoutFixture: glyphFixture.summary(),
+      surfacePreloadFixture: surfaceFixture.summary(),
+      soundDecodeFixture: soundFixture.summary(),
+      shaderFixture: shaderFixture?.summary(),
+      astLoadedByGame,
+      astVersion: lua.vm.getGlobal('astver'),
+      astTopLevelKeys: ast.size,
+    }),
   );
 } finally {
   runtime?.close();
