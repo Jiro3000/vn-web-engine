@@ -412,7 +412,8 @@ runtime frames once the text display completes: the pointer rests on the layer f
 second, one frame samples key 1 down and the pointer stays for another half second. Game
 Lua acts on a button in the key push handler that follows the layer's click handler.
 `--screenshots` simulates the screenshot surface so that save tags with thumbnails, such
-as a quick save, write their files. `--save-dir=DIR`
+as a quick save, write their files. The report's `nativeTags` entries record the delivered clicks before each tag (`click`), which
+places a tag on the route. `--save-dir=DIR`
 starts the save directory with DIR's files and writes it back at the end, so a later run
 continues from the global and system data of an earlier one. `--report-dir=DIR` writes every
 report array longer than 10000 entries (also inside a top-level object) to an NDJSON file in

@@ -317,6 +317,7 @@ export class ArtemisBrowserPlayer {
         hovered: this.hovered,
         volumes: this.volumes,
         movie: this.movie.progress,
+        videoLayers: this.layers?.videoLayers,
         clickable: this.layers?.eventLayers('click', true),
       }
     );

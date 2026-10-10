@@ -320,7 +320,13 @@ try {
         severity: 1,
       }),
     trace: {
-      tag: (tag) => nativeTags.push({name: tag.name, args: Object.fromEntries(tag.args)}),
+      // Each native tag with the delivered clicks before it, to place tags on a route.
+      tag: (tag) =>
+        nativeTags.push({
+          name: tag.name,
+          args: Object.fromEntries(tag.args),
+          click: deliveredClicks,
+        }),
       script: (entry) => events.push(entry),
       include: (path) => includes.push(path),
       effect: (effect) => modeEffects.push(effect),

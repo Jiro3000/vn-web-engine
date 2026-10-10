@@ -278,6 +278,27 @@ export class ArtemisLayerOwner<
       }
     for (const video of videos) video.update(now);
   }
+  /** Diagnostic: each current video layer's decoder frame counters and picture revision. */
+  get videoLayers(): {
+    readonly id: string;
+    readonly decoded: number;
+    readonly target: number;
+    readonly revision: number;
+    readonly playing: boolean;
+  }[] {
+    const layers = [];
+    for (const entry of this.layers.scene.entries('current')) {
+      const video = entry.value && this.host.videoOf(entry.value);
+      if (video)
+        layers.push({
+          id: entry.id,
+          ...video.frame,
+          revision: video.revision,
+          playing: video.playing,
+        });
+    }
+    return layers;
+  }
   /** `wait video=` frame check: layer `id` is a video layer that is still playing. */
   videoPlaying(id: string): boolean {
     const actor = this.layers.scene.entry(id)?.value;
