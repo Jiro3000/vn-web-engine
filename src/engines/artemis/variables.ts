@@ -47,6 +47,20 @@ const messageLayerExtents = {
 } as const;
 
 /** Literal byte-string variables with current-local/global lookup; expressions require a separate evaluator. */
+/** 0x1400a0040 encoding 2: each byte from a lead byte with n further high bits set skips n
+ * bytes; counting stops at the first NUL. */
+function utf8Characters(bytes: Uint8Array): number {
+  const end = bytes.indexOf(0) < 0 ? bytes.length : bytes.indexOf(0);
+  let count = 0;
+  for (let index = 0; index < end; count++) {
+    const byte = bytes[index]!;
+    let skip = 0;
+    if (byte & 0x80) for (let bit = 0x40; byte & bit; bit >>= 1) skip++;
+    index += skip + 1;
+    if (index > end) throw new Error('Artemis var length source ends inside a character');
+  }
+  return count;
+}
 export class ArtemisVariables {
   constructor(private readonly host?: ArtemisVariableHost) {}
   private dirty = false;
@@ -198,6 +212,14 @@ export class ArtemisVariables {
       if (!Number.isInteger(value) || value < -0x80000000 || value > 0x7fffffff)
         throw new Error('Unsupported Artemis message layer extent');
       this.write(name, String(value), local);
+    } else if (p.get('system') === 'length') {
+      // e56a0: mode absent or "0" stores the byte size of source; mode "1" counts UTF-8
+      // characters with 0x1400a0040 (encoding 2); any other mode writes nothing.
+      const mode = p.get('mode');
+      if (mode !== undefined && mode !== '0' && mode !== '1') return true;
+      if (!p.has('source')) throw new Error('Missing Artemis var source');
+      const source = tag.bytes?.get('source') ?? new TextEncoder().encode(p.get('source')!);
+      this.write(name, String(mode === '1' ? utf8Characters(source) : source.length | 0), local);
     } else if (p.get('system') === 'unixtime')
       // 0x14019a970 `_time64`, stored through the 32-bit integer setter.
       this.write(name, String(this.unixTime() | 0), local);

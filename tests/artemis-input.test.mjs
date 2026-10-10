@@ -241,3 +241,45 @@ test('Roles answer through their keys; Alt+Enter does not decide an Enter role',
   input.update(50, sample([13]));
   assert.equal(role(0, 'decide'), true);
 });
+
+test('var system=length stores source bytes, or UTF-8 characters for mode 1', () => {
+  const variables = new ArtemisVariables({stageSize: () => ({width: 1, height: 1})});
+  const length = (name, args, bytes) =>
+    variables.dispatch({
+      kind: 'tag',
+      name: 'var',
+      sourceLine: -1,
+      args: new Map([
+        ['name', name],
+        ['system', 'length'],
+        ...(bytes ? [['source', new TextDecoder().decode(bytes)]] : []),
+        ...args,
+      ]),
+      // A tag's raw argument bytes accompany its decoded text.
+      ...(bytes ? {bytes: new Map([['source', bytes]])} : {}),
+    });
+  const read = (name) => luaText(variables.read(name));
+  length('t.b', [['source', 'Aあ\n']]);
+  length('t.z', [
+    ['source', 'Aあ\n'],
+    ['mode', '0'],
+  ]);
+  length('t.c', [
+    ['source', 'Aあ\n'],
+    ['mode', '1'],
+  ]);
+  assert.deepEqual([read('t.b'), read('t.z'), read('t.c')], ['5', '5', '3']);
+  // Mode 1 stops at NUL, counts a stray continuation byte once and skips by the lead byte.
+  length('t.r', [['mode', '1']], Uint8Array.of(0x80, 0xe3, 0x81, 0x82, 0x41, 0, 0x41));
+  assert.equal(read('t.r'), '3');
+  // Any other mode leaves the variable alone.
+  length('t.c', [
+    ['source', 'x'],
+    ['mode', '2'],
+  ]);
+  assert.equal(read('t.c'), '3');
+  assert.throws(
+    () => length('t.e', [['mode', '1']], Uint8Array.of(0x41, 0xe3, 0x81)),
+    /ends inside a character/,
+  );
+});

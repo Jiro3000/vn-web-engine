@@ -1250,6 +1250,15 @@ The native post-render italic outline transform does not rerasterize its bitmap.
 System fonts, legacy character conversion, renderer atlas/edge algorithms and text
 layout remain distinct owners.
 
+Each text layer's CFontRenderer (`ArtemisGlyphRenderer`) keeps the first provider that
+opens a face: FreeType file, `<face>_<size>.rft` rendered font, then the system font
+(setFont `0x1401662e0`). When none opens the face the previous provider stays current; a
+renderer that never opened one draws empty, zero-advance characters (`0x140166420`). In
+this UTF-8 revision the Shift-JIS default face (`ＭＳ ゴシック`) opens nowhere, because
+CSystemFont matches UTF-8 `EnumFontFamiliesExW` family names, so text printed after a
+bare `fontinit` is empty on a fresh layer. A layer that already opened a face and then
+meets an unopenable one is refused, as are missing font files with UTF-8 names.
+
 `ArtemisPrint` handles print/ruby-buffer/debug-skip routing, diagnostics, overflow
 variable writes and consumed-prefix history. The required insertion owner returns
 its native result and the first unconsumed UTF-8 byte offset. Overflow policy0

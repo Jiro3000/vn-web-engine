@@ -1,6 +1,10 @@
 import {artemisDefaultFontAttributes} from './font-state.js';
 import type {ArtemisTextBlock} from './text-block.js';
-import type {ArtemisTextGlyphResource, ArtemisTextGlyphStyle} from './text-glyphs.js';
+import {
+  ArtemisGlyphRenderer,
+  type ArtemisTextGlyphResource,
+  type ArtemisTextGlyphStyle,
+} from './text-glyphs.js';
 import {ArtemisTextInsertion, type ArtemisInsertionStyle} from './text-insertion.js';
 import type {ArtemisMessageResource, ArtemisRuntimeGlyphs} from './runtime.js';
 
@@ -10,6 +14,7 @@ export interface ArtemisGlyphBlockSource {
     main: string,
     ruby: string,
     style: ArtemisTextGlyphStyle,
+    renderer: ArtemisGlyphRenderer,
   ): Promise<ArtemisTextBlock<ArtemisTextGlyphResource>>;
 }
 
@@ -33,9 +38,10 @@ export class ArtemisRuntimeGlyphOwner implements ArtemisRuntimeGlyphs {
     } as ArtemisInsertionStyle;
   }
   private host(resource: ArtemisMessageResource) {
+    const renderer = new ArtemisGlyphRenderer();
     return {
       loadBlock: async (main: string, ruby: string, style: ArtemisTextGlyphStyle) => {
-        const block = await this.blocks.load(main, ruby, style);
+        const block = await this.blocks.load(main, ruby, style, renderer);
         this.loaded?.(resource, block);
         return block;
       },

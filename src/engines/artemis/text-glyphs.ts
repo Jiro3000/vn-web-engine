@@ -22,6 +22,18 @@ export interface ArtemisTextGlyphResource {
   readonly codePoint: number;
   readonly surface: ArtemisGlyphSurface;
 }
+/** One text layer's CFontRenderer current-provider state. setFont (0x1401662e0) keeps
+ * the first of the FreeType, rendered (.rft) and system providers that opens the face; when
+ * none opens it the previous provider stays current. A renderer that has never opened a face
+ * has no provider, and 0x140166420 then yields empty character surfaces. */
+export class ArtemisGlyphRenderer {
+  opened = false;
+}
+const emptyGlyph = (codePoint: number): ArtemisTextGlyphResource =>
+  Object.freeze({
+    codePoint,
+    surface: Object.freeze({image: null, left: 0, top: 0, advance: 0}),
+  });
 interface Cached {
   promise: Promise<ArtemisTextGlyphResource>;
   bytes: number;
@@ -46,6 +58,7 @@ export class ArtemisTextGlyphs {
     mainText: string,
     rubyText: string,
     style: ArtemisTextGlyphStyle,
+    renderer?: ArtemisGlyphRenderer,
   ): Promise<ArtemisTextBlock<ArtemisTextGlyphResource>> {
     this.assertOpen();
     const snapshot = {...style};
@@ -81,11 +94,22 @@ export class ArtemisTextGlyphs {
       const size = ruby ? snapshot.rubysize : snapshot.size;
       if (!size || !symbols.length) return [];
       const face = ruby ? snapshot.rubyface : snapshot.face;
-      if (typeof face !== 'string') throw Error('Unsupported Artemis legacy/system font face');
+      if (typeof face !== 'string') {
+        // In this UTF-8 revision a face that is not UTF-8 (the 193720 Shift-JIS default)
+        // names no font file or <face>_<size>.rft, and CSystemFont (0x140191720) looks it up
+        // among UTF-8 EnumFontFamiliesExW names, so no provider opens it.
+        if (!renderer || renderer.opened)
+          throw Error('Unsupported Artemis legacy/system font face');
+        return symbols.map((symbol) => {
+          const glyph = emptyGlyph(symbol.codePointAt(0)!);
+          return {glyph, advance: 0};
+        });
+      }
       const path = face.split('\0', 1)[0]!;
       const shadow = ruby ? snapshot.rubyshadow : snapshot.shadow,
         outline = ruby ? snapshot.rubyoutline : snapshot.outline;
       const font = await this.font(path, size, snapshot.styleBits);
+      if (renderer) renderer.opened = true;
       const output: ArtemisBlockGlyph<ArtemisTextGlyphResource>[] = [];
       for (const symbol of symbols) {
         this.assertOpen();

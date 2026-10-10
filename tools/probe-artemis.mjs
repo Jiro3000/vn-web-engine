@@ -26,6 +26,10 @@ if (simulatedDialogResult !== null && ![0, 1].includes(simulatedDialogResult))
 const advanceWaits = process.argv.slice(3).includes('--advance-waits');
 const nativeIncludeReporting = process.argv.slice(3).includes('--native-include-reporting');
 const nativeCallLuaReporting = process.argv.slice(3).includes('--native-calllua-reporting');
+// SIMULATED --screenshots: takess is recorded and savess reads zero-filled RGBA rows; no
+// scene is rendered.
+const simulatedScreenshots = process.argv.slice(3).includes('--screenshots');
+let screenshotTaken = false;
 // Diagnostic layer events (--layer-event=id[:type], type defaults to click) and pushed
 // keys (--key-push=key, slot 0 edge) at a run mode 3 stop, one per frame in argument order.
 // No pointer hit testing is simulated.
@@ -159,6 +163,17 @@ try {
     sound: soundFixture,
     ...(shaderFixture ? {shaders: shaderFixture} : {}),
     moviePlayer,
+    ...(simulatedScreenshots
+      ? {
+          screenshots: {
+            take: () => {
+              screenshotTaken = true;
+              modeEffects.push({takess: true, simulation: true});
+            },
+            read: (width, height) => (screenshotTaken ? new Uint8Array(width * height * 4) : null),
+          },
+        }
+      : {}),
     dialogs: {
       present: (request, complete) => {
         dialogs.push(request);
@@ -452,6 +467,16 @@ try {
     refusal = error.message;
     if (process.env.ARTEMIS_PROBE_STACK) console.error(error.stack, error.hostCause?.stack ?? '');
   }
+  // ARTEMIS_PROBE_LUA: diagnostic Lua chunk run after the route; it sets global probe_out.
+  let probeLua;
+  if (process.env.ARTEMIS_PROBE_LUA) {
+    try {
+      lua.vm.execute(new TextEncoder().encode(process.env.ARTEMIS_PROBE_LUA), 'probe');
+      probeLua = luaText(lua.vm.getGlobal('probe_out') ?? '');
+    } catch (error) {
+      probeLua = 'error: ' + error.message;
+    }
+  }
   await runtime.flushSaves();
   try {
     await surfaceFixture.manager.waitForLoads();
@@ -477,6 +502,7 @@ try {
         saveLoad: saveLoadReport,
         autoChoices: autoChoiceLog,
         automodeWaits,
+        probeLua,
         saveFiles: Object.fromEntries(
           [...saveFiles].map(([name, bytes]) => [name, {bytes: bytes.length}]),
         ),

@@ -3089,6 +3089,7 @@ test('Native logical text copies retain glyph ids/pixels while line and indentat
 test('Native font defaults preserve historical face bytes and keep overflow outside attribute snapshots', async () => {
   const {artemisDefaultFontAttributes: defaults, artemisPatchFontAttributes: patch} =
     await import('../dist/engines/artemis/font-state.js');
+  const {ArtemisGlyphRenderer} = await import('../dist/engines/artemis/text-glyphs.js');
   const fixture = await nativeInsertionFixture();
   try {
     const original = defaults(fixture.hash);
@@ -3121,6 +3122,19 @@ test('Native font defaults preserve historical face bytes and keep overflow outs
       [65],
     );
     await assert.rejects(fixture.glyphs.load('A', '', original), /legacy\/system/);
+    // A layer renderer that never opened a face prints empty, zero-advance characters; once a
+    // face opened, the native renderer would keep that previous provider instead.
+    const renderer = new ArtemisGlyphRenderer();
+    const empty = await fixture.glyphs.load('AB', '', original, renderer);
+    assert.deepEqual(
+      empty.main.map((g) => [g.glyph.codePoint, g.advance, g.glyph.surface.image]),
+      [
+        [65, 0, null],
+        [66, 0, null],
+      ],
+    );
+    await fixture.glyphs.load('A', '', next.font, renderer);
+    await assert.rejects(fixture.glyphs.load('A', '', original, renderer), /legacy\/system/);
     // An unused legacy ruby face must not prevent actual normal text insertion.
     assert.equal(next.font.rubyface, original.rubyface);
   } finally {
