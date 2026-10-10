@@ -9,7 +9,7 @@ import type {ArtemisVariables} from './variables.js';
 export interface ArtemisResetHost {
   /** ini.Boot from the dynamic INI variables; an absent key reads as empty. */
   bootPath(): string;
-  /** 0x1400b6cf0 message wait/indicator state update. */
+  /** 0x1400b6cf0: releases a placed click glyph. */
   updateMessageState(): void;
   /** Scheduler virtual +0x30(0). */
   releaseScheduler(): void;

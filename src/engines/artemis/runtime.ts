@@ -646,12 +646,16 @@ export class ArtemisRuntime {
           trace({waitEventError: String(error)});
         }
       },
-      resumeMessageState: () => trace({resumeMessageState: true}),
+      resumeMessageState: () => clickGlyphs.release(),
       effectIndex: (id) => effectSlots.get(id),
       effectPlaying: (index) => sound.effectPlaying(index),
       videoPlaying: (id) => layers.videoPlaying(id),
       automodeWait: () =>
         artemisInteger(new TextDecoder().decode(variables.read('s.automodewait'))),
+      placeClickGlyph: () => {
+        clickGlyphs.place(script.nextTagName === 'rp');
+        trace({clickGlyph: clickGlyphs.placed});
+      },
     }));
     const stop = new ArtemisStop(modes, save, {
       debugSkipActive: () => false,
@@ -764,7 +768,7 @@ export class ArtemisRuntime {
       publishCurrentMessageLayer: (name) => variables.write('s.current_message_layer', name),
       selectionChanged: (_tag, name) => trace({messageSelected: name, simulation: true}),
       stackUnderflow: (_tag, name) => trace({messageStackUnderflow: name, simulation: true}),
-      messageStateUpdated: () => trace({messageStateUpdated: true, simulation: true}),
+      messageStateUpdated: () => clickGlyphs.release(),
     }));
     const recordText = (name: string, tag: AsbTag) => saveData.recordText(name, tag);
     const fontStack = (this.fontStack = new ArtemisFontStack<ArtemisRuntimeFont>({
@@ -1056,6 +1060,7 @@ export class ArtemisRuntime {
     script = this.script = new ArtemisScript(lua, {
       pushLocal: () => variables.pushLocal(),
       popLocal: () => variables.popLocal(),
+      caretTransferred: () => clickGlyphs.release(),
       readFile,
       dispatch,
       evaluateExpression: (expression) =>
@@ -1128,7 +1133,7 @@ export class ArtemisRuntime {
     };
     const reset = (this.resetEngine = new ArtemisReset(modes, save, variables, readHistory, {
       bootPath: () => ini.bootPath,
-      updateMessageState: () => trace({messageStateUpdated: true, reset: true}),
+      updateMessageState: () => clickGlyphs.release(),
       releaseScheduler: () => trace({releaseScheduler: true, reset: true}),
       resetOwners,
       applyVolumes: (musicVolume, effectVolume) => services.applyVolumes(musicVolume, effectVolume),

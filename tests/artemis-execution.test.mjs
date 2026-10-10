@@ -1272,6 +1272,7 @@ test('Automode gives a completed click-wait the s.automodewait deadline; syncse 
     effectIndex: (id) => ({voice: 3})[id],
     effectPlaying: (index) => playing.has(index),
     automodeWait: () => 500,
+    placeClickGlyph: () => calls.push('glyph'),
   });
   const tag = (name, args = {}) => ({
     kind: 'tag',
@@ -1291,6 +1292,8 @@ test('Automode gives a completed click-wait the s.automodewait deadline; syncse 
   assert.equal(wait.deadlineTick, 0);
   assert.equal(wait.tick(1000, false, true), false);
   assert.equal(wait.deadlineTick, 1500);
+  // The click glyph is placed when the deadline is armed.
+  assert.deepEqual(calls.splice(0), ['glyph']);
   // A playing syncse id holds the passed deadline until the sound stops.
   playing.add(3);
   assert.equal(wait.tick(1501, false, true), false);
@@ -6321,6 +6324,38 @@ test('Glyph tags configure the current message layer and copy the layer glyph to
   assert.equal(glyphs.get('mw').rplayerName, 'mw.rp');
   glyphs.reset();
   assert.equal(glyphs.get('mw'), undefined);
+});
+
+test('Click glyph placement marks the selected layer draggable until release', async () => {
+  const {ArtemisClickGlyphs} = await import('../dist/engines/artemis/click-glyph.js');
+  const flags = [];
+  const glyphs = new ArtemisClickGlyphs({
+    currentMessageLayer: () => 'mw',
+    setLayerDraggable: (name, value) => flags.push([name, value]),
+  });
+  const glyph = (args) => ({kind: 'tag', name: 'glyph', sourceLine: 1, args: new Map(args)});
+  glyphs.dispatch(glyph([['rplayer', 'mw.rp']]));
+  flags.length = 0;
+  // The layer flag is clear, so a wait not followed by `rp` places nothing.
+  glyphs.place(false);
+  assert.equal(glyphs.placed, '');
+  glyphs.release();
+  assert.deepEqual(flags, []);
+  glyphs.place(true);
+  glyphs.place(false);
+  assert.equal(glyphs.placed, 'mw.rp');
+  assert.deepEqual(flags.splice(0), [['mw.rp', true]]);
+  glyphs.release();
+  glyphs.release();
+  assert.equal(glyphs.placed, '');
+  assert.deepEqual(flags.splice(0), [['mw.rp', false]]);
+  glyphs.dispatch(
+    glyph([
+      ['layer', 'mw.glyph'],
+      ['homing', '1'],
+    ]),
+  );
+  assert.throws(() => glyphs.place(false), /homing click glyph/);
 });
 
 test('s.clickskip has no startup value and queries create it as integer zero', async () => {

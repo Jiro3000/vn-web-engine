@@ -12,7 +12,8 @@ export interface ArtemisClickGlyph {
   /** +0x50 TPoint<int>. */
   left: number;
   top: number;
-  /** +10 / +0x30 / +0x60: the read-ahead (rplayer) glyph; absent copies the layer fields. */
+  /** +10 / +0x30 / +0x60: the glyph of a wait followed by an `rp` tag; absent `rplayer`
+   * copies the layer fields. */
   rplayer: boolean;
   rplayerName: string;
   rpleft: number;
@@ -23,7 +24,7 @@ export interface ArtemisClickGlyphHost {
   /** Current message layer name (script +0x35e0). */
   currentMessageLayer(): string;
   /** Layer set +0x140 lookup by name; when the layer exists, its virtual +0xf0 (0x1400a4970)
-   * stores the draggable flag (layer +0x16c). The glyph tag always passes 0. */
+   * stores the draggable flag (layer +0x16c). The glyph tag passes 0, placement 1. */
   setLayerDraggable(name: string, value: boolean): void;
 }
 
@@ -31,6 +32,8 @@ export interface ArtemisClickGlyphHost {
  * 0x1400eb500). bf210 clears the map. */
 export class ArtemisClickGlyphs {
   private readonly entries = new Map<string, ArtemisClickGlyph>();
+  /** Script +0x3838: the placed glyph layer name, empty while none is placed. */
+  private placedName = '';
   constructor(private readonly host: ArtemisClickGlyphHost) {}
   get(name: string): Readonly<ArtemisClickGlyph> | undefined {
     return this.entries.get(name);
@@ -55,8 +58,37 @@ export class ArtemisClickGlyphs {
       );
     return entry;
   }
+  get placed(): string {
+    return this.placedName;
+  }
   reset(): void {
     this.entries.clear();
+  }
+  /** 0x1400b6820, called by the run mode 1 automode branch before the automode deadline is
+   * armed. A placed glyph stays until `release`. The current message layer's entry selects
+   * the `rplayer` fields when the caret's next tag is `rp`, else the layer fields; a cleared
+   * flag or an empty name places nothing. The name is recorded even when no such layer
+   * exists. */
+  place(beforePageEnd: boolean): void {
+    if (this.placedName) return;
+    const entry = this.entry();
+    const [present, name] = beforePageEnd
+      ? [entry.rplayer, entry.rplayerName]
+      : [entry.layer, entry.layerName];
+    if (!present || !name) return;
+    this.placedName = name;
+    // Homing moves the layer into the glyph container attached to the text layer (+0x3828,
+    // text layer virtual +0x1b0) at the stored position.
+    if (entry.homing) throw Error('Artemis homing click glyph is not implemented');
+    this.host.setLayerDraggable(name, true);
+  }
+  /** 0x1400b6cf0: run on wait end (c6160 mode 0), every caret transfer (b6520), message
+   * layer selection (chgmsg) and engine reset. Uses the current message layer's homing. */
+  release(): void {
+    if (!this.placedName) return;
+    if (this.entry().homing) throw Error('Artemis homing click glyph is not implemented');
+    this.host.setLayerDraggable(this.placedName, false);
+    this.placedName = '';
   }
   /** Scenario archive section 0x12: copies of the map entries. */
   saveFields(): Map<string, ArtemisClickGlyph> {

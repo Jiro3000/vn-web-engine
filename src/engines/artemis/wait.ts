@@ -17,7 +17,7 @@ export interface ArtemisTimedWaitHost {
   beginWait(inputEnabled: boolean): void;
   endWait(): void;
   clickWaitEvent(kind: 'in' | 'out'): void;
-  /** 0x1400b6cf0 update after native state 0 clears wait flags. */
+  /** 0x1400b6cf0 (click glyph release) after native state 0 clears wait flags. */
   resumeMessageState(): void;
   /** Root layer lookup +0x140 cast to a video layer (0x1400f53d0), then its +0x208:
    * false when the layer is missing, is not a video layer or has finished playing. */
@@ -29,6 +29,8 @@ export interface ArtemisTimedWaitHost {
   effectPlaying?(index: number): boolean;
   /** `s.automodewait` through the variable integer getter (virtual +0x10). */
   automodeWait?(): number;
+  /** 0x1400b6820 click glyph placement. */
+  placeClickGlyph?(): void;
 }
 function integer(value: string): number {
   const token = /^[\t\n\v\f\r ]*([+-]?\d+)/.exec(value);
@@ -206,10 +208,11 @@ export class ArtemisTimedWait {
         this.host.finishTextDisplay();
         this.host.writeClickSkip();
       }
-      // The click glyph placement 0x1400b6820 of this branch is a separate owner.
       if (this.click && this.deadline === 0 && this.modes.automode) {
         if (this.host.textDisplayComplete()) {
-          if (!this.host.automodeWait) throw Error('Unsupported Artemis automode wait owner');
+          if (!this.host.automodeWait || !this.host.placeClickGlyph)
+            throw Error('Unsupported Artemis automode wait owner');
+          this.host.placeClickGlyph();
           this.deadline = (this.host.automodeWait() + (now >>> 0)) >>> 0;
         }
       }

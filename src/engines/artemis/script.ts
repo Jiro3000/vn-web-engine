@@ -51,6 +51,8 @@ export interface ArtemisScriptHost {
   /** 0x1400c0560 before a caret tag of a named file runs (queued tags are exempt): the
    * already-read check. An event scope it enters leaves an empty caret, and the tag waits. */
   beforeCaretTag?(file: string, index: number, tag: AsbTag): void;
+  /** b6520/c6730 end a caret change with 0x1400b6cf0, after the new caret is installed. */
+  caretTransferred?(): void;
 }
 export interface ArtemisLuaCallErrorReport {
   readonly file: string;
@@ -126,6 +128,10 @@ export class ArtemisScript {
   get currentFile(): string {
     return this.cursor?.file ?? '';
   }
+  /** Name of the caret tag at the caret index (+0xb90), the next one the caret runs. */
+  get nextTagName(): string | undefined {
+    return this.cursor?.program.tags[this.cursor.index]?.name;
+  }
   constructor(
     private readonly lua: ArtemisLua,
     private readonly host: ArtemisScriptHost,
@@ -192,6 +198,7 @@ export class ArtemisScript {
     this.host.caretFields?.take();
     this.clearQueue();
     this.state = 'ready';
+    this.host.caretTransferred?.();
   }
   private clearQueue(): void {
     this.queue = [];
@@ -212,6 +219,7 @@ export class ArtemisScript {
     this.callers.push({...this.cursor, fields, queue: this.takeQueue()});
     this.cursor = destination;
     this.state = 'ready';
+    this.host.caretTransferred?.();
   }
   /** c6730 handler-only events interrupt with an empty caret and a fresh scope.
    * Resource-suspended Lua must be deferred by the native-mode event owner.
@@ -233,6 +241,7 @@ export class ArtemisScript {
       previousMode: 0,
     };
     this.state = 'ready';
+    this.host.caretTransferred?.();
   }
   return(): void {
     if (!this.callers.length) {

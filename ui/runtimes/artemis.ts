@@ -214,9 +214,9 @@ function pageTrace() {
       push({tag: tag.name, args});
     },
     effect: (effect: object) => {
-      // Skip and automode changes join the ordered notable list.
+      // Skip and automode changes and click glyph placement join the ordered notable list.
       if (
-        ['automode', 'commandSkip', 'controlSkip'].some((key) => key in effect) &&
+        ['automode', 'commandSkip', 'controlSkip', 'clickGlyph'].some((key) => key in effect) &&
         notable.length < 2000
       )
         notable.push({t: Math.round(performance.now()), effect});

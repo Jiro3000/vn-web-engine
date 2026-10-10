@@ -138,7 +138,7 @@ export interface ArtemisMessageSelectionHost {
   /** Native INFO3 diagnostics are nonfatal unless the logger owner throws. */
   selectionChanged(tag: AsbTag, id: string): void;
   stackUnderflow(tag: AsbTag, id: string): void;
-  /** b6cf0 updates the selected message wait/indicator state; it is not just a clear. */
+  /** 0x1400b6cf0: releases a placed click glyph. */
   messageStateUpdated(): void;
 }
 

@@ -309,8 +309,8 @@ By default dialogs remain pending. `--dialog-result=0` or `--dialog-result=1`
 explicitly supplies a simulated outcome for a separate probe, recorded in its JSON.
 Probe cursor/scheduler effects are record-only and do not represent production effects.
 
-Remaining work includes native system variables/events, full IET compilation and the
-click glyph. The player page is
+Remaining work includes native system variables/events, full IET compilation and homing
+click glyphs. The player page is
 `artemis.html`. Shared platform/media services must remain in
 the shared layers. Evidence and game resources are local-only and are not part of
 this source tree.
@@ -1597,8 +1597,18 @@ Without `rplayer`, the read-ahead glyph copies the layer flag, name and position
 `rplayer`, it takes that name and the optional `rpleft`/`rptop`. Each named layer is passed to
 the layer set's virtual +0xf0 (0x1400a4970), which clears the layer's draggable flag
 (+0x16c). `homing="0"`
-clears homing; any other value sets it. Rendering the glyph during click waits is not
-implemented.
+clears homing; any other value sets it.
+
+Placement (`0x1400b6820`) runs only in the run mode 1 automode branch, when the display of a
+flagless wait has completed and right before the automode deadline is armed. It reads the
+current message layer's entry: the `rplayer` fields when the caret's next tag is `rp`, else
+the layer fields. With the flag set and a nonempty name, it records the name as the placed
+glyph (script +0x3838) and, without homing, sets the layer's draggable flag. Release
+(`0x1400b6cf0`) clears that flag and the placed name. It runs when a wait ends (c6160 mode 0),
+after every caret transfer (b6520, event handler scopes), on `chgmsg` selection changes and
+on engine reset. Games create, show and delete the glyph layers themselves; the engine never
+changes their visibility. Homing placement, which moves the layer into the glyph container
+attached to the text layer, is not implemented and throws.
 
 `music.ts` holds the BGM commands on the music manager (script +0x3d60):
 
