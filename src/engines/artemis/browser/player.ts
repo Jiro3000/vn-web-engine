@@ -99,6 +99,8 @@ export class ArtemisBrowserPlayer {
   private pointer = {x: 0, y: 0};
   /** Diagnostic: the topmost hit layer with a registered pointer event. */
   private hovered: string | null = null;
+  /** Diagnostic: the music and effect group gains applied last. */
+  private volumes: readonly [number, number] | null = null;
   private readonly keys = new VirtualKeyState();
   private wheel: (136 | 137)[] = [];
   private pointerInside = false;
@@ -269,6 +271,7 @@ export class ArtemisBrowserPlayer {
       windowsVersion: () => options.windowsVersion,
       graphicsFeatureLevel: () => options.graphicsFeatureLevel,
       applyVolumes: (music, effect) => {
+        this.volumes = [music, effect];
         this.sound.music.setGroupGain(music);
         this.sound.effects.setGroupGain(effect);
       },
@@ -312,6 +315,7 @@ export class ArtemisBrowserPlayer {
         wait: runtime.wait.pending ? runtime.wait.reason : null,
         pointer: this.pointer,
         hovered: this.hovered,
+        volumes: this.volumes,
         clickable: this.layers?.eventLayers('click', true),
       }
     );
