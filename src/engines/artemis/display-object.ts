@@ -1,5 +1,5 @@
 import {artemisRevision} from './revision.js';
-import type {ArtemisLayerPropertyPatch} from './layer-properties.js';
+import type {ArtemisImageClip, ArtemisLayerPropertyPatch} from './layer-properties.js';
 
 export interface ArtemisDisplayProperties {
   left: number;
@@ -30,6 +30,10 @@ export class ArtemisDisplayObject {
   private stateRevision = 0;
   /** CLayer +0x168 (`clickablethreshold`, setter 0x1400a4960). Not a drawn property. */
   private threshold = 0;
+  /** CLayer +0x16c (`draggable`, setter 0x1400a4970) and the drag area TRect<float> at
+   * +0x170 (setter 0x1400a4980), zero after construction 0x1400a3640. Not drawn. */
+  private drag = false;
+  private area: ArtemisImageClip = {left: 0, top: 0, width: 0, height: 0, right: 0, bottom: 0};
   private state: ArtemisDisplayProperties = {
     left: 0,
     top: 0,
@@ -61,7 +65,15 @@ export class ArtemisDisplayObject {
     result.matrixDirty = this.matrixDirty;
     result.stateRevision = this.stateRevision;
     result.threshold = this.threshold;
+    result.drag = this.drag;
+    result.area = this.area;
     return result;
+  }
+  get draggable(): boolean {
+    return this.drag;
+  }
+  get dragArea(): Readonly<ArtemisImageClip> {
+    return this.area;
   }
   get clickableThreshold(): number {
     return this.threshold;
@@ -78,6 +90,8 @@ export class ArtemisDisplayObject {
         throw new Error('Invalid Artemis clickable threshold');
       this.threshold = patch.clickablethreshold;
     }
+    if (patch.draggable !== undefined) this.drag = patch.draggable;
+    if (patch.dragarea !== undefined) this.area = {...patch.dragarea};
     const next = {...this.state};
     for (const key of Object.keys(next) as (keyof ArtemisDisplayProperties)[]) {
       const value = patch[key];

@@ -237,7 +237,7 @@ export interface ArtemisRuntimeServices {
   readonly graphicsFeatureLevel?: () => number;
   /** Effective music and effect volumes after a reset. */
   readonly applyVolumes: (music: number, effect: number) => void;
-  /** The click-glyph byte +0x16c of a message layer. */
+  /** Layer +0x16c (the draggable byte, virtual +0xf0 0x1400a4970) of a glyph layer. */
   readonly setLayerByte16c: (name: string, value: boolean) => void;
   readonly setTouchLimit: (limit: number) => void;
   /** The touch device of Lua `getTouchCount`/`setUseTouchHold`; absent is a device with no

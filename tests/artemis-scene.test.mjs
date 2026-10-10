@@ -416,6 +416,58 @@ test('Clickable thresholds use atoi, survive actor copies and gate the alpha hit
   assert.equal(copy.clickableThreshold, 128);
 });
 
+test('Drag properties keep the native flag spelling and inclusive area, and survive actor copies', async () => {
+  const {artemisLayerProperties} = await import('../dist/engines/artemis/layer-properties.js');
+  const {ArtemisDisplayObject} = await import('../dist/engines/artemis/display-object.js');
+  const display = new ArtemisDisplayObject(revision);
+  assert.equal(display.draggable, false);
+  assert.deepEqual(display.dragArea, {left: 0, top: 0, width: 0, height: 0, right: 0, bottom: 0});
+  const revisionBefore = display.propertyRevision;
+  display.apply(
+    artemisLayerProperties(
+      new Map([
+        ['draggable', '1'],
+        ['dragarea', '0,-720,0,720'],
+      ]),
+    ),
+  );
+  assert.equal(display.draggable, true);
+  assert.deepEqual(display.dragArea, {
+    left: 0,
+    top: -720,
+    width: 1,
+    height: 1441,
+    right: 0,
+    bottom: 720,
+  });
+  assert.equal(display.propertyRevision, revisionBefore);
+  const copy = display.copy();
+  // Only exactly "0" clears; a field count other than four leaves the area.
+  display.apply(
+    artemisLayerProperties(
+      new Map([
+        ['draggable', '00'],
+        ['dragarea', '1,2,3'],
+      ]),
+    ),
+  );
+  assert.equal(display.draggable, true);
+  assert.equal(display.dragArea.top, -720);
+  display.apply(artemisLayerProperties(new Map([['draggable', '0']])));
+  assert.equal(display.draggable, false);
+  assert.equal(copy.draggable, true);
+  assert.equal(copy.dragArea.bottom, 720);
+  // Empty fields read as zero.
+  assert.deepEqual(artemisLayerProperties(new Map([['dragarea', ',,4.5,']])).dragarea, {
+    left: 0,
+    top: 0,
+    width: 5.5,
+    height: 1,
+    right: 4.5,
+    bottom: 0,
+  });
+});
+
 test('Artemis missing-image fallback preserves native RGB/ARGB color forms and decimal dimensions', async () => {
   const {layers, events} = await layerFixture(async () => null);
   try {

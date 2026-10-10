@@ -717,7 +717,13 @@ CArtemisLayer setter `0x1400b2e10` to the inner actors, which store it at +0x168
 the value and `hitsAlpha` is the pixel step of image hit test `0x14017b6a0`: threshold
 0 hits without reading the pixel, otherwise the alpha byte must reach the threshold as
 an unsigned comparison. Pointer selection of the hit actor belongs to the pointer owner.
-`draggable` (+0x16c) is not implemented and refuses.
+`lyprop draggable` sets actor +0x16c unless the value is exactly `0` (`0x1400a4970`);
+`dragarea` takes exactly four comma fields through `atof` as left, top, right and bottom
+and stores a TRect<float> whose sizes are the endpoint differences plus 1 at +0x170
+(`0x1400a4980`); other field counts are ignored. Both start zero and survive actor
+copies (`ArtemisDisplayObject.draggable`, `dragArea`). The glyph tag clears the same byte
+on its layers. Pointer dragging, which raises the dragin/drag/dragout layer events and
+moves a draggable actor inside its area, is not implemented.
 
 `lyprop layermode` preserves the native exact spellings `normal`, `add`, `screen`
 and `multiply`; any other value leaves the old mode intact (`0x140115650`). Mode

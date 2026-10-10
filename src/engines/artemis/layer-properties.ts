@@ -34,6 +34,10 @@ export interface ArtemisLayerPropertyPatch {
   intermediateRender?: {enabled: boolean; format?: 1 | 2};
   /** 0x1400d76d0 atoi, forwarded by CArtemisLayer +0xe8 (0x1400b2e10) to the inner actors. */
   clickablethreshold?: number;
+  /** 0x1400d76d0: exactly "0" clears, any other value sets; actor +0xf0 (0x1400a4970). */
+  draggable?: boolean;
+  /** 0x1400d76d0: four comma fields through atof; actor +0xf8 (0x1400a4980). */
+  dragarea?: ArtemisImageClip;
 }
 const numeric = [
   'left',
@@ -56,6 +60,8 @@ const supported = new Set<string>([
   'clip',
   'intermediate_render',
   'clickablethreshold',
+  'draggable',
+  'dragarea',
   // Game Lua forwards its creation argument table to lyprop. Native d76d0 /
   // 115650 never query these keys; keep the recorded tag without reloading.
   'file',
@@ -115,6 +121,25 @@ export function artemisLayerProperties(
   }
   if (args.has('clickablethreshold'))
     patch.clickablethreshold = artemisInteger(args.get('clickablethreshold')!);
+  if (args.has('draggable')) patch.draggable = args.get('draggable') !== '0';
+  if (args.has('dragarea')) {
+    // Split at "," with empty fields kept (0x1400a0770); other counts are ignored.
+    const parts = args.get('dragarea')!.split('\0', 1)[0]!.split(',');
+    if (parts.length === 4) {
+      const [left, top, right, bottom] = parts.map((part) => Math.fround(decimal(part))) as [
+        number,
+        number,
+        number,
+        number,
+      ];
+      // TRect<float> sizes are inclusive: endpoint difference plus 1.0f (0x1403fbf38).
+      const width = Math.fround(Math.fround(right - left) + 1);
+      const height = Math.fround(Math.fround(bottom - top) + 1);
+      if (!Number.isFinite(width) || !Number.isFinite(height))
+        throw new Error('Unsupported Artemis drag area');
+      patch.dragarea = {left, top, width, height, right, bottom};
+    }
+  }
   for (const key of flags) if (args.has(key)) patch[key] = args.get(key) !== '0';
   const mode = args.get('layermode');
   if (mode === 'normal' || mode === 'add' || mode === 'screen' || mode === 'multiply')
