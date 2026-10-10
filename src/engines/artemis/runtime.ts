@@ -27,6 +27,7 @@ import {
   type ArtemisFontAttributes,
 } from './font-state.js';
 import {ArtemisFullscreenVideo} from './fullscreen-video.js';
+import {ArtemisExit} from './exit.js';
 import {
   ArtemisReadHistory,
   writeArtemisGlobalArchive,
@@ -411,9 +412,10 @@ export class ArtemisRuntime {
     };
     let lua: ArtemisLua, script: ArtemisScript;
     let messageStage: ArtemisMessageLayers<ArtemisMessageResource>;
+    const windowDisplay = () => ({width, height, fullscreen: false});
     const variables = (this.variables = new ArtemisVariables({
       stageSize: () => ({width, height}),
-      windowDisplay: () => ({width, height, fullscreen: false}),
+      windowDisplay,
       applicationArguments: {readApplicationArguments: () => new Map()},
       messageLayerMeasure: () => glyphs.get(messageStage.currentLayer()).measure(),
       layerInfo: (id) => layers.layerInfo(id),
@@ -534,6 +536,16 @@ export class ArtemisRuntime {
         this.store('saveg.dat', 'G', writeArtemisGlobalArchive(readHistory, variables)),
       writeSystem: () => this.store('system.dat', 'X', writeArtemisSystemArchive(variables)),
     }));
+    const exit = new ArtemisExit(save, {
+      runMode: () => this.mode,
+      enterExitMode: () => {
+        script.enterRunMode(14);
+        if (script.state === 'ready') script.pause();
+        trace({runMode: 14, schedulerFlag: false});
+      },
+      fullscreen: () => windowDisplay().fullscreen,
+      writeStatus: (name, value) => variables.write(name, value),
+    });
     // Text display owners per message resource. Glyph and block actors are property stores
     // that the presentation reads.
     const textDisplays = new Map<ArtemisMessageResource, ArtemisTextDisplay<unknown>>(),
@@ -933,6 +945,7 @@ export class ArtemisRuntime {
           ...(services.shaders ? {shaders: services.shaders} : {}),
           reset,
           save,
+          exit,
           load,
           clickGlyphs,
           music,
@@ -1046,6 +1059,11 @@ export class ArtemisRuntime {
         }),
       ...(services.reportLuaCallError ? {reportLuaCallError: services.reportLuaCallError} : {}),
       ...(services.reportUnknownTag ? {reportUnknownTag: services.reportUnknownTag} : {}),
+      // 0x1400c8250 / 0x1400c0560: the root script ends in the application exit.
+      emptyReturn: () => {
+        exit.exit();
+        return this.mode === 14 ? 'stopped' : undefined;
+      },
       caretFields: {
         take: () => wait.take(),
         restore: (fields) => wait.restore(fields as ArtemisWaitFlags | undefined),
@@ -1264,6 +1282,10 @@ export class ArtemisRuntime {
   get acceptsInput(): boolean {
     return this.mode === 1 || this.mode === 3;
   }
+  /** Run mode 14: the script exited; the host closes the application after this frame. */
+  get exited(): boolean {
+    return this.mode === 14;
+  }
   /** A tag or Lua call is suspended on a resource operation. */
   get resourcePending(): boolean {
     return this.pendingResource !== null;
@@ -1337,6 +1359,7 @@ export class ArtemisRuntime {
    * script runs up to `steps` tags. While a resource load holds the script only the input
    * and clock advance; `settleResource` resumes it. */
   frame(now: number, input: ArtemisFrameInput, steps = 1000): void {
+    if (this.exited) throw Error('Artemis frame after the application exit');
     this.frameNumber = (this.frameNumber + 1) >>> 0;
     if (!this.resourcePending) {
       const events = this.layerEventQueue;

@@ -57,6 +57,8 @@ export interface ArtemisBrowserPlayerOptions {
   diagnostic(message: string): void;
   /** The game stopped with an error. */
   exit(error: unknown): void;
+  /** The game closed itself (script run mode 14) after its save writes completed. */
+  closed(): void;
 }
 
 // Mouse buttons 0..2 as virtual keys; the wheel notches are keys 136 (up) and 137 (down).
@@ -356,6 +358,11 @@ export class ArtemisBrowserPlayer {
   private frame(): void {
     const runtime = this.runtime;
     if (this.closed || !runtime) return;
+    // 0x14013cec0 closes the window after the frame that entered run mode 14.
+    if (runtime.exited && !this.settling) {
+      this.finish(runtime);
+      return;
+    }
     try {
       this.now = this.clock();
       if (this.settling) runtime.advanceTo(this.now);
@@ -507,6 +514,16 @@ export class ArtemisBrowserPlayer {
     );
     canvas.addEventListener('keyup', (event) => this.keys.release(event.keyCode), {signal});
     canvas.addEventListener('blur', () => this.keys.releaseAll(), {signal});
+  }
+  private finish(runtime: ArtemisRuntime): void {
+    void runtime.flushSaves().then(
+      () => {
+        if (this.closed) return;
+        this.dispose();
+        this.options.closed();
+      },
+      (error: unknown) => this.fail(error),
+    );
   }
   private fail(error: unknown): void {
     if (this.closed) return;

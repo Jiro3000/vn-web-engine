@@ -57,6 +57,7 @@ export interface ArtemisTagOwners {
   readonly shaders?: ResourceOwner;
   readonly reset: SyncOwner;
   readonly save: SyncOwner;
+  readonly exit: SyncOwner;
   readonly load: {dispatch(tag: AsbTag): Promise<unknown>};
   readonly clickGlyphs: SyncOwner;
   readonly music?: {dispatch(tag: AsbTag, recordHistory?: boolean): boolean | Promise<unknown>};
@@ -118,7 +119,8 @@ export function createArtemisTagDispatch(
     )
       return;
     if (owners.shaders && tag.name === 'lyshader') return pending(owners.shaders.dispatch(tag));
-    if (owners.reset.dispatch(tag) || owners.save.dispatch(tag)) return;
+    if (owners.reset.dispatch(tag) || owners.save.dispatch(tag) || owners.exit.dispatch(tag))
+      return;
     if (tag.name === 'load') return pending(owners.load.dispatch(tag));
     if (owners.clickGlyphs.dispatch(tag)) return;
     if (owners.music) {

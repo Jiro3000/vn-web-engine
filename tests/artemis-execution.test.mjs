@@ -1096,6 +1096,37 @@ test('Native save-gate tracks changed global g. bytes and orders scenario/global
   assert.deepEqual(calls, ['global', 'system']);
 });
 
+test('The exit tag enters run mode 14, writes fullscreenatexit and forces the global save', async () => {
+  const {ArtemisSave} = await import('../dist/engines/artemis/save.js');
+  const {ArtemisExit} = await import('../dist/engines/artemis/exit.js');
+  const {ArtemisVariables} = await import('../dist/engines/artemis/variables.js');
+  const calls = [];
+  let mode = 1;
+  const save = new ArtemisSave(new ArtemisVariables(), {
+    beforeScenario: (file) => calls.push(['before', file]),
+    reportEventError: (error) => calls.push(['error', String(error)]),
+    writeScenario: (file) => calls.push(['scenario', file]),
+    writeGlobal: () => calls.push('global'),
+    writeSystem: () => calls.push('system'),
+  });
+  const exit = new ArtemisExit(save, {
+    runMode: () => mode,
+    enterExitMode: () => calls.push(['mode', (mode = 14)]),
+    fullscreen: () => true,
+    writeStatus: (name, value) => calls.push([name, value]),
+  });
+  const tag = (name) => ({kind: 'tag', name, args: new Map(), sourceLine: 1});
+  assert.equal(exit.dispatch(tag('return')), false);
+  assert.equal(exit.dispatch(tag('exit')), true);
+  // Clean global variables are still written: the exit forces the global save.
+  assert.deepEqual(calls, [['mode', 14], ['s.status.fullscreenatexit', '1'], 'global', 'system']);
+  // A load holding run mode 13 keeps it.
+  calls.length = 0;
+  mode = 13;
+  exit.exit();
+  assert.deepEqual(calls, []);
+});
+
 test('Timed wait preserves strict deadline, event/save/message ordering and zero sentinel', async () => {
   const {ArtemisTimedWait} = await import('../dist/engines/artemis/wait.js');
   const {ArtemisModes} = await import('../dist/engines/artemis/modes.js');

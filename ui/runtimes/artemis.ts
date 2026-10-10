@@ -241,6 +241,16 @@ play.onclick = () => {
     trace: pageTrace(),
     diagnostic: (message) => console.warn(`[Artemis] ${message}`),
     exit: stopped,
+    closed: () => {
+      started = false;
+      player?.dispose();
+      player = null;
+      surface.replaceChildren();
+      element('welcome').hidden = false;
+      element('prompt').textContent = 'The game closed.';
+      report('The game closed.');
+      updateControls();
+    },
   });
   element('welcome').hidden = true;
   surface.replaceChildren(player.panel);

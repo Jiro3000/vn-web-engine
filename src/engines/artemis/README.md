@@ -26,8 +26,8 @@ commands require explicit host dispatch; they do not silently succeed.
 `script.ts` caches loaded programs, executes inline Lua once during initial load,
 then runs the cursor and FIFO tag queue. Queued tags precede the next script tag
 (`0x1400c0560`, `0x140130350`). Call/jump accept the current file when omitted;
-empty labels begin at tag zero (`0x1400b6520`). Call/return scope effects and root
-exit/save handling belong to the host. End of a called script returns to its
+empty labels begin at tag zero (`0x1400b6520`). Call/return scope effects and the
+root-end exit (`emptyReturn`) belong to the host. End of a called script returns to its
 caller. A host provides waits, stop effects, rendering and all remaining services.
 `run(maxSteps)` bounds dispatch; it does not schedule a browser frame.
 
@@ -199,7 +199,16 @@ resumes. While a resource holds the script only
 the input and clock advance. `acceptsInput` reports run modes 1 and 3. `advanceTo`,
 `layerEvent` and `keyPush` are the individual steps, and `save`/`load` with
 `scenarioArchive()` and `flushSaves()` serve save tooling. `runMode` is the current caret's
-native mode (0 script, 1 click wait, 2 transition, 3 stop, 4 wait, 7 video, 13 load).
+native mode (0 script, 1 click wait, 2 transition, 3 stop, 4 wait, 7 video, 13 load,
+14 exit).
+
+`exit.ts` is the application exit of the script, shared by the `exit` tag
+(`0x1400c8380`), `return` with an empty caret stack (`0x1400c8250`) and the end of the root
+script: unless a load holds run mode 13, the script enters run mode 14, writes
+`s.status.fullscreenatexit` and forces the global save (`saveg.dat`, `system.dat`).
+`exited` then reports true and `frame` refuses further frames. The window owner closes the
+application after that frame (`0x14013cec0` posts WM_DESTROY); the browser player waits
+for the pending save writes, disposes itself and reports `closed`.
 
 `input.ts` is CArtemisInput. Keys 0..0xff hold 0 idle, 1 pressed this update, 2 held,
 3 held past the 500 ms repeat delay and 4 released this update; wheel notches (136 up,
