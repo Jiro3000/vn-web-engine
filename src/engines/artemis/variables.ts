@@ -50,6 +50,49 @@ const messageLayerExtents = {
   get_message_layer_line_width: 'lineWidth',
 } as const;
 
+/** `system` values the native var handler (0x1400e56a0) compares, in its order. Any other
+ * value, including an absent `system` (an empty string), falls through and writes nothing. */
+const nativeVarSystems = new Set([
+  'var_exist',
+  'delete',
+  'array',
+  'random',
+  'length',
+  'find',
+  'substr',
+  'implode',
+  'explode',
+  'convert_encoding',
+  'to_utf8',
+  'to_sjis',
+  'character_reference_to_utf8',
+  'url_encode',
+  'url_decode',
+  'base64_encode',
+  'hmac_sha1_base64',
+  'date',
+  'unixtime',
+  'os',
+  'screen_width',
+  'screen_height',
+  'fullscreen',
+  'minimize',
+  'get_message_layer_width',
+  'get_message_layer_height',
+  'get_message_layer_line_width',
+  'get_message_tags',
+  'get_backlog_size',
+  'get_backlog_tags',
+  'get_layer_info',
+  'get_sound_info',
+  'file_exists',
+  'file_exist',
+  'file_update_time',
+  'file_crc',
+  'get_exe_parameter',
+  'get_font',
+]);
+
 /** Literal byte-string variables with current-local/global lookup; expressions require a separate evaluator. */
 /** 0x1400a0040 encoding 2: each byte from a lead byte with n further high bits set skips n
  * bytes; counting stops at the first NUL. */
@@ -189,6 +232,7 @@ export class ArtemisVariables {
     const local = p.has('writelocal') && p.get('writelocal') !== '0';
     // The native handler gives data precedence over system queries.
     if (p.has('data')) this.write(name, tag.bytes?.get('data') ?? p.get('data')!, local);
+    else if (!nativeVarSystems.has(p.get('system') ?? '')) return true;
     else if (p.get('system') === 'delete') this.delete(name, local);
     else if (p.get('system') === 'get_exe_parameter') {
       if (!this.host?.applicationArguments)

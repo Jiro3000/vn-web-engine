@@ -285,6 +285,38 @@ test('var system=length stores source bytes, or UTF-8 characters for mode 1', ()
   );
 });
 
+test('var without data or a native system value writes nothing', () => {
+  const variables = new ArtemisVariables({stageSize: () => ({width: 1, height: 1})});
+  const tag = (args) =>
+    variables.dispatch({kind: 'tag', name: 'var', sourceLine: -1, args: new Map(args)});
+  tag([
+    ['name', 't.rule'],
+    ['data', 'x'],
+  ]);
+  // A Lua table field set to nil (`data=(rule)`) leaves only name and writelocal.
+  assert.equal(
+    tag([
+      ['name', 't.rule'],
+      ['writelocal', '1'],
+    ]),
+    true,
+  );
+  tag([
+    ['name', 't.rule'],
+    ['system', 'no_such_query'],
+  ]);
+  assert.equal(luaText(variables.read('t.rule')), 'x');
+  // A native query this engine does not implement is still reported.
+  assert.throws(
+    () =>
+      tag([
+        ['name', 't.r'],
+        ['system', 'random'],
+      ]),
+    /Unsupported native Artemis var system random/,
+  );
+});
+
 test('var system=get_layer_info writes a CLayer actor in native key order', async () => {
   const {ArtemisDisplayObject} = await import('../dist/engines/artemis/display-object.js');
   const {artemisFloatText, artemisLayerExtent} =

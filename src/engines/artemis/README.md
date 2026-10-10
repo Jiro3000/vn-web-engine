@@ -61,6 +61,10 @@ refuse instead of reading zero, except `s.clickskip`: it has no startup initiali
 only native writers are the c0560 click-skip input paths (run modes 1/3/4, 2 and 7), which set
 integer 1 through 0x1400b0940: the wait click, the run mode 2 transition click and the run
 mode 7 movie end. Stage-size queries require a configuration/rendering provider.
+The handler (0x1400e56a0) gives `data` precedence. Without it, a `system` value that is not
+one of the native queries, or no `system` at all, writes nothing; this is what a Lua call
+such as `data=(rule)` with a nil field produces. Native queries this engine does not
+implement are refused.
 `system=unixtime` stores `_time64` through the 32-bit integer setter and `system=date`
 writes `.year`, `.month`, `.day`, `.hour`, `.minute` and `.second` from `_localtime64` of
 the `unixtime` argument (`atoi`, read as unsigned) or of the clock (0x14019a970,
