@@ -168,7 +168,7 @@ export class ArtemisBrowserPlayer {
     this.movie = new BrowserFullscreenMoviePlayer({
       document,
       container: this.panel,
-      read: (path) => files.readPlain(path),
+      open: (path) => files.openPlain(path),
       unsupported: (path, reason) =>
         options.diagnostic(`The browser cannot play the movie ${path} (${reason}).`),
     });
@@ -316,6 +316,7 @@ export class ArtemisBrowserPlayer {
         pointer: this.pointer,
         hovered: this.hovered,
         volumes: this.volumes,
+        movie: this.movie.progress,
         clickable: this.layers?.eventLayers('click', true),
       }
     );

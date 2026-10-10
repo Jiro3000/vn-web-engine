@@ -13,7 +13,8 @@ export interface AsfHeader {
   readonly duration: number | null;
 }
 
-const guid = (text: string) => {
+/** GUID bytes as stored in ASF objects. */
+export const asfGuid = (text: string) => {
   const hex = text.replace(/-/g, '');
   const bytes = Uint8Array.from(hex.match(/../g)!.map((byte) => Number.parseInt(byte, 16)));
   // The first three GUID fields are stored little-endian.
@@ -22,13 +23,13 @@ const guid = (text: string) => {
   bytes.subarray(6, 8).reverse();
   return bytes;
 };
-const headerObject = guid('75B22630-668E-11CF-A6D9-00AA0062CE6C');
-const filePropertiesObject = guid('8CABDCA1-A947-11CF-8EE4-00C00C205365');
-const equal = (bytes: Uint8Array, at: number, id: Uint8Array) =>
+const headerObject = asfGuid('75B22630-668E-11CF-A6D9-00AA0062CE6C');
+const filePropertiesObject = asfGuid('8CABDCA1-A947-11CF-8EE4-00C00C205365');
+export const asfGuidAt = (bytes: Uint8Array, at: number, id: Uint8Array) =>
   id.every((byte, index) => bytes[at + index] === byte);
 
 export function isAsf(bytes: Uint8Array): boolean {
-  return bytes.length >= 16 && equal(bytes, 0, headerObject);
+  return bytes.length >= 16 && asfGuidAt(bytes, 0, headerObject);
 }
 
 /** Header Object (GUID, u64 size, u32 object count, two reserved bytes) followed by its
@@ -47,7 +48,7 @@ export function readAsfHeader(bytes: Uint8Array): AsfHeader {
     const childSize = view.getBigUint64(offset + 16, true);
     if (childSize < 24n || BigInt(offset) + childSize > size)
       throw Error('Invalid ASF header child size');
-    if (equal(bytes, offset, filePropertiesObject)) {
+    if (asfGuidAt(bytes, offset, filePropertiesObject)) {
       if (childSize < 104n) throw Error('Truncated ASF file properties object');
       const body = offset + 24;
       const playDuration = view.getBigUint64(body + 40, true);

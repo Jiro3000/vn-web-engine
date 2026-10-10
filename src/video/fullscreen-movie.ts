@@ -1,5 +1,9 @@
+import {sourceBlob, type ByteSource} from '../core/source.js';
+import {workerSourceOf} from '../core/worker-source.js';
 import {isAsf} from '../formats/asf/header.js';
 import {playBrowserMediaWithActivation} from './browser-media-activation.js';
+import {BrowserStreamMoviePlayer} from './browser-stream-player.js';
+import {YuvRenderer} from './renderer.js';
 
 /** A movie played over the whole game window by the operating system's media stack
  * (for example a DirectShow graph rendering a loose file), outside the engine renderer. */
@@ -29,49 +33,94 @@ export interface BrowserFullscreenMovieOptions {
   readonly document: Document;
   /** Element the video covers while it plays. */
   readonly container: HTMLElement;
-  /** Loose file read; null when the file does not exist. */
-  read(path: string): Promise<Uint8Array | null>;
+  /** Loose file; null when the file does not exist. */
+  open(path: string): Promise<ByteSource | null>;
   /** The browser cannot decode or play the movie: playback completes immediately. */
   unsupported(path: string, reason: string): void;
 }
 
-/** HTMLVideoElement implementation. Containers the browser reports it cannot play (ASF/WMV
- * in most browsers) and decode errors are reported through `unsupported` and complete the
- * movie, so the engine continues as after the movie's end. */
+/** An error's message followed by its causes, so worker decode failures name their reason. */
+function describe(error: unknown): string {
+  let text = String(error);
+  for (
+    let cause = (error as {cause?: unknown})?.cause, depth = 0;
+    cause !== undefined && depth < 4;
+    depth++
+  ) {
+    text += `: ${cause instanceof Error ? cause.message : String(cause)}`;
+    cause = (cause as {cause?: unknown})?.cause;
+  }
+  return text;
+}
+
+/** ASF movies (WMV3 with WMA, WMA Pro or WMA Lossless audio) are decoded in a worker by the
+ * shared Windows Media decoder and drawn to a canvas over the container on the audio clock.
+ * Other containers play through an HTMLVideoElement. A movie that cannot be decoded or played
+ * is reported through `unsupported` and completes, so the engine continues as after the
+ * movie's end. */
 export class BrowserFullscreenMoviePlayer implements FullscreenMoviePlayer {
   private video: HTMLVideoElement | null = null;
+  private stream: {
+    player: BrowserStreamMoviePlayer;
+    canvas: HTMLCanvasElement;
+    renderer: YuvRenderer | null;
+    timer: ReturnType<typeof setInterval>;
+    frames: number;
+  } | null = null;
   private url = '';
   private abort: AbortController | null = null;
   private generation = 0;
   constructor(private readonly options: BrowserFullscreenMovieOptions) {}
   get playing(): boolean {
-    return this.video !== null;
+    return this.video !== null || this.stream !== null;
+  }
+  /** Diagnostic: position and duration in seconds, and pictures drawn, of a software movie. */
+  get progress(): {position: number; duration: number; frames: number} | null {
+    const stream = this.stream;
+    return stream
+      ? {
+          position: stream.player.position,
+          duration: stream.player.info.duration,
+          frames: stream.frames,
+        }
+      : null;
   }
   async play(request: FullscreenMovieRequest): Promise<boolean> {
     this.close();
     const generation = ++this.generation;
-    const bytes = await this.options.read(request.path);
+    const source = await this.options.open(request.path);
     if (generation !== this.generation) return true;
-    if (!bytes) return false;
-    const type = isAsf(bytes) ? 'video/x-ms-asf' : '';
-    const {document, container} = this.options;
-    const video = document.createElement('video');
-    if (type && !video.canPlayType(type)) {
-      this.options.unsupported(request.path, 'container ' + type);
+    if (!source) return false;
+    const signature = await source.read(0, Math.min(16, source.size));
+    if (generation !== this.generation) return true;
+    const abort = (this.abort = new AbortController());
+    if (isAsf(signature)) {
+      try {
+        const player = await BrowserStreamMoviePlayer.open(
+          await workerSourceOf(source),
+          this.options.document,
+          abort.signal,
+        );
+        if (generation !== this.generation) {
+          void player.closeAndJoin();
+          return true;
+        }
+        this.software(request, player);
+      } catch (error) {
+        if (generation === this.generation && !abort.signal.aborted)
+          this.options.unsupported(request.path, describe(error));
+      }
       return true;
     }
-    this.url = URL.createObjectURL(new Blob([bytes as BlobPart], type ? {type} : {}));
+    const blob = sourceBlob(source) ?? new Blob([(await source.read(0, source.size)).slice()]);
+    if (generation !== this.generation) return true;
+    const {document, container} = this.options;
+    const video = document.createElement('video');
+    this.url = URL.createObjectURL(blob);
     video.src = this.url;
-    video.volume = Math.min(1, 10 ** (request.attenuation / 2000));
+    video.volume = gain(request.attenuation);
     video.playsInline = true;
-    Object.assign(video.style, {
-      position: 'absolute',
-      inset: '0',
-      width: '100%',
-      height: '100%',
-      objectFit: 'contain',
-      background: '#000',
-    });
+    Object.assign(video.style, cover);
     const finish = () => {
       if (this.video === video) this.close();
     };
@@ -83,20 +132,52 @@ export class BrowserFullscreenMoviePlayer implements FullscreenMoviePlayer {
     });
     container.append(video);
     this.video = video;
-    const abort = (this.abort = new AbortController());
     playBrowserMediaWithActivation(video, {document, signal: abort.signal}).catch(
       (error: unknown) => {
         if (this.video !== video) return;
-        this.options.unsupported(request.path, String(error));
+        this.options.unsupported(request.path, describe(error));
         finish();
       },
     );
     return true;
   }
+  private software(request: FullscreenMovieRequest, player: BrowserStreamMoviePlayer): void {
+    const {document, container} = this.options;
+    const canvas = document.createElement('canvas');
+    canvas.width = player.info.width;
+    canvas.height = player.info.height;
+    Object.assign(canvas.style, cover);
+    container.append(canvas);
+    const stream = {
+      player,
+      canvas,
+      renderer: null as YuvRenderer | null,
+      timer: setInterval(() => {
+        if (this.stream !== stream) return;
+        try {
+          if (player.position >= player.info.duration) this.close();
+        } catch (error) {
+          this.options.unsupported(request.path, describe(error));
+          this.close();
+        }
+      }, 16),
+      frames: 0,
+    };
+    this.stream = stream;
+    player.volume(gain(request.attenuation));
+    player.start((frame) => {
+      if (this.stream !== stream) return;
+      stream.renderer ??= new YuvRenderer(canvas);
+      stream.renderer.draw(frame);
+      stream.frames++;
+    });
+  }
   close(): void {
     this.generation++;
-    const video = this.video;
+    const video = this.video,
+      stream = this.stream;
     this.video = null;
+    this.stream = null;
     this.abort?.abort();
     this.abort = null;
     if (video) {
@@ -105,7 +186,24 @@ export class BrowserFullscreenMoviePlayer implements FullscreenMoviePlayer {
       video.load();
       video.remove();
     }
+    if (stream) {
+      clearInterval(stream.timer);
+      void stream.player.closeAndJoin();
+      stream.renderer?.dispose();
+      stream.canvas.remove();
+    }
     if (this.url) URL.revokeObjectURL(this.url);
     this.url = '';
   }
 }
+
+/** Hundredths of a decibel (0 full, -10000 silence) to linear gain. */
+const gain = (attenuation: number) => Math.min(1, 10 ** (attenuation / 2000));
+const cover = {
+  position: 'absolute',
+  inset: '0',
+  width: '100%',
+  height: '100%',
+  objectFit: 'contain',
+  background: '#000',
+};

@@ -1087,15 +1087,20 @@ the movie on key role 0 or active skip, skip 2 on key role 1, closing the player
 releasing the run mode and writing `s.clickskip`.
 
 The native player is a DirectShow graph rendering the loose file. The game's movies are
-ASF/WMV (`src/formats/asf/header.ts` reads their duration without decoding).
-`BrowserFullscreenMoviePlayer` plays what the browser can decode over the game element
-and otherwise reports the movie as unsupported to the host and completes it, so the
-scenario continues as after the movie's end. The probe plays a movie for its ASF header
-duration in 16 ms frames without decoding it.
+ASF files with WMV3 video and WMA Standard, Pro or Lossless audio, which browsers cannot
+decode. `BrowserFullscreenMoviePlayer` streams an ASF file through the shared software
+movie player: `AsfMovie` (`src/formats/asf/movie.ts`) decodes it in the movie worker
+with the Windows Media decoder (`wasm/windows-media/`), the audio clock paces the
+pictures and a canvas covering the game element shows them. The player stops at the
+movie's duration. Other containers play in a `<video>` element. A movie that neither
+path can play is reported to the host as unsupported and completes, so the scenario
+continues as after the movie's end. The probe plays a movie for its ASF header duration
+in 16 ms frames without decoding it.
 
 `tests/artemis-video.test.mjs` checks frame timing, conversion and mask alpha against an
 independent statement of the native formulas, delaymargin skipping, looping, the open
 order and errors, the wait, the fullscreen tag and frame branch, and the ASF reader.
+`tests/asf-windows-media.test.mjs` covers the ASF demuxer and decoder.
 
 ## Nonvisual resource geometry probe
 
