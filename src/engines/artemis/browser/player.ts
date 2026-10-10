@@ -375,6 +375,18 @@ export class ArtemisBrowserPlayer {
             pointerInside: this.pointerInside,
           },
           layerEvents: this.pending.layerEvents,
+          ...(this.layers && this.graphics
+            ? {
+                pointer: {
+                  ...this.pointer,
+                  hits: this.graphics.hitTest(
+                    this.layers.layers.scene,
+                    this.pointer.x,
+                    this.pointer.y,
+                  ),
+                },
+              }
+            : {}),
         };
         this.pending = {layerEvents: []};
         this.wheel = [];
@@ -467,7 +479,8 @@ export class ArtemisBrowserPlayer {
           this.hover();
           if (
             this.hovered !== null &&
-            this.layers?.eventLayers('click', true).includes(this.hovered)
+            this.layers?.eventLayers('click', true).includes(this.hovered) &&
+            !this.layers.isDraggable(this.hovered)
           )
             this.pending.layerEvents.push({id: this.hovered, type: 'click'});
         }

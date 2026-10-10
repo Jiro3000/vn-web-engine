@@ -282,6 +282,13 @@ sends rollout and rollover when the topmost hit layer with a registered pointer 
 changes, and a click event to it on a press. Hover is tracked only while the runtime
 accepts input, so a layer that appears under a still pointer receives its rollover once
 the script stops.
+Each frame the player also passes the pointer and every hit layer id to the runtime, which
+runs the draggable half of the per-actor pointer update (`0x140179f50`) after its input
+update: `ArtemisLayerOwner.updateDrag` starts a visible draggable layer under the pointer on
+the key 1 down edge (`dragin`, `0x140179e80`), then moves its left/top by the pointer
+offset since the press, clamped into its drag area unless all four edges are zero. It raises
+`drag` while key 1 is down and `dragout` on release. Drag moves write no layer command, and
+a draggable layer receives no click.
 
 ## Verification and remaining work
 

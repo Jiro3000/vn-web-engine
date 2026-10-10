@@ -1,3 +1,4 @@
+import type {ArtemisDisplayObject} from './display-object.js';
 import type {ArtemisLayerInfo} from './layer-info.js';
 import type {AsbTag} from '../../formats/artemis/asb.js';
 import type {TriangleImage} from '../../graphics/triangle-draw.js';
@@ -61,6 +62,8 @@ export interface ArtemisLayerOwnerHost<T extends object, I extends ArtemisImageD
   applyTweenProperties(id: string, actor: T, patch: ArtemisLayerPropertyPatch): void;
   /** The video decoder a video actor holds. */
   videoOf(actor: T): ArtemisTheoraVideo | undefined;
+  /** The CLayer display state of an actor; without it actors expose `properties`. */
+  displayOf?(actor: T): ArtemisDisplayObject;
   /** The fields `var system=get_layer_info` reads from an actor. */
   layerInfo?(actor: T): ArtemisLayerInfo;
   /** Transition presentation state the renderer reads. */
@@ -93,6 +96,11 @@ export class ArtemisLayerOwner<
   readonly tweenRegistry: ArtemisTweenRegistry;
   readonly graphics: ArtemisLayerHost<T, I>;
   private readonly slots = new WeakMap<T, ArtemisLayerEventSlots>();
+  /** CLayer +0x288 start pointer (both -1 when idle) and +0x298 start position. */
+  private readonly drags = new WeakMap<
+    T,
+    {readonly x: number; readonly y: number; readonly left: number; readonly top: number}
+  >();
   private readonly events: ArtemisLayerEvents<T>;
   private readonly stage: ArtemisStage;
   private readonly transition: ArtemisTransition;
@@ -351,26 +359,31 @@ export class ArtemisLayerOwner<
    * and ancestors are visible; `registered` also requires a stored callback. */
   eventLayers(type: ArtemisLayerEventType, registered = false): string[] {
     const scene = this.layers.scene;
-    const visible = (id: string) => {
-      const parts = id.split('.');
-      for (let length = 1; length <= parts.length; length++) {
-        const value = scene.entry(parts.slice(0, length).join('.'))?.value as
-          {properties?: {visible?: boolean}} | undefined;
-        if (value?.properties && value.properties.visible === false) return false;
-      }
-      return true;
-    };
     return scene
       .entries()
       .filter(({id, value}) => {
         const slots = value === undefined ? undefined : this.slots.get(value);
         return (
-          !!slots?.isEnabled(type) && (!registered || slots.callback(type) !== null) && visible(id)
+          !!slots?.isEnabled(type) &&
+          (!registered || slots.callback(type) !== null) &&
+          this.visible(id)
         );
       })
       .map(({id}) => id);
   }
-  /** Invokes an actor's stored layer event callback. */
+  /** The layer and its ancestors are visible. */
+  private visible(id: string): boolean {
+    const parts = id.split('.');
+    for (let length = 1; length <= parts.length; length++) {
+      const value = this.layers.scene.entry(parts.slice(0, length).join('.'))?.value;
+      if (value === undefined) continue;
+      const properties = this.host.displayOf
+        ? this.host.displayOf(value).properties
+        : (value as {properties?: {visible?: boolean}}).properties;
+      if (properties?.visible === false) return false;
+    }
+    return true;
+  }
   /** The layer exists and has an enabled `type` event. */
   hasLayerEvent(id: string, type: ArtemisLayerEventType): boolean {
     const actor = this.layers.scene.entry(id)?.value;
@@ -382,6 +395,58 @@ export class ArtemisLayerOwner<
     if (!slots) throw Error('Artemis layer has no events: ' + id);
     if (!slots.isEnabled(type)) throw Error('Artemis layer event disabled: ' + id);
     return slots.invoke(type, sink);
+  }
+  /** The draggable half of the per-actor pointer update 0x140179f50 for every visible
+   * draggable layer, in child order. An idle layer under the pointer starts on the key 1
+   * down edge (0x140179e80): `dragin`, then the pointer and the layer's left/top are kept.
+   * A dragging layer moves by the pointer offset since the start, clamped into its drag
+   * area unless all four edges are zero, and raises `drag` while key 1 is down; otherwise
+   * it raises `dragout` and becomes idle. Moves set the actor's left/top without a command
+   * record. Returns the events whose slot holds an enabled callback, in order. */
+  updateDrag(
+    pointer: {readonly x: number; readonly y: number},
+    inside: (id: string) => boolean,
+    keys: {readonly downEdge: boolean; readonly down: boolean},
+  ): {readonly id: string; readonly type: ArtemisLayerEventType}[] {
+    const events: {id: string; type: ArtemisLayerEventType}[] = [];
+    const f = Math.fround;
+    const raise = (id: string, actor: T, type: ArtemisLayerEventType) => {
+      const slots = this.slots.get(actor);
+      if (slots?.isEnabled(type) && slots.callback(type)) events.push({id, type});
+    };
+    for (const {id, value: actor} of this.layers.scene.entries()) {
+      if (actor === undefined || !this.visible(id)) continue;
+      const display = this.host.displayOf?.(actor);
+      if (!display?.draggable) continue;
+      const start = this.drags.get(actor);
+      if (!start) {
+        if (inside(id) && keys.downEdge) {
+          raise(id, actor, 'dragin');
+          const {left, top} = display.properties;
+          this.drags.set(actor, {x: f(pointer.x), y: f(pointer.y), left, top});
+        }
+        continue;
+      }
+      let x = f(start.left + f(f(pointer.x) - start.x)),
+        y = f(start.top + f(f(pointer.y) - start.y));
+      const area = display.dragArea;
+      if (area.left || area.top || area.right || area.bottom) {
+        x = Math.min(area.right, Math.max(area.left, x));
+        y = Math.min(area.bottom, Math.max(area.top, y));
+      }
+      this.host.applyTweenProperties(id, actor, {left: x, top: y});
+      if (keys.down) raise(id, actor, 'drag');
+      else {
+        raise(id, actor, 'dragout');
+        this.drags.delete(actor);
+      }
+    }
+    return events;
+  }
+  /** Draggable layers raise drag events instead of `click` (0x140179f50). */
+  isDraggable(id: string): boolean {
+    const actor = this.layers.scene.entry(id)?.value;
+    return actor !== undefined && !!this.host.displayOf?.(actor).draggable;
   }
   /** trans runs synchronously except rule loads, which return a promise. */
   dispatchTransition(tag: AsbTag): boolean | Promise<void> {

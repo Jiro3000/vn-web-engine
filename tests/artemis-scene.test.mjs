@@ -1272,6 +1272,69 @@ test('Artemis layer owner and graphics share one texture allocation', async () =
   assert.equal(graphics.image(owner.layers.scene.entry('1').value.texture).width, 2);
 });
 
+test('Artemis draggable layers start on a press inside, follow the pointer within the drag area and end on release', async () => {
+  const {createArtemisBrowserLayers} = await import('../dist/engines/artemis/browser/layers.js');
+  const {createArtemisImageLoader} = await import('../dist/engines/artemis/image-loader.js');
+  const bytes = await syntheticImage();
+  const target = {width: 64, height: 64, prepareImage() {}, invalidate() {}, draw() {}};
+  const {owner} = createArtemisBrowserLayers({
+    executableSha256: revision,
+    target,
+    raster: {filter: 'nearest', blend: straightBlend},
+    images: createArtemisImageLoader(revision, async () => bytes),
+    runMode: {},
+    loadRule: async () => null,
+    readVideoFile: async () => null,
+    clock: {now: () => 1},
+    glyphs: {},
+    textProperties: () => undefined,
+    report: (message) => assert.fail(message),
+  });
+  await owner.layers.dispatch(command('lyc', {id: '1', file: 'a.png'}));
+  await owner.layers.dispatch(command('lyc', {id: '2', file: 'a.png'}));
+  await owner.layers.dispatch(
+    command('lyprop', {id: '1', left: '10', top: '20', draggable: '1', dragarea: '0,0,30,25'}),
+  );
+  for (const type of ['dragin', 'drag', 'dragout'])
+    await owner.dispatch(
+      command('lyevent', {id: '1', type, mode: 'init', handler: 'calllua', function: type}),
+    );
+  const position = (id) => {
+    const {left, top} = owner.layerInfo(id).display.properties;
+    return [left, top];
+  };
+  const step = (x, y, hits, downEdge, down) =>
+    owner.updateDrag({x, y}, (id) => hits.includes(id), {downEdge, down});
+  // A press outside the layer, or a held key without its down edge, does not start a drag.
+  assert.deepEqual(step(5, 5, [], true, true), []);
+  assert.deepEqual(step(12, 22, ['1'], false, true), []);
+  assert.deepEqual(step(12, 22, ['1'], true, true), [{id: '1', type: 'dragin'}]);
+  assert.deepEqual(position('1'), [10, 20]);
+  // The layer moves by the pointer offset since the press, even outside its hit area.
+  assert.deepEqual(step(15, 21, [], false, true), [{id: '1', type: 'drag'}]);
+  assert.deepEqual(position('1'), [13, 19]);
+  // The drag area clamps left into [0, 30] and top into [0, 25].
+  step(100, -50, [], false, true);
+  assert.deepEqual(position('1'), [30, 0]);
+  assert.deepEqual(step(2, 30, [], false, false), [{id: '1', type: 'dragout'}]);
+  assert.deepEqual(position('1'), [0, 25]);
+  // Idle again: movement without a new press leaves the layer in place.
+  assert.deepEqual(step(20, 20, ['1'], false, true), []);
+  assert.deepEqual(position('1'), [0, 25]);
+  // Draggable layers raise no click; non-draggable layers never drag.
+  assert.equal(owner.isDraggable('1'), true);
+  assert.equal(owner.isDraggable('2'), false);
+  assert.deepEqual(step(1, 1, ['2'], true, true), []);
+  // An empty drag area (all edges zero) does not clamp; a hidden layer does not drag.
+  await owner.layers.dispatch(command('lyprop', {id: '1', dragarea: '0,0,0,0'}));
+  step(0, 0, ['1'], true, true);
+  step(-40, 100, [], false, true);
+  assert.deepEqual(position('1'), [-40, 125]);
+  step(-40, 100, [], false, false);
+  await owner.layers.dispatch(command('lyprop', {id: '1', visible: '0'}));
+  assert.deepEqual(step(0, 0, ['1'], true, true), []);
+});
+
 test('Artemis cache loans belong to outer wrappers across current/retained actor copies and multiple layers', async () => {
   const {cache, layers, loaded, disposed} = await cachedLayerFixture();
   await layers.dispatch(command('lyc', {id: '1', file: 'a'}));

@@ -147,6 +147,11 @@ export interface ArtemisRuntimeLayers extends ArtemisLayerTagOwner {
   ): void;
   detachMessageActor(name: string): void;
   clickableLayers(): string[];
+  updateDrag(
+    pointer: {readonly x: number; readonly y: number},
+    inside: (id: string) => boolean,
+    keys: {readonly downEdge: boolean; readonly down: boolean},
+  ): readonly {readonly id: string; readonly type: ArtemisLayerEventType}[];
   hasLayerEvent(id: string, type: ArtemisLayerEventType): boolean;
   invokeLayerEvent(id: string, type: ArtemisLayerEventType, sink: ArtemisLayerEventSink): unknown;
   reset(): void;
@@ -161,6 +166,8 @@ export interface ArtemisFrameInput {
   readonly sample: ArtemisInputSample;
   /** Layer events from pointer hit testing, in delivery order. */
   readonly layerEvents: readonly {readonly id: string; readonly type: ArtemisLayerEventType}[];
+  /** The pointer in stage pixels and the layer ids its hit test reaches, for layer drag. */
+  readonly pointer?: {readonly x: number; readonly y: number; readonly hits: readonly string[]};
 }
 /** What the layer owner receives from the runtime. */
 export interface ArtemisRuntimeLayerHost {
@@ -1380,6 +1387,16 @@ export class ArtemisRuntime {
     }
     this.layerEventQueue.push(...input.layerEvents);
     this.input.update(now, input.sample);
+    // Draggable layers follow the pointer in the per-actor update (0x140179f50).
+    const pointer = input.pointer;
+    if (pointer && !this.resourcePending && this.acceptsInput) {
+      const hits = new Set(pointer.hits);
+      for (const event of this.layers.updateDrag(pointer, (id) => hits.has(id), {
+        downEdge: this.input.query('downEdge', 1),
+        down: this.input.query('down', 1),
+      }))
+        this.layerEvent(event.id, event.type);
+    }
     this.advanceTo(now);
     if (this.resourcePending) return;
     try {
