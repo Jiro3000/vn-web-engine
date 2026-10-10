@@ -6839,3 +6839,49 @@ test('Load tag forces a global save, dispatches the archive kind, calls onLoad a
   await load.load('00.dat', false);
   assert.deepEqual(effects.splice(0), [['loader', 9]]);
 });
+
+test('Volume variables reach the sound managers each frame when they change', async () => {
+  const {ArtemisVolumes} = await import('../dist/engines/artemis/volumes.js');
+  const {ArtemisVariables} = await import('../dist/engines/artemis/variables.js');
+  const variables = new ArtemisVariables();
+  const calls = [];
+  const playing = new Set([4]);
+  const gains = new Map([[4, 1000]]);
+  const effectSlots = new Map([
+    ['voice', 4],
+    ['done', 5],
+  ]);
+  const volumes = new ArtemisVolumes(variables, {
+    effectSlots,
+    applyGroupVolumes: (music, effect) => calls.push(['group', music, effect]),
+    effectPlaying: (index) => playing.has(index),
+    effectGain: (index, scope) => (assert.equal(scope, 1), gains.get(index) ?? -1),
+    setEffectGain: (index, scope, gain, time) => {
+      calls.push(['gain', index, scope, gain, time]);
+      gains.set(index, gain);
+    },
+  });
+  // The reset applies the values it read; absent variables read 0 in a frame.
+  volumes.applyAfterReset(1000, 1000);
+  assert.deepEqual(calls, [['group', 1000, 1000]]);
+  assert.deepEqual([...effectSlots.keys()], ['voice']); // no playing player: removed
+  calls.length = 0;
+  variables.write('s.bgmvol', '1000');
+  variables.write('s.sevol', '1000');
+  volumes.apply();
+  assert.deepEqual(calls, []);
+  // A configuration slider writes s.bgmvol: the next frame applies it once.
+  variables.write('s.bgmvol', '640');
+  volumes.apply();
+  volumes.apply();
+  assert.deepEqual(calls, [['group', 640, 1000]]);
+  calls.length = 0;
+  // s.segain.<id> moves a playing effect's scope 1 gain once.
+  variables.write('s.segain.voice', '300');
+  volumes.apply();
+  volumes.apply();
+  assert.deepEqual(calls, [['gain', 4, 1, 300, 0]]);
+  playing.clear();
+  volumes.apply();
+  assert.equal(effectSlots.size, 0);
+});

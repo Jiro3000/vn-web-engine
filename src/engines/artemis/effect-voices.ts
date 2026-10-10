@@ -120,6 +120,14 @@ export class ArtemisEffectVoices {
     this.open();
     this.suppressGain = suppressed;
   }
+  /** add70: the player's gain for `scope`; a missing player reads -1, an unset scope 1000. */
+  effectGain(index: number, scope: number): number {
+    this.open();
+    int32(scope);
+    const effect = this.effects.get(index);
+    if (!effect) return -1;
+    return effect.gains.get(scope) ?? 1000;
+  }
   setEffectGain(index: number, scope: number, gain: number, milliseconds = 0): void {
     this.open();
     int32(scope);

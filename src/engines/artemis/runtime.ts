@@ -44,6 +44,7 @@ import {ArtemisMouse} from './mouse.js';
 import {ArtemisMusic, type ArtemisMusicHost} from './music.js';
 import {ArtemisNativeLibrary} from './native-library.js';
 import {artemisInteger} from './numbers.js';
+import {ArtemisVolumes, artemisEffectGainVariable} from './volumes.js';
 import {ArtemisPrint} from './print.js';
 import {ArtemisRandom} from './random.js';
 import {ArtemisReset} from './reset.js';
@@ -219,6 +220,8 @@ export type ArtemisRuntimeSound = Omit<
     setFinishCallback(index: number, callback: (() => void) | null): void;
     setMusicFinishCallback(index: number, callback: (() => void) | null): void;
     effectPlaying(index: number): boolean;
+    /** 0x1400add70: the effect player's gain for `scope` (-1 without a player, 1000 unset). */
+    effectGain(index: number, scope: number): number;
     /** Renders the voices up to `now`. */
     advanceToTick(now: number): void;
   };
@@ -249,7 +252,7 @@ export interface ArtemisRuntimeServices {
   readonly windowsVersion: () => {readonly major: number; readonly minor: number} | null;
   /** The device feature level, when the host reports one. */
   readonly graphicsFeatureLevel?: () => number;
-  /** Effective music and effect volumes after a reset. */
+  /** Effective music and effect volumes, after a reset and whenever they change. */
   readonly applyVolumes: (music: number, effect: number) => void;
   readonly setTouchLimit: (limit: number) => void;
   /** The touch device of Lua `getTouchCount`/`setUseTouchHold`; absent is a device with no
@@ -356,6 +359,7 @@ export class ArtemisRuntime {
   textRevision = 0;
   private readonly writeScenario: (asLoaded: boolean) => Uint8Array;
   private readonly resetEngine: ArtemisReset;
+  private readonly volumes: ArtemisVolumes;
   /** Called after the scenario loader, before `onLoad`. */
   scenarioLoaded: (() => void) | null = null;
 
@@ -491,16 +495,21 @@ export class ArtemisRuntime {
       releaseScheduler: () => trace({releaseScheduler: true}),
       currentMessageLayer: () => messageSelection.currentMessageLayer(),
     }));
+    const volumes = (this.volumes = new ArtemisVolumes(variables, {
+      effectSlots,
+      applyGroupVolumes: (music, effect) => services.applyVolumes(music, effect),
+      effectPlaying: (index) => sound.effectPlaying(index),
+      effectGain: (index, scope) => sound.effectGain(index, scope),
+      setEffectGain: (index, scope, gain, milliseconds) =>
+        sound.setEffectGain(index, scope, gain, milliseconds),
+    }));
     const sePlay = new ArtemisSePlay(hash, {
       debugSkipActive: () => false,
       commandSkipActive: () => modes.skipAllowed && (modes.commandSkip || modes.controlSkip),
       effectIndex: (id) => effectSlots.get(id),
       ...sound,
       setEffectIndex: (id, index) => effectSlots.set(id, index),
-      effectGainVariable: (id) => {
-        const value = variables.lookup('s.segain.' + id);
-        return value === undefined ? undefined : Number(new TextDecoder().decode(value));
-      },
+      effectGainVariable: (id) => artemisEffectGainVariable(variables, id),
       replaceEffectHistory: (id, tag) => saveData.replaceEffect(id, tag),
       effectLoadFailed: () => {
         throw Error('Artemis sound load failed');
@@ -1139,7 +1148,8 @@ export class ArtemisRuntime {
       updateMessageState: () => clickGlyphs.release(),
       releaseScheduler: () => trace({releaseScheduler: true, reset: true}),
       resetOwners,
-      applyVolumes: (musicVolume, effectVolume) => services.applyVolumes(musicVolume, effectVolume),
+      applyVolumes: (musicVolume, effectVolume) =>
+        volumes.applyAfterReset(musicVolume, effectVolume),
       resetSaveObject: () => {
         saveData.clear();
         music.clearHistory();
@@ -1374,7 +1384,7 @@ export class ArtemisRuntime {
    * key states of the previous input update, in every run mode but 9 (each raised event's
    * script event is immediate or deferred by run mode); the input update; the event
    * latches clear; the clock advances sound, tweens and video layers; Lua `onEnterFrame` runs (a
-   * failing handler is cleared); then the run mode branch. Run mode 2 steps the transition,
+   * failing handler is cleared); volumes apply (c4680); then the run mode branch. Run mode 2 steps the transition,
    * which role 0 decided finishes; run mode 7 runs the fullscreen movie frame; run modes 1
    * and 3 deliver the push handlers (slot 0 on decide, slot 1 on
    * push), and a delivered handler ends the frame; the wait (run modes 1, 3 and 4) checks
@@ -1402,6 +1412,7 @@ export class ArtemisRuntime {
     } catch (error) {
       this.services.trace?.effect?.({enterFrameError: String(error)});
     }
+    this.volumes.apply();
     if (this.resourcePending) return;
     // Mode roles (0x1400c0560 before the run mode switch): a decided stop role ends
     // automode (role 10 with stopbyclick, else 11) or command skip (13) and the frame;

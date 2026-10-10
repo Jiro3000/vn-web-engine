@@ -80,8 +80,8 @@ const saveLoadAt = saveLoadArgument
   : null;
 // --auto-choice=PREFIX (repeatable) with --auto-choices=N: once the scripted inputs are used
 // up at a run mode 3 stop, pick the first visible layer with an enabled click event whose id
-// starts with a prefix (prefix order, then native child order) and deliver rollover, click
-// and key push 1, at most N times. A diagnostic route policy, not player input.
+// starts with a prefix (prefix order, then native child order) and press it like a browser
+// pointer (see --press-at), at most N times. A diagnostic route policy, not player input.
 const autoChoicePrefixes = process.argv
   .slice(3)
   .filter((arg) => arg.startsWith('--auto-choice='))
@@ -314,6 +314,17 @@ try {
   };
   // Deterministic 16 ms frame.
   const frame = () => runtime.advanceTo((runtime.now + 16) >>> 0 || 1);
+  // A browser pointer press on a layer: one 16 ms frame samples key 1 down, four release it.
+  // The pointer rests on the layer; the press is raised in the next update.
+  const pointerPress = (id) => {
+    for (let count = 0; count < 5; count++) {
+      const now = (runtime.now + 16) >>> 0 || 1;
+      runtime.frame(now, {
+        sample: {down: new Set(count ? [] : [1]), pointerInside: true},
+        pointer: {x: 0, y: 0, hits: [id]},
+      });
+    }
+  };
   // Durations of click-waits that automode ended, in milliseconds.
   const automodeWaits = [];
   let refusal = null;
@@ -381,7 +392,7 @@ try {
           autoChoices--;
           autoChoiceLog.push({id, click: deliveredClicks, tags: nativeTags.length});
           modeEffects.push({autoChoice: id, simulation: true});
-          probeInputs.push({id, type: 'rollover'}, {id, type: 'click'}, {key: 1});
+          probeInputs.push({id, type: 'press'});
         }
       }
       const stopInput = timedInputs.findIndex((input) => input.stop && input.at <= deliveredClicks);
@@ -391,7 +402,10 @@ try {
       }
       if (probeInputs.length && runtime.runMode === 3 && !wait.pending) {
         const input = probeInputs.shift();
-        if (input.id !== undefined) {
+        if (input.type === 'press') {
+          modeEffects.push({press: input.id, simulation: true});
+          pointerPress(input.id);
+        } else if (input.id !== undefined) {
           modeEffects.push({layerEvent: input, simulation: true});
           runtime.layerEvent(input.id, input.type);
         } else {
@@ -410,14 +424,7 @@ try {
             runtime.keyPush(key);
           } else if (type === 'press') {
             modeEffects.push({press: id, click: deliveredClicks, simulation: true});
-            for (let count = 0; count < 5; count++) {
-              const now = (runtime.now + 16) >>> 0 || 1;
-              runtime.frame(now, {
-                sample: {down: new Set(count ? [] : [1]), pointerInside: true},
-                // The pointer rests on the layer; the press is raised in the next update.
-                pointer: {x: 0, y: 0, hits: [id]},
-              });
-            }
+            pointerPress(id);
           } else {
             modeEffects.push({layerEvent: {id, type}, click: deliveredClicks, simulation: true});
             runtime.layerEvent(id, type);

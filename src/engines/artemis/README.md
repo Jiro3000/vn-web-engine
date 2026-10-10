@@ -402,15 +402,19 @@ to match the saved one with the caret written as loaded, and a second load of th
 to reproduce it; both loads run the game's `onLoad` handler. The report is `saveLoad`.
 `--auto-choice=PREFIX` (repeatable) with `--auto-choices=N` continues a route once the
 scripted `--layer-event`/`--key-push` inputs are used up: at a run mode 3 stop it picks the
-first visible layer with an enabled click event whose id starts with a prefix and delivers
-rollover, click and key push 1 (report `autoChoices`).
+first visible layer with an enabled click event whose id starts with a prefix and presses it
+like `--press-at` (real runtime frames, key 1 down then released; report `autoChoices`).
 
 `reset.ts` implements the engine reset `0x1400bf210`. `dispatch` handles the reset tag
 (`0x1400caad0`): a forced global save, automode off, mode defaults, owner resets through
-the host, volumes from `s.bgmvol`/`s.sevol`, save-object histories, a restart at the
+the host, volumes (`0x1400c4680`), save-object histories, a restart at the
 `ini.Boot` script, then erasure of every variable except `g.`/`s.`. `boot` is the
 application start path: volumes default to 1000, `saveg.dat` and `system.dat` load, then
-the static engine variables are written. Owners expose matching `reset` methods
+the static engine variables are written. `0x1400c4680` also runs in every frame after
+`onEnterFrame`: `s.bgmvol`/`s.sevol` reach the music and effect managers when they change
+(the configuration sliders write them), each effect id whose player is playing takes
+`s.segain.<id>` (scope 1, immediately) when it differs from the player's gain, and ids
+without a playing player leave the effect id map. Owners expose matching `reset` methods
 (`ArtemisModes`, `ArtemisMessageLayers`/`ArtemisMessageSelection`, `ArtemisFontStack`,
 `ArtemisSceneTweens`, `ArtemisRuby`, `ArtemisTextControls`, `ArtemisEventCommands`,
 `ArtemisEvents.clear`, `ArtemisKeyBindings.resetPushHandlers`, `ArtemisTransition`,
