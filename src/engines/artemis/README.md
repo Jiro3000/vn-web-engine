@@ -1066,6 +1066,16 @@ tag's layer path (`0x1400e4650` with `id`), decoding through `src/formats/theora
   decoder closes and `onFinish` runs; `playing` turns false.
 - Conversion uses the native integer tables and 4:2:0 chroma indexing for every pixel
   format, producing the picture region in RGBA.
+- `video-thread.ts` holds the decode threads (`0x140017010`) of the main and mask
+  streams and the conversion. Native update waits until the threads reach the target it
+  set last, and the threads decode the next target while the frame renders. An
+  `ArtemisTheoraThreadOpener` decides where they run: on the caller's thread by default
+  (the probe and tests), or in one worker per video (`video-thread-client.ts`,
+  `video-thread-worker.ts`), which the browser layers use. With a worker an update that
+  finds the threads still decoding returns without effect, so the shown picture and the
+  frame clock wait for a later update instead of blocking the frame; frames late by more
+  than `delaymargin` are then skipped as natively. The worker's picture is copied into
+  the video surface and its buffer returns with the next target.
 
 The layer is anchored at its centre, replaces the old layer like `lydel`, and outside
 replay empties the id's command list. `image-graphics.ts` draws a video actor as an
@@ -1098,7 +1108,8 @@ continues as after the movie's end. The probe plays a movie for its ASF header d
 in 16 ms frames without decoding it.
 
 `tests/artemis-video.test.mjs` checks frame timing, conversion and mask alpha against an
-independent statement of the native formulas, delaymargin skipping, looping, the open
+independent statement of the native formulas, the same frames through the worker,
+delaymargin skipping, looping, the open
 order and errors, the wait, the fullscreen tag and frame branch, and the ASF reader.
 `tests/asf-windows-media.test.mjs` covers the ASF demuxer and decoder.
 

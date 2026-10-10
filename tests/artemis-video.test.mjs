@@ -81,6 +81,61 @@ test('Video frames follow the native CTheora clock, conversion tables and mask a
   assert.equal(finished, 1);
 });
 
+test('Video decode threads in a worker reach the native frames; updates wait for them', async () => {
+  const {Worker} = await import('node:worker_threads');
+  const {workerTheoraThreads} = await import('../dist/engines/artemis/video-thread-client.js');
+  const threads = workerTheoraThreads(() => {
+    const raw = new Worker(new URL('./artemis-video-node-worker.mjs', import.meta.url));
+    const host = {
+      onmessage: null,
+      onerror: null,
+      postMessage: (value, transfers) => raw.postMessage(value, transfers),
+      terminate: () => raw.terminate(),
+    };
+    raw.on('message', (data) => host.onmessage?.({data}));
+    raw.on('error', (error) => host.onerror?.(error));
+    return host;
+  });
+  const stream = readTheoraOgg(clip);
+  const reference = new TheoraDecoder(stream.info, stream.setup);
+  const video = ArtemisTheoraVideo.open(HASH, clip, false, clip, threads);
+  try {
+    assert.equal(video.hasMask, true);
+    let finished = 0;
+    video.onFinish = () => finished++;
+    // Until the worker answers, an update changes nothing: no picture, no clock start.
+    video.update(1);
+    assert.deepEqual(video.frame, {decoded: -1, target: 0});
+    assert.equal(video.revision, 0);
+    /** Updates at `now` until the update finds the threads at their target. */
+    const update = async (now) => {
+      for (let attempt = 0; attempt < 5000; attempt++) {
+        const before = JSON.stringify([video.frame, video.playing]);
+        video.update(now);
+        if (JSON.stringify([video.frame, video.playing]) !== before) return;
+        await new Promise((resolve) => setTimeout(resolve, 1));
+      }
+      throw Error('Video worker did not answer');
+    };
+    const start = 5000;
+    for (let frame = 0; frame < stream.packets.length; frame++) {
+      await update(start + Math.ceil(frame * FRAME_MS));
+      assert.deepEqual(video.frame, {decoded: frame, target: frame + 1});
+      if (stream.packets[frame].length) reference.decode(stream.packets[frame]);
+      assert.deepEqual(
+        video.pixels,
+        expectedPixels(stream, reference, reference),
+        `frame ${frame}`,
+      );
+    }
+    await update(start + Math.ceil(stream.packets.length * FRAME_MS));
+    assert.equal(video.playing, false);
+    assert.equal(finished, 1);
+  } finally {
+    video.close();
+  }
+});
+
 test('Video delaymargin skips inter frames up to the frame-rate cap; loop restarts', () => {
   const late = ArtemisTheoraVideo.open(HASH, clip, false, null);
   late.update(1000);

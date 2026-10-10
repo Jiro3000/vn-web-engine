@@ -21,7 +21,7 @@ import type {ArtemisScene} from './scene.js';
 import type {ArtemisAnimationFrames} from './animation-layer.js';
 import {ArtemisDisplayObject, artemisDisplayPoint} from './display-object.js';
 import {artemisRevision} from './revision.js';
-import type {ArtemisTheoraVideo} from './video.js';
+import type {ArtemisTheoraThreadOpener, ArtemisTheoraVideo} from './video.js';
 import type {ArtemisStagePresentation} from './layer-owner.js';
 import {
   artemisHasRasterEffects,
@@ -112,6 +112,7 @@ export type ArtemisLayerServices = Pick<
   | 'layerNotFound'
   | 'readVideoFile'
   | 'videoError'
+  | 'videoThreads'
 >;
 interface Texture {
   readonly id: number;
@@ -237,6 +238,9 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
   animationError(tag: AsbTag, error: 'not-found' | 'mode'): void {
     if (!this.services.animationError) throw Error('Unsupported Artemis animation error owner');
     this.services.animationError(tag, error);
+  }
+  get videoThreads(): ArtemisTheoraThreadOpener | undefined {
+    return this.services.videoThreads;
   }
   readVideoFile(path: string): Promise<Uint8Array | null> {
     if (!this.services.readVideoFile) throw Error('Unsupported Artemis video file owner');

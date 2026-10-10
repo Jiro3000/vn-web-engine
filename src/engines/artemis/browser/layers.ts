@@ -14,6 +14,7 @@ import {ArtemisLayerOwner, type ArtemisMessageActorOwner} from '../layer-owner.j
 import type {ArtemisRuleImage} from '../transition.js';
 import type {ArtemisMessageResource, ArtemisRuntimeLayerHost} from '../runtime.js';
 import type {ArtemisRuntimeGlyphOwner} from '../runtime-glyphs.js';
+import {workerTheoraThreads} from '../video-thread-client.js';
 
 export interface ArtemisBrowserLayerOptions {
   readonly executableSha256: string;
@@ -181,6 +182,7 @@ export function createArtemisBrowserLayers(options: ArtemisBrowserLayerOptions):
               `Animation ${error === 'mode' ? 'mode error' : 'not found'}: ${name(tag, 'id')}`,
             ),
           readVideoFile: (path) => options.readVideoFile(path),
+          videoThreads: workerTheoraThreads(),
           videoError: (tag, error) =>
             options.report(
               `Video ${error === 'unsupported' ? 'unsupported' : 'not found'}: ${name(tag, 'file')}`,

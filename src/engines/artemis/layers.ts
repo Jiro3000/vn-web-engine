@@ -11,7 +11,7 @@ import {artemisLayerProperties, type ArtemisLayerPropertyPatch} from './layer-pr
 import {createSolidImage} from '../../graphics/solid-image.js';
 import {artemisHexUint32, artemisInteger} from './numbers.js';
 import {ArtemisAnimationFrames} from './animation-layer.js';
-import {ArtemisTheoraVideo, artemisVideoMaskName} from './video.js';
+import {ArtemisTheoraVideo, artemisVideoMaskName, type ArtemisTheoraThreadOpener} from './video.js';
 
 function dimension(value: string): number {
   const token = /^[\t\n\v\f\r ]*([+-]?\d+)/.exec(value);
@@ -90,6 +90,8 @@ export interface ArtemisLayerHost<
   createVideoLayer?(video: ArtemisTheoraVideo, anchor: {readonly x: number; readonly y: number}): T;
   /** c7260 with 0x140372540 (`not-found`) or 0x140372518 (`unsupported`). */
   videoError?(tag: AsbTag, error: 'not-found' | 'unsupported'): void;
+  /** Where the CTheora decode threads run; absent, on the caller's thread. */
+  readonly videoThreads?: ArtemisTheoraThreadOpener;
 }
 
 /** anime keys that 0x140115650 never queries. */
@@ -475,7 +477,7 @@ export class ArtemisLayers<T extends object, I extends ArtemisImageDimensions = 
       const loop = args.has('loop') && args.get('loop') !== '0';
       const mask = await host.readVideoFile(artemisVideoMaskName(name));
       if (token !== this.generation) throw Error('Artemis layer resource operation cancelled');
-      video = ArtemisTheoraVideo.open(this.hash, bytes, loop, mask);
+      video = ArtemisTheoraVideo.open(this.hash, bytes, loop, mask, host.videoThreads);
       if (!video) {
         // CMja is tried first natively; its format is not implemented here.
         if (!/^OggS/.test(String.fromCharCode(...bytes.subarray(0, 4))))
