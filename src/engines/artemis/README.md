@@ -191,7 +191,11 @@ replaced the suspended caret runs the loaded caret instead of resuming). `frame`
 
 Delivering pointer events one frame late keeps the native order of a button press: the
 push handler of the press is queued first and ends its frame, and the layer click's
-handler scope, raised next frame, runs above it. While a resource holds the script only
+handler scope, raised next frame, runs above it. A press sampled in the frame whose window
+update raises a rollover is not pushed: the rollover handler scope is in run mode 0 until it
+returns, so the layer click alone follows. Hosts raise rollover only while `acceptsInput`,
+so a pointer that rests on a button while a screen opens gets its rollover once input
+resumes. While a resource holds the script only
 the input and clock advance. `acceptsInput` reports run modes 1 and 3. `advanceTo`,
 `layerEvent` and `keyPush` are the individual steps, and `save`/`load` with
 `scenarioArchive()` and `flushSaves()` serve save tooling. `runMode` is the current caret's

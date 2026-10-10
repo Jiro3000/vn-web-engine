@@ -46,8 +46,16 @@ const probeInputs = process.argv
 // the Nth delivered click, raise the layer event (type defaults to click) or push the key
 // (slot 0 edge) at the click-wait instead, one per frame. --stop-event-at=N:id[:type] and
 // --stop-key-at=N:key wait instead for run mode 3 without a pending wait after at least N
-// delivered clicks (game dialogs and menus stop the script). No pointer hit testing.
-const timedPrefixes = ['--layer-event-at=', '--key-push-at=', '--stop-event-at=', '--stop-key-at='];
+// delivered clicks (game dialogs and menus stop the script). --press-at=N:id instead runs
+// real runtime frames like a browser pointer press: one frame samples key 1 down with the
+// layer's click event, then four frames release it. No pointer hit testing.
+const timedPrefixes = [
+  '--layer-event-at=',
+  '--key-push-at=',
+  '--stop-event-at=',
+  '--stop-key-at=',
+  '--press-at=',
+];
 const timedInputs = process.argv
   .slice(3)
   .filter((arg) => timedPrefixes.some((prefix) => arg.startsWith(prefix)))
@@ -56,7 +64,7 @@ const timedInputs = process.argv
     const [at, ...rest] = arg.slice(arg.indexOf('=') + 1).split(':');
     if (arg.startsWith('--key-push-at=') || arg.startsWith('--stop-key-at='))
       return {at: artemisInteger(at), key: artemisInteger(rest[0]), stop};
-    const [id, type = 'click'] = rest;
+    const [id, type = arg.startsWith('--press-at=') ? 'press' : 'click'] = rest;
     return {at: artemisInteger(at), id, type, stop};
   });
 // Diagnostic clicks (--clicks=N) at `@` click-waits: 16 ms frames run until the text
@@ -402,6 +410,15 @@ try {
           if (id === undefined) {
             modeEffects.push({keyPush: key, click: deliveredClicks, simulation: true});
             runtime.keyPush(key);
+          } else if (type === 'press') {
+            modeEffects.push({press: id, click: deliveredClicks, simulation: true});
+            for (let count = 0; count < 5; count++) {
+              const now = (runtime.now + 16) >>> 0 || 1;
+              runtime.frame(now, {
+                sample: {down: new Set(count ? [] : [1]), pointerInside: true},
+                layerEvents: count ? [] : [{id, type: 'click'}],
+              });
+            }
           } else {
             modeEffects.push({layerEvent: {id, type}, click: deliveredClicks, simulation: true});
             runtime.layerEvent(id, type);
