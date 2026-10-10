@@ -23,8 +23,8 @@ export interface ArtemisClickGlyphHost {
   /** Current message layer name (script +0x35e0). */
   currentMessageLayer(): string;
   /** Layer set +0x140 lookup by name; when the layer exists, its virtual +0xf0 (0x1400a4970)
-   * stores the byte argument at layer +0x16c. The glyph tag always passes 0. */
-  setLayerByte16c(name: string, value: boolean): void;
+   * stores the draggable flag (layer +0x16c). The glyph tag always passes 0. */
+  setLayerDraggable(name: string, value: boolean): void;
 }
 
 /** Glyph tag 0x1400d3290 over the per-message-layer map at script +0x3818 (find-or-create
@@ -75,7 +75,7 @@ export class ArtemisClickGlyphs {
     entry.layer = args.has('layer');
     if (entry.layer) {
       entry.layerName = args.get('layer')!;
-      this.host.setLayerByte16c(entry.layerName, false);
+      this.host.setLayerDraggable(entry.layerName, false);
     }
     if (args.has('left')) entry.left = artemisInteger(args.get('left')!);
     if (args.has('top')) entry.top = artemisInteger(args.get('top')!);
@@ -89,7 +89,7 @@ export class ArtemisClickGlyphs {
       entry.rplayerName = args.get('rplayer')!;
       if (args.has('rpleft')) entry.rpleft = artemisInteger(args.get('rpleft')!);
       if (args.has('rptop')) entry.rptop = artemisInteger(args.get('rptop')!);
-      this.host.setLayerByte16c(entry.rplayerName, false);
+      this.host.setLayerDraggable(entry.rplayerName, false);
     }
     if (args.has('homing')) entry.homing = args.get('homing') !== '0';
     return true;

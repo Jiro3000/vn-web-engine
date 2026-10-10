@@ -379,6 +379,11 @@ export class ArtemisLayerOwner<
     }
     return true;
   }
+  /** The draggable setter (0x1400a4970) of layer `id`'s actor, when it exists. */
+  setDraggable(id: string, draggable: boolean): void {
+    const actor = this.layers.scene.entry(id)?.value;
+    if (actor !== undefined) this.host.displayOf?.(actor).apply({draggable});
+  }
   /** Invokes an actor's stored layer event callback. */
   invokeLayerEvent(id: string, type: ArtemisLayerEventType, sink: ArtemisLayerEventSink): boolean {
     const actor = this.layers.scene.entry(id)?.value;

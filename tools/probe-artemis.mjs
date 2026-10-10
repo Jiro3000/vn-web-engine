@@ -215,8 +215,6 @@ try {
       ? {}
       : {graphicsFeatureLevel: () => simulatedGraphicsFeatureLevel}),
     applyVolumes: (music, effect) => modeEffects.push({volumes: {music, effect}, simulation: true}),
-    setLayerByte16c: (name, value) =>
-      modeEffects.push({layerByte16c: {name, value}, simulation: true}),
     setTouchLimit: (limit) => modeEffects.push({touchLimit: limit}),
     ...(nativeIncludeReporting
       ? {

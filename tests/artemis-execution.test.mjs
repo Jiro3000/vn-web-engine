@@ -6262,7 +6262,7 @@ test('Glyph tags configure the current message layer and copy the layer glyph to
   const cleared = [];
   const glyphs = new ArtemisClickGlyphs({
     currentMessageLayer: () => current,
-    setLayerByte16c: (name, value) => cleared.push([name, value]),
+    setLayerDraggable: (name, value) => cleared.push([name, value]),
   });
   const glyph = (args) => ({kind: 'tag', name: 'glyph', sourceLine: 1, args: new Map(args)});
   assert.equal(glyphs.dispatch({...glyph([]), name: 'trans'}), false);
@@ -6523,7 +6523,7 @@ test('Scenario save captures every owner and load restores them through the arch
         clearBacklog() {},
       }),
       sceneTweens: new ArtemisSceneTweens(hash, current),
-      clickGlyphs: new ArtemisClickGlyphs({currentMessageLayer: current, setLayerByte16c() {}}),
+      clickGlyphs: new ArtemisClickGlyphs({currentMessageLayer: current, setLayerDraggable() {}}),
       events: new ArtemisEvents(() => {}),
       saveData: new ArtemisSaveData(),
       layerCommands: new ArtemisLayerCommands(hash),

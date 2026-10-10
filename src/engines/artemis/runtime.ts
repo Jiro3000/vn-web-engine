@@ -147,6 +147,8 @@ export interface ArtemisRuntimeLayers extends ArtemisLayerTagOwner {
   ): void;
   detachMessageActor(name: string): void;
   clickableLayers(): string[];
+  /** CLayer virtual +0xf0 (0x1400a4970) of layer `id`, when it exists. */
+  setDraggable(id: string, draggable: boolean): void;
   updatePointer(
     pointer: {readonly x: number; readonly y: number},
     hits: readonly string[],
@@ -247,8 +249,6 @@ export interface ArtemisRuntimeServices {
   readonly graphicsFeatureLevel?: () => number;
   /** Effective music and effect volumes after a reset. */
   readonly applyVolumes: (music: number, effect: number) => void;
-  /** Layer +0x16c (the draggable byte, virtual +0xf0 0x1400a4970) of a glyph layer. */
-  readonly setLayerByte16c: (name: string, value: boolean) => void;
   readonly setTouchLimit: (limit: number) => void;
   /** The touch device of Lua `getTouchCount`/`setUseTouchHold`; absent is a device with no
    * touch points that ignores the hold setting. */
@@ -535,9 +535,7 @@ export class ArtemisRuntime {
     }));
     const clickGlyphs = new ArtemisClickGlyphs({
       currentMessageLayer: () => messageSelection.currentMessageLayer(),
-      setLayerByte16c: (name, value) => {
-        if (layers.hasLayer(name)) services.setLayerByte16c(name, value);
-      },
+      setLayerDraggable: (name, value) => layers.setDraggable(name, value),
     });
     const readHistory = new ArtemisReadHistory();
     const save = (this.save = new ArtemisSave(variables, {

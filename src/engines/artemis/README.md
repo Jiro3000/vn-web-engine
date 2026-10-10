@@ -1595,7 +1595,8 @@ current message layer (map at script +0x3818, created by 0x1400eb500). `layer` s
 layer name; an absent `layer` clears only the flag and keeps the name. `left`/`top` use atoi.
 Without `rplayer`, the read-ahead glyph copies the layer flag, name and position. With
 `rplayer`, it takes that name and the optional `rpleft`/`rptop`. Each named layer is passed to
-the layer set's virtual +0xf0 (0x1400a4970), which clears layer byte +0x16c. `homing="0"`
+the layer set's virtual +0xf0 (0x1400a4970), which clears the layer's draggable flag
+(+0x16c). `homing="0"`
 clears homing; any other value sets it. Rendering the glyph during click waits is not
 implemented.
 

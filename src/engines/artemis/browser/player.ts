@@ -273,7 +273,6 @@ export class ArtemisBrowserPlayer {
         this.sound.effects.setGroupGain(effect);
       },
       // The click-glyph byte has no browser presentation yet.
-      setLayerByte16c: () => {},
       // Touch input arrives as mouse input; there is no touch contact limit.
       setTouchLimit: () => {},
       // Native script error reports (c84b0, c7260, 0x14012d080 level 1): the game logs them

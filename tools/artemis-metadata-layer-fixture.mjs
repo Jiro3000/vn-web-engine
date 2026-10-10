@@ -367,6 +367,7 @@ export function createMetadataLayerFixture(hash, readFile, runMode = null) {
     restoreLayerCommands: (snapshot) => owner.restoreLayerCommands(snapshot),
     /** Diagnostic choice discovery, not native hit testing. */
     clickableLayers: () => owner.clickableLayers(),
+    setDraggable: (id, draggable) => owner.setDraggable(id, draggable),
     updatePointer: (pointer, hits, keys) => owner.updatePointer(pointer, hits, keys),
     /** Invokes an actor's stored layer event callback; no pointer hit testing is simulated. */
     invokeLayerEvent: (id, type, sink) => owner.invokeLayerEvent(id, type, sink),
