@@ -4763,7 +4763,8 @@ test('Artemis tween groups queue layer tweens, play them in order and share one 
 
 test('Artemis text layers give browser text their characters, stage placement and slots; hidden text draws no glyphs but still hits', async () => {
   const {createArtemisBrowserLayers} = await import('../dist/engines/artemis/browser/layers.js');
-  const {artemisTextSlots} = await import('../dist/engines/artemis/browser/dom-text.js');
+  const {artemisTextSlots, artemisFitTextRows} =
+    await import('../dist/engines/artemis/browser/dom-text.js');
   const {createArtemisImageLoader} = await import('../dist/engines/artemis/image-loader.js');
   const {artemisDefaultFontAttributes} = await import('../dist/engines/artemis/font-state.js');
   const {png} = await import('./png-fixtures.mjs');
@@ -4921,10 +4922,56 @@ test('Artemis text layers give browser text their characters, stage placement an
     artemisTextSlots('t', moved(100, {x: 0, y: 0, width: 50, height: 100}), cells, stage),
     [],
   );
-  // A partly shown run stays; the ruby, wholly past the left edge, does not.
+  const ruby = slots[1].slot.glyphs[0];
+  const placed = (shown) =>
+    shown.map(({slot}) => [slot.id, slot.glyphs.map((g) => [g.text, g.x, g.y, g.line])]);
+  // Partly shown text moves inside: each line starts at the left edge, the ruby with its word.
+  assert.deepEqual(placed(artemisTextSlots('t', moved(-30), cells, stage)), [
+    [
+      't-0',
+      [
+        ['文', 0, 38, 0],
+        ['字', 25, 38, 0],
+        [' ', 0, 78, 1],
+        ['a', 12, 78, 1],
+      ],
+    ],
+    ['t-ruby-0', [['も', ruby.x - 130 + 19, ruby.y, 0]]],
+  ]);
+  // Past the right edge a line wraps at its start, the following lines move down, and text
+  // ending below the stage moves up.
+  assert.deepEqual(placed(artemisTextSlots('t', moved(170), cells, stage)), [
+    [
+      't-0',
+      [
+        ['文', 180, 0, 0],
+        ['字', 180, 40, 1],
+        [' ', 176, 80, 2],
+        ['a', 188, 80, 2],
+      ],
+    ],
+    ['t-ruby-0', [['も', ruby.x + 70 - 1, ruby.y - 38, 0]]],
+  ]);
+  // A row breaks before the word that crosses the edge; added rows take the closest line
+  // pitch.
+  const row = (x, block, line = 0, y = 0) => ({
+    cell: {line, block},
+    glyph: {id: x, x, y, width: 10, height: 10, text: 'x', line, color: 0, alpha: 255},
+  });
+  const words = [row(170, 0), row(180, 1), row(190, 1), row(0, 2, 1, 12), row(0, 3, 2, 42)];
   assert.deepEqual(
-    artemisTextSlots('t', moved(-30), cells, stage).map(({slot}) => slot.id),
-    ['t-0'],
+    artemisFitTextRows(
+      words.map((w) => w.glyph),
+      words.map((w) => w.cell),
+      {left: 0, top: 0, right: 195, bottom: 100},
+    ).glyphs.map((g) => [g.x, g.y, g.line]),
+    [
+      [170, 0, 0],
+      [170, 12, 1],
+      [180, 12, 1],
+      [0, 24, 2],
+      [0, 54, 3],
+    ],
   );
 
   // An image layer drawn over the text hides the characters under it, in proportion to its

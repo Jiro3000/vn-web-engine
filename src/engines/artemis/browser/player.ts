@@ -379,25 +379,42 @@ export class ArtemisBrowserPlayer {
     if (!this.domText?.active || !this.graphics || !this.layers) return null;
     const layers = this.graphics.textLayers(this.layers.layers.scene),
       stage = {width: this.canvas.width, height: this.canvas.height};
-    // Characters dimmed by layers drawn over them, and slots left out off the stage.
+    // Characters dimmed by layers drawn over them, rows added to keep text on the stage, and
+    // the stage position of the first character of layers with nothing drawn on the stage.
     let covered = 0,
-      offStage = 0;
+      wrapped = 0;
+    const offStage: number[][] = [];
     for (const layer of layers) {
       const cells = layer.text.cells?.() ?? [],
         alphas = (covers: ArtemisTextLayer['covers']) =>
           artemisTextSlots('', {...layer, covers}, cells, stage).flatMap(({slot}) =>
             slot.glyphs.map((glyph) => glyph.alpha),
           ),
-        open = alphas([]);
+        open = alphas([]),
+        slots = artemisTextSlots('', layer, cells, stage),
+        rows = new Set(
+          slots
+            .flatMap(({slot}) => (slot.interactive === false ? [] : slot.glyphs))
+            .map((g) => g.line),
+        );
       covered += alphas(layer.covers).filter((alpha, index) => alpha < open[index]!).length;
-      offStage +=
-        artemisTextSlots('', layer, cells, {width: Infinity, height: Infinity}).length -
-        artemisTextSlots('', layer, cells, stage).length;
+      if (slots.length)
+        wrapped += rows.size - new Set(cells.filter((c) => !c.ruby).map((c) => c.line)).size;
+      else if (cells.length) {
+        const m = layer.matrix,
+          x = cells[0]!.matrix[2]!,
+          y = cells[0]!.matrix[5]!;
+        offStage.push([
+          Math.round(m[0]! * x + m[1]! * y + m[2]!),
+          Math.round(m[3]! * x + m[4]! * y + m[5]!),
+        ]);
+      }
     }
     return {
       layers: layers.length,
       cells: layers.reduce((count, layer) => count + (layer.text.cells?.().length ?? 0), 0),
       covered,
+      wrapped,
       offStage,
       hidden: this.graphics.textHidden,
     };

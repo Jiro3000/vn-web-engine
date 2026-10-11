@@ -87,12 +87,99 @@ function cellGlyph(layer: ArtemisTextLayer, cell: ArtemisTextCell, id: number, l
   return glyph;
 }
 
+interface Bounds {
+  readonly left: number;
+  readonly top: number;
+  readonly right: number;
+  readonly bottom: number;
+}
+
+/**
+ * Keeps the text of a layer inside `bounds` when any of it is drawn there: each display line
+ * starts inside them, and the part of a line past the right edge wraps onto new rows below
+ * it at the line's start, breaking before the word (block) that crosses the edge, or inside
+ * a word wider than a row. Later lines move down by the added rows (the layer's line pitch,
+ * or the line height for one line). Then the text moves up when it ends below the bounds, or
+ * down when it starts above them, as far as the other edge allows. A layer with nothing
+ * inside the bounds is not drawn and stays where it is. Returns the moved glyphs with their
+ * rows, and the move of each block's first glyph.
+ */
+export function artemisFitTextRows(
+  glyphs: readonly TextGlyph[],
+  cells: readonly ArtemisTextCell[],
+  bounds: Bounds,
+): {glyphs: TextGlyph[]; blocks: Map<number, {dx: number; dy: number}>} {
+  const {left, top, right, bottom} = bounds;
+  const moved: TextGlyph[] = glyphs.map((g) => ({...g})),
+    blocks = new Map<number, {dx: number; dy: number}>();
+  if (
+    !glyphs.some((g) => g.x < right && g.x + g.width > left && g.y < bottom && g.y + g.height > top)
+  )
+    return {glyphs: moved, blocks};
+  const lines = new Map<number, number[]>();
+  glyphs.forEach((_, index) => {
+    const line = cells[index]!.line;
+    lines.set(line, [...(lines.get(line) ?? []), index]);
+  });
+  const order = [...lines.keys()].sort((a, b) => a - b),
+    tops = order.map((line) => Math.min(...lines.get(line)!.map((i) => glyphs[i]!.y))),
+    pitches = tops
+      .slice(1)
+      .map((y, i) => y - tops[i]!)
+      .filter((d) => d > 0);
+  let row = 0,
+    shift = 0;
+  for (const line of order) {
+    const indices = lines.get(line)!,
+      first = glyphs[indices[0]!]!,
+      start = Math.max(left, Math.min(first.x, right - first.width)),
+      step = pitches.length
+        ? Math.min(...pitches)
+        : Math.max(...indices.map((i) => glyphs[i]!.height));
+    let dx = start - first.x,
+      rowStart = 0;
+    for (let k = 0; k < indices.length; k++) {
+      const g = glyphs[indices[k]!]!;
+      if (k > rowStart && g.x + dx + g.width > right) {
+        // Break before the word that crosses the edge, unless it starts the row.
+        const block = cells[indices[k]!]!.block;
+        let wrap = k;
+        while (wrap > rowStart + 1 && cells[indices[wrap - 1]!]!.block === block) wrap--;
+        if (cells[indices[wrap - 1]!]!.block !== block) k = wrap;
+        rowStart = k;
+        row++;
+        shift += step;
+        dx = start - glyphs[indices[k]!]!.x;
+      }
+      const h = glyphs[indices[k]!]!;
+      Object.assign(moved[indices[k]!]!, {x: h.x + dx, y: h.y + shift, line: row});
+    }
+    row++;
+  }
+  const high = Math.min(...moved.map((g) => g.y)),
+    low = Math.max(...moved.map((g) => g.y + g.height)),
+    dy =
+      low > bottom
+        ? -Math.min(low - bottom, Math.max(0, high - top))
+        : high < top
+          ? Math.min(top - high, bottom - low)
+          : 0;
+  if (dy) for (const g of moved) g.y += dy;
+  moved.forEach((g, index) => {
+    const block = cells[index]!.block;
+    if (!blocks.has(block))
+      blocks.set(block, {dx: g.x - glyphs[index]!.x, dy: g.y - glyphs[index]!.y});
+  });
+  return {glyphs: moved, blocks};
+}
+
 /**
  * The slots of one text layer: a slot per run of body characters sharing a font, with the
  * layer's display lines as explicit rows, and a slot per word's ruby that is not selected.
  * Colours, opacity (reveal fades and covering layers included) and effects stay per
- * character. A slot with no character inside the stage rect and the layer's clip is left
- * out, as nothing of it is drawn.
+ * character. Text partly outside the stage rect and the layer's clip is moved and wrapped
+ * inside them (`artemisFitTextRows`); a layer with nothing inside them is not drawn and its
+ * slots are left out.
  */
 export function artemisTextSlots(
   prefix: string,
@@ -103,20 +190,18 @@ export function artemisTextSlots(
   const result: ArtemisShownSlot[] = [],
     main = cells.filter((cell) => !cell.ruby);
   const clip = layer.clip,
-    left = Math.max(0, clip?.x ?? 0),
-    top = Math.max(0, clip?.y ?? 0),
-    right = Math.min(stage.width, clip ? clip.x + clip.width : Infinity),
-    bottom = Math.min(stage.height, clip ? clip.y + clip.height : Infinity);
-  const slots = {
-    push(shown: ArtemisShownSlot) {
-      if (
-        shown.slot.glyphs.some(
-          (g) => g.x < right && g.x + g.width > left && g.y < bottom && g.y + g.height > top,
-        )
-      )
-        result.push(shown);
-    },
-  };
+    bounds: Bounds = {
+      left: Math.max(0, clip?.x ?? 0),
+      top: Math.max(0, clip?.y ?? 0),
+      right: Math.min(stage.width, clip ? clip.x + clip.width : Infinity),
+      bottom: Math.min(stage.height, clip ? clip.y + clip.height : Infinity),
+    };
+  const fitted = artemisFitTextRows(
+    main.map((c, index) => cellGlyph(layer, c, index, c.line)),
+    main,
+    bounds,
+  );
+  if (!fitted.blocks.size) return result;
   let start = 0;
   for (let i = 1; i <= main.length; i++) {
     const first = main[start]!,
@@ -129,15 +214,14 @@ export function artemisTextSlots(
       cell.italic === first.italic
     )
       continue;
-    const run = main.slice(start, i);
-    slots.push({
+    result.push({
       face: first.face,
       slot: {
         id: `${prefix}-${start}`,
         explicitLines: true,
         bold: first.bold,
         italic: first.italic,
-        glyphs: run.map((c, j) => cellGlyph(layer, c, start + j, c.line)),
+        glyphs: fitted.glyphs.slice(start, i),
       },
     });
     start = i;
@@ -145,8 +229,10 @@ export function artemisTextSlots(
   const ruby = new Map<number, ArtemisTextCell[]>();
   for (const cell of cells)
     if (cell.ruby) ruby.set(cell.block, [...(ruby.get(cell.block) ?? []), cell]);
-  for (const [block, run] of ruby)
-    slots.push({
+  for (const [block, run] of ruby) {
+    // Ruby moves with its word.
+    const move = fitted.blocks.get(block) ?? {dx: 0, dy: 0};
+    result.push({
       face: run[0]!.face,
       slot: {
         id: `${prefix}-ruby-${block}`,
@@ -154,9 +240,13 @@ export function artemisTextSlots(
         bold: run[0]!.bold,
         italic: run[0]!.italic,
         classes: ['game-text-ruby'],
-        glyphs: run.map((c, j) => cellGlyph(layer, c, j, 0)),
+        glyphs: run.map((c, j) => {
+          const g = cellGlyph(layer, c, j, 0);
+          return {...g, x: g.x + move.dx, y: g.y + move.dy};
+        }),
       },
     });
+  }
   return result;
 }
 

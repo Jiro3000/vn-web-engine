@@ -289,9 +289,12 @@ the em box inside the outline) and a non-selectable slot per word's ruby.
 Each text layer also lists the ordinary image layers drawn over it (normal blend, no
 shader); a character keeps the share of its opacity that their pixel alpha leaves at its em
 box centre (`artemisTextVisibility`; images without CPU pixels count as opaque), so text
-under a menu is hidden or dimmed as on the stage. Slots with no character inside the stage
-and the layer's clip are left out. Browser faces
-load from the game's font files. Without a reader style the text is transparent over the
+under a menu is hidden or dimmed as on the stage. Text partly outside the stage and the
+layer's clip is kept inside them (`artemisFitTextRows`): each display line starts inside,
+the part past the right edge wraps onto new rows at the line's start (before the word that
+crosses the edge, or inside a word wider than a row), later lines and the ruby move with
+it, and the text then moves up or down into the bounds. A layer with no character inside
+them is not drawn by the stage and gets no slots. Browser faces load from the game's font files. Without a reader style the text is transparent over the
 stage's glyphs; with one `hideText` stops the stage drawing text (text layers still hit
 and clear their capture targets) and the slots show it. A click on the text reaches the game
 unless it selected text, the context menu stays for a selection, and keys from the text
