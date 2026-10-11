@@ -16,6 +16,31 @@ import type {ArtemisRuleImage} from '../transition.js';
 import type {ArtemisMessageResource, ArtemisRuntimeLayerHost} from '../runtime.js';
 import type {ArtemisRuntimeGlyphOwner} from '../runtime-glyphs.js';
 import {workerTheoraThreads} from '../video-thread-client.js';
+import {luaText, type Lua51} from '../../../core/lua51/runtime.js';
+
+/** The script's custom cursor is a live stage overlay. Read only its configured ID,
+ * without copying the full csv table or assuming a game-specific layer name. */
+export function artemisCursorLayer(vm: Lua51): string | null {
+  let reference = vm.referenceGlobal('csv');
+  try {
+    for (const key of ['mw', 'cursor', 'id']) {
+      if (reference.type !== 5) return null;
+      const next = reference.get(key);
+      reference.release();
+      reference = next;
+    }
+    const value = reference.read();
+    const id =
+      value instanceof Uint8Array
+        ? luaText(value)
+        : typeof value === 'number' && Number.isFinite(value)
+          ? String(value)
+          : '';
+    return id.split('\0', 1)[0] || null;
+  } finally {
+    reference.release();
+  }
+}
 
 export interface ArtemisBrowserLayerOptions {
   readonly executableSha256: string;

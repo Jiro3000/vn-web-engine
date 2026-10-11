@@ -726,10 +726,13 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
   private nodes(
     scene: ArtemisScene<ArtemisDisplayActor>,
     view: ArtemisSceneView = 'retained',
+    currentRoot?: string,
   ): RenderNode[] {
     const roots: RenderNode[] = [],
       groups = new Map<string, RenderNode>();
-    for (const entry of scene.prepareEntries(view)) {
+    for (const entry of currentRoot === undefined
+      ? scene.prepareEntries(view)
+      : scene.select(currentRoot)) {
       const node: RenderNode = {
         id: entry.id,
         actor: entry.value,
@@ -1070,8 +1073,20 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
   drawStage(
     scene: ArtemisScene<ArtemisDisplayActor>,
     presentation: ArtemisStagePresentation,
+    /** A top-level live overlay, such as the script's cursor, drawn after composition. */
+    liveRoot: string | null = null,
   ): DrawList {
-    return this.render(scene, presentation);
+    // Only a top-level layer is drawn apart from the stage. A nested or malformed ID keeps
+    // its layer in place, so a script's configuration can never stop the frame.
+    let live: string | null = null;
+    if (liveRoot && !liveRoot.includes('.'))
+      try {
+        scene.entry(liveRoot);
+        live = liveRoot;
+      } catch {
+        // Not a layer ID.
+      }
+    return this.render(scene, presentation, undefined, live);
   }
   /** takess 0x1400e1cf0: renders the committed scene into the screenshot surface; the
    * presented frame is unchanged. */
@@ -1125,6 +1140,7 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
     scene: ArtemisScene<ArtemisDisplayActor>,
     presentation: ArtemisStagePresentation | null,
     offscreen?: GpuRenderSurface,
+    liveRoot: string | null = null,
   ): DrawList {
     this.now = null;
     this.draws++;
@@ -1485,12 +1501,18 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
       // retained still owns the old scene until then, and previous holds its GPU frame.
       const transitioning = presentation?.state === 1 || presentation?.state === 2;
       const view = transitioning ? 'current' : 'retained';
-      visit(this.nodes(scene, view), new Float32Array([1, 0, 0, 0, 1, 0]), 1, {
-        surface: offscreen ?? (stage ? stage.current.image : null),
-        width: this.target.width,
-        height: this.target.height,
-        pendingClear: false,
-      });
+      const liveID = stage && liveRoot !== null ? scene.entry(liveRoot, view)?.id : undefined;
+      visit(
+        this.nodes(scene, view).filter((node) => node.id !== liveID),
+        new Float32Array([1, 0, 0, 0, 1, 0]),
+        1,
+        {
+          surface: offscreen ?? (stage ? stage.current.image : null),
+          width: this.target.width,
+          height: this.target.height,
+          pendingClear: false,
+        },
+      );
       if (stage) {
         const state = presentation!.state;
         const corners = [
@@ -1541,6 +1563,13 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
             discardTransparent: false,
           },
         );
+        if (liveRoot !== null)
+          visit(this.nodes(scene, 'current', liveRoot), new Float32Array([1, 0, 0, 0, 1, 0]), 1, {
+            surface: null,
+            width: this.target.width,
+            height: this.target.height,
+            pendingClear: false,
+          });
       }
       if (offscreen) commands.push({kind: 'gpu-target', surface: null});
       const list: DrawList = {
