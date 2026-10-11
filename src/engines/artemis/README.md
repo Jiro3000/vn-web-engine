@@ -3,8 +3,8 @@
 The integration targets Hatsuyuki Sakura's executable SHA-256
 `8953562b80608046662bd8c89015d04236b0ba3afee10c36469c11403de3ebaf`.
 Native addresses below describe this exact build; they are not selectors for
-other games or revisions. No Artemis player or compatibility profile is exposed
-in the UI yet.
+other games or revisions. The player page is `artemis.html` (see
+[Browser player](#browser-player)); `docs/artemis-status.md` lists what is not implemented.
 
 ## Resource and script execution
 
@@ -351,9 +351,7 @@ By default dialogs remain pending. `--dialog-result=0` or `--dialog-result=1`
 explicitly supplies a simulated outcome for a separate probe, recorded in its JSON.
 Probe cursor/scheduler effects are record-only and do not represent production effects.
 
-Remaining work includes native system variables/events, full IET compilation and homing
-click glyphs. The player page is
-`artemis.html`. Shared platform/media services must remain in
+Shared platform/media services must remain in
 the shared layers. Evidence and game resources are local-only and are not part of
 this source tree.
 
@@ -389,7 +387,7 @@ order of their start offsets. `global-save.ts` serializes `saveg.dat` (section 1
 section 2 `g.` variables) and `system.dat` (section 1 `s.` variables) and loads them
 without dirtying variables.
 
-Scenario (`S`) saves are in progress. `save-data.ts` is the save object (script +0xd0):
+`save-data.ts` is the save object (script +0xd0):
 per message layer text commands since the last clear (+0x08), the font frames copied at
 that clear (+0x18), indent/wordparts and prohibit commands pending (+0x38/+0x58) and
 promoted by a clear (+0x28/+0x48), and looping se tags (+0x78); the layer command
@@ -546,7 +544,7 @@ Enter is refused while Alt is down and Enter decided (Alt+Enter is the fullscree
 native 32-bit numeric result: zero falls through, two fails, and other nonzero
 values consume successfully. Numeric strings are rejected. The event owner must
 report Lua callback errors and continue its default dispatch, as the native owner
-does. Default event actions and physical input dispatch remain unimplemented.
+does.
 
 `setUseMultiTouch` requires a numeric limit, truncates it toward zero and calls the
 input owner's contact-limit operation. It is bound only when that owner exists;
@@ -613,8 +611,8 @@ registration and extension order are preserved; Unicode names/aliases stay uncha
 The exact-hash factory selects PNG (`png`, `PNG`), JPEG (`jpg`, `jpeg`, `JPG`, `JPEG`),
 then PSD (`psd`, `PSD`), matching the stage initializer. PNG uses the shared straight
 RGBA decoder on the shared worker when available, with an in-thread fallback.
-Merged PSD uses the format reader below on that same worker. JPEG still requires
-an injected owner and refuses when selected without one. Decoder null means native failure/fallback; host and unsupported-format errors
+Merged PSD uses the format reader below on that same worker. JPEG uses an injected
+owner ([Browser JPEG owner](#browser-jpeg-owner)) and refuses when selected without one. Decoder null means native failure/fallback; host and unsupported-format errors
 propagate. Corrupt PNGs are refused by the strict shared reader. Image loading is
 separate from cache eviction, layer geometry, property application and presentation.
 The pipeline is verified with synthetic PNGs through suspended Lua callbacks.
@@ -688,7 +686,7 @@ actors from create/copy and retain shared image resources when copying. Async
 resource dispatch rejects overlapping operations and snapshots tag arguments;
 `cancelPending()` prevents stale completion effects alongside cancellation of
 Lua continuations. These services are tested with synthetic images and suspended
-Lua; the image raster owner below remains separate from stage/scheduler and UI wiring.
+Lua.
 
 The scene/layer system checks run with:
 
@@ -710,8 +708,8 @@ selection remain explicit providers. `createArtemisOrdinaryGpuRaster()` supplies
 the confirmed ordinary D3D11 policy for this exact revision's single-level image
 subset. Actors prepare their images before scene
 insertion; copies share texture ownership and outer-wrapper metadata while copying
-inner display state. The last actor releases its image binding. Nonzero rotation,
-group raster, shader, mask and transition paths remain outside this raster subset.
+inner display state. The last actor releases its image binding. Groups, shaders and
+transitions are described in their own sections; mask images are unsupported.
 
 `drawCommitted()` emits retained GPU images in ascending child order through the
 preparation path (`0x140186770`); higher numeric ids paint after lower ids. The
@@ -719,8 +717,7 @@ separate ordinary callback path (`0x1401864a0`) traverses descending for non-ras
 effects. Native selection and structural traversal remain ascending. Image quads
 preserve float32 transform,
 viewport normalization and triangle-strip order (`0x14015d120`). The stage owner
-chooses frame/commit timing; this method does not implement the full native flip
-state machine. There is no playable Artemis UI/profile yet.
+chooses frame/commit timing; `drawStage` presents the stage and its transitions.
 
 Shared `WebGLDrawTarget.prepareImage()` uploads and retains an image until
 `invalidate()`, including empty/hidden frames. Normal unprepared images retain
@@ -747,8 +744,8 @@ loads the `rule` image (load failure and non-gray formats report the native seve
 errors), replaces or tiles (`tileArtemisRule`, `0x140171140`) the stage rule image, sets
 state 2 and tweens the threshold from `-vague` to `vague+255`. Both tweens complete through
 stage commit and run mode release. `input` selects run mode 2 (clickable) or 4. The frame
-owner ticks registered tweens and finishes `tween` on a mode 2 click. Transition rendering
-is host work.
+owner ticks registered tweens and finishes `tween` on a mode 2 click.
+`ArtemisImageGraphics.drawStage` draws the transition.
 
 The browser stage renders the pending `current` scene as the target during both crossfade
 and rule transitions. Its saved previous GPU frame supplies the source. Scene/resource
@@ -770,8 +767,7 @@ SHA-256.
 
 The flip prefix is present as a Ghidra label rather than a canonical function;
 its saved raw bytes/instructions confirm the capture-mode branch and tail jump.
-Transition reset's stored field +0x168 is confirmed by `0x1400a4960`; its full
-transition rendering semantics are still host work. `flip` marks presentation
+`flip` marks presentation
 pending; the scheduler/presenter decides when to draw. It does not bypass required
 transition effects or silently perform them with a scene commit alone.
 
@@ -1028,10 +1024,9 @@ empty auto bounds fit an existing allocation. The main presentation clear remain
 independent of this intermediate rule.
 
 The synthetic browser pipeline checks actual RGBA for both formats, nested targets,
-retention, effects, growth and empty captures. Mask loading/transition shaders,
+retention, effects, growth and empty captures. Mask loading,
 current-view capture buffers and full native dirty-flag accounting remain
-unsupported. This rendering service is not connected to a production Artemis
-player or a complete game scheduler.
+unsupported.
 
 ## Merged PSD images
 
@@ -1055,7 +1050,7 @@ transferred away from archive/cache ownership. Worker failures rerun the same
 in-thread decoder to report its original error. Synthetic checks compare raw/RLE
 output, recovery and channel order, real worker transport and resulting WebGL
 RGBA. Named layers, PSB, additional color/depth/compression layouts remain
-unsupported. No real game image was decoded for verification.
+unsupported.
 
 ## Browser JPEG owner
 
@@ -1077,7 +1072,6 @@ The synthetic Chrome check encodes a2x3 solid JPEG, injects valid EXIF orientati
 confirms the ordinary browser bitmap rotates to3x2, and verifies that the Artemis
 owner keeps2x3 and paints expected RGB. This validates ownership and metadata
 policy, not byte-exact equality to the native JPEG library's DCT/color rounding.
-No real game JPEG was decoded or rendered.
 
 ## Animation layers
 
@@ -1086,7 +1080,7 @@ No real game JPEG was decoded or rendered.
 
 - `init` and `add` load `file` into a frame actor (anchor at the image centre, then the
   tag's `0x140115650` properties such as `clip`). A failed load reports the
-  file-not-found error. `mask` requires an owner that does not exist yet.
+  file-not-found error. `mask` is refused: there is no mask owner.
 - `init` deletes the id through the `lydel` body and inserts a new `CAnimationLayer`
   holding the frame at key 0. `loop` sets the loop count (default -1, endless).
 - `add` stores the frame at key `time` of the existing animation; key 0 is ignored and
@@ -1199,7 +1193,7 @@ Creation keys `file`, `width`, `height`, `color` and `rule` forwarded to `lyprop
 are retained in its original command record and ignored by ordinary property
 application, matching `0x1400d76d0` / `0x140115650`. The game forwards the table
 used by `lyc`; property application does not reload or recolor its image.
-Unknown/unimplemented actual property keys continue to refuse.
+Unknown property keys are refused.
 
 The fixture records shader name, constants and texture leases through
 `ArtemisShaderProperties` without compiling programs. It steps layer tweens whenever the
@@ -1207,11 +1201,6 @@ probe clock advances, and advances 16 ms frames while a `sync` tween holds run m
 Animation layers are recorded with their frame keys and paths; the fixture never draws
 them.
 Lua `.ipt` animation tables are preloaded with the other script sources.
-
-The real nonvisual probe, with explicit simulated dialog result and timed waits,
-now creates the header-verified1920x1080 `:bg/black.png` layer and applies its
-forwarded properties. It stops at missing `getMousePoint`. This is control-flow
-progress through initialization, not playable game output or a rendered frame.
 
 ## Lua random, wait reason and PNG comments
 
@@ -1237,16 +1226,15 @@ Each method is bound only when its host owner exists.
 `getMousePoint` is bound only when the Lua host supplies the shared
 `PointerPositionHost`. Its owner supplies already-mapped window/input coordinates
 without consuming pending input edges. Native `0x140134ca0` reads its provider twice:
-firstx, theny; both are float32 values widened to Lua numbers (`0x140138f10`),
-not integer coordinates. Each call returns a fresh table with namedx/y fields.
+first x, then y; both are float32 values widened to Lua numbers (`0x140138f10`),
+not integer coordinates. Each call returns a fresh table with named x/y fields.
 Nonfinite provider values refuse. Native input sampling and stage coordinate
 mapping remain the input owner's responsibility.
 
-The metadata-only probe explicitly selects simulated position0,0 and marks that
-fixture in JSON. It now passes cursor resource creation, mouse configuration and
-flip; the next unsupported boot command is `caption`. Lua aliasesx/y/zoom forwarded
-by the game's lyc2 helper remain in recorded tags and do not override the normalized
-left/top/xscale/yscale property names consumed by native115650.
+The metadata-only probe selects a simulated position 0,0 and marks that fixture in
+JSON. Lua aliases x/y/zoom forwarded by the game's lyc2 helper remain in recorded tags
+and do not override the normalized left/top/xscale/yscale property names consumed by
+native 115650.
 
 ## Window caption
 
@@ -1257,8 +1245,7 @@ failure result. `BrowserWindowCaptionHost` changes only its selected document's
 title and reports failure when no document is selected. Legacy ANSI caption
 conversion remains unsupported.
 
-The nonvisual probe records caption changes. Boot now advances past caption and
-stops at `chgmsg id=name01 layered=1`, the first message-layer selection command.
+The nonvisual probe records caption changes.
 
 ## Message-layer selection
 
@@ -1284,9 +1271,7 @@ not alter this script selection stack or create script history.
 
 Synthetic owners verify layer copies preserve their supplied font state, independent
 map/current/scene loans, exact flag handling, history effects and restore behavior.
-The nonvisual probe's message resources explicitly remain a simulation with no
-text presentation. Its real Lua initialization now reaches `fontinit`; font/glyph
-construction, style application and text rendering are still unimplemented.
+The nonvisual probe's message resources are a simulation with no text presentation.
 
 ## Font stack and properties
 
@@ -1305,8 +1290,7 @@ attributes. Unknown keys and out-of-range conversions are refused.
 
 Display property revisions invalidate intermediate captures when an owner changes
 a descendant directly; identical assignments and parent-only transforms reuse
-captured pixels. The nonvisual boot probe now reaches `scetween type=show mode=init`
-after simulated message/font control. This does not verify game text presentation.
+captured pixels.
 
 ## Text effect configuration
 
@@ -1423,8 +1407,7 @@ Native atlas allocation is replaced by independent images; packed-bit/RGBA font
 sources and oversized/negative edge cases remain explicitly unsupported.
 
 A generated rectangle font verifies FreeType worker → native glyph paint worker →
-GPU output in the browser. The integration still requires actual text blocks, line
-layout, effects and production player wiring; no real game glyphs were displayed.
+GPU output in the browser.
 
 `layoutArtemisTextBlock` reconstructs normal/ruby stream placement from1971e0.
 Advances add kerning only when painted advance is positive. Net-width comparison
@@ -1497,9 +1480,6 @@ surface load through the manager's virtual +8 and releases the returned lease im
 non-string argument is an error. When the host reports the load as suspended, the Lua
 coroutine yields like a suspended tag; without a coroutine owner the call fails.
 
-Message-store/display wiring, links, text effects, vertical rotation and production
-player integration remain separate work; diagnostic progression is not gameplay.
-
 ## Asynchronous surface preload ownership
 
 `ArtemisSurfaceManager` connects native011a90 lookup/promotion,0128b0 worker FIFO
@@ -1543,16 +1523,14 @@ attachment does not reset script command history. Fresh/open/pending checks prec
 ownership transfer; insertion failure releases an unadopted wrapper.
 
 The metadata probe connects layered message selection to these APIs, with actual
-resource-loan accounting. This repairs the diagnostic split between its message
-store and graphical scene. Properties/deletion now find UI text actors; it still
-does not publish their frames, implement links/effects, or claim text rendering.
+resource-loan accounting, so properties and deletion find its text actors. It does not
+publish their frames.
 
 `ArtemisSeStop` follows e3c60 for sestop/sefadeout: exact named slot lookup,
 integer-prefix milliseconds, mandatory stop/fade service for an existing slot,
 and normal-execution history deletion. A missing slot does not parse time or call
-audio services; replay retains history. This is a command contract, not a playback
-implementation. The diagnostic has an empty SE table until an actual play owner
-is supplied; seplay remains unsupported.
+audio services; replay retains history. Playback belongs to the voice owner
+([Effect voices and device attenuation](#effect-voices-and-device-attenuation)).
 
 `ArtemisSePlay` follows e3370 for seplay/sefadein: stop an existing named effect,
 check skippable command mode, prepare a real sound, assign its index, set explicit
@@ -1570,9 +1548,7 @@ keep their arguments through scenario saves and replay nothing on load.
 
 The required prepare/gain/pan/start services own actual playback. The probe
 uses the shared Vorbis worker to decode real PCM, exporting hashes and metadata. It
-opens no audio graph/device. Decoding :sysse/none.ogg succeeds
-at48000Hz/stereo/11685frames; this is not evidence of native PCM rounding parity or
-game playback. `ArtemisVariables.lookup` supports non-inserting, owned-byte lookup
+opens no audio graph/device. `ArtemisVariables.lookup` supports non-inserting, owned-byte lookup
 for optional named gains without inventing missing system variables.
 
 ## Effect voices and device attenuation
@@ -1594,9 +1570,7 @@ without device output. Ordinary callers retain their existing initial controls.
 The codec owner remains responsible for native formats and buffer-mode semantics.
 
 The synthetic browser smoke verifies real offline PCM gain/pan and mono behavior,
-alongside text/GPU resources. Node diagnostic decoding still refuses playback;
-no silent or timer voice substitutes are installed there. Native PCM16 quantization,
-streaming modes and the production audio/scheduler/profile wiring remain separate.
+alongside text/GPU resources. No silent or timer voice substitutes are installed.
 
 ### Native sound filename lookup
 
@@ -1614,7 +1588,7 @@ Both decoder services are mandatory; their native formats and buffer modes are
 separate responsibilities.
 
 The nonvisual sound probe uses an explicit Ogg-only diagnostic registration and
-the actual shared Vorbis worker, now including suffix lookup. A synthetic browser
+the actual shared Vorbis worker with suffix lookup. A synthetic browser
 fixture connects this loader to actual offline WebAudio voices. Neither check
 opens audible game playback or proves native codec/streaming-mode completeness.
 
@@ -1645,8 +1619,8 @@ are unsupported in this eager resource adaptation.
 WAVE/Vorbis resource owners and shared integer-PCM conversion worker with the browser
 voice adapter. Only native `buffer=-1` is implemented: complete A+B storage, with
 hardware repeat of the whole clip. Native source B-only reset is used by streaming,
-not cached hardware looping. Zero/positive buffer modes still require the native
-rolling-buffer service. The decoder does not create an audio context itself.
+not cached hardware looping. Zero/positive buffer modes use the rolling buffer
+([Progressive PCM device voices](#progressive-pcm-device-voices)). The decoder does not create an audio context itself.
 PCM8/16, aligned frames and complete payloads are supported; other bit depths and
 truncated cached payloads are explicitly refused. No silence substitute is supplied.
 
@@ -1679,8 +1653,8 @@ then 1 MiB ranges and feeds them to a decoding session (`ArtemisVorbisStreamDeco
 reusable module worker per stream). In the worker, `ArtemisVorbisPcmChunks` runs the shared
 incremental `VorbisChunkDecoder` and converts each batch with Rev.3179's PCM16 rule; the
 concatenated PCM equals the eager result, including the EOS trim. The voice is prepared
-once both ring halves can be filled, so its start no longer waits for the whole file to be
-read and decoded. Later PCM reaches the device processor as `append` commands. A pump whose
+once both ring halves can be filled, so it starts before the whole file is read and
+decoded. Later PCM reaches the device processor as `append` commands. A pump whose
 half is not decoded yet refills nothing, and the next pump refills it once the PCM arrived
 (`ArtemisPcmCursor.ready`), so a slow decoder can never end or loop the voice early. An
 encoded-data error before the first PCM is a decode miss, as in the eager owner; a later
@@ -1766,7 +1740,7 @@ not shipped. The program displaces UV1.x by `sin(radians(UV1.y*inter-angle))*siz
 samples foreground and multiplies only alpha. Back/mask samples and color multiplier
 have no observable contribution in this source. Sampler filtering/addressing belong
 to the host. `ArtemisBrowserRasterShader` provides a real linked WebGL2 program on a
-dedicated context; actor-specific scene binding is now wired as described below; parameter animation jobs remain separate.
+dedicated context; actor scene binding is described below.
 
 `--shader-presets` adds actual known-source CPU executable registration to the
 nonvisual probe. It does not display or shade game image pixels. Its optional
@@ -1801,7 +1775,7 @@ accumulation. Zero size and zero fade retain the original foreground. Values
 are not clamped or inferred. CPU and actual GPU outputs are compared on synthetic
 nonzero radial displacement as well as identity cases.
 
-All twenty original DX11 source signatures now select executable CPU/WebGL2
+All twenty original DX11 source signatures select executable CPU/WebGL2
 presets. Additional programs cover add/mul, per-channel bright/dark composites,
 color add/multiply, reset and mosaic. Compbr/compbrc and compdk/compdkc have
 identical equations but retain separate signatures. Composite normalization uses
@@ -1810,7 +1784,7 @@ transparent division is not regularized. Cadd accepts negative channels, while
 RGB zeros negative-coefficient channels. Mosaic uses floor(UV*grid)/grid with
 w=size*ratio,h=size; grid inputs are not pixel dimensions. Caller/target own
 filtering, addressing and clamping. These known presets are not a general HLSL
-compiler; actor shader properties and constant/texture jobs require separate owners.
+compiler; actor shader properties and constant/texture jobs are described below.
 
 `shader-properties.ts` parses native shader/shaderconstant/shadertexture property
 lists and owns the CLayer shader state. Constants preserve order, duplicate names,
@@ -1835,10 +1809,10 @@ constant storage grows in16-byte units, initializes new memory to zero and keeps
 old trailing coefficients on shorter writes. GPU-layer copies share existing
 storage until one grows, matching verified15c850 pointer/refcount copies. Empty
 lists do not update slot1; the graphics binding owner must preserve prior slot1.
-Nonempty lists of empty vectors remain refused; API unbound/out-of-range reads are
-now represented by zero, as described below.
+Nonempty lists of empty vectors remain refused; unbound and out-of-range reads return
+zero (below).
 
-Custom shader properties now connect to `ArtemisLayers` and `ImageGraphics`.
+Custom shader properties connect to `ArtemisLayers` and `ImageGraphics`.
 Supply an owned ShaderLibrary of DrawShaderResource objects through the optional
 ImageGraphics shader-program provider. `createArtemisDrawShaderCompiler` selects
 exact source signatures and requires actual target prepareTriangleShader to compile
@@ -1857,13 +1831,12 @@ lists and apply native ordered packing. TextureUser selects the first surviving
 texture entry regardless of its name. Ordinary draws use their native blend state;
 captured custom programs replace RGBA before outer composition. Null user binding
 returns zero in the shader, and unknown named programs produce no color pixels.
-D3D constant-buffer out-of-range accesses are also zero; bufferParameters now models
-that verified API behavior rather than refusing a missing/short buffer.
+D3D constant-buffer out-of-range accesses are also zero, as `bufferParameters` models
+for a missing or short buffer.
 
 These API defaults follow the [Direct3D functional specification](https://microsoft.github.io/DirectX-Specs/d3d/archive/D3D11_3_FunctionalSpec.htm),
 sections7.5,7.18.17 and16.6. No game asset is synthesized to fill a missing resource.
-Shader coefficient animation jobs, root/wildcard property modes and full production
-runtime wiring remain distinct requirements.
+Shader coefficient animation jobs and root/wildcard property modes are unsupported.
 
 `script-events.ts` reconstructs b73e0/c6730 registration dispatch: producer-owned
 native modes, disabled/latch flags, copied deferred registrations, retained Lua
@@ -1873,9 +1846,9 @@ scope for handler-only events, then restores the interrupted ready/waiting curso
 A synthetic PCM EOF test exercises sound-finish capture, frame tick, event filter,
 scoped handler queue and return to the waiting script without an audio device.
 
-Native frame/timer/caret control and latch reset remain required production owners;
-no JS state-to-native-mode mapping is guessed. Resource-suspended Lua events must
-be deferred by that owner. Direct registered Lua Events callbacks remain distinct.
+Frame, timer and caret control and the latch reset belong to the runtime frame
+([Engine runtime](#engine-runtime)). Direct registered Lua Events callbacks remain
+distinct.
 
 Lua include accepts an explicit prepared `readPlainFile` owner: plain CFile uses
 Lua loadfile header/line framing and Windows CRT text input, then any open/load/
@@ -1883,7 +1856,7 @@ protected execution failure retries normal loose-first pack bytes. Empty plain
 files succeed without fallback; first-attempt Lua side effects survive. Shared
 Lua51 executeFile/compileFile operate on prepared raw/text bytes and preserve the
 existing explicit bytecode refusal. Hosts without the plain provider retain the
-pack-only subset. Final native error reporting and streaming I/O remain host work.
+pack-only subset. `reportIncludeError` (below) reports final failures.
 
 `run-mode.ts` owns native c70/c74 entry/release rules, wait callback/save gates,
 protected mode13, mode5/6 stored events and mode14 exit status/global save. Initial
@@ -1892,10 +1865,9 @@ host operations. Release restores the previous mode, dispatches pending script
 events in reverse order without repeated eligibility/latch tests, clears the queue,
 then emits the stored exit registration. Failed event flags do not stop that pass.
 
-The frame owner must call beginEventPhase after scene update and before sound/music
-settling, matching c05e2's word30 reset. This does not implement the full frame loop.
-The standalone TimedWait already owns callback/save effects: a unified wait adapter
-must choose one owner before wiring it to RunMode, to avoid duplicate callbacks.
+`beginEventPhase` is c05e2's word30 reset, due after the scene update and before
+sound/music settling. `ArtemisRunMode` is a standalone model: `ArtemisRuntime` does not
+use it, and its caret, wait (`ArtemisTimedWait`) and exit owners hold the run mode.
 
 `reportIncludeError` supplies native12d080 level1 final-error reporting and return
 to the include caller. Without that owner, diagnostics retain final refusal.
@@ -1916,7 +1888,6 @@ through a host method, so both stay strict, as do VM traps, the memory cap and
 non-string error values. Without the owner every failure keeps the strict fault.
 Debug gating (+0x3524/+0x3528), the Lua LogFilter and console output belong to the
 owner. Probe --native-calllua-reporting records reports without that policy.
-Evidence: lua-calllua-error-notes.md.
 
 `reportUnknownTag` is the unknown-command owner of the dispatcher `0x1400c5800`. A tag
 the Lua filter does not take is looked up in the native command map, which `0x1400b9e80`
@@ -1928,7 +1899,6 @@ every name reaches the host `dispatch`, which refuses unsupported names. This is
 `achievements` behaves when the game's Steam module (`system/extend/auth/steam.lua`,
 which defines `tags.achievements`) is not loaded. The probe's
 --native-calllua-reporting records these reports as `unknownTagReports`.
-Evidence: tag-registry-notes.md.
 
 `tag-dispatch.ts` is that host `dispatch`: `createArtemisTagDispatch(owners, suspend)`
 consults the tag owners in a fixed order (text, transition and layer tweens, fullscreen
