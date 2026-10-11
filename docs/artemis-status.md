@@ -13,7 +13,8 @@ Other executables are refused by hash.
   `ui/runtimes/artemis.ts`): WebGL stage with image, animation, video, group and text
   layers, crossfade and rule transitions, FreeType glyphs, Web Audio effect and music
   voices, named shaders, message-box dialogs, IndexedDB save storage and
-  pointer/keyboard input with image hit testing. The page reports Windows 10 and
+  pointer/keyboard input with image hit testing. Browser gamepads supply the DirectInput
+  joystick keys; only synthetic tests cover them, not a physical controller. The page reports Windows 10 and
   Direct3D feature level 11_0. Over the real installation it boots, takes the language
   choice, reaches the title menu, starts a new game and advances voiced scenario text
   through click-waits (nonvisual check: `#trace` diagnostics and canvas hashes only).
