@@ -5,10 +5,9 @@ import {decodeImageOffThread} from '../../../graphics/image-decode-offload.js';
 import {decodeOpaqueJpeg} from '../../../graphics/browser-jpeg.js';
 import {WebGLDrawTarget} from '../../../graphics/webgl-draw.js';
 import {BrowserWindowsDynamicLibraryHost} from '../../../platform/windows-dynamic-library.js';
-import {BrowserWindowsMessageBoxHost} from '../../../platform/windows-message-box.js';
 import {BrowserWindowCaptionHost} from '../../../platform/window-caption.js';
 import {BrowserWindowStateHost} from '../../../platform/window-state.js';
-import {MessageBoxTextDialogHost} from '../../../platform/text-dialog.js';
+import {BrowserTextDialogHost} from '../../../platform/text-dialog.js';
 import {FreeTypeWorker} from '../../../text/freetype-worker-client.js';
 import {BrowserFullscreenMoviePlayer} from '../../../video/fullscreen-movie.js';
 import {createArtemisBrowserSoundVoices} from '../browser-sound-voices.js';
@@ -197,9 +196,6 @@ export class ArtemisBrowserPlayer {
       },
       'nearest-even',
     );
-    const messageBox = new BrowserWindowsMessageBoxHost(this.panel, () =>
-      this.canvas.focus({preventScroll: true}),
-    );
     this.movie = new BrowserFullscreenMoviePlayer({
       document,
       container: this.panel,
@@ -286,7 +282,9 @@ export class ArtemisBrowserPlayer {
         this.sound.music.tick(now);
       }),
       moviePlayer: this.movie,
-      dialogs: new MessageBoxTextDialogHost(messageBox),
+      dialogs: new BrowserTextDialogHost(this.panel, () =>
+        this.canvas.focus({preventScroll: true}),
+      ),
       window: Object.assign(new BrowserWindowStateHost(document, options.display, report), {
         // The page keeps its stage size across display modes.
         displayModeChanged: () => {},

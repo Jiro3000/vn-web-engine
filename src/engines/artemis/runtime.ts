@@ -7,6 +7,8 @@ import {
 } from '../../formats/artemis/save-file.js';
 import type {CursorHost, PointerPositionHost} from '../../input/cursor-host.js';
 import type {TextDialogHost} from '../../platform/text-dialog.js';
+import {ArtemisFileCommand} from './file-command.js';
+import {ArtemisSaveDirectory, type ArtemisRuntimeStorage} from './save-directory.js';
 import type {WindowCaptionHost} from '../../platform/window-caption.js';
 import type {WindowStateHost} from '../../platform/window-state.js';
 import type {WindowsDynamicLibraryHost} from '../../platform/windows-dynamic-library.js';
@@ -115,14 +117,7 @@ export interface ArtemisRuntimeFiles {
   /** Every archive and loose file name ('/'-separated). */
   readonly paths: ReadonlySet<string>;
 }
-/** Save directory storage (SaveDataPath). */
-export interface ArtemisRuntimeStorage {
-  read(name: string): Promise<Uint8Array | null>;
-  write(name: string, bytes: Uint8Array): void | Promise<void>;
-  /** The stored names; without it the save directory appears empty to `isFileExists`
-   * until files are written. */
-  list?(): Promise<readonly string[]>;
-}
+export type {ArtemisRuntimeStorage};
 /** Layer graphics owner: the layer tags plus the frame and scene services the runtime
  * drives. */
 export interface ArtemisRuntimeLayers extends ArtemisLayerTagOwner {
@@ -367,7 +362,6 @@ export class ArtemisRuntime {
   private frameCalls = 0;
   private resourceInFlight = false;
   private runModeHeld = false;
-  private readonly saveWrites: Promise<void>[] = [];
   private readonly closers: (() => void)[] = [];
   private readonly currentTextDisplay: () => ArtemisTextDisplay<unknown>;
   private readonly displayProperties = new WeakMap<object, Map<string, number>>();
@@ -405,8 +399,8 @@ export class ArtemisRuntime {
           }
         }
       }
-    const saveNames = new Set(await services.storage.list?.());
-    return new ArtemisRuntime(services, readSystemIni(iniBytes), prepared, plain, bytes, saveNames);
+    const saves = await ArtemisSaveDirectory.open(services.storage);
+    return new ArtemisRuntime(services, readSystemIni(iniBytes), prepared, plain, bytes, saves);
   }
 
   private constructor(
@@ -415,8 +409,7 @@ export class ArtemisRuntime {
     readonly prepared: Map<string, Uint8Array>,
     plainFiles: ReadonlyMap<string, Uint8Array>,
     readonly preparedBytes: number,
-    /** Names in the save directory storage. */
-    private readonly saveNames: Set<string>,
+    private readonly saves: ArtemisSaveDirectory,
   ) {
     const hash = services.executableSha256,
       {files, sound, glyphs} = services,
@@ -948,7 +941,7 @@ export class ArtemisRuntime {
         stageSize: () => ({width, height}),
         take: () => services.screenshots!.take(),
         read: (w, h) => services.screenshots!.read(w, h),
-        writeSaveFile: (name, bytes) => this.writeSaveFile(name, bytes),
+        writeSaveFile: (name, bytes) => this.saves.write(name, bytes),
         evictSurface: (name) => services.surfaces.evict(name),
         invalidSize: (tag) => {
           throw Error(`Artemis ${tag.name} size is invalid`);
@@ -957,6 +950,25 @@ export class ArtemisRuntime {
           throw Error(`Artemis ${tag.name} ran before takess`);
         },
       });
+    const fileCommands = new ArtemisFileCommand({
+      readPackFile: (path) => this.readSaveDirectoryFile(path) ?? files.read(path),
+      writeFile: async (path, bytes) => {
+        const name = this.saveFileName(path);
+        // The installation is read-only: only the save directory can take new files.
+        if (name === undefined) return false;
+        await this.saves.write(name, bytes);
+        return true;
+      },
+      removeFile: (path) => this.removeSaveFile(path),
+      // Mounted archives never change while the runtime runs, so there is nothing to reread.
+      clearArchiveCache: () => {},
+      sourceNotFound: (tag) => {
+        throw Error(`Artemis file copy source not found: ${tag.args.get('src') ?? ''}`);
+      },
+      destinationNotCreated: (tag) => {
+        throw Error(`Artemis file copy cannot create ${tag.args.get('dst') ?? ''}`);
+      },
+    });
     // Reset and load are built after the Lua runtime that this dispatcher feeds.
     let dispatchTag: ReturnType<typeof createArtemisTagDispatch> | undefined;
     const createDispatch = () =>
@@ -995,6 +1007,7 @@ export class ArtemisRuntime {
           music,
           sePlay,
           screenshots,
+          fileCommands,
         },
         suspend,
       );
@@ -1054,9 +1067,7 @@ export class ArtemisRuntime {
       reportError: services.reportError,
       fileExists: (path) => {
         const name = this.saveFileName(path);
-        return name === undefined
-          ? files.paths.has(files.resolvePath(path))
-          : this.saveNames.has(name);
+        return name === undefined ? files.paths.has(files.resolvePath(path)) : this.saves.has(name);
       },
       setMagicPath: (name, root) => {
         files.setMagicPath(name, root);
@@ -1199,7 +1210,7 @@ export class ArtemisRuntime {
         trace({boot: path});
         script.reset(path);
       },
-      readSaveFile: (name) => services.storage.read(name),
+      readSaveFile: (name) => this.saves.read(name),
       initializeStaticVariables,
     }));
     // Font frames are attribute overrides over the 193720 defaults; the codec writes the
@@ -1312,7 +1323,7 @@ export class ArtemisRuntime {
         variables.write('s.current_message_layer', name),
     };
     const load = (this.load = new ArtemisLoad(save, readHistory, variables, lua.events, {
-      readSaveFile: (name) => services.storage.read(name),
+      readSaveFile: (name) => this.saves.read(name),
       loadScenario: async (archive) => {
         await applyArtemisScenario(
           scenarioOwners(),
@@ -1678,17 +1689,16 @@ export class ArtemisRuntime {
     return this.writeScenario(asLoaded);
   }
   /** Settles the pending save-file writes. */
-  async flushSaves(): Promise<void> {
-    await Promise.all(this.saveWrites);
+  flushSaves(): Promise<void> {
+    return this.saves.flush();
   }
   private store(name: string, kind: 'S' | 'G' | 'X', archive: Uint8Array): void {
-    this.saveWrites.push(
-      packArtemisSaveFile(kind, archive).then((bytes) => this.writeSaveFile(name, bytes)),
-    );
+    void this.saves.write(name, packArtemisSaveFile(kind, archive));
   }
-  private async writeSaveFile(name: string, bytes: Uint8Array): Promise<void> {
-    await this.services.storage.write(name, bytes);
-    this.saveNames.add(name);
+  /** `file` tag removal of a save directory file; installation files stay. */
+  private removeSaveFile(path: string): void {
+    const name = this.saveFileName(path);
+    if (name !== undefined) void this.saves.remove(name);
   }
   /** The SaveDataPath directory (system.ini SAVEPATH), when it is installation-relative. */
   private readonly saveDirectory: string | undefined;
@@ -1705,7 +1715,7 @@ export class ArtemisRuntime {
   /** A save directory file from save storage; undefined for paths outside it. */
   readSaveDirectoryFile(path: string): Promise<Uint8Array | null> | undefined {
     const name = this.saveFileName(path);
-    return name === undefined ? undefined : this.services.storage.read(name);
+    return name === undefined ? undefined : this.saves.read(name);
   }
   close(): void {
     for (const close of this.closers) close();

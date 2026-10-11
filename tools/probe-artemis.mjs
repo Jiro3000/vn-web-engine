@@ -229,6 +229,7 @@ try {
     storage: {
       read: async (name) => saveFiles.get(name) ?? null,
       write: (name, bytes) => void saveFiles.set(name, bytes),
+      delete: (name) => void saveFiles.delete(name),
     },
     // SIMULATED seed: a fixed Unix time keeps probe runs deterministic.
     randomSeed: 1733961600,
@@ -253,7 +254,9 @@ try {
     dialogs: {
       present: (request, complete) => {
         dialogs.push(request);
-        if (simulatedDialogResult !== null) complete({result: simulatedDialogResult});
+        // SIMULATED text fields keep their initial text.
+        if (simulatedDialogResult !== null)
+          complete({result: simulatedDialogResult, text: request.message});
       },
     },
     window: {

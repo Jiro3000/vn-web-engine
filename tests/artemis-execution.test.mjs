@@ -984,16 +984,6 @@ test('Dialog suspends script/ASB progress until completion and writes its native
     assert.equal(script.run(), 'stopped');
     assert.deepEqual(order, [['answer', '1'], 'resume', 'after', 'stop']);
     assert.throws(() => complete({result: 1}), /Stale or repeated/);
-    assert.throws(
-      () =>
-        dialog.dispatch({
-          kind: 'tag',
-          name: 'dialog',
-          sourceLine: -1,
-          args: new Map([['textfield', 'x']]),
-        }),
-      /text entry/,
-    );
   } finally {
     lua.close();
   }
@@ -1012,8 +1002,10 @@ test('Synchronous dialog completion leaves no pending wait and preserves native 
           fontSize: 20,
           minimumWidth: 240,
           applyDesktopScale: false,
+          textField: false,
+          inputDelay: 500,
         });
-        done({result: 0});
+        done({result: 0, text: ''});
       },
     },
     {
@@ -1026,6 +1018,164 @@ test('Synchronous dialog completion leaves no pending wait and preserves native 
   dialog.dispatch({kind: 'tag', name: 'dialog', sourceLine: -1, args: new Map()});
   assert.equal(dialog.pending, false);
   assert.deepEqual(order, ['begin', 'end']);
+});
+
+test('Text-field dialogs write the result, then the field text cut to its size in characters', async () => {
+  const {ArtemisDialog} = await import('../dist/engines/artemis/dialog.js');
+  const requests = [],
+    callbacks = [],
+    writes = [];
+  const dialog = new ArtemisDialog(
+    {
+      present: (request, done) => {
+        requests.push(request);
+        callbacks.push(done);
+      },
+    },
+    {
+      blocked: () => false,
+      beginWait: () => writes.push('begin'),
+      endWait: () => writes.push('end'),
+      writeVariable: (k, v) => writes.push([k, v]),
+    },
+  );
+  const run = (args, outcome) => {
+    writes.length = 0;
+    dialog.dispatch({kind: 'tag', name: 'dialog', sourceLine: -1, args: new Map(args)});
+    callbacks.at(-1)(outcome);
+    return [...writes];
+  };
+  const field = [
+    ['varname', 'yn'],
+    ['textfield', 'tx'],
+    ['message', '雪'],
+  ];
+  assert.deepEqual(run([...field, ['textfieldsize', '3']], {result: 1, text: 'aé雪😀b'}), [
+    'begin',
+    ['yn', '1'],
+    ['tx', 'aé雪'],
+    'end',
+  ]);
+  assert.equal(requests.at(-1).textField, true);
+  assert.equal(requests.at(-1).message, '雪');
+  assert.equal(requests.at(-1).canCancel, true);
+  // A cancelled dialog still hands back its text; 0 keeps everything and a NUL ends it.
+  assert.deepEqual(run(field, {result: 0, text: '😀😀😀😀\0x'}), [
+    'begin',
+    ['yn', '0'],
+    ['tx', '😀😀😀😀\0x'],
+    'end',
+  ]);
+  assert.deepEqual(
+    run([...field, ['textfieldsize', '-1']], {result: 1, text: 'ab\0c'}).slice(1, 3),
+    [
+      ['yn', '1'],
+      ['tx', 'ab'],
+    ],
+  );
+  assert.deepEqual(run([...field, ['textfieldsize', '1']], {result: 1, text: '😀x'}).slice(2, 3), [
+    ['tx', '😀'],
+  ]);
+  // An empty field name shows the field but writes nothing for it.
+  assert.deepEqual(run([['textfield', '']], {result: 1, text: 'z'}), ['begin', 'end']);
+  assert.equal(requests.at(-1).textField, true);
+  assert.equal(requests.at(-1).canCancel, false);
+  dialog.dispatch({kind: 'tag', name: 'dialog', sourceLine: -1, args: new Map(field)});
+  assert.throws(() => callbacks.at(-1)({result: 1}), /text is missing/);
+});
+
+test('The file tag copies into the save directory, removes files and ignores other commands', async () => {
+  const {ArtemisFileCommand} = await import('../dist/engines/artemis/file-command.js');
+  const files = new Map([['src.dat', Uint8Array.of(1, 2)]]),
+    events = [];
+  const command = new ArtemisFileCommand({
+    readPackFile: async (path) => files.get(path) ?? null,
+    writeFile: async (path, bytes) => {
+      if (path.startsWith('ro/')) return false;
+      files.set(path, bytes);
+      return true;
+    },
+    removeFile: (path) => {
+      events.push(['remove', path]);
+      files.delete(path);
+    },
+    clearArchiveCache: () => events.push(['clear']),
+    sourceNotFound: (tag) => events.push(['missing', tag.args.get('src')]),
+    destinationNotCreated: (tag) => events.push(['uncreated', tag.args.get('dst')]),
+  });
+  const tag = (...args) => ({kind: 'tag', name: 'file', sourceLine: -1, args: new Map(args)});
+  assert.equal(command.dispatch({...tag(), name: 'dialog'}), false);
+  assert.equal(
+    await command.dispatch(tag(['command', 'copy'], ['src', 'src.dat'], ['dst', 'dst.dat'])),
+    true,
+  );
+  assert.deepEqual([...files.get('dst.dat')], [1, 2]);
+  await command.dispatch(tag(['command', 'copy'], ['src', 'none.dat'], ['dst', 'x.dat']));
+  await command.dispatch(tag(['command', 'copy'], ['src', 'src.dat'], ['dst', 'ro/x.dat']));
+  assert.equal(command.dispatch(tag(['command', 'delete'], ['target', 'dst.dat'])), true);
+  assert.equal(command.dispatch(tag(['command', 'delete'])), true);
+  assert.equal(command.dispatch(tag(['command', 'clear_cache'])), true);
+  assert.equal(command.dispatch(tag(['command', 'Delete'], ['target', 'src.dat'])), true);
+  assert.equal(command.dispatch(tag()), true);
+  assert.deepEqual(events, [
+    ['missing', 'none.dat'],
+    ['uncreated', 'ro/x.dat'],
+    ['remove', 'dst.dat'],
+    ['remove', ''],
+    ['clear'],
+  ]);
+  assert.deepEqual([...files.keys()], ['src.dat']);
+});
+
+test('The save directory shows changes at once and applies them to storage in call order', async () => {
+  const {ArtemisSaveDirectory} = await import('../dist/engines/artemis/save-directory.js');
+  const records = new Map([['old.dat', Uint8Array.of(9)]]),
+    log = [];
+  let failNext = false;
+  const storage = {
+    read: async (name) => (log.push(['read', name]), records.get(name) ?? null),
+    write: async (name, bytes) => {
+      await new Promise((r) => setTimeout(r, 5));
+      if (failNext) {
+        failNext = false;
+        throw Error('disk full');
+      }
+      log.push(['write', name]);
+      records.set(name, bytes);
+    },
+    delete: (name) => void (log.push(['delete', name]), records.delete(name)),
+    list: async () => [...records.keys()],
+  };
+  const saves = await ArtemisSaveDirectory.open(storage);
+  assert.equal(saves.has('old.dat'), true);
+  let pack;
+  const packed = new Promise((r) => (pack = r));
+  void saves.write('a.dat', packed);
+  assert.equal(saves.has('a.dat'), true);
+  const firstRead = saves.read('a.dat');
+  void saves.remove('a.dat');
+  assert.equal(saves.has('a.dat'), false);
+  void saves.write('b.dat', Uint8Array.of(2));
+  const removedRead = saves.read('a.dat');
+  pack(Uint8Array.of(1));
+  assert.deepEqual([...(await firstRead)], [1]);
+  assert.equal(await removedRead, null);
+  assert.deepEqual(log, [
+    ['write', 'a.dat'],
+    ['read', 'a.dat'],
+    ['delete', 'a.dat'],
+    ['write', 'b.dat'],
+    ['read', 'a.dat'],
+  ]);
+  failNext = true;
+  void saves.write('c.dat', Uint8Array.of(3));
+  void saves.remove('old.dat');
+  await assert.rejects(saves.flush(), /disk full/);
+  assert.deepEqual([...records.keys()], ['b.dat']);
+  const readOnly = await ArtemisSaveDirectory.open({read: async () => null, write() {}});
+  void readOnly.write('x.dat', Uint8Array.of(0));
+  assert.throws(() => readOnly.remove('x.dat'), /cannot delete/);
+  assert.equal(readOnly.has('x.dat'), true);
 });
 
 test('Stale dialog callbacks cannot complete a subsequent dialog', async () => {

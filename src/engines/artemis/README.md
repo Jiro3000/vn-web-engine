@@ -155,12 +155,23 @@ Native metamethod-based callback lookup is not reproduced by the raw-field bridg
 implements the native unsigned auto-hide deadline. Native pointer activity resets
 remain unconnected; the browser player maps page coordinates to stage coordinates.
 
-`dialog.ts` supplies UTF-8 message dialogs through shared `TextDialogHost`. It
-pauses script progress and writes the returned native result before the host resumes.
-Text fields and their encoding/truncation remain unsupported. Full scheduler effects
-are supplied by the host (`0x1400c91e0`, `0x1400b7460`). In the browser,
-`MessageBoxTextDialogHost` (`src/platform/text-dialog.ts`) presents requests as OK or
-OK/Cancel message boxes.
+`dialog.ts` is the UTF-8 `dialog` tag (`0x1400c91e0`, completion `0x1400b7460`) over
+shared `TextDialogHost`. It pauses script progress until the host completes, then writes
+`varname` (1 accepted, 0 cancelled; its presence adds Cancel) and, for `textfield`, the
+field text cut to `textfieldsize` characters (0 keeps it whole, a negative size never
+cuts; text ends at a NUL). The field text is written on either result. The field starts
+with `message`. `BrowserTextDialogHost` (`src/platform/text-dialog.ts`) is the native
+CDialog window as a modal `<dialog>`: a focused single-line field or the message, OK and
+Cancel; Enter accepts and Escape cancels from any control, also without Cancel, but not
+while an IME composition takes the Enter; Tab moves forward through field, OK and
+Cancel; accepting and cancelling are ignored for the first 500 ms; browser close
+requests are ignored. Keys do not reach the game while it is open.
+
+`file-command.ts` is the `file` tag (`0x1400ea0b0`): `copy` reads `src` like a resource
+and writes `dst`, `delete` removes `target`, `clear_cache` drops the archive caches, and
+other commands do nothing. In the browser only the save directory is writable: copies
+elsewhere report the uncreatable destination, removals elsewhere are ignored, and
+`clear_cache` has nothing to drop because mounted archives never change.
 
 ## Engine runtime
 
@@ -387,9 +398,11 @@ and clears it). A loaded file whose tag has `type` continues as the trans tag. U
 files and refused versions fail without a Lua call. The owner runs the handler through
 `callEvent`, so a callback that issues resource tags finishes before the load returns.
 
-Files in the save directory (SAVEPATH when it is a plain relative name) are host storage:
-`fileExists` and resource reads under that directory consult the stored names, so saved
-thumbnails load like installation files. `screenshot.ts` implements `takess`
+Files in the save directory (SAVEPATH when it is a plain relative name) are host storage
+behind `save-directory.ts`: `fileExists` and resource reads under that directory consult
+the stored names, so saved thumbnails load like installation files. Native file writes are
+synchronous, so a written or removed file exists or is gone for the script at once; the
+storage changes apply in call order, and reads wait for the earlier changes. `screenshot.ts` implements `takess`
 (`0x1400e1cf0`), which renders the scene offscreen into the engine screenshot surface,
 and `savess` (`0x1400e1d90`), which scales that surface to `width`x`height` (stage size by
 default), writes it as PNG (`.png` appended to an unextended name) and evicts the name

@@ -94,6 +94,7 @@ function storage(store: IndexedDbStore): ArtemisRuntimeStorage {
     read: async (name) => (await store.snapshot()).get(name) ?? null,
     write: (name, bytes) => store.update((records) => void records.set(name, bytes.slice())),
     list: async () => [...(await store.snapshot()).keys()],
+    delete: (name) => store.update((records) => void records.delete(name)),
   };
 }
 
