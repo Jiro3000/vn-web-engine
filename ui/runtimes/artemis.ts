@@ -12,7 +12,11 @@ import {mountInstallationControls} from '../player/installation-controls.js';
 import {mountGameViewer} from '../player/game-viewer.js';
 import {setRuntimeState, subscribeSaveBusy} from '../player/runtime-state.js';
 import {mountFullscreenControls} from '../player/fullscreen.js';
-import {activeArtemisGame, artemisSaveNamespace} from '../player/artemis-library.js';
+import {
+  activeArtemisGame,
+  artemisSaveNamespace,
+  rememberArtemisGame,
+} from '../player/artemis-library.js';
 import {rememberLastPlayed} from '../player/last-played.js';
 
 /** The Windows version this page reports to games (Windows 10, 10.0). Games that check the
@@ -80,14 +84,16 @@ async function sha256(source: ByteSource): Promise<string> {
 }
 
 /** Identifies the engine revision by the hash of a root executable. */
-async function identify(files: ReadonlyMap<string, ByteSource>): Promise<string> {
+async function identify(
+  files: ReadonlyMap<string, ByteSource>,
+): Promise<{executableSha256: string; executableName: string}> {
   const hashes: string[] = [];
   for (const [path, source] of files) {
     if (path.includes('/') || !/\.exe$/i.test(path)) continue;
     const hash = await sha256(source);
     try {
       artemisRevision(hash);
-      return hash;
+      return {executableSha256: hash, executableName: path};
     } catch {
       hashes.push(hash);
     }
@@ -115,7 +121,7 @@ async function loadInstallation(cached: CachedInstallation): Promise<void> {
   const bases = [...byPath.keys()].filter((path) => !path.includes('/') && /\.pfs$/.test(path));
   if (bases.length !== 1)
     throw new Error('Choose the game folder, including its base .pfs archive.');
-  const executableSha256 = await identify(byPath);
+  const {executableSha256, executableName} = await identify(byPath);
   const files = await ArtemisFiles.mount(bases[0]!, (segments) => byPath.get(segments.join('/')));
   const paths = new Set(byPath.keys());
   for (const {archive} of files.archives)
@@ -123,9 +129,14 @@ async function loadInstallation(cached: CachedInstallation): Promise<void> {
   const namespace = artemisSaveNamespace(executableSha256, bases[0]!);
   const saves = await IndexedDbStore.open(namespace);
   installation = {executableSha256, files, paths, saves};
-  const title = 'Artemis';
-  activeArtemisGame.set({title, namespace});
+  // The executable carries no product name, so the game is named by its folder.
+  const title = cached.metadata.title || executableName.replace(/\.exe$/i, '');
+  const game = {title, namespace};
+  activeArtemisGame.set(game);
+  void rememberArtemisGame(game).catch(() => undefined);
   rememberLastPlayed('artemis', title);
+  document.title = `${title} · VN Web Engine`;
+  element('game-title').textContent = title;
   element('prompt').textContent = 'The game is ready.';
   status.textContent = `${byPath.size} files found. Ready to play.`;
   play.hidden = false;
@@ -139,10 +150,15 @@ async function selectInstallation(selection: InstallationSelection): Promise<voi
     source: new BlobSource(file),
     lastModifiedMs: file.lastModified,
   }));
+  const folder =
+    selection.directoryHandle?.name ||
+    selection.files
+      .find(({file}) => file.webkitRelativePath)
+      ?.file.webkitRelativePath.split('/')[0];
   await loadInstallation({
     directories: selection.directories,
     files,
-    metadata: {},
+    metadata: folder ? {title: folder} : {},
     attachments: {},
   });
 }

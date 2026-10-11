@@ -45,3 +45,41 @@ export function writeArtemisSave(
     store.update((records) => void records.set(name, bytes.slice())),
   );
 }
+
+const LIBRARY = ['library', 'artemis'];
+
+function validGame(value: unknown): value is ArtemisActiveGame {
+  if (typeof value !== 'object' || value === null) return false;
+  const game = value as Partial<ArtemisActiveGame>;
+  return (
+    typeof game.title === 'string' &&
+    Array.isArray(game.namespace) &&
+    game.namespace.length > 0 &&
+    game.namespace.every((part) => typeof part === 'string' && part.length > 0)
+  );
+}
+
+/** The Artemis installations loaded in this browser. */
+export async function knownArtemisGames(): Promise<ArtemisActiveGame[]> {
+  const store = await IndexedDbStore.open(LIBRARY);
+  try {
+    const games: ArtemisActiveGame[] = [];
+    for (const bytes of (await store.snapshot()).values()) {
+      const value: unknown = JSON.parse(new TextDecoder().decode(bytes));
+      if (validGame(value)) games.push(value);
+    }
+    return games;
+  } finally {
+    store.close();
+  }
+}
+
+export async function rememberArtemisGame(game: ArtemisActiveGame): Promise<void> {
+  const store = await IndexedDbStore.open(LIBRARY);
+  try {
+    const bytes = new TextEncoder().encode(JSON.stringify(game));
+    await store.update((records) => void records.set(game.namespace.join('\0'), bytes));
+  } finally {
+    store.close();
+  }
+}
