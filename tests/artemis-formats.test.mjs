@@ -234,6 +234,73 @@ test('Artemis read-ahead serves the next block files from memory and keeps loose
   assert.equal(Buffer.from(await source.read(0, 5)).toString(), 'voice');
 });
 
+test('Artemis scenario jumps name the files their target shows first', async () => {
+  const {artemisJumpNames} = await import('../dist/engines/artemis/read-ahead.js');
+  const source = Buffer.from(`astver = 2.0
+astname = "ast"
+ast = {
+block_00000={
+{"bg",file="early",path=":bg/"},
+{"text"},
+text={ja={{"x"}}},
+linknext="block_00001",
+},
+block_00001={
+{"bg",file="scene",time=500,path=":bg/"},
+{"fg",path=":fg/no/",ch="a",file="a_base",face="a_face",mode=3},
+{"bgm",file="bgm07"},
+linknext="block_00002",
+},
+block_00002={
+{"text"},
+text={vo={{"vo",ch="a",file="11/z1"}},ja={{"x"}}},
+linknext="block_00003",
+},
+block_00003={
+{"bg",file="later",path=":bg/"},
+},
+block_00004={
+{"msgoff"},
+{"excall",file="next",label="top",call=1},
+{"exreturn"},
+},
+label={top={block="block_00000",label=1},scene={block="block_00001",label=1},flow={block="block_00004",label=1}},
+}`);
+  const names = [];
+  assert.deepEqual(artemisJumpNames(source, 's.ast', {file: 's', label: 'scene'}, names), []);
+  assert.deepEqual(names.map((n) => `${n.directory ?? ''}${n.name}`).sort(), [
+    ':bg/scene',
+    ':fg/no/a',
+    ':fg/no/a_base',
+    ':fg/no/a_face',
+    ':vo/11/z1',
+    'bgm07',
+  ]);
+  // The game's sound tables translate tag names into the files they play.
+  const mapped = [];
+  artemisJumpNames(source, 's.ast', {file: 's', label: 'scene'}, mapped, (tag, name) =>
+    tag === 'bgm' ? {directory: ':bgm/', name: `${name}_file`} : undefined,
+  );
+  assert.deepEqual(
+    mapped.filter((n) => n.directory === ':bgm/'),
+    [{directory: ':bgm/', name: 'bgm07_file'}],
+  );
+  // A return resumes after the tag that called; a flow script's next call is returned.
+  const flow = [];
+  assert.deepEqual(
+    artemisJumpNames(source, 's.ast', {file: 's', block: 'block_00004', count: 1}, flow),
+    [{file: 'next', label: 'top'}],
+  );
+  assert.deepEqual(flow, []);
+  // Without the label the scenario starts at `top`.
+  const top = [];
+  artemisJumpNames(source, 's.ast', {file: 's', label: 'missing'}, top);
+  assert.deepEqual(
+    top.map((n) => n.name),
+    ['early'],
+  );
+});
+
 test('Artemis PSD merged raw and RLE planes preserve stage white-matte recovery and transparent RGB', async () => {
   const {psd} = await import('./artemis-image-fixtures.mjs');
   const {decodeArtemisPsd} = await import('../dist/formats/artemis/psd.js');

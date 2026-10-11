@@ -34,7 +34,17 @@ import {artemisRuntimeSound} from '../runtime-sound.js';
 import {ArtemisSurfaceManager} from '../surface-manager.js';
 import {ArtemisTextGlyphs} from '../text-glyphs.js';
 import {createArtemisBrowserLayers, type ArtemisBrowserLayers} from './layers.js';
-import {artemisCurrentBlock, artemisNextBlockNames} from '../read-ahead.js';
+import {
+  artemisCurrentBlock,
+  artemisJumpNames,
+  artemisNameMap,
+  artemisNextBlockNames,
+  artemisScenarioPath,
+  type ArtemisNameMap,
+  type ArtemisScenarioJump,
+} from '../read-ahead.js';
+import type {Lua51} from '../../../core/lua51/runtime.js';
+import type {ArtemisReadAheadName} from '../files.js';
 import {VirtualKeyState} from '../../../input/virtual-keys.js';
 import {beginRuntimeSpan} from '../../../platform/runtime-performance.js';
 
@@ -56,7 +66,8 @@ export interface ArtemisBrowserPlayerOptions {
   readonly surfaceBudget?: bigint;
   /** Diagnostic stream of tags, script steps and owner effects. */
   readonly trace?: ArtemisRuntimeTrace;
-  /** While the script waits for input, reads the files of the next scenario block. */
+  /** While the script waits for input, reads the files of the next scenario block and of
+   * the scenario file it enters (default true). */
   readonly readAhead?: boolean;
   diagnostic(message: string): void;
   /** The game stopped with an error. */
@@ -102,6 +113,9 @@ export class ArtemisBrowserPlayer {
   private aheadBlock: string | undefined;
   private aheadCandidate: string | undefined;
   private aheadChecked = 0;
+  private nameMap: {vm: Lua51; map: ArtemisNameMap} | undefined;
+  /** Names of the files that recent scenario jumps show first, by jump. */
+  private readonly jumpNames = new Map<string, Promise<ArtemisReadAheadName[]>>();
   private started = false;
   private closed = false;
   /** Pointer position in stage coordinates. */
@@ -406,7 +420,7 @@ export class ArtemisBrowserPlayer {
         this.wheel = [];
         runtime.frame(this.now, input);
         if (runtime.resourcePending) this.settle(runtime);
-        else if (this.options.readAhead) this.readAhead(runtime);
+        else if (this.options.readAhead !== false) this.readAhead(runtime);
       }
       if (this.layers && this.graphics)
         this.graphics.drawStage(this.layers.layers.scene, this.layers.presentation);
@@ -427,14 +441,57 @@ export class ArtemisBrowserPlayer {
       return;
     }
     const vm = runtime.lua.vm,
-      current = artemisCurrentBlock(vm);
-    if (!current || current === this.aheadBlock) return;
+      position = artemisCurrentBlock(vm),
+      current = position && `${position.file}\0${position.block}`;
+    if (!position || current === this.aheadBlock) return;
     if (current !== this.aheadCandidate) {
       this.aheadCandidate = current;
       return;
     }
     this.aheadBlock = current;
-    this.options.files.readAhead(artemisNextBlockNames(vm, current));
+    if (this.nameMap?.vm !== vm) this.nameMap = {vm, map: artemisNameMap(vm)};
+    const map = this.nameMap.map;
+    const {names, jumps} = artemisNextBlockNames(vm, position.block, map);
+    if (!jumps.length) {
+      this.options.files.readAhead(names);
+      return;
+    }
+    const paths = jumps.map((jump) => artemisScenarioPath(vm, jump.file));
+    void Promise.all(jumps.map((jump, index) => this.jumpTarget(jump, paths[index], 2)))
+      .then((found) => {
+        if (this.aheadBlock === current) this.options.files.readAhead(names.concat(...found));
+      })
+      .catch((error: unknown) => this.options.diagnostic(`read-ahead: ${String(error)}`));
+  }
+  /** Names a scenario jump shows first, following a flow script's own jump `depth` times. */
+  private jumpTarget(
+    jump: ArtemisScenarioJump,
+    path: string | undefined,
+    depth: number,
+  ): Promise<ArtemisReadAheadName[]> {
+    if (!path) return Promise.resolve([]);
+    const key = JSON.stringify([path, jump.label, jump.block, jump.count]);
+    let found = this.jumpNames.get(key);
+    if (!found) {
+      const runtime = this.runtime;
+      found = (async () => {
+        const bytes = await this.options.files.read(path);
+        if (!bytes) return [];
+        const names: ArtemisReadAheadName[] = [];
+        const finish = beginRuntimeSpan('artemis.read-ahead.jump', undefined, 0);
+        const further = artemisJumpNames(bytes, path, jump, names, this.nameMap?.map);
+        finish?.({names: names.length});
+        if (depth > 1 && runtime)
+          for (const next of further) {
+            const nextPath = artemisScenarioPath(runtime.lua.vm, next.file);
+            names.push(...(await this.jumpTarget(next, nextPath, depth - 1)));
+          }
+        return names;
+      })();
+      this.jumpNames.set(key, found);
+      if (this.jumpNames.size > 4) this.jumpNames.delete(this.jumpNames.keys().next().value!);
+    }
+    return found;
   }
   /** Resumes the script after each resource operation its tags or Lua calls suspend on. */
   private settle(runtime: ArtemisRuntime): void {
