@@ -34,7 +34,9 @@ import {artemisRuntimeSound} from '../runtime-sound.js';
 import {ArtemisSurfaceManager} from '../surface-manager.js';
 import {ArtemisTextGlyphs} from '../text-glyphs.js';
 import {createArtemisBrowserLayers, type ArtemisBrowserLayers} from './layers.js';
+import {artemisCurrentBlock, artemisNextBlockNames} from '../read-ahead.js';
 import {VirtualKeyState} from '../../../input/virtual-keys.js';
+import {beginRuntimeSpan} from '../../../platform/runtime-performance.js';
 
 export interface ArtemisBrowserPlayerOptions {
   readonly document: Document;
@@ -54,6 +56,8 @@ export interface ArtemisBrowserPlayerOptions {
   readonly surfaceBudget?: bigint;
   /** Diagnostic stream of tags, script steps and owner effects. */
   readonly trace?: ArtemisRuntimeTrace;
+  /** While the script waits for input, reads the files of the next scenario block. */
+  readonly readAhead?: boolean;
   diagnostic(message: string): void;
   /** The game stopped with an error. */
   exit(error: unknown): void;
@@ -94,6 +98,10 @@ export class ArtemisBrowserPlayer {
   private now = 1;
   private request = 0;
   private settling = false;
+  /** The block whose next block was read ahead, and when the block was last checked. */
+  private aheadBlock: string | undefined;
+  private aheadCandidate: string | undefined;
+  private aheadChecked = 0;
   private started = false;
   private closed = false;
   /** Pointer position in stage coordinates. */
@@ -398,6 +406,7 @@ export class ArtemisBrowserPlayer {
         this.wheel = [];
         runtime.frame(this.now, input);
         if (runtime.resourcePending) this.settle(runtime);
+        else if (this.options.readAhead) this.readAhead(runtime);
       }
       if (this.layers && this.graphics)
         this.graphics.drawStage(this.layers.layers.scene, this.layers.presentation);
@@ -407,12 +416,34 @@ export class ArtemisBrowserPlayer {
     }
     this.schedule();
   }
+  /** Once the current block has been waiting for input across two checks, reads the files
+   * of the next one. */
+  private readAhead(runtime: ArtemisRuntime): void {
+    const now = performance.now();
+    if (now - this.aheadChecked < 250) return;
+    this.aheadChecked = now;
+    if (runtime.skipping || runtime.script.state !== 'waiting') {
+      this.aheadCandidate = undefined;
+      return;
+    }
+    const vm = runtime.lua.vm,
+      current = artemisCurrentBlock(vm);
+    if (!current || current === this.aheadBlock) return;
+    if (current !== this.aheadCandidate) {
+      this.aheadCandidate = current;
+      return;
+    }
+    this.aheadBlock = current;
+    this.options.files.readAhead(artemisNextBlockNames(vm, current));
+  }
   /** Resumes the script after each resource operation its tags or Lua calls suspend on. */
   private settle(runtime: ArtemisRuntime): void {
     this.settling = true;
+    const finish = beginRuntimeSpan('artemis.resource.settle');
     void (async () => {
       while (runtime.resourcePending && !this.closed) await runtime.settleResource();
       this.settling = false;
+      finish?.();
     })().catch((error: unknown) => this.fail(error));
   }
   /** The runtime raises pointer events itself (`ArtemisLayerOwner.updatePointer`); this

@@ -240,6 +240,7 @@ play.onclick = () => {
     graphicsFeatureLevel: REPORTED_GRAPHICS_FEATURE_LEVEL,
     display: displayHost,
     trace: pageTrace(),
+    readAhead: location.hash.includes('readahead'),
     diagnostic: (message) => console.warn(`[Artemis] ${message}`),
     exit: stopped,
     closed: () => {

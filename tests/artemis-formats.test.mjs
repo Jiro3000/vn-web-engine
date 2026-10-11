@@ -188,6 +188,52 @@ test('Magic paths substitute one native alias and preserve overlay/empty loose p
   assert.throws(() => files.setMagicPath('x', ':脚本'), /Unsupported/);
 });
 
+test('Artemis read-ahead serves the next block files from memory and keeps loose files first', async () => {
+  const archive = memory(
+    pfs([
+      ['image/fg/no/a_base.png', Buffer.from('normal')],
+      ['image/fg/bu/a_base.png', Buffer.from('bust')],
+      ['image/face/a_face.png', Buffer.from('face')],
+      ['sound/vo/11/z1.ogg', Buffer.from('voice')],
+      ['system/loose.png', Buffer.from('archive')],
+    ]),
+  );
+  let reads = 0;
+  const counted = {size: archive.size, read: (...args) => (reads++, archive.read(...args))};
+  const installed = new Map([
+    ['game.pfs', counted],
+    ['system/loose.png', memory(Buffer.from('loose'))],
+  ]);
+  const files = await ArtemisFiles.mount('game.pfs', (parts) => installed.get(parts.join('/')));
+  files.setMagicPath('fg', 'image/fg');
+  files.setMagicPath('vo', 'sound/vo');
+  files.setMagicPath('sys', 'system');
+  files.readAhead([
+    {directory: ':fg/no/', name: 'a_base'},
+    {directory: ':fg/no/', name: 'a_face'},
+    {directory: ':vo/', name: '11/z1'},
+    {directory: ':sys/', name: 'loose'},
+    {name: 'missing'},
+  ]);
+  for (let i = 0; i < 20; i++) await new Promise(setImmediate);
+  const before = reads;
+  assert.equal(before > 0, true);
+  const text = async (path) => Buffer.from(await files.read(path)).toString();
+  assert.equal(await text(':fg/no/a_base.png'), 'normal');
+  assert.equal(await text('image/face/a_face.png'), 'face');
+  assert.equal(await text(':vo/11/z1.ogg'), 'voice');
+  assert.equal(reads, before);
+  // Only the directory's own match was read; the bust image comes from the archive.
+  assert.equal(await text(':fg/bu/a_base.png'), 'bust');
+  assert.equal(reads, before + 1);
+  assert.equal(await text(':sys/loose.png'), 'loose');
+  // Every read of a read-ahead file returns new bytes.
+  const source = await files.open(':vo/11/z1.ogg');
+  const first = await source.read(0, 5);
+  first.fill(0);
+  assert.equal(Buffer.from(await source.read(0, 5)).toString(), 'voice');
+});
+
 test('Artemis PSD merged raw and RLE planes preserve stage white-matte recovery and transparent RGB', async () => {
   const {psd} = await import('./artemis-image-fixtures.mjs');
   const {decodeArtemisPsd} = await import('../dist/formats/artemis/psd.js');
