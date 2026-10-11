@@ -754,11 +754,11 @@ The browser stage renders the pending `current` scene as the target during both 
 and rule transitions. Its saved previous GPU frame supplies the source. Scene/resource
 commit remains at tween completion; ordinary frames and screenshots use `retained`.
 
-The browser reads the custom cursor's layer ID from the script's `csv.mw.cursor.id`.
-`drawStage` excludes this top-level live layer from both transition surfaces and draws
-its current actor after stage composition. Its position and visibility stay live during
-crossfade/rule transitions, without a frozen cursor fading in the saved frame. Layer
-names come from the script; nested live layer IDs are explicitly unsupported.
+Native stage drawing (`0x1401505e0`) sends the whole root layer tree through the
+transition layer; only the message layers stored outside the tree and the stage's other
+top-level layers draw after it. A script-drawn cursor is an ordinary root layer
+(`lyc`/`lyprop`), so during a transition its old position fades out with the presented
+frame and its new position fades in with the pending scene.
 
 `png-surface.ts` (`artemisPngSurface`) converts a decoded PNG into the native CPng image
 (`0x1401838e0`): colour type 0 (gray) becomes format 0 with one byte per pixel (low depths

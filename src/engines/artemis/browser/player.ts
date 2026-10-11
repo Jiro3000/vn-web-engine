@@ -32,11 +32,7 @@ import {ArtemisRuntimeGlyphOwner} from '../runtime-glyphs.js';
 import {artemisRuntimeSound} from '../runtime-sound.js';
 import {ArtemisSurfaceManager} from '../surface-manager.js';
 import {ArtemisTextGlyphs} from '../text-glyphs.js';
-import {
-  artemisCursorLayer,
-  createArtemisBrowserLayers,
-  type ArtemisBrowserLayers,
-} from './layers.js';
+import {createArtemisBrowserLayers, type ArtemisBrowserLayers} from './layers.js';
 import {ArtemisDomText, artemisTextSlots} from './dom-text.js';
 import {
   artemisCurrentBlock,
@@ -512,11 +508,7 @@ export class ArtemisBrowserPlayer {
         else if (this.options.readAhead !== false) this.readAhead(runtime);
       }
       if (this.layers && this.graphics) {
-        this.graphics.drawStage(
-          this.layers.layers.scene,
-          this.layers.presentation,
-          artemisCursorLayer(runtime.lua.vm),
-        );
+        this.graphics.drawStage(this.layers.layers.scene, this.layers.presentation);
         this.domText?.update();
       }
     } catch (error) {

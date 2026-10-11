@@ -35,7 +35,6 @@
   import {ArtemisScript} from '../../dist/engines/artemis/script.js';
   import {ArtemisStage} from '../../dist/engines/artemis/stage.js';
   import {ArtemisTransition} from '../../dist/engines/artemis/transition.js';
-  import {artemisCursorLayer} from '../../dist/engines/artemis/browser/layers.js';
   import {ArtemisLayerCommands} from '../../dist/engines/artemis/layer-commands.js';
   import {GpuRenderSurface} from '../../dist/graphics/gpu-render-surface.js';
   import {CanvasDrawTarget} from '../../dist/graphics/draw-list.js';
@@ -362,45 +361,36 @@
       [...tracked].every((texture) => !deleted.includes(texture)),
       'hidden actor texture evicted',
     );
-    // The cursor stays live above both transitions; neither saved stage image may
-    // contain it. Use a configured name unrelated to the real game's name.
-    lua.vm.execute(new TextEncoder().encode('csv={mw={cursor={id="pointer"}}}'));
-    const cursorID = artemisCursorLayer(lua.vm);
-    assert(cursorID === 'pointer', 'configured cursor layer was not resolved');
+    // A layer moved during a transition, such as a script-drawn cursor, is part of the
+    // stage: its old position fades out with the presented frame and its new position
+    // fades in with the pending scene (0x1401505e0 composes only the root through the
+    // transition layer).
     await layers.dispatch(
-      command('lyc', {id: cursorID, width: '1', height: '1', color: 'ffff0000'}),
+      command('lyc', {id: 'moving', width: '1', height: '1', color: 'ffff0000'}),
     );
-    await layers.dispatch(command('lyprop', {id: cursorID, left: '0', top: '1'}));
-    stage.dispatch(command('flip'));
     const pixel = (x, y) => [...canvas.getContext('2d').getImageData(x, y, 1, 1).data];
+    const near = (actual, expected) =>
+      actual.every((value, index) => Math.abs(value - expected[index]) <= 1);
     for (const type of ['1', '2']) {
-      await layers.dispatch(command('lyprop', {id: cursorID, left: '0', visible: '1'}));
-      await layers.dispatch(command('lyprop', {id: '2', visible: '1'}));
+      await layers.dispatch(command('lyprop', {id: 'moving', left: '0', top: '1'}));
       stage.dispatch(command('flip'));
-      graphics.drawStage(layers.scene, presentation(), cursorID);
-      assert(pixel(0, 1).join() === '255,0,0,255', 'live cursor missing before transition');
-      await layers.dispatch(command('lyprop', {id: '2', visible: '0'}));
+      graphics.drawStage(layers.scene, presentation());
+      assert(pixel(0, 1).join() === '255,0,0,255', 'moving layer missing before transition');
       await transition.dispatch(command('trans', {type, time: '4', vague: '128', rule: 'gray'}));
       transitionTween.tick(300);
-      await layers.dispatch(command('lyprop', {id: cursorID, left: '3'}));
+      await layers.dispatch(command('lyprop', {id: 'moving', left: '3'}));
       transitionTween.tick(302);
-      graphics.drawStage(layers.scene, presentation(), cursorID);
-      assert(
-        pixel(0, 1).join() === '0,0,0,255',
-        'old cursor position survived in transition frame',
-      );
-      assert(pixel(3, 1).join() === '255,0,0,255', 'current cursor faded with the scene');
-      await layers.dispatch(command('lyprop', {id: cursorID, visible: '0'}));
-      graphics.drawStage(layers.scene, presentation(), cursorID);
-      assert(pixel(3, 1).join() === '0,0,0,255', 'hidden cursor survived until scene commit');
+      graphics.drawStage(layers.scene, presentation());
+      assert(near(pixel(0, 1), [128, 0, 0, 255]), 'old layer position did not fade out');
+      assert(near(pixel(3, 1), [128, 0, 0, 255]), 'new layer position did not fade in');
       transitionTween.tick(304);
-      graphics.drawStage(layers.scene, presentation(), cursorID);
+      graphics.drawStage(layers.scene, presentation());
+      assert(pixel(0, 1).join() === '0,0,0,255', 'old layer position survived the transition');
+      assert(pixel(3, 1).join() === '255,0,0,255', 'new layer position missing after transition');
     }
-    await layers.dispatch(command('lydel', {id: cursorID}));
+    await layers.dispatch(command('lydel', {id: 'moving'}));
     stage.dispatch(command('flip'));
-    lua.vm.execute(new TextEncoder().encode('csv.mw.cursor=nil'));
-    assert(artemisCursorLayer(lua.vm) === null, 'missing cursor config did not clear the overlay');
-    const afterCursor = {created: created.length, deleted: deleted.length};
+    const afterMove = {created: created.length, deleted: deleted.length};
     let refused = false;
     try {
       target.prepareImage({
@@ -420,7 +410,7 @@
     );
     assert(refused, 'oversized texture was accepted');
     assert(
-      created.length - deleted.length === afterCursor.created - afterCursor.deleted,
+      created.length - deleted.length === afterMove.created - afterMove.deleted,
       'failed upload leaked its texture',
     );
     await layers.dispatch(command('lydel', {id: '2'}));
