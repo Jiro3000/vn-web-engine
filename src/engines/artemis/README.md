@@ -750,6 +750,16 @@ stage commit and run mode release. `input` selects run mode 2 (clickable) or 4. 
 owner ticks registered tweens and finishes `tween` on a mode 2 click. Transition rendering
 is host work.
 
+The browser stage renders the pending `current` scene as the target during both crossfade
+and rule transitions. Its saved previous GPU frame supplies the source. Scene/resource
+commit remains at tween completion; ordinary frames and screenshots use `retained`.
+
+The browser reads the custom cursor's layer ID from the script's `csv.mw.cursor.id`.
+`drawStage` excludes this top-level live layer from both transition surfaces and draws
+its current actor after stage composition. Its position and visibility stay live during
+crossfade/rule transitions, without a frozen cursor fading in the saved frame. Layer
+names come from the script; nested live layer IDs are explicitly unsupported.
+
 `png-surface.ts` (`artemisPngSurface`) converts a decoded PNG into the native CPng image
 (`0x1401838e0`): colour type 0 (gray) becomes format 0 with one byte per pixel (low depths
 bit-replicated, 16-bit high byte, gray tRNS ignored); every other colour type becomes

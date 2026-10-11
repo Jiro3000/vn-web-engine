@@ -17,7 +17,7 @@ import type {
   ArtemisImageClip,
 } from './layer-properties.js';
 import type {ArtemisLoadedImage} from './image-loader.js';
-import type {ArtemisScene} from './scene.js';
+import type {ArtemisScene, ArtemisSceneView} from './scene.js';
 import type {ArtemisAnimationFrames} from './animation-layer.js';
 import {ArtemisDisplayObject, artemisDisplayPoint} from './display-object.js';
 import {artemisRevision} from './revision.js';
@@ -723,10 +723,16 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
     this.textures.set(id, {id, image, references: 0, managed: true});
     return {id, image};
   }
-  private nodes(scene: ArtemisScene<ArtemisDisplayActor>): RenderNode[] {
+  private nodes(
+    scene: ArtemisScene<ArtemisDisplayActor>,
+    view: ArtemisSceneView = 'retained',
+    currentRoot?: string,
+  ): RenderNode[] {
     const roots: RenderNode[] = [],
       groups = new Map<string, RenderNode>();
-    for (const entry of scene.prepareEntries('retained')) {
+    for (const entry of currentRoot === undefined
+      ? scene.prepareEntries(view)
+      : scene.select(currentRoot)) {
       const node: RenderNode = {
         id: entry.id,
         actor: entry.value,
@@ -1060,15 +1066,18 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
   drawCommitted(scene: ArtemisScene<ArtemisDisplayActor>): DrawList {
     return this.render(scene, null);
   }
-  /** Draws the committed scene into the stage surface, then presents it through the
-   * transition: state 1 mixes from the frame presented when the transition started by
+  /** Draws the committed scene normally, or the pending current scene as the transition
+   * target. State 1 mixes from the frame presented when the transition started by
    * `crossfade`; state 2 reveals each pixel as `threshold` passes its rule value, ramping
    * over `vague` on either side (the threshold tweens from -vague to 255+vague). */
   drawStage(
     scene: ArtemisScene<ArtemisDisplayActor>,
     presentation: ArtemisStagePresentation,
+    /** A top-level live overlay, such as the script's cursor, drawn after composition. */
+    liveRoot: string | null = null,
   ): DrawList {
-    return this.render(scene, presentation);
+    if (liveRoot?.includes('.')) throw Error('Unsupported nested Artemis live stage layer');
+    return this.render(scene, presentation, undefined, liveRoot);
   }
   /** takess 0x1400e1cf0: renders the committed scene into the screenshot surface; the
    * presented frame is unchanged. */
@@ -1122,6 +1131,7 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
     scene: ArtemisScene<ArtemisDisplayActor>,
     presentation: ArtemisStagePresentation | null,
     offscreen?: GpuRenderSurface,
+    liveRoot: string | null = null,
   ): DrawList {
     this.now = null;
     this.draws++;
@@ -1478,12 +1488,22 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
           clearColor: this.raster.clearColor ?? [0, 0, 0, 1],
         });
       }
-      visit(this.nodes(scene), new Float32Array([1, 0, 0, 0, 1, 0]), 1, {
-        surface: offscreen ?? (stage ? stage.current.image : null),
-        width: this.target.width,
-        height: this.target.height,
-        pendingClear: false,
-      });
+      // trans commits only at completion. Its target must include pending layer edits;
+      // retained still owns the old scene until then, and previous holds its GPU frame.
+      const transitioning = presentation?.state === 1 || presentation?.state === 2;
+      const view = transitioning ? 'current' : 'retained';
+      const liveID = stage && liveRoot !== null ? scene.entry(liveRoot, view)?.id : undefined;
+      visit(
+        this.nodes(scene, view).filter((node) => node.id !== liveID),
+        new Float32Array([1, 0, 0, 0, 1, 0]),
+        1,
+        {
+          surface: offscreen ?? (stage ? stage.current.image : null),
+          width: this.target.width,
+          height: this.target.height,
+          pendingClear: false,
+        },
+      );
       if (stage) {
         const state = presentation!.state;
         const corners = [
@@ -1534,6 +1554,13 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
             discardTransparent: false,
           },
         );
+        if (liveRoot !== null)
+          visit(this.nodes(scene, 'current', liveRoot), new Float32Array([1, 0, 0, 0, 1, 0]), 1, {
+            surface: null,
+            width: this.target.width,
+            height: this.target.height,
+            pendingClear: false,
+          });
       }
       if (offscreen) commands.push({kind: 'gpu-target', surface: null});
       const list: DrawList = {
