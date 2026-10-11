@@ -227,7 +227,12 @@ for the pending save writes, disposes itself and reports `closed`.
 `input.ts` is CArtemisInput. Keys 0..0xff hold 0 idle, 1 pressed this update, 2 held,
 3 held past the 500 ms repeat delay and 4 released this update; wheel notches (136 up,
 137 down) persist until a push, down or down-edge query sees them; joystick keys
-0x100..0x13f stay 0. Push answers states 1 and 3, down 1..3, down edge 1, up edge 4 and
+0x100..0x13f follow the first attached game controller (DIJOYSTATE, axes -1000..1000):
+buttons 0x100..0x11f, axes past ±499 0x120..0x12f, POV directions 0x130..0x13f. The player
+reads it from the browser Gamepad API (`src/input/directinput-joystick.ts`, the DirectInput
+layout of the pad's driver); a lost device releases the keys. While the page is not visible
+and focused every query is false and the pointer reads (-1,-1).
+Push answers states 1 and 3, down 1..3, down edge 1, up edge 4 and
 decide the down edge (rev.3179 has no writer for the up-edge decide set). Keys 1 and 2
 require the pointer inside the client area, and a false key 1 query repeats for the tap
 key 0x8a. Lua `overrideKey{key, status}` sets a one-update override of `status & 0x3e | 1`
@@ -824,8 +829,8 @@ an unsigned comparison. Pointer selection of the hit actor belongs to the pointe
 and stores a TRect<float> whose sizes are the endpoint differences plus 1 at +0x170
 (`0x1400a4980`); other field counts are ignored. Both start zero and survive actor
 copies (`ArtemisDisplayObject.draggable`, `dragArea`). The glyph tag clears the same byte
-on its layers. Pointer dragging, which raises the dragin/drag/dragout layer events and
-moves a draggable actor inside its area, is not implemented.
+on its layers. Pointer dragging raises the dragin/drag/dragout layer events and moves a
+draggable actor inside its area (`ArtemisLayerOwner.updatePointer`).
 
 `lyprop layermode` preserves the native exact spellings `normal`, `add`, `screen`
 and `multiply`; any other value leaves the old mode intact (`0x140115650`). Mode

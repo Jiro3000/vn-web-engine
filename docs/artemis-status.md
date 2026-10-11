@@ -33,5 +33,6 @@ Other executables are refused by hash.
 
 ## Not implemented
 
-- Layer event penetration and drag events; the click glyph (layer byte +0x16c).
-- Nonempty `syncse`, scenario mode 2, `macroadd`, text-field dialogs.
+- Nonempty `syncse`, scenario mode 2, `macroadd`.
+- Touch input (CArtemisTouch, WM_TOUCH): touches arrive as mouse input; the tap key 0x8a,
+  long taps and the touch point count stay unused.
