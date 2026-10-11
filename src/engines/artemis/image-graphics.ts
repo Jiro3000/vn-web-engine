@@ -87,13 +87,62 @@ export interface ArtemisTextCell {
   readonly line: number;
   readonly block: number;
 }
-/** A visible text layer in drawing order: its stage matrix, its opacity and the stage rect
- * that clips it, if any. */
+/** An image layer drawn over text: its stage matrix, opacity, texture and drawn source
+ * rect. */
+export interface ArtemisTextCover {
+  readonly id: string;
+  readonly matrix: Float32Array;
+  readonly alpha: number;
+  readonly texture: number;
+  readonly image: TriangleImage;
+  readonly left: number;
+  readonly top: number;
+  readonly width: number;
+  readonly height: number;
+}
+/** The share of text at stage point (x, y) that stays visible under `covers`: each covering
+ * image multiplies it by one minus its opacity there. Images without CPU pixels (video
+ * frames) are opaque within their rect. */
+export function artemisTextVisibility(
+  covers: readonly ArtemisTextCover[],
+  x: number,
+  y: number,
+): number {
+  let visible = 1;
+  for (const cover of covers) {
+    const [a, b, tx, c, d, ty] = cover.matrix as unknown as number[];
+    const determinant = a! * d! - b! * c!;
+    if (determinant === 0) continue;
+    const dx = x - tx!,
+      dy = y - ty!,
+      u = (d! * dx - b! * dy) / determinant,
+      v = (a! * dy - c! * dx) / determinant;
+    if (!(u >= 0 && v >= 0 && u < cover.width && v < cover.height)) continue;
+    const image = cover.image,
+      px = Math.floor(u + cover.left),
+      py = Math.floor(v + cover.top),
+      count = image.width * image.height;
+    if (px < 0 || py < 0 || px >= image.width || py >= image.height) continue;
+    const bytes = count ? image.pixels.length / count : 0;
+    const alpha =
+      bytes === 4
+        ? image.pixels[(py * image.width + px) * 4 + 3]! / 255
+        : bytes === 1
+          ? image.pixels[py * image.width + px]! / 255
+          : 1;
+    visible *= 1 - alpha * cover.alpha;
+    if (visible <= 0) return 0;
+  }
+  return visible;
+}
+/** A visible text layer in drawing order: its stage matrix, its opacity, the stage rect
+ * that clips it, if any, and the image layers drawn over it. */
 export interface ArtemisTextLayer {
   readonly id: string;
   readonly text: ArtemisTextSource;
   readonly matrix: Float32Array;
   readonly alpha: number;
+  readonly covers: readonly ArtemisTextCover[];
   readonly clip: {
     readonly x: number;
     readonly y: number;
@@ -780,12 +829,14 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
   hideText(hidden: boolean): void {
     this.hiddenText = hidden;
   }
-  /** The text layers the stage draws, in drawing order. Matrices are computed without the
+  /** The text layers the stage draws, in drawing order, each with the ordinary (normal
+   * blend, no shader) image layers drawn after it. Matrices are computed without the
    * retained world matrices, so reading them leaves the drawing unchanged; a capture with an
    * explicit clip shifts and clips its children as its surface does. */
   textLayers(scene: ArtemisScene<ArtemisDisplayActor>): ArtemisTextLayer[] {
     type Clip = ArtemisTextLayer['clip'];
-    const layers: ArtemisTextLayer[] = [];
+    const found: {layer: Omit<ArtemisTextLayer, 'covers'>; start: number}[] = [],
+      covers: ArtemisTextCover[] = [];
     const clipOf = (matrix: Float32Array, width: number, height: number, parent: Clip): Clip => {
       const points = [
         [0, 0],
@@ -830,8 +881,26 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
             clip,
           );
         } else if (isText(actor)) {
-          layers.push({id: node.id, text: actor.text, matrix, alpha, clip});
-        } else if (actor.texture === null) {
+          found.push({
+            layer: {id: node.id, text: actor.text, matrix, alpha, clip},
+            start: covers.length,
+          });
+        } else if (actor.texture !== null) {
+          if (actor.raster.layerMode !== 'normal' || actor.shaderState.shaderName) continue;
+          const image = this.check(actor).image,
+            c = actor.clip;
+          covers.push({
+            id: node.id,
+            matrix,
+            alpha,
+            texture: actor.texture,
+            image,
+            left: c.width !== 0 ? c.left : 0,
+            top: c.height !== 0 ? c.top : 0,
+            width: c.width !== 0 ? c.width : image.width,
+            height: c.height !== 0 ? c.height : image.height,
+          });
+        } else {
           const capture = this.wrappers.get(actor.wrapper)?.capture,
             c = actor.clip;
           if (capture?.enabled && c.width > 0 && c.height > 0)
@@ -846,7 +915,7 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
       }
     };
     visit(this.nodes(scene), new Float32Array([1, 0, 0, 0, 1, 0]), 1, null);
-    return layers;
+    return found.map(({layer, start}) => ({...layer, covers: covers.slice(start)}));
   }
   /** Ids of the visible image, animation and text layers under stage point (x, y), topmost
    * first. A point hits an image when it maps into the image bounds through the inverse

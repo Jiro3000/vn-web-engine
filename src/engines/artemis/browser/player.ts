@@ -19,7 +19,7 @@ import type {ArtemisFiles} from '../files.js';
 import {ArtemisFileFonts} from '../file-fonts.js';
 import {ArtemisGlyphPainter} from '../glyph-paint-client.js';
 import {createArtemisOrdinaryGpuRaster} from '../gpu-raster.js';
-import type {ArtemisImageGraphics} from '../image-graphics.js';
+import type {ArtemisImageGraphics, ArtemisTextLayer} from '../image-graphics.js';
 import {ArtemisImageLoader, type ArtemisLoadedImage} from '../image-loader.js';
 import {artemisPngSurface} from '../png-surface.js';
 import {
@@ -33,7 +33,7 @@ import {artemisRuntimeSound} from '../runtime-sound.js';
 import {ArtemisSurfaceManager} from '../surface-manager.js';
 import {ArtemisTextGlyphs} from '../text-glyphs.js';
 import {createArtemisBrowserLayers, type ArtemisBrowserLayers} from './layers.js';
-import {ArtemisDomText} from './dom-text.js';
+import {ArtemisDomText, artemisTextSlots} from './dom-text.js';
 import {
   artemisCurrentBlock,
   artemisJumpNames,
@@ -377,10 +377,28 @@ export class ArtemisBrowserPlayer {
   /** Diagnostic counts of the text the stage draws, while DOM text is on. */
   private textState(): object | null {
     if (!this.domText?.active || !this.graphics || !this.layers) return null;
-    const layers = this.graphics.textLayers(this.layers.layers.scene);
+    const layers = this.graphics.textLayers(this.layers.layers.scene),
+      stage = {width: this.canvas.width, height: this.canvas.height};
+    // Characters dimmed by layers drawn over them, and slots left out off the stage.
+    let covered = 0,
+      offStage = 0;
+    for (const layer of layers) {
+      const cells = layer.text.cells?.() ?? [],
+        alphas = (covers: ArtemisTextLayer['covers']) =>
+          artemisTextSlots('', {...layer, covers}, cells, stage).flatMap(({slot}) =>
+            slot.glyphs.map((glyph) => glyph.alpha),
+          ),
+        open = alphas([]);
+      covered += alphas(layer.covers).filter((alpha, index) => alpha < open[index]!).length;
+      offStage +=
+        artemisTextSlots('', layer, cells, {width: Infinity, height: Infinity}).length -
+        artemisTextSlots('', layer, cells, stage).length;
+    }
     return {
       layers: layers.length,
       cells: layers.reduce((count, layer) => count + (layer.text.cells?.().length ?? 0), 0),
+      covered,
+      offStage,
       hidden: this.graphics.textHidden,
     };
   }

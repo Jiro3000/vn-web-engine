@@ -4766,6 +4766,15 @@ test('Artemis text layers give browser text their characters, stage placement an
   const {artemisTextSlots} = await import('../dist/engines/artemis/browser/dom-text.js');
   const {createArtemisImageLoader} = await import('../dist/engines/artemis/image-loader.js');
   const {artemisDefaultFontAttributes} = await import('../dist/engines/artemis/font-state.js');
+  const {png} = await import('./png-fixtures.mjs');
+  // An opaque 20x20 image for covering the text.
+  const cover = png({
+    width: 20,
+    height: 20,
+    raw: Buffer.concat(
+      Array.from({length: 20}, () => Buffer.from([0, ...Array(20).fill([9, 9, 9, 255]).flat()])),
+    ),
+  });
   const font = {
     ...artemisDefaultFontAttributes(revision),
     face: 'font/a.ttf\0',
@@ -4817,8 +4826,8 @@ test('Artemis text layers give browser text their characters, stage placement an
   const {owner, graphics} = createArtemisBrowserLayers({
     executableSha256: revision,
     target,
-    raster: {filter: 'nearest', blend: straightBlend},
-    images: createArtemisImageLoader(revision, async () => null),
+    raster: {filter: 'nearest', blend: straightBlend, layerMode: () => undefined},
+    images: createArtemisImageLoader(revision, async () => cover),
     runMode: {},
     loadRule: async () => null,
     readVideoFile: async () => null,
@@ -4867,7 +4876,9 @@ test('Artemis text layers give browser text their characters, stage placement an
     {main: [glyph(' ', 0, 12, null), glyph('a', 12, 15)], ruby: []},
   );
 
-  const slots = artemisTextSlots('t', layer, cells);
+  const stage = {width: 200, height: 100};
+  assert.deepEqual(layer.covers, []);
+  const slots = artemisTextSlots('t', layer, cells, stage);
   assert.deepEqual(
     slots.map(({slot, face}) => [
       slot.id,
@@ -4886,6 +4897,7 @@ test('Artemis text layers give browser text their characters, stage placement an
       't',
       layer,
       cells.map((cell) => (cell.text === 'a' ? {...cell, size: 10} : cell)),
+      stage,
     ).map(({slot}) => [slot.id, slot.glyphs.length]),
     [
       ['t-0', 3],
@@ -4902,6 +4914,47 @@ test('Artemis text layers give browser text their characters, stage placement an
   assert.deepEqual(first.shadows, [{x: 1, y: 1, color: 0, alpha: 255}]);
   assert.equal(first.outline.radiusX, 2);
   assert.equal(slots[0].slot.glyphs[3].line, 1);
+  // Text the stage does not draw has no slots: outside the stage or the layer's clip.
+  const moved = (x, clip = null) => ({...layer, matrix: Float32Array.of(1, 0, x, 0, 1, 20), clip});
+  assert.deepEqual(artemisTextSlots('t', moved(500), cells, stage), []);
+  assert.deepEqual(
+    artemisTextSlots('t', moved(100, {x: 0, y: 0, width: 50, height: 100}), cells, stage),
+    [],
+  );
+  // A partly shown run stays; the ruby, wholly past the left edge, does not.
+  assert.deepEqual(
+    artemisTextSlots('t', moved(-30), cells, stage).map(({slot}) => slot.id),
+    ['t-0'],
+  );
+
+  // An image layer drawn over the text hides the characters under it, in proportion to its
+  // opacity at the em box centre; text under other blend modes stays.
+  await owner.layers.dispatch(command('lyc', {id: '2', file: 'cover.png'}));
+  await owner.layers.dispatch(command('lyprop', {id: '2', left: '112', top: '40'}));
+  owner.layers.commit();
+  const covered = () => {
+    const [over] = graphics.textLayers(owner.layers.scene);
+    return {
+      covers: over.covers.map((c) => [c.id, c.width, c.height]),
+      alpha: artemisTextSlots('t', over, over.text.cells(), stage)[0].slot.glyphs.map(
+        (g) => g.alpha,
+      ),
+    };
+  };
+  assert.deepEqual(covered(), {covers: [['2', 20, 20]], alpha: [0, 128, 128, 128]});
+  await owner.layers.dispatch(command('lyprop', {id: '2', alpha: '64'}));
+  owner.layers.commit();
+  assert.deepEqual(covered().alpha, [
+    Math.round(Math.fround(128 / 255) * (1 - Math.fround(64 / 255)) * 255),
+    128,
+    128,
+    128,
+  ]);
+  await owner.layers.dispatch(command('lyprop', {id: '2', alpha: '255', layermode: 'add'}));
+  owner.layers.commit();
+  assert.deepEqual(covered(), {covers: [], alpha: [128, 128, 128, 128]});
+  await owner.layers.dispatch(command('lydel', {id: '2'}));
+  owner.layers.commit();
 
   const triangles = () =>
     draws.at(-1).commands.filter((entry) => entry.kind === 'triangles').length;

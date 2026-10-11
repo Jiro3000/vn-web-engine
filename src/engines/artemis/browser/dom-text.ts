@@ -2,7 +2,11 @@ import {DomGlyphSlots} from '../../../text/dom-glyph-slots.js';
 import type {GlyphSlot, TextGlyph} from '../../../text/glyph-slots.js';
 import {getDomTextStyle, subscribeDomTextStyle} from '../../../text/dom-text-style.js';
 import {objectFitPlacement} from '../../../graphics/object-fit.js';
-import type {ArtemisTextCell, ArtemisTextLayer} from '../image-graphics.js';
+import {
+  artemisTextVisibility,
+  type ArtemisTextCell,
+  type ArtemisTextLayer,
+} from '../image-graphics.js';
 
 export interface ArtemisDomTextOptions {
   readonly document: Document;
@@ -27,7 +31,8 @@ export interface ArtemisShownSlot {
 }
 
 /** The stage rect of a cell's em box: the painted surface puts the outline radius before
- * the glyph and the shadow offset after it, so both are outside the box. */
+ * the glyph and the shadow offset after it, so both are outside the box. Its opacity is
+ * what the image layers drawn over the text leave of it at the box centre. */
 function cellGlyph(layer: ArtemisTextLayer, cell: ArtemisTextCell, id: number, line: number) {
   const [a, b, tx, c, d, ty] = layer.matrix as unknown as number[],
     [p, q, r, s, t, u] = cell.matrix as unknown as number[];
@@ -40,18 +45,21 @@ function cellGlyph(layer: ArtemisTextLayer, cell: ArtemisTextCell, id: number, l
   const x = a! * r! + b! * u! + tx! + m0 * edge + m1 * edge,
     y = c! * r! + d! * u! + ty! + m3 * edge + m4 * edge,
     scaleX = Math.hypot(m0, m3),
-    scaleY = Math.hypot(m1, m4);
+    scaleY = Math.hypot(m1, m4),
+    width = Math.max(0, cell.advance - 2 * edge - cell.shadow) * scaleX,
+    height = cell.size * scaleY,
+    visible = artemisTextVisibility(layer.covers, x + width / 2, y + height / 2);
   const glyph: TextGlyph = {
     id,
     x,
     y,
-    width: Math.max(0, cell.advance - 2 * edge - cell.shadow) * scaleX,
-    height: cell.size * scaleY,
+    width,
+    height,
     size: cell.size * scaleY,
     text: cell.text,
     line,
     color: cell.color & 0xffffff,
-    alpha: Math.round(Math.min(1, Math.max(0, cell.alpha * layer.alpha)) * 255),
+    alpha: Math.round(Math.min(1, Math.max(0, cell.alpha * layer.alpha * visible)) * 255),
     ...(layer.clip ? {clip: layer.clip} : {}),
     ...(cell.shadow > 0
       ? {
@@ -82,15 +90,33 @@ function cellGlyph(layer: ArtemisTextLayer, cell: ArtemisTextCell, id: number, l
 /**
  * The slots of one text layer: a slot per run of body characters sharing a font, with the
  * layer's display lines as explicit rows, and a slot per word's ruby that is not selected.
- * Colours, opacity (reveal fades included) and effects stay per character.
+ * Colours, opacity (reveal fades and covering layers included) and effects stay per
+ * character. A slot with no character inside the stage rect and the layer's clip is left
+ * out, as nothing of it is drawn.
  */
 export function artemisTextSlots(
   prefix: string,
   layer: ArtemisTextLayer,
   cells: readonly ArtemisTextCell[],
+  stage: {readonly width: number; readonly height: number},
 ): ArtemisShownSlot[] {
-  const slots: ArtemisShownSlot[] = [],
+  const result: ArtemisShownSlot[] = [],
     main = cells.filter((cell) => !cell.ruby);
+  const clip = layer.clip,
+    left = Math.max(0, clip?.x ?? 0),
+    top = Math.max(0, clip?.y ?? 0),
+    right = Math.min(stage.width, clip ? clip.x + clip.width : Infinity),
+    bottom = Math.min(stage.height, clip ? clip.y + clip.height : Infinity);
+  const slots = {
+    push(shown: ArtemisShownSlot) {
+      if (
+        shown.slot.glyphs.some(
+          (g) => g.x < right && g.x + g.width > left && g.y < bottom && g.y + g.height > top,
+        )
+      )
+        result.push(shown);
+    },
+  };
   let start = 0;
   for (let i = 1; i <= main.length; i++) {
     const first = main[start]!,
@@ -131,7 +157,7 @@ export function artemisTextSlots(
         glyphs: run.map((c, j) => cellGlyph(layer, c, j, 0)),
       },
     });
-  return slots;
+  return result;
 }
 
 /**
@@ -215,15 +241,27 @@ export class ArtemisDomText {
   update(): void {
     if (!this.enabled) return;
     const layers = this.options.layers();
-    const sample = JSON.stringify(
+    // Each layer's covers end the first layer's, so those are sampled once.
+    const sample = JSON.stringify([
       layers.map((layer) => [
         layer.id,
         layer.text.revision,
         Array.from(layer.matrix),
         layer.alpha,
         layer.clip,
+        layer.covers.length,
       ]),
-    );
+      (layers[0]?.covers ?? []).map((cover) => [
+        cover.id,
+        cover.texture,
+        Array.from(cover.matrix),
+        cover.alpha,
+        cover.left,
+        cover.top,
+        cover.width,
+        cover.height,
+      ]),
+    ]);
     if (sample === this.sampled) return;
     this.sampled = sample;
     const visible = new Set<string>();
@@ -231,7 +269,12 @@ export class ArtemisDomText {
     for (const layer of layers) {
       const cells = layer.text.cells?.() ?? [];
       if (!cells.length) continue;
-      for (const {slot, face} of artemisTextSlots(`artemis-${layer.id}`, layer, cells)) {
+      for (const {slot, face} of artemisTextSlots(
+        `artemis-${layer.id}`,
+        layer,
+        cells,
+        this.options,
+      )) {
         const family = this.family(face);
         visible.add(slot.id);
         // Showing only on change keeps a selection while the text stays the same.
