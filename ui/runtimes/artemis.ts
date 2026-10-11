@@ -13,6 +13,7 @@ import {mountGameViewer} from '../player/game-viewer.js';
 import {setRuntimeState, subscribeSaveBusy} from '../player/runtime-state.js';
 import {mountFullscreenControls} from '../player/fullscreen.js';
 import {activeArtemisGame, artemisSaveNamespace} from '../player/artemis-library.js';
+import {rememberLastPlayed} from '../player/last-played.js';
 
 /** The Windows version this page reports to games (Windows 10, 10.0). Games that check the
  * version see a supported system instead of the unknown one a browser would report. */
@@ -124,6 +125,7 @@ async function loadInstallation(cached: CachedInstallation): Promise<void> {
   installation = {executableSha256, files, paths, saves};
   const title = 'Artemis';
   activeArtemisGame.set({title, namespace});
+  rememberLastPlayed('artemis', title);
   element('prompt').textContent = 'The game is ready.';
   status.textContent = `${byPath.size} files found. Ready to play.`;
   play.hidden = false;

@@ -16,9 +16,9 @@ export interface PlayerEntry {
   readonly engine: string;
   /** What it plays: the supported titles of an engine player, or the title's engine. */
   readonly summary: string;
+  /** The engine the library tile shows; a single-title player still shows its engine. */
+  readonly engineName: string;
   readonly initials: string;
-  /** Card artwork: an engine player or a single title. */
-  readonly art: 'engine' | 'title';
   readonly route: string;
   readonly explorerRoute: string | null;
   /** Key of the remembered folder and the browser copy of the installation. */
@@ -37,8 +37,8 @@ export const PLAYERS: readonly PlayerEntry[] = [
     title: 'BGI / Ethornell',
     engine: 'BURIKO',
     summary: 'Aokana · 穢翼のユースティア · Jewelry Hearts Academia · Subarashiki Hibi',
+    engineName: 'BGI / Ethornell',
     initials: 'BG',
-    art: 'engine',
     route: './buriko.html',
     explorerRoute: './buriko-assets.html',
     installationKey: 'buriko',
@@ -50,9 +50,9 @@ export const PLAYERS: readonly PlayerEntry[] = [
     id: 'chaos-head-noah',
     title: 'CHAOS;HEAD NOAH',
     engine: 'MAGES',
-    summary: 'MAGES engine',
-    initials: 'CH',
-    art: 'title',
+    summary: 'CHAOS;HEAD NOAH',
+    engineName: 'MAGES / SC3',
+    initials: 'MG',
     route: './noah.html',
     explorerRoute: './assets.html',
     installationKey: 'chaos-head-noah-gog',
@@ -65,8 +65,8 @@ export const PLAYERS: readonly PlayerEntry[] = [
     title: 'codeX RScript',
     engine: 'RSCRIPT',
     summary: 'Fairytale Requiem · Symphony · Encore · Albatross Koukairoku',
+    engineName: 'codeX RScript',
     initials: 'RS',
-    art: 'engine',
     route: './rscript.html',
     explorerRoute: null,
     installationKey: 'rscript',
@@ -79,8 +79,8 @@ export const PLAYERS: readonly PlayerEntry[] = [
     title: 'Artemis',
     engine: 'ARTEMIS',
     summary: '初雪桜 (Hatsuyuki Sakura)',
+    engineName: 'Artemis',
     initials: 'AR',
-    art: 'engine',
     route: './artemis.html',
     explorerRoute: null,
     installationKey: 'artemis',
