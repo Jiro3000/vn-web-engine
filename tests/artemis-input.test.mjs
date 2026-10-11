@@ -370,6 +370,14 @@ test('Roles answer through their keys; Alt+Enter does not decide an Enter role',
   input.update(40, sample([]));
   input.update(50, sample([13]));
   assert.equal(role(0, 'decide'), true);
+  // Joystick keys take roles like any other key: button 3 is key 258, POV down 307.
+  keyconfig(2, '13,258,307');
+  input.update(60, sample([]));
+  input.update(70, sample([], {joystick: joystick([], [], [0, 0, 0x80])}));
+  assert.equal(role(2, 'decide'), true);
+  input.update(80, sample([]));
+  input.update(90, sample([], {joystick: joystick([], [18000])}));
+  assert.deepEqual([role(2, 'decide'), role(1, 'down')], [true, false]);
 });
 
 test('var system=length stores source bytes, or UTF-8 characters for mode 1', () => {
