@@ -46,6 +46,9 @@ import {
 import type {Lua51} from '../../../core/lua51/runtime.js';
 import type {ArtemisReadAheadName} from '../files.js';
 import {VirtualKeyState} from '../../../input/virtual-keys.js';
+import {readBrowserJoystick} from '../../../input/directinput-joystick.js';
+import {browserWindowActive} from '../../../platform/browser-window-activation.js';
+import {ARTEMIS_JOYSTICK_RANGE} from '../input.js';
 import {beginRuntimeSpan} from '../../../platform/runtime-performance.js';
 
 export interface ArtemisBrowserPlayerOptions {
@@ -127,6 +130,8 @@ export class ArtemisBrowserPlayer {
   private readonly keys = new VirtualKeyState();
   private wheel: (136 | 137)[] = [];
   private pointerInside = false;
+  /** The page is visible and focused: the game window is the foreground window. */
+  private foreground = false;
   private readonly abort = new AbortController();
   /** Selectable text over the stage, created with the stage. */
   private domText: ArtemisDomText | null = null;
@@ -317,7 +322,7 @@ export class ArtemisBrowserPlayer {
           this.pointer = {x: left, y: top};
         },
       },
-      pointer: {readPointerPosition: () => this.pointer},
+      pointer: {readPointerPosition: () => this.gamePointer()},
       dynamicLibraries: new BrowserWindowsDynamicLibraryHost(),
       windowsVersion: () => options.windowsVersion,
       graphicsFeatureLevel: () => options.graphicsFeatureLevel,
@@ -326,7 +331,6 @@ export class ArtemisBrowserPlayer {
         this.sound.music.setGroupGain(music);
         this.sound.effects.setGroupGain(effect);
       },
-      // The click-glyph byte has no browser presentation yet.
       // Touch input arrives as mouse input; there is no touch contact limit.
       setTouchLimit: () => {},
       // Native script error reports (c84b0, c7260, 0x14012d080 level 1): the game logs them
@@ -476,9 +480,16 @@ export class ArtemisBrowserPlayer {
       this.now = this.clock();
       if (this.settling) runtime.advanceTo(this.now);
       else {
+        // GetForegroundWindow is asked on every query; a page has no focus event for every
+        // change (focus emulation, a page loaded in the background), so it is read each frame.
+        const foreground = browserWindowActive(window);
+        // Keys held when the page lost focus never see their release.
+        if (this.foreground && !foreground) this.keys.releaseAll();
+        this.foreground = foreground;
+        const pointer = this.gamePointer();
         const hits =
           this.layers && this.graphics
-            ? this.graphics.hitTest(this.layers.layers.scene, this.pointer.x, this.pointer.y)
+            ? this.graphics.hitTest(this.layers.layers.scene, pointer.x, pointer.y)
             : [];
         this.hover(hits);
         const input: ArtemisFrameInput = {
@@ -486,8 +497,10 @@ export class ArtemisBrowserPlayer {
             down: this.keys.sample(),
             wheel: this.wheel,
             pointerInside: this.pointerInside,
+            foreground: this.foreground,
+            joystick: readBrowserJoystick(navigator, ARTEMIS_JOYSTICK_RANGE),
           },
-          pointer: {...this.pointer, hits},
+          pointer: {...pointer, hits},
         };
         this.wheel = [];
         runtime.frame(this.now, input);
@@ -599,6 +612,11 @@ export class ArtemisBrowserPlayer {
       x: Math.floor((event.clientX - rect.left - fit.offsetX) / scaleX),
       y: Math.floor((event.clientY - rect.top - fit.offsetY) / scaleY),
     };
+  }
+  /** The pointer the game sees: (-1,-1) while the window is not the foreground window
+   * (0x140178c50). */
+  private gamePointer(): {x: number; y: number} {
+    return this.foreground ? this.pointer : {x: -1, y: -1};
   }
   private bindInput(): void {
     const {canvas, panel} = this,

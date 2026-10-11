@@ -5,6 +5,7 @@ import {ArtemisKeyBindings} from '../dist/engines/artemis/key-bindings.js';
 import {ArtemisLua} from '../dist/engines/artemis/lua.js';
 import {ArtemisVariables} from '../dist/engines/artemis/variables.js';
 import {VirtualKeyState} from '../dist/input/virtual-keys.js';
+import {directInputJoystickState, readBrowserJoystick} from '../dist/input/directinput-joystick.js';
 import {luaText} from '../dist/core/lua51/runtime.js';
 import {ARTEMIS_3179_EXECUTABLE_SHA256} from '../dist/engines/artemis/revision.js';
 
@@ -55,6 +56,134 @@ test('Wheel notches persist until a push, down or down-edge query sees them', ()
   input.update(30, sample([136]));
   assert.equal(input.query('decide', 136), true);
   assert.equal(input.query('decide', 136), false);
+});
+
+const pad = (pressed, extra = {}) => ({
+  id: 'pad',
+  connected: true,
+  mapping: 'standard',
+  axes: [0, 0, 0, 0],
+  buttons: Array.from({length: 18}, (_, i) => ({
+    pressed: pressed.includes(i),
+    value: +pressed.includes(i),
+  })),
+  ...extra,
+});
+const joystick = (axes = [], povs = [], buttons = []) => ({
+  axes: Object.assign(new Array(8).fill(0), axes),
+  povs: Object.assign(new Array(4).fill(0xffffffff), povs),
+  buttons: Object.assign(new Array(32).fill(0), buttons),
+});
+const held = (input) => {
+  const keys = [];
+  for (let key = 0x100; key < 0x140; key++) if (input.query('down', key)) keys.push(key);
+  return keys;
+};
+
+test('Joystick keys 256-319 follow DIJOYSTATE buttons, axes past 499 and POV sectors', () => {
+  const input = new ArtemisInput();
+  const at = (state) => {
+    input.update(0, sample([], {joystick: state}));
+    return held(input);
+  };
+  assert.deepEqual(
+    at(joystick([], [], [0x80, 0, 0x80, ...new Array(28).fill(0), 0x80])),
+    [256, 258, 287],
+  );
+  assert.deepEqual(at(joystick([-500, -499])), [288]);
+  assert.deepEqual(
+    at(joystick([500, 1000, -1000, 1000, 600, -700, -999, 999])),
+    [290, 291, 292, 296, 297, 298, 300, 303],
+  );
+  assert.deepEqual(at(joystick([0, 0, 0, -500, 0, 500])), [294, 299]);
+  // POV n uses keys 304+4n: left, up, right, down.
+  const pov = (value, n = 0) => at(joystick([], Object.assign([], {[n]: value})));
+  assert.deepEqual(pov(0), [305]);
+  assert.deepEqual(pov(4499), [305]);
+  assert.deepEqual(pov(4500), [306]);
+  assert.deepEqual(pov(13499), [306]);
+  assert.deepEqual(pov(13500), [307]);
+  assert.deepEqual(pov(22500), [304]);
+  assert.deepEqual(pov(31499), [304]);
+  assert.deepEqual(pov(31500), [305]);
+  assert.deepEqual(pov(9000, 3), [318]);
+  assert.deepEqual(pov(0xffff), []);
+  // Joystick keys repeat like keyboard keys and release when the device goes away.
+  input.update(1000, sample([], {joystick: joystick([], [], [0, 0x80])}));
+  assert.deepEqual(answers(input, 257), ['push', 'down', 'downEdge', 'decide']);
+  input.update(1501, sample([], {joystick: joystick([], [], [0, 0x80])}));
+  assert.deepEqual(answers(input, 257), ['push', 'down']);
+  input.update(1520, sample([]));
+  assert.deepEqual(answers(input, 257), ['upEdge']);
+});
+
+test('Browser gamepads report their DirectInput driver layout, the d-pad as POV 0', () => {
+  const xinput = directInputJoystickState(
+    pad([0, 2, 8, 13, 15], {axes: [-1, 0.5, 0.25, -0.75]}),
+    1000,
+  );
+  assert.deepEqual(xinput.buttons.slice(0, 8), [0x80, 0, 0x80, 0, 0, 0, 0x80, 0]);
+  assert.deepEqual(xinput.povs, [13500, 0xffffffff, 0xffffffff, 0xffffffff]);
+  // Left trigger fully held: Z positive.
+  assert.deepEqual(xinput.axes, [-1000, 500, 0, 250, -750, 0, 0, 0]);
+  const lt = pad([]);
+  lt.buttons[6] = {pressed: true, value: 1};
+  assert.equal(directInputJoystickState(lt, 1000).axes[2], 1000);
+  const sony = directInputJoystickState(
+    pad([0, 2, 16, 12, 14], {
+      id: 'Wireless Controller (STANDARD GAMEPAD Vendor: 054c Product: 09cc)',
+      axes: [0, 0, 0.5, -0.5],
+    }),
+    1000,
+  );
+  assert.deepEqual(sony.buttons.slice(0, 14), [0x80, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x80, 0]);
+  assert.deepEqual(sony.axes, [0, 0, 500, -1000, -1000, -500, 0, 0]);
+  assert.equal(sony.povs[0], 31500);
+  // Opposite d-pad directions center the POV; other mappings pass through.
+  assert.equal(directInputJoystickState(pad([12, 13]), 1000).povs[0], 0xffffffff);
+  const raw = directInputJoystickState(
+    pad([1, 17], {mapping: '', axes: [0.1, 0, 0, 0, 0, 0, 0, 0, 1]}),
+    1000,
+  );
+  assert.deepEqual(
+    [raw.buttons[1], raw.buttons[17], raw.povs[0], raw.axes[0], raw.axes.length],
+    [0x80, 0x80, 0xffffffff, 100, 8],
+  );
+  // The first connected pad is the device; none, or a refused provider, is no device.
+  assert.equal(
+    readBrowserJoystick(
+      {getGamepads: () => [null, {...pad([3]), connected: false}, pad([1])]},
+      1000,
+    ).buttons[1],
+    0x80,
+  );
+  assert.equal(readBrowserJoystick({getGamepads: () => [null]}, 1000), null);
+  assert.equal(
+    readBrowserJoystick(
+      {
+        getGamepads: () => {
+          throw Error('denied');
+        },
+      },
+      1000,
+    ),
+    null,
+  );
+  assert.equal(readBrowserJoystick(undefined, 1000), null);
+});
+
+test('Keys are false while the window is not foreground; overrides still answer', () => {
+  const input = new ArtemisInput();
+  input.update(0, sample([13, 1], {foreground: false, wheel: [136]}));
+  assert.deepEqual(answers(input, 13), []);
+  assert.deepEqual(answers(input, 1), []);
+  assert.deepEqual(answers(input, 136), []);
+  input.override(13, 2);
+  assert.deepEqual(answers(input, 13), ['push']);
+  // A notch not seen in the background is still there in the foreground.
+  input.update(10, sample([13], {foreground: true}));
+  assert.deepEqual(answers(input, 136), ['push']);
+  assert.deepEqual(answers(input, 13), ['down']);
 });
 
 test('overrideKey answers with status bits for one update and refuses keys from 0x140', () => {
