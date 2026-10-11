@@ -302,6 +302,10 @@ export class ArtemisBrowserPlayer {
           if (!this.graphics || !this.layers) throw Error('Artemis takess before the stage');
           this.graphics.takeScreenshot(this.layers.layers.scene);
         },
+        takePresented: () => {
+          if (!this.graphics) throw Error('Artemis takess before the stage');
+          this.graphics.takePresentedScreenshot();
+        },
         read: (width, height) => this.graphics?.readScreenshot(width, height) ?? null,
       },
       sound: artemisRuntimeSound(this.sound, (now) => {

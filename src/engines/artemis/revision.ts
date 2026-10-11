@@ -2,6 +2,8 @@ import type {ArtemisVariables} from './variables.js';
 
 export const ARTEMIS_3179_EXECUTABLE_SHA256 =
   '8953562b80608046662bd8c89015d04236b0ba3afee10c36469c11403de3ebaf';
+export const ARTEMIS_3139_EXECUTABLE_SHA256 =
+  '455676b09503309b82dc78d7bac45d2eeb1837bed9ec0ab41053d7d9bb298f9e';
 
 export interface ArtemisRevision {
   readonly executableSha256: string;
@@ -9,23 +11,51 @@ export interface ArtemisRevision {
   readonly buildDate: string;
   readonly minimumSupportVersion: number;
   readonly saveDataVersion: number;
+  /** What `takess` puts into the screenshot surface +0x1c0. 'scene': Rev.3179 0x1400e1cf0
+   * renders the committed scene offscreen. 'presented': Rev.3139 0x1400e1cf0 copies the
+   * frame presented last (renderer virtual +0x48 reads the swap chain buffer) and records
+   * the stage margins +0x74/+0x78 as the crop +0x1d0/+0x1d4 that savess applies. */
+  readonly screenshot: 'scene' | 'presented';
+  /** CSoundLoaders (Rev.3179 0x140190290/0x140190170) seeks the opened file back to 0
+   * (file virtual +0x30) before it offers it to a further loader. Rev.3139
+   * (0x14018e760/0x14018e650) does not: the next loader continues at the position the
+   * failed one left. */
+  readonly soundLoaderRewinds: boolean;
 }
-const revision: ArtemisRevision = Object.freeze({
-  executableSha256: ARTEMIS_3179_EXECUTABLE_SHA256,
-  engineVersion: 3179,
-  buildDate: 'Thu Dec 21 04:26:04 2023',
-  minimumSupportVersion: 1103,
-  saveDataVersion: 1003,
-});
+const revisions: ReadonlyMap<string, ArtemisRevision> = new Map(
+  [
+    {
+      executableSha256: ARTEMIS_3179_EXECUTABLE_SHA256,
+      engineVersion: 3179,
+      buildDate: 'Thu Dec 21 04:26:04 2023',
+      minimumSupportVersion: 1103,
+      saveDataVersion: 1003,
+      screenshot: 'scene' as const,
+      soundLoaderRewinds: true,
+    },
+    // Rev.3139 0x1400c36f0 publishes the same support and save data versions.
+    {
+      executableSha256: ARTEMIS_3139_EXECUTABLE_SHA256,
+      engineVersion: 3139,
+      buildDate: 'Wed Aug 30 19:57:57 2023',
+      minimumSupportVersion: 1103,
+      saveDataVersion: 1003,
+      screenshot: 'presented' as const,
+      soundLoaderRewinds: false,
+    },
+  ].map((revision) => [revision.executableSha256, Object.freeze(revision)]),
+);
 
-/** Exact executable identity, never a display-name or version-only heuristic. */
+/** Exact executable identity, never a display-name or version-only heuristic. Native
+ * addresses in this engine name Rev.3179 functions; docs/artemis-revisions.md maps them to
+ * the other supported executables. */
 export function artemisRevision(executableSha256: string): ArtemisRevision {
-  if (executableSha256.toLowerCase() !== ARTEMIS_3179_EXECUTABLE_SHA256)
-    throw new Error(`Unsupported Artemis executable ${executableSha256}`);
+  const revision = revisions.get(executableSha256.toLowerCase());
+  if (!revision) throw new Error(`Unsupported Artemis executable ${executableSha256}`);
   return revision;
 }
 
-/** Confirmed static subset of 0x1400c37e0; platform paths/capabilities remain host-owned. */
+/** Confirmed static subset of 0x1400c37e0 (Rev.3139 0x1400c36f0); platform paths/capabilities remain host-owned. */
 export function initializeArtemisVariables(
   variables: ArtemisVariables,
   executableSha256: string,

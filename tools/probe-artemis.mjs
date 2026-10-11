@@ -247,6 +247,10 @@ try {
               screenshotTaken = true;
               modeEffects.push({takess: true, simulation: true});
             },
+            takePresented: () => {
+              screenshotTaken = true;
+              modeEffects.push({takess: 'presented', simulation: true});
+            },
             read: (width, height) => (screenshotTaken ? new Uint8Array(width * height * 4) : null),
           },
         }

@@ -19,7 +19,7 @@ export function createArtemisSoundLoader<S, F = Uint8Array>(
   },
   copy?: (file: F) => F,
 ): ArtemisSoundLoader<S, F> {
-  artemisRevision(hash);
+  const {soundLoaderRewinds} = artemisRevision(hash);
   return new ArtemisSoundLoader(
     readFile,
     [
@@ -27,6 +27,7 @@ export function createArtemisSoundLoader<S, F = Uint8Array>(
       {extensions: ['wav', 'WAV'], decode: decoders.wave},
     ],
     copy,
+    soundLoaderRewinds,
   );
 }
 export interface ArtemisLoadedSound<S> {
@@ -34,10 +35,13 @@ export interface ArtemisLoadedSound<S> {
   readonly sound: S;
 }
 
-/** Rev.3179 0x140190290: preferred suffix, sniff exact file, append suffixes.
- * The caller supplies the installation's actual registered codecs and order.
+/** Rev.3179 0x140190290 (Rev.3139 0x14018e760): preferred suffix, sniff exact file, append
+ * suffixes. The caller supplies the installation's actual registered codecs and order.
  * Each decode receives an independent file starting at native file offset zero: a copy of
- * the bytes, or, for a loader over read-only sources (`F`), the same source.
+ * the bytes, or, for a loader over read-only sources (`F`), the same source. Rev.3179 seeks
+ * the exact file back to zero before each further loader. Without that rewind (`rewinds`
+ * false, Rev.3139) a further loader would continue where the failed one stopped; that
+ * position belongs to the codec, so such a retry is refused instead of decoded from zero.
  */
 export class ArtemisSoundLoader<S, F = Uint8Array> {
   private readonly codecs: readonly ArtemisSoundCodec<S, F>[];
@@ -45,6 +49,7 @@ export class ArtemisSoundLoader<S, F = Uint8Array> {
     private readonly readFile: (path: string) => Promise<F | null>,
     codecs: readonly ArtemisSoundCodec<S, F>[],
     private readonly copy: (file: F) => F = (file) => Uint8Array.from(file as Uint8Array) as F,
+    private readonly rewinds = true,
   ) {
     this.codecs = codecs.map((codec) => ({
       extensions: [...codec.extensions],
@@ -58,19 +63,30 @@ export class ArtemisSoundLoader<S, F = Uint8Array> {
     name = name.split('\0', 1)[0]!;
     const decode = (codec: ArtemisSoundCodec<S, F>, file: F, path: string) =>
       codec.decode(this.copy(file), bufferMode, path);
-    const exact = await this.readFile(name);
-    if (exact !== null) {
+    const opened = await this.readFile(name);
+    if (opened !== null) {
+      const exact = opened;
+      let failed = false;
+      const decodeExact = async (codec: ArtemisSoundCodec<S, F>) => {
+        if (failed && !this.rewinds)
+          throw new Error(
+            `Unsupported Artemis sound lookup ${name}: a further loader without the rewind`,
+          );
+        const sound = await decode(codec, exact, name);
+        failed ||= sound === null;
+        return sound;
+      };
       const basename = name.slice(name.lastIndexOf('\\') + 1);
       const dot = basename.lastIndexOf('.');
       const extension = dot < 0 ? '' : basename.slice(dot + 1);
       if (extension)
         for (const codec of this.codecs)
           if (codec.extensions.includes(extension)) {
-            const sound = await decode(codec, exact, name);
+            const sound = await decodeExact(codec);
             if (sound !== null) return {path: name, sound};
           }
       for (const codec of this.codecs) {
-        const sound = await decode(codec, exact, name);
+        const sound = await decodeExact(codec);
         if (sound !== null) return {path: name, sound};
       }
     }

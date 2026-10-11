@@ -1094,6 +1094,20 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
     this.screenshot ??= this.captureTexture(this.target.width, this.target.height);
     this.render(scene, null, this.screenshot.image);
   }
+  /** Rev.3139 takess 0x1400e1cf0: copies the frame presented last (the presentation target,
+   * which is stage-sized, so the stage crop is empty) into the screenshot surface. Before
+   * any presentation the target holds its initial black. */
+  takePresentedScreenshot(): void {
+    this.screenshot ??= this.captureTexture(this.target.width, this.target.height);
+    this.target.draw(
+      {
+        sprites: [],
+        commands: [{kind: 'gpu-copy', source: null, destination: this.screenshot.image}],
+        offscreen: true,
+      },
+      (id) => this.image(id),
+    );
+  }
   /** 0x14014fc10: the screenshot scaled to `width` x `height` as RGBA rows, top row
    * first, or null before any `takeScreenshot`. */
   readScreenshot(width: number, height: number): Uint8Array | null {

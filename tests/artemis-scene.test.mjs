@@ -3724,6 +3724,7 @@ test('Artemis savess writes the scaled screenshot as PNG in the save directory',
   const owner = new ArtemisScreenshots(revision, {
     stageSize: () => ({width: 4, height: 2}),
     take: () => void (taken = true),
+    takePresented: () => assert.fail('Rev.3179 takess renders the scene'),
     read: (width, height) => {
       events.push(['read', width, height]);
       return taken
@@ -3764,6 +3765,49 @@ test('Artemis savess writes the scaled screenshot as PNG in the save directory',
   const png = await decodePng(files.get('big.jpg'));
   assert.deepEqual([png.width, png.height], [3, 1]);
   assert.deepEqual([...png.pixels], [...Array(12).keys()]);
+});
+
+test('Rev.3139 takess copies the presented frame instead of rendering the scene', async () => {
+  const {ArtemisScreenshots} = await import('../dist/engines/artemis/screenshot.js');
+  const {ARTEMIS_3139_EXECUTABLE_SHA256: sha} = await import('../dist/engines/artemis/revision.js');
+  const events = [];
+  const owner = new ArtemisScreenshots(sha, {
+    stageSize: () => ({width: 2, height: 1}),
+    take: () => assert.fail('Rev.3139 takess copies the presented frame'),
+    takePresented: () => events.push('presented'),
+    read: () => new Uint8Array(8),
+    writeSaveFile: async (name) => void events.push(name),
+    evictSurface: () => {},
+    invalidSize: () => assert.fail('invalid'),
+    missingScreenshot: () => assert.fail('missing'),
+  });
+  const tag = (name, args = {}) => ({
+    kind: 'tag',
+    name,
+    sourceLine: 1,
+    args: new Map(Object.entries(args)),
+  });
+  assert.equal(owner.dispatch(tag('takess')), true);
+  await owner.dispatch(tag('savess', {file: 'x'}));
+  assert.deepEqual(events, ['presented', 'x.png']);
+});
+
+test('Presented screenshots copy the presentation target into the screenshot surface offscreen', async () => {
+  const {graphics, layers, frames} = await rasterFixture(undefined, true);
+  try {
+    graphics.takePresentedScreenshot();
+    assert.equal(frames.length, 1);
+    const {list} = frames[0];
+    assert.equal(list.offscreen, true);
+    assert.deepEqual(list.sprites, []);
+    assert.equal(list.commands.length, 1);
+    const [copy] = list.commands;
+    assert.equal(copy.kind, 'gpu-copy');
+    assert.equal(copy.source, null);
+    assert.deepEqual([copy.destination.width, copy.destination.height], [4, 2]);
+  } finally {
+    layers.close();
+  }
 });
 
 test('Artemis preload queue shares real surfaces with foreground loans and keeps one explicit script binding', async () => {

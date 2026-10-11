@@ -700,18 +700,20 @@ void main(){vec4 sampled=texture(atlas,tex);if(maskMode.w!=0.)sampled.rgb=vec3(1
             }
           } else if (draw.kind === 'gpu-copy') {
             const {source, destination} = draw;
-            const framebuffer = this.renderSurfaces.get(source),
+            const framebuffer = source ? this.renderSurfaces.get(source) : this.framebuffer,
               color = this.images.get(destination);
             if (!framebuffer || !this.renderSurfaces.has(destination) || !color)
               throw new Error('GPU copy surfaces are not prepared on this target');
             if (source === destination) throw new Error('GPU surface cannot copy itself');
-            if (source.width !== destination.width || source.height !== destination.height)
+            const width = source?.width ?? this.width,
+              height = source?.height ?? this.height;
+            if (width !== destination.width || height !== destination.height)
               throw new Error('GPU copy surface dimensions differ');
             gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
             try {
               gl.activeTexture(gl.TEXTURE0);
               gl.bindTexture(gl.TEXTURE_2D, color);
-              gl.copyTexSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 0, 0, source.width, source.height);
+              gl.copyTexSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 0, 0, width, height);
             } finally {
               gl.bindFramebuffer(gl.FRAMEBUFFER, this.activeFramebuffer!);
             }

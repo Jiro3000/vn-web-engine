@@ -46,10 +46,12 @@ export interface GpuTargetDraw {
   surface: GpuRenderSurface | null;
   clearColor?: readonly [number, number, number, number];
 }
-/** Copy a complete persistent color attachment without publishing CPU pixels. */
+/** Copy a complete persistent color attachment without publishing CPU pixels. A null
+ * source is the presentation target: the frame presented last, unless this list already drew
+ * into it. */
 export interface GpuCopyDraw {
   kind: 'gpu-copy';
-  source: GpuRenderSurface;
+  source: GpuRenderSurface | null;
   destination: GpuRenderSurface;
 }
 /** Replace a texture allocation at this point in the command stream. */

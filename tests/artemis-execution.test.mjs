@@ -3890,6 +3890,73 @@ test('Revision-selected sound plugins search Vorbis before WAVE with native uppe
   );
 });
 
+test('Artemis revisions are selected by executable hash with explicit Rev.3139 differences', async () => {
+  const {artemisRevision, ARTEMIS_3139_EXECUTABLE_SHA256, ARTEMIS_3179_EXECUTABLE_SHA256} =
+    await import('../dist/engines/artemis/revision.js');
+  const r3179 = artemisRevision(ARTEMIS_3179_EXECUTABLE_SHA256),
+    r3139 = artemisRevision(ARTEMIS_3139_EXECUTABLE_SHA256.toUpperCase());
+  assert.deepEqual(
+    [r3179.engineVersion, r3179.screenshot, r3179.soundLoaderRewinds],
+    [3179, 'scene', true],
+  );
+  assert.deepEqual(
+    [r3139.engineVersion, r3139.screenshot, r3139.soundLoaderRewinds],
+    [3139, 'presented', false],
+  );
+  assert.deepEqual(
+    [r3139.minimumSupportVersion, r3139.saveDataVersion],
+    [r3179.minimumSupportVersion, r3179.saveDataVersion],
+  );
+  assert.equal(Object.isFrozen(r3139), true);
+  assert.throws(() => artemisRevision('1'.repeat(64)), /Unsupported Artemis executable/);
+  const {initializeArtemisVariables} = await import('../dist/engines/artemis/revision.js');
+  const written = new Map();
+  initializeArtemisVariables(
+    {write: (key, value) => written.set(key, value)},
+    ARTEMIS_3139_EXECUTABLE_SHA256,
+  );
+  assert.deepEqual(
+    ['s.engineversion', 's.builddate', 's.minimumsupportversion', 's.savedataversion'].map((key) =>
+      written.get(key),
+    ),
+    ['3139', 'Wed Aug 30 19:57:57 2023', '1103', '1003'],
+  );
+});
+
+test('Rev.3139 sound loaders do not rewind: a further loader of a failed exact file is refused', async () => {
+  const {createArtemisSoundLoader} = await import('../dist/engines/artemis/sound-loader.js');
+  const {ARTEMIS_3139_EXECUTABLE_SHA256: sha} = await import('../dist/engines/artemis/revision.js');
+  const decoded = [],
+    sound = {sampleRate: 44100};
+  const loader = createArtemisSoundLoader(
+    sha,
+    async (path) => (['a.ogg', 'b', 'c.wav', 'd.ogg'].includes(path) ? bytes(path) : null),
+    {
+      vorbis: async (value) => {
+        decoded.push(['vorbis', luaText(value)]);
+        return luaText(value) === 'a.ogg' ? sound : null;
+      },
+      wave: async (value) => {
+        decoded.push(['wave', luaText(value)]);
+        return luaText(value) === 'c.wav' ? sound : null;
+      },
+    },
+  );
+  // A first loader succeeding needs no rewind.
+  assert.deepEqual(await loader.load('a.ogg', 0), {path: 'a.ogg', sound});
+  // Rev.3179 would sniff the same file again from offset 0 after the failed Vorbis loader.
+  await assert.rejects(() => loader.load('b', 0), /without the rewind/);
+  assert.deepEqual(decoded, [
+    ['vorbis', 'a.ogg'],
+    ['vorbis', 'b'],
+  ]);
+  decoded.length = 0;
+  // Appended suffixes open a fresh file each.
+  assert.deepEqual(await loader.load('c', 0), {path: 'c.wav', sound});
+  assert.deepEqual(decoded, [['wave', 'c.wav']]);
+  await assert.rejects(() => loader.load('d.ogg', 0), /without the rewind/);
+});
+
 test('Native WAVE sources stream paired files and rewind only the active segment', async () => {
   const {ArtemisWaveSource} = await import('../dist/engines/artemis/wave-source.js');
   const {ARTEMIS_3179_EXECUTABLE_SHA256: sha} = await import('../dist/engines/artemis/revision.js');

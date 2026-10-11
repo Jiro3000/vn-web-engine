@@ -197,8 +197,11 @@ export interface ArtemisRuntimeSurfaces {
 }
 /** The engine screenshot surface (+0x1c0) of `takess`/`savess`. */
 export interface ArtemisRuntimeScreenshots {
+  /** The committed scene (Rev.3179 takess). */
   take(): void;
-  /** Scaled RGBA rows, top row first; null before any `take`. */
+  /** The frame presented last (Rev.3139 takess). */
+  takePresented(): void;
+  /** Scaled RGBA rows, top row first; null before any take. */
   read(width: number, height: number): Uint8Array | null;
 }
 /** Effect and music voices (script +0x3d88/+0x3d60 managers). */
@@ -940,6 +943,7 @@ export class ArtemisRuntime {
       new ArtemisScreenshots(hash, {
         stageSize: () => ({width, height}),
         take: () => services.screenshots!.take(),
+        takePresented: () => services.screenshots!.takePresented(),
         read: (w, h) => services.screenshots!.read(w, h),
         writeSaveFile: (name, bytes) => this.saves.write(name, bytes),
         evictSurface: (name) => services.surfaces.evict(name),
