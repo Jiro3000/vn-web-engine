@@ -1952,6 +1952,121 @@ test('Event filters retain the function and preserve native numeric outcomes sep
   }
 });
 
+test('A held event filter resumes after its resource tag; its status then decides the default dispatch', async () => {
+  const {ArtemisScriptEvents} = await import('../dist/engines/artemis/script-events.js');
+  const {artemisEventFilterResult} = await import('../dist/engines/artemis/lua.js');
+  const hash = '8953562b80608046662bd8c89015d04236b0ba3afee10c36469c11403de3ebaf';
+  const tags = [],
+    effects = [];
+  const source = bytes('[record]');
+  let script;
+  // Frame-phase tags reach the script owner as frame calls.
+  const lua = new ArtemisLua({
+    readFile: () => source,
+    fileExists: () => false,
+    now: () => 0,
+    variable: () => '',
+    suspendableTags: true,
+    tag: (tag) => script.executeTag(tag, true),
+    enqueueTag: () => {},
+  });
+  script = new ArtemisScript(lua, {
+    readFile: () => source,
+    // A click sound loads asynchronously, like seplay in the runtime.
+    dispatch: (tag) => (tags.push(tag.name), tag.name === 'seplay' ? 'suspended' : undefined),
+  });
+  let held = null;
+  const events = new ArtemisScriptEvents(hash, {
+    nativeMode: () => 1,
+    disabled: () => false,
+    latched: () => false,
+    latch: () => {},
+    filter: (command, resume) => {
+      const task = lua.createEventFilterCall(command);
+      const result = task.resume();
+      if (result.status === 'yielded') {
+        held = {task, resume};
+        return 'held';
+      }
+      task.close();
+      return artemisEventFilterResult(result.values[0]);
+    },
+    report: (kind, command, error) => effects.push(['report', kind, String(error)]),
+    jump: () => assert.fail('unexpected jump'),
+    call: () => assert.fail('unexpected call'),
+    enterHandlerScope: () => effects.push(['scope']),
+    enqueueHandler: (command) => effects.push(['handler', command.name]),
+  });
+  const finish = () => {
+    const {task, resume} = held;
+    held = null;
+    let result;
+    try {
+      result = task.resume();
+    } catch (error) {
+      task.close();
+      resume({error});
+      return;
+    }
+    task.close();
+    resume({status: artemisEventFilterResult(result.values[0])});
+  };
+  const push = (result) => ({
+    kind: 'tag',
+    name: 'setonpush',
+    sourceLine: -1,
+    args: new Map([
+      ['handler', 'calllua'],
+      ['result', result],
+    ]),
+  });
+  try {
+    lua.vm.execute(
+      bytes(`engine:setEventFilter(function(e, name, p)
+        e:tag{'seplay', id='9', file='click'}
+        if p.result == 'error' then error('filter failed') end
+        e:tag{'exec', command='automode', mode='0'}
+        return tonumber(p.result)
+      end)`),
+    );
+    script.load('main.iet');
+    assert.equal(script.state, 'ready');
+    // Fallthrough: the event counts as delivered while held; the handler follows the status.
+    assert.deepEqual(events.emit(push('0'), 0, true), {status: 'delivered', failed: false});
+    assert.deepEqual(tags, ['seplay']);
+    assert.deepEqual(effects, []);
+    // The frame holds, not the script.
+    assert.equal(script.state, 'ready');
+    finish();
+    assert.deepEqual(tags, ['seplay', 'exec']);
+    assert.deepEqual(effects, [['scope'], ['handler', 'calllua']]);
+    // A consuming status skips the default dispatch.
+    tags.length = effects.length = 0;
+    assert.equal(events.dispatch(push('1')), false);
+    finish();
+    assert.deepEqual(tags, ['seplay', 'exec']);
+    assert.deepEqual(effects, []);
+    // A failure after the resource is reported, and the default dispatch still runs.
+    tags.length = 0;
+    assert.equal(events.dispatch(push('error')), false);
+    finish();
+    assert.deepEqual(tags, ['seplay']);
+    assert.equal(effects[0][0], 'report');
+    assert.match(effects[0][2], /filter failed/);
+    assert.deepEqual(effects.slice(1), [['scope'], ['handler', 'calllua']]);
+    // Without suspension the filter returns at once.
+    lua.vm.execute(bytes(`engine:setEventFilter(function() return 2 end)`));
+    assert.equal(events.dispatch(push('0')), true);
+    assert.equal(held, null);
+    // A script tag that suspends makes the script wait.
+    const seplay = {kind: 'tag', name: 'seplay', sourceLine: -1, args: new Map()};
+    assert.equal(script.executeTag(seplay), 'suspended');
+    assert.equal(script.state, 'waiting');
+  } finally {
+    lua.close();
+  }
+});
+
 test('Command event registrations capture label-only filenames and keep both push slots', async () => {
   const {ArtemisEventCommands} = await import('../dist/engines/artemis/event-commands.js');
   const {ArtemisKeyBindings} = await import('../dist/engines/artemis/key-bindings.js');

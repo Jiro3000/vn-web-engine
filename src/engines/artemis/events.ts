@@ -70,8 +70,9 @@ export class ArtemisEvents {
     }
     return true;
   }
-  /** Native frame/wait, save and load owners disable their failed callback. */
-  private fail(event: ArtemisEvent): void {
+  /** Native frame/wait, save and load owners disable their failed callback. An owner that
+   * resumes a callback after resource work reports its failure here. */
+  fail(event: ArtemisEvent): void {
     if (
       event === 'onEnterFrame' ||
       event === 'onClickWaitIn' ||

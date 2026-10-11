@@ -37,7 +37,8 @@ import {ArtemisKeyBindings} from './key-bindings.js';
 import type {ArtemisLayerEventSink, ArtemisLayerEventType} from './layer-events.js';
 import type {ArtemisTweenRegistry} from './tween.js';
 import {ArtemisLoad} from './load.js';
-import {ArtemisLua} from './lua.js';
+import {ArtemisLua, artemisEventFilterResult, type ArtemisLuaCall} from './lua.js';
+import type {LuaThreadResult, LuaValue} from '../../core/lua51/runtime.js';
 import {ArtemisMessageLayers, ArtemisMessageSelection} from './message-layers.js';
 import {ArtemisModes} from './modes.js';
 import {ArtemisMouse} from './mouse.js';
@@ -65,7 +66,7 @@ import {
 import {applyArtemisScenario, captureArtemisScenario} from './scenario-state.js';
 import {ArtemisSceneTweens} from './scene-tweens.js';
 import {ArtemisScript} from './script.js';
-import {createArtemisScriptEvents} from './script-events.js';
+import {createArtemisScriptEvents, type ArtemisEventFilterResume} from './script-events.js';
 import {ArtemisScreenshots} from './screenshot.js';
 import {ArtemisSePlay, type ArtemisSePlayHost} from './se-play.js';
 import {ArtemisSeStop} from './se-stop.js';
@@ -349,6 +350,21 @@ export class ArtemisRuntime {
   /** Milliseconds (uint32, timeGetTime) of the current frame. */
   now = 1;
   private pendingResource: Promise<unknown> | null = null;
+  /** A frame-phase Lua call (event filter, `onEnterFrame`) suspended on its resource
+   * operation. Native loads the resource synchronously inside the call; here the frame holds
+   * until `settleResource` finishes the call, then runs the remaining frame steps. */
+  private heldCall: {
+    readonly task: ArtemisLuaCall;
+    complete(value: LuaValue | undefined): void;
+    fail(error: unknown): void;
+  } | null = null;
+  /** The remaining steps of the current frame; a step returning true ends the frame. */
+  private frameSteps: (() => boolean | void)[] = [];
+  /** A frame-phase call may hold only directly in a frame step: not inside another Lua call
+   * or the script run. */
+  private holdable = false;
+  /** Frame-phase calls running now; their tags leave the script state alone. */
+  private frameCalls = 0;
   private resourceInFlight = false;
   private runModeHeld = false;
   private readonly saveWrites: Promise<void>[] = [];
@@ -1049,7 +1065,7 @@ export class ArtemisRuntime {
       setTouchLimit: services.setTouchLimit,
       pointerPosition: services.pointer,
       now: () => this.now,
-      tag: (tag) => script.executeTag(tag),
+      tag: (tag) => script.executeTag(tag, this.frameCalls > 0),
       enqueueTag: (tag) => script.enqueue(tag),
       variable: (name) => variables.queryLiteral(name),
       scriptStack: () => script.stack(),
@@ -1117,6 +1133,30 @@ export class ArtemisRuntime {
       },
       report: (kind, command, error) =>
         trace({eventError: {kind, name: command.name, error: String(error)}}),
+      filter: (command, resume) => {
+        const task = lua.createEventFilterCall(command);
+        if (!task) return 0;
+        let held = false,
+          result: ArtemisEventFilterResume = {status: 0};
+        const finish = (next: ArtemisEventFilterResume) => {
+          result = next;
+          if (held) resume(next);
+        };
+        held = this.runFrameCall(
+          task,
+          (value) => {
+            try {
+              finish({status: artemisEventFilterResult(value)});
+            } catch (error) {
+              finish({error});
+            }
+          },
+          (error) => finish({error}),
+        );
+        if (held) return 'held';
+        if ('error' in result) throw result.error;
+        return result.status;
+      },
     }));
     const resetOwners = () => {
       exec.clearRequests();
@@ -1339,6 +1379,37 @@ export class ArtemisRuntime {
     const operation = this.pendingResource;
     if (!operation) throw Error('No Artemis resource operation is pending');
     this.pendingResource = null;
+    const held = this.heldCall;
+    if (held) {
+      this.heldCall = null;
+      try {
+        await operation;
+      } catch (error) {
+        held.task.close();
+        this.frameSteps = [];
+        throw error;
+      }
+      let result: LuaThreadResult | undefined;
+      this.frameCalls++;
+      try {
+        result = held.task.resume();
+      } catch (error) {
+        held.task.close();
+        held.fail(error);
+      } finally {
+        this.frameCalls--;
+      }
+      if (result) {
+        this.holdable = true;
+        try {
+          this.finishFrameCall(held.task, result, held.complete, held.fail);
+        } finally {
+          this.holdable = false;
+        }
+      }
+      this.runFrameSteps();
+      return 'resumed';
+    }
     this.resourceInFlight = true;
     const script = this.script;
     const restored = script.restoredCarets;
@@ -1390,44 +1461,140 @@ export class ArtemisRuntime {
    * push), and a delivered handler ends the frame; the wait (run modes 1, 3 and 4) checks
    * the role 0 decision in run mode 1, its deadline or display completion; then a ready
    * script runs up to `steps` tags. While a resource load holds the script only the input
-   * and clock advance; `settleResource` resumes it. */
+   * and clock advance; `settleResource` resumes it. An event filter or `onEnterFrame` whose
+   * tag loads a resource holds the frame instead (native loads inside the call):
+   * `settleResource` finishes the call and then the rest of the frame. */
   frame(now: number, input: ArtemisFrameInput, steps = 1000): void {
     if (this.exited) throw Error('Artemis frame after the application exit');
+    if (this.heldCall) throw Error('Artemis frame while a frame call is held');
     this.frameNumber = (this.frameNumber + 1) >>> 0;
-    const pointer = input.pointer;
-    if (pointer && !this.resourcePending && this.mode !== 9)
-      for (const event of this.layers.updatePointer(pointer, pointer.hits, {
-        decide: this.input.query('decide', 1),
-        downEdge: this.input.query('downEdge', 1),
-        down: this.input.query('down', 1),
-      }))
-        this.layerEvent(event.id, event.type);
-    this.input.update(now, input.sample);
-    // c0560 clears both latches after the window and input updates.
-    this.eventLatches.fill(false);
-    this.advanceTo(now);
-    if (this.resourcePending) return;
-    try {
-      this.lua.events.emit('onEnterFrame');
-    } catch (error) {
-      this.services.trace?.effect?.({enterFrameError: String(error)});
+    const pointer = input.pointer,
+      clock = this.now;
+    const events =
+      pointer && !this.resourcePending && this.mode !== 9
+        ? this.layers.updatePointer(pointer, pointer.hits, {
+            decide: this.input.query('decide', 1),
+            downEdge: this.input.query('downEdge', 1),
+            down: this.input.query('down', 1),
+          })
+        : [];
+    this.frameSteps = [
+      ...events.map((event) => () => this.layerEvent(event.id, event.type)),
+      () => {
+        this.input.update(now, input.sample);
+        // c0560 clears both latches after the window and input updates.
+        this.eventLatches.fill(false);
+        // The host advances the clock while a layer event holds the frame.
+        if (this.now === clock) this.advanceTo(now);
+      },
+      () => this.enterFrame(),
+      () => this.frameModes(),
+      () => this.frameRunMode(now, steps),
+    ];
+    this.runFrameSteps();
+  }
+  /** Runs the frame steps in order. A held frame call keeps the rest for `settleResource`;
+   * another pending resource operation drops them. */
+  private runFrameSteps(): void {
+    while (this.frameSteps.length) {
+      if (this.pendingResource) {
+        if (!this.heldCall) this.frameSteps = [];
+        return;
+      }
+      const step = this.frameSteps.shift()!;
+      this.holdable = true;
+      try {
+        if (step() === true) this.frameSteps = [];
+      } finally {
+        this.holdable = false;
+      }
     }
+  }
+  /** Lua `onEnterFrame`; a failing handler is cleared. */
+  private enterFrame(): void {
+    const events = this.lua.events,
+      name = events.handler('onEnterFrame');
+    if (!name) return;
+    const fail = (error: unknown) => {
+      events.fail('onEnterFrame');
+      this.services.trace?.effect?.({enterFrameError: String(error)});
+    };
+    let task: ArtemisLuaCall;
+    try {
+      task = this.lua.createCall(name);
+    } catch (error) {
+      fail(error);
+      return;
+    }
+    this.runFrameCall(task, () => {}, fail);
+  }
+  /** Starts a frame-phase Lua call; true when it holds the frame on its resource operation.
+   * A call that suspends where it cannot hold fails, and its operation completes unawaited. */
+  private runFrameCall(
+    task: ArtemisLuaCall,
+    complete: (value: LuaValue | undefined) => void,
+    fail: (error: unknown) => void,
+  ): boolean {
+    const holdable = this.holdable;
+    this.holdable = false;
+    let result: LuaThreadResult;
+    this.frameCalls++;
+    try {
+      result = task.resume();
+    } catch (error) {
+      task.close();
+      fail(error);
+      return false;
+    } finally {
+      this.frameCalls--;
+      this.holdable = holdable;
+    }
+    return this.finishFrameCall(task, result, complete, fail);
+  }
+  private finishFrameCall(
+    task: ArtemisLuaCall,
+    result: LuaThreadResult,
+    complete: (value: LuaValue | undefined) => void,
+    fail: (error: unknown) => void,
+  ): boolean {
+    if (result.status === 'yielded') {
+      if (this.holdable && this.pendingResource && !this.heldCall) {
+        this.heldCall = {task, complete, fail};
+        return true;
+      }
+      task.close();
+      const operation = this.pendingResource;
+      this.pendingResource = null;
+      operation?.catch(() => {});
+      fail(Error('Artemis frame call suspended outside a frame step'));
+      return false;
+    }
+    task.close();
+    complete(result.values[0]);
+    return false;
+  }
+  /** Volumes and the mode roles after `onEnterFrame`; true ends the frame. */
+  private frameModes(): boolean {
     this.volumes.apply();
-    if (this.resourcePending) return;
     // Mode roles (0x1400c0560 before the run mode switch): a decided stop role ends
     // automode (role 10 with stopbyclick, else 11) or command skip (13) and the frame;
     // control skip follows role 14 held.
     const modes = this.modes;
     if (modes.automode && this.roleDecided(modes.stopAutoByClick ? 10 : 11)) {
       modes.setAutomode(false);
-      return;
+      return true;
     }
     if (modes.commandSkip && this.roleDecided(13)) {
       modes.setCommandSkip(false);
-      return;
+      return true;
     }
     const control = this.roleHeld(14);
     if (control !== modes.controlSkip) modes.setControlSkip(control);
+    return false;
+  }
+  /** The run mode branch, push handlers, the wait and the script; true ends the frame. */
+  private frameRunMode(now: number, steps: number): boolean {
+    const modes = this.modes;
     if (this.layers.transitionPending) {
       if (this.mode === 2 && this.roleDecided(0)) {
         this.layers.finishTransition(now || 1);
@@ -1441,22 +1608,24 @@ export class ArtemisRuntime {
         (key, slot) => this.input.query(slot === 0 ? 'decide' : 'push', key),
         (command) => this.scriptEvents.dispatch(command),
       );
-      if (delivered) return;
+      if (delivered) return true;
       // Role 9 starts automode, role 12 command skip (unforced); either ends the frame.
       if (this.roleDecided(9)) {
         modes.setAutomode(true);
-        return;
+        return true;
       }
       if (this.roleDecided(12)) {
         modes.setCommandSkip(true);
-        return;
+        return true;
       }
     }
     const mode = this.mode;
     // Run mode 1 clicks on role 0 or while skipping (0x1400b5170).
     if (this.wait.pending && (mode === 1 || mode === 3 || mode === 4))
       this.wait.tick(now, mode === 1 && (this.roleDecided(0) || this.skipping), mode === 1);
+    this.holdable = false;
     if (this.script.state === 'ready') this.script.run(steps);
+    return true;
   }
   /** 0x1400b5170: skip is allowed and command or control skip is on (debug skip has no
    * owner). */

@@ -8,7 +8,10 @@ export interface ArtemisScriptEventHost {
   /** b73e0 latches30/31; the frame/control owner decides when they clear. */
   latched(mode: 0 | 1): boolean;
   latch(mode: 0 | 1): void;
-  filter(command: AsbTag): number;
+  /** The event filter's status, or 'held' when the owner holds the filter on resource work
+   * (native loads synchronously inside it) and later finishes the dispatch through `resume`
+   * with the status or the filter's failure. */
+  filter(command: AsbTag, resume: (result: ArtemisEventFilterResume) => void): number | 'held';
   report(kind: 'filter' | 'default', command: AsbTag, error: unknown): void;
   /** Default event transfers return the native failed flag, not consumed status. */
   jump(file: string, label: string): boolean;
@@ -18,6 +21,7 @@ export interface ArtemisScriptEventHost {
   /** Priority script queue, sourceLine0; never invoke a Lua handler directly. */
   enqueueHandler(command: AsbTag): void;
 }
+export type ArtemisEventFilterResume = {readonly status: number} | {readonly error: unknown};
 export type ArtemisScriptEventResult =
   | {readonly status: 'suppressed' | 'queued'}
   | {readonly status: 'delivered'; readonly failed: boolean};
@@ -72,17 +76,33 @@ export class ArtemisScriptEvents {
   clear(): void {
     this.pending = [];
   }
+  /** A held filter reports a delivered, not failed, event; its default dispatch follows when
+   * the owner resumes it. */
   dispatch(input: AsbTag): boolean {
     const command = copy(input);
     if (!command.name) return true;
+    let status: number | 'held';
     try {
-      const status = this.host.filter(command);
-      if (!Number.isInteger(status) || status < -0x80000000 || status > 0x7fffffff)
-        throw Error('Unsupported Artemis event filter result');
-      if (status !== 0) return status === 2;
+      status = this.host.filter(command, (result) => {
+        if ('error' in result) {
+          this.host.report('filter', command, result.error);
+          this.dispatchDefault(command);
+        } else this.filtered(command, result.status);
+      });
     } catch (error) {
       this.host.report('filter', command, error);
+      return this.dispatchDefault(command);
     }
+    return status === 'held' ? false : this.filtered(command, status);
+  }
+  private filtered(command: AsbTag, status: number): boolean {
+    if (!Number.isInteger(status) || status < -0x80000000 || status > 0x7fffffff) {
+      this.host.report('filter', command, Error('Unsupported Artemis event filter result'));
+      return this.dispatchDefault(command);
+    }
+    return status !== 0 ? status === 2 : this.dispatchDefault(command);
+  }
+  private dispatchDefault(command: AsbTag): boolean {
     const args = command.args;
     try {
       if (args.has('file') || args.has('label')) {
@@ -110,17 +130,22 @@ export class ArtemisScriptEvents {
 }
 
 /** Actual Lua filter + script cursor/queue/scope adapter. The application must
- * supply native mode/latches; no ready/waiting enum is silently guessed here.
+ * supply native mode/latches; no ready/waiting enum is silently guessed here. A `filter` in
+ * `control` replaces the synchronous Lua filter, for owners that hold it on resource work.
  */
 export function createArtemisScriptEvents(
   hash: string,
   lua: import('./lua.js').ArtemisLua,
   script: import('./script.js').ArtemisScript,
-  control: Pick<ArtemisScriptEventHost, 'nativeMode' | 'disabled' | 'latched' | 'latch' | 'report'>,
+  control: Pick<
+    ArtemisScriptEventHost,
+    'nativeMode' | 'disabled' | 'latched' | 'latch' | 'report'
+  > &
+    Partial<Pick<ArtemisScriptEventHost, 'filter'>>,
 ): ArtemisScriptEvents {
   return new ArtemisScriptEvents(hash, {
-    ...control,
     filter: (command) => lua.filterEvent(command),
+    ...control,
     jump: (file, label) => {
       script.jump(file, label);
       return false;

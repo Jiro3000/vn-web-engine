@@ -551,11 +551,21 @@ cancel or reject stale resource completions. Lua callback return values are disc
 
 Tag filters also retain their continuation: the first numeric return decides
 consume/fallthrough, and native dispatch receives the original arguments. Extra
-returns are discarded, matching native single-result callbacks. Event filters
-and inline includes remain synchronous. Lua 5.1
+returns are discarded, matching native single-result callbacks. Inline includes and
+the click-wait, save and load callbacks remain synchronous. Lua 5.1
 cannot yield across a protected C-call boundary; such asynchronous paths refuse.
 The default owner keeps the original synchronous callback path. `ArtemisRuntime` always
 uses the coroutine path.
+
+The event filter (`setEventFilter`) and `onEnterFrame` run as coroutines in the frame
+steps of `ArtemisRuntime.frame`: each raised layer event, the input update and clock, the
+frame callback, the mode roles, and the run mode branch with the script. When a tag of such
+a call loads a resource (an `seplay` of a click sound, for example), the frame holds:
+`settleResource` awaits the operation, resumes the call, and runs the remaining steps with
+the same input, so a push handler or mode role later in that frame still sees the click.
+A held event filter reports the event as delivered; its status then decides the default
+dispatch. A call nested in another Lua call or in the script run cannot hold; it fails and
+its operation completes unawaited.
 
 `image-loader.ts` resolves resources asynchronously with native extension preference,
 then content sniffing of the exact file, then appended-extension candidates. Codec

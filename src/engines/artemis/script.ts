@@ -121,6 +121,7 @@ export class ArtemisScript {
   private running = false;
   private readonly luaCalls: PendingLuaCall[] = [];
   private luaSuspended = false;
+  private frameCall = false;
   state: ArtemisScriptState = 'ended';
   /** Counts `restoreCarets`: a resource operation that loaded a save has replaced the
    * caret it suspended. */
@@ -462,12 +463,18 @@ export class ArtemisScript {
     this.luaCalls.length = 0;
     this.luaSuspended = false;
   }
-  executeTag(tag: AsbTag): void | 'suspended' {
+  /** `frameCall`: the tag comes from a frame-phase Lua call (event filter, `onEnterFrame`).
+   * Its resource suspension holds the frame, not the script, so the script state stays. */
+  executeTag(tag: AsbTag, frameCall = false): void | 'suspended' {
+    const outer = this.frameCall;
+    this.frameCall = frameCall;
     try {
       return this.dispatch(tag);
     } catch (error) {
       this.state = 'faulted';
       throw error;
+    } finally {
+      this.frameCall = outer;
     }
   }
   /** The evaluated value replaces the argument; exact Lua argument bytes of that key are
@@ -588,7 +595,7 @@ export class ArtemisScript {
         }
         const state = this.host.dispatch(tag);
         if (state === 'suspended') {
-          this.state = 'waiting';
+          if (!this.frameCall) this.state = 'waiting';
           return 'suspended';
         }
         if (state) this.state = state;

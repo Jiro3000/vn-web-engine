@@ -551,14 +551,22 @@ export class ArtemisLua {
     if (!tag.name || !this.eventFilter) return 0;
     const args: LuaTable = new Map();
     for (const [key, value] of tag.args) args.set(key, new TextEncoder().encode(value));
-    const result = this.eventFilter.invokeFirst([new TextEncoder().encode(tag.name), args], true);
-    if (
-      typeof result !== 'number' ||
-      !Number.isFinite(result) ||
-      !Number.isSafeInteger(Math.trunc(result))
-    )
-      throw new Error('Unsupported Artemis event filter result');
-    return Math.trunc(result) | 0;
+    return artemisEventFilterResult(
+      this.eventFilter.invokeFirst([new TextEncoder().encode(tag.name), args], true),
+    );
+  }
+  /** Resumable counterpart of `filterEvent` for owners that hold the frame while a tag of the
+   * filter loads resources; its first result goes through `artemisEventFilterResult`. Null
+   * without an event filter or for an unnamed event. */
+  createEventFilterCall(tag: AsbTag): ArtemisLuaCall | null {
+    if (!tag.name || !this.eventFilter) return null;
+    const args: LuaTable = new Map();
+    for (const [key, value] of tag.args) args.set(key, new TextEncoder().encode(value));
+    return new ArtemisLuaCall(
+      this.vm.createThread(this.eventFilter, true),
+      [new TextEncoder().encode(tag.name), args],
+      false,
+    );
   }
   close(): void {
     this.vm.close();
@@ -593,6 +601,17 @@ export class ArtemisLuaCall {
   close(): void {
     this.thread.close();
   }
+}
+
+/** The native 32-bit event filter result; numeric strings and other values are rejected. */
+export function artemisEventFilterResult(result: LuaValue | undefined): number {
+  if (
+    typeof result !== 'number' ||
+    !Number.isFinite(result) ||
+    !Number.isSafeInteger(Math.trunc(result))
+  )
+    throw new Error('Unsupported Artemis event filter result');
+  return Math.trunc(result) | 0;
 }
 
 export function artemisTagFilterResult(result: LuaValue | undefined): boolean {
