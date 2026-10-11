@@ -12,6 +12,32 @@ export interface ArtemisSoundBufferUpdate {
   readonly stopped: boolean;
 }
 
+/** Native 163a80 half size in bytes: two seconds below one millisecond, else the mode's
+ * milliseconds of PCM. Throws for a format or size the ring cannot hold. */
+export function artemisRollingHalfSize(
+  format: ArtemisWaveFormat,
+  bufferMilliseconds: number,
+): number {
+  if (
+    !Number.isInteger(format.sampleRate) ||
+    format.sampleRate <= 0 ||
+    !Number.isInteger(format.channels) ||
+    format.channels < 1 ||
+    !Number.isInteger(format.bitsPerSample) ||
+    format.bitsPerSample < 1 ||
+    format.blockAlign !== (format.bitsPerSample >> 3) * format.channels
+  )
+    throw Error('Invalid Artemis progressive PCM format');
+  const byteRate = Math.imul(format.blockAlign, format.sampleRate) >>> 0;
+  const halfSize =
+    bufferMilliseconds < 1
+      ? Math.imul(byteRate, 2) >>> 0
+      : Math.floor((Math.imul(byteRate, bufferMilliseconds) >>> 0) / 1000);
+  if (!halfSize || halfSize > 0x3fffffff || halfSize % format.blockAlign !== 0)
+    throw Error('Unsupported Artemis progressive buffer size/alignment');
+  return halfSize;
+}
+
 /** Native163a80/164410/1640c0 two-half PCM storage. The host supplies actual
  * device cursors and plays these bytes; this owner never simulates a voice.
  * Decoder errors and restored/lost DirectSound buffers remain host services.
@@ -36,24 +62,7 @@ export class ArtemisRollingSoundBuffer {
       bufferMilliseconds === -1
     )
       throw Error('Invalid Artemis progressive sound buffer mode');
-    const format = source.format;
-    if (
-      !Number.isInteger(format.sampleRate) ||
-      format.sampleRate <= 0 ||
-      !Number.isInteger(format.channels) ||
-      format.channels < 1 ||
-      !Number.isInteger(format.bitsPerSample) ||
-      format.bitsPerSample < 1 ||
-      format.blockAlign !== (format.bitsPerSample >> 3) * format.channels
-    )
-      throw Error('Invalid Artemis progressive PCM format');
-    const byteRate = Math.imul(format.blockAlign, format.sampleRate) >>> 0;
-    this.halfSize =
-      bufferMilliseconds < 1
-        ? Math.imul(byteRate, 2) >>> 0
-        : Math.floor((Math.imul(byteRate, bufferMilliseconds) >>> 0) / 1000);
-    if (!this.halfSize || this.halfSize > 0x3fffffff || this.halfSize % format.blockAlign !== 0)
-      throw Error('Unsupported Artemis progressive buffer size/alignment');
+    this.halfSize = artemisRollingHalfSize(source.format, bufferMilliseconds);
     this.storage = new Uint8Array(this.halfSize * 2);
   }
   get playing(): boolean {

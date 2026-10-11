@@ -12,6 +12,7 @@ import {MessageBoxTextDialogHost} from '../../../platform/text-dialog.js';
 import {FreeTypeWorker} from '../../../text/freetype-worker-client.js';
 import {BrowserFullscreenMoviePlayer} from '../../../video/fullscreen-movie.js';
 import {createArtemisBrowserSoundVoices} from '../browser-sound-voices.js';
+import {BlobSource} from '../../../core/source.js';
 import {ArtemisDrawShaderResource} from '../draw-shader.js';
 import {compileArtemisShaderPreset} from '../raster-shader.js';
 import {ArtemisShaderLibrary} from '../shader-library.js';
@@ -161,7 +162,19 @@ export class ArtemisBrowserPlayer {
         },
       },
     );
-    this.sound = createArtemisBrowserSoundVoices(hash, read, 'nearest-even');
+    this.sound = createArtemisBrowserSoundVoices(
+      hash,
+      {
+        read,
+        open: async (path) => {
+          const saved = this.runtime?.readSaveDirectoryFile(path);
+          if (saved === undefined) return files.open(path);
+          const bytes = await saved;
+          return bytes && new BlobSource(new Blob([bytes.slice().buffer]));
+        },
+      },
+      'nearest-even',
+    );
     const messageBox = new BrowserWindowsMessageBoxHost(this.panel, () =>
       this.canvas.focus({preventScroll: true}),
     );

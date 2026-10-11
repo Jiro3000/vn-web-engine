@@ -8,6 +8,15 @@ import {
   type ArtemisRollingAudioRequest,
   type ArtemisRollingAudioResponse,
 } from './rolling-audio-processor.js';
+import type {ArtemisPcmResource} from './pcm-resource.js';
+
+/** Progressive PCM owner: an incomplete snapshot, followed by its appends and its end. */
+export interface ArtemisPcmStream {
+  /** Returns the PCM so far; `listener` then receives each later chunk, and null at the end. */
+  follow(listener: (bytes: Uint8Array | null) => void): ArtemisPcmResource;
+  /** Stops decoding; the voice closes its stream when it is disposed. */
+  close(): void;
+}
 
 export interface ArtemisRollingVoice extends AudioVoice {
   /** Fence commands for integration tests/owners that must observe worker completion. */
@@ -16,21 +25,41 @@ export interface ArtemisRollingVoice extends AudioVoice {
 }
 export async function createArtemisRollingVoice(
   context: BaseAudioContext,
-  options: ArtemisRollingAudioOptions,
+  input:
+    | ArtemisRollingAudioOptions
+    | {readonly hash: string; readonly stream: ArtemisPcmStream; readonly bufferMode: number},
 ): Promise<ArtemisRollingVoice> {
-  artemisRevision(options.hash);
-  const node = await createBrowserPcmNode<ArtemisRollingAudioRequest, ArtemisRollingAudioResponse>(
-    context,
-    {
-      module: new URL('./rolling-audio-worklet.js', import.meta.url),
-      name: 'artemis-rolling-pcm',
-      channels: 2,
-      interpretation: 'discrete',
-      processorOptions: options,
-      createProcessor: (send) =>
-        new ArtemisRollingAudioProcessor(options, context.sampleRate, send),
-    },
-  );
+  artemisRevision(input.hash);
+  // Chunks decoded while the node is created wait here, in order.
+  let queued: (Uint8Array | null)[] | null = [],
+    deliver = (bytes: Uint8Array | null): void => void queued!.push(bytes);
+  const stream = 'stream' in input ? input.stream : undefined,
+    options: ArtemisRollingAudioOptions = stream
+      ? {
+          hash: input.hash,
+          bufferMode: input.bufferMode,
+          resource: stream.follow((bytes) => deliver(bytes)),
+        }
+      : (input as ArtemisRollingAudioOptions);
+  let decodedBytes = options.resource.bytes.length;
+  let node;
+  try {
+    node = await createBrowserPcmNode<ArtemisRollingAudioRequest, ArtemisRollingAudioResponse>(
+      context,
+      {
+        module: new URL('./rolling-audio-worklet.js', import.meta.url),
+        name: 'artemis-rolling-pcm',
+        channels: 2,
+        interpretation: 'discrete',
+        processorOptions: options,
+        createProcessor: (send) =>
+          new ArtemisRollingAudioProcessor(options, context.sampleRate, send),
+      },
+    );
+  } catch (error) {
+    stream?.close();
+    throw error;
+  }
   const gain = context.createGain(),
     splitter = context.createChannelSplitter(2),
     left = context.createGain(),
@@ -73,7 +102,11 @@ export async function createArtemisRollingVoice(
     }
   };
   node.onprocessorerror = () => fail(Error('Artemis rolling PCM processor failed'));
-  const send = (command: ArtemisRollingAudioCommand, fence = false): Promise<void> | undefined => {
+  const send = (
+    command: ArtemisRollingAudioCommand,
+    fence = false,
+    transfer: Transferable[] = [],
+  ): Promise<void> | undefined => {
     if (disposed) {
       if (fence) return Promise.reject(Error('Artemis rolling voice disposed'));
       return;
@@ -86,7 +119,7 @@ export async function createArtemisRollingVoice(
     let done: Promise<void> | undefined;
     if (fence) done = new Promise((resolve, reject) => pending.set(id, {resolve, reject}));
     try {
-      node.port.postMessage({id, command} satisfies ArtemisRollingAudioRequest);
+      node.port.postMessage({id, command} satisfies ArtemisRollingAudioRequest, transfer);
     } catch (error) {
       fail(error instanceof Error ? error : Error(String(error)));
       if (!fence) throw failure;
@@ -97,7 +130,10 @@ export async function createArtemisRollingVoice(
     resource.declaredSize + (resource.paired ? count(resource.paired) : 0);
   const voice: ArtemisRollingVoice = {
     sampleRate: options.resource.format.sampleRate,
-    sampleCount: count(options.resource) / options.resource.format.blockAlign,
+    /** Decoded so far while a progressive stream is still decoding. */
+    get sampleCount() {
+      return (stream ? decodedBytes : count(options.resource)) / options.resource.format.blockAlign;
+    },
     loopStart: options.resource.paired
       ? options.resource.declaredSize / options.resource.format.blockAlign
       : 0,
@@ -144,6 +180,7 @@ export async function createArtemisRollingVoice(
     },
     dispose: () => {
       if (disposed) return;
+      stream?.close();
       try {
         if (!failure) send({kind: 'dispose'});
       } finally {
@@ -161,6 +198,18 @@ export async function createArtemisRollingVoice(
       }
     },
   };
+  if (stream) {
+    deliver = (bytes) => {
+      if (disposed || failure) return;
+      if (bytes === null) send({kind: 'end'});
+      else {
+        decodedBytes += bytes.length;
+        send({kind: 'append', bytes}, false, [bytes.buffer as ArrayBuffer]);
+      }
+    };
+    for (const bytes of queued!) deliver(bytes);
+  }
+  queued = null;
   try {
     await voice.synchronize();
     return voice;

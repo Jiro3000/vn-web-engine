@@ -4058,6 +4058,121 @@ test('Device-driven rolling PCM renderer preserves pause, cursor, scheduler refi
   assert.equal(renderer.render(block()), false);
 });
 
+test('Progressive Vorbis decodes partial reads to the eager PCM, and its voice refills only decoded halves', async () => {
+  const {readFile} = await import('node:fs/promises');
+  const {ARTEMIS_3179_EXECUTABLE_SHA256: sha} = await import('../dist/engines/artemis/revision.js');
+  const {decodeArtemisVorbisBytes} = await import('../dist/engines/artemis/vorbis-byte-decode.js');
+  const {ArtemisVorbisPcmChunks} = await import('../dist/engines/artemis/vorbis-pcm-stream.js');
+  const {ArtemisVorbisStream, ArtemisVorbisStreamDecoder} =
+    await import('../dist/engines/artemis/vorbis-stream-source.js');
+  const {ArtemisRollingAudioProcessor} =
+    await import('../dist/engines/artemis/rolling-audio-processor.js');
+  const {BlobSource} = await import('../dist/core/source.js');
+  const encoded = new Uint8Array(
+    await readFile(new URL('./fixtures/audio/vorbis-boundaries.ogg', import.meta.url)),
+  );
+  const eager = (
+    await decodeArtemisVorbisBytes({hash: sha, rounding: 'nearest-even', bytes: encoded})
+  ).bytes;
+  const join = (parts) => Buffer.concat(parts.map((part) => Buffer.from(part)));
+
+  // Reads of 97 bytes split pages and packets across pushes.
+  const outputs = [];
+  const chunks = new ArtemisVorbisPcmChunks(
+    {hash: sha, rounding: 'nearest-even', firstFrames: 300, chunkFrames: 300},
+    (output) => outputs.push(output),
+  );
+  for (let offset = 0; offset < encoded.length; offset += 97)
+    await chunks.push(encoded.slice(offset, offset + 97), offset + 97 >= encoded.length);
+  assert.deepEqual(outputs[0], {kind: 'open', sampleRate: 48000, channels: 1});
+  assert.equal(outputs.at(-1).kind, 'done');
+  // The fixture's audio packets all sit on its EOS page, so the trim applies to one batch.
+  const pcm = outputs.filter((output) => output.kind === 'pcm');
+  assert.equal(pcm.length, 1);
+  assert.deepEqual(join(pcm.map((output) => output.bytes)), Buffer.from(eager));
+  const truncated = [];
+  const damaged = new ArtemisVorbisPcmChunks(
+    {hash: sha, rounding: 'nearest-even', firstFrames: 300, chunkFrames: 300},
+    (output) => truncated.push(output),
+  );
+  await damaged.push(encoded.slice(0, encoded.length - 5), true);
+  assert.deepEqual(truncated.at(-1), {
+    kind: 'error',
+    message: 'Incomplete Ogg page',
+    encodedDataError: true,
+  });
+
+  // The source settles once the voice's start bytes exist; its follower receives the rest.
+  const decoder = new ArtemisVorbisStreamDecoder(sha, 'nearest-even');
+  try {
+    const stream = await ArtemisVorbisStream.open(
+      sha,
+      new BlobSource(new Blob([encoded])),
+      decoder,
+      (format) => format.blockAlign * 100,
+    );
+    const later = [];
+    let resource;
+    const ended = new Promise((resolve) => {
+      resource = stream.follow((bytes) => (bytes === null ? resolve() : later.push(bytes)));
+    });
+    assert.equal(resource.complete, false);
+    assert.ok(resource.bytes.length >= 200);
+    await ended;
+    assert.deepEqual(join([resource.bytes, ...later]), Buffer.from(eager));
+    assert.equal(stream.decodedBytes, eager.length);
+    assert.equal(
+      await ArtemisVorbisStream.open(
+        sha,
+        new BlobSource(new Blob([new Uint8Array(64)])),
+        decoder,
+        () => 2,
+      ),
+      null,
+    );
+  } finally {
+    decoder.close();
+  }
+
+  // A 2 ms half is 96 frames. Two halves are decoded; the third arrives after it is needed.
+  const format = {sampleRate: 48000, channels: 1, bitsPerSample: 16, blockAlign: 2},
+    half = 192,
+    events = [];
+  const renderer = new ArtemisRollingAudioProcessor(
+    {
+      hash: sha,
+      bufferMode: 2,
+      resource: {
+        kind: 'vorbis',
+        format,
+        declaredSize: 2 * half,
+        bytes: eager.slice(0, 2 * half),
+        complete: false,
+      },
+    },
+    48000,
+    (event) => events.push(event),
+  );
+  const view = new DataView(eager.buffer, eager.byteOffset);
+  const expected = (from, count) =>
+    Array.from({length: count}, (_, i) => view.getInt16((from + i) * 2, true) / 32768);
+  const render = (count) => {
+    const output = [new Float32Array(count), new Float32Array(count)];
+    renderer.render(output);
+    return [...output[0]];
+  };
+  renderer.receive({id: 1, command: {kind: 'start', loop: false}});
+  assert.deepEqual(render(100), expected(0, 100));
+  // The cursor is in the second half, so native refills the first; nothing is decoded yet.
+  renderer.receive({id: 2, command: {kind: 'pump'}});
+  assert.equal(events.at(-1).playing, true);
+  assert.equal(events.at(-1).finished, false);
+  renderer.receive({id: 3, command: {kind: 'append', bytes: eager.slice(2 * half, 3 * half)}});
+  renderer.receive({id: 4, command: {kind: 'pump'}});
+  assert.deepEqual(render(92), expected(100, 92));
+  assert.deepEqual(render(96), expected(192, 96));
+});
+
 test('Offline PCM voices render actual cached gain/pan and progressive native completion', async () => {
   const {createArtemisOfflineSoundVoices} =
     await import('../dist/engines/artemis/offline-sound-voices.js');

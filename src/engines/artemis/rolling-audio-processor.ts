@@ -9,7 +9,9 @@ export interface ArtemisRollingAudioOptions {
 export type ArtemisRollingAudioCommand =
   | {readonly kind: 'start'; readonly loop: boolean}
   | {readonly kind: 'pause'; readonly paused: boolean}
-  | {readonly kind: 'pump' | 'stop' | 'status' | 'dispose'};
+  /** Progressive Vorbis PCM after the resource snapshot (`ArtemisPcmCursor.append`). */
+  | {readonly kind: 'append'; readonly bytes: Uint8Array}
+  | {readonly kind: 'pump' | 'stop' | 'status' | 'dispose' | 'end'};
 export interface ArtemisRollingAudioRequest {
   readonly id: number;
   readonly command: ArtemisRollingAudioCommand;
@@ -27,9 +29,12 @@ export type ArtemisRollingAudioResponse =
 /** Device-driven real PCM output. Native refills are explicit scheduler pump
  * commands; render advances the device cursor, never the source or engine clock.
  * Fractional rate conversion is a browser linear interpolation adaptation.
+ * A pump whose progressive source has not decoded a whole half yet refills nothing;
+ * a later pump refills once the PCM arrived (native decodes synchronously).
  */
 export class ArtemisRollingAudioProcessor {
   private readonly ring: ArtemisRollingSoundBuffer;
+  private readonly cursor: ArtemisPcmCursor;
   private bytes: Uint8Array;
   private view: DataView;
   private phase = 0;
@@ -51,11 +56,8 @@ export class ArtemisRollingAudioProcessor {
       (format.channels !== 1 && format.channels !== 2)
     )
       throw Error('Unsupported Artemis rolling audio device format');
-    this.ring = new ArtemisRollingSoundBuffer(
-      options.hash,
-      new ArtemisPcmCursor(options.resource),
-      options.bufferMode,
-    );
+    this.cursor = new ArtemisPcmCursor(options.resource);
+    this.ring = new ArtemisRollingSoundBuffer(options.hash, this.cursor, options.bufferMode);
     this.bytes = this.ring.snapshot();
     this.view = new DataView(this.bytes.buffer);
   }
@@ -89,7 +91,14 @@ export class ArtemisRollingAudioProcessor {
         case 'pause':
           this.paused = command.paused;
           break;
+        case 'append':
+          this.cursor.append(command.bytes);
+          break;
+        case 'end':
+          this.cursor.end();
+          break;
         case 'pump': {
+          if (!this.cursor.ready(this.ring.halfSize)) break;
           const cursor =
             (Math.floor(this.phase) * this.options.resource.format.blockAlign) % this.bytes.length;
           const update = this.ring.tick(cursor);

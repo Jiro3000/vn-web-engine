@@ -1621,9 +1621,22 @@ PCM host provides its real ScriptProcessor compatibility fallback where worklets
 are unavailable. Mono duplicates into stereo, and per-side attenuation is independent.
 
 The browser adapter prefills both halves before output; native fills its second
-half during the first engine tick. Sources are eagerly decoded in codec workers.
-Progressive decode timing, damaged/chained streams and DirectSound lost-buffer
-recovery remain separate native services. Fractional device rates use browser
+half during the first engine tick.
+
+Native decodes a rolling voice's Vorbis file as it plays. The browser owner does the same
+for files without a paired `_b` resource: `ArtemisVorbisStream` reads the file in 256 KiB,
+then 1 MiB ranges and feeds them to a decoding session (`ArtemisVorbisStreamDecoder`, one
+reusable module worker per stream). In the worker, `ArtemisVorbisPcmChunks` runs the shared
+incremental `VorbisChunkDecoder` and converts each batch with Rev.3179's PCM16 rule; the
+concatenated PCM equals the eager result, including the EOS trim. The voice is prepared
+once both ring halves can be filled, so its start no longer waits for the whole file to be
+read and decoded. Later PCM reaches the device processor as `append` commands. A pump whose
+half is not decoded yet refills nothing, and the next pump refills it once the PCM arrived
+(`ArtemisPcmCursor.ready`), so a slow decoder can never end or loop the voice early. An
+encoded-data error before the first PCM is a decode miss, as in the eager owner; a later
+read or decode failure ends the PCM where it stopped. Paired `_a`/`_b` files and WAVE
+sources are decoded eagerly in codec workers. Damaged/chained streams and DirectSound
+lost-buffer recovery remain separate native services. Fractional device rates use browser
 linear interpolation; no target-driver bit identity is claimed. Worklet control
 commands have completion fences for tests and callers that must observe state.
 
