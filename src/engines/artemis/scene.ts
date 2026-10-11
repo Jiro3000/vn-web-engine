@@ -12,7 +12,6 @@ export interface ArtemisSceneLayer<T> {
    * retained one when the two indices differ. Empty once the node is destroyed. */
   actors(): readonly T[];
 }
-const encoder = new TextEncoder();
 function integerKey(key: string): number | null {
   // Native 0x1401856c0 accepts a lone minus sign; atoi then yields zero.
   if (!/^-?\d*$/.test(key) || !key) return null;
@@ -21,21 +20,34 @@ function integerKey(key: string): number | null {
     throw new Error('Unsupported Artemis numeric layer id');
   return number;
 }
-function keyBytes(key: string): Uint8Array {
-  if (key.includes('\0') || /[\uD800-\uDFFF]/u.test(key))
-    throw new Error('Invalid Artemis UTF-8 layer id');
-  // Numeric-looking nonnumeric keys can make the native comparator nontransitive.
-  // Refuse this subset rather than substitute Array.sort ordering for the native tree.
-  if (integerKey(key) === null && /^[\x2d-\x39]/.test(key))
-    throw new Error('Unsupported Artemis mixed numeric layer id');
-  return encoder.encode(key);
+/** Validated keys: the integer value, or null for a key compared by its UTF-8 bytes. */
+const keyKinds = new Map<string, number | null>();
+function keyKind(key: string): number | null {
+  let kind = keyKinds.get(key);
+  if (kind !== undefined) return kind;
+  kind = integerKey(key);
+  if (kind === null) {
+    if (key.includes('\0') || /[\uD800-\uDFFF]/u.test(key))
+      throw new Error('Invalid Artemis UTF-8 layer id');
+    // Numeric-looking nonnumeric keys can make the native comparator nontransitive.
+    // Refuse this subset rather than substitute Array.sort ordering for the native tree.
+    if (/^[\x2d-\x39]/.test(key)) throw new Error('Unsupported Artemis mixed numeric layer id');
+  }
+  // Layer ids repeat; the bound only limits a script that generates them without end.
+  if (keyKinds.size >= 0x4000) keyKinds.clear();
+  keyKinds.set(key, kind);
+  return kind;
 }
+const astral = /[\uD800-\uDBFF]/;
 function compare(a: string, b: string): number {
-  const left = integerKey(a),
-    right = integerKey(b);
+  const left = keyKind(a),
+    right = keyKind(b);
   if (left !== null && right !== null) return left < right ? -1 : left > right ? 1 : 0;
-  const x = keyBytes(a),
-    y = keyBytes(b);
+  // UTF-8 byte order is code-point order, shorter prefix first. Without surrogate pairs
+  // that is UTF-16 code-unit order.
+  if (!astral.test(a) && !astral.test(b)) return a < b ? -1 : a > b ? 1 : 0;
+  const x = [...a].map((c) => c.codePointAt(0)!),
+    y = [...b].map((c) => c.codePointAt(0)!);
   for (let i = 0; i < Math.min(x.length, y.length); i++)
     if (x[i] !== y[i]) return x[i]! < y[i]! ? -1 : 1;
   return x.length < y.length ? -1 : x.length > y.length ? 1 : 0;
@@ -197,7 +209,7 @@ export class ArtemisScene<T> {
   private path(id: string): string[] {
     const parts = id.split('.');
     if (parts.length > 256) throw new Error('Artemis layer id depth limit exceeded');
-    for (const part of parts) keyBytes(part);
+    for (const part of parts) keyKind(part);
     return parts;
   }
   /** Image-backed constructor 0x1400b1690 has type 1; empty groups have type 0. */

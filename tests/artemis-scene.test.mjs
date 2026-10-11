@@ -1241,6 +1241,46 @@ async function cachedLayerFixture(budget = 0n, source) {
   return {...f, graphics, layers: new ArtemisLayers(revision, f.cache, graphics)};
 }
 
+test('Artemis rule transitions upload the gray rule as equal RGBA channels once per revision', async () => {
+  const {ArtemisImageGraphics} = await import('../dist/engines/artemis/image-graphics.js');
+  const {ArtemisScene} = await import('../dist/engines/artemis/scene.js');
+  const prepared = [];
+  const target = {
+    width: 3,
+    height: 2,
+    prepareImage: (image) => prepared.push(image),
+    prepareRenderSurface() {},
+    invalidate() {},
+    draw() {},
+  };
+  const graphics = new ArtemisImageGraphics(
+    revision,
+    target,
+    {
+      creationMode: () => 0,
+      clearLayerCommands() {},
+      resetLayerCommands() {},
+      recordLayerProperties() {},
+      imageLoadFailed() {},
+      layerNotFound() {},
+    },
+    {filter: 'nearest', blend: straightBlend},
+  );
+  const gray = [0, 1, 127, 128, 254, 255];
+  const rule = {width: 3, height: 2, bytesPerPixel: 1, pixels: Uint8Array.from(gray)};
+  const presentation = {state: 2, crossfade: 0, vague: 0, threshold: 0, rule, ruleRevision: 1};
+  const scene = new ArtemisScene(revision);
+  graphics.drawStage(scene, presentation);
+  graphics.drawStage(scene, presentation);
+  assert.equal(prepared.length, 1);
+  assert.deepEqual(
+    [...prepared[0].pixels],
+    gray.flatMap((value) => [value, value, value, value]),
+  );
+  graphics.drawStage(scene, {...presentation, ruleRevision: 2});
+  assert.equal(prepared.length, 2);
+});
+
 test('Artemis layer owner and graphics share one texture allocation', async () => {
   const {createArtemisBrowserLayers} = await import('../dist/engines/artemis/browser/layers.js');
   const {createArtemisImageLoader} = await import('../dist/engines/artemis/image-loader.js');

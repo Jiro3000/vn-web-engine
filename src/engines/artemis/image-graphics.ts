@@ -918,9 +918,13 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
         this.target.invalidate(stage.rule.image);
         this.textures.delete(stage.rule.texture);
       }
-      const pixels = new Uint8Array(rule.width * rule.height * 4);
-      for (let index = 0; index < rule.width * rule.height; index++)
-        pixels.fill(rule.pixels[index]!, index * 4, index * 4 + 4);
+      // Each gray byte fills all four channels: one 32-bit store per pixel, so the
+      // expansion is byte-order independent and stays well below a frame at stage size.
+      const count = rule.width * rule.height,
+        pixels = new Uint8Array(count * 4),
+        words = new Uint32Array(pixels.buffer),
+        gray = rule.pixels;
+      for (let index = 0; index < count; index++) words[index] = gray[index]! * 0x01010101;
       const image: TriangleImage = {width: rule.width, height: rule.height, pixels};
       this.target.prepareImage(image);
       const texture = this.nextTexture++;
