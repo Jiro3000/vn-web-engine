@@ -33,6 +33,7 @@ import {artemisRuntimeSound} from '../runtime-sound.js';
 import {ArtemisSurfaceManager} from '../surface-manager.js';
 import {ArtemisTextGlyphs} from '../text-glyphs.js';
 import {createArtemisBrowserLayers, type ArtemisBrowserLayers} from './layers.js';
+import {ArtemisDomText} from './dom-text.js';
 import {
   artemisCurrentBlock,
   artemisJumpNames,
@@ -127,6 +128,11 @@ export class ArtemisBrowserPlayer {
   private wheel: (136 | 137)[] = [];
   private pointerInside = false;
   private readonly abort = new AbortController();
+  /** Selectable text over the stage, created with the stage. */
+  private domText: ArtemisDomText | null = null;
+  private textMode: 'native' | 'dom' = 'native';
+  /** A left press on the DOM text, which becomes a click unless it selects text. */
+  private textPress: {x: number; y: number} | null = null;
 
   constructor(private readonly options: ArtemisBrowserPlayerOptions) {
     const {document, executableSha256: hash, files} = options;
@@ -265,6 +271,18 @@ export class ArtemisBrowserPlayer {
         });
         this.layers = owner;
         this.graphics = graphics;
+        this.domText = new ArtemisDomText({
+          document,
+          parent: this.panel,
+          canvas: this.canvas,
+          width,
+          height,
+          layers: () =>
+            this.layers && this.graphics ? this.graphics.textLayers(this.layers.layers.scene) : [],
+          readFont: read,
+          hideText: (hidden) => graphics.hideText(hidden),
+        });
+        this.domText.setEnabled(this.textMode === 'dom');
         return owner;
       },
       glyphs: this.glyphs,
@@ -352,8 +370,29 @@ export class ArtemisBrowserPlayer {
         movie: this.movie.progress,
         videoLayers: this.layers?.videoLayers,
         clickable: this.layers?.eventLayers('click', true),
+        text: this.textState(),
       }
     );
+  }
+  /** Diagnostic counts of the text the stage draws, while DOM text is on. */
+  private textState(): object | null {
+    if (!this.domText?.active || !this.graphics || !this.layers) return null;
+    const layers = this.graphics.textLayers(this.layers.layers.scene);
+    return {
+      layers: layers.length,
+      cells: layers.reduce((count, layer) => count + (layer.text.cells?.().length ?? 0), 0),
+      hidden: this.graphics.textHidden,
+    };
+  }
+  /** `dom` adds selectable text over the game text for copying and dictionary extensions;
+   * a reader style shows it instead of the stage's glyphs. */
+  setTextMode(mode: 'native' | 'dom'): void {
+    this.textMode = mode;
+    this.domText?.setEnabled(mode === 'dom');
+  }
+  /** Re-reads the canvas placement; box resizes are observed, `object-fit` changes are not. */
+  relayout(): void {
+    this.domText?.relayout();
   }
   /** Layer ids at a stage point, topmost first, for diagnostics. */
   hitTest(x: number, y: number): string[] {
@@ -420,8 +459,10 @@ export class ArtemisBrowserPlayer {
         if (runtime.resourcePending) this.settle(runtime);
         else if (this.options.readAhead !== false) this.readAhead(runtime);
       }
-      if (this.layers && this.graphics)
+      if (this.layers && this.graphics) {
         this.graphics.drawStage(this.layers.layers.scene, this.layers.presentation);
+        this.domText?.update();
+      }
     } catch (error) {
       this.fail(error);
       return;
@@ -530,10 +571,11 @@ export class ArtemisBrowserPlayer {
     // The game screen and a fullscreen movie over it take input; dialogs keep their own.
     const game = (event: Event) =>
       event.target === canvas || event.target instanceof HTMLVideoElement;
+    const onText = (event: Event) => !!this.domText?.element.contains(event.target as Node);
     panel.addEventListener(
       'pointermove',
       (event) => {
-        if (!game(event)) return;
+        if (!game(event) && !onText(event)) return;
         this.pointer = this.point(event);
         this.pointerInside = true;
       },
@@ -550,6 +592,11 @@ export class ArtemisBrowserPlayer {
     panel.addEventListener(
       'pointerdown',
       (event) => {
+        // A press on the DOM text may select it; it clicks when released in place.
+        if (onText(event)) {
+          if (event.button === 0) this.textPress = {x: event.clientX, y: event.clientY};
+          return;
+        }
         if (!game(event)) return;
         this.pointer = this.point(event);
         this.pointerInside = true;
@@ -564,14 +611,25 @@ export class ArtemisBrowserPlayer {
       this.options.document.addEventListener(
         type,
         (event) => {
+          const press = this.textPress;
+          if (press && event.button === 0) {
+            this.textPress = null;
+            if (
+              type === 'pointerup' &&
+              !this.domText?.selected &&
+              Math.hypot(event.clientX - press.x, event.clientY - press.y) < 5
+            )
+              this.click(1, event);
+          }
           const key = VK_BUTTONS[event.button as 0 | 1 | 2];
           if (key !== undefined) this.keys.release(key);
         },
         {signal},
       );
-    canvas.addEventListener(
+    panel.addEventListener(
       'wheel',
       (event) => {
+        if (event.target !== canvas && !onText(event)) return;
         if (event.deltaY) this.wheel.push(event.deltaY < 0 ? 136 : 137);
         event.preventDefault();
       },
@@ -581,13 +639,24 @@ export class ArtemisBrowserPlayer {
       'contextmenu',
       (event) => {
         if (game(event)) event.preventDefault();
+        // The browser menu stays available for copying a selection.
+        else if (onText(event) && !this.domText?.selected) {
+          event.preventDefault();
+          this.click(2, event);
+        }
       },
       {signal},
     );
-    canvas.addEventListener(
+    // Keys reach the game from the canvas or the DOM text, not from dialogs in the panel.
+    const forGame = (event: KeyboardEvent) => event.target === canvas || onText(event);
+    panel.addEventListener(
       'keydown',
       (event) => {
-        if (event.repeat || event.metaKey) return;
+        if (!forGame(event) || event.repeat || event.metaKey) return;
+        // With DOM text, Shift is left to dictionary extensions (Yomichan scans with it)
+        // and Control to copying a selection.
+        if (this.textMode === 'dom' && event.key === 'Shift') return;
+        if ((event.key === 'Control' || event.ctrlKey) && this.domText?.selected) return;
         // Virtual-key codes: KeyboardEvent.keyCode carries the Windows VK for these keys.
         const key = event.keyCode;
         if (key > 0 && key < 256) {
@@ -597,8 +666,22 @@ export class ArtemisBrowserPlayer {
       },
       {signal},
     );
-    canvas.addEventListener('keyup', (event) => this.keys.release(event.keyCode), {signal});
+    panel.addEventListener(
+      'keyup',
+      (event) => {
+        if (forGame(event)) this.keys.release(event.keyCode);
+      },
+      {signal},
+    );
     canvas.addEventListener('blur', () => this.keys.releaseAll(), {signal});
+  }
+  /** A press and release of mouse button `key` (1 or 2) at the event point, sampled by the
+   * next frame. */
+  private click(key: 1 | 2, event: MouseEvent): void {
+    this.pointer = this.point(event);
+    this.pointerInside = true;
+    this.keys.press(key);
+    this.keys.release(key);
   }
   private finish(runtime: ArtemisRuntime): void {
     void runtime.flushSaves().then(
@@ -631,6 +714,7 @@ export class ArtemisBrowserPlayer {
     this.painter.close();
     this.fontWorker.close();
     this.target?.dispose();
+    this.domText?.dispose();
     this.panel.remove();
   }
 }

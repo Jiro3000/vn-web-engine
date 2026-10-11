@@ -6,6 +6,7 @@ import {
   ArtemisImageGraphics,
   type ArtemisDisplayActor,
   type ArtemisImageShaderPrograms,
+  type ArtemisTextCell,
   type ArtemisTextSource,
   type ArtemisTextSprite,
 } from '../image-graphics.js';
@@ -46,6 +47,64 @@ const f = Math.fround;
 const property = (values: ReadonlyMap<string, number> | undefined, name: string, base: number) =>
   values?.get(name) ?? base;
 
+/** Each displayed glyph of a message layer with its display tweens: the glyph and block
+ * `xscale`, `yscale` and `rotate` (degrees) combined, the `left`/`top` offsets added and
+ * `alpha` multiplied into the font opacity. Invisible fonts show nothing. */
+function* displayedGlyphs(
+  options: Pick<ArtemisBrowserLayerOptions, 'glyphs' | 'textProperties'>,
+  message: ArtemisMessageResource,
+) {
+  const insertion = options.glyphs.peek(message);
+  if (!insertion) return;
+  let lineIndex = 0,
+    blockIndex = 0;
+  for (const line of insertion.displayLines()) {
+    for (const positioned of line.geometry.blocks) {
+      const block = positioned.block,
+        blockValues = options.textProperties(block);
+      for (const [ruby, glyph] of [
+        ...block.main.map((glyph) => [false, glyph] as const),
+        ...block.ruby.map((glyph) => [true, glyph] as const),
+      ]) {
+        const resource = glyph.glyph,
+          font = resource.font;
+        if (!font.visible) continue;
+        const values = options.textProperties(resource);
+        const xscale = f(property(values, 'xscale', 1) * property(blockValues, 'xscale', 1)),
+          yscale = f(property(values, 'yscale', 1) * property(blockValues, 'yscale', 1)),
+          radians =
+            ((property(values, 'rotate', 0) + property(blockValues, 'rotate', 0)) * Math.PI) / 180;
+        yield {
+          line,
+          lineIndex,
+          blockIndex,
+          positioned,
+          glyph,
+          resource,
+          font,
+          ruby,
+          xscale,
+          yscale,
+          cos: Math.cos(radians),
+          sin: Math.sin(radians),
+          left: property(values, 'left', 0),
+          blockLeft: property(blockValues, 'left', 0),
+          top: property(values, 'top', 0),
+          blockTop: property(blockValues, 'top', 0),
+          alpha: f(
+            font.alpha *
+              font.entirealpha *
+              property(values, 'alpha', 1) *
+              property(blockValues, 'alpha', 1),
+          ),
+        };
+      }
+      blockIndex++;
+    }
+    lineIndex++;
+  }
+}
+
 /** Glyph sprites of a message layer. Each glyph keeps the font attributes it was inserted
  * with: `left`/`top` place the text in the layer and `alpha` multiplies the entire and
  * per-glyph opacity; invisible fonts draw nothing. Text display tweens offset glyphs and
@@ -55,63 +114,67 @@ export function artemisTextSprites(
   options: Pick<ArtemisBrowserLayerOptions, 'glyphs' | 'textProperties'>,
   message: ArtemisMessageResource,
 ): ArtemisTextSprite[] {
-  const insertion = options.glyphs.peek(message);
-  if (!insertion) return [];
   const sprites: ArtemisTextSprite[] = [];
-  for (const line of insertion.displayLines())
-    for (const positioned of line.geometry.blocks) {
-      const block = positioned.block,
-        blockValues = options.textProperties(block);
-      for (const glyph of [...block.main, ...block.ruby]) {
-        const resource = glyph.glyph,
-          surface = resource.surface,
-          image = surface.image,
-          font = resource.font;
-        if (!image || !font.visible) continue;
-        const values = options.textProperties(resource);
-        const xscale = f(property(values, 'xscale', 1) * property(blockValues, 'xscale', 1)),
-          yscale = f(property(values, 'yscale', 1) * property(blockValues, 'yscale', 1)),
-          radians =
-            ((property(values, 'rotate', 0) + property(blockValues, 'rotate', 0)) * Math.PI) / 180,
-          cos = Math.cos(radians),
-          sin = Math.sin(radians);
-        const x = f(
-            font.left +
-              positioned.x +
-              glyph.x +
-              surface.left +
-              property(values, 'left', 0) +
-              property(blockValues, 'left', 0),
-          ),
-          y = f(
-            font.top +
-              line.y +
-              positioned.y +
-              glyph.y +
-              surface.top +
-              property(values, 'top', 0) +
-              property(blockValues, 'top', 0),
-          );
-        sprites.push({
-          image,
-          matrix: new Float32Array([
-            f(cos * xscale),
-            f(-sin * yscale),
-            x,
-            f(sin * xscale),
-            f(cos * yscale),
-            y,
-          ]),
-          alpha: f(
-            font.alpha *
-              font.entirealpha *
-              property(values, 'alpha', 1) *
-              property(blockValues, 'alpha', 1),
-          ),
-        });
-      }
-    }
+  for (const shown of displayedGlyphs(options, message)) {
+    const {line, positioned, glyph, font, xscale, yscale, cos, sin} = shown,
+      surface = shown.resource.surface,
+      image = surface.image;
+    if (!image) continue;
+    const x = f(font.left + positioned.x + glyph.x + surface.left + shown.left + shown.blockLeft),
+      y = f(font.top + line.y + positioned.y + glyph.y + surface.top + shown.top + shown.blockTop);
+    sprites.push({
+      image,
+      matrix: new Float32Array([
+        f(cos * xscale),
+        f(-sin * yscale),
+        x,
+        f(sin * xscale),
+        f(cos * yscale),
+        y,
+      ]),
+      alpha: shown.alpha,
+    });
+  }
   return sprites;
+}
+
+/** The characters of a message layer for browser text, with the sprites' display tweens.
+ * A cell's origin is the glyph's pen position at the top of its stream's em box. */
+export function artemisTextCells(
+  options: Pick<ArtemisBrowserLayerOptions, 'glyphs' | 'textProperties'>,
+  message: ArtemisMessageResource,
+): ArtemisTextCell[] {
+  const cells: ArtemisTextCell[] = [];
+  for (const shown of displayedGlyphs(options, message)) {
+    const {line, positioned, glyph, font, ruby, xscale, yscale, cos, sin} = shown;
+    const face = ruby ? font.rubyface : font.face;
+    cells.push({
+      text: String.fromCodePoint(shown.resource.codePoint),
+      matrix: new Float32Array([
+        f(cos * xscale),
+        f(-sin * yscale),
+        f(font.left + positioned.x + glyph.x + shown.left + shown.blockLeft),
+        f(sin * xscale),
+        f(cos * yscale),
+        f(font.top + line.y + positioned.y + glyph.y + shown.top + shown.blockTop),
+      ]),
+      advance: glyph.advance,
+      size: (ruby ? font.rubysize : font.size) & 255,
+      face: typeof face === 'string' ? face.split('\0', 1)[0]! : null,
+      bold: !!(font.styleBits & 8),
+      italic: !!(font.styleBits & 16),
+      color: font.color,
+      alpha: shown.alpha,
+      shadow: ruby ? font.rubyshadow : font.shadow,
+      shadowcolor: font.shadowcolor,
+      outline: ruby ? font.rubyoutline : font.outline,
+      outlinecolor: font.outlinecolor,
+      ruby,
+      line: shown.lineIndex,
+      block: shown.blockIndex,
+    });
+  }
+  return cells;
 }
 
 function textSource(
@@ -138,6 +201,7 @@ function textSource(
     previous = next;
     return next;
   };
+  let previousCells: ArtemisTextCell[] = [];
   return {
     // Sprites are compared with the previous sample: insertion, clearing and display
     // tweens all change them.
@@ -146,6 +210,10 @@ function textSource(
       return revision;
     },
     sprites,
+    cells: () =>
+      options.glyphs.peek(message)?.busy
+        ? previousCells
+        : (previousCells = artemisTextCells(options, message)),
     retain: () => owner.retain(message),
     release: () => owner.release(message),
   };

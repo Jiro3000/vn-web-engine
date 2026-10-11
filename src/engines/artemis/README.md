@@ -254,7 +254,7 @@ insertion per message resource over a glyph block source.
 canvas (`WebGLDrawTarget` sized from system.ini), the surface manager over the PNG, JPEG
 and merged PSD decoders (decoded off the main thread), FreeType glyph rasterization and
 painting in workers, Web Audio voices (`browser-sound-voices.ts`), the fullscreen movie
-player, message-box dialogs, the window, caption and cursor hosts, and the shader library
+player, text dialogs, the window, caption and cursor hosts, and the shader library
 (`shader-library.ts`) whose presets compile into WebGL triangle shaders. The page decides
 the Windows version and the graphics feature level reported to the game
 (`ui/runtimes/artemis.ts`). Each animation frame runs `runtime.frame` with the input
@@ -277,6 +277,20 @@ layer keeps the sprites from before the insertion, as the synchronous native ins
 never shows a partial line. A block's glyph jobs overlap in a window of 16 per main or ruby
 stream (`text-glyphs.ts`), below the 64-job budgets of the font and paint workers, and the
 block keeps glyph order.
+
+DOM text (`browser/dom-text.ts`, `ArtemisDomText`, selected by the page's text mode) puts
+selectable text over every text layer the stage draws, for copying and dictionary
+extensions. `ArtemisImageGraphics.textLayers` lists the visible text layers in drawing order
+with their stage matrix, opacity and capture clip, computed without the retained world
+matrices so reading them leaves drawing unchanged. A text source's `cells` are its
+characters, ink-less ones included, with the sprites' display tweens; `artemisTextSlots`
+makes a slot per run of body characters sharing a font (display lines as explicit rows,
+the em box inside the outline) and a non-selectable slot per word's ruby. Browser faces
+load from the game's font files. Without a reader style the text is transparent over the
+stage's glyphs; with one `hideText` stops the stage drawing text (text layers still hit
+and clear their capture targets) and the slots show it. A click on the text reaches the game
+unless it selected text, the context menu stays for a selection, and keys from the text
+reach the game except Shift (left to the extension) and Control while text is selected.
 
 `ArtemisImageGraphics.drawStage` renders the scene into a stage surface and presents it.
 When a transition starts the last presented frame is kept; state 1 crossfades from it by

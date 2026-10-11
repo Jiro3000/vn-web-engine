@@ -63,11 +63,51 @@ export interface ArtemisTextSprite {
   readonly matrix: Float32Array;
   readonly alpha: number;
 }
+/** One character of a text layer for browser text: its layer-local 2x3 cell matrix, whose
+ * origin is the pen position at the top of the character's em box, and the font it was
+ * inserted with. Characters without ink (spaces) are cells too. */
+export interface ArtemisTextCell {
+  readonly text: string;
+  readonly matrix: Float32Array;
+  readonly advance: number;
+  /** Em size in pixels. */
+  readonly size: number;
+  /** The font file; null for a face no provider opens. */
+  readonly face: string | null;
+  readonly bold: boolean;
+  readonly italic: boolean;
+  readonly color: number;
+  readonly alpha: number;
+  readonly shadow: number;
+  readonly shadowcolor: number;
+  readonly outline: number;
+  readonly outlinecolor: number;
+  readonly ruby: boolean;
+  /** Display line and block (word) of the character, counted in the layer. */
+  readonly line: number;
+  readonly block: number;
+}
+/** A visible text layer in drawing order: its stage matrix, its opacity and the stage rect
+ * that clips it, if any. */
+export interface ArtemisTextLayer {
+  readonly id: string;
+  readonly text: ArtemisTextSource;
+  readonly matrix: Float32Array;
+  readonly alpha: number;
+  readonly clip: {
+    readonly x: number;
+    readonly y: number;
+    readonly width: number;
+    readonly height: number;
+  } | null;
+}
 /** The text of a message layer (CLinkableTextLayer) as glyph sprites. `revision` changes
  * whenever the sprites would. Actor copies share the source and each holds a loan. */
 export interface ArtemisTextSource {
   readonly revision: number;
   sprites(): readonly ArtemisTextSprite[];
+  /** The characters the sprites show, for browser text. */
+  cells?(): readonly ArtemisTextCell[];
   retain(): void;
   release(): void;
 }
@@ -732,6 +772,82 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
     visit(nodes, new Float32Array([1, 0, 0, 0, 1, 0]));
     return rect;
   }
+  /** Browser text presents the text: text layers draw nothing (their hit areas stay). */
+  private hiddenText = false;
+  get textHidden(): boolean {
+    return this.hiddenText;
+  }
+  hideText(hidden: boolean): void {
+    this.hiddenText = hidden;
+  }
+  /** The text layers the stage draws, in drawing order. Matrices are computed without the
+   * retained world matrices, so reading them leaves the drawing unchanged; a capture with an
+   * explicit clip shifts and clips its children as its surface does. */
+  textLayers(scene: ArtemisScene<ArtemisDisplayActor>): ArtemisTextLayer[] {
+    type Clip = ArtemisTextLayer['clip'];
+    const layers: ArtemisTextLayer[] = [];
+    const clipOf = (matrix: Float32Array, width: number, height: number, parent: Clip): Clip => {
+      const points = [
+        [0, 0],
+        [width, 0],
+        [0, height],
+        [width, height],
+      ].map(([x, y]) => artemisDisplayPoint(matrix, x!, y!));
+      let left = Math.min(...points.map((p) => p[0])),
+        top = Math.min(...points.map((p) => p[1])),
+        right = Math.max(...points.map((p) => p[0])),
+        bottom = Math.max(...points.map((p) => p[1]));
+      if (parent) {
+        left = Math.max(left, parent.x);
+        top = Math.max(top, parent.y);
+        right = Math.min(right, parent.x + parent.width);
+        bottom = Math.min(bottom, parent.y + parent.height);
+      }
+      return {x: left, y: top, width: Math.max(0, right - left), height: Math.max(0, bottom - top)};
+    };
+    const visit = (
+      nodes: readonly RenderNode[],
+      parent: Float32Array,
+      parentAlpha: number,
+      clip: Clip,
+    ) => {
+      for (const node of nodes) {
+        const actor = node.actor;
+        if (!actor) {
+          if (node.group) visit(node.children, parent, parentAlpha, clip);
+          continue;
+        }
+        const p = actor.display.properties;
+        if (p.xscale <= 0 || p.yscale <= 0) continue;
+        const matrix = actor.display.matrix(parent, this.raster.trig),
+          alpha = f(parentAlpha * p.alpha);
+        if (!p.visible || alpha < 2 ** -23) continue;
+        if (isAnimation(actor)) {
+          visit(
+            [{id: node.id, actor: actor.animation.frame(), group: false, children: []}],
+            matrix,
+            alpha,
+            clip,
+          );
+        } else if (isText(actor)) {
+          layers.push({id: node.id, text: actor.text, matrix, alpha, clip});
+        } else if (actor.texture === null) {
+          const capture = this.wrappers.get(actor.wrapper)?.capture,
+            c = actor.clip;
+          if (capture?.enabled && c.width > 0 && c.height > 0)
+            visit(
+              node.children,
+              compose(matrix, new Float32Array([1, 0, f(-c.left), 0, 1, f(-c.top)])),
+              alpha,
+              clipOf(matrix, c.width, c.height, clip),
+            );
+          else visit(node.children, matrix, alpha, clip);
+        }
+      }
+    };
+    visit(this.nodes(scene), new Float32Array([1, 0, 0, 0, 1, 0]), 1, null);
+    return layers;
+  }
   /** Ids of the visible image, animation and text layers under stage point (x, y), topmost
    * first. A point hits an image when it maps into the image bounds through the inverse
    * local matrix; the actor's clickable threshold then gates the pixel alpha (image hit
@@ -833,7 +949,7 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
           const frame = this.animationFrame(child.actor);
           signature.push(frame, frame.display.propertyRevision, this.changes.get(frame));
         } else if (child.actor && isText(child.actor)) {
-          signature.push(child.actor.text, child.actor.text.revision);
+          signature.push(child.actor.text, child.actor.text.revision, this.hiddenText);
         } else if (child.actor?.texture === null)
           signature.push(this.wrappers.get(child.actor.wrapper)?.capture?.revision);
         else if (child.actor) signature.push(this.videoFrame(child.actor));
@@ -1159,6 +1275,11 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
               const spriteAlpha = f(alpha * sprite.alpha);
               if (sprite.image.width === 0 || sprite.image.height === 0 || spriteAlpha < 2 ** -23)
                 continue;
+              // Hidden text still clears the target lazily, as its quads would.
+              if (this.hiddenText) {
+                clear(context);
+                continue;
+              }
               quad(
                 this.glyphTexture(sprite.image),
                 compose(matrix, sprite.matrix),

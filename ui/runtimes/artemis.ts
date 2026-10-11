@@ -29,10 +29,16 @@ const status = element('status'),
   surface = element('artemis-surface'),
   play = element<HTMLButtonElement>('play');
 const {collapseOptions: collapse} = mountGameViewer('artemis');
+const textMode = element<HTMLSelectElement>('text-mode');
+const selectedTextMode = (): 'native' | 'dom' => (textMode.value === 'dom' ? 'dom' : 'native');
+textMode.onchange = () => player?.setTextMode(selectedTextMode());
 let fullscreenControls: ReturnType<typeof mountFullscreenControls> | undefined;
 const displayHost = new BrowserPageFullscreenHost(
   element('display'),
-  () => fullscreenControls?.refresh(),
+  () => {
+    fullscreenControls?.refresh();
+    player?.relayout();
+  },
   report,
 );
 fullscreenControls = mountFullscreenControls(displayHost);
@@ -255,6 +261,7 @@ play.onclick = () => {
       updateControls();
     },
   });
+  player.setTextMode(selectedTextMode());
   element('welcome').hidden = true;
   surface.replaceChildren(player.panel);
   sidebar.hidden = false;

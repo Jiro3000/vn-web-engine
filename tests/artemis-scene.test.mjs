@@ -4760,3 +4760,164 @@ test('Artemis tween groups queue layer tweens, play them in order and share one 
     layers.close();
   }
 });
+
+test('Artemis text layers give browser text their characters, stage placement and slots; hidden text draws no glyphs but still hits', async () => {
+  const {createArtemisBrowserLayers} = await import('../dist/engines/artemis/browser/layers.js');
+  const {artemisTextSlots} = await import('../dist/engines/artemis/browser/dom-text.js');
+  const {createArtemisImageLoader} = await import('../dist/engines/artemis/image-loader.js');
+  const {artemisDefaultFontAttributes} = await import('../dist/engines/artemis/font-state.js');
+  const font = {
+    ...artemisDefaultFontAttributes(revision),
+    face: 'font/a.ttf\0',
+    rubyface: 'font/r.ttf',
+    left: 4,
+    top: 6,
+    size: 20,
+    rubysize: 8,
+    outline: 2,
+    shadow: 1,
+    color: 0x123456,
+  };
+  const ink = {width: 2, height: 2, pixels: new Uint8Array(16).fill(255)};
+  const glyph = (character, x, advance, image = ink) => ({
+    x,
+    y: 10,
+    advance,
+    glyph: {
+      codePoint: character.codePointAt(0),
+      surface: {image, left: 1, top: 3, advance},
+      font,
+    },
+  });
+  // Two words on two lines: a word with ruby, and a space without ink before a word.
+  const blocks = [
+    {main: [glyph('文', 0, 25), glyph('字', 25, 25)], ruby: [{...glyph('も', 0, 10), y: 0}]},
+    {main: [glyph(' ', 0, 12, null), glyph('a', 12, 15)], ruby: []},
+  ];
+  let busy = false;
+  const insertion = {
+    get busy() {
+      return busy;
+    },
+    displayLines: () => [
+      {y: 0, geometry: {blocks: [{x: 5, y: 0, block: blocks[0]}]}},
+      {y: 40, geometry: {blocks: [{x: 0, y: 0, block: blocks[1]}]}},
+    ],
+  };
+  const message = {};
+  const draws = [];
+  const target = {
+    width: 200,
+    height: 100,
+    prepareImage() {},
+    prepareRenderSurface() {},
+    invalidate() {},
+    draw() {},
+  };
+  const {owner, graphics} = createArtemisBrowserLayers({
+    executableSha256: revision,
+    target,
+    raster: {filter: 'nearest', blend: straightBlend},
+    images: createArtemisImageLoader(revision, async () => null),
+    runMode: {},
+    loadRule: async () => null,
+    readVideoFile: async () => null,
+    clock: {now: () => 1},
+    glyphs: {peek: (resource) => (resource === message ? insertion : undefined)},
+    textProperties: () => undefined,
+    report: (text) => assert.fail(text),
+  });
+  owner.attachMessageActor('1', message, {retain() {}, release() {}});
+  await owner.layers.dispatch(command('lyprop', {id: '1', left: '100', top: '20', alpha: '128'}));
+  owner.layers.commit();
+  const [layer, ...others] = graphics.textLayers(owner.layers.scene);
+  assert.equal(others.length, 0);
+  assert.equal(layer.id, '1');
+  assert.equal(layer.alpha, Math.fround(128 / 255));
+  assert.deepEqual([layer.matrix[2], layer.matrix[5]], [100, 20]);
+  const cells = layer.text.cells();
+  assert.deepEqual(
+    cells.map((cell) => [cell.text, cell.ruby, cell.line, cell.block]),
+    [
+      ['文', false, 0, 0],
+      ['字', false, 0, 0],
+      ['も', true, 0, 0],
+      [' ', false, 1, 1],
+      ['a', false, 1, 1],
+    ],
+  );
+  // A cell is the sprite without the painted surface offset; ink-less cells have no sprite.
+  const sprites = layer.text.sprites();
+  assert.equal(sprites.length, 4);
+  for (const [index, cell] of cells.filter((cell) => cell.text !== ' ').entries()) {
+    assert.equal(sprites[index].matrix[2], cell.matrix[2] + 1);
+    assert.equal(sprites[index].matrix[5], cell.matrix[5] + 3);
+  }
+  assert.deepEqual(
+    [cells[1].matrix[2], cells[1].matrix[5], cells[1].size, cells[1].face, cells[2].face],
+    [4 + 5 + 25, 6 + 10, 20, 'font/a.ttf', 'font/r.ttf'],
+  );
+  // While an insertion loads, the text from before it stays.
+  busy = true;
+  blocks.length = 0;
+  assert.equal(layer.text.cells().length, 5);
+  busy = false;
+  blocks.push(
+    {main: [glyph('文', 0, 25), glyph('字', 25, 25)], ruby: [{...glyph('も', 0, 10), y: 0}]},
+    {main: [glyph(' ', 0, 12, null), glyph('a', 12, 15)], ruby: []},
+  );
+
+  const slots = artemisTextSlots('t', layer, cells);
+  assert.deepEqual(
+    slots.map(({slot, face}) => [
+      slot.id,
+      face,
+      slot.interactive ?? true,
+      slot.glyphs.map((g) => g.text).join(''),
+    ]),
+    [
+      ['t-0', 'font/a.ttf', true, '文字 a'],
+      ['t-ruby-0', 'font/r.ttf', false, 'も'],
+    ],
+  );
+  // A change of font size or face starts another slot.
+  assert.deepEqual(
+    artemisTextSlots(
+      't',
+      layer,
+      cells.map((cell) => (cell.text === 'a' ? {...cell, size: 10} : cell)),
+    ).map(({slot}) => [slot.id, slot.glyphs.length]),
+    [
+      ['t-0', 3],
+      ['t-3', 1],
+      ['t-ruby-0', 1],
+    ],
+  );
+  const first = slots[0].slot.glyphs[0];
+  // The em box lies inside the outline; the shadow and outline follow the font.
+  assert.deepEqual(
+    [first.x, first.y, first.width, first.height, first.line, first.color, first.alpha],
+    [100 + 4 + 5 + 2, 20 + 6 + 10 + 2, 25 - 4 - 1, 20, 0, 0x123456, 128],
+  );
+  assert.deepEqual(first.shadows, [{x: 1, y: 1, color: 0, alpha: 255}]);
+  assert.equal(first.outline.radiusX, 2);
+  assert.equal(slots[0].slot.glyphs[3].line, 1);
+
+  const triangles = () =>
+    draws.at(-1).commands.filter((entry) => entry.kind === 'triangles').length;
+  draws.push(graphics.drawStage(owner.layers.scene, owner.presentation));
+  // The stage presentation adds its own quad.
+  const shown = triangles();
+  graphics.hideText(true);
+  draws.push(graphics.drawStage(owner.layers.scene, owner.presentation));
+  assert.equal(shown - triangles(), 4);
+  const [x, y] = [sprites[0].matrix[2] + 100, sprites[0].matrix[5] + 20];
+  assert.deepEqual(graphics.hitTest(owner.layers.scene, x, y), ['1']);
+  graphics.hideText(false);
+  draws.push(graphics.drawStage(owner.layers.scene, owner.presentation));
+  assert.equal(triangles(), shown);
+  // Hidden layers have no browser text.
+  await owner.layers.dispatch(command('lyprop', {id: '1', visible: '0'}));
+  owner.layers.commit();
+  assert.deepEqual(graphics.textLayers(owner.layers.scene), []);
+});
