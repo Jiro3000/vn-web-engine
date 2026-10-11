@@ -1,5 +1,6 @@
 import type {DecodedPng} from '../formats/png/decode.js';
 import {WorkerPool} from '../platform/worker-pool.js';
+import {beginRuntimeSpan} from '../platform/runtime-performance.js';
 
 /** Named formats use pure byte decoders; MIME types use the browser-owned codec. */
 export type ImageDecodeFormat = 'png' | 'artemis-psd' | 'opaque-jpeg' | 'image/webp' | 'image/jpeg';
@@ -37,7 +38,15 @@ export async function decodeImageOffThread(
 ): Promise<ImageDecodeResponse | null> {
   const workers = decodePool();
   if (!workers.available) return null;
+  // Records the time until the decoded image is back, worker queueing included.
+  const finish = beginRuntimeSpan(`graphics.decode.${format.replace('/', '-')}`, {
+    bytes: bytes.length,
+  });
   // A Uint8Array subclass (for example Node Buffer) may implement slice as a borrowed view.
   const snapshot = Uint8Array.from(bytes);
-  return (await workers.run({format, bytes: snapshot}, [snapshot.buffer])) ?? null;
+  try {
+    return (await workers.run({format, bytes: snapshot}, [snapshot.buffer])) ?? null;
+  } finally {
+    finish?.();
+  }
 }

@@ -1,6 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {decodePng} from '../dist/formats/png/decode.js';
+import {crc32} from 'node:zlib';
+import {decodePng, pngCrc} from '../dist/formats/png/decode.js';
 import {png, chunk} from './png-fixtures.mjs';
 test('PNG RGBA filters 0–4 preserve straight color under zero alpha', async () => {
   const target = [10, 20, 30, 0, 40, 50, 60, 128],
@@ -142,4 +143,50 @@ test('PNG rejects CRC errors, wrong scanline length, filters and unknown critica
     ),
     /critical/,
   );
+});
+test('PNG 8-bit RGB and RGBA rows decode every filter against a reference encoder', async () => {
+  let seed = 7;
+  const random = () => (seed = (Math.imul(seed, 1103515245) + 12345) >>> 0) >>> 24;
+  const paeth = (a, b, c) => {
+    const p = a + b - c,
+      pa = Math.abs(p - a),
+      pb = Math.abs(p - b),
+      pc = Math.abs(p - c);
+    return pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
+  };
+  for (const channels of [3, 4])
+    for (const width of [1, 2, 4, 5, 33]) {
+      const height = 12,
+        stride = width * channels,
+        // Smooth rows with noise, so Paeth sees all three of its choices.
+        samples = Array.from({length: height * stride}, (_, i) => (i * 3 + random()) & 255),
+        raw = [];
+      for (let y = 0; y < height; y++) {
+        const filter = (y + width) % 5;
+        raw.push(filter);
+        for (let i = 0; i < stride; i++) {
+          const at = y * stride + i,
+            a = i >= channels ? samples[at - channels] : 0,
+            b = y ? samples[at - stride] : 0,
+            c = y && i >= channels ? samples[at - stride - channels] : 0;
+          const prediction = [0, a, b, (a + b) >>> 1, paeth(a, b, c)][filter];
+          raw.push((samples[at] - prediction) & 255);
+        }
+      }
+      const image = await decodePng(
+        png({width, height, type: channels === 4 ? 6 : 2, raw: Buffer.from(raw)}),
+      );
+      const expected = [];
+      for (let p = 0; p < width * height; p++)
+        expected.push(
+          ...samples.slice(p * channels, p * channels + 3),
+          channels === 4 ? samples[p * 4 + 3] : 255,
+        );
+      assert.deepEqual([...image.pixels], expected, `${channels} channels, width ${width}`);
+    }
+});
+test('PNG CRC matches zlib for every length around its 8-byte blocks', () => {
+  const bytes = Uint8Array.from({length: 300}, (_, i) => (i * 131 + 7) & 255);
+  for (let length = 0; length <= bytes.length; length++)
+    assert.equal(pngCrc(bytes.subarray(0, length)), crc32(bytes.subarray(0, length)));
 });

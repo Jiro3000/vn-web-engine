@@ -14,10 +14,56 @@ const crcTable = Uint32Array.from({length: 256}, (_, i) => {
   for (let n = 0; n < 8; n++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
   return c >>> 0;
 });
+/** Slicing-by-8: table k maps a byte to its CRC contribution k bytes further on. */
+const crcTables = (() => {
+  const tables = new Uint32Array(8 * 256);
+  tables.set(crcTable);
+  for (let k = 1; k < 8; k++)
+    for (let i = 0; i < 256; i++) {
+      const previous = tables[(k - 1) * 256 + i]!;
+      tables[k * 256 + i] = (previous >>> 8) ^ crcTable[previous & 255]!;
+    }
+  return tables;
+})();
 export function pngCrc(bytes: Uint8Array): number {
-  let c = 0xffffffff;
-  for (let i = 0; i < bytes.length; i++) c = crcTable[(c ^ bytes[i]!) & 255]! ^ (c >>> 8);
+  const t = crcTables,
+    length = bytes.length,
+    blocks = length - (length & 7);
+  let c = 0xffffffff,
+    i = 0;
+  for (; i < blocks; i += 8) {
+    const low =
+      (c ^ (bytes[i]! | (bytes[i + 1]! << 8) | (bytes[i + 2]! << 16) | (bytes[i + 3]! << 24))) >>>
+      0;
+    c =
+      t[1792 + (low & 255)]! ^
+      t[1536 + ((low >>> 8) & 255)]! ^
+      t[1280 + ((low >>> 16) & 255)]! ^
+      t[1024 + (low >>> 24)]! ^
+      t[768 + bytes[i + 4]!]! ^
+      t[512 + bytes[i + 5]!]! ^
+      t[256 + bytes[i + 6]!]! ^
+      t[bytes[i + 7]!]!;
+  }
+  for (; i < length; i++) c = t[(c ^ bytes[i]!) & 255]! ^ (c >>> 8);
   return (c ^ 0xffffffff) >>> 0;
+}
+/** The Paeth predictor of PNG 9.4: of a (left), b (up) and c (up-left), the one nearest
+ * a + b - c, preferring a, then b. */
+function paeth(a: number, b: number, c: number): number {
+  let pa = b - c,
+    pb = a - c,
+    pc = pa + pb;
+  // Branch-free: absolute values and selections by sign masks.
+  let m = pa >> 31;
+  pa = (pa ^ m) - m;
+  m = pb >> 31;
+  pb = (pb ^ m) - m;
+  m = pc >> 31;
+  pc = (pc ^ m) - m;
+  const notA = ((pb - pa) | (pc - pa)) >> 31,
+    cOverB = (pc - pb) >> 31;
+  return (a & ~notA) | (((b & ~cOverB) | (c & cOverB)) & notA);
 }
 /** Reverse one scanline filter into `row`; bytes left of the first pixel read as zero. */
 function unfilter(
@@ -52,6 +98,74 @@ function unfilter(
         pb = Math.abs(a - c),
         pc = Math.abs(a + b - 2 * c);
       row[i] = (raw[start + i]! + (pa <= pb && pa <= pc ? a : pb <= pc ? b : c)) & 255;
+    }
+  }
+}
+/** Whether a 32-bit word holds its bytes lowest first, so an RGBA pixel's alpha is the top byte. */
+const littleEndian = new Uint8Array(Uint32Array.of(1).buffer)[0] === 1;
+/** Bytewise sums of two packed words; no carry crosses a byte. */
+const add8 = (x: number, y: number) =>
+  (((x & 0x7f7f7f7f) + (y & 0x7f7f7f7f)) | 0) ^ ((x ^ y) & 0x80808080);
+/** Bytewise floor((x + y) / 2) of two packed words. */
+const average8 = (x: number, y: number) => ((x & y) + (((x ^ y) >>> 1) & 0x7f7f7f7f)) | 0;
+/**
+ * Reverses one non-interlaced 8-bit RGB (`channels` 3) or RGBA scanline straight into its
+ * row of RGBA `pixels`, which starts at pixel `out`; `up` is the row above, or -1 for the
+ * first row. The row is copied (RGB with opaque alpha) and unfiltered in place: Sub, Up and
+ * Average on whole pixels as packed little-endian words, Paeth per sample. An RGB alpha
+ * byte enters only its own byte of each sum and is forced back to opaque.
+ */
+function unfilterPixels(
+  filter: number,
+  raw: Uint8Array,
+  start: number,
+  channels: number,
+  pixels: Uint8Array,
+  words: Int32Array,
+  out: number,
+  up: number,
+  width: number,
+): void {
+  const opaque = channels === 3 ? 0xff000000 | 0 : 0,
+    end = out + width;
+  if (channels === 4) pixels.set(raw.subarray(start, start + width * 4), out * 4);
+  else
+    for (let w = out, s = start; w < end; w++, s += 3)
+      words[w] = raw[s]! | (raw[s + 1]! << 8) | (raw[s + 2]! << 16) | opaque;
+  if (filter === 4 && up < 0) filter = 1; // Paeth with b = c = 0 selects a.
+  if (filter === 1)
+    for (let w = out + 1; w < end; w++) words[w] = add8(words[w]!, words[w - 1]!) | opaque;
+  else if (filter === 2) {
+    if (up >= 0)
+      for (let w = out, u = up; w < end; w++, u++) words[w] = add8(words[w]!, words[u]!) | opaque;
+  } else if (filter === 3) {
+    let left = 0;
+    for (let w = out, u = up; w < end; w++, u++)
+      words[w] = left = add8(words[w]!, average8(left, up < 0 ? 0 : words[u]!)) | opaque;
+  } else if (filter === 4) {
+    let a0 = 0,
+      a1 = 0,
+      a2 = 0,
+      a3 = 0,
+      c0 = 0,
+      c1 = 0,
+      c2 = 0,
+      c3 = 0;
+    for (let i = out * 4, j = up * 4, n = end * 4; i < n; i += 4, j += 4) {
+      const b0 = pixels[j]!,
+        b1 = pixels[j + 1]!,
+        b2 = pixels[j + 2]!;
+      pixels[i] = a0 = (pixels[i]! + paeth(a0, b0, c0)) & 255;
+      pixels[i + 1] = a1 = (pixels[i + 1]! + paeth(a1, b1, c1)) & 255;
+      pixels[i + 2] = a2 = (pixels[i + 2]! + paeth(a2, b2, c2)) & 255;
+      c0 = b0;
+      c1 = b1;
+      c2 = b2;
+      if (channels === 4) {
+        const b3 = pixels[j + 3]!;
+        pixels[i + 3] = a3 = (pixels[i + 3]! + paeth(a3, b3, c3)) & 255;
+        c3 = b3;
+      }
     }
   }
 }
@@ -186,6 +300,27 @@ export async function decodePng(bytes: Uint8Array): Promise<DecodedPng> {
     ? new DataView(alpha.buffer, alpha.byteOffset, alpha.length)
     : undefined;
   let cursor = 0;
+  if (littleEndian && !interlace && depth === 8 && (type === 6 || (type === 2 && !transparent))) {
+    const words = new Int32Array(pixels.buffer, pixels.byteOffset, width * height),
+      stride = width * channels;
+    for (let y = 0; y < height; y++) {
+      const filter = raw[cursor++]!;
+      if (filter > 4) throw new Error(`Invalid PNG filter ${filter}`);
+      unfilterPixels(
+        filter,
+        raw,
+        cursor,
+        channels,
+        pixels,
+        words,
+        y * width,
+        y ? (y - 1) * width : -1,
+        width,
+      );
+      cursor += stride;
+    }
+    return {width, height, colorType: type, bitDepth: depth, pixels, indices};
+  }
   for (const p of layouts) {
     if (!p.w || !p.h) continue;
     let previous = new Uint8Array(p.row),
