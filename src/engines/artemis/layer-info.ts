@@ -1,3 +1,4 @@
+import {formatCGeneral} from '../../core/c-number-format.js';
 import type {ArtemisDisplayObject} from './display-object.js';
 import type {ArtemisImageClip, ArtemisLayerMode} from './layer-properties.js';
 import type {ArtemisShaderConstant} from './shader-properties.js';
@@ -38,15 +39,7 @@ export function artemisLayerExtent(
 export function artemisFloatText(value: number): string {
   if (Number.isNaN(value)) return 'nan';
   if (!Number.isFinite(value)) return value < 0 ? '-inf' : 'inf';
-  if (value === 0) return Object.is(value, -0) ? '-0' : '0';
-  const [mantissa, exponentText] = value.toExponential(8).split('e') as [string, string];
-  const exponent = Number(exponentText);
-  const trim = (text: string) => (text.includes('.') ? text.replace(/\.?0+$/, '') : text);
-  if (exponent < -4 || exponent >= 9) {
-    const digits = String(Math.abs(exponent)).padStart(2, '0');
-    return `${trim(mantissa)}e${exponent < 0 ? '-' : '+'}${digits}`;
-  }
-  return trim(value.toFixed(8 - exponent));
+  return formatCGeneral(value, 9);
 }
 
 /** cvttss2si: truncation, with 0x80000000 for values outside int32. */

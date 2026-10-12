@@ -80,6 +80,18 @@ export class ArtemisSaveData<Font extends object> {
   textCommands(layer: string): readonly AsbTag[] | undefined {
     return this.text.get(layer)?.map(copy);
   }
+  /** `var system=get_message_tags` (0x1400e56a0): nothing when +0x08 has no entry for the
+   * layer; otherwise its text commands and, with `fonts`, the +0x18 frames, which
+   * operator[] creates empty when absent. */
+  messageTags(
+    layer: string,
+    fonts: boolean,
+  ): {readonly fonts: readonly Readonly<Font>[]; readonly tags: readonly AsbTag[]} | undefined {
+    const tags = this.text.get(layer);
+    if (!tags) return undefined;
+    if (fonts && !this.fonts.has(layer)) this.fonts.set(layer, []);
+    return {fonts: fonts ? [...this.fonts.get(layer)!] : [], tags: tags.map(copy)};
+  }
 
   hasEffect(id: string): boolean {
     return this.effects.has(id);

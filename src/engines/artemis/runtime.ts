@@ -461,6 +461,22 @@ export class ArtemisRuntime {
       applicationArguments: {readApplicationArguments: () => new Map()},
       messageLayerMeasure: () => glyphs.get(messageStage.currentLayer()).measure(),
       layerInfo: (id) => layers.layerInfo(id),
+      // Font frames are attribute overrides over the 193720 defaults (see fontCodec).
+      messageTags: (id, fonts) => {
+        const history = saveData.messageTags(id, fonts);
+        return (
+          history && {
+            tags: history.tags,
+            fonts: history.fonts.map((frame) => ({
+              font: {
+                ...artemisDefaultFontAttributes(hash),
+                ...Object.fromEntries(frame.font),
+              } as ArtemisFontAttributes,
+              overflow: frame.overflow ?? 0,
+            })),
+          }
+        );
+      },
     }));
     // c37e0 static variables run inside the bf210 boot path, after the save-file loads.
     const initializeStaticVariables = () => {

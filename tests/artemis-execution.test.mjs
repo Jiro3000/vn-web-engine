@@ -786,6 +786,127 @@ test('Message layer extent queries truncate the selected layer measure to intege
   );
 });
 
+test('C %g formatting uses the exact binary value with ties to even', async () => {
+  const {formatCGeneral} = await import('../dist/core/c-number-format.js');
+  const cases = [
+    [1, 9, '1'],
+    [Math.fround(0.1), 9, '0.100000001'],
+    [1234567.125, 9, '1234567.12'],
+    [1234567.375, 9, '1234567.38'],
+    [0.0001, 9, '0.0001'],
+    [0.00001, 9, '1e-05'],
+    [123456789012, 9, '1.23456789e+11'],
+    [999999999.5, 9, '1e+09'],
+    [-0, 9, '-0'],
+    [-2.5, 0, '-2'],
+    [5e-324, 3, '4.94e-324'],
+  ];
+  for (const [value, precision, text] of cases)
+    assert.equal(formatCGeneral(value, precision), text, `${value} %.${precision}g`);
+  assert.throws(() => formatCGeneral(Infinity, 9), /finite/);
+});
+
+test('get_message_tags writes a layer history as native tag and font text', async () => {
+  const {ArtemisVariables} = await import('../dist/engines/artemis/variables.js');
+  const {ArtemisSaveData} = await import('../dist/engines/artemis/save-data.js');
+  const {artemisDefaultFontAttributes} = await import('../dist/engines/artemis/font-state.js');
+  const {ARTEMIS_3179_EXECUTABLE_SHA256: hash} =
+    await import('../dist/engines/artemis/revision.js');
+  const saveData = new ArtemisSaveData();
+  const variables = new ArtemisVariables({
+    stageSize: () => ({width: 1, height: 1}),
+    messageTags: (id, fonts) => saveData.messageTags(id, fonts),
+  });
+  const query = (args) =>
+    variables.dispatch({
+      kind: 'tag',
+      name: 'var',
+      sourceLine: -1,
+      args: new Map([['name', 'm'], ['system', 'get_message_tags'], ...args]),
+    });
+  const read = (name) => [...variables.read(name)];
+  const text = (name) => new TextDecoder().decode(variables.read(name));
+  // No +0x08 history for the layer: nothing is written.
+  query([['id', 'msg']]);
+  assert.equal(read('m.size').length, 0);
+
+  saveData.recordText('msg', {
+    kind: 'tag',
+    name: 'print',
+    sourceLine: 1,
+    args: new Map([
+      ['id', 'a,b'],
+      ['data', 'x'],
+    ]),
+    // A comma after a lead byte is inside a character; after a whole one it is escaped.
+    bytes: new Map([['data', Uint8Array.of(0xc3, 0x2c, 0xe3, 0x81, 0x82, 0x2c)]]),
+  });
+  query([
+    ['id', 'msg'],
+    ['allfont', '0'],
+  ]);
+  assert.equal(text('m.size'), '1');
+  const encoder = new TextEncoder();
+  assert.deepEqual(read('m.0'), [
+    ...encoder.encode('print,data,'),
+    0xc3,
+    0x2c,
+    0xe3,
+    0x81,
+    0x82,
+    0x5c,
+    0x2c,
+    ...encoder.encode(',id,a\\,b'),
+  ]);
+  // allfont creates the +0x18 entry (operator[]) even when it adds nothing.
+  query([
+    ['id', 'msg'],
+    ['allfont', '1'],
+  ]);
+  assert.deepEqual([...saveData.snapshot().fonts], [['msg', []]]);
+
+  const font = {
+    ...artemisDefaultFontAttributes(hash),
+    size: 30,
+    alpha: 0.5,
+    spacebottom: 2.5,
+    entirexscale: 1.5,
+    color: 0xff8800,
+    face: 'F,a',
+    rubyface: 'R',
+    styleBits: 8 | 16,
+  };
+  saveData.saveFonts('msg', [{font, overflow: 2}]);
+  query([
+    ['id', 'msg'],
+    ['allfont', '1'],
+  ]);
+  assert.equal(text('m.size'), '2');
+  assert.equal(
+    text('m.0'),
+    'font,left,0,top,0,width,640,height,480,entirealpha,255,entireanchorx,0,entireanchory,0,' +
+      'entirerotate,0,alpha,127.5,rotate,0,size,30,shadow,0,outline,0,rubysize,8,rubyshadow,0,' +
+      'rubyoutline,0,spacetop,0,spacemiddle,0,spacebottom,2.5,kerning,0,rubykerning,0,' +
+      'overflow,2,entirexscale,150,entireyscale,100,xscale,100,yscale,100,color,0xFF8800,' +
+      'shadowcolor,0x0,outlinecolor,0x0,face,F,a,rubyface,R,anchorcenter,1,visible,1,' +
+      'vertical,0,hung,1,layermode,normal,align,left,style,bold\\,italic',
+  );
+  assert.equal(text('m.1').slice(0, 11), 'print,data,');
+  assert.throws(
+    () =>
+      new ArtemisVariables().dispatch({
+        kind: 'tag',
+        name: 'var',
+        sourceLine: -1,
+        args: new Map([
+          ['name', 'm'],
+          ['system', 'get_message_tags'],
+        ]),
+      }),
+    /history provider/,
+  );
+});
+
 test('End of a called script restores its caller; root end requires an exit provider', () => {
   const sources = new Map([
     ['root', bytes('[call file="sub"][done]')],
@@ -7224,7 +7345,13 @@ test('Artemis runtime reports missing seplay and splay sounds like c7260 and con
     runtime.script.run(1000);
   }
   assert.deepEqual(
-    reports.map(({file, tag, message, severity}) => [file, tag.name, tag.sourceLine, message, severity]),
+    reports.map(({file, tag, message, severity}) => [
+      file,
+      tag.name,
+      tag.sourceLine,
+      message,
+      severity,
+    ]),
     [
       ['system/first.iet', 'seplay', 0, artemisTagErrorMessages.soundNotLoaded, 1],
       ['system/first.iet', 'splay', 1, artemisTagErrorMessages.soundNotLoaded, 1],

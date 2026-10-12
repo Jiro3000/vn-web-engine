@@ -3,6 +3,8 @@ import type {WindowDisplayGeometry} from '../../platform/window-display.js';
 import type {AsbTag} from '../../formats/artemis/asb.js';
 import type {ArtemisExpressionValue} from './expression.js';
 import {artemisLayerInfoFields, type ArtemisLayerInfo} from './layer-info.js';
+import type {ArtemisFontFrameRecord} from './font-state.js';
+import {artemisFontText, artemisTagText} from './message-tags.js';
 
 const encoder = new TextEncoder();
 const empty = new Uint8Array();
@@ -43,6 +45,14 @@ export interface ArtemisVariableHost {
   /** The scene actor of layer `id` (CArtemisLayer find-by-id 0x1401857c0, then the node's
    * current actor), or undefined when no layer has that id. */
   layerInfo?(id: string): ArtemisLayerInfo | undefined;
+  /** Save object (script +0xd0) histories of message layer `id`: undefined without a
+   * +0x08 entry; otherwise its text commands and, with `fonts`, its +0x18 font frames. */
+  messageTags?(
+    id: string,
+    fonts: boolean,
+  ):
+    | {readonly fonts: readonly ArtemisFontFrameRecord[]; readonly tags: readonly AsbTag[]}
+    | undefined;
 }
 const messageLayerExtents = {
   get_message_layer_width: 'width',
@@ -277,6 +287,17 @@ export class ArtemisVariables {
       if (info)
         for (const [key, value] of artemisLayerInfoFields(info))
           this.write(`${name}.${key}`, value, local);
+    } else if (p.get('system') === 'get_message_tags') {
+      // e56a0: `name.N` from 0, the font frames first when `allfont` is present and not
+      // "0", then the text commands; `name.size` is the count. An absent `id` reads "".
+      if (!this.host?.messageTags)
+        throw new Error('Artemis message tag history provider is not configured');
+      const fonts = p.has('allfont') && p.get('allfont') !== '0';
+      const history = this.host.messageTags(p.get('id') ?? '', fonts);
+      if (!history) return true;
+      const values = [...history.fonts.map(artemisFontText), ...history.tags.map(artemisTagText)];
+      values.forEach((value, index) => this.write(`${name}.${index}`, value, local));
+      this.write(`${name}.size`, String(values.length), local);
     } else if (p.get('system') === 'unixtime')
       // 0x14019a970 `_time64`, stored through the 32-bit integer setter.
       this.write(name, String(this.unixTime() | 0), local);

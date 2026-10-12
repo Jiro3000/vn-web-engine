@@ -79,6 +79,17 @@ surface, else the nonzero clip width, else the surface width (height alike). An 
 writes nothing. An empty group (CLayerSet::CPropertyHolder) shares the CLayer getters and
 reads as a CLayer without a surface. Animation and text actors and the id-less enumeration
 are refused.
+`system=get_message_tags` reads the save object's history of message layer `id` (absent:
+""): nothing without a +0x08 entry; otherwise `name.0`… hold, when `allfont` is present
+and not `0`, each +0x18 font frame as CFontProperty text (0x1400a5c70; operator[] creates
+an empty +0x18 entry), then each text command as tag text (0x1400a2400), and `name.size`
+the count. Tag text is the name and `,key,value` per argument in std::map order, with
+each comma that starts a UTF-8 character (0x1400a0340, code page 2) escaped as `\,`. Font
+text is `font` and `,key,value` pairs in native order: floats as `%.9g` (alphas ×255 and
+scales ×100 as float32 products), sizes unsigned, `overflow` signed, colors `0x%X`, faces
+unescaped, flags `1`/`0`, `layermode`/`align` names and `style` names joined by `\,`.
+`%.9g` (`src/core/c-number-format.ts`) formats the exact binary value with ties to even,
+the UCRT rule since Windows 10 2004.
 `revision.ts` initializes the confirmed static boot variables only after exact
 executable-hash selection. Host Windows-version failure produces native 0.0;
 platform identity/capabilities are never invented.
