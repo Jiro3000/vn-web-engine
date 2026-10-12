@@ -122,6 +122,11 @@ horizontal variant clips only the negative horizontal edge, as its source does.
 The four native constant slots are horizontal center, vertical center, scale and edge
 fade. The CPU reference, standalone WebGL helper and DrawList adapter share that
 layout; unused center slots are retained so later fields keep their native offsets.
+Source hash `80d646d6…e02ad` selects diagonal blur. It averages four diagonal samples
+for RGB, adds their alpha to the retained center alpha, then applies layer alpha.
+The two native constant slots are diagonal offset and its size multiplier.
+Hashes `b993e902…38a2` and `613c946b…3122` select the corresponding two-sample
+horizontal and vertical filters, preserving the same center-alpha addition and layout.
 
 `parseIet` lowers if/elseif/else/[/if] and loop/[/loop] like the native IET parser
 (`0x14011a740`): conditional and loop tags receive a decimal `\x0bindex` target and

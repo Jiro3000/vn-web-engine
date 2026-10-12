@@ -64,6 +64,12 @@ export function createArtemisDrawShaderPreset(
       scalar('size', 'uSize');
       scalar('fade', 'uFade');
       break;
+    case 'blur_diag':
+    case 'blur_pair_h':
+    case 'blur_pair_v':
+      scalar('offset', 'uOffset');
+      scalar('size', 'uSize');
+      break;
     case 'mosaic':
       scalar('size', 'uSize');
       scalar('ratio', 'uRatio');

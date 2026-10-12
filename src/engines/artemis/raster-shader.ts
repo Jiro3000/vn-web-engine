@@ -13,6 +13,9 @@ import {
 import {artemisRadialShade, ARTEMIS_RADIAL_FRAGMENT_SOURCE} from './radial-shader.js';
 import {
   artemisBlurShade,
+  artemisDiagonalBlurShade,
+  artemisOffsetBlurFragmentSource,
+  type ArtemisOffsetBlurKind,
   artemisBlurFragmentSource,
   type ArtemisBlurKind,
   type ArtemisBlurUniforms,
@@ -165,6 +168,11 @@ export async function compileArtemisShaderPreset(
       readonly fragmentSource: string;
       readonly shade: typeof artemisPerspectiveShade;
     }
+  | {
+      readonly kind: ArtemisOffsetBlurKind;
+      readonly fragmentSource: string;
+      readonly shade: typeof artemisDiagonalBlurShade;
+    }
 > {
   artemisRevision(hash);
   const digest = await crypto.subtle.digest('SHA-256', Uint8Array.from(bytes).buffer),
@@ -196,6 +204,18 @@ export async function compileArtemisShaderPreset(
       kind: 'screen',
       fragmentSource: ARTEMIS_SCREEN_FRAGMENT_SOURCE,
       shade: artemisScreenShade,
+    };
+  const offsetBlurs: Readonly<Record<string, ArtemisOffsetBlurKind>> = {
+    '80d646d64254becbb1fa0ff5e84fb01af7b5261894d79a9a204a2be7b59e02ad': 'blur_diag',
+    b993e9021e84f01c2e9f1cb5c8abedc7e0938ab5660c900797dfd6f678dd38a2: 'blur_pair_h',
+    '613c946b72ad2fdc2ff96b03e33e51f67d507528ae7d15f57743a7ab63953122': 'blur_pair_v',
+  };
+  const offsetBlur = offsetBlurs[signature];
+  if (offsetBlur)
+    return {
+      kind: offsetBlur,
+      fragmentSource: artemisOffsetBlurFragmentSource(offsetBlur),
+      shade: (sample, u, v, p) => artemisDiagonalBlurShade(sample, u, v, p, offsetBlur),
     };
   const colors: Record<string, ArtemisColorKind> = {
     e296e41bbad54c2a5e30e9cdf044aef6482baffa055a9e4dd939dd1ea6f4f748: 'cadd',
@@ -265,6 +285,7 @@ export type ArtemisShaderPresetKind =
   | 'radial'
   | 'mosaic'
   | ArtemisPerspectiveKind
+  | ArtemisOffsetBlurKind
   | ArtemisCompositeKind;
 /** Reconstructed preset source, independent of resource selection/registration. */
 export function artemisShaderFragmentSource(kind: ArtemisShaderPresetKind): string {
@@ -285,6 +306,10 @@ export function artemisShaderFragmentSource(kind: ArtemisShaderPresetKind): stri
     case 'blur_h':
     case 'blur_v':
       return artemisBlurFragmentSource(kind);
+    case 'blur_diag':
+    case 'blur_pair_h':
+    case 'blur_pair_v':
+      return artemisOffsetBlurFragmentSource(kind);
     case 'sepia':
     case 'sepia2':
     case 'gray':

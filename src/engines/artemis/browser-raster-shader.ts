@@ -12,6 +12,9 @@ import {
 import {ARTEMIS_RADIAL_FRAGMENT_SOURCE, type ArtemisRadialUniforms} from './radial-shader.js';
 import {
   artemisBlurFragmentSource,
+  artemisOffsetBlurFragmentSource,
+  type ArtemisOffsetBlurKind,
+  type ArtemisDiagonalBlurUniforms,
   type ArtemisBlurKind,
   type ArtemisBlurUniforms,
 } from './blur-shader.js';
@@ -55,6 +58,7 @@ export class ArtemisBrowserRasterShader {
       | 'radial'
       | 'mosaic'
       | ArtemisPerspectiveKind
+      | ArtemisOffsetBlurKind
       | ArtemisCompositeKind = 'raster',
   ) {
     artemisRevision(hash);
@@ -82,15 +86,17 @@ export class ArtemisBrowserRasterShader {
             ? ARTEMIS_SCREEN_FRAGMENT_SOURCE
             : kind === 'blur_h' || kind === 'blur_v'
               ? artemisBlurFragmentSource(kind)
-              : kind === 'radial'
-                ? ARTEMIS_RADIAL_FRAGMENT_SOURCE
-                : kind === 'mosaic'
-                  ? ARTEMIS_MOSAIC_FRAGMENT_SOURCE
-                  : kind.startsWith('perspective')
-                    ? artemisPerspectiveFragmentSource(kind as ArtemisPerspectiveKind)
-                    : ['add', 'mul', 'compbr', 'compbrc', 'compdk', 'compdkc'].includes(kind)
-                      ? artemisCompositeFragmentSource(kind as ArtemisCompositeKind)
-                      : artemisColorFragmentSource(kind as ArtemisColorKind),
+              : ['blur_diag', 'blur_pair_h', 'blur_pair_v'].includes(kind)
+                ? artemisOffsetBlurFragmentSource(kind as ArtemisOffsetBlurKind)
+                : kind === 'radial'
+                  ? ARTEMIS_RADIAL_FRAGMENT_SOURCE
+                  : kind === 'mosaic'
+                    ? ARTEMIS_MOSAIC_FRAGMENT_SOURCE
+                    : kind.startsWith('perspective')
+                      ? artemisPerspectiveFragmentSource(kind as ArtemisPerspectiveKind)
+                      : ['add', 'mul', 'compbr', 'compbrc', 'compdk', 'compdkc'].includes(kind)
+                        ? artemisCompositeFragmentSource(kind as ArtemisCompositeKind)
+                        : artemisColorFragmentSource(kind as ArtemisColorKind),
       );
       program = gl.createProgram();
       if (!program) throw Error('Cannot allocate raster program');
@@ -130,6 +136,7 @@ export class ArtemisBrowserRasterShader {
       | ArtemisScreenUniforms
       | ArtemisColorUniforms
       | ArtemisBlurUniforms
+      | ArtemisDiagonalBlurUniforms
       | ArtemisRadialUniforms
       | ArtemisMosaicUniforms
       | ArtemisPerspectiveUniforms
@@ -278,6 +285,13 @@ export class ArtemisBrowserRasterShader {
       if (![m.size, m.ratio].every(Number.isFinite)) throw Error('Missing mosaic uniforms');
       gl.uniform1f(gl.getUniformLocation(this.program, 'uSize'), m.size);
       gl.uniform1f(gl.getUniformLocation(this.program, 'uRatio'), m.ratio);
+    }
+    if (['blur_diag', 'blur_pair_h', 'blur_pair_v'].includes(this.kind)) {
+      const diagonal = p as ArtemisDiagonalBlurUniforms;
+      if (![diagonal.offset, diagonal.size].every(Number.isFinite))
+        throw Error('Missing diagonal blur uniforms');
+      gl.uniform1f(gl.getUniformLocation(this.program, 'uOffset'), diagonal.offset);
+      gl.uniform1f(gl.getUniformLocation(this.program, 'uSize'), diagonal.size);
     }
     if (this.kind.startsWith('perspective')) {
       const perspective = p as ArtemisPerspectiveUniforms;

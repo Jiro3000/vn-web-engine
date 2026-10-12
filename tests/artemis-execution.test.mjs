@@ -7489,6 +7489,80 @@ test('Artemis Lua opens the os library like luaL_openlibs over the browser platf
     );
 });
 
+test('Diagonal blur averages four RGB samples and retains the center alpha before adding them', async () => {
+  const {artemisDiagonalBlurShade} = await import('../dist/engines/artemis/blur-shader.js');
+  const samples = [];
+  const pixel = artemisDiagonalBlurShade(
+    (x, y) => {
+      samples.push([x, y]);
+      return [x, y, 0.6, 0.8];
+    },
+    0.5,
+    0.5,
+    {alpha: 0.5, offset: 0.25, size: 1},
+  );
+  assert.deepEqual(samples, [
+    [0.5, 0.5],
+    [0.75, 0.75],
+    [0.25, 0.75],
+    [0.25, 0.25],
+    [0.75, 0.25],
+  ]);
+  assert.equal(pixel[0], 0.5);
+  assert.equal(pixel[1], 0.5);
+  assert.ok(Math.abs(pixel[2] - 0.6) < 1e-7);
+  assert.ok(Math.abs(pixel[3] - 0.8) < 1e-7);
+  for (const [kind, expected] of [
+    [
+      'blur_pair_h',
+      [
+        [0.5, 0.5],
+        [0.75, 0.5],
+        [0.25, 0.5],
+      ],
+    ],
+    [
+      'blur_pair_v',
+      [
+        [0.5, 0.5],
+        [0.5, 0.75],
+        [0.5, 0.25],
+      ],
+    ],
+  ]) {
+    const seen = [];
+    const pair = artemisDiagonalBlurShade(
+      (x, y) => {
+        seen.push([x, y]);
+        return [x, y, 0.6, 0.8];
+      },
+      0.5,
+      0.5,
+      {alpha: 0.5, offset: 0.25, size: 1},
+      kind,
+    );
+    assert.deepEqual(seen, expected);
+    assert.deepEqual(pair.slice(0, 2), [0.5, 0.5]);
+    assert.ok(Math.abs(pair[3] - 0.8) < 1e-7);
+  }
+  assert.throws(
+    () => artemisDiagonalBlurShade(() => [0, 0, 0, 0], 0, 0, {alpha: 1, offset: NaN, size: 1}),
+    /Invalid/,
+  );
+  const {createArtemisDrawShaderPreset} = await import('../dist/engines/artemis/draw-shader.js');
+  const {ARTEMIS_3257_EXECUTABLE_SHA256: hash} =
+    await import('../dist/engines/artemis/revision.js');
+  assert.deepEqual(
+    [
+      ...createArtemisDrawShaderPreset(hash, 'blur_diag').nativeParameters([
+        {name: 'a', values: [0.25]},
+        {name: 'b', values: [2]},
+      ]),
+    ].slice(0, 2),
+    [0.25, 2],
+  );
+});
+
 test('Perspective shader preserves identity, warps UVs, clips X and fades the native Y edges', async () => {
   const {artemisPerspectiveShade} = await import('../dist/engines/artemis/perspective-shader.js');
   const p = {alpha: 0.5, centerX: 0.5, centerY: 0.9, scale: 1, fade: 0.1};
