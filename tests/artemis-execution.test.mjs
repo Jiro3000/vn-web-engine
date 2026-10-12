@@ -7506,6 +7506,91 @@ test('Artemis Lua opens the os library like luaL_openlibs over the browser platf
     );
 });
 
+test('Rev.3257 indentmodify reaches its owner, records history without a replay slot and exposes depth', async () => {
+  const {ArtemisTextBreakControls} = await import('../dist/engines/artemis/text-break-controls.js');
+  const {ArtemisVariables} = await import('../dist/engines/artemis/variables.js');
+  const {artemisNativeTagNamesForExecutable} =
+    await import('../dist/engines/artemis/native-tags.js');
+  const {
+    ARTEMIS_3257_EXECUTABLE_SHA256: newHash,
+    ARTEMIS_3179_EXECUTABLE_SHA256: oldHash,
+    artemisRevision,
+  } = await import('../dist/engines/artemis/revision.js');
+  const history = [],
+    replay = [],
+    counts = [];
+  const host = {
+    currentMessageLayer: () => '1',
+    unindent: (n) => counts.push(n),
+    recordTextCommand: (id, tag) => history.push([id, tag]),
+    rememberTextCommand: (...args) => replay.push(args),
+  };
+  const tag = {
+    kind: 'tag',
+    name: 'indentmodify',
+    sourceLine: 0,
+    args: new Map([['unindent', '-1']]),
+  };
+  const modern = new ArtemisTextBreakControls(host, artemisRevision(newHash).indentModify);
+  assert.equal(modern.dispatch(tag), true);
+  assert.deepEqual(counts, [-1]);
+  assert.equal(history.length, 1);
+  assert.equal(replay.length, 0);
+  modern.dispatch(tag, false);
+  assert.deepEqual(counts, [-1, -1]);
+  assert.equal(history.length, 1);
+  assert.equal(
+    new ArtemisTextBreakControls(host, artemisRevision(oldHash).indentModify).dispatch(tag),
+    false,
+  );
+  for (const [hash, expected] of [
+    [newHash, 1],
+    [oldHash, 0],
+  ]) {
+    const unknown = [],
+      seen = [];
+    const lua = new ArtemisLua({readFile: () => null, variable: () => bytes('0'), tag: () => {}});
+    const script = new ArtemisScript(lua, {
+      nativeTagNames: artemisNativeTagNamesForExecutable(hash),
+      emptyReturn: () => 'stopped',
+      readFile: () => bytes('[indentmodify unindent=-1]'),
+      dispatch: (t) => seen.push(t.name),
+      reportUnknownTag: (r) => unknown.push(r),
+    });
+    script.load('synthetic.iet');
+    script.run(20);
+    assert.equal(seen.length, expected);
+    assert.equal(unknown.length, 1 - expected);
+    lua.close();
+  }
+  const variables = new ArtemisVariables({
+    stageSize: () => ({width: 1, height: 1}),
+    messageLayerIndentationDepth: () => 3,
+  });
+  variables.dispatch({
+    kind: 'tag',
+    name: 'var',
+    sourceLine: 0,
+    args: new Map([
+      ['name', 'depth'],
+      ['system', 'get_message_layer_indent_nest'],
+    ]),
+  });
+  assert.equal(luaText(variables.read('depth')), '3');
+  const older = new ArtemisVariables({stageSize: () => ({width: 1, height: 1})});
+  older.write('depth', 'keep');
+  older.dispatch({
+    kind: 'tag',
+    name: 'var',
+    sourceLine: 0,
+    args: new Map([
+      ['name', 'depth'],
+      ['system', 'get_message_layer_indent_nest'],
+    ]),
+  });
+  assert.equal(luaText(older.read('depth')), 'keep');
+});
+
 test('Noise shader reads background UV2, offsets both axes equally and respects a missing back texture', async () => {
   const {artemisNoiseShade} = await import('../dist/engines/artemis/noise-shader.js');
   const samples = [];

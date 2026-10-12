@@ -33,6 +33,15 @@ Confirmed revision fields:
 - Archive mount `0x1401884a0` opens the base, then existing `.000` through `.999` in
   ascending order, including after gaps. The current mount implementation includes
   `.500` without a special suffix rule.
+- `indentModify = true` (false for 3179/3139): constructor `0x1400be300` registers
+  `indentmodify` at `0x1400d87a0`. Its optional `unindent` argument is read with
+  `atoi`, then selected-layer virtual `+0x1b8` (`0x1401537c0`) pops both paired
+  indentation stacks, stopping at an empty stack; any negative value clears both.
+  Existing line geometry is untouched. The tag records text history except during
+  replay and does not update the persistent indent replay slot. The new var system
+  `get_message_layer_indent_nest` (`0x1400f42f0`) reads selected-layer virtual `+0x158`
+  (`0x1401535e0`, the depth at `+0x510`). Earlier revisions retain their unknown-tag
+  report and unknown-system no-write behavior for these names.
 
 The address map and route validation are in progress; see `RESUME-SAKURANOUTA.md`
 in the surrounding analysis workspace. Do not apply Rev.3179 addresses to this

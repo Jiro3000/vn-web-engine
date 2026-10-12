@@ -112,6 +112,11 @@ platform identity/capabilities are never invented.
 Rev.3257 has an independent hash and boot record; its screenshot and sound-loader
 rewind fields match Rev.3179. Its recompiled native addresses require the mapping in
 `docs/artemis-revisions.md`; Rev.3179 address literals are not its native addresses.
+Its revision-selected native tag map also includes `indentmodify`: optional `unindent`
+pops paired indentation levels, any negative count clears them, and existing lines
+keep their geometry. The command records text history without editing the persistent
+indent replay slot. `var system=get_message_layer_indent_nest` reads the selected
+insertion owner's depth. Both operations are absent from the older revision maps.
 
 Exact shader source hashes `271173e7…d18d6`, `3a5b63e5…604b`, `07f6d756…763d`
 and `db1b5dc8…3ac9` select the perspective presets. They warp one texture coordinate

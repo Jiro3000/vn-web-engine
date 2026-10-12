@@ -21,6 +21,7 @@ export interface ArtemisScriptTrace {
 }
 export type ArtemisScriptState = 'ready' | 'waiting' | 'stopped' | 'ended' | 'faulted';
 export interface ArtemisScriptHost {
+  readonly nativeTagNames?: ReadonlySet<string>;
   readFile(path: string): Uint8Array | null;
   /** Implemented native services. Throw for every unsupported command. */
   dispatch(tag: AsbTag): 'waiting' | 'stopped' | 'suspended' | void;
@@ -584,7 +585,10 @@ export class ArtemisScript {
         break;
       default: {
         // The macro stack (b38..b40) stays empty: macroadd is not implemented here.
-        if (this.host.reportUnknownTag && !artemisNativeTagNames.has(tag.name)) {
+        if (
+          this.host.reportUnknownTag &&
+          !(this.host.nativeTagNames ?? artemisNativeTagNames).has(tag.name)
+        ) {
           this.host.reportUnknownTag({
             file: this.currentFile,
             tag,

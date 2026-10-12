@@ -152,6 +152,14 @@ export class ArtemisTextInsertion {
     this.wrapping.setIndentation(value);
     this.indentPairs = new Map(value.pairs);
   }
+  unindent(count: number): void {
+    this.idle();
+    this.wrapping.unindent(count);
+  }
+  get indentationDepth(): number {
+    this.idle();
+    return this.wrapping.indentationDepth;
+  }
   setProhibitedCharacters(head: ReadonlySet<string>, foot: ReadonlySet<string>): void {
     this.idle();
     const next = artemisUtf8Prohibition(head, foot);

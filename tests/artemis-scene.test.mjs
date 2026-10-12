@@ -3309,6 +3309,54 @@ test('Native insertion cancels pending resources while already published frames 
   }
 });
 
+test('Rev.3257 unindent clamps pops, clears for any negative count and keeps existing geometry', async () => {
+  const {ArtemisTextWrapping} = await import('../dist/engines/artemis/text-wrapping.js');
+  const {ARTEMIS_3257_EXECUTABLE_SHA256: hash} =
+    await import('../dist/engines/artemis/revision.js');
+  const wrap = new ArtemisTextWrapping(hash, {
+    width: 100,
+    height: 100,
+    lineHeight: 10,
+    align: 'left',
+    hung: false,
+  });
+  wrap.setIndentation({
+    pairs: new Map([
+      ['[', ']'],
+      ['(', ')'],
+    ]),
+    range: 0,
+    logicalRange: false,
+    nest: true,
+  });
+  const add = (text) =>
+    wrap.append({
+      text,
+      opensIndent: true,
+      headProhibited: false,
+      footProhibited: false,
+      block: {width: 10, height: 10, main: [{glyph: text, advance: 10, x: 0, y: 0}], ruby: []},
+    });
+  add('[');
+  add('(');
+  assert.equal(wrap.indentationDepth, 2);
+  const before = wrap.prepareFrame();
+  wrap.unindent(0);
+  assert.equal(wrap.indentationDepth, 2);
+  wrap.unindent(1);
+  assert.equal(wrap.indentationDepth, 1);
+  assert.equal(wrap.indentClosing, ']');
+  assert.deepEqual(wrap.prepareFrame(), before);
+  wrap.unindent(5);
+  assert.equal(wrap.indentationDepth, 0);
+  add('[');
+  add('(');
+  wrap.unindent(-7);
+  assert.equal(wrap.indentationDepth, 0);
+  assert.throws(() => wrap.unindent(1.5), /Invalid/);
+  wrap.dispose();
+});
+
 test('Native indentation keeps paired width stacks, one-level wrap pops and physical/logical range counts', async () => {
   const {ArtemisTextWrapping} = await import('../dist/engines/artemis/text-wrapping.js');
   const {artemisUtf8TextBlockFlags: flags} =

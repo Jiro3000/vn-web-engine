@@ -1,7 +1,7 @@
 import type {ArtemisLuaOsHost} from './lua-os.js';
 import type {ArtemisLayerInfo} from './layer-info.js';
 import type {AsbTag} from '../../formats/artemis/asb.js';
-import {artemisTagErrorMessages} from './native-tags.js';
+import {artemisTagErrorMessages, artemisNativeTagNamesForExecutable} from './native-tags.js';
 import {
   ArtemisSaveArchiveReader,
   ArtemisSaveArchiveWriter,
@@ -59,6 +59,7 @@ import {ArtemisPrint} from './print.js';
 import {ArtemisRandom} from './random.js';
 import {ArtemisReset} from './reset.js';
 import {
+  artemisRevision,
   initializeArtemisGraphicsFeatureLevel,
   initializeArtemisResourcePaths,
   initializeArtemisVariables,
@@ -479,6 +480,12 @@ export class ArtemisRuntime {
       windowDisplay,
       applicationArguments: {readApplicationArguments: () => new Map()},
       messageLayerMeasure: () => glyphs.get(messageStage.currentLayer()).measure(),
+      ...(artemisRevision(hash).indentModify
+        ? {
+            messageLayerIndentationDepth: () =>
+              glyphs.get(messageStage.currentLayer()).indentationDepth,
+          }
+        : {}),
       layerInfo: (id) => layers.layerInfo(id),
       // Save directory paths read the save storage, as native reads its real files.
       readPackFile: (path) => this.readSaveDirectoryFile(path) ?? files.read(path),
@@ -875,29 +882,33 @@ export class ArtemisRuntime {
     }));
     this.closers.push(() => fontStack.close());
     const sceneTweens = new ArtemisSceneTweens(hash, () => messageSelection.currentMessageLayer());
-    const textBreakControls = new ArtemisTextBreakControls({
-      currentMessageLayer: () => messageSelection.currentMessageLayer(),
-      setIndentation: (value) => {
-        messageStage.currentLayer().indentation = {...value, pairs: new Map(value.pairs)};
-        trace({indentationConfigured: true, simulation: true, textLayout: false});
+    const textBreakControls = new ArtemisTextBreakControls(
+      {
+        unindent: (count) => glyphs.get(messageStage.currentLayer()).unindent(count),
+        currentMessageLayer: () => messageSelection.currentMessageLayer(),
+        setIndentation: (value) => {
+          messageStage.currentLayer().indentation = {...value, pairs: new Map(value.pairs)};
+          trace({indentationConfigured: true, simulation: true, textLayout: false});
+        },
+        setProhibitedCharacters: (head, foot) => {
+          messageStage.currentLayer().prohibition = artemisUtf8Prohibition(head, foot);
+          trace({prohibitionConfigured: true, simulation: true, textLayout: false});
+        },
+        setWordParts: (parts) => {
+          messageStage.currentLayer().wordParts = new Set(parts);
+          trace({wordPartsConfigured: true, simulation: true, textLayout: false});
+        },
+        recordTextCommand: (layer, tag) => {
+          trace({textCommand: tag.name, messageLayer: layer, simulation: true});
+          recordText(layer, tag);
+        },
+        rememberTextCommand: (layer, slot, tag) => {
+          trace({textReplaySlot: slot, messageLayer: layer, simulation: true});
+          saveData.rememberText(layer, slot, tag);
+        },
       },
-      setProhibitedCharacters: (head, foot) => {
-        messageStage.currentLayer().prohibition = artemisUtf8Prohibition(head, foot);
-        trace({prohibitionConfigured: true, simulation: true, textLayout: false});
-      },
-      setWordParts: (parts) => {
-        messageStage.currentLayer().wordParts = new Set(parts);
-        trace({wordPartsConfigured: true, simulation: true, textLayout: false});
-      },
-      recordTextCommand: (layer, tag) => {
-        trace({textCommand: tag.name, messageLayer: layer, simulation: true});
-        recordText(layer, tag);
-      },
-      rememberTextCommand: (layer, slot, tag) => {
-        trace({textReplaySlot: slot, messageLayer: layer, simulation: true});
-        saveData.rememberText(layer, slot, tag);
-      },
-    });
+      artemisRevision(hash).indentModify,
+    );
     const textControls = new ArtemisTextControls({
       currentMessageLayer: () => messageSelection.currentMessageLayer(),
       messageLayerExists: (id) => messageStage.messageLayerExists(id),
@@ -1167,6 +1178,7 @@ export class ArtemisRuntime {
       }
     this.compiled = compiled;
     script = this.script = new ArtemisScript(lua, {
+      nativeTagNames: artemisNativeTagNamesForExecutable(hash),
       pushLocal: () => variables.pushLocal(),
       popLocal: () => variables.popLocal(),
       caretTransferred: () => clickGlyphs.release(),

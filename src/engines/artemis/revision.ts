@@ -29,6 +29,8 @@ export interface ArtemisRevision {
    * (0x14018e760/0x14018e650) does not: the next loader continues at the position the
    * failed one left. */
   readonly soundLoaderRewinds: boolean;
+  /** Rev.3257's indentation mutation tag and nesting query. */
+  readonly indentModify: boolean;
 }
 // Rev.3139 0x1400c36f0 publishes the same support and save data versions.
 const rev3139 = {
@@ -39,12 +41,14 @@ const rev3139 = {
   saveDataVersion: 1003,
   screenshot: 'presented' as const,
   soundLoaderRewinds: false,
+  indentModify: false,
 };
 const revisions: ReadonlyMap<string, ArtemisRevision> = new Map(
   [
     {
       executableSha256: ARTEMIS_3179_EXECUTABLE_SHA256,
       engineVersion: 3179,
+      indentModify: false,
       buildDate: 'Thu Dec 21 04:26:04 2023',
       minimumSupportVersion: 1103,
       saveDataVersion: 1003,
@@ -56,6 +60,7 @@ const revisions: ReadonlyMap<string, ArtemisRevision> = new Map(
     {
       executableSha256: ARTEMIS_3257_EXECUTABLE_SHA256,
       engineVersion: 3257,
+      indentModify: true,
       buildDate: 'Thu Apr 17 21:58:09 2025',
       minimumSupportVersion: 1103,
       saveDataVersion: 1003,

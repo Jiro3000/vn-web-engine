@@ -30,6 +30,8 @@ function literal(name: string): void {
 }
 
 export interface ArtemisVariableHost {
+  /** Only supplied for revisions with the native nesting query. */
+  messageLayerIndentationDepth?(): number;
   /** Logical stage dimensions; supplied by the configuration/rendering owner. */
   stageSize(): {width: number; height: number};
   windowDisplay?(): WindowDisplayGeometry;
@@ -99,6 +101,7 @@ const nativeVarSystems = new Set([
   'get_message_layer_width',
   'get_message_layer_height',
   'get_message_layer_line_width',
+  'get_message_layer_indent_nest',
   'get_message_tags',
   'get_backlog_size',
   'get_backlog_tags',
@@ -300,7 +303,11 @@ export class ArtemisVariables {
     // The native handler gives data precedence over system queries.
     if (p.has('data')) this.write(name, tag.bytes?.get('data') ?? p.get('data')!, local);
     else if (!nativeVarSystems.has(p.get('system') ?? '')) return true;
-    else if (p.get('system') === 'delete') this.delete(name, local);
+    else if (p.get('system') === 'get_message_layer_indent_nest') {
+      // Earlier revisions do not recognize this system name and write nothing.
+      if (this.host?.messageLayerIndentationDepth)
+        this.write(name, String(this.host.messageLayerIndentationDepth()), local);
+    } else if (p.get('system') === 'delete') this.delete(name, local);
     else if (p.get('system') === 'get_exe_parameter') {
       if (!this.host?.applicationArguments)
         throw new Error('Artemis application argument provider is not configured');

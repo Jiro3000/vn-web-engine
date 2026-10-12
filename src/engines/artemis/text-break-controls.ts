@@ -8,6 +8,7 @@ export interface ArtemisIndentation {
   readonly nest: boolean;
 }
 export interface ArtemisTextBreakHost {
+  unindent?(count: number): void;
   /** Copies the pair map and scalar settings into the selected text resource. */
   setIndentation(value: ArtemisIndentation): void;
   /** Empty sets request native encoding-specific defaults, not disabled restrictions. */
@@ -34,8 +35,25 @@ function enabled(args: ReadonlyMap<string, string>, key: string): boolean {
  * CLinkableTextLayer resource storage remain mandatory host effects.
  */
 export class ArtemisTextBreakControls {
-  constructor(private readonly host: ArtemisTextBreakHost) {}
+  constructor(
+    private readonly host: ArtemisTextBreakHost,
+    private readonly indentModify = false,
+  ) {}
   dispatch(tag: AsbTag, recordHistory = true): boolean {
+    if (tag.name === 'indentmodify') {
+      if (!this.indentModify) return false;
+      if (tag.args.has('unindent')) {
+        if (!this.host.unindent) throw Error('Artemis unindent owner is not configured');
+        this.host.unindent(artemisInteger(tag.args.get('unindent')!));
+      }
+      // d87a0 records history only; it does not change the persistent indent replay slot.
+      if (recordHistory)
+        this.host.recordTextCommand(this.host.currentMessageLayer(), {
+          ...tag,
+          args: new Map(tag.args),
+        });
+      return true;
+    }
     if (!['indent', 'prohibit', 'wordparts'].includes(tag.name)) return false;
     const args = tag.args;
     if (tag.name === 'indent') {

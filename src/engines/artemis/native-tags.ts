@@ -1,6 +1,14 @@
 /** Names registered into the native command map (script +0x50) by 0x1400b9e80, in
  * registration order. Every other name that the Lua tag filter does not take reaches the
  * macro stack, then the unknown-command report in 0x1400c5800. */
+import {artemisRevision} from './revision.js';
+
+/** Native command-map identity comes from the executable, not the script's tag spelling. */
+export function artemisNativeTagNamesForExecutable(hash: string): ReadonlySet<string> {
+  return artemisRevision(hash).indentModify
+    ? new Set([...artemisNativeTagNames, 'indentmodify'])
+    : artemisNativeTagNames;
+}
 export const artemisNativeTagNames: ReadonlySet<string> = new Set([
   '\x0bgoto',
   'tag',

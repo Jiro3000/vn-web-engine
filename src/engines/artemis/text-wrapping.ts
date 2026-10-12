@@ -57,6 +57,13 @@ export class ArtemisTextWrapping<T> {
   get indentationDepth(): number {
     return this.indents.length;
   }
+  /** Rev.3257 0x1401537c0: negative clears both stacks, positive pops until either is empty. */
+  unindent(count: number): void {
+    this.assertOpen();
+    if (!Number.isInteger(count) || count < -0x80000000 || count > 0x7fffffff)
+      throw Error('Invalid Artemis unindent count');
+    this.indents.length = count < 0 ? 0 : Math.max(0, this.indents.length - count);
+  }
 
   constructor(
     private readonly hash: string,
