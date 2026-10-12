@@ -13,6 +13,31 @@ only `.rsrc` and the header fields that size it (SizeOfInitializedData, SizeOfIm
 CheckSum, the resource directory size and the `.rsrc` section header) differ. It shares
 every Rev.3139 address and field below.
 
+## Rev.3257
+
+Executable `7c604c92b434cbee3620dcf4af8dde40d9313d04cefa794d168b03477135a08a`
+is selected independently (`ARTEMIS_3257_EXECUTABLE_SHA256`). Its PE timestamp is
+`0x6800fb55`; all seven section hashes differ from Rev.3179, Rev.3139 and Rev.3198.
+Static Ghidra analysis identifies Rev.3257 at `0x1400c7d80`, build date
+`Thu Apr 17 21:58:09 2025`, minimum support version 1103 and save data version 1003.
+It is a recompiled engine: 6035 of the 6070 Rev.3198 functions having at least eight
+instructions have a matching normalized instruction signature. Signatures identify
+mapping candidates; they do not establish equal behavior on their own.
+
+Confirmed revision fields:
+
+- `screenshot = scene`: `0x1400ee300` changes the renderer target, draws the committed
+  scene through `0x14015a220`, and restores the previous target and renderer mode.
+- `soundLoaderRewinds = true`: `0x140197120` and `0x140197010` seek the opened file
+  through file virtual slot `+0x30` with `(0, 0)` before a further loader.
+- Archive mount `0x1401884a0` opens the base, then existing `.000` through `.999` in
+  ascending order, including after gaps. The current mount implementation includes
+  `.500` without a special suffix rule.
+
+The address map and route validation are in progress; see `RESUME-SAKURANOUTA.md`
+in the surrounding analysis workspace. Do not apply Rev.3179 addresses to this
+executable without an explicit mapping.
+
 ## How the revisions were compared
 
 Both executables were analyzed read-only in Ghidra (`scripts/ArtemisFunctionHashes.java`,

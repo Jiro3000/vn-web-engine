@@ -4077,6 +4077,32 @@ test('Artemis revisions are selected by executable hash with explicit Rev.3139 d
   );
 });
 
+test('Rev.3257 publishes its own boot record only for its exact executable hash', async () => {
+  const {
+    artemisRevision,
+    initializeArtemisVariables,
+    ARTEMIS_3257_EXECUTABLE_SHA256: sha,
+  } = await import('../dist/engines/artemis/revision.js');
+  const revision = artemisRevision(sha.toUpperCase());
+  assert.equal(revision.engineVersion, 3257);
+  assert.equal(revision.screenshot, 'scene');
+  assert.equal(revision.soundLoaderRewinds, true);
+  assert.equal(Object.isFrozen(revision), true);
+  const written = new Map();
+  initializeArtemisVariables({write: (key, value) => written.set(key, value)}, sha);
+  assert.deepEqual(
+    ['s.engineversion', 's.builddate', 's.minimumsupportversion', 's.savedataversion'].map((key) =>
+      written.get(key),
+    ),
+    ['3257', 'Thu Apr 17 21:58:09 2025', '1103', '1003'],
+  );
+  assert.throws(() => artemisRevision('3257'), /Unsupported Artemis executable/);
+  assert.throws(
+    () => artemisRevision('7c604c92' + '0'.repeat(56)),
+    /Unsupported Artemis executable/,
+  );
+});
+
 test('Rev.3139 sound loaders do not rewind: a further loader of a failed exact file is refused', async () => {
   const {createArtemisSoundLoader} = await import('../dist/engines/artemis/sound-loader.js');
   const {ARTEMIS_3139_EXECUTABLE_SHA256: sha} = await import('../dist/engines/artemis/revision.js');
@@ -7490,7 +7516,13 @@ test('Artemis runtime reports a missing or non-gray trans rule like c7260 and co
     runtime.script.run(1000);
   }
   assert.deepEqual(
-    reports.map(({file, tag, message, severity}) => [file, tag.name, tag.sourceLine, message, severity]),
+    reports.map(({file, tag, message, severity}) => [
+      file,
+      tag.name,
+      tag.sourceLine,
+      message,
+      severity,
+    ]),
     [
       ['system/first.iet', 'trans', 0, artemisTransitionErrors.ruleLoad, 1],
       ['system/first.iet', 'trans', 1, artemisTransitionErrors.ruleFormat, 1],

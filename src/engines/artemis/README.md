@@ -109,6 +109,9 @@ that API, or when it is denied, the list is empty.
 `revision.ts` initializes the confirmed static boot variables only after exact
 executable-hash selection. Host Windows-version failure produces native 0.0;
 platform identity/capabilities are never invented.
+Rev.3257 has an independent hash and boot record; its screenshot and sound-loader
+rewind fields match Rev.3179. Its recompiled native addresses require the mapping in
+`docs/artemis-revisions.md`; Rev.3179 address literals are not its native addresses.
 
 `parseIet` lowers if/elseif/else/[/if] and loop/[/loop] like the native IET parser
 (`0x14011a740`): conditional and loop tags receive a decimal `\x0bindex` target and
