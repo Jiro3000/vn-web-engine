@@ -4,6 +4,7 @@ import {
   type ArtemisCompositeUniforms,
 } from './composite-shader.js';
 import {ARTEMIS_MOSAIC_FRAGMENT_SOURCE, type ArtemisMosaicUniforms} from './mosaic-shader.js';
+import {ARTEMIS_NOISE_FRAGMENT_SOURCE, type ArtemisNoiseUniforms} from './noise-shader.js';
 import {
   artemisPerspectiveFragmentSource,
   type ArtemisPerspectiveKind,
@@ -31,9 +32,11 @@ import type {TriangleImage} from '../../graphics/triangle-draw.js';
 const vertexSource = `#version 300 es
 precision highp float;
 out vec2 vUv;
+out vec2 vBackUv;
 void main() {
   vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
   vUv = vec2(p.x, 1.0 - p.y);
+  vBackUv=vUv;
   gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
 }`;
 
@@ -59,6 +62,7 @@ export class ArtemisBrowserRasterShader {
       | 'mosaic'
       | ArtemisPerspectiveKind
       | ArtemisOffsetBlurKind
+      | 'noise'
       | ArtemisCompositeKind = 'raster',
   ) {
     artemisRevision(hash);
@@ -80,23 +84,25 @@ export class ArtemisBrowserRasterShader {
     try {
       fragment = compile(
         gl.FRAGMENT_SHADER,
-        kind === 'raster'
-          ? ARTEMIS_RASTER_FRAGMENT_SOURCE
-          : kind === 'screen'
-            ? ARTEMIS_SCREEN_FRAGMENT_SOURCE
-            : kind === 'blur_h' || kind === 'blur_v'
-              ? artemisBlurFragmentSource(kind)
-              : ['blur_diag', 'blur_pair_h', 'blur_pair_v'].includes(kind)
-                ? artemisOffsetBlurFragmentSource(kind as ArtemisOffsetBlurKind)
-                : kind === 'radial'
-                  ? ARTEMIS_RADIAL_FRAGMENT_SOURCE
-                  : kind === 'mosaic'
-                    ? ARTEMIS_MOSAIC_FRAGMENT_SOURCE
-                    : kind.startsWith('perspective')
-                      ? artemisPerspectiveFragmentSource(kind as ArtemisPerspectiveKind)
-                      : ['add', 'mul', 'compbr', 'compbrc', 'compdk', 'compdkc'].includes(kind)
-                        ? artemisCompositeFragmentSource(kind as ArtemisCompositeKind)
-                        : artemisColorFragmentSource(kind as ArtemisColorKind),
+        kind === 'noise'
+          ? ARTEMIS_NOISE_FRAGMENT_SOURCE
+          : kind === 'raster'
+            ? ARTEMIS_RASTER_FRAGMENT_SOURCE
+            : kind === 'screen'
+              ? ARTEMIS_SCREEN_FRAGMENT_SOURCE
+              : kind === 'blur_h' || kind === 'blur_v'
+                ? artemisBlurFragmentSource(kind)
+                : ['blur_diag', 'blur_pair_h', 'blur_pair_v'].includes(kind)
+                  ? artemisOffsetBlurFragmentSource(kind as ArtemisOffsetBlurKind)
+                  : kind === 'radial'
+                    ? ARTEMIS_RADIAL_FRAGMENT_SOURCE
+                    : kind === 'mosaic'
+                      ? ARTEMIS_MOSAIC_FRAGMENT_SOURCE
+                      : kind.startsWith('perspective')
+                        ? artemisPerspectiveFragmentSource(kind as ArtemisPerspectiveKind)
+                        : ['add', 'mul', 'compbr', 'compbrc', 'compdk', 'compdkc'].includes(kind)
+                          ? artemisCompositeFragmentSource(kind as ArtemisCompositeKind)
+                          : artemisColorFragmentSource(kind as ArtemisColorKind),
       );
       program = gl.createProgram();
       if (!program) throw Error('Cannot allocate raster program');
@@ -137,6 +143,7 @@ export class ArtemisBrowserRasterShader {
       | ArtemisColorUniforms
       | ArtemisBlurUniforms
       | ArtemisDiagonalBlurUniforms
+      | ArtemisNoiseUniforms
       | ArtemisRadialUniforms
       | ArtemisMosaicUniforms
       | ArtemisPerspectiveUniforms
@@ -200,13 +207,17 @@ export class ArtemisBrowserRasterShader {
         gl.uniform1f(gl.getUniformLocation(this.program, name), value);
     } else if (
       this.kind === 'screen' ||
+      this.kind === 'noise' ||
       ['add', 'mul', 'compbr', 'compbrc', 'compdk', 'compdkc'].includes(this.kind)
     ) {
+      const auxiliary =
+        userImage ??
+        (this.kind === 'noise' ? {width: 1, height: 1, pixels: new Uint8Array(4)} : undefined);
       if (
-        !userImage ||
-        userImage.width < 1 ||
-        userImage.height < 1 ||
-        userImage.pixels.length !== userImage.width * userImage.height * 4
+        !auxiliary ||
+        auxiliary.width < 1 ||
+        auxiliary.height < 1 ||
+        auxiliary.pixels.length !== auxiliary.width * auxiliary.height * 4
       )
         throw Error('Missing screen user texture');
       gl.activeTexture(gl.TEXTURE1);
@@ -219,14 +230,22 @@ export class ArtemisBrowserRasterShader {
         gl.TEXTURE_2D,
         0,
         gl.RGBA8,
-        userImage.width,
-        userImage.height,
+        auxiliary.width,
+        auxiliary.height,
         0,
         gl.RGBA,
         gl.UNSIGNED_BYTE,
-        userImage.pixels as Uint8Array<ArrayBuffer>,
+        auxiliary.pixels as Uint8Array<ArrayBuffer>,
       );
-      gl.uniform1i(gl.getUniformLocation(this.program, 'uUser'), 1);
+      gl.uniform1i(
+        gl.getUniformLocation(this.program, this.kind === 'noise' ? 'uBack' : 'uUser'),
+        1,
+      );
+    }
+    if (this.kind === 'noise') {
+      const noise = p as ArtemisNoiseUniforms;
+      if (!Number.isFinite(noise.size)) throw Error('Missing noise uniforms');
+      gl.uniform1f(gl.getUniformLocation(this.program, 'uSize'), noise.size);
     }
     if (
       this.kind === 'sepia' ||

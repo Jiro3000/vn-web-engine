@@ -70,6 +70,9 @@ export function createArtemisDrawShaderPreset(
       scalar('offset', 'uOffset');
       scalar('size', 'uSize');
       break;
+    case 'noise':
+      scalar('size', 'uSize');
+      break;
     case 'mosaic':
       scalar('size', 'uSize');
       scalar('ratio', 'uRatio');
@@ -116,6 +119,7 @@ export function createArtemisDrawShaderPreset(
     .replace(/^#version.*\n/, '')
     .replace(/precision highp float;/g, '')
     .replace(/in vec2 vUv;/g, '')
+    .replace(/in vec2 vBackUv;/g, '')
     .replace(/uniform [^;]+;/g, '')
     .replace(/out vec4 outColor;/g, '')
     .replace(
@@ -125,6 +129,11 @@ export function createArtemisDrawShaderPreset(
         : 'vec4(0.0)',
     )
     .replace(/\buFore\b/g, 'atlas')
+    .replace(
+      /texture\(uBack,\s*uv\)/g,
+      userTextureIndex > 0 ? 'texture(additionalAtlas0,uv)' : 'vec4(0.0)',
+    )
+    .replace(/\bvBackUv\b/g, userTextureIndex > 0 ? 'additionalUV0' : 'vec2(0.0)')
     .replace(/\bvUv\b/g, 'tex')
     .replace(/\buAlpha\b/g, 'tint.a');
   source = source.replace(

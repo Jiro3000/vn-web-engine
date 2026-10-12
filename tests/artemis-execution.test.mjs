@@ -7489,6 +7489,32 @@ test('Artemis Lua opens the os library like luaL_openlibs over the browser platf
     );
 });
 
+test('Noise shader reads background UV2, offsets both axes equally and respects a missing back texture', async () => {
+  const {artemisNoiseShade} = await import('../dist/engines/artemis/noise-shader.js');
+  const samples = [];
+  const sample = (x, y) => {
+    samples.push([x, y]);
+    return [0.2, 0.4, 0.6, 0.8];
+  };
+  const result = artemisNoiseShade(sample, 0.25, 0.5, {alpha: 0.5, size: 0});
+  assert.deepEqual(samples, [[0.25, 0.5]]);
+  assert.deepEqual(result.slice(0, 3), [0.2, 0.4, 0.6]);
+  assert.ok(Math.abs(result[3] - 0.4) < 1e-7);
+  artemisNoiseShade(sample, 0.25, 0.5, {alpha: 1, size: 0.1});
+  assert.ok(samples[1][0] >= 0.25 && samples[1][0] <= 0.35);
+  assert.ok(Math.abs(samples[1][0] - 0.25 - (samples[1][1] - 0.5)) < 1e-7);
+  const {createArtemisDrawShaderPreset} = await import('../dist/engines/artemis/draw-shader.js');
+  const {ARTEMIS_3257_EXECUTABLE_SHA256: hash} =
+    await import('../dist/engines/artemis/revision.js');
+  const ordinary = createArtemisDrawShaderPreset(hash, 'noise');
+  const captured = createArtemisDrawShaderPreset(hash, 'noise', 1);
+  assert.equal(captured.needsUserTexture, false);
+  assert.match(captured.fragment, /texture\(additionalAtlas0,uv\)/);
+  assert.match(captured.fragment, /dot\(additionalUV0/);
+  assert.ok(!ordinary.fragment.includes('texture(additionalAtlas'));
+  assert.match(ordinary.fragment, /vec4\(0.0\)/);
+});
+
 test('Diagonal blur averages four RGB samples and retains the center alpha before adding them', async () => {
   const {artemisDiagonalBlurShade} = await import('../dist/engines/artemis/blur-shader.js');
   const samples = [];

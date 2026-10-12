@@ -5,6 +5,7 @@ import {
   type ArtemisCompositeUniforms,
 } from './composite-shader.js';
 import {artemisMosaicShade, ARTEMIS_MOSAIC_FRAGMENT_SOURCE} from './mosaic-shader.js';
+import {artemisNoiseShade, ARTEMIS_NOISE_FRAGMENT_SOURCE} from './noise-shader.js';
 import {
   artemisPerspectiveShade,
   artemisPerspectiveFragmentSource,
@@ -173,6 +174,11 @@ export async function compileArtemisShaderPreset(
       readonly fragmentSource: string;
       readonly shade: typeof artemisDiagonalBlurShade;
     }
+  | {
+      readonly kind: 'noise';
+      readonly fragmentSource: string;
+      readonly shade: typeof artemisNoiseShade;
+    }
 > {
   artemisRevision(hash);
   const digest = await crypto.subtle.digest('SHA-256', Uint8Array.from(bytes).buffer),
@@ -217,6 +223,8 @@ export async function compileArtemisShaderPreset(
       fragmentSource: artemisOffsetBlurFragmentSource(offsetBlur),
       shade: (sample, u, v, p) => artemisDiagonalBlurShade(sample, u, v, p, offsetBlur),
     };
+  if (signature === 'c4bf785cfb1ec5e2bbb9470764ccec206e400f142854106eea0aa4e7eefde20a')
+    return {kind: 'noise', fragmentSource: ARTEMIS_NOISE_FRAGMENT_SOURCE, shade: artemisNoiseShade};
   const colors: Record<string, ArtemisColorKind> = {
     e296e41bbad54c2a5e30e9cdf044aef6482baffa055a9e4dd939dd1ea6f4f748: 'cadd',
     '807fd3b8ef52658c6ee664aa43ccafc61632d3bd1e72810f108cde9edba68254': 'cmul',
@@ -286,12 +294,15 @@ export type ArtemisShaderPresetKind =
   | 'mosaic'
   | ArtemisPerspectiveKind
   | ArtemisOffsetBlurKind
+  | 'noise'
   | ArtemisCompositeKind;
 /** Reconstructed preset source, independent of resource selection/registration. */
 export function artemisShaderFragmentSource(kind: ArtemisShaderPresetKind): string {
   switch (kind) {
     case 'raster':
       return ARTEMIS_RASTER_FRAGMENT_SOURCE;
+    case 'noise':
+      return ARTEMIS_NOISE_FRAGMENT_SOURCE;
     case 'screen':
       return ARTEMIS_SCREEN_FRAGMENT_SOURCE;
     case 'radial':

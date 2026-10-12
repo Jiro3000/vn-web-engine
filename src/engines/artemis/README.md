@@ -127,6 +127,12 @@ for RGB, adds their alpha to the retained center alpha, then applies layer alpha
 The two native constant slots are diagonal offset and its size multiplier.
 Hashes `b993e902…38a2` and `613c946b…3122` select the corresponding two-sample
 horizontal and vertical filters, preserving the same center-alpha addition and layout.
+Hash `c4bf785c…e20a` selects a background-noise displacement preset. It reads the captured
+background through native UV2, adds the same sine/frac offset to both coordinates with
+fixed zero time, and scales background alpha. Its single constant is offset amplitude.
+The DrawList adapter binds capture texture 0 and its own coordinates; without a captured
+background it samples zero, matching an unbound native background slot. The standalone
+WebGL helper uses its auxiliary image as background for this preset.
 
 `parseIet` lowers if/elseif/else/[/if] and loop/[/loop] like the native IET parser
 (`0x14011a740`): conditional and loop tags receive a decimal `\x0bindex` target and
