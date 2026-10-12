@@ -13,6 +13,7 @@ import type {AsbTag} from '../../formats/artemis/asb.js';
 import type {PointerPositionHost} from '../../input/cursor-host.js';
 import {windowsTextFileBytes} from '../../platform/windows-text-file.js';
 import {readArtemisPngComments} from './png-comments.js';
+import {installArtemisLuaOs, type ArtemisLuaOsHost} from './lua-os.js';
 
 export interface ArtemisLuaHost {
   /** Synchronous prepared byte sources; null means the file does not exist. */
@@ -27,6 +28,12 @@ export interface ArtemisLuaHost {
   reportIncludeError?(path: string, error: unknown): void;
   fileExists(path: string): boolean;
   now(): number;
+  /** The platform behind the Lua `os` library (lua-os.ts); without it `os.execute` and
+   * `os.getenv` are refused. */
+  os?: ArtemisLuaOsHost;
+  /** Wall clock in milliseconds since the Unix epoch for `os.date`/`os.time` (CRT
+   * `time`); defaults to `Date.now`. */
+  wallClock?(): number;
   tag(tag: AsbTag): void | 'suspended';
   /** Opt in only when callbacks run through createCall and the owner drives yielded work. */
   suspendableTags?: boolean;
@@ -432,6 +439,7 @@ export class ArtemisLua {
         '@artemis/suspendable-tag',
       );
     }
+    installArtemisLuaOs(this.vm, host.os, () => (host.wallClock ? host.wallClock() : Date.now()));
   }
   include(path: string): void {
     if (this.host.readPlainFile) {

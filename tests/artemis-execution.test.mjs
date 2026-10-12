@@ -7098,3 +7098,150 @@ test('Volume variables reach the sound managers each frame when they change', as
   volumes.apply();
   assert.equal(effectSlots.size, 0);
 });
+
+test('Artemis Lua opens the os library like luaL_openlibs over the browser platform', async () => {
+  const {BrowserWindowsProcessHost} = await import('../dist/platform/browser-windows-process.js');
+  const {BrowserWindowsSystemProfileHost} =
+    await import('../dist/platform/browser-windows-system-profile.js');
+  const process = new BrowserWindowsProcessHost(),
+    profile = new BrowserWindowsSystemProfileHost();
+  const base = {readFile: () => null, fileExists: () => false, now: () => 0};
+  const lua = new ArtemisLua({
+    ...base,
+    wallClock: () => 1693425477123,
+    os: {
+      system: (command) => process.system(command),
+      getenv: (name) => profile.readEnvironmentVariable(name),
+    },
+  });
+  const run = (code) => {
+    lua.vm.execute(new TextEncoder().encode(`probe_out = ${code}`), 'probe');
+    return lua.vm.getGlobal('probe_out');
+  };
+  const text = (code) => luaText(run(code));
+  // 2001-02-03 04:05:06 UTC, a Saturday.
+  const t = 981173106;
+  assert.equal(
+    text(`os.date('!%Y-%m-%d %H:%M:%S|%j|%a %A|%b %B %h|%p|%y %C|%e|%D|%F|%T|%R|%r|%u %w', ${t})`),
+    '2001-02-03 04:05:06|034|Sat Saturday|Feb February Feb|AM|01 20| 3|02/03/01|2001-02-03|04:05:06|04:05|04:05:06 AM|6 6',
+  );
+  assert.equal(text(`os.date('!%U %W %V %G %g', ${t})`), '04 05 05 2001 01');
+  assert.equal(text(`os.date('!%U %W %V %G %g', 1104537600)`), '00 00 53 2004 04'); // 2005-01-01.
+  assert.equal(text(`os.date('!100%% and %', ${t})`), '100% and %');
+  assert.equal(text(`os.date('!%Y\\0%m', ${t})`), '2001'); // A C string format.
+  const fields = run(`os.date('!*t', ${t})`);
+  assert.deepEqual(Object.fromEntries(fields), {
+    sec: 6,
+    min: 5,
+    hour: 4,
+    day: 3,
+    month: 2,
+    year: 2001,
+    wday: 7,
+    yday: 34,
+    isdst: false,
+  });
+  const local = new Date(t * 1000);
+  assert.equal(
+    text(`os.date('%H:%M', '${t}')`),
+    `${String(local.getHours()).padStart(2, '0')}:${String(local.getMinutes()).padStart(2, '0')}`,
+  );
+  assert.equal(run(`os.time()`), 1693425477);
+  assert.equal(text(`os.date('!%Y')`), '2023');
+  assert.equal(
+    run(`os.time{year=2023, month=8, day=30, hour=19, min=57, sec=57}`),
+    new Date(2023, 7, 30, 19, 57, 57).getTime() / 1000,
+  );
+  assert.equal(
+    run(`os.time{year='2023', month=13, day=1.9}`),
+    new Date(2024, 0, 1, 12, 0, 0).getTime() / 1000,
+  );
+  assert.equal(run(`os.time{year=1960, month=1, day=1}`), null);
+  assert.equal(run(`os.difftime(10, 4.9)`), 6);
+  assert.equal(run(`os.difftime(10)`), 10);
+  assert.equal(run(`os.execute()`), 0); // No command interpreter in the browser.
+  assert.equal(run(`os.execute('dir')`), -1);
+  assert.equal(run(`os.getenv('USERNAME')`), null);
+  assert.equal(text(`os.setlocale()`), 'C');
+  assert.equal(
+    text(`select(2, pcall(os.date, {}))`),
+    "bad argument #1 to 'date' (string expected, got table)",
+  );
+  assert.equal(
+    text(`select(2, pcall(os.difftime))`),
+    "bad argument #1 to 'difftime' (number expected, got no value)",
+  );
+  assert.equal(
+    text(`select(2, pcall(os.time, {year=2000, month=1}))`),
+    "field 'day' missing in date table",
+  );
+  assert.equal(
+    text(`select(2, pcall(os.setlocale, nil, 'bad'))`),
+    "bad argument #2 to 'setlocale' (invalid option 'bad')",
+  );
+  for (const code of [
+    `os.date('!%c', ${t})`,
+    `os.date('!%Z', ${t})`,
+    `os.date('%Y', -1)`,
+    `os.time{year=2000, month=1, day=1, isdst=false}`,
+    `os.clock()`,
+    `os.exit()`,
+    `os.remove('a')`,
+    `os.rename('a', 'b')`,
+    `os.tmpname()`,
+    `os.setlocale('')`,
+  ])
+    assert.throws(() => run(code), /Unsupported Artemis/, code);
+  // The hidden engine methods are not left on the engine table.
+  assert.equal(
+    run(`rawget(engine, 'artemisOsDate') == nil and rawget(engine, 'artemisOsUnsupported') == nil`),
+    true,
+  );
+  // Without a platform, commands and the environment are refused.
+  const bare = new ArtemisLua(base);
+  bare.vm.execute(new TextEncoder().encode(`probe_out = os.date('!%Y', 0 + ${t})`), 'probe');
+  assert.equal(luaText(bare.vm.getGlobal('probe_out')), '2001');
+  for (const code of [`os.execute()`, `os.getenv('PATH')`])
+    assert.throws(
+      () => bare.vm.execute(new TextEncoder().encode(code), 'probe'),
+      /Unsupported Artemis Lua os/,
+    );
+});
+
+test('Artemis runtime reports missing seplay and splay sounds like c7260 and continues', async () => {
+  const {openArtemisRuntimeFixture} = await import('./artemis-runtime-fixture.mjs');
+  const {artemisTagErrorMessages} = await import('../dist/engines/artemis/native-tags.js');
+  const first =
+    '[seplay id="1" file=":missing/se.ogg" gain="500"]\n[splay file="missing/bgm.ogg"]\n[var name="t.done" data="1"]\n[stop]';
+  const reports = [];
+  const {runtime, close} = await openArtemisRuntimeFixture(
+    {'system/first.iet': first},
+    {services: {reportTagError: (report) => reports.push(report)}},
+  );
+  await runtime.boot();
+  for (let i = 0; i < 8 && runtime.resourcePending; i++) {
+    await runtime.settleResource();
+    runtime.script.run(1000);
+  }
+  assert.deepEqual(
+    reports.map(({file, tag, message, severity}) => [file, tag.name, tag.sourceLine, message, severity]),
+    [
+      ['system/first.iet', 'seplay', 0, artemisTagErrorMessages.soundNotLoaded, 1],
+      ['system/first.iet', 'splay', 1, artemisTagErrorMessages.soundNotLoaded, 1],
+    ],
+  );
+  assert.equal(new TextDecoder().decode(runtime.variables.read('t.done')), '1');
+  // [stop]: run mode 3.
+  assert.equal(runtime.runMode, 3);
+  await close();
+  // The owner without a report service keeps the failure strict.
+  const strict = await openArtemisRuntimeFixture({'system/first.iet': first});
+  await strict.runtime.boot();
+  await assert.rejects(async () => {
+    for (let i = 0; i < 8 && strict.runtime.resourcePending; i++) {
+      await strict.runtime.settleResource();
+      strict.runtime.script.run(1000);
+    }
+  }, /Artemis sound load failed/);
+  await strict.close();
+});

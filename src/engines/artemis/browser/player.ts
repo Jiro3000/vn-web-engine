@@ -1,4 +1,7 @@
-import {decodePng} from '../../../formats/png/decode.js';
+import {BrowserWindowsProcessHost} from '../../../platform/browser-windows-process.js';
+import {BrowserWindowsSystemProfileHost} from '../../../platform/browser-windows-system-profile.js';
+import {decodePng, type DecodedPng} from '../../../formats/png/decode.js';
+import type {TriangleImage} from '../../../graphics/triangle-draw.js';
 import {decodeArtemisPsd} from '../../../formats/artemis/psd.js';
 import {objectFitPlacement} from '../../../graphics/object-fit.js';
 import {decodeImageOffThread} from '../../../graphics/image-decode-offload.js';
@@ -20,7 +23,11 @@ import {ArtemisFileFonts} from '../file-fonts.js';
 import {ArtemisGlyphPainter} from '../glyph-paint-client.js';
 import {createArtemisOrdinaryGpuRaster} from '../gpu-raster.js';
 import type {ArtemisImageGraphics, ArtemisTextLayer} from '../image-graphics.js';
-import {ArtemisImageLoader, type ArtemisLoadedImage} from '../image-loader.js';
+import {
+  ArtemisImageLoader,
+  artemisPngSurfaceFormat,
+  type ArtemisLoadedImage,
+} from '../image-loader.js';
 import {artemisPngSurface} from '../png-surface.js';
 import {
   ArtemisRuntime,
@@ -113,6 +120,8 @@ export class ArtemisBrowserPlayer {
   private graphics: ArtemisImageGraphics | null = null;
   private target: WebGLDrawTarget | null = null;
   private readonly origin = performance.now();
+  private readonly processHost = new BrowserWindowsProcessHost();
+  private readonly systemProfile = new BrowserWindowsSystemProfileHost();
   private now = 1;
   private request = 0;
   private settling = false;
@@ -164,11 +173,12 @@ export class ArtemisBrowserPlayer {
     this.glyphs = new ArtemisRuntimeGlyphOwner(hash, this.glyphBlocks);
     // Layer images are RGBA texture sources: gray PNGs expand to RGBA here, so their
     // budget counts four bytes per pixel instead of the native one.
-    const images = new ArtemisImageLoader(read, [
+    const images = new ArtemisImageLoader<TriangleImage>(read, [
       {
         extensions: ['png', 'PNG'],
         decode: async (bytes) =>
           isPng(bytes) ? ((await decodeImageOffThread(bytes, 'png')) ?? decodePng(bytes)) : null,
+        surfaceFormat: (image) => artemisPngSurfaceFormat(image as DecodedPng),
       },
       {
         extensions: ['jpg', 'jpeg', 'JPG', 'JPEG'],
@@ -341,6 +351,10 @@ export class ArtemisBrowserPlayer {
       },
       // Touch input arrives as mouse input; there is no touch contact limit.
       setTouchLimit: () => {},
+      luaOs: {
+        system: (command) => this.processHost.system(command),
+        getenv: (name) => this.systemProfile.readEnvironmentVariable(name),
+      },
       // Native script error reports (c84b0, c7260, 0x14012d080 level 1): the game logs them
       // and continues. Engine refusals (unsupported behavior) still stop the game.
       reportIncludeError: (path, error) => {
@@ -352,6 +366,10 @@ export class ArtemisBrowserPlayer {
       reportLuaCallError: ({file, tag, message}) =>
         report(`${file}:${tag.sourceLine} ${new TextDecoder().decode(message)}`),
       reportUnknownTag: ({file, tag, message}) =>
+        report(
+          `${file}:${tag.sourceLine} ${tag.name}: ${new TextDecoder('shift_jis').decode(message)}`,
+        ),
+      reportTagError: ({file, tag, message}) =>
         report(
           `${file}:${tag.sourceLine} ${tag.name}: ${new TextDecoder('shift_jis').decode(message)}`,
         ),

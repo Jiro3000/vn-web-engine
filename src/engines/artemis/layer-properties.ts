@@ -32,6 +32,9 @@ export interface ArtemisLayerPropertyPatch {
   colormultiply?: number;
   clip?: ArtemisImageClip;
   intermediateRender?: {enabled: boolean; format?: 1 | 2};
+  /** Image path loaded through the stage surface cache (0x1400d76d0) for the node's mask
+   * setter 0x1400b29c0; the owner reads the resource. */
+  intermediateRenderMask?: string;
   /** 0x1400d76d0 atoi, forwarded by CArtemisLayer +0xe8 (0x1400b2e10) to the inner actors. */
   clickablethreshold?: number;
   /** 0x1400d76d0: exactly "0" clears, any other value sets; actor +0xf0 (0x1400a4970). */
@@ -59,6 +62,7 @@ const supported = new Set<string>([
   'colormultiply',
   'clip',
   'intermediate_render',
+  'intermediate_render_mask',
   'clickablethreshold',
   'draggable',
   'dragarea',
@@ -107,6 +111,8 @@ export function artemisLayerProperties(
       format: value === '1' ? 2 : value === '2' ? 1 : undefined,
     };
   }
+  if (args.has('intermediate_render_mask'))
+    patch.intermediateRenderMask = args.get('intermediate_render_mask')!;
   for (const key of numeric) {
     if (!args.has(key)) continue;
     const double = decimal(args.get(key)!);

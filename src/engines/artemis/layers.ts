@@ -65,6 +65,12 @@ export interface ArtemisLayerHost<
     patch: ArtemisShaderPropertyPatch,
     textures?: readonly {name: string; lease: ArtemisShaderTextureLease<object>}[],
   ): void;
+  /** lyprop `intermediate_render_mask`: the node mask setter 0x1400b29c0 with the image
+   * the stage surface cache returned (null when it failed). An empty group (`group`) keeps
+   * it for its intermediate capture; an image node forwards it to its inner actors, the
+   * current one and then the retained one (CLayer 0x1400a4490). Ownership of the resource
+   * lease transfers to the owner. */
+  applyLayerMask?(actors: readonly T[], group: boolean, mask: ArtemisLoadedImage<I> | null): void;
   /** lyprop outside replay: coalescing record (0x1400b9cd0) into the id's command list. */
   recordLayerProperties(tag: AsbTag): void;
   layerNotFound(tag: AsbTag): void;
@@ -256,8 +262,12 @@ export class ArtemisLayers<T extends object, I extends ArtemisImageDimensions = 
         throw Error('Unsupported Artemis shader property owner');
       if (shader?.textures?.length && !this.host.createShaderTexture)
         throw Error('Unsupported Artemis shader texture resource owner');
+      const maskPath = properties.intermediateRenderMask;
+      if (maskPath !== undefined && !this.host.applyLayerMask)
+        throw Error('Unsupported Artemis intermediate render mask owner');
       const textures: {name: string; lease: ArtemisShaderTextureLease<object>}[] = [];
-      const generation = shader ? ++this.generation : null;
+      let mask: ArtemisLoadedImage<I> | null = null;
+      const generation = shader || maskPath !== undefined ? ++this.generation : null;
       if (generation !== null) this.pending = generation;
       try {
         for (const entry of shader?.textures ?? []) {
@@ -274,6 +284,10 @@ export class ArtemisLayers<T extends object, I extends ArtemisImageDimensions = 
               throw error;
             }
           }
+          if (this.closed || generation !== this.generation) return true;
+        }
+        if (maskPath !== undefined) {
+          mask = await this.images.load(maskPath);
           if (this.closed || generation !== this.generation) return true;
         }
 
@@ -299,8 +313,18 @@ export class ArtemisLayers<T extends object, I extends ArtemisImageDimensions = 
             shader,
             shader.textures === undefined ? undefined : textures,
           );
+        if (maskPath !== undefined) {
+          const resource = mask;
+          mask = null;
+          this.host.applyLayerMask!(
+            this.scene.layer(id)!.actors(),
+            entry.acceptsChildren,
+            resource,
+          );
+        }
         if (recordHistory) this.host.recordLayerProperties(tag);
       } finally {
+        mask?.lease?.release();
         for (const entry of textures) entry.lease.release();
         if (generation !== null && this.pending === generation) this.pending = null;
         this.collect();

@@ -76,7 +76,9 @@ has a surface, `clip` and `dragarea` as MSVC `%.9g` float lists, `layermode` (no
 add 1, multiply 2, screen 4), raster flags, `colormultiply`, the shader name and
 `shaderconstant.*`, `clickablethreshold` and `draggable`. A CLayer's width is 0 without a
 surface, else the nonzero clip width, else the surface width (height alike). An unknown id
-writes nothing. Group, animation and text actors and the id-less enumeration are refused.
+writes nothing. An empty group (CLayerSet::CPropertyHolder) shares the CLayer getters and
+reads as a CLayer without a surface. Animation and text actors and the id-less enumeration
+are refused.
 `revision.ts` initializes the confirmed static boot variables only after exact
 executable-hash selection. Host Windows-version failure produces native 0.0;
 platform identity/capabilities are never invented.
@@ -345,8 +347,8 @@ extracting or rendering media. The probe runs `ArtemisRuntime` over nonvisual se
 (image metadata layers, actual glyph layout, surface decode, offline PCM voices, optional
 `--shader-presets` CPU shaders) until the first unsupported service. It uses a
 deterministic clock and in-memory save storage; it is not a production filesystem,
-clock or complete INI loader. The actual game
-`readScriptFile` load-only path validates AST loading; this is not story execution.
+clock or complete INI loader. With `--ast-check=NAME` the game's own
+`readScriptFile` load-only path loads the AST script NAME after the route.
 By default dialogs remain pending. `--dialog-result=0` or `--dialog-result=1`
 explicitly supplies a simulated outcome for a separate probe, recorded in its JSON.
 Probe cursor/scheduler effects are record-only and do not represent production effects.
@@ -709,7 +711,7 @@ the confirmed ordinary D3D11 policy for this exact revision's single-level image
 subset. Actors prepare their images before scene
 insertion; copies share texture ownership and outer-wrapper metadata while copying
 inner display state. The last actor releases its image binding. Groups, shaders and
-transitions are described in their own sections; mask images are unsupported.
+transitions are described in their own sections, layer masks in "Layer masks" below.
 
 `drawCommitted()` emits retained GPU images in ascending child order through the
 preparation path (`0x140186770`); higher numeric ids paint after lower ids. The
@@ -1015,6 +1017,11 @@ the final wrapper releases each GPU attachment once. Allocation failure leaves
 existing browser storage owned, reports the failure and permits a retry; the
 native flags0 fallback has no browser render-target implementation.
 
+With a node mask (see "Layer masks") the capture is sized exactly to the mask,
+starts at the group origin (no bounds offset) and is reallocated whenever either
+dimension differs. The output layer keeps left/top 0; a positive group clip is
+used as the output clip unchanged, otherwise the whole capture is drawn.
+
 Unchanged committed descendants reuse their captured surface. Preparation tracks
 actor identities, property changes, child keys, clips and nested capture configuration;
 a failed draw does not mark pending snapshots reusable. Parent geometry/alpha
@@ -1025,9 +1032,31 @@ empty auto bounds fit an existing allocation. The main presentation clear remain
 independent of this intermediate rule.
 
 The synthetic browser pipeline checks actual RGBA for both formats, nested targets,
-retention, effects, growth and empty captures. Mask loading,
-current-view capture buffers and full native dirty-flag accounting remain
-unsupported.
+retention, effects, growth and empty captures. Current-view capture buffers and
+full native dirty-flag accounting remain unsupported.
+
+## Layer masks
+
+`lyprop intermediate_render_mask` loads its file through the surface cache (the
+same cache as `lyc`) and passes the result, or null when the load fails or the
+name is empty, to the node mask setter `0x1400b29c0`:
+
+- Group (type 0): the node stores the mask and marks its display dirty. The group
+  capture uses it for sizing (above) and, on every capture draw, offers it to the
+  capture layer.
+- Image (type 1): the current inner actor, then the retained one, receive it
+  through the CLayer setter `0x1400a4490`. Video and other actors are refused.
+
+The CLayer setter always stores null. A non-null mask is stored only when the
+layer has a texture of surface format 1 or 2, the mask has format 0 and both
+have equal dimensions; otherwise the earlier mask stays. Changing the texture
+(`0x1400a43f0`) clears the mask. Surface formats come from the image loader:
+PNG grayscale is 0, every other PNG colour type 2. An unknown format is refused.
+
+A stored mask selects the masked shader variants: before the alpha multiplier and
+effects, foreground alpha is multiplied by the mask's red channel sampled at the
+foreground coordinates. Custom layer shaders receive no mask term. The
+transition-mask variant (CLayer `+0x150`) is not modeled.
 
 ## Merged PSD images
 
@@ -1060,6 +1089,9 @@ an opaque RGB JPEG owner using the shared `opaque-jpeg` worker service. The base
 `createArtemisImageLoader` still permits an injected JPEG decoder for other hosts.
 The native default CJpg file path (`0x140178e80` / `0x140179120`) has no alpha sidecar;
 its grayscale format0 and paired-alpha path remain unsupported by this browser owner.
+
+Each codec may report the native surface format of its image (`surfaceFormat`);
+the loader passes it through with the decoded resource for the mask rules above.
 
 The shared marker reader strips APP1/APP2 metadata before browser decoding, so
 EXIF orientation and ICC profiles do not change stored pixels/dimensions. It

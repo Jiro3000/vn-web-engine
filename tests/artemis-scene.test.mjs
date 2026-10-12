@@ -626,6 +626,7 @@ async function rasterFixture(
   rasterPolicy = {filter: 'nearest', blend: straightBlend},
   surfaces = false,
   clock = undefined,
+  files = {},
 ) {
   const {ArtemisImageGraphics} = await import('../dist/engines/artemis/image-graphics.js');
   const {ArtemisLayers} = await import('../dist/engines/artemis/layers.js');
@@ -680,7 +681,9 @@ async function rasterFixture(
   );
   const layers = new ArtemisLayers(
     revision,
-    createArtemisImageLoader(revision, async (path) => (path === 'synthetic.png' ? image : null)),
+    createArtemisImageLoader(revision, async (path) =>
+      path === 'synthetic.png' ? image : (files[path] ?? null),
+    ),
     graphics,
   );
   return {
@@ -2168,6 +2171,114 @@ test('Artemis nested intermediate groups restore targets and snapshot each forma
     assert.equal(copies[0].source, copies[2].source);
     assert.equal(list.commands.at(-2).surface, null);
     assert.equal(graphics.drawCommitted(layers.scene).commands.length, 1);
+  } finally {
+    layers.close();
+  }
+});
+
+async function maskFixture() {
+  const {png} = await import('./png-fixtures.mjs');
+  const {createArtemisOrdinaryGpuRaster} = await import('../dist/engines/artemis/gpu-raster.js');
+  const gray = (width, height) =>
+    png({
+      width,
+      height,
+      type: 0,
+      raw: Buffer.concat(
+        Array.from({length: height}, () => Buffer.from([0, ...Array(width).fill(200)])),
+      ),
+    });
+  return rasterFixture(createArtemisOrdinaryGpuRaster(revision), true, undefined, {
+    'gray4x3.png': gray(4, 3),
+    'gray2x1.png': gray(2, 1),
+    'rgba4x3.png': png({
+      width: 4,
+      height: 3,
+      raw: Buffer.concat(Array.from({length: 3}, () => Buffer.from([0, ...Array(16).fill(200)]))),
+    }),
+  });
+}
+
+test('Artemis intermediate_render_mask sizes a group capture to the mask and applies only a gray mask', async () => {
+  const {layers, graphics, prepared, invalidated} = await maskFixture();
+  try {
+    await layers.dispatch(command('lyc', {id: 'group.1', file: 'synthetic.png'}));
+    await layers.dispatch(command('lyprop', {id: 'group.1', left: '1', top: '1'}));
+    await layers.dispatch(
+      command('lyprop', {
+        id: 'group',
+        left: '1',
+        intermediate_render: '1',
+        intermediate_render_mask: 'rgba4x3.png',
+      }),
+    );
+    layers.commit();
+    let list = graphics.drawCommitted(layers.scene);
+    // The capture is the mask's size and keeps the group origin: the child at 1,1 of a
+    // 4x3 target. A format 2 mask never reaches the capture layer (0x1400a4490).
+    const capture = list.commands.find((x) => x.kind === 'gpu-target' && x.surface);
+    assert.deepEqual([capture.surface.width, capture.surface.height], [4, 3]);
+    let draws = list.commands.filter((x) => x.kind === 'triangles');
+    assert.deepEqual(
+      [...draws[0].vertices.slice(0, 2)].map((x) => +x.toFixed(6)),
+      [-0.5, 0.333333],
+    );
+    assert.deepEqual([...draws[1].vertices.slice(0, 2)], [-0.5, 1]);
+    assert.equal(draws[1].additionalTextures, undefined);
+    assert.equal(draws[1].fragment, undefined);
+
+    const before = prepared.length;
+    await layers.dispatch(
+      command('lyprop', {id: 'group', intermediate_render_mask: 'gray4x3.png'}),
+    );
+    layers.commit();
+    list = graphics.drawCommitted(layers.scene);
+    draws = list.commands.filter((x) => x.kind === 'triangles');
+    assert.equal(prepared.length, before + 1); // The mask texture; the capture is reused.
+    const masked = draws.at(-1);
+    assert.equal(masked.additionalTextures.length, 1);
+    assert.deepEqual([...masked.additionalTextures[0].uv], [0, 0, 1, 0, 0, 1, 1, 1]);
+    assert.match(masked.fragment, /sampleColor\.a\*=texture\(additionalAtlas0,additionalUV0\)\.r/);
+
+    // A failed load stores a null mask and releases the mask texture. Without a mask the
+    // larger storage is kept (it is reallocated only when too small).
+    const released = invalidated.length,
+      uploads = prepared.length;
+    await layers.dispatch(command('lyprop', {id: 'group', intermediate_render_mask: 'none.png'}));
+    layers.commit();
+    list = graphics.drawCommitted(layers.scene);
+    draws = list.commands.filter((x) => x.kind === 'triangles');
+    assert.equal(invalidated.length, released + 1);
+    assert.equal(prepared.length, uploads);
+    assert.equal(draws.at(-1).additionalTextures, undefined);
+  } finally {
+    layers.close();
+  }
+});
+
+test('Artemis image layers keep a gray mask of their own size on both inner actors', async () => {
+  const {layers, graphics} = await maskFixture();
+  try {
+    await layers.dispatch(command('lyc', {id: 'a', file: 'synthetic.png'}));
+    await layers.dispatch(command('lyc', {id: 'b', file: 'gray2x1.png'}));
+    layers.commit();
+    // The retained actor (drawn before commit) receives the mask too.
+    await layers.dispatch(command('lyprop', {id: 'a', intermediate_render_mask: 'gray2x1.png'}));
+    await layers.dispatch(command('lyprop', {id: 'b', intermediate_render_mask: 'gray2x1.png'}));
+    let draws = graphics.drawCommitted(layers.scene).commands;
+    assert.equal(draws[0].additionalTextures.length, 1);
+    assert.deepEqual([...draws[0].additionalTextures[0].uv], [0, 0, 1, 0, 0, 1, 1, 1]);
+    assert.equal(draws[1].additionalTextures, undefined); // A format 0 image keeps none.
+    layers.commit();
+    // A mask of another size is dropped and the earlier one stays.
+    await layers.dispatch(command('lyprop', {id: 'a', intermediate_render_mask: 'gray4x3.png'}));
+    layers.commit();
+    draws = graphics.drawCommitted(layers.scene).commands;
+    assert.equal(draws[0].additionalTextures.length, 1);
+    await layers.dispatch(command('lyprop', {id: 'a', intermediate_render_mask: ''}));
+    layers.commit();
+    draws = graphics.drawCommitted(layers.scene).commands;
+    assert.equal(draws[0].additionalTextures, undefined);
   } finally {
     layers.close();
   }
@@ -5064,4 +5175,25 @@ test('Artemis text layers give browser text their characters, stage placement an
   await owner.layers.dispatch(command('lyprop', {id: '1', visible: '0'}));
   owner.layers.commit();
   assert.deepEqual(graphics.textLayers(owner.layers.scene), []);
+});
+
+test('get_layer_info reads an empty group as a CLayer without a surface', async () => {
+  const {artemisLayerInfoFields} = await import('../dist/engines/artemis/layer-info.js');
+  const owner = await browserLayerOwner();
+  await owner.layers.dispatch(command('lyc', {id: '1.g.a', file: 'a.png'}));
+  await owner.layers.dispatch(
+    command('lyprop', {id: '1.g', left: '7', anchorx: '5', alpha: '128'}),
+  );
+  const info = owner.layerInfo('1.g');
+  assert.equal(info.surface, null);
+  assert.deepEqual([info.width, info.height], [0, 0]);
+  const fields = new Map(artemisLayerInfoFields(info));
+  assert.deepEqual(
+    ['left', 'width', 'height', 'alpha', 'anchorx', 'surfacewidth', 'clip', 'layermode'].map(
+      (key) => fields.get(key),
+    ),
+    ['7', '0', '0', '128', '5', undefined, '0,0,0,0', '0'],
+  );
+  // The image child keeps its surface.
+  assert.notEqual(owner.layerInfo('1.g.a').surface, null);
 });

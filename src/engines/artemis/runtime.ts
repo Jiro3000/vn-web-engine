@@ -1,5 +1,7 @@
+import type {ArtemisLuaOsHost} from './lua-os.js';
 import type {ArtemisLayerInfo} from './layer-info.js';
 import type {AsbTag} from '../../formats/artemis/asb.js';
+import {artemisTagErrorMessages} from './native-tags.js';
 import {
   ArtemisSaveArchiveReader,
   ArtemisSaveArchiveWriter,
@@ -259,9 +261,14 @@ export interface ArtemisRuntimeServices {
   readonly touch?: {count(): number; setHold(enabled: boolean): void};
   /** Native include errors (0x14012d080 level 1); without it they fault. */
   readonly reportIncludeError?: (path: string, error: unknown) => void;
+  /** The platform behind the Lua `os` library (CRT `system`/`getenv`). */
+  readonly luaOs?: ArtemisLuaOsHost;
   /** Native callLua and unknown-tag reports (c84b0/c7260); without them they fault. */
   readonly reportLuaCallError?: ArtemisScriptReport<'reportLuaCallError'>;
   readonly reportUnknownTag?: ArtemisScriptReport<'reportUnknownTag'>;
+  /** Tag owner reports (c7260 severity 1: sound and music load, fullscreen video playback,
+   * file copy); the tag returns normally. Without it they fault. */
+  readonly reportTagError?: ArtemisScriptReport<'reportUnknownTag'>;
   /** Engine method error reports (0x14012d490), Shift_JIS. */
   readonly reportError: (message: Uint8Array) => void;
   /** Diagnostic stream: tags, includes and owner effects. */
@@ -436,6 +443,16 @@ export class ArtemisRuntime {
       this.pendingResource = operation;
     };
     let lua: ArtemisLua, script: ArtemisScript;
+    // c7260(script, 1, tag, message): the owner reports and the tag returns normally.
+    const reportTagError = (tag: AsbTag, message: Uint8Array, strict: string) => {
+      if (!services.reportTagError) throw Error(strict);
+      services.reportTagError({
+        file: script.currentFile,
+        tag,
+        message: message.slice(),
+        severity: 1,
+      });
+    };
     let messageStage: ArtemisMessageLayers<ArtemisMessageResource>;
     const windowDisplay = () => ({width, height, fullscreen: false});
     const variables = (this.variables = new ArtemisVariables({
@@ -523,18 +540,16 @@ export class ArtemisRuntime {
       setEffectIndex: (id, index) => effectSlots.set(id, index),
       effectGainVariable: (id) => artemisEffectGainVariable(variables, id),
       replaceEffectHistory: (id, tag) => saveData.replaceEffect(id, tag),
-      effectLoadFailed: () => {
-        throw Error('Artemis sound load failed');
-      },
+      effectLoadFailed: (tag) =>
+        reportTagError(tag, artemisTagErrorMessages.soundNotLoaded, 'Artemis sound load failed'),
     });
     this.closers.push(() => sePlay.close());
     // BGM manager script +0x3d60.
     const music = new ArtemisMusic(hash, {
       debugSkipActive: () => false,
       ...sound,
-      musicLoadFailed: () => {
-        throw Error('Artemis music load failed');
-      },
+      musicLoadFailed: (tag) =>
+        reportTagError(tag, artemisTagErrorMessages.soundNotLoaded, 'Artemis music load failed'),
     });
     const exec = new ArtemisExec(modes, {
       window: services.window,
@@ -694,9 +709,12 @@ export class ArtemisRuntime {
       debugSkipActive: () => false,
       videoVolume: () => artemisInteger(new TextDecoder().decode(variables.read('s.videovol'))),
       player: services.moviePlayer,
-      playbackFailed: (tag) => {
-        throw Error('Artemis fullscreen video failed: ' + tag.args.get('file'));
-      },
+      playbackFailed: (tag) =>
+        reportTagError(
+          tag,
+          artemisTagErrorMessages.playbackFailed,
+          'Artemis fullscreen video failed: ' + tag.args.get('file'),
+        ),
       enterVideoMode: () => {
         if (this.mode === 13) return;
         script.enterRunMode(7);
@@ -966,12 +984,18 @@ export class ArtemisRuntime {
       removeFile: (path) => this.removeSaveFile(path),
       // Mounted archives never change while the runtime runs, so there is nothing to reread.
       clearArchiveCache: () => {},
-      sourceNotFound: (tag) => {
-        throw Error(`Artemis file copy source not found: ${tag.args.get('src') ?? ''}`);
-      },
-      destinationNotCreated: (tag) => {
-        throw Error(`Artemis file copy cannot create ${tag.args.get('dst') ?? ''}`);
-      },
+      sourceNotFound: (tag) =>
+        reportTagError(
+          tag,
+          artemisTagErrorMessages.fileNotFound,
+          `Artemis file copy source not found: ${tag.args.get('src') ?? ''}`,
+        ),
+      destinationNotCreated: (tag) =>
+        reportTagError(
+          tag,
+          artemisTagErrorMessages.fileNotCreated,
+          `Artemis file copy cannot create ${tag.args.get('dst') ?? ''}`,
+        ),
     });
     // Reset and load are built after the Lua runtime that this dispatcher feeds.
     let dispatchTag: ReturnType<typeof createArtemisTagDispatch> | undefined;
@@ -1035,6 +1059,7 @@ export class ArtemisRuntime {
       isLoadingSurface: (name) => surfaces.isLoadingSurface(name),
       suspendableTags: true,
       ...(services.reportIncludeError ? {reportIncludeError: services.reportIncludeError} : {}),
+      ...(services.luaOs ? {os: services.luaOs} : {}),
       readPlainFile: (path) => {
         services.trace?.include?.(path);
         return plainFiles.get(path.replaceAll('\\', '/')) ?? null;

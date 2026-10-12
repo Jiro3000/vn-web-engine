@@ -4,7 +4,7 @@
  * or claims production rendering.
  */
 import {createHash} from 'node:crypto';
-import {ArtemisImageLoader} from '../dist/engines/artemis/image-loader.js';
+import {ArtemisImageLoader, artemisPngSurfaceFormat} from '../dist/engines/artemis/image-loader.js';
 import {ArtemisLayerOwner} from '../dist/engines/artemis/layer-owner.js';
 import {ArtemisDisplayObject} from '../dist/engines/artemis/display-object.js';
 import {ArtemisShaderProperties} from '../dist/engines/artemis/shader-properties.js';
@@ -17,8 +17,11 @@ import {artemisPngSurface} from '../dist/engines/artemis/png-surface.js';
 /** `runMode` supplies the probe's run mode/wait owner for trans and sync tweens, `emit`
  * for tween completion events and `stageSize` for rule transitions; an absent owner
  * refuses them. */
-export function createMetadataLayerFixture(hash, readFile, runMode = null) {
+// `reportFailures`: missing images and layers are recorded like the native script error
+// reports (the game continues) instead of stopping the probe.
+export function createMetadataLayerFixture(hash, readFile, runMode = null, reportFailures = false) {
   artemisRevision(hash);
+  const failures = [];
   const loads = [],
     effects = [],
     actors = new Set(),
@@ -40,8 +43,9 @@ export function createMetadataLayerFixture(hash, readFile, runMode = null) {
         const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
         if (view.getUint32(8) !== 13 || view.getUint32(12) !== 0x49484452)
           throw Error('Invalid probe PNG IHDR');
-        return dimensions(view.getUint32(16), view.getUint32(20));
+        return {...dimensions(view.getUint32(16), view.getUint32(20)), colorType: bytes[25]};
       },
+      surfaceFormat: (image) => artemisPngSurfaceFormat(image),
     },
     {
       extensions: ['jpg', 'jpeg', 'JPG', 'JPEG'],
@@ -85,12 +89,52 @@ export function createMetadataLayerFixture(hash, readFile, runMode = null) {
         path: resource.path,
         width: resource.image.width,
         height: resource.image.height,
+        format: resource.surfaceFormat,
         display,
         wrapper: {alpha: 1},
         properties: {},
       };
       actors.add(actor);
       return actor;
+    },
+    // Node mask setter 0x1400b29c0: an empty group keeps the mask on its node (shared by
+    // holder copies); an image forwards it to its inner actors, which keep only a format 0
+    // mask of their own dimensions on a format 1 or 2 image (0x1400a4490).
+    applyLayerMask(list, group, resource) {
+      for (const actor of list) if (!actors.has(actor)) throw Error('Probe actor released');
+      const mask = resource && {
+        width: resource.image.width,
+        height: resource.image.height,
+        format: resource.surfaceFormat ?? null,
+      };
+      let accepted = 0;
+      if (group) {
+        list[0].wrapper.mask = mask;
+        accepted = 1;
+      } else
+        for (const actor of list) {
+          if (actor.kind !== 'image') throw Error('Unsupported Artemis layer mask actor');
+          if (mask) {
+            if (actor.format === undefined)
+              throw Error('Unsupported Artemis layer mask target surface format');
+            if (actor.format !== 1 && actor.format !== 2) continue;
+            if (mask.format === null) throw Error('Unsupported Artemis layer mask surface format');
+            if (mask.format !== 0 || mask.width !== actor.width || mask.height !== actor.height)
+              continue;
+          }
+          actor.mask = mask;
+          accepted++;
+        }
+      effects.push({
+        kind: 'layerMask',
+        group,
+        actors: list.length,
+        accepted,
+        width: mask?.width ?? null,
+        height: mask?.height ?? null,
+        format: mask?.format ?? null,
+        simulation: true,
+      });
     },
     createGroupLayer() {
       const actor = {
@@ -229,10 +273,12 @@ export function createMetadataLayerFixture(hash, readFile, runMode = null) {
       registry.recordLayerProperties(tag);
     },
     imageLoadFailed: (tag) => {
-      throw Error('Probe image metadata missing: ' + tag.args.get('file'));
+      if (!reportFailures) throw Error('Probe image metadata missing: ' + tag.args.get('file'));
+      failures.push({kind: 'image', tag: tag.name, file: tag.args.get('file') ?? null});
     },
     layerNotFound: (tag) => {
-      throw Error('Probe layer missing: ' + tag.args.get('id'));
+      if (!reportFailures) throw Error('Probe layer missing: ' + tag.args.get('id'));
+      failures.push({kind: 'layer', tag: tag.name, id: tag.args.get('id') ?? null});
     },
   });
   // Rule images use the stage loader; only PNG has a decoded native surface here.
@@ -309,13 +355,13 @@ export function createMetadataLayerFixture(hash, readFile, runMode = null) {
       tweenFrames++;
     },
     videoOf: (actor) => actor.video,
-    // CLayer getters over the recorded properties; groups, animation and message actors
-    // read other native getters.
+    // CLayer getters over the recorded properties; an empty group reads as a CLayer
+    // without a surface. Animation and message actors read other native getters.
     layerInfo(actor) {
-      if (actor.kind !== 'image' && actor.kind !== 'video')
+      if (actor.kind !== 'image' && actor.kind !== 'video' && actor.kind !== 'group')
         throw Error('Unsupported Artemis layer info actor');
       const props = actor.properties,
-        surface = {width: actor.width, height: actor.height};
+        surface = actor.kind === 'group' ? null : {width: actor.width, height: actor.height};
       const clip = props.clip ?? {left: 0, top: 0, width: 0, height: 0, right: 0, bottom: 0};
       return {
         display: actor.display,
@@ -390,6 +436,7 @@ export function createMetadataLayerFixture(hash, readFile, runMode = null) {
         width: entry.value?.width ?? null,
         height: entry.value?.height ?? null,
         properties: entry.value?.display.properties ?? null,
+        mask: entry.value?.mask ?? entry.value?.wrapper.mask ?? null,
         // Frame map keys with frame paths; null marks the cycle end.
         animation: entry.value?.animation
           ? {
@@ -428,6 +475,7 @@ export function createMetadataLayerFixture(hash, readFile, runMode = null) {
         id,
         commands: tags.map((tag) => Object.fromEntries(tag.args)),
       })),
+      failures,
     }),
     close: () => owner.close(),
   };

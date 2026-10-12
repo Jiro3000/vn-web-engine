@@ -1,5 +1,5 @@
 import type {TriangleImage} from '../../graphics/triangle-draw.js';
-import {decodePng} from '../../formats/png/decode.js';
+import {decodePng, type DecodedPng} from '../../formats/png/decode.js';
 import {decodeArtemisPsd} from '../../formats/artemis/psd.js';
 import {decodeImageOffThread} from '../../graphics/image-decode-offload.js';
 import {decodeOpaqueJpeg} from '../../graphics/browser-jpeg.js';
@@ -15,12 +15,21 @@ export interface ArtemisImageCodec<I extends ArtemisImageDimensions = TriangleIm
   readonly extensions: readonly string[];
   /** Null is native decode failure; exceptions represent unsupported/host failures. */
   decode(bytes: Uint8Array): Promise<I | null>;
+  /** The native image format of a decoded image, when this codec determines it. */
+  surfaceFormat?(image: I): 0 | 1 | 2 | undefined;
+}
+
+/** CPng 0x1401838e0: colour type 0 (gray) creates a format 0 image, every other colour
+ * type format 2. */
+export function artemisPngSurfaceFormat(image: {readonly colorType?: number}): 0 | 2 | undefined {
+  return image.colorType === undefined ? undefined : image.colorType === 0 ? 0 : 2;
 }
 export interface ArtemisLoadedImage<I extends ArtemisImageDimensions = TriangleImage> {
   readonly path: string;
   readonly image: I;
-  /** Present when the resource path explicitly determines a native surface format. */
-  readonly surfaceFormat?: 1 | 2;
+  /** Native image format (virtual +0x20) when the decoder determines it: 0 is the one-byte
+   * gray format, 2 the four-byte format, 1 the solid RGB fill. */
+  readonly surfaceFormat?: 0 | 1 | 2;
   /** One native surface-manager loan; transfer to a successful outer layer wrapper. */
   readonly lease?: {release(): void};
 }
@@ -39,7 +48,18 @@ export class ArtemisImageLoader<I extends ArtemisImageDimensions = TriangleImage
     this.codecs = codecs.map((codec) => ({
       extensions: [...codec.extensions],
       decode: (bytes) => codec.decode(bytes),
+      surfaceFormat: codec.surfaceFormat && ((image) => codec.surfaceFormat!(image)),
     }));
+  }
+  private async decode(
+    codec: ArtemisImageCodec<I>,
+    path: string,
+    bytes: Uint8Array,
+  ): Promise<ArtemisLoadedImage<I> | null> {
+    const image = await codec.decode(bytes);
+    if (image === null) return null;
+    const surfaceFormat = codec.surfaceFormat?.(image);
+    return surfaceFormat === undefined ? {path, image} : {path, image, surfaceFormat};
   }
   async load(name: string): Promise<ArtemisLoadedImage<I> | null> {
     if (name.includes('\0')) throw new Error('Unsupported Artemis image path containing NUL');
@@ -52,12 +72,12 @@ export class ArtemisImageLoader<I extends ArtemisImageDimensions = TriangleImage
       if (extension)
         for (const codec of this.codecs)
           if (codec.extensions.includes(extension)) {
-            const image = await codec.decode(exact);
-            if (image !== null) return {path: name, image};
+            const resource = await this.decode(codec, name, exact);
+            if (resource !== null) return resource;
           }
       for (const codec of this.codecs) {
-        const image = await codec.decode(exact);
-        if (image !== null) return {path: name, image};
+        const resource = await this.decode(codec, name, exact);
+        if (resource !== null) return resource;
       }
     }
     for (const codec of this.codecs)
@@ -65,8 +85,8 @@ export class ArtemisImageLoader<I extends ArtemisImageDimensions = TriangleImage
         const path = `${name}.${extension}`;
         const bytes = await this.readFile(path);
         if (bytes === null) continue;
-        const image = await codec.decode(bytes);
-        if (image !== null) return {path, image};
+        const resource = await this.decode(codec, path, bytes);
+        if (resource !== null) return resource;
       }
     return null;
   }
@@ -95,6 +115,7 @@ export function createArtemisImageLoader(
           return null;
         return (await decodeImageOffThread(bytes, 'png')) ?? decodePng(bytes);
       },
+      surfaceFormat: (image) => artemisPngSurfaceFormat(image as DecodedPng),
     },
     {extensions: ['jpg', 'jpeg', 'JPG', 'JPEG'], decode: decoders.jpeg ?? absent('JPEG')},
     {

@@ -17,11 +17,13 @@ import {createArtemisOfflineSoundFixture} from './artemis-offline-sound-fixture.
 import {createMetadataLayerFixture} from './artemis-metadata-layer-fixture.mjs';
 import {openArtemisInstallation} from './artemis-installation.mjs';
 import {BrowserWindowsSystemProfileHost} from '../dist/platform/browser-windows-system-profile.js';
+import {BrowserWindowsProcessHost} from '../dist/platform/browser-windows-process.js';
 import {BrowserWindowsDynamicLibraryHost} from '../dist/platform/windows-dynamic-library.js';
 import {packArtemisSaveFile} from '../dist/formats/artemis/save-file.js';
 import {readAsfHeader} from '../dist/formats/asf/header.js';
 import {ArtemisRuntime} from '../dist/engines/artemis/runtime.js';
 import {artemisInteger} from '../dist/engines/artemis/numbers.js';
+import {artemisRevision} from '../dist/engines/artemis/revision.js';
 import {luaText} from '../dist/core/lua51/runtime.js';
 if (!process.argv[2]) throw new Error('Usage: node tools/probe-artemis.mjs GAME_DIRECTORY');
 const dialogResultArgument = process.argv
@@ -34,6 +36,9 @@ if (simulatedDialogResult !== null && ![0, 1].includes(simulatedDialogResult))
   throw new Error('Probe dialog result must be 0 or 1');
 const advanceWaits = process.argv.slice(3).includes('--advance-waits');
 const nativeIncludeReporting = process.argv.slice(3).includes('--native-include-reporting');
+// --native-load-reporting: missing images and layers are recorded (metadataLayerFixture
+// failures) like the native script error reports, and the game continues.
+const nativeLoadReporting = process.argv.slice(3).includes('--native-load-reporting');
 const nativeCallLuaReporting = process.argv.slice(3).includes('--native-calllua-reporting');
 // SIMULATED --screenshots: takess is recorded and savess reads zero-filled RGBA rows; no
 // scene is rendered.
@@ -104,6 +109,24 @@ let autoChoices = autoChoicesArgument
   : 0;
 const autoChoiceLog = [];
 const shaderPresets = process.argv.slice(3).includes('--shader-presets');
+// --windows-version=MAJOR.MINOR: the SIMULATED Windows version (the browser page reports
+// 10.0); absent, the query fails like the browser system profile.
+const windowsVersionArgument = process.argv
+  .slice(3)
+  .findLast((arg) => arg.startsWith('--windows-version='))
+  ?.slice('--windows-version='.length);
+const simulatedWindowsVersion =
+  windowsVersionArgument === undefined
+    ? null
+    : (() => {
+        const match = /^(\d+)\.(\d+)$/.exec(windowsVersionArgument);
+        if (!match) throw new Error('Probe Windows version must be MAJOR.MINOR');
+        return {major: Number(match[1]), minor: Number(match[2])};
+      })();
+const astCheck = process.argv
+  .slice(3)
+  .findLast((arg) => arg.startsWith('--ast-check='))
+  ?.slice('--ast-check='.length);
 const graphicsFeatureArgument = process.argv
   .slice(3)
   .find((value) => value.startsWith('--graphics-feature-level='));
@@ -175,15 +198,27 @@ try {
     luaIncludeErrors = [],
     luaCallErrors = [],
     unknownTagReports = [],
+    tagErrorReports = [],
     modeEffects = [],
     dialogs = [];
-  const executablePaths = [...installation.paths].filter(
-    (path) => /\.exe$/i.test(path) && !path.includes('/'),
-  );
-  if (executablePaths.length !== 1) throw new Error('Probe requires exactly one root executable');
-  const executable = await installation.files.read(executablePaths[0]);
-  if (executable === null) throw new Error('Missing Artemis executable');
-  const executableSha256 = createHash('sha256').update(executable).digest('hex');
+  // Like the browser player: the root executable whose hash names a supported revision
+  // (installations also ship updaters and other executables).
+  const executableHashes = [];
+  for (const path of installation.paths) {
+    if (!/\.exe$/i.test(path) || path.includes('/')) continue;
+    const executable = await installation.files.read(path);
+    if (executable === null) throw new Error('Missing Artemis executable');
+    const hash = createHash('sha256').update(executable).digest('hex');
+    try {
+      artemisRevision(hash);
+      executableHashes.push(hash);
+    } catch {
+      // Not an Artemis executable of a supported revision.
+    }
+  }
+  if (executableHashes.length !== 1)
+    throw new Error('Probe requires exactly one supported root executable');
+  const [executableSha256] = executableHashes;
   // Save directory paths read the probe's save storage, like the browser player.
   const read = (path) => runtime?.readSaveDirectoryFile(path) ?? installation.files.read(path);
   glyphFixture = createArtemisGlyphLayoutFixture(executableSha256, read);
@@ -191,6 +226,7 @@ try {
   soundFixture = createArtemisOfflineSoundFixture(executableSha256, read);
   if (shaderPresets) shaderFixture = createArtemisShaderFixture(executableSha256, read);
   const systemProfile = new BrowserWindowsSystemProfileHost();
+  const processHost = new BrowserWindowsProcessHost();
   // SIMULATED device: a fullscreen movie plays for its ASF header duration in probe ticks;
   // no media is decoded or shown. No input arrives while it plays.
   const moviePlayer = {
@@ -234,7 +270,12 @@ try {
     // SIMULATED seed: a fixed Unix time keeps probe runs deterministic.
     randomSeed: 1733961600,
     createLayers: (host) =>
-      (layerFixture = createMetadataLayerFixture(executableSha256, read, host)),
+      (layerFixture = createMetadataLayerFixture(
+        executableSha256,
+        read,
+        host,
+        nativeLoadReporting,
+      )),
     glyphs: glyphFixture,
     surfaces: surfaceFixture.manager,
     sound: soundFixture,
@@ -281,7 +322,12 @@ try {
     },
     pointer: {readPointerPosition: () => ({x: 0, y: 0})},
     dynamicLibraries: new BrowserWindowsDynamicLibraryHost(),
-    windowsVersion: () => systemProfile.readVersion(),
+    windowsVersion: () => simulatedWindowsVersion ?? systemProfile.readVersion(),
+    // The browser platform: no command interpreter, no process environment.
+    luaOs: {
+      system: (command) => processHost.system(command),
+      getenv: (name) => systemProfile.readEnvironmentVariable(name),
+    },
     ...(simulatedGraphicsFeatureLevel === null
       ? {}
       : {graphicsFeatureLevel: () => simulatedGraphicsFeatureLevel}),
@@ -307,6 +353,15 @@ try {
               sourceLine: tag.sourceLine,
               function: tag.args.get('function'),
               message: new TextDecoder().decode(message),
+              severity,
+            }),
+          // Tag owner reports (c7260 severity 1); the tag returns normally.
+          reportTagError: ({file, tag, message, severity}) =>
+            tagErrorReports.push({
+              file,
+              sourceLine: tag.sourceLine,
+              name: tag.name,
+              message: new TextDecoder('shift_jis').decode(message),
               severity,
             }),
           // c5800 unknown command/macro report (c7260 severity 1); the tag returns normally.
@@ -540,6 +595,13 @@ try {
           if (count >= 100000) throw Error('Probe click-wait display did not finish');
           frame();
           wait.tick(runtime.now);
+          if (!wait.clickPending) break;
+        }
+        // A frame event (for example a sound finish handler) took the caret: its handler runs
+        // first and the click-wait returns with the caret.
+        if (!wait.clickPending) {
+          script.run(1000);
+          continue;
         }
         if (saveLoadAt !== null && deliveredClicks === saveLoadAt && !saveLoadReport) {
           // The loaded caret resumes at the tag after the click-wait instead of a click.
@@ -551,7 +613,17 @@ try {
         probeClicks--;
         runtime.now = (runtime.now + 16) >>> 0 || 1;
         modeEffects.push({click: true, simulation: true});
-        if (!wait.tick(runtime.now, true)) throw Error('Probe click did not end the click-wait');
+        if (!wait.tick(runtime.now, true))
+          throw Error(
+            'Probe click did not end the click-wait: ' +
+              JSON.stringify({
+                runMode: runtime.runMode,
+                pending: wait.pending,
+                click: wait.clickPending,
+                display: runtime.textDisplayComplete,
+                skipping: runtime.skipping,
+              }),
+          );
         script.run(1000);
         continue;
       }
@@ -607,17 +679,20 @@ try {
   } catch (error) {
     refusal = refusal ? `${refusal}; preload: ${error.message}` : error.message;
   }
-  // Exercise the game's actual AST loader independently after the boot boundary.
-  // flag=true is its existing load-only path, avoiding image-cache deletion.
-  const loader = lua.vm.referenceGlobal('readScriptFile');
-  let astLoadedByGame;
-  try {
-    astLoadedByGame = loader.invoke([new TextEncoder().encode('flow_start'), true])[0];
-  } finally {
-    loader.release();
+  // --ast-check=NAME: exercise the game's own AST loader (Lua `readScriptFile`) on NAME
+  // after the route. flag=true is its load-only path, avoiding image-cache deletion.
+  let astLoadedByGame = null,
+    ast = null;
+  if (astCheck !== undefined) {
+    const loader = lua.vm.referenceGlobal('readScriptFile');
+    try {
+      astLoadedByGame = loader.invoke([new TextEncoder().encode(astCheck), true])[0];
+    } finally {
+      loader.release();
+    }
+    if (astLoadedByGame !== true) throw new Error('Game AST loader did not confirm the source');
+    ast = lua.vm.getGlobal('ast');
   }
-  if (astLoadedByGame !== true) throw new Error('Game AST loader did not confirm the source');
-  const ast = lua.vm.getGlobal('ast');
   if (saveDir !== undefined)
     for (const [name, bytes] of saveFiles) writeFileSync(`${saveDir}/${name}`, bytes);
   console.log(
@@ -633,6 +708,7 @@ try {
       ),
       dialogPending: runtime.dialog.pending,
       simulatedDialogResult,
+      simulatedWindowsVersion,
       graphicsFeatureLevel:
         simulatedGraphicsFeatureLevel === null
           ? null
@@ -663,6 +739,7 @@ try {
       nativeCallLuaReporting,
       luaCallErrors,
       unknownTagReports,
+      tagErrorReports,
       luaVersion: luaText(lua.vm.getGlobal('_VERSION')),
       state: script.state,
       refusal,
@@ -676,7 +753,7 @@ try {
       shaderFixture: shaderFixture?.summary(),
       astLoadedByGame,
       astVersion: lua.vm.getGlobal('astver'),
-      astTopLevelKeys: ast.size,
+      astTopLevelKeys: ast?.size ?? null,
     }),
   );
 } finally {

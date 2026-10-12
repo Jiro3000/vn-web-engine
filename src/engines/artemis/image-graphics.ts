@@ -176,6 +176,17 @@ function isAnimation(actor: ArtemisDisplayActor): actor is ArtemisAnimationActor
 function isText(actor: ArtemisDisplayActor): actor is ArtemisTextActor {
   return 'text' in actor;
 }
+/** The masked variant of a raster fragment: foreground alpha times the red channel of the
+ * mask (additional texture `index`) before the fragment's own shading. */
+export function artemisMaskedFragment(fragment: string | undefined, index: number): string {
+  const base = fragment ?? 'vec4 shade(vec4 sampleColor,vec4 tint){return sampleColor*tint;}';
+  if (base.split('vec4 shade(').length !== 2)
+    throw new Error('Unsupported Artemis masked raster fragment');
+  return (
+    base.replace('vec4 shade(', 'vec4 unmaskedShade(') +
+    `vec4 shade(vec4 sampleColor,vec4 tint){sampleColor.a*=texture(additionalAtlas${index},additionalUV${index}).r;return unmaskedShade(sampleColor,tint);}`
+  );
+}
 /** `outer` after `inner` for row-major 2x3 matrices. */
 function compose(outer: Float32Array, inner: Float32Array): Float32Array {
   const [a, b, c, d, e, g] = outer as unknown as number[];
@@ -208,6 +219,8 @@ interface Texture {
   readonly image: TriangleImage;
   references: number;
   readonly managed: boolean;
+  /** Native image format (virtual +0x20) when the loader determined it. */
+  readonly format?: 0 | 1 | 2;
   /** Video actor decoder; `uploaded` is the decoder revision held by the GPU texture. */
   readonly video?: {readonly decoder: ArtemisTheoraVideo; uploaded: number; updated: boolean};
 }
@@ -221,15 +234,28 @@ interface CaptureTexture {
   readonly id: number;
   readonly image: GpuRenderSurface;
 }
+/** An `intermediate_render_mask` image: a hidden image actor holding the surface-cache
+ * loan and texture, shared by the nodes and actors that keep it. */
+interface LayerMask {
+  readonly holder: ArtemisImageActor;
+  readonly width: number;
+  readonly height: number;
+  readonly format?: 0 | 1 | 2;
+  references: number;
+}
 interface GroupCapture {
   enabled: boolean;
   format: 1 | 2;
   revision: number;
+  /** CLayerSet node +0xa0 (setter 0x1400b29c0 for an empty group). */
+  mask?: LayerMask;
   storage?: {
     readonly fore: CaptureTexture;
     readonly back?: CaptureTexture;
     readonly format: 1 | 2;
     readonly display: ArtemisDisplayObject;
+    /** The capture layer's own CLayer +0xc0 mask, set on each capture draw. */
+    mask?: LayerMask;
     signature?: readonly unknown[];
     plan?: ArtemisImageClip;
   };
@@ -255,6 +281,8 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
   private readonly textures = new Map<number, Texture>();
   private readonly images = new Map<TriangleImage, Texture>();
   private readonly actors = new Set<ArtemisDisplayActor>();
+  /** CLayer +0xc0 masks of image actors (setter 0x1400a4490); copies share them. */
+  private readonly masks = new Map<ArtemisDisplayActor, LayerMask>();
   private readonly changes = new WeakMap<ArtemisDisplayActor, number>();
   private nextChange = 1;
   private readonly shaderTextureResources = new WeakSet<object>();
@@ -380,14 +408,21 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
     this.checkActor(actor);
     return actor.texture === null ? undefined : this.textures.get(actor.texture)!.video?.decoder;
   }
-  /** `var system=get_layer_info` of a CLayer (image, color or video actor). Groups,
-   * animation and text actors read other native getters and are refused. */
+  /** `var system=get_layer_info` of a CLayer (image, color or video actor) or an empty
+   * group. The group holder (CLayerSet::CPropertyHolder, primary vtable 0x1403693b0) shares
+   * the CLayer interface entries and reaches the CLayer width/height getters
+   * 0x1400a3e60/0x1400a3ee0 through adjustor thunks 0x14010dea4/0x14010e088, so it reads as
+   * a CLayer without a surface. Animation and text actors read other native getters and
+   * are refused. */
   layerInfo(actor: ArtemisDisplayActor): ArtemisLayerInfo {
     this.checkActor(actor);
-    if (actor.texture === null || isText(actor))
+    if (isText(actor) || isAnimation(actor))
       throw new Error('Unsupported Artemis layer info actor');
-    const image = this.textures.get(actor.texture)!.image;
-    const surface = {width: image.width, height: image.height};
+    let surface: ArtemisLayerInfo['surface'] = null;
+    if (actor.texture !== null) {
+      const image = this.textures.get(actor.texture)!.image;
+      surface = {width: image.width, height: image.height};
+    }
     return {
       display: actor.display,
       ...artemisLayerExtent(surface, actor.clip),
@@ -427,6 +462,7 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
         image,
         references: 0,
         managed: resource.lease !== undefined,
+        ...(resource.surfaceFormat === undefined ? {} : {format: resource.surfaceFormat}),
       };
       this.images.set(image, texture);
       this.textures.set(texture.id, texture);
@@ -528,7 +564,81 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
     if (old.texture !== null) this.check(old).references++;
     this.wrappers.get(actor.wrapper)!.references++;
     this.actors.add(actor);
+    const mask = this.masks.get(old);
+    if (mask) {
+      mask.references++;
+      this.masks.set(actor, mask);
+    }
     return actor;
+  }
+  private createMask(resource: ArtemisLoadedImage): LayerMask {
+    const holder = this.createImageLayer(resource, {x: 0, y: 0});
+    const image = this.check(holder);
+    return {
+      holder,
+      width: image.image.width,
+      height: image.image.height,
+      ...(image.format === undefined ? {} : {format: image.format}),
+      references: 0,
+    };
+  }
+  private releaseMask(mask: LayerMask | undefined): void {
+    if (mask && --mask.references <= 0) this.releaseImageLayer(mask.holder);
+  }
+  /** Native 0x1400a4490 keeps a mask only on an image of format 1 or 2 whose dimensions
+   * match a format 0 mask; a null mask clears it and any other mask is dropped. */
+  private acceptsMask(
+    target: {width: number; height: number; format?: 0 | 1 | 2},
+    mask: LayerMask,
+  ) {
+    if (target.format === undefined)
+      throw new Error('Unsupported Artemis layer mask target surface format');
+    if (target.format !== 1 && target.format !== 2) return false;
+    if (mask.format === undefined) throw new Error('Unsupported Artemis layer mask surface format');
+    return mask.format === 0 && mask.width === target.width && mask.height === target.height;
+  }
+  applyLayerMask(
+    actors: readonly ArtemisDisplayActor[],
+    group: boolean,
+    resource: ArtemisLoadedImage | null,
+  ): void {
+    let mask: LayerMask | null = null;
+    try {
+      for (const actor of actors) this.checkActor(actor);
+      mask = resource && this.createMask(resource);
+    } catch (error) {
+      if (!mask) resource?.lease?.release();
+      throw error;
+    }
+    // A temporary reference keeps a mask nobody accepts until it is dropped below.
+    if (mask) mask.references++;
+    try {
+      if (group) {
+        // 0x1400b29c0 type 0: the node keeps the mask and marks its display dirty (+0xf8, 4).
+        const capture = this.wrappers.get(actors[0]!.wrapper)!.capture!;
+        this.releaseMask(capture.mask);
+        if (mask) {
+          mask.references++;
+          capture.mask = mask;
+        } else delete capture.mask;
+        capture.revision++;
+        return;
+      }
+      // Type 1: the current inner actor, then the retained one.
+      for (const actor of actors) {
+        const texture = actor.texture === null ? undefined : this.check(actor);
+        if (!texture || texture.video) throw new Error('Unsupported Artemis layer mask actor');
+        const target = {width: texture.image.width, height: texture.image.height};
+        if (mask && !this.acceptsMask({...target, format: texture.format}, mask)) continue;
+        if (mask) mask.references++;
+        this.releaseMask(this.masks.get(actor));
+        if (mask) this.masks.set(actor, mask);
+        else this.masks.delete(actor);
+        this.changes.set(actor, this.nextChange++);
+      }
+    } finally {
+      this.releaseMask(mask ?? undefined);
+    }
   }
   supportsShaderProperties(): boolean {
     return this.shaderPrograms !== undefined;
@@ -667,6 +777,9 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
     this.checkActor(actor);
     const texture = actor.texture === null ? undefined : this.check(actor);
     this.actors.delete(actor);
+    const mask = this.masks.get(actor);
+    this.masks.delete(actor);
+    this.releaseMask(mask);
     actor.shaderState.close();
     if (isAnimation(actor)) actor.animation.close();
     if (isText(actor)) actor.text.release();
@@ -679,7 +792,7 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
     const wrapper = this.wrappers.get(actor.wrapper)!;
     if (--wrapper.references === 0) {
       this.wrappers.delete(actor.wrapper);
-      if (wrapper.capture) this.releaseCapture(wrapper.capture);
+      if (wrapper.capture) this.releaseGroupCapture(wrapper.capture);
       wrapper.lease?.release();
     }
   }
@@ -691,7 +804,14 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
   releaseGroupResources(actor: ArtemisDisplayActor): void {
     this.checkActor(actor);
     const capture = this.wrappers.get(actor.wrapper)!.capture;
-    if (capture) this.releaseCapture(capture);
+    if (capture) this.releaseGroupCapture(capture);
+  }
+  /** Node destruction releases the capture storage and the node mask (0x1400b1860). */
+  private releaseGroupCapture(capture: GroupCapture): void {
+    this.releaseCapture(capture);
+    const mask = capture.mask;
+    delete capture.mask;
+    this.releaseMask(mask);
   }
   private glyphTexture(image: TriangleImage): number {
     let texture = this.glyphTextures.get(image);
@@ -713,6 +833,7 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
         this.textures.delete(texture.id);
       }
     capture.storage = undefined;
+    this.releaseMask(storage.mask);
   }
   private captureTexture(width: number, height: number): CaptureTexture {
     if (!this.target.prepareRenderSurface)
@@ -1177,6 +1298,7 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
         clip: ArtemisImageClip,
         context: RenderContext,
         actor: ArtemisDisplayActor,
+        mask?: LayerMask,
       ) => {
         const image = this.image(texture),
           imageWidth = f(image.width),
@@ -1266,6 +1388,13 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
           throw new Error('Artemis captured raster policy owner missing');
         if (!custom && context.format !== 2 && artemisHasRasterEffects(raster) && !mode)
           throw new Error('Artemis image effects require a raster policy owner');
+        // The masked shader variants (base +8) sample the mask at the foreground UV and
+        // multiply foreground alpha by its red channel before any other step. Custom
+        // shaders receive the mask as a resource and decide themselves.
+        const maskTexture =
+          mask && !custom
+            ? {texture: mask.holder.texture, uv: new Float32Array(8), filter: this.raster.filter}
+            : undefined;
         const vertices = new Float32Array(36),
           backgroundUV = new Float32Array(8),
           color = raster.colorMultiply,
@@ -1294,7 +1423,7 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
             ],
             index * 9,
           );
-          for (const texture of userTextures)
+          for (const texture of maskTexture ? [...userTextures, maskTexture] : userTextures)
             texture.uv.set(
               [f(f(x + sourceLeft) / imageWidth), f(f(y + sourceTop) / imageHeight)],
               index * 2,
@@ -1320,16 +1449,19 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
           depthClip: false,
           filter: this.raster.filter,
           blendState: mode?.blend ?? this.raster.blend,
-          fragment: custom?.fragment ?? mode?.fragment,
+          fragment: maskTexture
+            ? artemisMaskedFragment(mode?.fragment, context.format === 2 ? 1 : 0)
+            : (custom?.fragment ?? mode?.fragment),
           parameters,
           additionalTextures:
             context.format === 2
               ? [
                   {texture: context.back!.id, uv: backgroundUV, filter: this.raster.filter},
                   ...userTextures,
+                  ...(maskTexture ? [maskTexture] : []),
                 ]
-              : userTextures.length
-                ? userTextures
+              : userTextures.length || maskTexture
+                ? [...userTextures, ...(maskTexture ? [maskTexture] : [])]
                 : undefined,
           discardTransparent: this.raster.discardTransparent,
         });
@@ -1398,7 +1530,16 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
             this.videoFrame(actor);
             const image = this.check(actor).image;
             if (image.width > 0 && image.height > 0)
-              quad(actor.texture, matrix, alpha, actor.raster, actor.clip, context, actor);
+              quad(
+                actor.texture,
+                matrix,
+                alpha,
+                actor.raster,
+                actor.clip,
+                context,
+                actor,
+                this.masks.get(actor),
+              );
             continue;
           }
           const capture = this.wrappers.get(actor.wrapper)!.capture!;
@@ -1414,9 +1555,20 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
               signature.some((value, index) => value !== previous[index]);
           let storage = capture.storage,
             plan = storage?.plan;
+          // 0x140186770: a node mask sizes the capture exactly to the mask, at the group
+          // origin, instead of the clip or the descendant bounds.
+          const mask = capture.mask;
           if (changed) {
-            plan =
-              actor.clip.width > 0 && actor.clip.height > 0
+            plan = mask
+              ? {
+                  left: 0,
+                  top: 0,
+                  width: mask.width,
+                  height: mask.height,
+                  right: f(mask.width - 1),
+                  bottom: f(mask.height - 1),
+                }
+              : actor.clip.width > 0 && actor.clip.height > 0
                 ? actor.clip
                 : this.bounds(node.children);
             const width = Math.ceil(plan.width),
@@ -1425,8 +1577,9 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
               throw new Error('Unsupported Artemis intermediate surface size');
             if (
               !storage ||
-              storage.fore.image.width < width ||
-              storage.fore.image.height < height
+              (mask
+                ? storage.fore.image.width !== width || storage.fore.image.height !== height
+                : storage.fore.image.width < width || storage.fore.image.height < height)
             ) {
               if (width <= 0 || height <= 0) continue; // Native cannot allocate an empty capture.
               const fore = this.captureTexture(width, height);
@@ -1459,6 +1612,20 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
             commands.push({kind: 'gpu-target', surface: storage.fore.image});
             visit(node.children, local, 1, childContext);
             commands.push({kind: 'gpu-target', surface: context.surface});
+            // The capture layer's mask setter (0x1400a4490) runs on every capture draw.
+            const target = {
+              width: storage.fore.image.width,
+              height: storage.fore.image.height,
+              format: storage.format,
+            };
+            if (!mask) {
+              this.releaseMask(storage.mask);
+              delete storage.mask;
+            } else if (mask !== storage.mask && this.acceptsMask(target, mask)) {
+              mask.references++;
+              this.releaseMask(storage.mask);
+              storage.mask = mask;
+            }
             const completed = storage,
               completedPlan = plan;
             updates.push(() => {
@@ -1467,17 +1634,24 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
             });
           }
           if (!storage || !plan) continue;
+          // With a node mask the capture keeps the group origin and the group clip itself
+          // selects the drawn part of it.
           const explicit = actor.clip.width > 0 && actor.clip.height > 0,
-            sourceClip: ArtemisImageClip = explicit
-              ? {
-                  left: 0,
-                  top: 0,
-                  width: plan.width,
-                  height: plan.height,
-                  right: f(plan.width - 1),
-                  bottom: f(plan.height - 1),
-                }
-              : {left: 0, top: 0, width: 0, height: 0, right: 0, bottom: 0};
+            none: ArtemisImageClip = {left: 0, top: 0, width: 0, height: 0, right: 0, bottom: 0},
+            sourceClip: ArtemisImageClip = mask
+              ? explicit
+                ? actor.clip
+                : none
+              : explicit
+                ? {
+                    left: 0,
+                    top: 0,
+                    width: plan.width,
+                    height: plan.height,
+                    right: f(plan.width - 1),
+                    bottom: f(plan.height - 1),
+                  }
+                : none;
           storage.display.apply({left: explicit ? 0 : plan.left, top: explicit ? 0 : plan.top});
           quad(
             storage.fore.id,
@@ -1487,6 +1661,7 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
             sourceClip,
             context,
             actor,
+            storage.mask,
           );
         }
       };

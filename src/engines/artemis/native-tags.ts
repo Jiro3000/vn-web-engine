@@ -161,3 +161,22 @@ export const artemisUnknownTagMessage = new Uint8Array([
   0x82, 0xcd, 0x96, 0xa2, 0x92, 0xe8, 0x8b, 0x60, 0x82, 0xcc, 0x83, 0x7d, 0x83, 0x4e, 0x83, 0x8d,
   0x82, 0xc5, 0x82, 0xb7, 0x81, 0x42,
 ]);
+
+const shiftJis = (hex: string) => Uint8Array.from(hex.match(/../g)!, (byte) => parseInt(byte, 16));
+/** c7260 severity-1 messages of tag owners (Shift_JIS, Rev.3179 addresses; Rev.3139 holds the
+ * same bytes, for example the sound message at 0x14036e428). */
+export const artemisTagErrorMessages = {
+  /** 0x140372148 「指定されたファイルは見つからないか、非対応形式です。」: e3370 seplay and
+   * e2390 splay load failure. */
+  soundNotLoaded: shiftJis(
+    '8e7792e882b382ea82bd837483408343838b82cd8ca982c282a982e782c882a282a9814194f191ce899e8c608eae82c582b78142',
+  ),
+  /** 0x1403724e0 「再生に失敗しました。」: fullscreen video playback failure. */
+  playbackFailed: shiftJis('8dc490b682c98eb8947382b582dc82b582bd8142'),
+  /** 0x140372a18 「ファイルが見つかりません。」: file copy source. */
+  fileNotFound: shiftJis('837483408343838b82aa8ca982c282a982e882dc82b982f18142'),
+  /** 0x140372a48 「書き込み先ファイルが作成できません。」: file copy destination. */
+  fileNotCreated: shiftJis(
+    '8f9182ab8d9e82dd90e6837483408343838b82aa8dec90ac82c582ab82dc82b982f18142',
+  ),
+} as const;
