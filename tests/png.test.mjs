@@ -120,6 +120,16 @@ test('PNG Adam7 reconstructs all passes including tiny-image empty passes', asyn
     assert.deepEqual([...image.pixels], expected);
   }
 });
+test('PNG trailing bytes remain strict unless the consumer stops at IEND', async () => {
+  const base = png({width: 1, height: 1, raw: Buffer.from([0, 11, 22, 33, 44])});
+  const padded = Buffer.concat([base, Buffer.from([91, 82, 73])]);
+  await assert.rejects(decodePng(padded), /Trailing PNG bytes/);
+  assert.deepEqual(await decodePng(padded, {trailingBytes: 'ignore'}), await decodePng(base));
+  const broken = Buffer.from(padded);
+  broken[base.length - 13] ^= 1;
+  await assert.rejects(decodePng(broken, {trailingBytes: 'ignore'}), /IDAT CRC mismatch/);
+});
+
 test("PNG ancillary CRC errors: rejected by default, dropped with libpng's default CRC action", async () => {
   const corrupt = (b) => ((b[b.length - 1] ^= 1), b);
   const raw = Buffer.from([0, 9, 8, 7]),

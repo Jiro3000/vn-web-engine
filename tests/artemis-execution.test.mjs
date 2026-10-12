@@ -2700,7 +2700,10 @@ test('Artemis PNG loads drop an ancillary chunk whose CRC fails, as libpng 0x140
   const {artemisPngDecodeOptions} = await import('../dist/engines/artemis/png-surface.js');
   const {ARTEMIS_3139_EXECUTABLE_SHA256: sha} = await import('../dist/engines/artemis/revision.js');
   const {png, chunk} = await import('./png-fixtures.mjs');
-  assert.deepEqual({...artemisPngDecodeOptions}, {ancillaryCrcErrors: 'discard'});
+  assert.deepEqual(
+    {...artemisPngDecodeOptions},
+    {ancillaryCrcErrors: 'discard', trailingBytes: 'ignore'},
+  );
   const iccp = chunk('iCCP', Buffer.from('p\0\0xyz'));
   iccp[iccp.length - 1] ^= 1;
   const encoded = png({width: 1, height: 1, raw: Buffer.from([0, 1, 2, 3, 4]), extras: [iccp]});
@@ -2716,6 +2719,20 @@ test('Artemis PNG loads drop an ancillary chunk whose CRC fails, as libpng 0x140
     path === 'a.png' ? critical : null,
   );
   await assert.rejects(() => strict.load('a'), /IDAT CRC mismatch/);
+  const {createArtemisSurfacePreloadFixture} =
+    await import('../tools/artemis-surface-preload-fixture.mjs');
+  const padded = Buffer.concat([encoded, Buffer.from([17, 23, 42])]);
+  const fixture = createArtemisSurfacePreloadFixture(sha, async (path) =>
+    path === 'a.png' ? padded : null,
+  );
+  try {
+    const surface = await fixture.manager.load('a');
+    assert.deepEqual([...surface.image.pixels], [1, 2, 3, 4]);
+    assert.equal(fixture.summary().decodedImages, 1);
+    surface.lease.release();
+  } finally {
+    await fixture.close();
+  }
 });
 
 test('Revision-selected image pipeline decodes synthetic PNGs through suspended Lua work', async () => {

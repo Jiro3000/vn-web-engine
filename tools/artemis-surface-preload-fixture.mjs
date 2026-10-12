@@ -4,7 +4,8 @@ import {createHash} from 'node:crypto';
 import {createNodeBrowserWorker} from './node-browser-worker.mjs';
 import {ArtemisSurfaceManager} from '../dist/engines/artemis/surface-manager.js';
 import {ArtemisImageLoader} from '../dist/engines/artemis/image-loader.js';
-import {artemisPngSurface} from '../dist/engines/artemis/png-surface.js';
+import {artemisPngSurface, artemisPngDecodeOptions} from '../dist/engines/artemis/png-surface.js';
+import {decodePng} from '../dist/formats/png/decode.js';
 export function createArtemisSurfacePreloadFixture(
   hash,
   readFile,
@@ -24,7 +25,11 @@ export function createArtemisSurfacePreloadFixture(
     const pending = jobs.get(data.id);
     if (!pending) return;
     jobs.delete(data.id);
-    if (data.failed) pending.reject(Error('Unsupported or failed nonvisual image worker decode'));
+    if (data.failed && pending.format === 'png')
+      // Like the browser offload owner, rerun to retain the original codec diagnostic.
+      decodePng(pending.input, artemisPngDecodeOptions).then(pending.resolve, pending.reject);
+    else if (data.failed)
+      pending.reject(Error('Unsupported or failed nonvisual image worker decode'));
     else pending.resolve(data.response);
   };
   const failed = (error) => {
@@ -38,9 +43,15 @@ export function createArtemisSurfacePreloadFixture(
     const bytes = Uint8Array.from(input),
       requestId = ++id;
     return new Promise((resolve, reject) => {
-      jobs.set(requestId, {resolve, reject});
+      jobs.set(requestId, {resolve, reject, format, input});
       try {
-        worker.postMessage({id: requestId, request: {format, bytes}}, [bytes.buffer]);
+        worker.postMessage(
+          {
+            id: requestId,
+            request: {format, bytes, ...(format === 'png' ? {png: artemisPngDecodeOptions} : {})},
+          },
+          [bytes.buffer],
+        );
       } catch (error) {
         jobs.delete(requestId);
         reject(error);

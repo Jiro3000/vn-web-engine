@@ -7,6 +7,8 @@ import type {ArtemisRuleImage} from './transition.js';
  * whose CRC fails; the image still loads. A critical chunk's CRC failure fails the load. */
 export const artemisPngDecodeOptions: PngDecodeOptions = Object.freeze({
   ancillaryCrcErrors: 'discard',
+  // CPng reads image/end and destroys libpng state without checking CFile EOF.
+  trailingBytes: 'ignore',
 });
 
 /** CPng load 0x1401838e0 (libpng): gray images (colour type 0) create a format 0 image

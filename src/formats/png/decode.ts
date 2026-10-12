@@ -10,6 +10,8 @@ export interface DecodedPng {
   indices?: Uint8Array;
 }
 export interface PngDecodeOptions {
+  /** libpng consumers stop after IEND without requiring file EOF. Strict by default. */
+  readonly trailingBytes?: 'reject' | 'ignore';
   /** A chunk whose CRC fails rejects the image ('reject', the default). 'discard' is libpng's
    * default CRC action (png_crc_finish): an ancillary chunk with a failed CRC is dropped with a
    * warning and decoding continues; a critical chunk still fails. */
@@ -221,7 +223,8 @@ export async function decodePng(
       if (size || !sawData) throw new Error('Invalid PNG IEND');
       end = true;
       pos += 12;
-      if (pos !== bytes.length) throw new Error('Trailing PNG bytes');
+      if (pos !== bytes.length && options.trailingBytes !== 'ignore')
+        throw new Error('Trailing PNG bytes');
       break;
     } else {
       if ((bytes[pos + 4]! & 32) === 0) throw new Error(`Unsupported critical PNG chunk ${tag}`);

@@ -832,6 +832,10 @@ that ID each frame; `drawStage` leaves the layer out of both transition surfaces
 draws its current actor after stage composition, so no frozen copy fades with the saved
 frame. A nested, missing or malformed ID leaves the layer in place.
 
+`png-surface.ts` supplies libpng's ancillary-CRC discard behavior and accepts bytes after
+`IEND`: the native CPng loader destroys its reader after image/end reads without checking
+file EOF. Other PNG consumers keep strict trailing-byte and CRC validation by default.
+The probe's surface worker uses the same options and preserves codec errors on fallback.
 `png-surface.ts` (`artemisPngSurface`) converts a decoded PNG into the native CPng image
 (`0x1401838e0`): colour type 0 (gray) becomes format 0 with one byte per pixel (low depths
 bit-replicated, 16-bit high byte, gray tRNS ignored); every other colour type becomes
