@@ -37,6 +37,8 @@ export interface ArtemisLayerRunModeHost {
   emit(tag: AsbTag): void;
   stageSize(): {readonly width: number; readonly height: number};
   skipState(): {readonly allowed: boolean; readonly command: boolean; readonly control: boolean};
+  /** c7260(script, 1, tag, message): the script owner reports and the tag returns. */
+  reportTagError?(tag: AsbTag, message: Uint8Array): void;
 }
 
 /** The save-object command registry services a graphics backend forwards. */
@@ -218,8 +220,9 @@ export class ArtemisLayerOwner<
       registerTween: (tween) => {
         this.transitionTween = tween;
       },
-      reportError: () => {
-        throw Error('Unsupported Artemis trans error report');
+      reportError: (tag, message) => {
+        if (!runMode.reportTagError) throw Error('Unsupported Artemis trans error report');
+        runMode.reportTagError(tag, message);
       },
     });
     const tweens = (this.tweenRegistry = new ArtemisTweenRegistry(hash));

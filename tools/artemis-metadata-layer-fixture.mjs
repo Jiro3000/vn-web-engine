@@ -320,6 +320,10 @@ export function createMetadataLayerFixture(hash, readFile, runMode = null, repor
         return runMode.stageSize();
       },
       skipState: () => runMode?.skipState() ?? refuseRunMode(),
+      reportTagError: (tag, message) => {
+        if (!runMode?.reportTagError) throw Error('Unsupported Artemis trans error report');
+        runMode.reportTagError(tag, message);
+      },
     },
     loadRule: async (path) => {
       const resource = await ruleSource.load(path);

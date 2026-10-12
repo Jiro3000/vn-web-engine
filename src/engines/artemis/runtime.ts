@@ -181,6 +181,9 @@ export interface ArtemisRuntimeLayerHost {
   emit(tag: AsbTag): void;
   stageSize(): {readonly width: number; readonly height: number};
   skipState(): {readonly allowed: boolean; readonly command: boolean; readonly control: boolean};
+  /** c7260(script, 1, tag, message), e.g. a trans rule image that fails to load or is not
+   * gray (0x1403723c8, 0x140372420). */
+  reportTagError(tag: AsbTag, message: Uint8Array): void;
 }
 /** Text glyph owner: one text insertion per message resource. */
 export interface ArtemisRuntimeGlyphs {
@@ -922,6 +925,8 @@ export class ArtemisRuntime {
         command: modes.commandSkip,
         control: modes.controlSkip,
       }),
+      reportTagError: (tag, message) =>
+        reportTagError(tag, message, 'Unsupported Artemis trans error report'),
     }));
     this.closers.push(() => layers.close());
     const selectedResource = (name: string) => {

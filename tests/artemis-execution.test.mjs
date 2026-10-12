@@ -7468,6 +7468,49 @@ test('Artemis runtime reports missing seplay and splay sounds like c7260 and con
   await strict.close();
 });
 
+test('Artemis runtime reports a missing or non-gray trans rule like c7260 and continues', async () => {
+  const {openArtemisRuntimeFixture} = await import('./artemis-runtime-fixture.mjs');
+  const {artemisTransitionErrors} = await import('../dist/engines/artemis/transition.js');
+  const {png} = await import('./png-fixtures.mjs');
+  // 0x1400e10c0: a rule that fails to load reports 0x1403723c8; a rule that is not gray
+  // (format 0) reports 0x140372420. Both return without a transition.
+  const first =
+    '[trans type="2" time="100" rule="rule/missing"]\n[trans type="2" time="100" rule="rule/rgba"]\n[var name="t.done" data="1"]\n[stop]';
+  const files = {
+    'system/first.iet': first,
+    'rule/rgba.png': png({width: 1, height: 1, raw: Buffer.from([0, 1, 2, 3, 4])}),
+  };
+  const reports = [];
+  const {runtime, close} = await openArtemisRuntimeFixture(files, {
+    services: {reportTagError: (report) => reports.push(report)},
+  });
+  await runtime.boot();
+  for (let i = 0; i < 8 && runtime.resourcePending; i++) {
+    await runtime.settleResource();
+    runtime.script.run(1000);
+  }
+  assert.deepEqual(
+    reports.map(({file, tag, message, severity}) => [file, tag.name, tag.sourceLine, message, severity]),
+    [
+      ['system/first.iet', 'trans', 0, artemisTransitionErrors.ruleLoad, 1],
+      ['system/first.iet', 'trans', 1, artemisTransitionErrors.ruleFormat, 1],
+    ],
+  );
+  assert.equal(new TextDecoder().decode(runtime.variables.read('t.done')), '1');
+  assert.equal(runtime.runMode, 3);
+  await close();
+  // The owner without a report service keeps the failure strict.
+  const strict = await openArtemisRuntimeFixture(files);
+  await strict.runtime.boot();
+  await assert.rejects(async () => {
+    for (let i = 0; i < 8 && strict.runtime.resourcePending; i++) {
+      await strict.runtime.settleResource();
+      strict.runtime.script.run(1000);
+    }
+  }, /Unsupported Artemis trans error report/);
+  await strict.close();
+});
+
 test('CIni sections, keys and values follow the native tokenizer', async () => {
   const {ArtemisIni, artemisAtoi} = await import('../dist/engines/artemis/ini.js');
   const text = [

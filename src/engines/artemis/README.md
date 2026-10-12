@@ -781,7 +781,8 @@ timestamp b94 = now; the wait owner (`ArtemisTimedWait.setDeadline`) ends that f
 in the first frame after the timestamp, as c0560 does for any passed b94. Type `1` sets transition state 1 and registers a float crossfade tween (0 to 1
 over `time`, `ArtemisLinearFloatTween`) that writes the transition layer value. Type `2`
 loads the `rule` image (load failure and non-gray formats report the native severity-1
-errors), replaces or tiles (`tileArtemisRule`, `0x140171140`) the stage rule image, sets
+errors through the runtime's `reportTagError` service, c7260, and the tag returns without a
+transition; without that service they stay refusals), replaces or tiles (`tileArtemisRule`, `0x140171140`) the stage rule image, sets
 state 2 and tweens the threshold from `-vague` to `vague+255`. Both tweens complete through
 stage commit and run mode release. `input` selects run mode 2 (clickable) or 4. The frame
 owner ticks registered tweens and finishes `tween` on a mode 2 click.
