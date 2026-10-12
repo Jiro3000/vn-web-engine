@@ -97,7 +97,8 @@ export interface ArtemisScenarioScalars<Font extends object> {
 
 /** Caret record inputs the script does not own: the wait flags (b94..bc8 of each caret). */
 export interface ArtemisScenarioRunMode {
-  /** Write the current caret as the loader restores it: run mode 0, no wait flag. */
+  /** Write the current caret as the loader restores it: the run modes the loader assigns
+   * (see `writeArtemisCaret`) and no wait flag. */
   readonly asLoaded?: boolean;
   /** Any wait flag (timed, scenario, se or video wait) of the current caret is set. */
   readonly waiting: boolean;
@@ -117,15 +118,27 @@ export function captureArtemisScenario<Font extends object>(
 ): ArtemisScenarioRecord<Font> {
   const modes = owners.modes.saveFields();
   const carets = owners.script.carets();
-  const record = (caret: ArtemisScriptCaret, current: boolean): ArtemisCaretRecord => ({
-    file: caret.file,
-    index: caret.index,
-    runMode: current && runMode.asLoaded ? 0 : (caret.runMode ?? 0),
-    previousRunMode: current && runMode.asLoaded ? 0 : (caret.previousRunMode ?? 0),
-    waiting: current ? !runMode.asLoaded && runMode.waiting : runMode.frameWaiting(caret.fields),
-    queue: caret.queue,
-    tag: caret.tag ?? emptyBlock,
-  });
+  const record = (caret: ArtemisScriptCaret, current: boolean): ArtemisCaretRecord => {
+    const mode = caret.runMode ?? 0,
+      previous = caret.previousRunMode ?? 0;
+    // The loader assigns the two written modes: a waiting caret loads in mode 0 with its
+    // mode as the previous one, a caret in mode 5 or above loads its previous mode.
+    const loaded =
+      current && runMode.asLoaded
+        ? runMode.waiting
+          ? [0, mode]
+          : [mode >>> 0 < 5 ? mode : previous, previous]
+        : [mode, previous];
+    return {
+      file: caret.file,
+      index: caret.index,
+      runMode: loaded[0]!,
+      previousRunMode: loaded[1]!,
+      waiting: current ? !runMode.asLoaded && runMode.waiting : runMode.frameWaiting(caret.fields),
+      queue: caret.queue,
+      tag: caret.tag ?? emptyBlock,
+    };
+  };
   const events = owners.eventCommands.saveFields();
   const selection = owners.messageSelection.saveFields();
   const text = owners.textControls.saveFields();

@@ -1320,7 +1320,7 @@ export class ArtemisRuntime {
       music,
       variables,
     });
-    /** `asLoaded` writes the caret as the loader restores it: run mode 0, no wait flag. */
+    /** `asLoaded` writes the caret as the loader restores it: loaded run modes, no wait flag. */
     this.writeScenario = (asLoaded) => {
       const record = captureArtemisScenario(
         scenarioOwners(),

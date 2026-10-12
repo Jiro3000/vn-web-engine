@@ -7070,6 +7070,29 @@ test('Scenario save captures every owner and load restores them through the arch
   // The saved +0x3628 font and the other host scalars come back as written.
   const reloaded = captureArtemisScenario(b, restoredScalars, runMode, null);
   assert.deepEqual(reloaded, saved);
+  // A caret saved inside a wait loads in run mode 0 with its mode as the previous mode;
+  // the as-loaded capture writes exactly that caret.
+  const waitingWriter = new ArtemisSaveArchiveWriter();
+  writeArtemisScenarioArchive(
+    waitingWriter,
+    captureArtemisScenario(a, scalars, {...runMode, waiting: true}, null),
+    a.variables,
+    fonts,
+  );
+  const waitingLoaded = readArtemisScenarioArchive(
+    new ArtemisSaveArchiveReader(waitingWriter.finish()),
+    fonts,
+  ).caret;
+  const asLoaded = captureArtemisScenario(
+    a,
+    scalars,
+    {...runMode, waiting: true, asLoaded: true},
+    null,
+  ).caret;
+  assert.deepEqual([waitingLoaded.runMode, waitingLoaded.previousRunMode], [0, 1]);
+  assert.deepEqual([asLoaded.runMode, asLoaded.previousRunMode, asLoaded.waiting], [0, 1, false]);
+  const ready = captureArtemisScenario(a, scalars, {...runMode, asLoaded: true}, null).caret;
+  assert.deepEqual([ready.runMode, ready.previousRunMode, ready.waiting], [1, 0, false]);
   assert.equal(new TextDecoder().decode(b.variables.read('f.flag')), '7');
   assert.equal(b.keyBindings.pushHandler(1, 0), undefined);
   // Ordinary keys come from the save; the 136/137 flags keep the constructor defaults.

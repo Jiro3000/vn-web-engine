@@ -443,8 +443,16 @@ try {
       callDepth: script.callDepth,
       files: ['probe-roundtrip.dat', 'probe-roundtrip-2.dat'],
     };
-    if (!saveLoadReport.restored || !saveLoadReport.stable)
+    if (!saveLoadReport.restored || !saveLoadReport.stable) {
+      // The archives are kept for a structural comparison of the differing fields.
+      if (reportDir !== undefined) {
+        mkdirSync(reportDir, {recursive: true});
+        writeFileSync(`${reportDir}/roundtrip-expected.bin`, expected);
+        writeFileSync(`${reportDir}/roundtrip-loaded.bin`, loaded);
+        writeFileSync(`${reportDir}/roundtrip-reloaded.bin`, reloaded);
+      }
       throw Error('Probe scenario save/load round trip differs');
+    }
   };
   // Deterministic 16 ms frame.
   const frame = () => runtime.advanceTo((runtime.now + 16) >>> 0 || 1);
