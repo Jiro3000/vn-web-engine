@@ -2461,6 +2461,45 @@ test('Native DLL strings are copied before Delete; missing modules, methods and 
   assert.throws(() => native.call('日本語.dll', 'Version', ''), /ANSI/);
 });
 
+test('Native string-call arguments preserve Unicode and exact Lua bytes through the host ABI', async () => {
+  const {ArtemisNativeLibrary} = await import('../dist/engines/artemis/native-library.js');
+  const library = {},
+    procedure = {},
+    release = {},
+    seen = [];
+  const native = new ArtemisNativeLibrary(
+    {
+      loadLibraryA: () => library,
+      getProcAddress: (_library, name) => (name === 'Delete' ? release : procedure),
+      invoke: (fn, args) => {
+        if (fn === release) return;
+        seen.push(args[0].pointer.bytes.slice());
+        return 1n;
+      },
+      readCString: () => Uint8Array.of(65),
+      freeLibrary: () => {},
+      mainWindowHandle: () => null,
+    },
+    () => {},
+  );
+  native.call('sample.dll', 'Echo', '仮想/保存');
+  assert.deepEqual(seen[0], Uint8Array.from([...bytes('仮想/保存'), 0]));
+  const exact = Uint8Array.of(0xff, 0x82, 0xa0, 0, 0x33);
+  native.dispatch({
+    kind: 'tag',
+    name: 'callnative',
+    sourceLine: -1,
+    args: new Map([
+      ['module', 'sample.dll'],
+      ['method', 'Echo'],
+      ['param', 'decoded placeholder'],
+    ]),
+    bytes: new Map([['param', exact]]),
+  });
+  assert.deepEqual(seen[1], Uint8Array.from([...exact, 0]));
+  assert.deepEqual(exact, Uint8Array.of(0xff, 0x82, 0xa0, 0, 0x33));
+});
+
 test('Native module teardown releases the sorted registry once and permits later loading', async () => {
   const {ArtemisNativeLibrary} = await import('../dist/engines/artemis/native-library.js');
   const released = [],

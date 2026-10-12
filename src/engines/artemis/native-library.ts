@@ -24,9 +24,11 @@ export class ArtemisNativeLibrary {
     private readonly host: WindowsDynamicLibraryHost,
     private readonly writeResult: (name: string, bytes: Uint8Array) => void,
   ) {}
-  call(module: string, method: string, parameter: string): Uint8Array {
+  call(module: string, method: string, parameter: string | Uint8Array): Uint8Array {
     const path = ansi(module),
-      argument = ansi(parameter);
+      // char* parameters are native byte strings. The export owns their encoding;
+      // LoadLibraryA's module-name constraint does not apply to argument bytes.
+      argument = typeof parameter === 'string' ? new TextEncoder().encode(parameter) : parameter;
     ansi(method);
     let library = this.modules.get(module);
     if (!library) {
@@ -57,7 +59,11 @@ export class ArtemisNativeLibrary {
   dispatch(tag: AsbTag): boolean {
     if (tag.name !== 'callnative') return false;
     const p = tag.args;
-    const result = this.call(p.get('module') ?? '', p.get('method') ?? '', p.get('param') ?? '');
+    const result = this.call(
+      p.get('module') ?? '',
+      p.get('method') ?? '',
+      tag.bytes?.get('param') ?? p.get('param') ?? '',
+    );
     this.writeResult(p.get('result') ?? '', result);
     return true;
   }

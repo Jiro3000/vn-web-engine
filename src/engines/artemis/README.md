@@ -603,8 +603,10 @@ load; failed loads are retried. Each export receives a NUL-terminated string and
 returns a native pointer. The owner copies the result before querying/calling
 `Delete`; absent module/export, null result and absent `Delete` produce an empty
 result, matching the native implementation. Browser DLL loading returns failure.
-Successful native hosts must supply `readCString`. The current tag adapter supports
-ASCII arguments only; legacy ANSI encoding remains unsupported. `reset()` releases
+Successful native hosts must supply `readCString`. Module and export names currently
+support ASCII only; legacy ANSI module-name encoding remains unsupported. Parameters
+preserve the tag's exact bytes, including Unicode and embedded NULs; the export owns
+their interpretation. `reset()` releases
 cached modules in native byte-key order and clears the registry for later reuse.
 Returned bytes are published through the variable owner without UTF-8 conversion.
 
