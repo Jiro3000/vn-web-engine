@@ -30,7 +30,7 @@ import {
   artemisPngSurfaceFormat,
   type ArtemisLoadedImage,
 } from '../image-loader.js';
-import {artemisPngSurface} from '../png-surface.js';
+import {artemisPngDecodeOptions, artemisPngSurface} from '../png-surface.js';
 import {
   ArtemisRuntime,
   type ArtemisFrameInput,
@@ -181,7 +181,10 @@ export class ArtemisBrowserPlayer {
       {
         extensions: ['png', 'PNG'],
         decode: async (bytes) =>
-          isPng(bytes) ? ((await decodeImageOffThread(bytes, 'png')) ?? decodePng(bytes)) : null,
+          isPng(bytes)
+            ? ((await decodeImageOffThread(bytes, 'png', artemisPngDecodeOptions)) ??
+              decodePng(bytes, artemisPngDecodeOptions))
+            : null,
         surfaceFormat: (image) => artemisPngSurfaceFormat(image as DecodedPng),
       },
       {
@@ -237,7 +240,9 @@ export class ArtemisBrowserPlayer {
         extensions: ['png', 'PNG'],
         decode: async (bytes) => {
           if (!isPng(bytes)) return null;
-          const png = (await decodeImageOffThread(bytes, 'png')) ?? (await decodePng(bytes));
+          const png =
+            (await decodeImageOffThread(bytes, 'png', artemisPngDecodeOptions)) ??
+            (await decodePng(bytes, artemisPngDecodeOptions));
           return png && artemisPngSurface(png);
         },
       },

@@ -4,6 +4,7 @@ import {decodeArtemisPsd} from '../../formats/artemis/psd.js';
 import {decodeImageOffThread} from '../../graphics/image-decode-offload.js';
 import {decodeOpaqueJpeg} from '../../graphics/browser-jpeg.js';
 import {artemisRevision} from './revision.js';
+import {artemisPngDecodeOptions} from './png-surface.js';
 
 /** Logical resource geometry; the owner decides whether it needs decoded pixel storage. */
 export interface ArtemisImageDimensions {
@@ -113,7 +114,10 @@ export function createArtemisImageLoader(
       decode: async (bytes) => {
         if (![137, 80, 78, 71, 13, 10, 26, 10].every((byte, index) => bytes[index] === byte))
           return null;
-        return (await decodeImageOffThread(bytes, 'png')) ?? decodePng(bytes);
+        return (
+          (await decodeImageOffThread(bytes, 'png', artemisPngDecodeOptions)) ??
+          decodePng(bytes, artemisPngDecodeOptions)
+        );
       },
       surfaceFormat: (image) => artemisPngSurfaceFormat(image as DecodedPng),
     },

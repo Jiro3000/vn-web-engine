@@ -9,6 +9,12 @@ export interface DecodedPng {
   /** Source palette indices, preserved before RGBA expansion for indexed images. */
   indices?: Uint8Array;
 }
+export interface PngDecodeOptions {
+  /** A chunk whose CRC fails rejects the image ('reject', the default). 'discard' is libpng's
+   * default CRC action (png_crc_finish): an ancillary chunk with a failed CRC is dropped with a
+   * warning and decoding continues; a critical chunk still fails. */
+  readonly ancillaryCrcErrors?: 'reject' | 'discard';
+}
 const signature = [137, 80, 78, 71, 13, 10, 26, 10];
 /** The PNG chunk CRC is CRC-32. */
 export const pngCrc = crc32;
@@ -135,7 +141,10 @@ function unfilterPixels(
 }
 /** PNG scanline decoding; the platform supplies only the zlib/DEFLATE primitive.
  * No browser color-management or alpha premultiplication is applied to stored samples. */
-export async function decodePng(bytes: Uint8Array): Promise<DecodedPng> {
+export async function decodePng(
+  bytes: Uint8Array,
+  options: PngDecodeOptions = {},
+): Promise<DecodedPng> {
   if (!signature.every((b, i) => bytes[i] === b)) throw new Error('Expected PNG signature');
   const v = new DataView(bytes.buffer, bytes.byteOffset, bytes.length),
     idat: Uint8Array[] = [];
@@ -154,8 +163,14 @@ export async function decodePng(bytes: Uint8Array): Promise<DecodedPng> {
     const size = v.getUint32(pos),
       tag = ascii(bytes, pos + 4, 4);
     checkRange(bytes.length, pos + 8, size + 4);
-    if (pngCrc(bytes.subarray(pos + 4, pos + 8 + size)) !== v.getUint32(pos + 8 + size))
-      throw new Error(`PNG ${tag} CRC mismatch`);
+    if (pngCrc(bytes.subarray(pos + 4, pos + 8 + size)) !== v.getUint32(pos + 8 + size)) {
+      const ancillary = (bytes[pos + 4]! & 32) !== 0;
+      if (!ancillary || options.ancillaryCrcErrors !== 'discard' || type === -1)
+        throw new Error(`PNG ${tag} CRC mismatch`);
+      if (sawData) closedData = true;
+      pos += 12 + size;
+      continue;
+    }
     const data = bytes.subarray(pos + 8, pos + 8 + size),
       d = new DataView(data.buffer, data.byteOffset, data.length);
     if (type === -1 && tag !== 'IHDR') throw new Error('PNG IHDR must be first');

@@ -60,7 +60,7 @@ try {
       '-mexception-handling',
       '-sALLOW_MEMORY_GROWTH=1',
       '-sINITIAL_MEMORY=16777216',
-      // The native allocator (Rev.3139 0x1401a0710) is plain realloc/free with no limit, and
+      // The native allocator (0x1401a1d70; Rev.3139 0x1401a0710) is plain realloc/free, and
       // game Lua stops the collector until collectgarbage("count") reaches its own threshold.
       '-sMAXIMUM_MEMORY=2147483648',
       '-sSTACK_SIZE=1048576',

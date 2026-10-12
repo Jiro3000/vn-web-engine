@@ -1,5 +1,13 @@
-import type {DecodedPng} from '../../formats/png/decode.js';
+import type {DecodedPng, PngDecodeOptions} from '../../formats/png/decode.js';
 import type {ArtemisRuleImage} from './transition.js';
+
+/** The PNG loader 0x1401838e0 reads through libpng 1.6.21 created with
+ * png_create_read_struct's defaults (0x140057750: no error/warning handlers, CRC actions
+ * unchanged). png_crc_finish 0x14005ccf0 then warns on stderr and drops an ancillary chunk
+ * whose CRC fails; the image still loads. A critical chunk's CRC failure fails the load. */
+export const artemisPngDecodeOptions: PngDecodeOptions = Object.freeze({
+  ancillaryCrcErrors: 'discard',
+});
 
 /** CPng load 0x1401838e0 (libpng): gray images (colour type 0) create a format 0 image
  * with one byte per pixel; every other colour type creates a format 2 image with four.

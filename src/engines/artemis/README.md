@@ -645,7 +645,11 @@ then PSD (`psd`, `PSD`), matching the stage initializer. PNG uses the shared str
 RGBA decoder on the shared worker when available, with an in-thread fallback.
 Merged PSD uses the format reader below on that same worker. JPEG uses an injected
 owner ([Browser JPEG owner](#browser-jpeg-owner)) and refuses when selected without one. Decoder null means native failure/fallback; host and unsupported-format errors
-propagate. Corrupt PNGs are refused by the strict shared reader. Image loading is
+propagate. Corrupt PNGs are refused by the strict shared reader, with one exception taken
+from the native loader (0x1401838e0, libpng 1.6.21 with png_create_read_struct defaults):
+an ancillary chunk whose CRC fails is dropped and the image loads (png_crc_finish
+0x14005ccf0 only warns on stderr), `artemisPngDecodeOptions`. A dropped tRNS keys no
+colour. A critical chunk's CRC failure still refuses the image. Image loading is
 separate from cache eviction, layer geometry, property application and presentation.
 The pipeline is verified with synthetic PNGs through suspended Lua callbacks.
 

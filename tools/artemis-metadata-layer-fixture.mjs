@@ -12,7 +12,7 @@ import {artemisLayerExtent} from '../dist/engines/artemis/layer-info.js';
 import {artemisRevision} from '../dist/engines/artemis/revision.js';
 import {readJpegHeader} from '../dist/formats/jpeg/header.js';
 import {decodePng} from '../dist/formats/png/decode.js';
-import {artemisPngSurface} from '../dist/engines/artemis/png-surface.js';
+import {artemisPngDecodeOptions, artemisPngSurface} from '../dist/engines/artemis/png-surface.js';
 
 /** `runMode` supplies the probe's run mode/wait owner for trans and sync tweens, `emit`
  * for tween completion events and `stageSize` for rule transitions; an absent owner
@@ -287,7 +287,7 @@ export function createMetadataLayerFixture(hash, readFile, runMode = null, repor
       extensions: ['png', 'PNG'],
       decode: async (bytes) => {
         if (![137, 80, 78, 71, 13, 10, 26, 10].every((v, i) => bytes[i] === v)) return null;
-        return artemisPngSurface(await decodePng(bytes));
+        return artemisPngSurface(await decodePng(bytes, artemisPngDecodeOptions));
       },
     },
     ...[

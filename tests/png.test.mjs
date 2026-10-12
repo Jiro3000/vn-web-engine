@@ -120,6 +120,42 @@ test('PNG Adam7 reconstructs all passes including tiny-image empty passes', asyn
     assert.deepEqual([...image.pixels], expected);
   }
 });
+test("PNG ancillary CRC errors: rejected by default, dropped with libpng's default CRC action", async () => {
+  const corrupt = (b) => ((b[b.length - 1] ^= 1), b);
+  const raw = Buffer.from([0, 9, 8, 7]),
+    discard = {ancillaryCrcErrors: 'discard'};
+  const plain = await decodePng(png({width: 1, height: 1, type: 2, raw}));
+  const iccp = png({
+    width: 1,
+    height: 1,
+    type: 2,
+    raw,
+    extras: [corrupt(chunk('iCCP', Buffer.from('p\0\0xyz')))],
+  });
+  await assert.rejects(decodePng(iccp), /iCCP CRC mismatch/);
+  assert.deepEqual(await decodePng(iccp, discard), plain);
+  // A dropped tRNS keys nothing: the matching color stays opaque.
+  const key = Buffer.from([0, 9, 0, 8, 0, 7]);
+  const keyed = (tRNS) => png({width: 1, height: 1, type: 2, raw, extras: [tRNS]});
+  assert.deepEqual([...(await decodePng(keyed(chunk('tRNS', key)), discard)).pixels], [9, 8, 7, 0]);
+  assert.deepEqual(
+    [...(await decodePng(keyed(corrupt(chunk('tRNS', key))), discard)).pixels],
+    [9, 8, 7, 255],
+  );
+  // An ancillary chunk after the image data still closes it.
+  const after = Buffer.from(png({width: 1, height: 1, type: 2, raw}));
+  const tail = after.length - 12;
+  const late = Buffer.concat([
+    after.subarray(0, tail),
+    corrupt(chunk('tEXt', Buffer.from('a\0b'))),
+    after.subarray(tail),
+  ]);
+  assert.deepEqual(await decodePng(late, discard), plain);
+  // Critical chunks still fail.
+  const idat = Buffer.from(png({width: 1, height: 1, type: 2, raw}));
+  idat[idat.length - 13] ^= 1;
+  await assert.rejects(decodePng(idat, discard), /IDAT CRC mismatch/);
+});
 test('PNG rejects CRC errors, wrong scanline length, filters and unknown critical chunks', async () => {
   const good = png({width: 1, height: 1, raw: Buffer.from([0, 1, 2, 3, 4])}),
     bad = Buffer.from(good);

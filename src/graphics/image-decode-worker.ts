@@ -7,10 +7,10 @@ import type {ImageDecodeRequest, ImageDecodeResponse} from './image-decode-offlo
 
 // Failures are reported as failed jobs; the host reruns the in-thread decoder, which raises
 // the original error.
-serveWorkerPool<ImageDecodeRequest, ImageDecodeResponse>(async ({format, bytes}) => {
+serveWorkerPool<ImageDecodeRequest, ImageDecodeResponse>(async ({format, bytes, png}) => {
   const image =
     format === 'png'
-      ? await decodePng(bytes)
+      ? await decodePng(bytes, png)
       : format === 'artemis-psd'
         ? decodeArtemisPsd(bytes)
         : format === 'opaque-jpeg'

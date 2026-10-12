@@ -2656,6 +2656,29 @@ test('Asynchronous image loading preserves Unicode aliases and stops on owner re
   await assert.rejects(() => refused.load('unknown'), /unsupported root/);
 });
 
+test('Artemis PNG loads drop an ancillary chunk whose CRC fails, as libpng 0x14005ccf0 does', async () => {
+  const {createArtemisImageLoader} = await import('../dist/engines/artemis/image-loader.js');
+  const {artemisPngDecodeOptions} = await import('../dist/engines/artemis/png-surface.js');
+  const {ARTEMIS_3139_EXECUTABLE_SHA256: sha} = await import('../dist/engines/artemis/revision.js');
+  const {png, chunk} = await import('./png-fixtures.mjs');
+  assert.deepEqual({...artemisPngDecodeOptions}, {ancillaryCrcErrors: 'discard'});
+  const iccp = chunk('iCCP', Buffer.from('p\0\0xyz'));
+  iccp[iccp.length - 1] ^= 1;
+  const encoded = png({width: 1, height: 1, raw: Buffer.from([0, 1, 2, 3, 4]), extras: [iccp]});
+  const loader = createArtemisImageLoader(sha, async (path) => (path === 'a.png' ? encoded : null));
+  const loaded = await loader.load('a');
+  assert.deepEqual(
+    [loaded.image.width, loaded.image.height, [...loaded.image.pixels]],
+    [1, 1, [1, 2, 3, 4]],
+  );
+  const critical = Buffer.from(encoded);
+  critical[critical.length - 13] ^= 1;
+  const strict = createArtemisImageLoader(sha, async (path) =>
+    path === 'a.png' ? critical : null,
+  );
+  await assert.rejects(() => strict.load('a'), /IDAT CRC mismatch/);
+});
+
 test('Revision-selected image pipeline decodes synthetic PNGs through suspended Lua work', async () => {
   const {createArtemisImageLoader} = await import('../dist/engines/artemis/image-loader.js');
   const {ARTEMIS_3179_EXECUTABLE_SHA256: sha} = await import('../dist/engines/artemis/revision.js');
