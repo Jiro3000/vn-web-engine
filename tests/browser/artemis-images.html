@@ -1037,6 +1037,7 @@
       await font.close();
       const fileFonts = new ArtemisFileFonts(revision, {
         readFontFile: async () => rectangleFont(),
+        hasSystemFontFamily: async () => false,
         openFontFace: (bytes) => fontWorker.open(bytes),
       });
       const textGlyphs = new ArtemisTextGlyphs(revision, fileFonts, glyphPainter);

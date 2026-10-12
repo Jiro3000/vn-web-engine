@@ -1426,8 +1426,12 @@ opens a face: FreeType file, `<face>_<size>.rft` rendered font, then the system 
 renderer that never opened one draws empty, zero-advance characters (`0x140166420`). In
 this UTF-8 revision the Shift-JIS default face (`ＭＳ ゴシック`) opens nowhere, because
 CSystemFont matches UTF-8 `EnumFontFamiliesExW` family names, so text printed after a
-bare `fontinit` is empty on a fresh layer. A layer that already opened a face and then
-meets an unopenable one is refused, as are missing font files with UTF-8 names.
+bare `fontinit` is empty on a fresh layer. A missing font file falls through the same
+chain: an existing `.rft` file or a system family the host reports
+(`hasSystemFontFamily`; the browser player tests whether the browser draws the family)
+would open a provider that is not reconstructed and is refused. Otherwise a layer that
+already opened a face keeps drawing with that provider's face, size and style bits. The
+normal stream selects its font before the ruby stream.
 
 `ArtemisPrint` handles print/ruby-buffer/debug-skip routing, diagnostics, overflow
 variable writes and consumed-prefix history. The required insertion owner returns

@@ -30,6 +30,7 @@ export function createArtemisGlyphLayoutFixture(hash, readFont) {
         });
       return bytes;
     },
+    hasSystemFontFamily: async () => false,
     openFontFace: async (bytes) => {
       const face = await fontWorker.open(bytes);
       return {

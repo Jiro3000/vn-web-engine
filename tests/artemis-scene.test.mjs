@@ -2720,6 +2720,7 @@ test('Native glyph block pipeline shares file faces and cached painted glyphs ac
       reads++;
       return rectangleFont();
     },
+    hasSystemFontFamily: async () => false,
     openFontFace: (bytes) => worker.open(bytes),
   });
   const loader = new ArtemisTextGlyphs(hash, fonts, painter);
@@ -2800,6 +2801,7 @@ test('Native glyph pipeline validates before allocation, retries failed paint an
       reads++;
       return rectangleFont();
     },
+    hasSystemFontFamily: async () => false,
     openFontFace: (bytes) => worker.open(bytes),
   });
   const loader = new ArtemisTextGlyphs(hash, fonts, {
@@ -2881,6 +2883,7 @@ test('Native glyph blocks overlap font and paint jobs in a bounded window and ke
     painter = await createNodeGlyphPainter(hash);
   const fonts = new ArtemisFileFonts(hash, {
     readFontFile: async () => rectangleFont(),
+    hasSystemFontFamily: async () => false,
     openFontFace: (bytes) => worker.open(bytes),
   });
   let active = 0,
@@ -3064,6 +3067,7 @@ async function nativeInsertionFixture() {
     painter = await createNodeGlyphPainter(hash);
   const fonts = new ArtemisFileFonts(hash, {
     readFontFile: async () => rectangleFont(),
+    hasSystemFontFamily: async () => false,
     openFontFace: (bytes) => worker.open(bytes),
   });
   const glyphs = new ArtemisTextGlyphs(hash, fonts, painter);
@@ -3454,7 +3458,7 @@ test('Native font defaults preserve historical face bytes and keep overflow outs
     );
     await assert.rejects(fixture.glyphs.load('A', '', original), /legacy\/system/);
     // A layer renderer that never opened a face prints empty, zero-advance characters; once a
-    // face opened, the native renderer would keep that previous provider instead.
+    // face opened, the renderer keeps that previous provider instead.
     const renderer = new ArtemisGlyphRenderer();
     const empty = await fixture.glyphs.load('AB', '', original, renderer);
     assert.deepEqual(
@@ -3464,11 +3468,65 @@ test('Native font defaults preserve historical face bytes and keep overflow outs
         [66, 0, null],
       ],
     );
-    await fixture.glyphs.load('A', '', next.font, renderer);
-    await assert.rejects(fixture.glyphs.load('A', '', original, renderer), /legacy\/system/);
+    const opened = await fixture.glyphs.load('A', '', next.font, renderer);
+    const kept = await fixture.glyphs.load('A', '', original, renderer);
+    assert.equal(kept.main[0].advance, opened.main[0].advance);
+    assert.notEqual(kept.main[0].glyph.surface.image, null);
     // An unused legacy ruby face must not prevent actual normal text insertion.
     assert.equal(next.font.rubyface, original.rubyface);
   } finally {
+    await fixture.close();
+  }
+});
+
+test('A face no provider opens keeps the layer renderer on its previous font', async () => {
+  const {ArtemisTextGlyphs, ArtemisGlyphRenderer} =
+    await import('../dist/engines/artemis/text-glyphs.js');
+  const {ArtemisFileFonts} = await import('../dist/engines/artemis/file-fonts.js');
+  const {rectangleFont, createNodeFontWorker, createNodeGlyphPainter} =
+    await import('./freetype-fixtures.mjs');
+  const fixture = await nativeInsertionFixture();
+  const hash = fixture.hash;
+  const worker = await createNodeFontWorker(),
+    painter = await createNodeGlyphPainter(hash);
+  const reads = [];
+  const fonts = new ArtemisFileFonts(hash, {
+    readFontFile: async (path) => {
+      reads.push(path);
+      if (path === 'a.ttf') return rectangleFont();
+      return path === 'r.ttf_16.rft' ? new Uint8Array(4) : null;
+    },
+    hasSystemFontFamily: async (name) => name === 'family',
+    openFontFace: (bytes) => worker.open(bytes),
+  });
+  const glyphs = new ArtemisTextGlyphs(hash, fonts, painter);
+  const style = (face, size) => ({...fixture.style, face, size});
+  try {
+    const renderer = new ArtemisGlyphRenderer();
+    const fresh = await glyphs.load('A', '', style('gone.ttf', 32), renderer);
+    assert.deepEqual(
+      fresh.main.map((g) => [g.advance, g.glyph.surface.image]),
+      [[0, null]],
+    );
+    assert.deepEqual(reads, ['gone.ttf', 'gone.ttf_32.rft']);
+    const large = await glyphs.load('A', '', style('a.ttf', 32), renderer);
+    const small = await glyphs.load('A', '', style('a.ttf', 16), renderer);
+    assert.notEqual(large.main[0].advance, small.main[0].advance);
+    // The 16-pixel provider stays current with its own size.
+    const kept = await glyphs.load('A', '', style('gone.ttf', 32), renderer);
+    assert.equal(kept.main[0].advance, small.main[0].advance);
+    assert.equal(
+      (await glyphs.load('A', '', style('r.ttf', 17), renderer)).main[0].advance,
+      small.main[0].advance,
+    );
+    await assert.rejects(glyphs.load('A', '', style('r.ttf', 16), renderer), /rendered font/);
+    await assert.rejects(glyphs.load('A', '', style('family', 16), renderer), /system font/);
+    await assert.rejects(glyphs.load('A', '', style('gone.ttf', 32)), /Missing Artemis font file/);
+  } finally {
+    await glyphs.close();
+    await fonts.close();
+    painter.close();
+    worker.close();
     await fixture.close();
   }
 });

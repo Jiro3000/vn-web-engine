@@ -8,6 +8,8 @@ export interface ArtemisFileFontFace {
 }
 export interface ArtemisFileFontHost {
   readFontFile(path: string): Promise<Uint8Array | null>;
+  /** Whether CSystemFont's UTF-8 EnumFontFamiliesExW family names include `name`. */
+  hasSystemFontFamily(name: string): Promise<boolean>;
   /** Must provide FreeType 2.4.8 with Unicode charmap and face index0. */
   openFontFace(bytes: Uint8Array): Promise<ArtemisFileFontFace>;
 }
@@ -26,6 +28,13 @@ export interface ArtemisFileGlyph {
   readonly top: number;
   readonly advance: number;
   readonly pixels: Uint8Array;
+}
+/** The face file does not exist; CFreeTypeFont open (0x14016a0a0) then fails before it
+ * changes any provider state. */
+export class ArtemisMissingFontFile extends Error {
+  constructor(path: string) {
+    super('Missing Artemis font file ' + path);
+  }
 }
 interface Entry {
   face: Promise<ArtemisFileFontFace>;
@@ -81,9 +90,18 @@ export class ArtemisFileFonts {
       throw error;
     }
   }
+  /** Whether a provider file such as `<face>_<size>.rft` exists. */
+  async hasFile(path: string): Promise<boolean> {
+    if (this.closed) throw Error('Artemis file fonts closed');
+    return (await this.host.readFontFile(path)) !== null;
+  }
+  hasSystemFamily(name: string): Promise<boolean> {
+    if (this.closed) throw Error('Artemis file fonts closed');
+    return this.host.hasSystemFontFamily(name);
+  }
   private async open(path: string): Promise<ArtemisFileFontFace> {
     const bytes = await this.host.readFontFile(path);
-    if (!bytes) throw Error('Missing Artemis font file ' + path);
+    if (!bytes) throw new ArtemisMissingFontFile(path);
     if (this.closed) throw Error('Artemis file fonts closed');
     return this.host.openFontFace(bytes);
   }

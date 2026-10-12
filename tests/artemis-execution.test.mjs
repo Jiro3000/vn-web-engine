@@ -3381,6 +3381,7 @@ test('Native file fonts share resources but keep cell-size metrics and raster jo
         reads++;
         return path === 'synthetic.ttf' ? rectangleFont() : null;
       },
+      hasSystemFontFamily: async () => false,
       openFontFace: async (bytes) => {
         opens++;
         const face = await worker.open(bytes);

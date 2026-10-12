@@ -12,6 +12,7 @@ import {BrowserWindowCaptionHost} from '../../../platform/window-caption.js';
 import {BrowserWindowStateHost} from '../../../platform/window-state.js';
 import {BrowserTextDialogHost} from '../../../platform/text-dialog.js';
 import {FreeTypeWorker} from '../../../text/freetype-worker-client.js';
+import {browserDrawsFamily} from '../../../text/gdi-font-families.js';
 import {BrowserFullscreenMoviePlayer} from '../../../video/fullscreen-movie.js';
 import {createArtemisBrowserSoundVoices} from '../browser-sound-voices.js';
 import {BlobSource} from '../../../core/source.js';
@@ -167,6 +168,8 @@ export class ArtemisBrowserPlayer {
     this.painter = new ArtemisGlyphPainter(hash);
     this.fonts = new ArtemisFileFonts(hash, {
       readFontFile: read,
+      // Without font enumeration, a family the browser draws stands for an installed one.
+      hasSystemFontFamily: async (name) => browserDrawsFamily(document, name),
       openFontFace: (bytes) => this.fontWorker.open(bytes),
     });
     this.glyphBlocks = new ArtemisTextGlyphs(hash, this.fonts, this.painter);
