@@ -1,4 +1,10 @@
-import {ArtemisMissingFontFile, type ArtemisFileFont, type ArtemisFileFonts} from './file-fonts.js';
+import {
+  ArtemisMissingFontFile,
+  type ArtemisFileFont,
+  type ArtemisFileFontMetrics,
+  type ArtemisFileFonts,
+  type ArtemisFileGlyph,
+} from './file-fonts.js';
 import type {ArtemisGlyphPainter} from './glyph-paint-client.js';
 import type {ArtemisGlyphSurface} from './glyph-paint.js';
 import {
@@ -25,15 +31,23 @@ export interface ArtemisTextGlyphResource {
 /** One text layer's CFontRenderer current-provider state. setFont (0x1401662e0) keeps
  * the first of the FreeType, rendered (.rft) and system providers that opens the face; when
  * none opens it the previous provider stays current. A renderer that has never opened a face
- * has no provider, and 0x140166420 then yields empty character surfaces. */
+ * has no provider, and 0x140166420 then yields empty character surfaces, as it does for a
+ * failed provider glyph. */
 export class ArtemisGlyphRenderer {
   /** The current provider's face path, byte size and style bits. */
   current: ArtemisGlyphProvider | null = null;
 }
 interface ArtemisGlyphProvider {
+  /** CFreeTypeFont file or CRenderedFont `.rft` face. */
+  readonly kind: 'file' | 'rendered';
   readonly path: string;
   readonly size: number;
   readonly styleBits: number;
+}
+/** A provider's glyph call: null when it fails. */
+interface ArtemisGlyphFont {
+  readonly metrics: ArtemisFileFontMetrics;
+  glyph(codePoint: number): Promise<ArtemisFileGlyph | null>;
 }
 const emptyGlyph = (codePoint: number): ArtemisTextGlyphResource =>
   Object.freeze({
@@ -96,26 +110,36 @@ export class ArtemisTextGlyphs {
       throw Error('Artemis text block glyph budget exceeded');
     // setFont for the normal stream, then the ruby stream; a stream without characters or
     // size selects no font.
+    const open = async (provider: ArtemisGlyphProvider): Promise<ArtemisGlyphFont | null> =>
+      provider.kind === 'file'
+        ? this.font(provider.path, provider.size, provider.styleBits)
+        : this.fontOwner.loadRendered(provider.path, provider.size);
     const select = async (
       ruby: boolean,
-    ): Promise<{provider: ArtemisGlyphProvider; font: ArtemisFileFont} | null | undefined> => {
+    ): Promise<{provider: ArtemisGlyphProvider; font: ArtemisGlyphFont} | null | undefined> => {
       const size = ruby ? snapshot.rubysize : snapshot.size;
       if (!size || !(ruby ? rubySymbols : mainSymbols).length) return undefined;
       const face = ruby ? snapshot.rubyface : snapshot.face;
       if (typeof face === 'string') {
-        const provider = {path: face.split('\0', 1)[0]!, size, styleBits: snapshot.styleBits};
+        const path = face.split('\0', 1)[0]!,
+          styleBits = snapshot.styleBits;
+        const file: ArtemisGlyphProvider = {kind: 'file', path, size, styleBits};
         try {
-          const font = await this.font(provider.path, size, provider.styleBits);
-          if (renderer) renderer.current = provider;
-          return {provider, font};
+          const font = await open(file);
+          if (renderer) renderer.current = file;
+          return {provider: file, font: font!};
         } catch (error) {
           if (!(error instanceof ArtemisMissingFontFile) || !renderer) throw error;
         }
         // CRenderedFont (0x14018a160) opens `<face>_<size>.rft`, CSystemFont (0x140191720)
         // a UTF-8 EnumFontFamiliesExW family name.
-        if (await this.fontOwner.hasFile(`${provider.path}_${size & 255}.rft`))
-          throw Error('Unsupported Artemis rendered font');
-        if (await this.fontOwner.hasSystemFamily(provider.path))
+        const rendered: ArtemisGlyphProvider = {kind: 'rendered', path, size, styleBits};
+        const font = await open(rendered);
+        if (font) {
+          renderer.current = rendered;
+          return {provider: rendered, font};
+        }
+        if (await this.fontOwner.hasSystemFamily(path))
           throw Error('Unsupported Artemis system font');
       } else if (!renderer) {
         // In this UTF-8 revision a face that is not UTF-8 (the 193720 Shift-JIS default)
@@ -125,10 +149,9 @@ export class ArtemisTextGlyphs {
       }
       const previous = renderer!.current;
       if (!previous) return null;
-      return {
-        provider: previous,
-        font: await this.font(previous.path, previous.size, previous.styleBits),
-      };
+      const font = await open(previous);
+      if (!font) throw Error('Artemis glyph provider no longer opens');
+      return {provider: previous, font};
     };
     const mainFont = await select(false);
     this.assertOpen();
@@ -156,6 +179,7 @@ export class ArtemisTextGlyphs {
         this.assertOpen();
         const codePoint = symbol.codePointAt(0)!;
         const key = JSON.stringify([
+          provider.kind,
           provider.path,
           provider.size,
           provider.styleBits,
@@ -177,6 +201,7 @@ export class ArtemisTextGlyphs {
             promise: Promise.resolve().then(async () => {
               const glyph = await font.glyph(codePoint);
               this.assertOpen();
+              if (!glyph) return emptyGlyph(codePoint);
               const surface = await this.painter.paint(glyph, {
                 shadow,
                 outline,

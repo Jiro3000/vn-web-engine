@@ -7373,3 +7373,46 @@ test('Artemis runtime reports missing seplay and splay sounds like c7260 and con
   }, /Artemis sound load failed/);
   await strict.close();
 });
+
+test('CIni sections, keys and values follow the native tokenizer', async () => {
+  const {ArtemisIni, artemisAtoi} = await import('../dist/engines/artemis/ini.js');
+  const text = [
+    'top = 1',
+    '; comment = 9',
+    '[FONT]',
+    '  KEY   =  a b  \r',
+    'SPLIT',
+    'KEY = 2',
+    'esc\\=aped = 3',
+    'value = x\\y ; z',
+    '[OTHER]',
+    'KEY = 4',
+    '[FONT]',
+    'LAST = 5',
+    'ＫＥＹ = ６',
+    'TAIL',
+  ].join('\n');
+  const ini = ArtemisIni.parse(new TextEncoder().encode(text));
+  const get = (section, key) => new TextDecoder().decode(ini.get(section, key));
+  assert.equal(get('', 'top'), '1');
+  assert.equal(get('', 'comment'), '');
+  // The repeated [FONT] section replaces the first one whole.
+  assert.equal(get('FONT', 'KEY'), '');
+  assert.equal(get('FONT', 'LAST'), '5');
+  assert.equal(get('FONT', 'ＫＥＹ'), '６');
+  assert.equal(get('FONT', 'TAIL'), '');
+  assert.equal(get('OTHER', 'KEY'), '4');
+  const first = ArtemisIni.parse(new TextEncoder().encode(text.split('[OTHER]')[0]));
+  const value = (key) => new TextDecoder().decode(first.get('FONT', key));
+  assert.equal(value('KEY'), 'a b');
+  // A key without `=` runs on over the line end; `\` escapes key bytes only.
+  assert.equal(value('SPLIT\nKEY'), '2');
+  assert.equal(value('esc=aped'), '3');
+  assert.equal(value('value'), 'x\\y ; z');
+  assert.deepEqual(
+    [' 42x', '-7', '+', '99999999999', '\t-99999999999'].map((v) =>
+      artemisAtoi(new TextEncoder().encode(v)),
+    ),
+    [42, -7, 0, 0x7fffffff, -0x80000000],
+  );
+});

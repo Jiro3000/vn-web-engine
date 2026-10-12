@@ -467,3 +467,35 @@ test('Plain CFile reads bypass archive overlays and pack magic aliases', async (
   await assert.rejects(files.readPlain(':system/plain.lua'), /Unsupported/);
   assert.equal(Buffer.from(await files.read(':system/plain.lua')).toString(), 'plain');
 });
+
+test('Rendered font files index fixed code ranges per version', async () => {
+  const {artemisRftEntry, artemisRftSettingsEntry, artemisRftVersion} =
+    await import('../dist/formats/artemis/rft.js');
+  const {rft} = await import('./artemis-rft-fixtures.mjs');
+  const glyph = Buffer.from([1, 2, 3]);
+  const unicode = rft({ini: 'x', entries: new Map([[0x3042, glyph]])});
+  assert.equal(artemisRftVersion(unicode), 3);
+  assert.equal(unicode.length - 4, 63455 * 8 + 1 + 3);
+  assert.deepEqual(artemisRftSettingsEntry(unicode), artemisRftEntry(unicode, 0, true));
+  const at = artemisRftEntry(unicode, 0x3042, true);
+  assert.deepEqual([...unicode.subarray(at.offset, at.offset + at.size)], [1, 2, 3]);
+  assert.deepEqual(artemisRftEntry(unicode, 0x41, true), {offset: 0, size: 0});
+  // Space, the C1 gap, surrogates and codes above the BMP are outside the Unicode ranges.
+  for (const code of [0x20, 0x7f, 0xd800, 0x10000])
+    assert.equal(artemisRftEntry(unicode, code, true), undefined);
+  // A non-UTF-8 CHARSET indexes the same file by the Shift-JIS ranges after code 0.
+  const shiftJis = rft({ini: 'x', unicodeRanges: false, entries: new Map([[0x82a0, glyph]])});
+  assert.equal(artemisRftEntry(shiftJis, 0x82a0, false).size, 3);
+  assert.equal(artemisRftEntry(shiftJis, 0x80, false), undefined);
+  // rft0 starts its third range at 8141; rft1 and rft2 at 8140; neither indexes code 0.
+  const old = rft({version: 0, entries: new Map([[0x8141, glyph]])});
+  assert.equal(artemisRftEntry(old, 0x8141, false).size, 3);
+  assert.equal(artemisRftEntry(old, 0x8140, false), undefined);
+  assert.equal(artemisRftEntry(old, 0, false), undefined);
+  const one = rft({version: 1, entries: new Map([[0x8140, glyph]])});
+  assert.equal(artemisRftEntry(one, 0x8140, false).size, 3);
+  assert.equal(artemisRftVersion(new Uint8Array([0x72, 0x66, 0x74, 0x34])), undefined);
+  assert.throws(() => artemisRftEntry(new Uint8Array(4), 0x41, false), /magic/);
+  const truncated = unicode.slice(0, 100);
+  assert.throws(() => artemisRftEntry(truncated, 0x3042, true), /index exceeds/);
+});

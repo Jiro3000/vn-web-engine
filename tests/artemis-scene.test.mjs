@@ -3479,28 +3479,62 @@ test('Native font defaults preserve historical face bytes and keep overflow outs
   }
 });
 
-test('A face no provider opens keeps the layer renderer on its previous font', async () => {
+test('setFont falls back from a missing font file to a rendered font, then keeps the previous provider', async () => {
   const {ArtemisTextGlyphs, ArtemisGlyphRenderer} =
     await import('../dist/engines/artemis/text-glyphs.js');
   const {ArtemisFileFonts} = await import('../dist/engines/artemis/file-fonts.js');
   const {rectangleFont, createNodeFontWorker, createNodeGlyphPainter} =
     await import('./freetype-fixtures.mjs');
+  const {png} = await import('./png-fixtures.mjs');
+  const {rft} = await import('./artemis-rft-fixtures.mjs');
   const fixture = await nativeInsertionFixture();
   const hash = fixture.hash;
   const worker = await createNodeFontWorker(),
     painter = await createNodeGlyphPainter(hash);
+  const gray = (width, height) =>
+    png({
+      width,
+      height,
+      type: 0,
+      raw: Buffer.concat(
+        Array.from({length: height}, () => Buffer.from([0, ...Array(width).fill(200)])),
+      ),
+    });
+  const ini = (charset) =>
+    `[FONT]\r\nCOLOR_32 = 0\r\nCHARSET = ${charset} \r\nSTRIKEOUT_SIZE=2\r\n` +
+    'STRIKEOUT_POSITION = 9\r\nUNDERSCORE_SIZE=1\r\nUNDERSCORE_POSITION=14\r\n';
+  const files = new Map([
+    ['a.ttf', rectangleFont()],
+    [
+      'r.ttf_16.rft',
+      rft({
+        ini: ini('UTF-8'),
+        entries: new Map([
+          [0x41, gray(6, 16)],
+          [0x42, Buffer.alloc(0)],
+        ]),
+      }),
+    ],
+    // The file layer also tries the name with a second `.rft`; rft0 has no settings entry.
+    ['j.ttf_16.rft.rft', rft({version: 0, entries: new Map([[0x41, gray(5, 16)]])})],
+    ['x.ttf_16.rft', new Uint8Array(4)],
+    [
+      'c.ttf_16.rft',
+      rft({ini: '[FONT]\nCOLOR_32=1\nCHARSET=UTF-8\n', entries: new Map([[0x41, gray(6, 16)]])}),
+    ],
+  ]);
   const reads = [];
   const fonts = new ArtemisFileFonts(hash, {
     readFontFile: async (path) => {
       reads.push(path);
-      if (path === 'a.ttf') return rectangleFont();
-      return path === 'r.ttf_16.rft' ? new Uint8Array(4) : null;
+      return files.get(path) ?? null;
     },
     hasSystemFontFamily: async (name) => name === 'family',
     openFontFace: (bytes) => worker.open(bytes),
   });
   const glyphs = new ArtemisTextGlyphs(hash, fonts, painter);
   const style = (face, size) => ({...fixture.style, face, size});
+  const advances = (block) => block.main.map((g) => g.advance);
   try {
     const renderer = new ArtemisGlyphRenderer();
     const fresh = await glyphs.load('A', '', style('gone.ttf', 32), renderer);
@@ -3508,18 +3542,44 @@ test('A face no provider opens keeps the layer renderer on its previous font', a
       fresh.main.map((g) => [g.advance, g.glyph.surface.image]),
       [[0, null]],
     );
-    assert.deepEqual(reads, ['gone.ttf', 'gone.ttf_32.rft']);
+    assert.deepEqual(reads, ['gone.ttf', 'gone.ttf_32.rft', 'gone.ttf_32.rft.rft']);
     const large = await glyphs.load('A', '', style('a.ttf', 32), renderer);
     const small = await glyphs.load('A', '', style('a.ttf', 16), renderer);
     assert.notEqual(large.main[0].advance, small.main[0].advance);
     // The 16-pixel provider stays current with its own size.
     const kept = await glyphs.load('A', '', style('gone.ttf', 32), renderer);
     assert.equal(kept.main[0].advance, small.main[0].advance);
-    assert.equal(
-      (await glyphs.load('A', '', style('r.ttf', 17), renderer)).main[0].advance,
+    // An invalid rendered file opens nothing either.
+    assert.deepEqual(advances(await glyphs.load('A', '', style('x.ttf', 16), renderer)), [
       small.main[0].advance,
+    ]);
+    // The rendered font draws its images at the line top and advances by their width. An
+    // unindexed U+0020 advances by (size+1)/2; an empty entry (here U+3000 too) or another
+    // unindexed code fails as an empty character.
+    const rendered = await glyphs.load('A B\u3000C\u{1d49c}', '', style('r.ttf', 16), renderer);
+    assert.deepEqual(advances(rendered), [6, 8, 0, 0, 0, 0]);
+    assert.equal(rendered.main[0].glyph.surface.top, 0);
+    assert.equal(rendered.main[0].glyph.surface.image.width, 6);
+    const metrics = (await fonts.loadRendered('r.ttf', 16)).metrics;
+    assert.deepEqual(
+      [
+        metrics.decorationThickness,
+        metrics.strikeoutPosition,
+        metrics.underlineThickness,
+        metrics.underlinePosition,
+      ],
+      [2, 9, 1, 14],
     );
-    await assert.rejects(glyphs.load('A', '', style('r.ttf', 16), renderer), /rendered font/);
+    // A face that opens nothing keeps the rendered provider.
+    assert.deepEqual(advances(await glyphs.load('A', '', style('gone.ttf', 24), renderer)), [6]);
+    // Codes look up the Shift-JIS ranges of rft0 unchanged, so U+3000 is unindexed there and
+    // advances by the size.
+    assert.deepEqual(
+      advances(await glyphs.load('A \u3000', '', style('j.ttf', 16), renderer)),
+      [5, 8, 16],
+    );
+    assert.equal((await fonts.loadRendered('j.ttf', 16)).metrics.underlineThickness, 0);
+    await assert.rejects(glyphs.load('A', '', style('c.ttf', 16), renderer), /32-bit/);
     await assert.rejects(glyphs.load('A', '', style('family', 16), renderer), /system font/);
     await assert.rejects(glyphs.load('A', '', style('gone.ttf', 32)), /Missing Artemis font file/);
   } finally {

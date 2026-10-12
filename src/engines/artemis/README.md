@@ -1427,11 +1427,26 @@ renderer that never opened one draws empty, zero-advance characters (`0x14016642
 this UTF-8 revision the Shift-JIS default face (`ＭＳ ゴシック`) opens nowhere, because
 CSystemFont matches UTF-8 `EnumFontFamiliesExW` family names, so text printed after a
 bare `fontinit` is empty on a fresh layer. A missing font file falls through the same
-chain: an existing `.rft` file or a system family the host reports
-(`hasSystemFontFamily`; the browser player tests whether the browser draws the family)
-would open a provider that is not reconstructed and is refused. Otherwise a layer that
-already opened a face keeps drawing with that provider's face, size and style bits. The
-normal stream selects its font before the ruby stream.
+chain. A system family the host reports (`hasSystemFontFamily`; the browser player tests
+whether the browser draws the family) would open CSystemFont, which is not reconstructed
+and is refused. Otherwise a layer that already opened a face keeps drawing with that
+provider's face, size and style bits. The normal stream selects its font before the ruby
+stream. A failed provider glyph is an empty, zero-advance character.
+
+## Rendered fonts
+
+`ArtemisRenderedFont` is CRenderedFont over the `.rft` container
+(`src/formats/artemis/rft.ts`): the file `<face>_<size>.rft`, or that name with a second
+`.rft`, holds `rft0`-`rft3` magic and an index of (offset, size) entries over fixed code
+ranges. `rft3` adds a settings entry at code 0, read with the native INI tokenizer
+(`ArtemisIni`, CIni); its `[FONT] CHARSET` of exactly `UTF-8` selects Unicode ranges, and
+the choice is kept per file name for the process. The settings give the strikeout and
+underline metrics and `COLOR_32`; a file without them opens through its `A` entry with
+zero metrics. Glyphs are 8-bit gray PNG entries placed at the line top that advance by
+their width; character codes are looked up unchanged, so the Shift-JIS versions see
+Unicode code points in this revision. Unindexed U+0020 and U+3000 advance by half the
+size (rounded up) and the size; other unindexed codes and empty entries fail. 32-bit
+(`COLOR_32`/`rft2`) glyphs and other image formats are refused.
 
 `ArtemisPrint` handles print/ruby-buffer/debug-skip routing, diagnostics, overflow
 variable writes and consumed-prefix history. The required insertion owner returns

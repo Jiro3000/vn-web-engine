@@ -1,4 +1,5 @@
 import type {FreeTypeMetrics, FreeTypeGlyph, FreeTypeRasterOptions} from '../../text/freetype.js';
+import {ArtemisRenderedFont} from './rendered-fonts.js';
 import {artemisRevision} from './revision.js';
 
 export interface ArtemisFileFontFace {
@@ -46,6 +47,8 @@ interface Entry {
  */
 export class ArtemisFileFonts {
   private readonly entries = new Map<string, Entry>();
+  private readonly rendered = new Map<string, Promise<ArtemisRenderedFont | null>>();
+  private readonly charsets = new Map<string, boolean>();
   private closed = false;
   constructor(
     executableSha256: string,
@@ -90,10 +93,24 @@ export class ArtemisFileFonts {
       throw error;
     }
   }
-  /** Whether a provider file such as `<face>_<size>.rft` exists. */
-  async hasFile(path: string): Promise<boolean> {
+  /** The CRenderedFont provider of `face` at uint8 `size`, or null when it does not open. */
+  loadRendered(face: string, size: number): Promise<ArtemisRenderedFont | null> {
     if (this.closed) throw Error('Artemis file fonts closed');
-    return (await this.host.readFontFile(path)) !== null;
+    const key = JSON.stringify([face, size & 255]);
+    let font = this.rendered.get(key);
+    if (!font) {
+      font = ArtemisRenderedFont.open(
+        (path) => this.host.readFontFile(path),
+        this.charsets,
+        face,
+        size,
+      );
+      this.rendered.set(key, font);
+      font.catch(() => {
+        if (this.rendered.get(key) === font) this.rendered.delete(key);
+      });
+    }
+    return font;
   }
   hasSystemFamily(name: string): Promise<boolean> {
     if (this.closed) throw Error('Artemis file fonts closed');
