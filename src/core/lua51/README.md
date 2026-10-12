@@ -22,7 +22,10 @@ holds the original exception. Owners use it to keep host refusals distinct from
 errors raised by Lua code. A per-call instruction budget is shared across nested
 calls; exhaustion throws across the wasm import, preventing Lua pcall from
 swallowing it, and invalidates that VM. Host table conversion is bounded to
-100,000 visited values per conversion and nesting depth 64. Memory growth is bounded to 64 MiB. These
+100,000 visited values per conversion and nesting depth 64. Memory growth is bounded to 2 GiB: the native Artemis
+allocator (Rev.3139 0x1401a0710, `lua_newstate` inlined in 0x1401293e0) is plain
+`realloc`/`free`, and game Lua may stop the collector (`collectgarbage("stop")`) until
+its heap reaches a threshold of its own, so a small bound fails scripts that run natively. These
 limits do not bound every C library operation or claim a security sandbox.
 
 `createThread` roots a callable in a separate Lua coroutine. Each `resume` returns

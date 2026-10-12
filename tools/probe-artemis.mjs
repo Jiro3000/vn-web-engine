@@ -117,6 +117,15 @@ const automodeLimitArgument = process.argv
 const automodeLimit = automodeLimitArgument
   ? artemisInteger(automodeLimitArgument.slice('--automode-limit='.length))
   : null;
+// --lua-memory-every=N: every N delivered clicks, record the Lua heap (collectgarbage
+// "count", KiB) and the Lua module's wasm memory size in bytes. Diagnostic only.
+const luaMemoryArgument = process.argv
+  .slice(3)
+  .findLast((arg) => arg.startsWith('--lua-memory-every='));
+const luaMemoryEvery = luaMemoryArgument
+  ? artemisInteger(luaMemoryArgument.slice('--lua-memory-every='.length))
+  : 0;
+const luaMemory = [];
 const shaderPresets = process.argv.slice(3).includes('--shader-presets');
 // --windows-version=MAJOR.MINOR: the SIMULATED Windows version (the browser page reports
 // 10.0); absent, the query fails like the browser system profile.
@@ -648,6 +657,21 @@ try {
         }
         deliveredClicks++;
         probeClicks--;
+        if (luaMemoryEvery && deliveredClicks % luaMemoryEvery === 0) {
+          const count = lua.vm.referenceGlobal('collectgarbage');
+          try {
+            luaMemory.push({
+              click: deliveredClicks,
+              kib: count.invokeFirst([new TextEncoder().encode('count')]),
+              wasmBytes: lua.vm.exports.memory.buffer.byteLength,
+              // The registry slot of this temporary reference: luaL_ref reuses freed slots,
+              // so a growing number means host references that were never released.
+              registryRef: count.id,
+            });
+          } finally {
+            count.release();
+          }
+        }
         runtime.now = (runtime.now + 16) >>> 0 || 1;
         modeEffects.push({click: true, simulation: true});
         if (!wait.tick(runtime.now, true))
@@ -701,10 +725,15 @@ try {
     if (process.env.ARTEMIS_PROBE_STACK) console.error(error.stack, error.hostCause?.stack ?? '');
   }
   // ARTEMIS_PROBE_LUA: diagnostic Lua chunk run after the route; it sets global probe_out.
+  // A chunk that sets global probe_done to false runs again (each run has its own instruction
+  // budget), at most 10000 times, until it sets probe_done to true.
   let probeLua;
   if (process.env.ARTEMIS_PROBE_LUA) {
     try {
-      lua.vm.execute(new TextEncoder().encode(process.env.ARTEMIS_PROBE_LUA), 'probe');
+      const chunk = new TextEncoder().encode(process.env.ARTEMIS_PROBE_LUA);
+      lua.vm.execute(chunk, 'probe');
+      for (let runs = 1; lua.vm.getGlobal('probe_done') === false && runs < 10000; runs++)
+        lua.vm.execute(chunk, 'probe');
       probeLua = luaText(lua.vm.getGlobal('probe_out') ?? '');
     } catch (error) {
       probeLua = 'error: ' + error.message;
@@ -778,6 +807,7 @@ try {
       luaCallErrors,
       unknownTagReports,
       tagErrorReports,
+      luaMemory,
       luaVersion: luaText(lua.vm.getGlobal('_VERSION')),
       state: script.state,
       refusal,

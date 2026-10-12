@@ -39,6 +39,33 @@ test('Lua 5.1 executes closures, environments, byte strings and isolated states'
   }
 });
 
+test('A stopped collector lets the heap grow past 64 MiB, as with the native realloc allocator', () => {
+  // Game Lua stops the collector and only steps it once collectgarbage("count") reaches its own
+  // threshold (100 MB on x64); the heap must hold that much live and dead data.
+  const lua = new Lua51();
+  try {
+    lua.execute(
+      bytes(`
+      collectgarbage('stop')
+      keep = {}
+      for i = 1, 96 do
+        local s = string.rep(string.char(64 + i % 26), 1048576 - i)
+        if i % 2 == 0 then keep[#keep + 1] = s end
+      end
+      grown = collectgarbage('count')
+      collectgarbage('step', 0.01)
+      collectgarbage('collect')
+      collected = collectgarbage('count')
+    `),
+    );
+    assert.ok(lua.getGlobal('grown') > 96 * 1024);
+    assert.ok(lua.getGlobal('collected') > 48 * 1024);
+    assert.ok(lua.getGlobal('collected') < 50 * 1024);
+  } finally {
+    lua.close();
+  }
+});
+
 test('Host callbacks preserve reentrant include, colon receiver and coroutine state', () => {
   const vm = new Lua51();
   const events = [];
