@@ -12,7 +12,8 @@ import {BrowserWindowCaptionHost} from '../../../platform/window-caption.js';
 import {BrowserWindowStateHost} from '../../../platform/window-state.js';
 import {BrowserTextDialogHost} from '../../../platform/text-dialog.js';
 import {FreeTypeWorker} from '../../../text/freetype-worker-client.js';
-import {browserDrawsFamily} from '../../../text/gdi-font-families.js';
+import {readBrowserLocalFontMetadata} from '../../../text/browser-local-fonts.js';
+import {browserDrawsFamily, enumerateGdiFontFamiliesW} from '../../../text/gdi-font-families.js';
 import {BrowserFullscreenMoviePlayer} from '../../../video/fullscreen-movie.js';
 import {createArtemisBrowserSoundVoices} from '../browser-sound-voices.js';
 import {BlobSource} from '../../../core/source.js';
@@ -346,6 +347,10 @@ export class ArtemisBrowserPlayer {
       pointer: {readPointerPosition: () => this.gamePointer()},
       dynamicLibraries: new BrowserWindowsDynamicLibraryHost(),
       windowsVersion: () => options.windowsVersion,
+      // Installed faces from the Local Font Access API, named as on Japanese Windows; a
+      // missing or denied API lists none.
+      fontFamilies: async () =>
+        enumerateGdiFontFamiliesW(await readBrowserLocalFontMetadata(), true),
       graphicsFeatureLevel: () => options.graphicsFeatureLevel,
       applyVolumes: (music, effect) => {
         this.volumes = [music, effect];

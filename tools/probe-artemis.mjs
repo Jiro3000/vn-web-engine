@@ -323,6 +323,8 @@ try {
     pointer: {readPointerPosition: () => ({x: 0, y: 0})},
     dynamicLibraries: new BrowserWindowsDynamicLibraryHost(),
     windowsVersion: () => simulatedWindowsVersion ?? systemProfile.readVersion(),
+    // As a page without (or denied) Local Font Access: no installed faces.
+    fontFamilies: async () => [],
     // The browser platform: no command interpreter, no process environment.
     luaOs: {
       system: (command) => processHost.system(command),

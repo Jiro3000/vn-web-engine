@@ -90,6 +90,22 @@ scales ×100 as float32 products), sizes unsigned, `overflow` signed, colors `0x
 unescaped, flags `1`/`0`, `layermode`/`align` names and `style` names joined by `\,`.
 `%.9g` (`src/core/c-number-format.ts`) formats the exact binary value with ties to even,
 the UCRT rule since Windows 10 2004.
+`system=url_encode` (0x1400a18f0) keeps `A-Z a-z 0-9 - . _ ~` of the C string `source` and
+writes every other byte as `%XX` (uppercase, unsigned). `system=url_decode` (0x1400a1a10)
+turns `+` into a space and `%` plus the next two bytes into `strtol(.., 16)` cut to a
+byte; a `%` without two following bytes reads past the native string and is refused.
+`system=file_exists`/`file_exist` writes 1 when `file` opens as a CArtemisPackFile
+(0x1401193d0) and 0 otherwise; `save` (present and not `0`) makes SaveDataPath the
+current directory for the open, which this engine models as the save storage.
+`system=file_crc` reads `file` whole and writes its CRC-32 (`src/core/crc32.ts`, boost
+`crc_32_type`) as `%x`, `%X` with `caps`, with a `0x` prefix with `zerox`; a file that
+does not open writes an empty string. `system=get_font` enumerates the host's families
+(EnumFontFamiliesExW over DEFAULT_CHARSET, 0x140182040, callback 0x140182710) and keeps
+TrueType entries under SHIFTJIS_CHARSET, fixed pitch only with `monospace`. Names are
+listed once in UTF-8 byte order as `name.0`…, `name.size` the count: `@` vertical faces
+only with `vertical` (present and not `0`), the others only without it. The browser host
+reads installed faces through Local Font Access (`src/text/gdi-font-families.ts`); without
+that API, or when it is denied, the list is empty.
 `revision.ts` initializes the confirmed static boot variables only after exact
 executable-hash selection. Host Windows-version failure produces native 0.0;
 platform identity/capabilities are never invented.

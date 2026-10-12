@@ -47,7 +47,7 @@ export interface ArtemisTagOwners {
   readonly textControls: SyncOwner;
   readonly modes: SyncOwner;
   readonly exec: SyncOwner;
-  readonly variables: SyncOwner;
+  readonly variables: {dispatch(tag: AsbTag): boolean | Promise<boolean>};
   readonly caption: SyncOwner;
   readonly seStop: HistoryOwner;
   readonly seAdjust: HistoryOwner;
@@ -110,8 +110,13 @@ export function createArtemisTagDispatch(
       owners.nativeLibrary.dispatch(tag) ||
       owners.textControls.dispatch(tag) ||
       owners.modes.dispatch(tag) ||
-      owners.exec.dispatch(tag) ||
-      owners.variables.dispatch(tag) ||
+      owners.exec.dispatch(tag)
+    )
+      return;
+    const variable = owners.variables.dispatch(tag);
+    if (variable instanceof Promise) return pending(variable);
+    if (
+      variable ||
       owners.caption.dispatch(tag) ||
       owners.seStop.dispatch(tag, recordHistory) ||
       owners.seAdjust.dispatch(tag, recordHistory) ||

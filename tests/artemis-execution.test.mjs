@@ -7416,3 +7416,130 @@ test('CIni sections, keys and values follow the native tokenizer', async () => {
     [42, -7, 0, 0x7fffffff, -0x80000000],
   );
 });
+
+test('var url, file and font queries follow the native handler', async () => {
+  const {ArtemisVariables} = await import('../dist/engines/artemis/variables.js');
+  const {enumerateGdiFontFamiliesW} = await import('../dist/text/gdi-font-families.js');
+  const pack = new Map([
+    ['a.dat', new TextEncoder().encode('123456789')],
+    ['b.dat', new TextEncoder().encode('f157')],
+  ]);
+  const saves = new Map([['s.dat', new Uint8Array(1)]]);
+  const reads = [];
+  // Families as EnumFontFamiliesExW reports them from three installed faces.
+  const name = (unicode, language) => ({id: 1, platform: 3, language, unicode});
+  const face = (family, fixedPitch, pages, names = []) => ({
+    family,
+    fullName: family,
+    postscriptName: family,
+    data: {fixedPitch, codePageRanges: [pages, 0], names},
+  });
+  const sjis = 1 << 17;
+  const families = [
+    ...enumerateGdiFontFamiliesW(
+      [
+        face('Zeta', false, sjis | 1),
+        face('MS Gothic', true, sjis, [name('MS Gothic', 0x409), name('ＭＳ ゴシック', 0x411)]),
+        face('Alpha', true, sjis),
+        face('Latin', true, 1),
+        face('L'.repeat(40), true, sjis),
+      ],
+      true,
+    ),
+    // Not TrueType: left out.
+    {name: 'Raster', charset: 0x80, fixedPitch: true, fontType: 1},
+  ];
+  const variables = new ArtemisVariables({
+    stageSize: () => ({width: 1, height: 1}),
+    readPackFile: async (path) => (reads.push(['pack', path]), pack.get(path) ?? null),
+    readSaveFile: async (path) => (reads.push(['save', path]), saves.get(path) ?? null),
+    fontFamilies: async () => families,
+  });
+  const query = (system, args, bytes) =>
+    variables.dispatch({
+      kind: 'tag',
+      name: 'var',
+      sourceLine: -1,
+      args: new Map([['name', 'v'], ['system', system], ...args]),
+      bytes,
+    });
+  const bytes = (name) => [...variables.read(name)];
+  const text = (name) => new TextDecoder().decode(variables.read(name));
+
+  // RFC 3986 unreserved bytes stay; the source ends at its first NUL.
+  const source = Uint8Array.from([0x41, 0x20, 0xc3, 0xa9, 0x7e, 0x2f, 0x5f, 0x2d, 0x2e, 0, 0x41]);
+  assert.equal(query('url_encode', [['source', '']], new Map([['source', source]])), true);
+  assert.equal(text('v'), 'A%20%C3%A9~%2F_-.');
+  // `+` is a space; each escape is strtol base 16 of two bytes, cut to a byte.
+  query('url_decode', [['source', 'a+%41%e3%81%82%zz% 5%-1%0x']]);
+  assert.deepEqual(bytes('v'), [0x61, 0x20, 0x41, 0xe3, 0x81, 0x82, 0, 5, 0xff, 0]);
+  assert.throws(() => query('url_decode', [['source', 'x%4']]), /url_decode escape/);
+
+  // file_exists/file_exist: 1 or 0 through the integer setter; `save` reads SaveDataPath.
+  const exists = query('file_exist', [['file', 'a.dat']]);
+  assert.ok(exists instanceof Promise);
+  await exists;
+  assert.equal(text('v'), '1');
+  await query('file_exists', [
+    ['file', 'c.dat'],
+    ['save', '0'],
+  ]);
+  assert.equal(text('v'), '0');
+  await query('file_exists', [
+    ['file', 's.dat'],
+    ['save', '1'],
+  ]);
+  assert.equal(text('v'), '1');
+  await query('file_exist', [
+    ['file', 'a.dat'],
+    ['save', 'yes'],
+  ]);
+  assert.equal(text('v'), '0');
+
+  // file_crc: CRC-32 as %x, %X with `caps`, 0x with `zerox`; no zero padding.
+  await query('file_crc', [['file', 'a.dat']]);
+  assert.equal(text('v'), 'cbf43926');
+  await query('file_crc', [
+    ['file', 'a.dat'],
+    ['caps', '1'],
+    ['zerox', '1'],
+  ]);
+  assert.equal(text('v'), '0xCBF43926');
+  await query('file_crc', [
+    ['file', 'b.dat'],
+    ['caps', '0'],
+    ['zerox', '1'],
+  ]);
+  assert.equal(text('v'), '0x2c9fdd');
+  await query('file_crc', [['file', 'missing']]);
+  assert.equal(bytes('v').length, 0);
+  assert.deepEqual(reads, [
+    ['pack', 'a.dat'],
+    ['pack', 'c.dat'],
+    ['save', 's.dat'],
+    ['save', 'a.dat'],
+    ['pack', 'a.dat'],
+    ['pack', 'a.dat'],
+    ['pack', 'b.dat'],
+    ['pack', 'missing'],
+  ]);
+
+  // get_font: TrueType Shift-JIS families once each in UTF-8 byte order; `@` faces only
+  // with `vertical`; LOGFONTW names keep 31 UTF-16 units.
+  const fonts = async (args) => {
+    await query('get_font', args);
+    const size = Number(text('v.size'));
+    return Array.from({length: size}, (_, index) => text(`v.${index}`));
+  };
+  const long = 'L'.repeat(31);
+  assert.deepEqual(await fonts([]), ['Alpha', long, 'Zeta', 'ＭＳ ゴシック']);
+  assert.deepEqual(await fonts([['monospace', '1']]), ['Alpha', long, 'ＭＳ ゴシック']);
+  assert.deepEqual(
+    await fonts([
+      ['vertical', '1'],
+      ['monospace', '0'],
+    ]),
+    ['@Alpha', '@' + 'L'.repeat(30), '@Zeta', '@ＭＳ ゴシック'],
+  );
+  assert.deepEqual(await fonts([['vertical', '0']]), ['Alpha', long, 'Zeta', 'ＭＳ ゴシック']);
+});

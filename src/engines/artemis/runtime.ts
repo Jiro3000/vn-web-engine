@@ -22,6 +22,7 @@ import {ArtemisDialog} from './dialog.js';
 import {ArtemisEventCommands, type ArtemisCommandEvent} from './event-commands.js';
 import {ArtemisExec} from './exec.js';
 import {artemisExpressionBytes} from './expression.js';
+import type {GdiEnumeratedFamily} from '../../text/gdi-font-families.js';
 import {artemisFontProperties} from './font-properties.js';
 import {ArtemisFontStack} from './font-stack.js';
 import {
@@ -251,6 +252,8 @@ export interface ArtemisRuntimeServices {
   readonly dynamicLibraries: WindowsDynamicLibraryHost;
   /** The Windows version the host reports, or null when it reports none. */
   readonly windowsVersion: () => {readonly major: number; readonly minor: number} | null;
+  /** EnumFontFamiliesExW over DEFAULT_CHARSET; without it `get_font` is refused. */
+  readonly fontFamilies?: () => Promise<readonly GdiEnumeratedFamily[]>;
   /** The device feature level, when the host reports one. */
   readonly graphicsFeatureLevel?: () => number;
   /** Effective music and effect volumes, after a reset and whenever they change. */
@@ -461,6 +464,10 @@ export class ArtemisRuntime {
       applicationArguments: {readApplicationArguments: () => new Map()},
       messageLayerMeasure: () => glyphs.get(messageStage.currentLayer()).measure(),
       layerInfo: (id) => layers.layerInfo(id),
+      // Save directory paths read the save storage, as native reads its real files.
+      readPackFile: (path) => this.readSaveDirectoryFile(path) ?? files.read(path),
+      readSaveFile: (name) => this.saves.read(name),
+      fontFamilies: services.fontFamilies,
       // Font frames are attribute overrides over the 193720 defaults (see fontCodec).
       messageTags: (id, fonts) => {
         const history = saveData.messageTags(id, fonts);

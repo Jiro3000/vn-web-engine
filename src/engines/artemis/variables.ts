@@ -1,10 +1,12 @@
 import type {ApplicationArgumentsHost} from '../../platform/application-arguments.js';
 import type {WindowDisplayGeometry} from '../../platform/window-display.js';
 import type {AsbTag} from '../../formats/artemis/asb.js';
+import type {GdiEnumeratedFamily} from '../../text/gdi-font-families.js';
 import type {ArtemisExpressionValue} from './expression.js';
 import {artemisLayerInfoFields, type ArtemisLayerInfo} from './layer-info.js';
 import type {ArtemisFontFrameRecord} from './font-state.js';
 import {artemisFontText, artemisTagText} from './message-tags.js';
+import {crc32} from '../../core/crc32.js';
 
 const encoder = new TextEncoder();
 const empty = new Uint8Array();
@@ -53,6 +55,13 @@ export interface ArtemisVariableHost {
   ):
     | {readonly fonts: readonly ArtemisFontFrameRecord[]; readonly tags: readonly AsbTag[]}
     | undefined;
+  /** CArtemisPackFile 0x1401193d0 opened on `path` with GameDataPath as the current
+   * directory and read whole (0x14017f7c0); null when it does not open. */
+  readPackFile?(path: string): Promise<Uint8Array | null>;
+  /** The same open with SaveDataPath as the current directory. */
+  readSaveFile?(path: string): Promise<Uint8Array | null>;
+  /** EnumFontFamiliesExW over DEFAULT_CHARSET (0x140182040). */
+  fontFamilies?(): Promise<readonly GdiEnumeratedFamily[]>;
 }
 const messageLayerExtents = {
   get_message_layer_width: 'width',
@@ -118,6 +127,53 @@ function utf8Characters(bytes: Uint8Array): number {
   }
   return count;
 }
+/** Bytes up to the first NUL: the native string functions walk C strings. */
+function cString(bytes: Uint8Array): Uint8Array {
+  const end = bytes.indexOf(0);
+  return end < 0 ? bytes : bytes.subarray(0, end);
+}
+/** 0x1400a18f0: A-Z, a-z, 0-9, `-`, `.`, `_` and `~` stay; any other byte is `%%%02X` of
+ * its unsigned value. */
+function urlEncode(source: Uint8Array): Uint8Array {
+  const result: number[] = [];
+  for (const byte of source) {
+    if (/[A-Za-z0-9._~-]/.test(String.fromCharCode(byte))) result.push(byte);
+    else
+      for (const char of `%${byte.toString(16).toUpperCase().padStart(2, '0')}`)
+        result.push(char.charCodeAt(0));
+  }
+  return Uint8Array.from(result);
+}
+/** 0x1400a1a10: `+` is a space; `%` takes the next two bytes as `strtol(.., 16)`, stored
+ * as one byte; other bytes stay. A `%` without two following bytes reads past the native
+ * string. */
+function urlDecode(source: Uint8Array): Uint8Array {
+  const result: number[] = [];
+  for (let index = 0; index < source.length; index++) {
+    const byte = source[index]!;
+    if (byte === 0x2b) result.push(0x20);
+    else if (byte === 0x25) {
+      if (index + 2 >= source.length)
+        throw new Error('Unsupported Artemis url_decode escape at the end of the source');
+      result.push(strtol16(source.subarray(index + 1, index + 3)) & 255);
+      index += 2;
+    } else result.push(byte);
+  }
+  return Uint8Array.from(result);
+}
+/** MSVC `strtol(text, 0, 16)` of a short NUL-free string: leading whitespace, a sign, an
+ * optional `0x` and hexadecimal digits; no digits read 0. */
+function strtol16(bytes: Uint8Array): number {
+  const match = /^[\t\n\v\f\r ]*([+-]?)(?:0[xX](?=[0-9A-Fa-f]))?([0-9A-Fa-f]*)/.exec(
+    String.fromCharCode(...bytes),
+  )!;
+  const value = match[2] ? parseInt(match[2], 16) : 0;
+  return match[1] === '-' ? -value : value;
+}
+/** Optional flags the var handler tests with 0x1400f3c00: present and not "0". */
+const flag = (args: ReadonlyMap<string, string>, key: string) =>
+  args.has(key) && args.get(key) !== '0';
+
 export class ArtemisVariables {
   constructor(private readonly host?: ArtemisVariableHost) {}
   private dirty = false;
@@ -234,7 +290,8 @@ export class ArtemisVariables {
   private unixTime(): number {
     return Math.floor((this.host?.now?.() ?? Date.now()) / 1000);
   }
-  dispatch(tag: AsbTag): boolean {
+  /** The `var` tag (0x1400e56a0). File queries settle once the file is read. */
+  dispatch(tag: AsbTag): boolean | Promise<boolean> {
     if (tag.name !== 'var') return false;
     const p = tag.args,
       name = p.get('name');
@@ -314,7 +371,82 @@ export class ArtemisVariables {
         ['second', date.getSeconds()],
       ];
       for (const [field, value] of fields) this.write(`${name}.${field}`, String(value), local);
-    } else throw new Error(`Unsupported native Artemis var system ${p.get('system') ?? ''}`);
+    } else if (p.get('system') === 'url_encode' || p.get('system') === 'url_decode') {
+      const source = cString(tag.bytes?.get('source') ?? encoder.encode(p.get('source') ?? ''));
+      this.write(
+        name,
+        p.get('system') === 'url_encode' ? urlEncode(source) : urlDecode(source),
+        local,
+      );
+    } else if (p.get('system') === 'file_exists' || p.get('system') === 'file_exist')
+      return this.fileExists(p, name, local);
+    else if (p.get('system') === 'file_crc') return this.fileCrc(p, name, local);
+    else if (p.get('system') === 'get_font') return this.fonts(p, name, local);
+    else throw new Error(`Unsupported native Artemis var system ${p.get('system') ?? ''}`);
     return true;
   }
+  /** `file_exists`/`file_exist`: 1 when `file` opens as a pack file, otherwise 0; `save`
+   * (present and not "0") opens it with SaveDataPath as the current directory. */
+  private async fileExists(
+    p: ReadonlyMap<string, string>,
+    name: string,
+    local: boolean,
+  ): Promise<boolean> {
+    const read = flag(p, 'save') ? this.host?.readSaveFile : this.host?.readPackFile;
+    if (!read) throw new Error('Artemis pack file provider is not configured');
+    const bytes = await read.call(this.host, p.get('file') ?? '');
+    this.write(name, bytes ? '1' : '0', local);
+    return true;
+  }
+  /** `file_crc`: the CRC-32 of the pack file `file` as `%x`, `%X` with `caps`, prefixed by
+   * `0x` with `zerox`; an empty string when it does not open. */
+  private async fileCrc(
+    p: ReadonlyMap<string, string>,
+    name: string,
+    local: boolean,
+  ): Promise<boolean> {
+    if (!this.host?.readPackFile) throw new Error('Artemis pack file provider is not configured');
+    const bytes = await this.host.readPackFile(p.get('file') ?? '');
+    if (!bytes) {
+      this.write(name, '', local);
+      return true;
+    }
+    const hex = crc32(bytes).toString(16);
+    this.write(
+      name,
+      (flag(p, 'zerox') ? '0x' : '') + (flag(p, 'caps') ? hex.toUpperCase() : hex),
+      local,
+    );
+    return true;
+  }
+  /** `get_font`: the TrueType Shift-JIS families (fixed pitch with `monospace`), sorted
+   * by their UTF-8 bytes and listed once, as `name.N` with `name.size` the count. `@`
+   * vertical faces are listed only with `vertical`, the others only without it. Names are
+   * stored as UTF-8 (script text mode 2). */
+  private async fonts(
+    p: ReadonlyMap<string, string>,
+    name: string,
+    local: boolean,
+  ): Promise<boolean> {
+    if (!this.host?.fontFamilies) throw new Error('Artemis font family provider is not configured');
+    const monospace = flag(p, 'monospace'),
+      vertical = flag(p, 'vertical');
+    // Callback 0x140182710 with the flags 0x140182040 receives from the var handler.
+    const names = new Map<string, Uint8Array>();
+    for (const family of await this.host.fontFamilies())
+      if (family.fontType === 4 && family.charset === 0x80 && (!monospace || family.fixedPitch))
+        names.set(family.name, encoder.encode(family.name));
+    const sorted = [...names.values()].sort(compareBytes);
+    let count = 0;
+    for (const bytes of sorted)
+      if ((bytes[0] === 0x40) === vertical) this.write(`${name}.${count++}`, bytes, local);
+    this.write(`${name}.size`, String(count), local);
+    return true;
+  }
+}
+
+function compareBytes(left: Uint8Array, right: Uint8Array): number {
+  for (let index = 0; index < Math.min(left.length, right.length); index++)
+    if (left[index] !== right[index]) return left[index]! - right[index]!;
+  return left.length - right.length;
 }
