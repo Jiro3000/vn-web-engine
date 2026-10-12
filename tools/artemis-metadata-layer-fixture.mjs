@@ -19,7 +19,14 @@ import {artemisPngDecodeOptions, artemisPngSurface} from '../dist/engines/artemi
  * refuses them. */
 // `reportFailures`: missing images and layers are recorded like the native script error
 // reports (the game continues) instead of stopping the probe.
-export function createMetadataLayerFixture(hash, readFile, runMode = null, reportFailures = false) {
+// `failureContext` adds diagnostic fields (e.g. the probe's tag index) to each failure.
+export function createMetadataLayerFixture(
+  hash,
+  readFile,
+  runMode = null,
+  reportFailures = false,
+  failureContext = () => ({}),
+) {
   artemisRevision(hash);
   const failures = [];
   const loads = [],
@@ -274,11 +281,11 @@ export function createMetadataLayerFixture(hash, readFile, runMode = null, repor
     },
     imageLoadFailed: (tag) => {
       if (!reportFailures) throw Error('Probe image metadata missing: ' + tag.args.get('file'));
-      failures.push({kind: 'image', tag: tag.name, file: tag.args.get('file') ?? null});
+      failures.push({kind: 'image', tag: tag.name, file: tag.args.get('file') ?? null, ...failureContext()});
     },
     layerNotFound: (tag) => {
       if (!reportFailures) throw Error('Probe layer missing: ' + tag.args.get('id'));
-      failures.push({kind: 'layer', tag: tag.name, id: tag.args.get('id') ?? null});
+      failures.push({kind: 'layer', tag: tag.name, id: tag.args.get('id') ?? null, ...failureContext()});
     },
   });
   // Rule images use the stage loader; only PNG has a decoded native surface here.
