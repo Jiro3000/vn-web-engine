@@ -113,6 +113,16 @@ Rev.3257 has an independent hash and boot record; its screenshot and sound-loade
 rewind fields match Rev.3179. Its recompiled native addresses require the mapping in
 `docs/artemis-revisions.md`; Rev.3179 address literals are not its native addresses.
 
+Exact shader source hashes `271173e7…d18d6`, `3a5b63e5…604b`, `07f6d756…763d`
+and `db1b5dc8…3ac9` select the perspective presets. They warp one texture coordinate
+around its center and divide the other by a position-dependent slope, then clip and
+fade alpha using the source's step and smoothstep factors. The vertical variants swap
+the axes; anchored variants use both center fields and reverse the slope. The anchored
+horizontal variant clips only the negative horizontal edge, as its source does.
+The four native constant slots are horizontal center, vertical center, scale and edge
+fade. The CPU reference, standalone WebGL helper and DrawList adapter share that
+layout; unused center slots are retained so later fields keep their native offsets.
+
 `parseIet` lowers if/elseif/else/[/if] and loop/[/loop] like the native IET parser
 (`0x14011a740`): conditional and loop tags receive a decimal `\x0bindex` target and
 branch exits become compiler-only `\x0bgoto` tags. `ArtemisScript` writes its cursor for

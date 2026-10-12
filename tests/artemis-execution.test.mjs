@@ -7489,6 +7489,68 @@ test('Artemis Lua opens the os library like luaL_openlibs over the browser platf
     );
 });
 
+test('Perspective shader preserves identity, warps UVs, clips X and fades the native Y edges', async () => {
+  const {artemisPerspectiveShade} = await import('../dist/engines/artemis/perspective-shader.js');
+  const p = {alpha: 0.5, centerX: 0.5, centerY: 0.9, scale: 1, fade: 0.1};
+  const sample = (x, y) => [x, y, 0.3, 0.8];
+  const identity = artemisPerspectiveShade(sample, 0.25, 0.5, p);
+  assert.deepEqual(identity.slice(0, 3), [0.25, 0.5, 0.3]);
+  assert.ok(Math.abs(identity[3] - 0.4) < 1e-7);
+  const warped = artemisPerspectiveShade(sample, 0.6, 0.6, {...p, scale: 0.5});
+  assert.ok(Math.abs(warped[0] - 0.7) < 1e-7);
+  assert.ok(Math.abs(warped[1] - 0.6052631578947368) < 1e-7);
+  assert.equal(artemisPerspectiveShade(sample, 0.2, 0.5, {...p, scale: 0.5})[3], 0);
+  assert.ok(Math.abs(artemisPerspectiveShade(sample, 0.5, -0.05, p)[3] - 0.2) < 1e-7);
+  assert.ok(Math.abs(artemisPerspectiveShade(sample, 0.5, 0.95, p)[3] - 0.2) < 3e-7);
+  assert.deepEqual(artemisPerspectiveShade(sample, 0.25, 0.5, {...p, centerY: -12}), identity);
+  assert.equal(artemisPerspectiveShade(sample, 0.5, 1.1, p)[3], 0);
+  const anchored = artemisPerspectiveShade(
+    sample,
+    0.6,
+    0.6,
+    {...p, scale: 0.5, centerY: 0.3},
+    'perspective_anchored',
+  );
+  assert.ok(Math.abs(anchored[1] - 0.5857142857142857) < 1e-7);
+  assert.ok(artemisPerspectiveShade(sample, 1.2, 0.5, p, 'perspective_anchored')[3] > 0);
+  assert.equal(artemisPerspectiveShade(sample, 1.2, 0.5, p)[3], 0);
+  const vertical = artemisPerspectiveShade(
+    sample,
+    0.6,
+    0.6,
+    {...p, scale: 0.5, centerY: 0.5},
+    'perspective_vertical',
+  );
+  assert.ok(Math.abs(vertical[0] - 0.6052631578947368) < 1e-7);
+  assert.ok(Math.abs(vertical[1] - 0.7) < 1e-7);
+  const verticalAnchored = artemisPerspectiveShade(
+    sample,
+    0.6,
+    0.6,
+    {...p, scale: 0.5, centerX: 0.3, centerY: 0.5},
+    'perspective_vertical_anchored',
+  );
+  assert.ok(Math.abs(verticalAnchored[0] - 0.5857142857142857) < 1e-7);
+  assert.equal(artemisPerspectiveShade(sample, 0.5, 1.2, p, 'perspective_vertical_anchored')[3], 0);
+  const {createArtemisDrawShaderPreset} = await import('../dist/engines/artemis/draw-shader.js');
+  const {ARTEMIS_3257_EXECUTABLE_SHA256: hash} =
+    await import('../dist/engines/artemis/revision.js');
+  const adapter = createArtemisDrawShaderPreset(hash, 'perspective');
+  // Native fields are concatenated in order; the unused second field still occupies a slot.
+  assert.deepEqual(
+    [
+      ...adapter.nativeParameters([
+        {name: 'a', values: [0.5]},
+        {name: 'b', values: [0.9]},
+        {name: 'c', values: [1]},
+        {name: 'd', values: [0.1]},
+      ]),
+    ].slice(0, 4),
+    [0.5, Math.fround(0.9), 1, Math.fround(0.1)],
+  );
+  assert.match(adapter.fragment, /float uScale=parameters\[0\]\.z/);
+});
+
 test('Artemis CSIDL saves use the mounted virtual folder for publication, writes and reads', async () => {
   const {openArtemisRuntimeFixture} = await import('./artemis-runtime-fixture.mjs');
   const {VirtualWindowsFolderPaths, joinVirtualWindowsDirectory} =

@@ -5,6 +5,11 @@ import {
   type ArtemisCompositeUniforms,
 } from './composite-shader.js';
 import {artemisMosaicShade, ARTEMIS_MOSAIC_FRAGMENT_SOURCE} from './mosaic-shader.js';
+import {
+  artemisPerspectiveShade,
+  artemisPerspectiveFragmentSource,
+  type ArtemisPerspectiveKind,
+} from './perspective-shader.js';
 import {artemisRadialShade, ARTEMIS_RADIAL_FRAGMENT_SOURCE} from './radial-shader.js';
 import {
   artemisBlurShade,
@@ -155,6 +160,11 @@ export async function compileArtemisShaderPreset(
       readonly fragmentSource: string;
       readonly shade: typeof artemisMosaicShade;
     }
+  | {
+      readonly kind: ArtemisPerspectiveKind;
+      readonly fragmentSource: string;
+      readonly shade: typeof artemisPerspectiveShade;
+    }
 > {
   artemisRevision(hash);
   const digest = await crypto.subtle.digest('SHA-256', Uint8Array.from(bytes).buffer),
@@ -166,6 +176,20 @@ export async function compileArtemisShaderPreset(
       kind: 'raster',
       fragmentSource: ARTEMIS_RASTER_FRAGMENT_SOURCE,
       shade: artemisRasterShade,
+    };
+  const perspectives: Readonly<Record<string, ArtemisPerspectiveKind>> = {
+    '271173e75305f3754627750f0e782bd38f217da903a5f79971dd126d677d18d6': 'perspective',
+    '3a5b63e574b3e9fa6135a756dc09eaaa27de3c930ef48792a0a53e1cf65b604b': 'perspective_anchored',
+    '07f6d756956160c90aef1c0ccd37a13161d8986a218e4439891b751309d0763d': 'perspective_vertical',
+    db1b5dc85206ab9ab553870420f61befa1f3e8aa7e1ce8fb31dd5ef09b3e3ac9:
+      'perspective_vertical_anchored',
+  };
+  const perspective = perspectives[signature];
+  if (perspective)
+    return {
+      kind: perspective,
+      fragmentSource: artemisPerspectiveFragmentSource(perspective),
+      shade: (sample, u, v, p) => artemisPerspectiveShade(sample, u, v, p, perspective),
     };
   if (signature === 'd55bc26b8b72c1f38ff34aa1d41a15a7be69f2351518a8f8a3e99b39f61b59d2')
     return {
@@ -240,6 +264,7 @@ export type ArtemisShaderPresetKind =
   | ArtemisBlurKind
   | 'radial'
   | 'mosaic'
+  | ArtemisPerspectiveKind
   | ArtemisCompositeKind;
 /** Reconstructed preset source, independent of resource selection/registration. */
 export function artemisShaderFragmentSource(kind: ArtemisShaderPresetKind): string {
@@ -252,6 +277,11 @@ export function artemisShaderFragmentSource(kind: ArtemisShaderPresetKind): stri
       return ARTEMIS_RADIAL_FRAGMENT_SOURCE;
     case 'mosaic':
       return ARTEMIS_MOSAIC_FRAGMENT_SOURCE;
+    case 'perspective':
+    case 'perspective_anchored':
+    case 'perspective_vertical':
+    case 'perspective_vertical_anchored':
+      return artemisPerspectiveFragmentSource(kind);
     case 'blur_h':
     case 'blur_v':
       return artemisBlurFragmentSource(kind);

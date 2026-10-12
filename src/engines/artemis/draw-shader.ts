@@ -68,6 +68,15 @@ export function createArtemisDrawShaderPreset(
       scalar('size', 'uSize');
       scalar('ratio', 'uRatio');
       break;
+    case 'perspective':
+    case 'perspective_anchored':
+    case 'perspective_vertical':
+    case 'perspective_vertical_anchored':
+      scalar('centerX', 'uCenterX');
+      scalar('centerY', 'uCenterY');
+      scalar('scale', 'uScale');
+      scalar('fade', 'uFade');
+      break;
     case 'add':
     case 'mul':
     case 'compbr':

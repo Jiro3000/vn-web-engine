@@ -4,6 +4,11 @@ import {
   type ArtemisCompositeUniforms,
 } from './composite-shader.js';
 import {ARTEMIS_MOSAIC_FRAGMENT_SOURCE, type ArtemisMosaicUniforms} from './mosaic-shader.js';
+import {
+  artemisPerspectiveFragmentSource,
+  type ArtemisPerspectiveKind,
+  type ArtemisPerspectiveUniforms,
+} from './perspective-shader.js';
 import {ARTEMIS_RADIAL_FRAGMENT_SOURCE, type ArtemisRadialUniforms} from './radial-shader.js';
 import {
   artemisBlurFragmentSource,
@@ -49,6 +54,7 @@ export class ArtemisBrowserRasterShader {
       | ArtemisBlurKind
       | 'radial'
       | 'mosaic'
+      | ArtemisPerspectiveKind
       | ArtemisCompositeKind = 'raster',
   ) {
     artemisRevision(hash);
@@ -80,9 +86,11 @@ export class ArtemisBrowserRasterShader {
                 ? ARTEMIS_RADIAL_FRAGMENT_SOURCE
                 : kind === 'mosaic'
                   ? ARTEMIS_MOSAIC_FRAGMENT_SOURCE
-                  : ['add', 'mul', 'compbr', 'compbrc', 'compdk', 'compdkc'].includes(kind)
-                    ? artemisCompositeFragmentSource(kind as ArtemisCompositeKind)
-                    : artemisColorFragmentSource(kind as ArtemisColorKind),
+                  : kind.startsWith('perspective')
+                    ? artemisPerspectiveFragmentSource(kind as ArtemisPerspectiveKind)
+                    : ['add', 'mul', 'compbr', 'compbrc', 'compdk', 'compdkc'].includes(kind)
+                      ? artemisCompositeFragmentSource(kind as ArtemisCompositeKind)
+                      : artemisColorFragmentSource(kind as ArtemisColorKind),
       );
       program = gl.createProgram();
       if (!program) throw Error('Cannot allocate raster program');
@@ -124,6 +132,7 @@ export class ArtemisBrowserRasterShader {
       | ArtemisBlurUniforms
       | ArtemisRadialUniforms
       | ArtemisMosaicUniforms
+      | ArtemisPerspectiveUniforms
       | ArtemisCompositeUniforms,
     sampler: {readonly filter: 'nearest' | 'linear'; readonly address: 'clamp' | 'repeat'},
     userImage?: TriangleImage,
@@ -269,6 +278,22 @@ export class ArtemisBrowserRasterShader {
       if (![m.size, m.ratio].every(Number.isFinite)) throw Error('Missing mosaic uniforms');
       gl.uniform1f(gl.getUniformLocation(this.program, 'uSize'), m.size);
       gl.uniform1f(gl.getUniformLocation(this.program, 'uRatio'), m.ratio);
+    }
+    if (this.kind.startsWith('perspective')) {
+      const perspective = p as ArtemisPerspectiveUniforms;
+      if (
+        ![perspective.centerX, perspective.centerY, perspective.scale, perspective.fade].every(
+          Number.isFinite,
+        )
+      )
+        throw Error('Missing perspective uniforms');
+      for (const [name, value] of [
+        ['uCenterX', perspective.centerX],
+        ['uCenterY', perspective.centerY],
+        ['uScale', perspective.scale],
+        ['uFade', perspective.fade],
+      ] as const)
+        gl.uniform1f(gl.getUniformLocation(this.program, name), value);
     }
     gl.viewport(0, 0, width, height);
     gl.disable(gl.BLEND);
