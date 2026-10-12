@@ -300,7 +300,8 @@ Native script error reports become diagnostics and the script continues: Lua cal
 from an unsupported or unprepared owner, which stop the game. The page passes a `trace`
 stream when its address contains `#trace`: `window.artemisTrace` keeps the last tags,
 script steps and owner effects, `state()` reports the run mode, script, wait and pointer
-state, and `hitTest(x, y)` the layers at a stage point.
+state, `hitTest(x, y)` the layers at a stage point, and `lua(path)` the Lua global at a dotted
+path (booleans and numbers as values, strings as their byte length, tables as `table`).
 
 `browser/layers.ts` builds the layer system over `ArtemisImageGraphics`. Message layers
 are text actors (`createTextLayer`) whose sprites come from the insertion's display lines:

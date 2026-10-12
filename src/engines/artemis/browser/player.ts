@@ -468,6 +468,20 @@ export class ArtemisBrowserPlayer {
     this.domText?.relayout();
   }
   /** Layer ids at a stage point, topmost first, for diagnostics. */
+  /** Diagnostic read of the Lua global at a dotted path: booleans and numbers as they are,
+   * strings as their byte length, tables as 'table', anything else as its kind. */
+  luaValue(path: string): boolean | number | string | null {
+    const runtime = this.runtime;
+    if (!runtime) return null;
+    let value: unknown = runtime.lua.vm.getGlobal(path.split('.')[0]!);
+    for (const key of path.split('.').slice(1)) {
+      if (!(value instanceof Map)) return null;
+      value = value.get(/^\d+$/.test(key) ? Number(key) : key) ?? null;
+    }
+    if (value === null || typeof value === 'boolean' || typeof value === 'number') return value;
+    if (value instanceof Uint8Array) return `string:${value.byteLength}`;
+    return value instanceof Map ? 'table' : 'other';
+  }
   hitTest(x: number, y: number): string[] {
     return this.layers && this.graphics
       ? this.graphics.hitTest(this.layers.layers.scene, x, y)

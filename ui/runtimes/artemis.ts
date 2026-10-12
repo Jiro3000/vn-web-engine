@@ -224,6 +224,7 @@ function pageTrace() {
         ]),
       state: () => player?.state ?? null,
       hitTest: (x: number, y: number) => player?.hitTest(x, y) ?? [],
+      lua: (path: string) => player?.luaValue(path) ?? null,
     },
   });
   return {
