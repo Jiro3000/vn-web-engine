@@ -153,6 +153,25 @@ async function layerFixture(readFile, extraHost = {}) {
   return {layers, events};
 }
 
+test('Artemis lyc with a missing file creates neither the layer nor its parents', async () => {
+  // Native lyc (Rev.3179 0x1400d5930) reports and returns before creating the layer when no image loads and
+  // width/height/color are absent; later commands on that subtree find no layer.
+  const {layers, events} = await layerFixture(async () => null);
+  await layers.dispatch(command('lyc', {id: 'a.b.c.d', file: 'missing'}));
+  for (const id of ['a', 'a.b', 'a.b.c', 'a.b.c.d'])
+    assert.equal(layers.scene.entry(id), undefined);
+  await layers.dispatch(command('lyprop', {id: 'a.b.c.d', left: '1'}));
+  await layers.dispatch(command('lyprop', {id: 'a.b', top: '1'}));
+  // lyprop without an id names no layer either (native 0x1400d76d0 reports it).
+  await layers.dispatch(command('lyprop', {visible: '0'}));
+  assert.deepEqual(events, [
+    ['error', 'missing'],
+    ['missing', 'a.b.c.d'],
+    ['missing', 'a.b'],
+    ['missing', undefined],
+  ]);
+});
+
 async function syntheticImage() {
   const {png} = await import('./png-fixtures.mjs');
   return png({width: 2, height: 1, raw: Buffer.from([0, 255, 0, 0, 0, 0, 255, 0, 128])});

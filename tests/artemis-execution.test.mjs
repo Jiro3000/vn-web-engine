@@ -5770,6 +5770,45 @@ test('Names outside the native command map report the unknown-tag error and cont
   assert.deepEqual(run({}).dispatched, ['achievements', 'caption', 'stop']);
 });
 
+test('A Lua tag named only by a tags handler bypasses the filter and reports the unknown-tag error', () => {
+  // 0x1400c5710 consults the filter only for script lines (line > -1); e:tag carries -1.
+  const source = bytes(
+    `[lua]\ntags={}; engine:setTagFilter(tags); handled=0\nfunction tags.custom(e,p) handled=handled+1; return 1 end\nfunction tags.relay(e,p) e:tag{'custom'}; return 1 end\n[/lua]\n[custom][relay][stop]`,
+  );
+  let script;
+  const dispatched = [],
+    reports = [];
+  const lua = new ArtemisLua({
+    readFile: () => source,
+    fileExists: () => true,
+    now: () => 0,
+    variable: () => '',
+    tag: (tag) => script.executeTag(tag),
+    enqueueTag: () => {},
+  });
+  try {
+    script = new ArtemisScript(lua, {
+      readFile: () => source,
+      dispatch: (tag) => {
+        if (lua.filterTag(tag)) return;
+        dispatched.push(tag.name);
+        if (tag.name === 'stop') return 'stopped';
+      },
+      reportUnknownTag: (report) => reports.push(report),
+    });
+    script.load('boot');
+    assert.equal(script.run(), 'stopped');
+    assert.equal(lua.vm.getGlobal('handled'), 1);
+    assert.deepEqual(dispatched, ['stop']);
+    assert.deepEqual(
+      reports.map((r) => [r.tag.name, r.tag.sourceLine, r.severity]),
+      [['custom', -1, 1]],
+    );
+  } finally {
+    lua.close();
+  }
+});
+
 test('Suspended calllua failures close their coroutine, report once and resume the caller', () => {
   const source = bytes(`[lua]
     function child(e) e:tag{'asset'}; child_after=1; authentication() end
