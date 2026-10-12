@@ -1902,10 +1902,8 @@ test('Artemis groups retain raster metadata while intermediate rendering require
       () => layers.dispatch(command('lyprop', {id: 'group', intermediate_render: '1'})),
       /GPU surface owner/,
     );
-    await assert.rejects(
-      () => layers.dispatch(command('lyprop', {id: 'group', mask: 'missing'})),
-      /Unsupported Artemis layer property/,
-    );
+    // lyprop never reads `mask` (only lyc does).
+    await layers.dispatch(command('lyprop', {id: 'group', mask: 'missing'}));
     layers.commit();
     assert.equal(graphics.drawCommitted(layers.scene).commands.length, 1);
   } finally {
