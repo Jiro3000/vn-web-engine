@@ -8,6 +8,7 @@ import {VirtualKeyState} from '../dist/input/virtual-keys.js';
 import {directInputJoystickState, readBrowserJoystick} from '../dist/input/directinput-joystick.js';
 import {luaText} from '../dist/core/lua51/runtime.js';
 import {ARTEMIS_3179_EXECUTABLE_SHA256} from '../dist/engines/artemis/revision.js';
+import {ArtemisTextFocus} from '../dist/engines/artemis/browser/text-focus.js';
 
 const kinds = ['push', 'down', 'downEdge', 'upEdge', 'decide'];
 const answers = (input, key) => kinds.filter((kind) => input.query(kind, key));
@@ -574,4 +575,66 @@ test('var system=get_layer_info writes a CLayer actor in native key order', asyn
     'inf',
     'nan',
   ]);
+});
+
+test('A focused DOM text slot that goes away gives focus back to the canvas', () => {
+  const element = (fields = {}) => ({
+    isConnected: true,
+    tabIndex: 0,
+    hidden: false,
+    focused: 0,
+    closest() {
+      return this.hidden ? this : null;
+    },
+    focus() {
+      this.focused++;
+      document.activeElement = this;
+    },
+    ...fields,
+  });
+  const document = {activeElement: null, body: {}};
+  const canvas = element(),
+    focus = new ArtemisTextFocus(document, canvas);
+  // A choice slot clicked, then hidden: focus is still on it or already on the body.
+  for (const fixup of [false, true]) {
+    const choice = element();
+    choice.focus();
+    focus.focusin(choice, true);
+    assert.equal(focus.restore(), false);
+    choice.hidden = true;
+    if (fixup) document.activeElement = document.body;
+    assert.equal(focus.restore(), true);
+    assert.equal(document.activeElement, canvas);
+  }
+  // Made inert (tabIndex -1) or removed.
+  for (const gone of [{tabIndex: -1}, {isConnected: false}]) {
+    const slot = element();
+    slot.focus();
+    focus.focusin(slot, true);
+    Object.assign(slot, gone);
+    assert.equal(focus.restore(), true);
+    assert.equal(document.activeElement, canvas);
+  }
+  // Focus moved to a page control, or the slot was left by a click outside the player and
+  // stays visible: kept, also when the slot goes away later.
+  const kept = element(),
+    control = element();
+  kept.focus();
+  focus.focusin(kept, true);
+  control.focus();
+  kept.hidden = true;
+  assert.equal(focus.restore(), false);
+  assert.equal(document.activeElement, control);
+  const left = element();
+  left.focus();
+  focus.focusin(left, true);
+  document.activeElement = document.body;
+  assert.equal(focus.restore(), false);
+  left.hidden = true;
+  assert.equal(focus.restore(), false);
+  assert.equal(document.activeElement, document.body);
+  // Focus on the canvas itself is not tracked.
+  focus.focusin(canvas, false);
+  assert.equal(focus.restore(), false);
+  assert.equal(canvas.focused, 4);
 });

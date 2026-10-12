@@ -333,7 +333,10 @@ them is not drawn by the stage and gets no slots. Browser faces load from the ga
 stage's glyphs; with one `hideText` stops the stage drawing text (text layers still hit
 and clear their capture targets) and the slots show it. A click on the text reaches the game
 unless it selected text, the context menu stays for a selection, and keys from the text
-reach the game except Shift (left to the extension) and Control while text is selected.
+reach the game except Shift (left to the extension) and Control while text is selected. A
+focused text slot that is hidden, made inert or removed (a choice closing after a click on
+its text) gives focus back to the canvas (`ArtemisTextFocus`), so keys keep reaching the game
+as they reach the native window; focus moved elsewhere on the page is kept.
 
 `ArtemisImageGraphics.drawStage` renders the scene into a stage surface and presents it.
 When a transition starts the last presented frame is kept; state 1 crossfades from it by

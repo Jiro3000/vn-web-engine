@@ -47,6 +47,7 @@ import {
   type ArtemisBrowserLayers,
 } from './layers.js';
 import {ArtemisDomText, artemisTextSlots} from './dom-text.js';
+import {ArtemisTextFocus} from './text-focus.js';
 import {
   artemisCurrentBlock,
   artemisJumpNames,
@@ -153,6 +154,8 @@ export class ArtemisBrowserPlayer {
   private textMode: 'native' | 'dom' = 'native';
   /** A left press on the DOM text, which becomes a click unless it selects text. */
   private textPress: {x: number; y: number} | null = null;
+  /** Gives focus back to the canvas when a focused DOM text slot goes away. */
+  private readonly textFocus: ArtemisTextFocus;
 
   constructor(private readonly options: ArtemisBrowserPlayerOptions) {
     const {document, executableSha256: hash, files} = options;
@@ -164,6 +167,7 @@ export class ArtemisBrowserPlayer {
     this.canvas.setAttribute('aria-label', 'Game screen');
     this.canvas.style.cssText = 'touch-action:none;user-select:none;-webkit-touch-callout:none';
     this.panel.append(this.canvas);
+    this.textFocus = new ArtemisTextFocus(document, this.canvas);
     // Save directory paths read the save storage, as native reads its real files.
     const read = (path: string) => this.runtime?.readSaveDirectoryFile(path) ?? files.read(path);
     this.painter = new ArtemisGlyphPainter(hash);
@@ -567,6 +571,7 @@ export class ArtemisBrowserPlayer {
           artemisCursorLayer(runtime.lua.vm),
         );
         this.domText?.update();
+        this.textFocus.restore();
       }
     } catch (error) {
       this.fail(error);
@@ -784,6 +789,11 @@ export class ArtemisBrowserPlayer {
       {signal},
     );
     canvas.addEventListener('blur', () => this.keys.releaseAll(), {signal});
+    panel.addEventListener(
+      'focusin',
+      (event) => this.textFocus.focusin(event.target as HTMLElement, onText(event)),
+      {signal},
+    );
   }
   /** A press and release of mouse button `key` (1 or 2) at the event point, sampled by the
    * next frame. */
