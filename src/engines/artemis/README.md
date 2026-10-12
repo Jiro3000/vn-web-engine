@@ -1542,7 +1542,7 @@ out of the source; plain CTextLayer clones clear copied job lists instead.
 
 `insertRuby` creates a single native main/annotation block, with global glyph ids
 for both streams. `ArtemisRuby` follows the global buffers and end-command layer
-selection. Automatic page overflow queues `@`, `rp`, `/ruby` while retaining active
+selection; `ruby` takes its annotation from `text` (d1010), while `print` uses `data`. Automatic page overflow queues `@`, `rp`, `/ruby` while retaining active
 buffers; inactive/nested/unprintable behavior and history follow the native branches.
 
 `ArtemisTextCommands` implements `rt` (newline) and `rp` dispatch. Backlog capture

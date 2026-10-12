@@ -75,8 +75,9 @@ export class ArtemisRuby {
     if (tag.name === 'ruby') {
       if (this.enabled) this.host.reportRubyError(tag, 'nested', Uint8Array.from(this.main));
       else {
-        if (!tag.args.has('data')) tag.args.set('data', '');
-        const annotation = bytes(tag.args.get('data')!);
+        // d1010 reads the annotation from `text`, creating the key when absent.
+        if (!tag.args.has('text')) tag.args.set('text', '');
+        const annotation = bytes(tag.args.get('text')!);
         if (annotation.byteLength > 1024 * 1024) throw Error('Artemis ruby byte budget exceeded');
         this.enabled = true;
         this.main = new Uint8Array();

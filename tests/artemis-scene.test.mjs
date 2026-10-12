@@ -3723,7 +3723,7 @@ test('Native ruby buffers print data globally and end inserts one real normal/ru
     kind: 'tag',
     name,
     sourceLine: 3,
-    args: new Map(data === undefined ? [] : [['data', data]]),
+    args: new Map(data === undefined ? [] : [[name === 'print' ? 'data' : 'text', data]]),
   });
   const ruby = new ArtemisRuby(fixture.hash, {
     currentMessageLayer: () => selected,
@@ -3747,7 +3747,13 @@ test('Native ruby buffers print data globally and end inserts one real normal/ru
     recordPrintCommand: (layer, t) => history.push([layer, t]),
   });
   try {
-    await ruby.dispatch(tag('ruby', 'A'));
+    await ruby.dispatch({
+      ...tag('ruby', 'A'),
+      args: new Map([
+        ['data', 'ignored'],
+        ['text', 'A'],
+      ]),
+    });
     await print.dispatch(tag('print', 'AA\0ignored'));
     await ruby.dispatch(tag('ruby', 'wrong'));
     assert.deepEqual(errors, ['nested']);
@@ -3780,7 +3786,7 @@ test('Native ruby buffers print data globally and end inserts one real normal/ru
     assert.equal(history.length, 4);
     assert.deepEqual(errors, ['nested', 'inactive']);
     await ruby.dispatch(tag('ruby'));
-    assert.equal(history.at(-1)[1].args.get('data'), '');
+    assert.equal(history.at(-1)[1].args.get('text'), '');
     await ruby.dispatch(tag('/ruby'));
     assert.equal(queued.length, 0);
   } finally {
@@ -3792,7 +3798,7 @@ test('Native ruby buffers print data globally and end inserts one real normal/ru
 test('Native ruby overflow queues retry with active buffers and distinguishes unprintable/replay/cancellation', async () => {
   const fixture = await nativeInsertionFixture();
   const {ArtemisRuby} = await import('../dist/engines/artemis/ruby.js');
-  const tag = (name) => ({kind: 'tag', name, sourceLine: 19, args: new Map([['data', 'A']])});
+  const tag = (name) => ({kind: 'tag', name, sourceLine: 19, args: new Map([['text', 'A']])});
   const queue = [],
     history = [],
     errors = [];
