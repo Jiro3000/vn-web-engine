@@ -2284,6 +2284,38 @@ test('Artemis image layers keep a gray mask of their own size on both inner acto
   }
 });
 
+test('Artemis lyc mask loads with the image; a missing or non-gray mask fails the creation', async () => {
+  const {layers, graphics, effects} = await maskFixture();
+  try {
+    await layers.dispatch(command('lyc', {id: 'a', file: 'synthetic.png', mask: 'gray2x1.png'}));
+    // A gray mask of another size passes the creation check; the CLayer setter drops it.
+    await layers.dispatch(command('lyc', {id: 'b', file: 'synthetic.png', mask: 'gray4x3.png'}));
+    layers.commit();
+    let draws = graphics.drawCommitted(layers.scene).commands;
+    assert.equal(draws.length, 2);
+    assert.equal(draws[0].additionalTextures.length, 1);
+    assert.equal(draws[1].additionalTextures, undefined);
+    // Failures report the image load error and keep the earlier layer unmasked or masked.
+    effects.length = 0;
+    await layers.dispatch(command('lyc', {id: 'a', file: 'synthetic.png', mask: 'none.png'}));
+    await layers.dispatch(command('lyc', {id: 'a', file: 'synthetic.png', mask: 'rgba4x3.png'}));
+    assert.deepEqual(effects, [
+      ['missing image', 'synthetic.png'],
+      ['missing image', 'synthetic.png'],
+    ]);
+    layers.commit();
+    draws = graphics.drawCommitted(layers.scene).commands;
+    assert.equal(draws[0].additionalTextures.length, 1);
+    // lyprop never reads `mask` (the game forwards creation arguments to it).
+    await layers.dispatch(command('lyprop', {id: 'b', mask: 'gray2x1.png', left: '1'}));
+    layers.commit();
+    draws = graphics.drawCommitted(layers.scene).commands;
+    assert.equal(draws[1].additionalTextures, undefined);
+  } finally {
+    layers.close();
+  }
+});
+
 test('Artemis intermediate enable/disable is shared across retained holder copies, exact zero alone disables', async () => {
   const {layers, graphics, prepared, invalidated} = await captureFixture();
   try {

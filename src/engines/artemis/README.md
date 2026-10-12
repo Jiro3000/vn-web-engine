@@ -679,6 +679,10 @@ image dimensions, deletes the previous selected subtree only after successful
 resource creation, inserts an image leaf and resets that id's command list.
 Creation-tag geometry arguments are not applied: the native command uses separate
 `lyprop`. A missing resource reports a script error while preserving the old layer.
+`mask` loads a second image through the same cache; a failed load or a mask whose surface
+format is not 0 reports the same error, releases the image and keeps the old layer.
+Otherwise the new actor receives it through the CLayer mask setter (see "Layer masks"),
+which keeps it only for a same-size format 1 or 2 texture. `lyprop` never reads `mask`.
 Rules and capture-mode creation are explicitly unsupported. When file loading
 fails and width/height/color are all present, solid fallback uses shared straight
 RGBA fill. Six-byte colors and eight-byte 0x/0X forms select RGB with forced opaque

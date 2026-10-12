@@ -343,9 +343,13 @@ export class ArtemisLayers<T extends object, I extends ArtemisImageDimensions = 
     if (this.host.creationMode() !== 0)
       throw new Error('Unsupported Artemis capture-mode layer creation');
     if (tag.args.has('rule')) throw new Error('Unsupported Artemis rule surface format owner');
+    const maskName = tag.args.get('mask');
+    if (maskName !== undefined && !this.host.applyLayerMask)
+      throw new Error('Unsupported Artemis layer creation mask owner');
     const token = ++this.generation;
     this.pending = token;
     let resource: ArtemisLoadedImage<I | TriangleImage> | null = null;
+    let mask: ArtemisLoadedImage<I> | null = null;
     try {
       resource = await this.images.load(tag.args.get('file') ?? '');
       if (token !== this.generation) throw new Error('Artemis layer resource operation cancelled');
@@ -353,6 +357,19 @@ export class ArtemisLayers<T extends object, I extends ArtemisImageDimensions = 
         if (['width', 'height', 'color'].every((key) => tag.args.has(key)))
           resource = solidImage(tag);
         else {
+          this.host.imageLoadFailed(tag);
+          return true;
+        }
+      }
+      // A `mask` loads through the same cache; a failed load or a mask whose surface
+      // format is not 0 reports the load error and releases the image.
+      if (maskName !== undefined) {
+        mask = await this.images.load(maskName);
+        if (token !== this.generation)
+          throw new Error('Artemis layer resource operation cancelled');
+        if (mask && mask.surfaceFormat === undefined)
+          throw new Error('Unsupported Artemis layer mask surface format');
+        if (!mask || mask.surfaceFormat !== 0) {
           this.host.imageLoadFailed(tag);
           return true;
         }
@@ -366,6 +383,12 @@ export class ArtemisLayers<T extends object, I extends ArtemisImageDimensions = 
       try {
         this.remove(id);
         this.scene.set(id, layer);
+        if (mask) {
+          // The CLayer mask setter keeps it only for a same-size format 1 or 2 texture.
+          const loan = mask;
+          mask = null;
+          this.host.applyLayerMask!(this.scene.layer(id)!.actors(), false, loan);
+        }
         if (recordHistory) this.host.resetLayerCommands(id, tag);
       } finally {
         this.collect();
@@ -374,6 +397,7 @@ export class ArtemisLayers<T extends object, I extends ArtemisImageDimensions = 
     } finally {
       try {
         resource?.lease?.release();
+        mask?.lease?.release();
       } finally {
         if (this.pending === token) this.pending = null;
       }

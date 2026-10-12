@@ -73,6 +73,7 @@ const supported = new Set<string>([
   'height',
   'color',
   'rule',
+  'mask',
   // lyc2 copies these Lua aliases into left/top/xscale/yscale but also forwards
   // the original keys. Native consumes only the resulting property names.
   'x',
