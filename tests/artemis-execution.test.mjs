@@ -7450,6 +7450,57 @@ test('Artemis Lua opens the os library like luaL_openlibs over the browser platf
     );
 });
 
+test('Artemis CSIDL saves use the mounted virtual folder for publication, writes and reads', async () => {
+  const {openArtemisRuntimeFixture} = await import('./artemis-runtime-fixture.mjs');
+  const {VirtualWindowsFolderPaths, joinVirtualWindowsDirectory} =
+    await import('../dist/platform/windows-folder-path.js');
+  const folderPaths = new VirtualWindowsFolderPaths(new Map([[26, 'virtual/roaming']]));
+  const fixture = await openArtemisRuntimeFixture(
+    {
+      'system.ini':
+        '[WINDOWS]\nWIDTH=640\nHEIGHT=360\nBOOT=system/first.iet\nSAVEPATH=.\\sub\\child\\..\\saves\nSAVEPATH_CSIDL=26\n',
+      'system/first.iet':
+        '[file command="copy" src="input.dat" dst="virtual/roaming/sub/saves/payload.dat"]\n[var name="t.exists" system="file_exists" file="virtual/roaming/sub/saves/payload.dat"]\n[stop]',
+      'input.dat': Uint8Array.of(17, 29, 41),
+    },
+    {services: {folderPaths}},
+  );
+  try {
+    await fixture.runtime.boot();
+    for (let i = 0; i < 8 && fixture.runtime.resourcePending; i++) {
+      await fixture.runtime.settleResource();
+      fixture.runtime.script.run(1000);
+    }
+    assert.equal(
+      new TextDecoder().decode(fixture.runtime.variables.read('s.savepath')),
+      'virtual/roaming/sub/saves',
+    );
+    assert.equal(new TextDecoder().decode(fixture.runtime.variables.read('t.exists')), '1');
+    assert.deepEqual([...fixture.saves.get('payload.dat')], [17, 29, 41]);
+    assert.deepEqual(
+      [
+        ...(await fixture.runtime.readSaveDirectoryFile(
+          'virtual\\roaming\\sub\\saves\\payload.dat',
+        )),
+      ],
+      [17, 29, 41],
+    );
+    assert.equal(fixture.runtime.readSaveDirectoryFile('installation/payload.dat'), undefined);
+    assert.equal(folderPaths.folderPath(12345), null);
+    assert.equal(
+      joinVirtualWindowsDirectory('virtual/roaming', './子/./saves'),
+      'virtual/roaming/子/saves',
+    );
+    assert.throws(() => joinVirtualWindowsDirectory('virtual/roaming', '../outside'), /escapes/);
+    assert.throws(
+      () => joinVirtualWindowsDirectory('virtual/roaming', 'C:\\outside'),
+      /explicit virtual mount/,
+    );
+  } finally {
+    await fixture.close();
+  }
+});
+
 test('Artemis runtime reports missing seplay and splay sounds like c7260 and continues', async () => {
   const {openArtemisRuntimeFixture} = await import('./artemis-runtime-fixture.mjs');
   const {artemisTagErrorMessages} = await import('../dist/engines/artemis/native-tags.js');

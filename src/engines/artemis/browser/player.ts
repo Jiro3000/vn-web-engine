@@ -8,6 +8,7 @@ import {decodeImageOffThread} from '../../../graphics/image-decode-offload.js';
 import {decodeOpaqueJpeg} from '../../../graphics/browser-jpeg.js';
 import {WebGLDrawTarget} from '../../../graphics/webgl-draw.js';
 import {BrowserWindowsDynamicLibraryHost} from '../../../platform/windows-dynamic-library.js';
+import {BrowserWindowsFolderPaths} from '../../../platform/windows-folder-path.js';
 import {BrowserWindowCaptionHost} from '../../../platform/window-caption.js';
 import {BrowserWindowStateHost} from '../../../platform/window-state.js';
 import {BrowserTextDialogHost} from '../../../platform/text-dialog.js';
@@ -355,6 +356,7 @@ export class ArtemisBrowserPlayer {
       },
       pointer: {readPointerPosition: () => this.gamePointer()},
       dynamicLibraries: new BrowserWindowsDynamicLibraryHost(),
+      folderPaths: new BrowserWindowsFolderPaths(),
       windowsVersion: () => options.windowsVersion,
       // Installed faces from the Local Font Access API, named as on Japanese Windows; a
       // missing or denied API lists none.

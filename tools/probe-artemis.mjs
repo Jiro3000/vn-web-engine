@@ -19,6 +19,7 @@ import {openArtemisInstallation} from './artemis-installation.mjs';
 import {BrowserWindowsSystemProfileHost} from '../dist/platform/browser-windows-system-profile.js';
 import {BrowserWindowsProcessHost} from '../dist/platform/browser-windows-process.js';
 import {BrowserWindowsDynamicLibraryHost} from '../dist/platform/windows-dynamic-library.js';
+import {BrowserWindowsFolderPaths} from '../dist/platform/windows-folder-path.js';
 import {packArtemisSaveFile} from '../dist/formats/artemis/save-file.js';
 import {readAsfHeader} from '../dist/formats/asf/header.js';
 import {ArtemisRuntime} from '../dist/engines/artemis/runtime.js';
@@ -342,6 +343,7 @@ try {
     },
     pointer: {readPointerPosition: () => ({x: 0, y: 0})},
     dynamicLibraries: new BrowserWindowsDynamicLibraryHost(),
+    folderPaths: new BrowserWindowsFolderPaths(),
     windowsVersion: () => simulatedWindowsVersion ?? systemProfile.readVersion(),
     // As a page without (or denied) Local Font Access: no installed faces.
     fontFamilies: async () => [],

@@ -14,6 +14,10 @@ import {ArtemisSaveDirectory, type ArtemisRuntimeStorage} from './save-directory
 import type {WindowCaptionHost} from '../../platform/window-caption.js';
 import type {WindowStateHost} from '../../platform/window-state.js';
 import type {WindowsDynamicLibraryHost} from '../../platform/windows-dynamic-library.js';
+import {
+  joinVirtualWindowsDirectory,
+  type WindowsFolderPathHost,
+} from '../../platform/windows-folder-path.js';
 import {windowsTextFileBytes} from '../../platform/windows-text-file.js';
 import type {FullscreenMoviePlayer} from '../../video/fullscreen-movie.js';
 import {ArtemisCaption} from './caption.js';
@@ -253,6 +257,8 @@ export interface ArtemisRuntimeServices {
   readonly cursor: CursorHost;
   readonly pointer: PointerPositionHost;
   readonly dynamicLibraries: WindowsDynamicLibraryHost;
+  /** Explicit virtual mounts for system.ini SAVEPATH_CSIDL. */
+  readonly folderPaths?: WindowsFolderPathHost;
   /** The Windows version the host reports, or null when it reports none. */
   readonly windowsVersion: () => {readonly major: number; readonly minor: number} | null;
   /** EnumFontFamiliesExW over DEFAULT_CHARSET; without it `get_font` is refused. */
@@ -431,11 +437,18 @@ export class ArtemisRuntime {
       {files, sound, glyphs} = services,
       {width, height} = ini;
     const trace = (effect: object) => services.trace?.effect?.(effect);
-    // Installation-relative save directory; no Windows known-folder resolution.
-    const saveDirectory = (this.saveDirectory =
+    // Preserve the established simple installation-relative path. A CSIDL root belongs
+    // to the filesystem host (Rev.3257 0x14009d710 -> 0x14018a5c0), not to the engine.
+    let saveDirectory =
       ini.savePath !== undefined && ini.savePathCsidl === undefined && /^[\w-]+$/.test(ini.savePath)
         ? ini.savePath
-        : undefined);
+        : undefined;
+    if (ini.savePath !== undefined && ini.savePathCsidl !== undefined && services.folderPaths) {
+      const root = services.folderPaths.folderPath(artemisInteger(ini.savePathCsidl));
+      if (root === null) throw new Error('Artemis save folder has no virtual mount');
+      saveDirectory = joinVirtualWindowsDirectory(root, ini.savePath);
+    }
+    this.saveDirectory = saveDirectory;
     const readFile = (path: string) => {
       path = files.resolvePath(path);
       const bytes = prepared.get(path);

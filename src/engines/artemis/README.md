@@ -610,9 +610,13 @@ Returned bytes are published through the variable owner without UTF-8 conversion
 
 `initializeArtemisResourcePaths` publishes the filesystem owner's resolved data
 and save roots. It does not resolve Windows known folders or choose persistence.
-The nonvisual probe uses an installation-relative namespace and accepts only an
-explicit simple SAVEPATH with no SAVEPATH_CSIDL. Reads remain in the selected
-installation; it does not create directories or write saves.
+The runtime keeps simple installation-relative SAVEPATH values. With SAVEPATH_CSIDL,
+the filesystem host supplies an explicit virtual folder mount; the runtime joins the
+relative SAVEPATH onto it, normalizing separators and dot components. Browser and
+probe hosts mount CSIDL 26 (roaming application data) in an opaque virtual directory.
+The published `s.savepath`, file-copy writes and file-existence reads all use the same
+save-storage namespace. No directories or saves are written in the installed game.
+An unmounted folder or a path escaping its mount is refused.
 
 A resource owner can opt into `suspendableTags` and return `suspended` after
 starting an asynchronous native tag operation. `createCall` keeps the Lua call's
