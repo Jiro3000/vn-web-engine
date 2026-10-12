@@ -4030,6 +4030,15 @@ test('Artemis revisions are selected by executable hash with explicit Rev.3139 d
     [r3179.minimumSupportVersion, r3179.saveDataVersion],
   );
   assert.equal(Object.isFrozen(r3139), true);
+  // A second Rev.3139 executable (code sections identical, only .rsrc differs) gets every
+  // Rev.3139 field under its own hash.
+  const {ARTEMIS_3139_RESOURCE_VARIANT_SHA256: variantSha} =
+    await import('../dist/engines/artemis/revision.js');
+  const variant = artemisRevision(variantSha);
+  assert.deepEqual({...variant, executableSha256: r3139.executableSha256}, {...r3139});
+  assert.equal(variant.executableSha256, variantSha);
+  assert.notEqual(variantSha, ARTEMIS_3139_EXECUTABLE_SHA256);
+  assert.equal(Object.isFrozen(variant), true);
   assert.throws(() => artemisRevision('1'.repeat(64)), /Unsupported Artemis executable/);
   const {initializeArtemisVariables} = await import('../dist/engines/artemis/revision.js');
   const written = new Map();

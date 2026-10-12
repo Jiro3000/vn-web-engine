@@ -4,6 +4,11 @@ export const ARTEMIS_3179_EXECUTABLE_SHA256 =
   '8953562b80608046662bd8c89015d04236b0ba3afee10c36469c11403de3ebaf';
 export const ARTEMIS_3139_EXECUTABLE_SHA256 =
   '455676b09503309b82dc78d7bac45d2eeb1837bed9ec0ab41053d7d9bb298f9e';
+/** A second Rev.3139 executable: its .text, .rdata, .data, .pdata, second .text and _RDATA
+ * sections and the PE timestamp are byte-identical to ARTEMIS_3139_EXECUTABLE_SHA256; only
+ * .rsrc (and the header fields that size it) differ. Every Rev.3139 address applies. */
+export const ARTEMIS_3139_RESOURCE_VARIANT_SHA256 =
+  '852e457db9b3d84def9a892a1a93ea752152207f36106889229c50098068da43';
 
 export interface ArtemisRevision {
   readonly executableSha256: string;
@@ -22,6 +27,16 @@ export interface ArtemisRevision {
    * failed one left. */
   readonly soundLoaderRewinds: boolean;
 }
+// Rev.3139 0x1400c36f0 publishes the same support and save data versions.
+const rev3139 = {
+  executableSha256: ARTEMIS_3139_EXECUTABLE_SHA256,
+  engineVersion: 3139,
+  buildDate: 'Wed Aug 30 19:57:57 2023',
+  minimumSupportVersion: 1103,
+  saveDataVersion: 1003,
+  screenshot: 'presented' as const,
+  soundLoaderRewinds: false,
+};
 const revisions: ReadonlyMap<string, ArtemisRevision> = new Map(
   [
     {
@@ -33,16 +48,8 @@ const revisions: ReadonlyMap<string, ArtemisRevision> = new Map(
       screenshot: 'scene' as const,
       soundLoaderRewinds: true,
     },
-    // Rev.3139 0x1400c36f0 publishes the same support and save data versions.
-    {
-      executableSha256: ARTEMIS_3139_EXECUTABLE_SHA256,
-      engineVersion: 3139,
-      buildDate: 'Wed Aug 30 19:57:57 2023',
-      minimumSupportVersion: 1103,
-      saveDataVersion: 1003,
-      screenshot: 'presented' as const,
-      soundLoaderRewinds: false,
-    },
+    rev3139,
+    {...rev3139, executableSha256: ARTEMIS_3139_RESOURCE_VARIANT_SHA256},
   ].map((revision) => [revision.executableSha256, Object.freeze(revision)]),
 );
 

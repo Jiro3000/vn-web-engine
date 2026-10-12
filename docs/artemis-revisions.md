@@ -6,6 +6,13 @@ address of the executable `8953562b…ebaf`. This file ties those addresses to R
 (`455676b09503309b82dc78d7bac45d2eeb1837bed9ec0ab41053d7d9bb298f9e`) and lists every
 behavioral difference the engine selects by revision.
 
+A second Rev.3139 executable, `852e457db9b3d84def9a892a1a93ea752152207f36106889229c50098068da43`
+(`ARTEMIS_3139_RESOURCE_VARIANT_SHA256`), has the same PE timestamp (`0x64ef20ee`) and
+byte-identical `.text`, `.rdata`, `.data`, `.pdata`, second `.text` and `_RDATA` sections;
+only `.rsrc` and the header fields that size it (SizeOfInitializedData, SizeOfImage,
+CheckSum, the resource directory size and the `.rsrc` section header) differ. It shares
+every Rev.3139 address and field below.
+
 ## How the revisions were compared
 
 Both executables were analyzed read-only in Ghidra (`scripts/ArtemisFunctionHashes.java`,
