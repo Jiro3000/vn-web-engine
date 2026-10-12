@@ -472,7 +472,8 @@ and continues from the restored caret instead of clicking. It requires the loade
 to match the saved one with the caret written as loaded, and a second load of that state
 to reproduce it; both loads run the game's `onLoad` handler. The report is `saveLoad`; a
 differing round trip also writes the three archives (`roundtrip-*.bin`) to `--report-dir`.
-`--auto-choice=PREFIX` (repeatable) with `--auto-choices=N` continues a route once the
+`--automode-limit=N` gives the click-wait after N automode-ended waits one pointer press on
+no layer (report `automodeStop`: whether automode is still on). `--auto-choice=PREFIX` (repeatable) with `--auto-choices=N` continues a route once the
 scripted `--layer-event`/`--key-push` inputs are used up: at a run mode 3 stop it picks the
 first visible layer with an enabled click event whose id starts with a prefix and presses it
 like `--press-at` (report `autoChoices`). `--press-at` delivers a browser pointer press in real

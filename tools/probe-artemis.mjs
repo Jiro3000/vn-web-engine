@@ -108,6 +108,15 @@ let autoChoices = autoChoicesArgument
   ? artemisInteger(autoChoicesArgument.slice('--auto-choices='.length))
   : 0;
 const autoChoiceLog = [];
+// --automode-limit=N: once automode has ended N click-waits, the next click-wait receives one
+// browser pointer press on no layer (see --press-at), the input automode's stop-by-click role
+// reads; the report's automodeStop records whether automode ended.
+const automodeLimitArgument = process.argv
+  .slice(3)
+  .findLast((arg) => arg.startsWith('--automode-limit='));
+const automodeLimit = automodeLimitArgument
+  ? artemisInteger(automodeLimitArgument.slice('--automode-limit='.length))
+  : null;
 const shaderPresets = process.argv.slice(3).includes('--shader-presets');
 // --windows-version=MAJOR.MINOR: the SIMULATED Windows version (the browser page reports
 // 10.0); absent, the query fails like the browser system profile.
@@ -467,7 +476,7 @@ try {
       const now = (runtime.now + 16) >>> 0 || 1;
       runtime.frame(now, {
         sample: {down: new Set(count ? [] : [1]), pointerInside: true},
-        pointer: {x: 0, y: 0, hits: [id]},
+        pointer: {x: 0, y: 0, hits: id === null ? [] : [id]},
       });
       while (runtime.resourcePending) {
         await runtime.settleResource();
@@ -477,6 +486,7 @@ try {
   };
   // Durations of click-waits that automode ended, in milliseconds.
   const automodeWaits = [];
+  let automodeStop = null;
   let refusal = null;
   try {
     await runtime.boot();
@@ -586,6 +596,23 @@ try {
             modeEffects.push({layerEvent: {id, type}, click: deliveredClicks, simulation: true});
             runtime.layerEvent(id, type);
           }
+          script.run(1000);
+          continue;
+        }
+        if (
+          runtime.modes.automode &&
+          automodeLimit !== null &&
+          automodeWaits.length >= automodeLimit &&
+          !automodeStop
+        ) {
+          for (let count = 0; !runtime.textDisplayComplete; count++) {
+            if (count >= 100000) throw Error('Probe click-wait display did not finish');
+            frame();
+            wait.tick(runtime.now);
+          }
+          modeEffects.push({press: null, click: deliveredClicks, simulation: true});
+          await pointerPress(null);
+          automodeStop = {click: deliveredClicks, automode: runtime.modes.automode};
           script.run(1000);
           continue;
         }
@@ -712,6 +739,7 @@ try {
       saveLoad: saveLoadReport,
       autoChoices: autoChoiceLog,
       automodeWaits,
+      automodeStop,
       probeLua,
       saveFiles: Object.fromEntries(
         [...saveFiles].map(([name, bytes]) => [name, {bytes: bytes.length}]),
