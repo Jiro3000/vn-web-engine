@@ -1,11 +1,12 @@
 /** Nonvisual real-pixel decode/queue diagnostic. No canvas, frame or asset display.
- * PNG/merged PSD use the existing shared worker. Node lacks the browser JPEG owner. */
+ * PNG/merged PSD use the shared worker; JPEG uses the diagnostic Pillow/libjpeg owner. */
 import {createHash} from 'node:crypto';
 import {createNodeBrowserWorker} from './node-browser-worker.mjs';
 import {ArtemisSurfaceManager} from '../dist/engines/artemis/surface-manager.js';
 import {ArtemisImageLoader} from '../dist/engines/artemis/image-loader.js';
 import {artemisPngSurface, artemisPngDecodeOptions} from '../dist/engines/artemis/png-surface.js';
 import {decodePng} from '../dist/formats/png/decode.js';
+import {decodeNodeOpaqueJpeg} from './node-opaque-jpeg.mjs';
 export function createArtemisSurfacePreloadFixture(
   hash,
   readFile,
@@ -71,7 +72,7 @@ export function createArtemisSurfacePreloadFixture(
       extensions: ['jpg', 'jpeg', 'JPG', 'JPEG'],
       decode: async (bytes) => {
         if (bytes[0] !== 255 || bytes[1] !== 216) return null;
-        throw Error('Unsupported nonvisual Node JPEG surface preload');
+        return decodeNodeOpaqueJpeg(bytes);
       },
     },
     {

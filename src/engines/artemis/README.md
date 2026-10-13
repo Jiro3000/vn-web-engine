@@ -1650,8 +1650,12 @@ queries the whole queue and returns a boolean. No queue host is invented by defa
 `probe-artemis` uses
 a real shared image worker for PNG and merged PSD pixels. Gray PNGs become native
 format 0 surfaces (`artemisPngSurface`, one byte per pixel in the 0x1401649b0 storage
-size), all others four bytes per pixel. JPEG explicitly refuses in this Node
-diagnostic. Only metrics and hashes are exported; it does not prepare GPU surfaces,
+size), all others four bytes per pixel. Opaque JPEG uses the diagnostic
+`node-opaque-jpeg.mjs` CPU owner (Python with Pillow/libjpeg; select the interpreter
+with `ARTEMIS_PROBE_PYTHON`). It strips metadata through the shared header reader,
+checks the stored frame dimensions and emits RGBA bytes without an image window or
+canvas. Its rounding is the diagnostic codec's, not a claim of native/browser pixel
+identity; production playback keeps the browser JPEG codec. Only metrics and hashes are exported; it does not prepare GPU surfaces,
 display assets or claim production rendering. The 512 MiB budget is an explicit
 diagnostic policy, not an inferred setting of the original game. Existing metadata layer
 fixtures remain simulated and are independent of these pixel resources.

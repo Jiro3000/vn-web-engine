@@ -5508,3 +5508,39 @@ test('get_layer_info reads an empty group as a CLayer without a surface', async 
   // The image child keeps its surface.
   assert.notEqual(owner.layerInfo('1.g.a').surface, null);
 });
+
+test(
+  'Nonvisual surface preload decodes actual JPEG pixels without a browser canvas',
+  {skip: !process.env.ARTEMIS_PROBE_PYTHON},
+  async () => {
+    const {createArtemisSurfacePreloadFixture} =
+      await import('../tools/artemis-surface-preload-fixture.mjs');
+    const {decodeNodeOpaqueJpeg} = await import('../tools/node-opaque-jpeg.mjs');
+    const bytes = Buffer.from(
+      '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQH/2wBDAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQH/wAARCAABAAIDAREAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwD8V6/jc/0AP//Z',
+      'base64',
+    );
+    const image = await decodeNodeOpaqueJpeg(bytes);
+    assert.deepEqual([image.width, image.height, image.format], [2, 1, 2]);
+    for (let i = 0; i < 2; i++) {
+      for (let c = 0; c < 3; c++)
+        assert.ok(Math.abs(image.pixels[i * 4 + c] - [120, 60, 30][c]) <= 2);
+      assert.equal(image.pixels[i * 4 + 3], 255);
+    }
+    const fixture = createArtemisSurfacePreloadFixture(revision, async (p) =>
+      p === 'synthetic.jpg' ? bytes : null,
+    );
+    try {
+      fixture.manager.bindSurfaceAsync('synthetic');
+      await fixture.manager.waitForLoads();
+      const summary = fixture.summary();
+      assert.equal(summary.decodedImages, 1);
+      assert.equal(summary.failures.length, 0);
+      assert.equal(summary.gameVisualAssetsDisplayed, false);
+      assert.deepEqual([summary.samples[0].width, summary.samples[0].height], [2, 1]);
+    } finally {
+      await fixture.close();
+    }
+    await assert.rejects(() => decodeNodeOpaqueJpeg(Uint8Array.of(255, 216, 255, 217)));
+  },
+);
