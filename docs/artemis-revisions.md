@@ -1,10 +1,11 @@
 # Artemis revisions
 
 The engine accepts an executable only by its SHA-256 (`src/engines/artemis/revision.ts`).
-Every native address in the code and in `src/engines/artemis/README.md` is a Rev.3179
-address of the executable `8953562b…ebaf`. This file ties those addresses to Rev.3139
-(`455676b09503309b82dc78d7bac45d2eeb1837bed9ec0ab41053d7d9bb298f9e`) and lists every
-behavioral difference the engine selects by revision.
+Unless a revision is stated explicitly, native addresses in the code and in
+`src/engines/artemis/README.md` describe Rev.3179 executable `8953562b…ebaf`.
+This file maps those addresses to Rev.3139
+(`455676b09503309b82dc78d7bac45d2eeb1837bed9ec0ab41053d7d9bb298f9e`) and Rev.3257,
+and records the behavioral differences selected by exact executable hash.
 
 A second Rev.3139 executable, `852e457db9b3d84def9a892a1a93ea752152207f36106889229c50098068da43`
 (`ARTEMIS_3139_RESOURCE_VARIANT_SHA256`), has the same PE timestamp (`0x64ef20ee`) and
@@ -51,6 +52,33 @@ Confirmed revision fields:
 The address map and route validation are in progress; see `RESUME-SAKURANOUTA.md`
 in the surrounding analysis workspace. Do not apply Rev.3179 addresses to this
 executable without an explicit mapping.
+
+### Confirmed Rev.3257 method correspondence
+
+RTTI identifies a class, but multiple inheritance can give that class several
+virtual tables. Keep every table for a class and pair each using already matched
+methods. The primary text-layer table at `0x140376af0` (3179, 67 slots) corresponds
+to `0x140371e18` (3257, 69 slots). Rev.3257 inserts the depth getter at slot 43
+(`+0x158`) and unindent at slot 55 (`+0x1b8`): old slots 0–42 keep their indices,
+43–53 move by one, and 54–66 move by two. Secondary tables with the same RTTI
+identity do not replace this primary table.
+
+The following pairs have also been checked in paired decompiles. Constructor
+inlining and equivalent compiler branches account for their instruction differences;
+the listed state layout and operations agree. This is a confirmed subset of the
+full map, which remains in progress.
+
+| Rev.3179 | Rev.3257 | Checked operation |
+| --- | --- | --- |
+| `0x140015b50` | `0x140013140` | Theora constructor and BT.601 conversion table arithmetic |
+| `0x14009d200` | `0x14009ff90` | INI shared-holder constructor, flags and map slots |
+| `0x1400a3640` | `0x1400a6450` | Actor constructor, virtual-base layout and property defaults |
+| `0x1400b1860` | `0x1400b4a90` | Scene node destruction, captures and map/actor release order |
+| `0x1400ef000` | `0x1400fed50` | Float tween constructor, state offsets and callback ownership |
+| `0x140149760` | `0x140152ea0` | Tween-id query across active and pending registries |
+| `0x140171140` | `0x1401791d0` | Horizontal rule copies and vertical row wrapping |
+| `0x140190920` | `0x140197920` | Sound manager load, inactive-handle pruning and index insertion |
+| `0x14019aa00` | `0x1401a0f80` | Tween frame completion, destruction and pending-registry merge |
 
 ## How the revisions were compared
 
