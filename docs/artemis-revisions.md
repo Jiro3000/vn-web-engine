@@ -112,6 +112,12 @@ full map, which remains in progress.
 | `0x140176b10` | `0x14017f5f0` | INI string query, section/key presence and missing empty result |
 | `0x1400a4eb0` | `0x1400a7ec0` | Actor property assignment; base copy is outlined and shared transfers inlined |
 | `0x1400a0770` | `0x1400a33a0` | Encoding-aware string splitting, empty fields and delimiter boundaries |
+| `0x1400ae440` | `0x1400b1590` | Sound handle lookup and virtual `+0x70` query |
+| `0x1400b8090` | `0x1400bbd80` | Command state assignment, three strings and unchanged scalar/flag offsets |
+| `0x1400ecc70` | `0x1400fc9b0` | Curve member assignment and tagged callable transfer/release |
+| `0x1400ae2e0` | `0x1400b1440` | Sound callback setter at virtual `+0x68`, callable copy and release |
+| `0x1400ed9d0` | `0x1400fd750` | Integer tween constructor, from/to conversion and callable ownership |
+| `0x1400f8050` | `0x1401058c0` | Script event callable construction, tag copies and temporary release |
 
 Fullscreen movie cleanup corresponds from `0x14015c0a0` to `0x1401650e0`,
 but its native resource layout changed. The active flag moves from `+0x58`
