@@ -118,6 +118,12 @@ full map, which remains in progress.
 | `0x1400ae2e0` | `0x1400b1440` | Sound callback setter at virtual `+0x68`, callable copy and release |
 | `0x1400ed9d0` | `0x1400fd750` | Integer tween constructor, from/to conversion and callable ownership |
 | `0x1400f8050` | `0x1401058c0` | Script event callable construction, tag copies and temporary release |
+| `0x1400acbb0` | `0x1400b0230` | Key-role binding, wheel flags and unique integer-key set insertion |
+| `0x1400c9870` | `0x1400d0090` | Caption conversion, encoding guard and native window handle lookup |
+| `0x14009d150` | `0x14009fe60` | Archive string length/bytes and field-id bookkeeping; bookkeeping is inlined |
+| `0x1400b9cd0` | `0x1400bdfc0` | Empty history argument-map construction, copy and append |
+| `0x1400ebf10` | `0x1400fbab0` | Automode indicator-map search/insert and default member layout |
+| `0x14012d490` | `0x1401325e0` | Native report encoding guard, conversion and temporary release |
 
 Fullscreen movie cleanup corresponds from `0x14015c0a0` to `0x1401650e0`,
 but its native resource layout changed. The active flag moves from `+0x58`
