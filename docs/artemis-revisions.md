@@ -124,6 +124,8 @@ full map, which remains in progress.
 | `0x1400b9cd0` | `0x1400bdfc0` | Empty history argument-map construction, copy and append |
 | `0x1400ebf10` | `0x1400fbab0` | Automode indicator-map search/insert and default member layout |
 | `0x14012d490` | `0x1401325e0` | Native report encoding guard, conversion and temporary release |
+| `0x1400b5690` | `0x1400b8a10` | Key-role decide query, wheel/ordinary keys and Alt+Enter suppression |
+| `0x140130350` | `0x140135db0` | Lua tag parsing, script-queue append and severity-1 report branch |
 
 Fullscreen movie cleanup corresponds from `0x14015c0a0` to `0x1401650e0`,
 but its native resource layout changed. The active flag moves from `+0x58`
