@@ -89,6 +89,30 @@ full map, which remains in progress.
 | `0x1400b5a30` | `0x1400b8cd0` | Caret constructor, wait fields and pending-command queue |
 | `0x1400b5b20` | `0x1400b8dc0` | Caret destructor and string/map/queue release order |
 | `0x1400b6cf0` | `0x1400ba2c0` | Pending capture restoration; text virtual `+0x1b0` becomes `+0x1c0` |
+| `0x140057750` | `0x1400562e0` | Decoder read-context flags and callback setup; callback construction is inlined |
+| `0x1400a0340` | `0x1400a2fd0` | Encoding-aware replacement for Shift-JIS, EUC and UTF-8 |
+| `0x1400add70` | `0x1400b0e00` | Scoped sound gain query, missing-handle result and scope conversion |
+| `0x1400ae110` | `0x1400b1220` | Pan tween cancellation, current-pan query and setter; registry insertion is inlined |
+| `0x1400afc60` | `0x1400b2ee0` | Expression string read, empty result and temporary release |
+| `0x1400b0e90` | `0x1400b40a0` | Save-state clone, maps and scalar fields |
+| `0x1400b1690` | `0x1400b4890` | Scene-node construction, reference counts, actor arrays and inlined payload copy |
+| `0x1400c6480` | `0x1400cb6d0` | Run-mode scope release, scheduler, pending queue and modes 5/6 |
+| `0x140134ca0` | `0x14013b680` | Lua display-info float extraction and property setter |
+| `0x14013ef10` | `0x140146c60` | String-map restoration |
+| `0x1401593a0` | `0x140161f40` | Operator-byte classification, including punctuation predicates and result masks |
+| `0x1401856c0` | `0x14018d0c0` | Integer-string predicate: empty rejection, leading minus and digit checks |
+| `0x1401990e0` | `0x1401a0110` | Relative float tween construction, six properties and from/to reversal |
+
+Fullscreen movie cleanup corresponds from `0x14015c0a0` to `0x1401650e0`,
+but its native resource layout changed. The active flag moves from `+0x58`
+to `+0x68`, and the seven existing interface members move from `+0x18..0x48`
+to `+0x28..0x58`. Rev.3257 also stops and closes a resource owner at `+0x18`
+through its virtual `+0x58` and `+0x68` methods before clearing the member.
+The browser owns its media backend through `BrowserFullscreenMoviePlayer.close`:
+it cancels pending activation and playback, disposes the audio voice, joins decoder
+shutdown, releases the renderer and removes the movie surface. This lifecycle already
+covers the additional native owner; the native pointer layout is not reproduced in
+browser memory. Existing revision behavior is unchanged.
 
 ## How the revisions were compared
 
