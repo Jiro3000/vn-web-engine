@@ -339,6 +339,8 @@ function readSystemIni(bytes: Uint8Array) {
  * native tag owner, the Lua runtime and script, the tag dispatch and the frame-level
  * operations a host drives (resource completion, clock, input, waits, save and load). */
 export class ArtemisRuntime {
+  private readonly loadRunMode: number;
+  private readonly exitRunMode: number;
   readonly lua: ArtemisLua;
   readonly script: ArtemisScript;
   readonly variables: ArtemisVariables;
@@ -438,6 +440,9 @@ export class ArtemisRuntime {
     const hash = services.executableSha256,
       {files, sound, glyphs} = services,
       {width, height} = ini;
+    const revision = artemisRevision(hash);
+    this.loadRunMode = revision.loadRunMode;
+    this.exitRunMode = revision.exitRunMode;
     const trace = (effect: object) => services.trace?.effect?.(effect);
     // Preserve the established simple installation-relative path. A CSIDL root belongs
     // to the filesystem host (Rev.3257 0x14009d710 -> 0x14018a5c0), not to the engine.
@@ -632,16 +637,20 @@ export class ArtemisRuntime {
         this.store('saveg.dat', 'G', writeArtemisGlobalArchive(readHistory, variables)),
       writeSystem: () => this.store('system.dat', 'X', writeArtemisSystemArchive(variables)),
     }));
-    const exit = new ArtemisExit(save, {
-      runMode: () => this.mode,
-      enterExitMode: () => {
-        script.enterRunMode(14);
-        if (script.state === 'ready') script.pause();
-        trace({runMode: 14, schedulerFlag: false});
+    const exit = new ArtemisExit(
+      save,
+      {
+        runMode: () => this.mode,
+        enterExitMode: () => {
+          script.enterRunMode(this.exitRunMode);
+          if (script.state === 'ready') script.pause();
+          trace({runMode: this.exitRunMode, schedulerFlag: false});
+        },
+        fullscreen: () => windowDisplay().fullscreen,
+        writeStatus: (name, value) => variables.write(name, value),
       },
-      fullscreen: () => windowDisplay().fullscreen,
-      writeStatus: (name, value) => variables.write(name, value),
-    });
+      this.loadRunMode,
+    );
     // Text display owners per message resource. Glyph and block actors are property stores
     // that the presentation reads.
     const textDisplays = new Map<ArtemisMessageResource, ArtemisTextDisplay<unknown>>(),
@@ -764,7 +773,7 @@ export class ArtemisRuntime {
           'Artemis fullscreen video failed: ' + tag.args.get('file'),
         ),
       enterVideoMode: () => {
-        if (this.mode === 13) return;
+        if (this.mode === this.loadRunMode) return;
         script.enterRunMode(7);
         trace({runMode: 7, simulation: true});
         if (this.resourceInFlight) this.runModeHeld = true;
@@ -1202,7 +1211,7 @@ export class ArtemisRuntime {
       // 0x1400c8250 / 0x1400c0560: the root script ends in the application exit.
       emptyReturn: () => {
         exit.exit();
-        return this.mode === 14 ? 'stopped' : undefined;
+        return this.mode === this.exitRunMode ? 'stopped' : undefined;
       },
       caretFields: {
         take: () => wait.take(),
@@ -1382,8 +1391,8 @@ export class ArtemisRuntime {
       loadBacklog: (backlog: unknown) => trace({backlogLoad: backlog ? 'empty' : null}),
       enterLoadMode: (caret: ArtemisLoadedCaret | undefined) => {
         loadPrevious = caret ? caret.runMode : this.mode;
-        this.script.setRunMode(13);
-        trace({runMode: 13, simulation: true});
+        this.script.setRunMode(this.loadRunMode);
+        trace({runMode: this.loadRunMode, simulation: true});
       },
       frameState: () => undefined,
       refreshGlyphLayer: (name: string) => trace({glyphLayerRefresh: name, simulation: true}),
@@ -1449,9 +1458,9 @@ export class ArtemisRuntime {
   get acceptsInput(): boolean {
     return this.mode === 1 || this.mode === 3;
   }
-  /** Run mode 14: the script exited; the host closes the application after this frame. */
+  /** Revision's exit mode: the host closes the application after this frame. */
   get exited(): boolean {
-    return this.mode === 14;
+    return this.mode === this.exitRunMode;
   }
   /** A tag or Lua call is suspended on a resource operation. */
   get resourcePending(): boolean {

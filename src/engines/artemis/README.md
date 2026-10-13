@@ -117,6 +117,9 @@ pops paired indentation levels, any negative count clears them, and existing lin
 keep their geometry. The command records text history without editing the persistent
 indent replay slot. `var system=get_message_layer_indent_nest` reads the selected
 insertion owner's depth. Both operations are absent from the older revision maps.
+Its scenario replay hold is mode 14 and its application exit is mode 15; earlier
+revisions keep modes 13/14. The revision fields select the loader bracket, exit guard,
+video-entry guard and host exit predicate. Lua status values remain native numbers.
 
 Exact shader source hashes `271173e7…d18d6`, `3a5b63e5…604b`, `07f6d756…763d`
 and `db1b5dc8…3ac9` select the perspective presets. They warp one texture coordinate

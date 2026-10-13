@@ -28,6 +28,11 @@ Confirmed revision fields:
 
 - `screenshot = scene`: `0x1400ee300` changes the renderer target, draws the committed
   scene through `0x14015a220`, and restores the previous target and renderer mode.
+- `loadRunMode = 14`, `exitRunMode = 15` (older revisions: 13/14): scenario loader
+  `0x14014a2a0` holds replay in mode 14; mode entry `0x1400cb290` refuses changes from
+  that hold. Exit `0x1400cdf40` enters 15 unless replay holds 14. Window frame
+  `0x1401449f0` closes after mode 15. Runtime replay, exit guarding, fullscreen-video
+  entry and the host's exit predicate use these exact-hash fields.
 - `soundLoaderRewinds = true`: `0x140197120` and `0x140197010` seek the opened file
   through file virtual slot `+0x30` with `(0, 0)` before a further loader.
 - Archive mount `0x1401884a0` opens the base, then existing `.000` through `.999` in

@@ -7753,6 +7753,52 @@ test('Perspective shader preserves identity, warps UVs, clips X and fades the na
   assert.match(adapter.fragment, /float uScale=parameters\[0\]\.z/);
 });
 
+test('Artemis runtime selects native load and exit modes by exact revision without changing older modes', async () => {
+  const {openArtemisRuntimeFixture} = await import('./artemis-runtime-fixture.mjs');
+  const {
+    artemisRevision,
+    ARTEMIS_3179_EXECUTABLE_SHA256,
+    ARTEMIS_3139_EXECUTABLE_SHA256,
+    ARTEMIS_3257_EXECUTABLE_SHA256,
+  } = await import('../dist/engines/artemis/revision.js');
+  for (const [hash, loadMode, exitMode] of [
+    [ARTEMIS_3179_EXECUTABLE_SHA256, 13, 14],
+    [ARTEMIS_3139_EXECUTABLE_SHA256, 13, 14],
+    [ARTEMIS_3257_EXECUTABLE_SHA256, 14, 15],
+  ]) {
+    assert.deepEqual(
+      [artemisRevision(hash).loadRunMode, artemisRevision(hash).exitRunMode],
+      [loadMode, exitMode],
+    );
+    const fixture = await openArtemisRuntimeFixture({'system/first.iet': '[stop]'}, {hash});
+    try {
+      const {runtime} = fixture;
+      await runtime.boot();
+      runtime.save.request('synthetic.dat');
+      await runtime.flushSaves();
+      fixture.effects.length = 0;
+      assert.equal(await runtime.load.load('synthetic.dat', false), true);
+      assert.ok(fixture.effects.some((e) => e.runMode === loadMode));
+      assert.equal(runtime.runMode, 3);
+      assert.equal(runtime.exited, false);
+      runtime.lua.vm.execute(
+        new TextEncoder().encode(`engine:setScriptStatus(${loadMode}); engine:tag{'exit'}`),
+      );
+      assert.equal(runtime.runMode, loadMode);
+      assert.equal(runtime.exited, false);
+      runtime.lua.vm.execute(
+        new TextEncoder().encode("engine:setScriptStatus(0); engine:tag{'exit'}"),
+      );
+      assert.equal(runtime.runMode, exitMode);
+      assert.equal(runtime.exited, true);
+      await runtime.flushSaves();
+      assert.ok(fixture.saves.has('saveg.dat'));
+    } finally {
+      await fixture.close();
+    }
+  }
+});
+
 test('Artemis runtime lets Lua read sound-loop sidecars synchronously with exact bytes', async () => {
   const {openArtemisRuntimeFixture} = await import('./artemis-runtime-fixture.mjs');
   const fixture = await openArtemisRuntimeFixture({
@@ -7763,12 +7809,14 @@ test('Artemis runtime lets Lua read sound-loop sidecars synchronously with exact
   });
   try {
     await fixture.runtime.boot();
-    fixture.runtime.lua.vm.execute(new TextEncoder().encode(
-      `local e=engine
+    fixture.runtime.lua.vm.execute(
+      new TextEncoder().encode(
+        `local e=engine
        assert(e:file('SOUND\\\\loop.ogg.sli')==string.char(0,255,13,10,49,50))
        assert(e:file('sound/empty.ogg.sli')=='')
        assert(e:file('sound/missing.ogg.sli')==nil)`,
-    ));
+      ),
+    );
     // Binary audio stays lazy; adding sidecars must not preload the media corpus.
     assert.equal(fixture.runtime.prepared.has('sound/loop.ogg'), false);
   } finally {
