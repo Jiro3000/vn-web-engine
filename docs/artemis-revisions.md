@@ -162,6 +162,50 @@ full map, which remains in progress.
 | `0x14011ef00` | `0x140124f60` | Scenario-state serialization: section 7 and collection fields 1–6 |
 | `0x140193720` | `0x14019aab0` | Text-block defaults and two inline default-font strings |
 
+
+| `0x1400f0f70` | `0x140107260` | Recursive tree-node destruction and payload release |
+| `0x140122c60` | `0x140128810` | Point-vector archive serialization and extension-provider traversal |
+| `0x140123ba0` | `0x140129ad0` | Deque of serializable objects and nested section completion |
+| `0x140123c70` | `0x140129b60` | Vector of 96-byte serializable objects and nested section completion |
+| `0x14012c030` | `0x140130e50` | Dotted Lua function lookup, optional argument table, protected call and error result |
+| `0x1401469c0` | `0x140150150`, `0x14014f800` | String-keyed serializable-object map; two compiled variants |
+| `0x140146ae0` | `0x14014fad0` | String-keyed point-vector map serialization |
+| `0x140146cc0` | `0x14014fe20` | Integer-keyed serializable-object map serialization |
+| `0x140146e00` | `0x14014ff30` | String-keyed vector-of-object map serialization |
+| `0x14015adc0` | `0x140163a10` | Six-component affine matrix equality using the same float epsilon |
+| `0x140176f30` | `0x140180110` | Encoding-aware INI whitespace trim, including multibyte boundaries |
+| `0x14014c5d0` | `0x140155e30` + `0x14019f710` | Text layout wrapper and extracted line-position/alignment helper |
+| `0x1400b6820` | `0x1400b9e00` | Click-wait glyph selection and actor ownership; text virtual `+0x1b0` becomes `+0x1c0` |
+| `0x140088340` | `0x14008a520` | Vorbis integer samples, interleaving, PCM16 clipping and consumed-frame accounting |
+| `0x1400acec0` | `0x1400b0360` | Role-14 pressed query: wheel flags and bound-key traversal |
+| `0x1400f3c00` | `0x1401014b0` | String/C-string equality, NUL length and byte comparison |
+
+Some cited helpers have been inlined or folded into a containing operation.
+These entries identify the checked component, rather than a separate Rev.3257 entry:
+
+| Rev.3179 helper | Rev.3257 containing operation | Checked component |
+| --- | --- | --- |
+| `0x14009ff30` | `0x1400a2a60` | Six epsilon clamps after the enclosing translation operation |
+| `0x140185740` | `0x14018f7c0`, `0x14018d8a0` | Numeric ordering when both keys are integer strings; byte ordering otherwise |
+| `0x140182640` | `0x14009d710` | Shutdown module-cache walk, FreeLibrary calls, tree clear and sentinel restoration |
+| `0x14019a940` | `0x1400d3630`, `0x1400df290`, `0x140163310` | Shared once-only timeBeginPeriod(1) guard followed by timeGetTime |
+| `0x1400ad130` | `0x1400b8a10` | Key-role down-edge query before the enclosing Alt+Enter guard |
+| `0x140105530` | `0x140106a60` | Click-glyph map-node construction and default members |
+
+The lookup at `0x1400eb500` returns the click-glyph payload directly. Its checked
+Rev.3257 counterpart `0x140106a60` returns a node iterator and insertion flag;
+callers access the payload at node `+0x40`. The node constructor formerly at
+`0x140105530` is inlined into its missing-key branch. This is a changed native
+container interface with the same checked map insertion and payload defaults.
+
+The text subclass table at `0x140377418` (72 slots) becomes `0x1403726b8`
+(74 slots), using the same depth/unindent insertions as the primary text table.
+All 64 previously mapped slots align without contradiction. The layout wrapper's
+virtual refresh slot moves from `+0x228` to `+0x238`; its extracted helper retains
+line positions, maximum width, accumulated height and alignment calculations.
+The two default-font strings copied by the text-block constructor have identical
+13-byte SHA256 values in both binaries; their contents are not part of this evidence.
+
 The flip entry is actual code at `0x1400e10a0` in Rev.3179; Ghidra's initial
 function analysis omitted it. Transient disassembly in a read-only project confirms
 its debug-skip guard and stage-commit call. Rev.3257 inlines that commit in both flip
