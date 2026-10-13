@@ -773,6 +773,7 @@ try {
       dialogRequests: dialogs,
       saveLoad: saveLoadReport,
       autoChoices: autoChoiceLog,
+      clickableLayers: runtime.layers.clickableLayers(),
       automodeWaits,
       automodeStop,
       probeLua,
