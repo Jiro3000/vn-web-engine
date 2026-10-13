@@ -127,6 +127,31 @@ full map, which remains in progress.
 | `0x1400b5690` | `0x1400b8a10` | Key-role decide query, wheel/ordinary keys and Alt+Enter suppression |
 | `0x140130350` | `0x140135db0` | Lua tag parsing, script-queue append and severity-1 report branch |
 
+
+| `0x1400b73e0` | `0x1400bac20` | Event delivery callback: guards, delivery modes and queued-tag fallback |
+| `0x1400e10a0` | `0x1400ed4f0` | Flip command, debug-skip guard and inlined stage commit |
+| `0x14014f420` | `0x140158ff0` | Stage commit, capture reset, presentation and pending transition state |
+| `0x1400b7440` | `0x1400bac80` | Transition completion, inlined stage commit and run-mode scope release |
+| `0x1400c7800` | `0x1400ccd10` | Numeric estimate argument and cursor field `+0xb90` assignment |
+| `0x1400128b0` | `0x140010ac0` | Serialized preload FIFO, budget guard, backend load and completed-resource registries |
+| `0x14012d590` | `0x140132730` | Lua file execution, two backend attempts, load/protected-call branches and error reporting |
+| `0x14012fa10` | `0x140135310` | Lua alias table update: indexed/named pairs, nonempty assignment and empty-root deletion |
+| `0x140131480` | `0x1401371b0` | Lua script-status result from current script run-mode field `+0xc70` |
+| `0x140134180` | `0x14013a2b0` | Lua foreground surface load at virtual `+8` and immediate lease release |
+| `0x140182710` | `0x14018afb0` | Font enumeration callback, four filter flags and UTF-16 name insertion |
+
+The flip entry is actual code at `0x1400e10a0` in Rev.3179; Ghidra's initial
+function analysis omitted it. Transient disassembly in a read-only project confirms
+its debug-skip guard and stage-commit call. Rev.3257 inlines that commit in both flip
+and transition completion. A prior Rev.3139 bridge alias at this address must not be
+used to identify the Rev.3257 flip entry. Instruction-signature hashes alone are not
+byte comparisons: memory displacements are omitted, so short matches require body
+or caller checks. The paired stage-commit bodies agree at all checked offsets.
+
+Matrix normalization retains the float epsilon bit pattern `872415232`
+(`1.1920929e-7`). The newer compiler's 32-bit float absolute-value mask and the older
+compiler's promoted 64-bit double mask give the same normalization comparison.
+
 Fullscreen movie cleanup corresponds from `0x14015c0a0` to `0x1401650e0`,
 but its native resource layout changed. The active flag moves from `+0x58`
 to `+0x68`, and the seven existing interface members move from `+0x18..0x48`
