@@ -7753,6 +7753,29 @@ test('Perspective shader preserves identity, warps UVs, clips X and fades the na
   assert.match(adapter.fragment, /float uScale=parameters\[0\]\.z/);
 });
 
+test('Artemis runtime lets Lua read sound-loop sidecars synchronously with exact bytes', async () => {
+  const {openArtemisRuntimeFixture} = await import('./artemis-runtime-fixture.mjs');
+  const fixture = await openArtemisRuntimeFixture({
+    'system/first.iet': '[stop]',
+    'sound/loop.ogg.sli': Uint8Array.of(0, 255, 13, 10, 49, 50),
+    'sound/empty.ogg.sli': new Uint8Array(),
+    'sound/loop.ogg': Uint8Array.of(79, 103, 103, 83),
+  });
+  try {
+    await fixture.runtime.boot();
+    fixture.runtime.lua.vm.execute(new TextEncoder().encode(
+      `local e=engine
+       assert(e:file('SOUND\\\\loop.ogg.sli')==string.char(0,255,13,10,49,50))
+       assert(e:file('sound/empty.ogg.sli')=='')
+       assert(e:file('sound/missing.ogg.sli')==nil)`,
+    ));
+    // Binary audio stays lazy; adding sidecars must not preload the media corpus.
+    assert.equal(fixture.runtime.prepared.has('sound/loop.ogg'), false);
+  } finally {
+    await fixture.close();
+  }
+});
+
 test('Artemis CSIDL saves use the mounted virtual folder for publication, writes and reads', async () => {
   const {openArtemisRuntimeFixture} = await import('./artemis-runtime-fixture.mjs');
   const {VirtualWindowsFolderPaths, joinVirtualWindowsDirectory} =

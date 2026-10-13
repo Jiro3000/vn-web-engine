@@ -234,8 +234,10 @@ elsewhere report the uncreatable destination, removals elsewhere are ignored, an
 ## Engine runtime
 
 `runtime.ts` is the engine object of `0x1400b9e80`. `ArtemisRuntime.open(services)` reads
-system.ini ([WINDOWS] WIDTH/HEIGHT/BOOT/SAVEPATH) and the Lua/AST/script corpus, which
-the script reads synchronously, then builds every tag owner, the Lua runtime, the script,
+system.ini ([WINDOWS] WIDTH/HEIGHT/BOOT/SAVEPATH), the Lua/AST/script corpus and `.sli`
+sound-loop sidecars, which Lua reads synchronously with `file`. Sidecar bytes remain
+unchanged: the game's Lua interprets them, rather than an engine-specific loop parser.
+They share the corpus memory budget. The runtime then builds every tag owner, the Lua runtime, the script,
 the tag dispatch (`tag-dispatch.ts`), reset, save and load. The services supply what the
 native engine took from Windows and its devices: installation files, save storage, the
 layer graphics owner, text glyphs, surfaces, effect/music voices, shaders, the fullscreen

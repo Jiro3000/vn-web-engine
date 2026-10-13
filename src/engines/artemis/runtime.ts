@@ -396,7 +396,7 @@ export class ArtemisRuntime {
   /** Called after the scenario loader, before `onLoad`. */
   scenarioLoaded: (() => void) | null = null;
 
-  /** Reads system.ini and the Lua/script corpus, which the script reads synchronously. */
+  /** Reads the script corpus and sound-loop sidecars for synchronous Lua file reads. */
   static async open(services: ArtemisRuntimeServices): Promise<ArtemisRuntime> {
     const {files} = services;
     const iniBytes = await files.read('system.ini');
@@ -409,7 +409,7 @@ export class ArtemisRuntime {
       if (bytes > MEMORY_BUDGET) throw new Error('Script corpus exceeds memory budget');
     };
     for (const path of files.paths)
-      if (/\.(lua|ast|iet|ipt|asb|tbl|ini)$/.test(path)) {
+      if (/\.(lua|ast|iet|ipt|asb|tbl|ini|sli)$/.test(path)) {
         const data = await files.read(path);
         if (data === null) throw new Error(`Missing inventoried source ${path}`);
         budget(data.length);
