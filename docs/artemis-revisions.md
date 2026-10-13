@@ -79,6 +79,12 @@ full map, which remains in progress.
 | `0x140171140` | `0x1401791d0` | Horizontal rule copies and vertical row wrapping |
 | `0x140190920` | `0x140197920` | Sound manager load, inactive-handle pruning and index insertion |
 | `0x14019aa00` | `0x1401a0f80` | Tween frame completion, destruction and pending-registry merge |
+| `0x1400a54b0` | `0x1400a8580` | Tween finish lookup and virtual `+0x18` (cancel uses `+0x10`) |
+| `0x1400adcf0` | `0x1400b0d80` | Sound handle lookup and playing query at virtual `+0x30` |
+| `0x1400b6520` | `0x1400b9b10` | File/label jump, script load and caret transfer |
+| `0x140138f10` | `0x140140230` | Lua float table setter, stack values and registry lookup |
+| `0x14014f2a0` | `0x140158e80` | Capture enumeration/transfer and temporary identifier lifetime |
+| `0x140178e80` | `0x140181900` | JPEG file read/rewind, buffer sizing and decode result |
 
 ## How the revisions were compared
 
