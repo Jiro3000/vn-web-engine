@@ -102,11 +102,21 @@ full map, which remains in progress.
 | `0x1401593a0` | `0x140161f40` | Operator-byte classification, including punctuation predicates and result masks |
 | `0x1401856c0` | `0x14018d0c0` | Integer-string predicate: empty rejection, leading minus and digit checks |
 | `0x1401990e0` | `0x1401a0110` | Relative float tween construction, six properties and from/to reversal |
+| `0x1400a5ac0` | `0x1400a89e0` | Property block assignment, scalar/flag fields and two strings |
+| `0x1400c2400` | `0x1400c6bf0` | Tag copy constructor, string/map members and field `+0x58` |
+| `0x1400adf30` | `0x1400b0fb0` | Scoped sound-volume tween, prior tween cancellation and default gain 1000 |
+| `0x140144960` | `0x14014cfe0` | Layer history erase, argument subset matching, shifting and recursive removal |
+| `0x140165bb0` | `0x14016de30` | Directory preparation, multibyte path stepping and A/W file open |
+| `0x1400f53d0` | `0x140103010` | Shared-owner dynamic cast with identical RTTI source/destination descriptors |
+| `0x1400f8820` | `0x1401063b0` | Second shared-owner dynamic cast and matching reference release |
+| `0x140176b10` | `0x14017f5f0` | INI string query, section/key presence and missing empty result |
+| `0x1400a4eb0` | `0x1400a7ec0` | Actor property assignment; base copy is outlined and shared transfers inlined |
+| `0x1400a0770` | `0x1400a33a0` | Encoding-aware string splitting, empty fields and delimiter boundaries |
 
 Fullscreen movie cleanup corresponds from `0x14015c0a0` to `0x1401650e0`,
 but its native resource layout changed. The active flag moves from `+0x58`
 to `+0x68`, and the seven existing interface members move from `+0x18..0x48`
-to `+0x28..0x58`. Rev.3257 also stops and closes a resource owner at `+0x18`
+to `+0x28..0x58`. Rev.3257 also invokes a resource owner at `+0x18`
 through its virtual `+0x58` and `+0x68` methods before clearing the member.
 The browser owns its media backend through `BrowserFullscreenMoviePlayer.close`:
 it cancels pending activation and playback, disposes the audio voice, joins decoder
