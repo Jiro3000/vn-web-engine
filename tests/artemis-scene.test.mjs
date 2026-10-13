@@ -4523,6 +4523,96 @@ async function audioEffectFixture() {
   return {effects, transport, context, nodes, gains};
 }
 
+test('Timed sound waits use the player start tick, preserve time-only flags and ignore inactive players', async () => {
+  const {ArtemisTimedWait} = await import('../dist/engines/artemis/wait.js');
+  const {ArtemisModes} = await import('../dist/engines/artemis/modes.js');
+  const {ArtemisSave} = await import('../dist/engines/artemis/save.js');
+  const {ArtemisVariables} = await import('../dist/engines/artemis/variables.js');
+  const {effects} = await audioEffectFixture();
+  let clock = 100;
+  const events = [];
+  const unexpected = () => assert.fail('unexpected text/save operation');
+  const modes = new ArtemisModes({
+    writeStatus() {},
+    commandSkipChanged() {},
+    controlSkipChanged() {},
+    automodeChanged() {},
+    releaseScheduler() {},
+  });
+  const save = new ArtemisSave(new ArtemisVariables(), {
+    reportEventError: unexpected,
+    beforeScenario: unexpected,
+    writeScenario: unexpected,
+    writeGlobal: unexpected,
+    writeSystem: unexpected,
+  });
+  let index;
+  const wait = new ArtemisTimedWait(modes, save, {
+    now: () => clock,
+    debugSkipActive: () => false,
+    startTextDisplay: unexpected,
+    textDisplayComplete: () => true,
+    finishTextDisplay: unexpected,
+    writeClickSkip: () => events.push('clickskip'),
+    beginWait: (input) => events.push(input),
+    endWait: () => events.push('end'),
+    clickWaitEvent: (kind) => events.push(kind),
+    resumeMessageState: () => events.push('message'),
+    effectIndex: (id) => (id === 'voice' ? index : undefined),
+    effectPlaying: (i) => effects.isPlaying(i),
+    effectStartTick: (i) => effects.startTick(i),
+  });
+  const tag = (args) => ({
+    kind: 'tag',
+    name: 'wait',
+    sourceLine: -1,
+    args: new Map(Object.entries(args)),
+  });
+  try {
+    index = await effects.prepareEffect('synthetic', -1);
+    assert.equal(effects.startTick(index), 0);
+    assert.equal(wait.dispatch(tag({se: 'missing', time: '500'})), true);
+    assert.equal(wait.dispatch(tag({se: 'voice', time: '500'})), true);
+    assert.equal(wait.pending, false);
+    assert.deepEqual(events, []);
+    effects.tick(clock);
+    effects.startEffect(index, 0, false);
+    assert.equal(effects.startTick(index), 100);
+    clock = 400;
+    effects.tick(clock);
+    effects.startEffect(index, 0, false); // Already playing: preserves the original start.
+    assert.equal(effects.startTick(index), 100);
+    wait.dispatch(tag({se: 'voice', time: '500', scenario: '2', video: 'ignored'}));
+    assert.deepEqual(wait.reason, {time: 600});
+    assert.equal(wait.soundPending, false);
+    const flags = wait.take();
+    wait.restore(flags);
+    assert.deepEqual(wait.reason, {time: 600});
+    assert.equal(wait.tick(600), false);
+    assert.equal(wait.tick(601), true);
+    assert.equal(effects.isPlaying(index), true); // Deadline is independent of completion.
+    wait.dispatch(tag({se: 'voice', time: '0', input: '1'}));
+    assert.equal(wait.tick(400, true), true);
+    assert.deepEqual(events.slice(-4), ['clickskip', 'end', 'out', 'message']);
+    effects.stopEffect(index, 0);
+    assert.equal(effects.startTick(index), 0);
+    wait.dispatch(tag({se: 'voice', time: '500'}));
+    assert.equal(wait.pending, false);
+    index = await effects.prepareEffect('synthetic', -1);
+    effects.tick(0xfffffff0);
+    effects.startEffect(index, 0, false);
+    wait.dispatch(tag({se: 'voice', time: '32'}));
+    assert.deepEqual(wait.reason, {time: 16});
+    wait.clear();
+    effects.stopEffect(index, 10);
+    effects.tick(20);
+    effects.tick(31);
+    assert.equal(effects.startTick(index), 0);
+  } finally {
+    effects.close();
+  }
+});
+
 test('Native effect voices drive the real shared transport through gain, loop, stereo attenuation and fade completion', async () => {
   const {effects, transport, context, nodes, gains} = await audioEffectFixture();
   try {

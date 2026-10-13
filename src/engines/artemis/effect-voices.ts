@@ -13,6 +13,7 @@ interface Effect {
   readonly jobs: Map<number, ArtemisLinearIntegerTween>;
   pan: number;
   playing: boolean;
+  startTick: number;
   onFinish?: () => void;
 }
 function int32(value: number): void {
@@ -30,6 +31,7 @@ export class ArtemisEffectVoices {
   private pending = false;
   private groupGain = 1000;
   private suppressGain = false;
+  private clock = 0;
   constructor(
     private readonly hash: string,
     private readonly host: ArtemisEffectVoiceHost,
@@ -70,6 +72,10 @@ export class ArtemisEffectVoices {
     const effect = this.effects.get(index);
     return !!effect?.playing;
   }
+  /** CSoundPlayer +0x44, getter virtual +0x38; Stop clears it with the state word. */
+  startTick(index: number): number {
+    return this.effects.get(index)?.startTick ?? 0;
+  }
   /** ae2e0/ae440 assign/clear the existing player's callback; missing indices do nothing. */
   setFinishCallback(index: number, callback: (() => void) | null): void {
     this.open();
@@ -95,7 +101,14 @@ export class ArtemisEffectVoices {
         if (this.next > 0xffffffff) throw Error('Artemis sound index overflow');
         voice.volume(1); // Native fresh CSoundPlayer gain defaults to1000.
         const index = this.next++;
-        this.effects.set(index, {voice, gains: new Map(), jobs: new Map(), pan: 0, playing: false});
+        this.effects.set(index, {
+          voice,
+          gains: new Map(),
+          jobs: new Map(),
+          pan: 0,
+          playing: false,
+          startTick: 0,
+        });
         return index;
       } catch (error) {
         voice.dispose();
@@ -193,6 +206,7 @@ export class ArtemisEffectVoices {
       if (effect.voice.ended()) effect.voice.stop!();
       effect.voice.setLoop!(loop);
       effect.voice.pause(false);
+      effect.startTick = this.clock;
     }
     effect.playing = true;
   }
@@ -215,6 +229,7 @@ export class ArtemisEffectVoices {
           () => {
             effect.voice.stop!();
             effect.playing = false;
+            effect.startTick = 0;
           },
         ),
       );
@@ -224,12 +239,14 @@ export class ArtemisEffectVoices {
     this.open();
     if (!Number.isInteger(now) || now < 0 || now > 0xffffffff)
       throw Error('Invalid Artemis audio clock');
+    this.clock = now;
     for (const effect of [...this.effects.values()]) {
       if (!effect.playing) continue;
       effect.voice.pump?.();
       if (effect.voice.ended()) {
         effect.voice.stop!();
         effect.playing = false;
+        effect.startTick = 0;
         effect.onFinish?.();
       }
     }

@@ -433,8 +433,14 @@ is missing, is not a video layer or has finished playing (see [Video layers](#vi
 registered returns without a wait or run-mode change; otherwise the wait starts no text
 display, reports `sound` as its wait reason, counts as a wait flag for `s.clickskip` and
 ends on the first frame where the sound manager reports that index stopped (a missing
-player counts as stopped). `scenario=2` and `se` with `time` remain explicitly
-unsupported.
+player counts as stopped). With `time`, it instead reads CSoundPlayer's playback-start
+tick (virtual +0x38), returns without waiting when that tick is zero, and sets a
+time-only deadline to `start + time` modulo 2^32. It starts no text display and does
+not wait for sound completion. Its reason is `time`, and the normal strict deadline
+and automode syncse rules apply. Rev.3257 evidence: handler `0x1400d3630`, getter
+`0x140099980` (+0x44), Play `0x14016c670`, Stop `0x14016c970` and frame `0x1400c4940`.
+Play captures the scheduler clock only when starting an inactive player; Stop clears
+both the playing state and start tick. `scenario=2` remains explicitly unsupported.
 
 `save.ts` preserves the native save gate: empty filename/force=false/clean sf state
 performs no writes. A nonempty filename emits onSave before the scenario snapshot;

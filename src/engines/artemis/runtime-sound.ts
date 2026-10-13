@@ -23,6 +23,7 @@ export function artemisRuntimeSound(
     startEffect: (index, time, loop) => effects.startEffect(index, time, loop),
     setFinishCallback: (index, callback) => effects.setFinishCallback(index, callback),
     effectPlaying: (index) => effects.isPlaying(index),
+    effectStartTick: (index) => effects.startTick(index),
     effectGain: (index, scope) => effects.effectGain(index, scope),
     prepareMusic: (file, bufferMode) => music.prepareEffect(file, bufferMode),
     discardPreparedMusic: (index) => music.discardPreparedEffect(index),

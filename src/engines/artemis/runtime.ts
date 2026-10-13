@@ -230,6 +230,7 @@ export type ArtemisRuntimeSound = Omit<
     setFinishCallback(index: number, callback: (() => void) | null): void;
     setMusicFinishCallback(index: number, callback: (() => void) | null): void;
     effectPlaying(index: number): boolean;
+    effectStartTick?(index: number): number;
     /** 0x1400add70: the effect player's gain for `scope` (-1 without a player, 1000 unset). */
     effectGain(index: number, scope: number): number;
     /** Renders the voices up to `now`. */
@@ -733,6 +734,7 @@ export class ArtemisRuntime {
       resumeMessageState: () => clickGlyphs.release(),
       effectIndex: (id) => effectSlots.get(id),
       effectPlaying: (index) => sound.effectPlaying(index),
+      effectStartTick: sound.effectStartTick,
       videoPlaying: (id) => layers.videoPlaying(id),
       automodeWait: () =>
         artemisInteger(new TextDecoder().decode(variables.read('s.automodewait'))),

@@ -27,6 +27,8 @@ export interface ArtemisTimedWaitHost {
   /** 0x1400adcf0: the sound manager's player state for `index` is nonzero (a missing
    * player is 0). The modeled players have one nonzero state, playing (1). */
   effectPlaying?(index: number): boolean;
+  /** CSoundPlayer virtual +0x38: uint32 playback-start tick, zero when stopped/missing. */
+  effectStartTick?(index: number): number;
   /** `s.automodewait` through the variable integer getter (virtual +0x10). */
   automodeWait?(): number;
   /** 0x1400b6820 click glyph placement. */
@@ -67,7 +69,8 @@ export interface ArtemisWaitFlags {
  * flagless wait (`@`) whose display has completed gets the deadline b94 =
  * `s.automodewait` + now; when it passes, the wait ends unless an id of the syncse list
  * names a playing se. Turning automode off clears the deadline of a flagless wait.
- * `se` with `time`, `scenario=2` and the debug-skip frame branch need owners that are not
+ * `se` with `time` sets a time-only deadline relative to the player's start tick;
+ * a zero start tick returns without waiting. `scenario=2` and the debug-skip frame branch need owners that are not
  * implemented. */
 export class ArtemisTimedWait {
   private active = false;
@@ -136,6 +139,7 @@ export class ArtemisTimedWait {
     if (input === 2 && (skipping || debugSkip)) return true;
     if (this.active) throw new Error('Artemis timed wait is already pending');
     let sound: {id: string; index: number} | null = null;
+    let soundDeadline: number | undefined;
     if (p.has('se')) {
       if (!this.host.effectIndex || !this.host.effectPlaying)
         throw new Error('Unsupported Artemis se wait owner');
@@ -143,22 +147,27 @@ export class ArtemisTimedWait {
         index = this.host.effectIndex(id);
       // An se id seplay never registered sets no wait and leaves the run mode alone.
       if (index === undefined) return true;
-      if (p.has('time')) throw new Error('Artemis timed se waits are not implemented');
-      sound = {id, index};
+      if (p.has('time')) {
+        if (!this.host.effectStartTick) throw new Error('Unsupported Artemis timed se wait owner');
+        const start = this.host.effectStartTick(index) >>> 0;
+        if (start === 0) return true;
+        soundDeadline = (start + integer(p.get('time')!)) >>> 0;
+      } else sound = {id, index};
     }
-    const video = sound ? undefined : p.get('video');
-    const scenario = video === undefined && !sound ? integer(p.get('scenario') ?? '0') : 0;
+    const hasSound = sound !== null || soundDeadline !== undefined;
+    const video = hasSound ? undefined : p.get('video');
+    const scenario = video === undefined && !hasSound ? integer(p.get('scenario') ?? '0') : 0;
     if (scenario === 2) throw new Error('Artemis scenario=2 waits are not implemented');
     if (video !== undefined && !this.host.videoPlaying)
       throw new Error('Unsupported Artemis video wait owner');
     this.scenario = scenario === 1;
     this.click = false;
-    this.deadline = 0;
+    this.deadline = soundDeadline ?? 0;
     this.video = video ?? null;
     this.sound = sound;
     // The se and video branches start no text display.
     if (this.scenario) this.host.startTextDisplay(false);
-    else if (video === undefined && !sound) {
+    else if (video === undefined && !hasSound) {
       this.deadline = (integer(p.get('time') ?? '0') + this.host.now()) >>> 0;
       this.host.startTextDisplay(skipping || debugSkip);
     }
