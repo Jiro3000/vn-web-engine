@@ -49,12 +49,13 @@ export class ArtemisFileFonts {
   private readonly entries = new Map<string, Entry>();
   private readonly rendered = new Map<string, Promise<ArtemisRenderedFont | null>>();
   private readonly charsets = new Map<string, boolean>();
+  private readonly fontSizeBits: 8 | 32;
   private closed = false;
   constructor(
     executableSha256: string,
     private readonly host: ArtemisFileFontHost,
   ) {
-    artemisRevision(executableSha256);
+    this.fontSizeBits = artemisRevision(executableSha256).fontSizeBits;
   }
   async load(path: string, size: number, styleBits = 0): Promise<ArtemisFileFont> {
     if (this.closed) throw Error('Artemis file fonts closed');
@@ -67,8 +68,8 @@ export class ArtemisFileFonts {
     for (const value of [size, styleBits])
       if (!Number.isInteger(value) || value < -0x80000000 || value > 0x7fffffff)
         throw Error('Unsupported Artemis font integer');
-    const byteSize = size & 255;
-    if (!byteSize) throw Error('Unsupported zero Artemis file font size');
+    const nativeSize = this.fontSizeBits === 8 ? size & 255 : size >>> 0;
+    if (!nativeSize) throw Error('Unsupported zero Artemis file font size');
     let entry = this.entries.get(path);
     if (!entry) {
       entry = {references: 0, face: this.open(path)};
@@ -78,9 +79,9 @@ export class ArtemisFileFonts {
     try {
       const face = await entry.face;
       if (this.closed) throw Error('Artemis file fonts closed');
-      const native = await face.requestSize(3, 0, byteSize * 64);
+      const native = await face.requestSize(3, 0, nativeSize << 6);
       if (this.closed) throw Error('Artemis file fonts closed');
-      const metrics = artemisFileFontMetrics(byteSize, native);
+      const metrics = artemisFileFontMetrics(nativeSize, native, this.fontSizeBits);
       return new ArtemisFileFont(
         face,
         metrics,
@@ -93,10 +94,10 @@ export class ArtemisFileFonts {
       throw error;
     }
   }
-  /** The CRenderedFont provider of `face` at uint8 `size`, or null when it does not open. */
+  /** The rendered provider uses the revision's size argument, or fails to open the face. */
   loadRendered(face: string, size: number): Promise<ArtemisRenderedFont | null> {
     if (this.closed) throw Error('Artemis file fonts closed');
-    const key = JSON.stringify([face, size & 255]);
+    const key = JSON.stringify([face, this.fontSizeBits === 8 ? size & 255 : size | 0]);
     let font = this.rendered.get(key);
     if (!font) {
       font = ArtemisRenderedFont.open(
@@ -104,6 +105,7 @@ export class ArtemisFileFonts {
         this.charsets,
         face,
         size,
+        this.fontSizeBits,
       );
       this.rendered.set(key, font);
       font.catch(() => {
@@ -163,11 +165,12 @@ export class ArtemisFileFonts {
 export function artemisFileFontMetrics(
   size: number,
   face: FreeTypeMetrics,
+  sizeBits: 8 | 32 = 8,
 ): ArtemisFileFontMetrics {
   if (
     !Number.isInteger(size) ||
     size < 1 ||
-    size > 255 ||
+    size > (sizeBits === 8 ? 255 : 0xffffffff) ||
     !Number.isInteger(face.unitsPerEm) ||
     face.unitsPerEm <= 0
   )

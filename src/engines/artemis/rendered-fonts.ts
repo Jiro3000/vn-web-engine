@@ -13,7 +13,7 @@ export type ArtemisRenderedFontRead = (path: string) => Promise<Uint8Array | nul
 
 /** One opened `.rft` file of CRenderedFont (open 0x14018a160, glyph 0x14018a700).
  *
- * Open builds `<face>_<size>.rft` from the uint8 size; the file layer also tries that name
+ * Open builds `<face>_<size>.rft` from the revision's size argument; the file layer also tries that name
  * with a second `.rft`. Code 0's entry (the `rft3` settings) supplies `[FONT]`
  * STRIKEOUT_SIZE, STRIKEOUT_POSITION, UNDERSCORE_SIZE, UNDERSCORE_POSITION and COLOR_32;
  * without it, code 0x41's entry opens the font with zero metrics and the `rft2` 32-bit mark.
@@ -39,9 +39,10 @@ export class ArtemisRenderedFont {
     charsets: Map<string, boolean>,
     face: string,
     size: number,
+    sizeBits: 8 | 32 = 8,
   ): Promise<ArtemisRenderedFont | null> {
-    const byteSize = size & 255;
-    const name = `${face}_${byteSize}.rft`;
+    const nativeSize = sizeBits === 8 ? size & 255 : size | 0;
+    const name = `${face}_${nativeSize}.rft`;
     const bytes = (await read(name)) ?? (await read(name + '.rft'));
     if (!bytes || artemisRftVersion(bytes) === undefined) return null;
     const version = artemisRftVersion(bytes)!;
@@ -55,7 +56,7 @@ export class ArtemisRenderedFont {
     }
     const metrics = (values: readonly number[]): ArtemisFileFontMetrics =>
       Object.freeze({
-        size: byteSize,
+        size: nativeSize,
         baseline: 0,
         decorationThickness: values[0]!,
         strikeoutPosition: values[1]!,

@@ -65,8 +65,11 @@ identity do not replace this primary table.
 
 The following pairs have also been checked in paired decompiles. Constructor
 inlining and equivalent compiler branches account for their instruction differences;
-the listed state layout and operations agree. This is a confirmed subset of the
-full map, which remains in progress.
+the listed state layout and operations agree for the checked operations. The full
+local correspondence file covers all 392 cited reference addresses, including 11
+entries whose implementation is part of a containing operation. Its path is
+`local-runtime/sakuranouta/map-cited-final1.txt`; the adjacent safe JSON receipt
+records its SHA256 and coverage audit. The tables below explain selected pairs.
 
 | Rev.3179 | Rev.3257 | Checked operation |
 | --- | --- | --- |
@@ -206,6 +209,38 @@ line positions, maximum width, accumulated height and alignment calculations.
 The two default-font strings copied by the text-block constructor have identical
 13-byte SHA256 values in both binaries; their contents are not part of this evidence.
 
+
+| `0x14013f940` | `0x1401475d0` | Compressed save archive writing, version 1003 and encoding-aware paths |
+| `0x140157ff0` | `0x140160770` | Expression tokenization/evaluation and integer-zero variable leaves |
+| `0x140166420` | `0x14016e840` | Glyph cache key, provider calls, empty glyph/advance branches and result layout |
+| `0x140176090` | `0x14017e9e0` | INI state machine, multibyte scanning, section/key maps and trim calls |
+| `0x1401971e0` | `0x14019e170` | Text-block construction, style fields and character break flags |
+| `0x1400a0040` | `0x1400a2c00` | Encoding-aware character count for Shift-JIS, EUC and UTF-8 |
+| `0x1400a2400` | `0x1400a5210` | Tag serialization, sorted argument traversal and delimiter escaping |
+| `0x1400b5830` | `0x1400b8bf0` + `0x140102b50` | Key-role archive read: ordinary-key map clear/rebuild and section-1 guard |
+| `0x1400eb990` | `0x140106e70` | Caret deque append, complete field copy and remaining tag-queue copy |
+| `0x1400ebb70` | `0x1400fb830` | Read-history file-map insertion and empty integer-set construction |
+| `0x14015e1b0` | `0x1401673c0` | Float-array zero initialization; the newer compiler uses memset over count × 4 bytes |
+
+Additional folded/specialized components are `0x140017360` (shared-owner reset,
+checked inside `0x140013300`), `0x140157fa0` (missing-variable integer-zero creation,
+inside `0x140160770`), and `0x1400edec0` (a singleton tag-vector constructor,
+inside `0x1400dfba0` and the other matched history-reset callers). These are
+recorded separately from ordinary function-entry pairs in the local map.
+
+The RNG seed routine at `0x1400f1a10` is inlined in the script constructor
+`0x1400be300`: its 624-word recurrence, state-zero normalization and all-zero fallback
+agree. Initialization uses the low 32 bits of the native epoch-second clock. The old
+`0x14019a970` null-argument clock wrapper is folded into a direct call to
+`0x140268924`; both implement the 64-bit epoch-second clock contract. These native
+clock functions are distinct from the multimedia millisecond timer.
+
+Quote registration at `0x1400afd90` becomes the specialized `0x1400b3040`.
+It inserts delimiter byte 39 through `0x140102270`. The old character-to-boolean
+registry is represented by a character set in the new binary; the script still
+registers the same active quote delimiter. The browser parser's fixed delimiter
+already represents this configuration.
+
 The flip entry is actual code at `0x1400e10a0` in Rev.3179; Ghidra's initial
 function analysis omitted it. Transient disassembly in a read-only project confirms
 its debug-skip guard and stage-commit call. Rev.3257 inlines that commit in both flip
@@ -228,6 +263,17 @@ it cancels pending activation and playback, disposes the audio voice, joins deco
 shutdown, releases the renderer and removes the movie surface. This lifecycle already
 covers the additional native owner; the native pointer layout is not reproduced in
 browser memory. Existing revision behavior is unchanged.
+
+
+Font-provider size width is selected by the executable hash through
+`ArtemisRevision.fontSizeBits`. Rev.3257 `0x14016e6f0` forwards the full word:
+FreeType open `0x140172580` caches an unsigned 32-bit size and writes the CELL
+request as a 32-bit `size << 6`; rendered-font open `0x140191c90` builds its
+filename from a signed 32-bit size. Older callers narrow the provider argument
+to its low byte. File-font requests/metrics and rendered-font names/cache keys
+retain this difference. A synthetic 300-pixel FreeType glyph and rendered-font
+cache collision checks cover the wider case; all three older hashes retain byte
+sizing and their zero-size refusal.
 
 ## How the revisions were compared
 

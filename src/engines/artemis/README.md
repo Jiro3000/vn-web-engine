@@ -1503,7 +1503,7 @@ layout remain distinct owners.
 
 Each text layer's CFontRenderer (`ArtemisGlyphRenderer`) keeps the first provider that
 opens a face: FreeType file, `<face>_<size>.rft` rendered font, then the system font
-(setFont `0x1401662e0`). When none opens the face the previous provider stays current; a
+(setFont `0x1401662e0`). The exact Rev.3257 hash keeps the full 32-bit provider size, while older hashes retain the low-byte size. FreeType CELL requests preserve the native 32-bit shift; rendered-font names and cache keys use the corresponding size width. When none opens the face the previous provider stays current; a
 renderer that never opened one draws empty, zero-advance characters (`0x140166420`). In
 this UTF-8 revision the Shift-JIS default face (`ＭＳ ゴシック`) opens nowhere, because
 CSystemFont matches UTF-8 `EnumFontFamiliesExW` family names, so text printed after a

@@ -31,6 +31,8 @@ export interface ArtemisRevision {
   readonly soundLoaderRewinds: boolean;
   /** Rev.3257's indentation mutation tag and nesting query. */
   readonly indentModify: boolean;
+  /** Provider size argument: older callers narrow to uint8; Rev.3257 passes all 32 bits. */
+  readonly fontSizeBits: 8 | 32;
   /** Temporary scenario replay hold and application exit; Rev.3257 inserted a mode. */
   readonly loadRunMode: 13 | 14;
   readonly exitRunMode: 14 | 15;
@@ -45,6 +47,7 @@ const rev3139 = {
   screenshot: 'presented' as const,
   soundLoaderRewinds: false,
   indentModify: false,
+  fontSizeBits: 8 as const,
   loadRunMode: 13 as const,
   exitRunMode: 14 as const,
 };
@@ -54,6 +57,7 @@ const revisions: ReadonlyMap<string, ArtemisRevision> = new Map(
       executableSha256: ARTEMIS_3179_EXECUTABLE_SHA256,
       engineVersion: 3179,
       indentModify: false,
+      fontSizeBits: 8 as const,
       loadRunMode: 13 as const,
       exitRunMode: 14 as const,
       buildDate: 'Thu Dec 21 04:26:04 2023',
@@ -68,6 +72,7 @@ const revisions: ReadonlyMap<string, ArtemisRevision> = new Map(
       executableSha256: ARTEMIS_3257_EXECUTABLE_SHA256,
       engineVersion: 3257,
       indentModify: true,
+      fontSizeBits: 32 as const,
       loadRunMode: 14 as const,
       exitRunMode: 15 as const,
       buildDate: 'Thu Apr 17 21:58:09 2025',
