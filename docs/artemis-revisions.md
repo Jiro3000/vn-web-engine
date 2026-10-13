@@ -140,6 +140,28 @@ full map, which remains in progress.
 | `0x140134180` | `0x14013a2b0` | Lua foreground surface load at virtual `+8` and immediate lease release |
 | `0x140182710` | `0x14018afb0` | Font enumeration callback, four filter flags and UTF-16 name insertion |
 
+
+| `0x140017010` | `0x140014a10` | Video packet worker, EOF/rewind, decode budget and granule position |
+| `0x1400a0560` | `0x1400a31d0` | Substring character boundaries for Shift-JIS, EUC and UTF-8 |
+| `0x1400a56f0` | `0x1400a8670` | Pending tween deque append, block allocation and size increment |
+| `0x1400c3720` | `0x1400c7cf0` | Display string encoding conversion guarded by field `+0xaf0` |
+| `0x1400c28c0` | `0x1400c7150` | Display-mode restoration, device presentation and scaled side-picture rectangle |
+| `0x1400c6580` | `0x1400cb7b0` | Script return, saved caret transfer, queue pop and pending callback release |
+| `0x14014a9a0` | `0x140154170` | Draw-string display constructor and virtual-base/member defaults |
+| `0x14014fc10` | `0x140159950` | Capture creation, margin crop and scaled copy; invalid dimensions return empty |
+| `0x1401662e0` | `0x14016e6f0` | Font-provider selection, retained provider on failure and face/flag storage |
+| `0x1400f4f90` | `0x1401029a0` | Nested key-role map serialization with field bookkeeping and sorted tree traversal |
+| `0x1400f8210` | `0x140105ab0` | Event callable copy construction and consumed tag-payload release |
+| `0x14013ec90` | `0x140146a80` | Lua variable snapshot, prefix filtering and string-pair serialization |
+| `0x14012ca50` | `0x140131ae0` | Lua tag-handler lookup, argument-table construction and protected dispatch |
+| `0x140008940` | `0x140008c00` | Archive field-offset bookkeeping and optional nested section creation |
+| `0x1400a2290` | `0x1400a5070` | Archive nested section completion and bookkeeping deque pop |
+| `0x1400a2300` | `0x1400a50e0` | Empty event-block constructor; ordered-map sentinel creation is inlined |
+| `0x1400ebd90` | `0x1400fb950` | MT19937 draw, tempering and inclusive integer-range reduction |
+| `0x1400ec380` | `0x1400fbfc0` | Tree clear, recursive payload destruction and sentinel restoration |
+| `0x14011ef00` | `0x140124f60` | Scenario-state serialization: section 7 and collection fields 1–6 |
+| `0x140193720` | `0x14019aab0` | Text-block defaults and two inline default-font strings |
+
 The flip entry is actual code at `0x1400e10a0` in Rev.3179; Ghidra's initial
 function analysis omitted it. Transient disassembly in a read-only project confirms
 its debug-skip guard and stage-commit call. Rev.3257 inlines that commit in both flip
