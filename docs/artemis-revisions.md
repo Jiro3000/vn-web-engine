@@ -85,6 +85,10 @@ full map, which remains in progress.
 | `0x140138f10` | `0x140140230` | Lua float table setter, stack values and registry lookup |
 | `0x14014f2a0` | `0x140158e80` | Capture enumeration/transfer and temporary identifier lifetime |
 | `0x140178e80` | `0x140181900` | JPEG file read/rewind, buffer sizing and decode result |
+| `0x1400a1060` | `0x1400a3d80` | Display base constructor, virtual-base adjustment and member defaults |
+| `0x1400b5a30` | `0x1400b8cd0` | Caret constructor, wait fields and pending-command queue |
+| `0x1400b5b20` | `0x1400b8dc0` | Caret destructor and string/map/queue release order |
+| `0x1400b6cf0` | `0x1400ba2c0` | Pending capture restoration; text virtual `+0x1b0` becomes `+0x1c0` |
 
 ## How the revisions were compared
 
