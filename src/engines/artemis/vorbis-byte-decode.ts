@@ -16,9 +16,11 @@ export type ArtemisVorbisResponse =
 export async function decodeArtemisVorbisBytes(
   request: ArtemisVorbisRequest,
 ): Promise<ArtemisVorbisBytes | null> {
-  artemisRevision(request.hash);
+  const revision = artemisRevision(request.hash);
   try {
-    const pcm = await decodeVorbisFile(request.bytes);
+    const pcm = await decodeVorbisFile(request.bytes, {
+      firstPageSearchBoundary: revision.vorbisHeaderSyncBoundary ?? undefined,
+    });
     return {
       sampleRate: pcm.sampleRate,
       channels: pcm.planes.length,

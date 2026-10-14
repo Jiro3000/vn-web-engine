@@ -138,9 +138,42 @@ interface OpenedVorbis extends PrimedVorbis {
   readonly packets: Uint8Array[];
   readonly finalGranule: number | null;
 }
+export interface VorbisDecodeOptions {
+  /** libogg-style synchronization before the first page only. The first page's start
+   * must be below this exclusive boundary. Omitted: reject bytes before the first page. */
+  readonly firstPageSearchBoundary?: number;
+}
+
+/** ogg_sync_pageseek: garbage and bad-CRC candidates advance to the next capture
+ * pattern, while an incomplete candidate waits for EOF and cannot be skipped.
+ * Subsequent stream damage/multiplexing policies remain owned by the packet reader.
+ */
+function firstPageBytes(bytes: Uint8Array, boundary: number): Uint8Array {
+  if (!Number.isSafeInteger(boundary) || boundary < 1)
+    throw Error('Invalid Vorbis first-page search boundary');
+  for (let offset = 0; offset < Math.min(boundary, bytes.length); offset++) {
+    if (
+      bytes[offset] !== 0x4f ||
+      bytes[offset + 1] !== 0x67 ||
+      bytes[offset + 2] !== 0x67 ||
+      bytes[offset + 3] !== 0x53
+    )
+      continue;
+    if (offset + OGG_PAGE_HEADER_SIZE > bytes.length) fail('Incomplete Ogg sync header');
+    const page = readOggPage(bytes, offset);
+    if (!page) return fail('Incomplete Ogg sync page');
+    if (oggPageChecksumValid(page)) return bytes.subarray(offset);
+  }
+  return fail('Ogg first-page search boundary or EOF');
+}
 
 /** Validates the identification header and primes libvorbis; the caller frees the decoder. */
-async function openVorbis(bytes: Uint8Array): Promise<OpenedVorbis> {
+async function openVorbis(
+  bytes: Uint8Array,
+  options: VorbisDecodeOptions = {},
+): Promise<OpenedVorbis> {
+  if (options.firstPageSearchBoundary !== undefined)
+    bytes = firstPageBytes(bytes, options.firstPageSearchBoundary);
   const {packets, finalGranule} = vorbisPackets(bytes);
   return {...(await primeVorbis(packets)), packets, finalGranule};
 }
@@ -214,8 +247,11 @@ function decodeBatch(opened: PrimedVorbis, packets: Uint8Array[]) {
 }
 
 /** libvorbis supplies actual PCM; browser decodeAudioData may discard boundary samples. */
-export async function decodeVorbisFile(bytes: Uint8Array): Promise<VorbisPcm> {
-  const opened = await openVorbis(bytes);
+export async function decodeVorbisFile(
+  bytes: Uint8Array,
+  options: VorbisDecodeOptions = {},
+): Promise<VorbisPcm> {
+  const opened = await openVorbis(bytes, options);
   try {
     const result = decodeBatch(opened, opened.packets.slice(3));
     // Ogg's EOS granule removes the encoder's final overlap; it never creates samples.

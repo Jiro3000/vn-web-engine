@@ -52,6 +52,20 @@ It does not draw a new scene (`screenshot = presented`). Sound loaders
 size, caches that byte and requests CELL size `uint(size) << 6`; this profile
 retains the legacy 8-bit provider policy. Rev.3257 keeps all 32 bits.
 
+`vorbisHeaderSyncBoundary = 65536` selects the confirmed Rev.2898 header search.
+`CVorbisLoader` `0x51a090` opens `CVorbis` through virtual `+0x04`, `0x6046f0`.
+Its `ov_open_callbacks` path is `0x501250` → `0x500fa0` → `0x4fff20`.
+The initial page request passes the exclusive `0x10000` boundary to `0x4ffb50`,
+which reads 2048-byte batches and loops over `ogg_sync_pageseek`, `0x4d3ae0`.
+That operation checks the capture pattern, segment lengths and CRC, skipping
+garbage/bad-CRC candidates and waiting on incomplete candidates. No `bw  `-specific
+branch is involved. The native first Vorbis loader therefore accepts the Ogg page
+after a 64-byte wrapper; the no-rewind rule is unchanged. The shared decoder's
+optional first-page search models this operation; later damaged/multiplexed page
+handling remains outside this extension. Other profiles keep their existing strict
+decoder (`null` means this search has not been reconstructed for them, not native
+absence); they do not inherit an unverified numeric boundary.
+
 `glyphGeometry = clipped-cell` selects the Rev.2898 result ABI. FreeType glyph
 provider `0x5d75c0` returns a cell width from `advance.x >> 6`, height from the
 byte size, nonnegative bitmap bearings and expanded cell dimensions for overflow.

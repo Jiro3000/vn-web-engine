@@ -40,6 +40,9 @@ export interface ArtemisRevision {
    * (0x14018e760/0x14018e650) does not: the next loader continues at the position the
    * failed one left. */
   readonly soundLoaderRewinds: boolean;
+  /** Confirmed first-page libogg sync boundary; null keeps the prior strict decoder
+   * until that revision's header-search operation is investigated. */
+  readonly vorbisHeaderSyncBoundary: number | null;
   /** Rev.3257's indentation mutation tag and nesting query. */
   readonly indentModify: boolean;
   /** Provider size argument: older callers narrow to uint8; Rev.3257 passes all 32 bits. */
@@ -65,6 +68,7 @@ const rev3139 = {
   graphicsApi: 'd3d11' as const,
   screenshot: 'presented' as const,
   soundLoaderRewinds: false,
+  vorbisHeaderSyncBoundary: null,
   indentModify: false,
   fontSizeBits: 8 as const,
   glyphGeometry: 'bearing-advance' as const,
@@ -92,6 +96,7 @@ const revisions: ReadonlyMap<string, ArtemisRevision> = new Map(
       // loaders 0x5f8ab0/0x5f89e0 reuse the opened file without a rewind.
       screenshot: 'presented' as const,
       soundLoaderRewinds: false,
+      vorbisHeaderSyncBoundary: 65536,
       indentModify: false,
       fontSizeBits: 8 as const,
       glyphGeometry: 'clipped-cell' as const,
@@ -118,6 +123,7 @@ const revisions: ReadonlyMap<string, ArtemisRevision> = new Map(
       graphicsApi: 'd3d11' as const,
       screenshot: 'scene' as const,
       soundLoaderRewinds: true,
+      vorbisHeaderSyncBoundary: null,
     },
     rev3139,
     {...rev3139, executableSha256: ARTEMIS_3139_RESOURCE_VARIANT_SHA256},
@@ -142,6 +148,7 @@ const revisions: ReadonlyMap<string, ArtemisRevision> = new Map(
       // 0x140197010 seek the opened file to 0 before a further sound loader.
       screenshot: 'scene' as const,
       soundLoaderRewinds: true,
+      vorbisHeaderSyncBoundary: null,
     },
   ].map((revision) => [revision.executableSha256, Object.freeze(revision)]),
 );

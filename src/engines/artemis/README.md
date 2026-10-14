@@ -120,6 +120,12 @@ integer zero for these confirmed absent names. Boot does not insert them or
 invoke a graphics-feature query, and preserves values restored from system data.
 Other unsupported system names retain their guards. Its screenshot, sound-loader
 and mode fields are documented with x86 evidence in `docs/artemis-revisions.md`.
+Its Vorbis opener synchronizes to the first CRC-valid Ogg page before the native
+65536-byte boundary. This accepts a leading `bw  ` header through the ordinary
+Vorbis loader, without retrying another codec or rewinding the opened file.
+The shared Vorbis decoder exposes this as an optional first-page search; its default
+remains strict, as do the other four Artemis profiles pending their header-search
+audit. Incomplete candidates and malformed subsequent pages still fail decoding.
 Rev.3257 has an independent hash and boot record; its screenshot and sound-loader
 rewind fields match Rev.3179. Its recompiled native addresses require the mapping in
 `docs/artemis-revisions.md`; Rev.3179 address literals are not its native addresses.
