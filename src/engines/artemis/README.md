@@ -533,6 +533,11 @@ and continues from the restored caret instead of clicking. It requires the loade
 to match the saved one with the caret written as loaded, and a second load of that state
 to reproduce it; both loads run the game's `onLoad` handler. The report is `saveLoad`; a
 differing round trip also writes the three archives (`roundtrip-*.bin`) to `--report-dir`.
+These two loads use the same runtime. To verify restart separately, copy the generated
+save directory and run a new probe with `--start-save=FILE --save-dir=COPY` and
+`--expected-start-sha256=HASH`. It boots to the first native stop, loads that scenario
+through the real loader and records the restored archive before `onLoad` in
+`startSaveLoad` and `start-loaded-state.bin`; a differing expected hash refuses the run.
 `--automode-limit=N` gives the click-wait after N automode-ended waits one pointer press on
 no layer (report `automodeStop`: whether automode is still on). `--auto-choice=PREFIX` (repeatable) with `--auto-choices=N` continues a route once the
 scripted `--layer-event`/`--key-push` inputs are used up: at a run mode 3 stop it picks the

@@ -160,6 +160,26 @@ const saveDir = process.argv
   .slice(3)
   .findLast((arg) => arg.startsWith('--save-dir='))
   ?.slice('--save-dir='.length);
+// A fresh process boots normally to its first native stop, then loads an own/copied
+// scenario save through the real loader. Capture occurs before the game's onLoad.
+const startSaveFile = process.argv
+  .slice(3)
+  .findLast((arg) => arg.startsWith('--start-save='))
+  ?.slice('--start-save='.length);
+const expectedStartSha256 = process.argv
+  .slice(3)
+  .findLast((arg) => arg.startsWith('--expected-start-sha256='))
+  ?.slice('--expected-start-sha256='.length);
+if (
+  startSaveFile !== undefined &&
+  (saveDir === undefined || !startSaveFile || /[\\/\0]/.test(startSaveFile))
+)
+  throw Error('Probe start-save requires a basename and an explicit save-dir');
+if (
+  expectedStartSha256 !== undefined &&
+  (startSaveFile === undefined || !/^[0-9a-f]{64}$/.test(expectedStartSha256))
+)
+  throw Error('Probe expected-start-sha256 requires start-save and a SHA-256');
 if (saveDir !== undefined) {
   mkdirSync(saveDir, {recursive: true});
   for (const name of readdirSync(saveDir)) saveFiles.set(name, readFileSync(`${saveDir}/${name}`));
@@ -423,30 +443,31 @@ try {
   const {script, wait, lua} = runtime;
   let deliveredClicks = 0,
     saveLoadReport = null,
+    startSaveLoadReport = null,
     captureLoaded = false,
     loadedArchive = null;
   // The round trip compares the state the loader restored, before `onLoad` runs.
   runtime.scenarioLoaded = () => {
     if (captureLoaded) loadedArchive = runtime.scenarioArchive();
   };
+  const loadFile = async (file) => {
+    captureLoaded = true;
+    loadedArchive = null;
+    try {
+      if (!(await runtime.load.load(file, true))) throw Error('Probe scenario load failed');
+    } finally {
+      captureLoaded = false;
+    }
+    if (!loadedArchive) throw Error('Probe scenario load did not run the scenario loader');
+    if (wait.pending || script.state !== 'ready')
+      throw Error('Probe scenario load did not resume the restored caret');
+    return loadedArchive;
+  };
   const saveLoadRoundTrip = async () => {
     const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
     // A caret saved inside a wait loads at the same tag in run mode 0 with its wait flags
     // clear, so the first load changes the caret. Loading the archive of that loaded state
     // must restore it unchanged. Each load then runs the game's `onLoad` handler.
-    const loadFile = async (file) => {
-      captureLoaded = true;
-      loadedArchive = null;
-      try {
-        if (!(await runtime.load.load(file, true))) throw Error('Probe scenario load failed');
-      } finally {
-        captureLoaded = false;
-      }
-      if (!loadedArchive) throw Error('Probe scenario load did not run the scenario loader');
-      if (wait.pending || script.state !== 'ready')
-        throw Error('Probe scenario load did not resume the restored caret');
-      return loadedArchive;
-    };
     runtime.save.request('probe-roundtrip.dat', true, true);
     await runtime.flushSaves();
     // After the save, which ran the game's `onSave` handler first.
@@ -549,6 +570,29 @@ try {
           frame();
           runtime.fullscreenVideo.frame();
         }
+        script.run(1000);
+        continue;
+      }
+      if (
+        startSaveFile !== undefined &&
+        startSaveLoadReport === null &&
+        runtime.runMode === 3 &&
+        !wait.pending
+      ) {
+        const loaded = await loadFile(startSaveFile);
+        const sha256 = createHash('sha256').update(loaded).digest('hex');
+        startSaveLoadReport = {
+          file: startSaveFile,
+          sha256,
+          expected: expectedStartSha256 ?? null,
+          matched: expectedStartSha256 === undefined ? null : sha256 === expectedStartSha256,
+          runMode: runtime.runMode,
+          callDepth: script.callDepth,
+          freshProcess: true,
+        };
+        if (reportDir !== undefined) writeFileSync(`${reportDir}/start-loaded-state.bin`, loaded);
+        if (startSaveLoadReport.matched === false)
+          throw Error('Probe fresh scenario state differs');
         script.run(1000);
         continue;
       }
@@ -772,6 +816,7 @@ try {
       executableSha256,
       dialogRequests: dialogs,
       saveLoad: saveLoadReport,
+      startSaveLoad: startSaveLoadReport,
       autoChoices: autoChoiceLog,
       clickableLayers: runtime.layers.clickableLayers(),
       automodeWaits,

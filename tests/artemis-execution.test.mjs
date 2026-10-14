@@ -1124,6 +1124,44 @@ test('Game Lua restores real PNG font cache through a suspended runtime call and
   }
 });
 
+test('Rev.2898 scenario state and continuation survive a new runtime over copied save files', async () => {
+  const {openArtemisRuntimeFixture} = await import('./artemis-runtime-fixture.mjs');
+  const {ARTEMIS_2898_EXECUTABLE_SHA256: hash} =
+    await import('../dist/engines/artemis/revision.js');
+  const files = {
+    'system/first.iet':
+      '[var name="f.persisted" data="123"][font size="300"][wait time="500"][var name="f.continued" data="456"][stop]',
+  };
+  let expected, savedFiles;
+  const first = await openArtemisRuntimeFixture(files, {hash});
+  try {
+    await first.runtime.boot();
+    assert.equal(first.runtime.runMode, 4);
+    first.runtime.save.request('restart.dat', true, true);
+    await first.runtime.flushSaves();
+    expected = first.runtime.scenarioArchive(true);
+    savedFiles = Object.fromEntries(first.saves);
+  } finally {
+    await first.close();
+  }
+  const second = await openArtemisRuntimeFixture(files, {hash, savedFiles});
+  try {
+    await second.runtime.boot();
+    let actual;
+    second.runtime.scenarioLoaded = () => {
+      actual = second.runtime.scenarioArchive();
+    };
+    assert.equal(await second.runtime.load.load('restart.dat', true), true);
+    assert.deepEqual(actual, expected);
+    assert.equal(luaText(second.runtime.variables.read('f.persisted')), '123');
+    assert.equal(second.runtime.runMode, 0);
+    second.runtime.script.run(100);
+    assert.equal(luaText(second.runtime.variables.read('f.continued')), '456');
+  } finally {
+    await second.close();
+  }
+});
+
 test('Windows version initialization preserves failed platform queries as native zero values', async () => {
   const {ArtemisVariables} = await import('../dist/engines/artemis/variables.js');
   const {initializeArtemisWindowsVersion} = await import('../dist/engines/artemis/revision.js');

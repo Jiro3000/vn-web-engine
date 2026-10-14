@@ -12,10 +12,11 @@ const encode = (text) => new TextEncoder().encode(text);
 
 /** `files` maps lowercase installation paths to text or bytes; system.ini defaults to a
  * 640x360 window that boots system/first.iet. `services` overrides runtime services.
- * `close` releases the runtime and the fixture workers. */
+ * `savedFiles` seeds independent byte copies for a fresh runtime; `close` releases
+ * the runtime and the fixture workers. */
 export async function openArtemisRuntimeFixture(
   files,
-  {hash = ARTEMIS_3179_EXECUTABLE_SHA256, services = {}} = {},
+  {hash = ARTEMIS_3179_EXECUTABLE_SHA256, services = {}, savedFiles = {}} = {},
 ) {
   const entries = new Map(
     Object.entries({
@@ -23,7 +24,7 @@ export async function openArtemisRuntimeFixture(
       ...files,
     }).map(([path, data]) => [path, typeof data === 'string' ? encode(data) : data]),
   );
-  const saves = new Map(),
+  const saves = new Map(Object.entries(savedFiles).map(([name, bytes]) => [name, bytes.slice()])),
     effects = [];
   const read = async (path) => entries.get(path) ?? null;
   const sound = createArtemisOfflineSoundFixture(hash, read),
