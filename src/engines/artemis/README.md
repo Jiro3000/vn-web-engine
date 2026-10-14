@@ -109,6 +109,11 @@ that API, or when it is denied, the list is empty.
 `revision.ts` initializes the confirmed static boot variables only after exact
 executable-hash selection. Host Windows-version failure produces native 0.0;
 platform identity/capabilities are never invented.
+Boot publishes `s.windowstouch` from the touch owner's registration flag, independently
+of its current contact count. The shared `WindowsTouchHost` also owns Lua contact/hold
+queries. `BrowserWindowsTouchHost` is unregistered: the current page delivers mouse
+input and has no Windows Touch contact owner. A native host can provide a registered
+device. Boot overwrites a restored capability value with the current host's value.
 The exact Rev.2898 PE32 hash has its own boot record. Its publication omits
 `s.llp64` and `s.windowsfeaturelevel`; a later literal Lua query creates native
 integer zero for these confirmed absent names. Boot does not insert them or

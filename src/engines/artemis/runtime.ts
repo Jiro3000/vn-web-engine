@@ -13,6 +13,7 @@ import {ArtemisFileCommand} from './file-command.js';
 import {ArtemisSaveDirectory, type ArtemisRuntimeStorage} from './save-directory.js';
 import type {WindowCaptionHost} from '../../platform/window-caption.js';
 import type {WindowStateHost} from '../../platform/window-state.js';
+import {BrowserWindowsTouchHost, type WindowsTouchHost} from '../../platform/windows-touch.js';
 import type {WindowsDynamicLibraryHost} from '../../platform/windows-dynamic-library.js';
 import {
   joinVirtualWindowsDirectory,
@@ -270,9 +271,9 @@ export interface ArtemisRuntimeServices {
   /** Effective music and effect volumes, after a reset and whenever they change. */
   readonly applyVolumes: (music: number, effect: number) => void;
   readonly setTouchLimit: (limit: number) => void;
-  /** The touch device of Lua `getTouchCount`/`setUseTouchHold`; absent is a device with no
-   * touch points that ignores the hold setting. */
-  readonly touch?: {count(): number; setHold(enabled: boolean): void};
+  /** The registered touch owner, shared by boot capability and Lua contact queries.
+   * Without an injected host, the browser supplies its unregistered mouse-input host. */
+  readonly touch?: WindowsTouchHost;
   /** Native include errors (0x14012d080 level 1); without it they fault. */
   readonly reportIncludeError?: (path: string, error: unknown) => void;
   /** The platform behind the Lua `os` library (CRT `system`/`getenv`). */
@@ -516,6 +517,7 @@ export class ArtemisRuntime {
       },
     }));
     // c37e0 static variables run inside the bf210 boot path, after the save-file loads.
+    const touch = services.touch ?? new BrowserWindowsTouchHost();
     const initializeStaticVariables = () => {
       initializeArtemisVariables(variables, hash);
       if (services.graphicsFeatureLevel)
@@ -523,6 +525,8 @@ export class ArtemisRuntime {
       if (saveDirectory !== undefined)
         initializeArtemisResourcePaths(variables, {dataPath: '', savePath: saveDirectory});
       initializeArtemisWindowsVersion(variables, services.windowsVersion);
+      // 3179 c37e0 / 2898 539360: the touch owner's registration flag, not contact count.
+      variables.write('s.windowstouch', touch.registered() ? '1' : '0');
     };
     // Effect id map (script +0x3d88) and the save object.
     const effectSlots = new Map<string, number>(),
@@ -1177,7 +1181,7 @@ export class ArtemisRuntime {
       scriptStatus: () => this.mode,
       setScriptStatus: (mode) => this.setScriptStatus(mode),
       frameNumber: () => this.frameNumber,
-      touch: services.touch ?? {count: () => 0, setHold: () => {}},
+      touch,
     });
     this.closers.unshift(() => lua.close());
     let compiled = 0;

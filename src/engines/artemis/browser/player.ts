@@ -1,5 +1,6 @@
 import {BrowserWindowsProcessHost} from '../../../platform/browser-windows-process.js';
 import {BrowserWindowsSystemProfileHost} from '../../../platform/browser-windows-system-profile.js';
+import {BrowserWindowsTouchHost} from '../../../platform/windows-touch.js';
 import {decodePng, type DecodedPng} from '../../../formats/png/decode.js';
 import type {TriangleImage} from '../../../graphics/triangle-draw.js';
 import {decodeArtemisPsd} from '../../../formats/artemis/psd.js';
@@ -358,6 +359,7 @@ export class ArtemisBrowserPlayer {
       dynamicLibraries: new BrowserWindowsDynamicLibraryHost(),
       folderPaths: new BrowserWindowsFolderPaths(),
       windowsVersion: () => options.windowsVersion,
+      touch: new BrowserWindowsTouchHost(),
       // Installed faces from the Local Font Access API, named as on Japanese Windows; a
       // missing or denied API lists none.
       fontFamilies: async () =>

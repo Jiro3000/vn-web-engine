@@ -1035,6 +1035,58 @@ test('Legacy exact hashes retain their LLP64, graphics and font-size policies be
   assert.throws(() => new ArtemisVariables({executableSha256: '0'.repeat(64)}), /Unsupported/);
 });
 
+test('Runtime boot publishes touch registration independently of live contacts for every exact hash', async () => {
+  const {openArtemisRuntimeFixture} = await import('./artemis-runtime-fixture.mjs');
+  const revisions = await import('../dist/engines/artemis/revision.js');
+  const hashes = Object.entries(revisions)
+    .filter(([name]) => /^ARTEMIS_.*(?:EXECUTABLE|RESOURCE_VARIANT)_SHA256$/.test(name))
+    .map(([, hash]) => hash);
+  assert.equal(hashes.length, 5);
+  for (const hash of hashes) {
+    for (const device of [
+      null,
+      {registered: true, contacts: 0},
+      {registered: false, contacts: 2},
+    ]) {
+      const holds = [];
+      const fixture = await openArtemisRuntimeFixture(
+        {'system/first.iet': '[stop]'},
+        {
+          hash,
+          services: device
+            ? {
+                touch: {
+                  registered: () => device.registered,
+                  count: () => device.contacts,
+                  setHold: (enabled) => holds.push(enabled),
+                },
+              }
+            : {},
+        },
+      );
+      try {
+        fixture.runtime.variables.write('s.windowstouch', '99');
+        await fixture.runtime.boot();
+        fixture.runtime.lua.vm.execute(
+          bytes(`
+          registration = engine:var('s.windowstouch')
+          contacts = engine:getTouchCount()
+          engine:setUseTouchHold(true)
+        `),
+        );
+        assert.equal(
+          luaText(fixture.runtime.lua.vm.getGlobal('registration')),
+          device?.registered ? '1' : '0',
+        );
+        assert.equal(fixture.runtime.lua.vm.getGlobal('contacts'), device?.contacts ?? 0);
+        assert.deepEqual(holds, device ? [true] : []);
+      } finally {
+        await fixture.close();
+      }
+    }
+  }
+});
+
 test('Windows version initialization preserves failed platform queries as native zero values', async () => {
   const {ArtemisVariables} = await import('../dist/engines/artemis/variables.js');
   const {initializeArtemisWindowsVersion} = await import('../dist/engines/artemis/revision.js');

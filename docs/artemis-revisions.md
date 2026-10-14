@@ -32,6 +32,18 @@ then queried again. The profile permits this lazy creation only for these two
 proven absent fields; unsupported device/system queries retain their guards.
 An existing value restored from system data is left intact by boot publication.
 
+The published `s.windowstouch` is a device registration capability. In Rev.2898,
+tag constructor `0x52f170` installs `CArtemisTouch` at tag-object `+0x08`.
+Boot `0x539360` queries that object's PE32 vtable `+0x44`, `0x4b7cd0`, which
+reads its byte `+0x3c`. Constructor `0x4b7d50` initializes the byte to zero and
+sets it only after `SM_DIGITIZER` reports `NID_READY`, three User32 touch APIs
+resolve and `RegisterTouchWindow(hwnd, 3)` succeeds. It is not a contact count.
+Rev.3179 boot `0x1400c37e0`, Rev.3139 `0x1400c36f0` and Rev.3257
+`0x1400c7d80` all query their touch owner at `+0x10`, virtual `+0x98`, and
+publish the boolean through the integer setter. This is shared boot behavior,
+without a revision policy difference. The browser platform supplies an
+unregistered touch owner; an injected native owner supplies its real flag.
+
 Screenshot tag `0x558900` calls renderer `0x5d0db0`, which copies the existing
 GPU buffer through `GetRenderTargetData` into system memory and copies its rows.
 It does not draw a new scene (`screenshot = presented`). Sound loaders
