@@ -28,6 +28,8 @@ export interface ArtemisRevision {
   readonly absentSystemVariables: readonly string[];
   /** Native actor-property parser accepts shadertexture paths (absent in Rev.2898). */
   readonly shaderTextureProperties: boolean;
+  readonly shaderConstantBinding: 'named-effect' | 'ordered-buffer';
+  readonly graphicsApi: 'd3d9' | 'd3d11';
   /** What `takess` puts into the screenshot surface +0x1c0. 'scene': Rev.3179 0x1400e1cf0
    * renders the committed scene offscreen. 'presented': Rev.3139 0x1400e1cf0 copies the
    * frame presented last (renderer virtual +0x48 reads the swap chain buffer) and records
@@ -57,6 +59,8 @@ const rev3139 = {
   publishesGraphicsFeatureLevel: true,
   absentSystemVariables: Object.freeze([] as string[]),
   shaderTextureProperties: true,
+  shaderConstantBinding: 'ordered-buffer' as const,
+  graphicsApi: 'd3d11' as const,
   screenshot: 'presented' as const,
   soundLoaderRewinds: false,
   indentModify: false,
@@ -79,6 +83,8 @@ const revisions: ReadonlyMap<string, ArtemisRevision> = new Map(
       absentSystemVariables: Object.freeze(['s.llp64', 's.windowsfeaturelevel']),
       // 0x58cc90 ends after shaderconstant; no texture-path property setter.
       shaderTextureProperties: false,
+      shaderConstantBinding: 'named-effect' as const,
+      graphicsApi: 'd3d9' as const,
       // 0x558900 -> renderer 0x5d0db0 reads the existing GPU buffer. Sound
       // loaders 0x5f8ab0/0x5f89e0 reuse the opened file without a rewind.
       screenshot: 'presented' as const,
@@ -103,6 +109,8 @@ const revisions: ReadonlyMap<string, ArtemisRevision> = new Map(
       publishesGraphicsFeatureLevel: true,
       absentSystemVariables: Object.freeze([] as string[]),
       shaderTextureProperties: true,
+      shaderConstantBinding: 'ordered-buffer' as const,
+      graphicsApi: 'd3d11' as const,
       screenshot: 'scene' as const,
       soundLoaderRewinds: true,
     },
@@ -122,6 +130,8 @@ const revisions: ReadonlyMap<string, ArtemisRevision> = new Map(
       publishesGraphicsFeatureLevel: true,
       absentSystemVariables: Object.freeze([] as string[]),
       shaderTextureProperties: true,
+      shaderConstantBinding: 'ordered-buffer' as const,
+      graphicsApi: 'd3d11' as const,
       // 0x1400ee300 renders the scene into the screenshot target; 0x140197120/
       // 0x140197010 seek the opened file to 0 before a further sound loader.
       screenshot: 'scene' as const,

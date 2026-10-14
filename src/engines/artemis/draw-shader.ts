@@ -1,6 +1,12 @@
 import {ArtemisShaderConstantStorage, type ArtemisShaderConstant} from './shader-properties.js';
 import {artemisRevision} from './revision.js';
 import {
+  ArtemisDx9EffectConstants,
+  artemisDx9ShaderFragmentSource,
+  type ArtemisDx9ShaderKind,
+} from './dx9-shader.js';
+import type {ArtemisShaderTextureLease} from './shader-properties.js';
+import {
   compileArtemisShaderPreset,
   artemisShaderFragmentSource,
   type ArtemisShaderPresetKind,
@@ -20,7 +26,7 @@ export interface ArtemisDrawShaderPreset {
   /** Explicit required values, no inferred defaults or native reflection claim. */
   parameters(values: ReadonlyMap<string, readonly number[]>): Float32Array;
   /** Native render15d120 concatenates vectors in order, ignoring their names. */
-  nativeParameters(values: readonly ArtemisShaderConstant[]): Float32Array;
+  nativeParameters(values: readonly ArtemisShaderConstant[], alpha?: number): Float32Array;
   /** Buffer includes native zero initialization/reused padding. Null is slot1 unbound. */
   bufferParameters(buffer: Float32Array | null): Float32Array;
 }
@@ -32,8 +38,10 @@ export function createArtemisDrawShaderPreset(
   kind: ArtemisShaderPresetKind,
   userTextureIndex = 0,
   userTextureBound = true,
+  maskTextureIndex?: number,
 ): ArtemisDrawShaderPreset {
-  artemisRevision(hash);
+  const named = artemisRevision(hash).shaderConstantBinding === 'named-effect';
+  if (named) userTextureBound = false;
   if (!Number.isInteger(userTextureIndex) || userTextureIndex < 0 || userTextureIndex > 29)
     throw Error('Invalid Artemis user texture binding');
   const fields: UniformField[] = [];
@@ -115,7 +123,11 @@ export function createArtemisDrawShaderPreset(
         : `float ${field.glsl}[${field.size}]=float[${field.size}](${values.join(',')});`;
     })
     .join('\n');
-  let source = artemisShaderFragmentSource(kind)
+  let source = (
+    named
+      ? artemisDx9ShaderFragmentSource(kind as ArtemisDx9ShaderKind)
+      : artemisShaderFragmentSource(kind)
+  )
     .replace(/^#version.*\n/, '')
     .replace(/precision highp float;/g, '')
     .replace(/in vec2 vUv;/g, '')
@@ -123,10 +135,18 @@ export function createArtemisDrawShaderPreset(
     .replace(/uniform [^;]+;/g, '')
     .replace(/out vec4 outColor;/g, '')
     .replace(
+      /texture\(uMask,\s*vUv\)\.a/g,
+      maskTextureIndex === undefined
+        ? '1.0'
+        : `texture(additionalAtlas${maskTextureIndex},additionalUV${maskTextureIndex}).a`,
+    )
+    .replace(
       /texture\(uUser,\s*vUv\)/g,
       userTextureBound
         ? `texture(additionalAtlas${userTextureIndex},additionalUV${userTextureIndex})`
-        : 'vec4(0.0)',
+        : named
+          ? 'vec4(0.0,0.0,0.0,1.0)'
+          : 'vec4(0.0)',
     )
     .replace(/\buFore\b/g, 'atlas')
     .replace(
@@ -135,7 +155,7 @@ export function createArtemisDrawShaderPreset(
     )
     .replace(/\bvBackUv\b/g, userTextureIndex > 0 ? 'additionalUV0' : 'vec2(0.0)')
     .replace(/\bvUv\b/g, 'tex')
-    .replace(/\buAlpha\b/g, 'tint.a');
+    .replace(/\buAlpha\b/g, named ? 'parameters[7].w' : 'tint.a');
   source = source.replace(
     /void main\(\)\s*\{/,
     `vec4 shade(vec4 sampleColor,vec4 tint){\nvec4 outColor;\n${declarations}`,
@@ -157,11 +177,21 @@ export function createArtemisDrawShaderPreset(
       if (buffer) result.set(buffer);
       return result;
     },
-    nativeParameters(values) {
+    nativeParameters(values, alpha) {
+      if (named) {
+        if (alpha === undefined) throw Error('Missing Artemis effect alpha');
+        return new ArtemisDx9EffectConstants(fields).update(values, alpha);
+      }
       return this.bufferParameters(new ArtemisShaderConstantStorage(hash).update(values));
     },
     parameters(values) {
       const result = new Float32Array(32);
+      if (named) {
+        const alpha = values.get('alpha');
+        if (!alpha || alpha.length !== 1 || !Number.isFinite(Math.fround(alpha[0]!)))
+          throw Error('Missing/invalid Artemis shader constant alpha');
+        result[31] = alpha[0]!;
+      }
       let offset = 0;
       for (const field of fields) {
         const input = values.get(field.name);
@@ -188,6 +218,10 @@ export class ArtemisDrawShaderResource {
   private readonly captured: ArtemisDrawShaderPreset;
   private readonly nullOrdinary: ArtemisDrawShaderPreset;
   private readonly nullCaptured: ArtemisDrawShaderPreset;
+  private readonly maskedOrdinary?: ArtemisDrawShaderPreset;
+  private readonly maskedCaptured?: ArtemisDrawShaderPreset;
+  private readonly effect?: ArtemisDx9EffectConstants;
+  private mask?: ArtemisShaderTextureLease<{readonly texture: number}>;
   constructor(
     hash: string,
     kind: ArtemisShaderPresetKind,
@@ -197,13 +231,21 @@ export class ArtemisDrawShaderResource {
     this.captured = createArtemisDrawShaderPreset(hash, kind, 1);
     this.nullOrdinary = createArtemisDrawShaderPreset(hash, kind, 0, false);
     this.nullCaptured = createArtemisDrawShaderPreset(hash, kind, 1, false);
+    if (artemisRevision(hash).shaderConstantBinding === 'named-effect') {
+      this.effect = new ArtemisDx9EffectConstants(this.ordinary.fields);
+      this.maskedOrdinary = createArtemisDrawShaderPreset(hash, kind, 0, false, 0);
+      this.maskedCaptured = createArtemisDrawShaderPreset(hash, kind, 1, false, 1);
+      prepare(this.maskedOrdinary.fragment, 1);
+      prepare(this.maskedCaptured.fragment, 2);
+    }
     prepare(this.nullOrdinary.fragment, 0);
     prepare(this.nullCaptured.fragment, 1);
     prepare(this.ordinary.fragment, this.ordinary.needsUserTexture ? 1 : 0);
     prepare(this.captured.fragment, this.captured.needsUserTexture ? 2 : 1);
   }
-  preset(captured: boolean, userTextureBound = true): ArtemisDrawShaderPreset {
+  preset(captured: boolean, userTextureBound = true, maskBound = false): ArtemisDrawShaderPreset {
     if (this.closed) throw Error('Artemis draw shader resource disposed');
+    if (maskBound && this.effect) return (captured ? this.maskedCaptured : this.maskedOrdinary)!;
     return userTextureBound
       ? captured
         ? this.captured
@@ -212,8 +254,31 @@ export class ArtemisDrawShaderResource {
         ? this.nullCaptured
         : this.nullOrdinary;
   }
+  namedParameters(values: readonly ArtemisShaderConstant[], alpha: number): Float32Array {
+    if (this.closed || !this.effect) throw Error('Artemis named effect owner missing');
+    return this.effect.update(values, alpha);
+  }
+  /** 5cf080 skips SetTexture for null masks;447968 retains the last assignment. */
+  bindMask(
+    mask?: ArtemisShaderTextureLease<{readonly texture: number}>,
+  ): ArtemisShaderTextureLease<{readonly texture: number}> | undefined {
+    if (this.closed || !this.effect) throw Error('Artemis named effect owner missing');
+    if (mask && mask.resource !== this.mask?.resource) {
+      const next = mask.retain(),
+        prior = this.mask;
+      this.mask = next;
+      prior?.release();
+    }
+    // The renderer batches commands. Preserve each sampled dependency until submission,
+    // even if a later actor changes this same effect's texture parameter.
+    return this.mask?.retain();
+  }
   dispose(): void {
+    if (this.closed) return;
     this.closed = true;
+    const mask = this.mask;
+    this.mask = undefined;
+    mask?.release();
   }
 }
 /** Exact-source selector plus mandatory actual GPU preparation. */

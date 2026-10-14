@@ -6,6 +6,8 @@ import {
   type ArtemisShaderTextureLease,
 } from './shader-properties.js';
 import type {ArtemisDrawShaderResource} from './draw-shader.js';
+import {createAlphaTextureImage} from '../../graphics/alpha-texture.js';
+import {artemisDx9DeviceBlend} from './gpu-raster.js';
 import type {DrawList, DrawListTarget, DrawCommand} from '../../graphics/draw-list.js';
 import {GpuRenderSurface} from '../../graphics/gpu-render-surface.js';
 import type {TriangleImage} from '../../graphics/triangle-draw.js';
@@ -178,13 +180,17 @@ function isText(actor: ArtemisDisplayActor): actor is ArtemisTextActor {
 }
 /** The masked variant of a raster fragment: foreground alpha times the red channel of the
  * mask (additional texture `index`) before the fragment's own shading. */
-export function artemisMaskedFragment(fragment: string | undefined, index: number): string {
+export function artemisMaskedFragment(
+  fragment: string | undefined,
+  index: number,
+  channel: 'red' | 'alpha' = 'red',
+): string {
   const base = fragment ?? 'vec4 shade(vec4 sampleColor,vec4 tint){return sampleColor*tint;}';
   if (base.split('vec4 shade(').length !== 2)
     throw new Error('Unsupported Artemis masked raster fragment');
   return (
     base.replace('vec4 shade(', 'vec4 unmaskedShade(') +
-    `vec4 shade(vec4 sampleColor,vec4 tint){sampleColor.a*=texture(additionalAtlas${index},additionalUV${index}).r;return unmaskedShade(sampleColor,tint);}`
+    `vec4 shade(vec4 sampleColor,vec4 tint){sampleColor.a*=texture(additionalAtlas${index},additionalUV${index}).${channel === 'red' ? 'r' : 'a'};return unmaskedShade(sampleColor,tint);}`
   );
 }
 /** `outer` after `inner` for row-major 2x3 matrices. */
@@ -217,6 +223,8 @@ export type ArtemisLayerServices = Pick<
 interface Texture {
   readonly id: number;
   readonly image: TriangleImage;
+  /** Separately owned A8 upload view; the surface cache still owns the source. */
+  readonly sourceImage?: TriangleImage;
   references: number;
   readonly managed: boolean;
   /** Native image format (virtual +0x20) when the loader determined it. */
@@ -238,6 +246,7 @@ interface CaptureTexture {
  * loan and texture, shared by the nodes and actors that keep it. */
 interface LayerMask {
   readonly holder: ArtemisImageActor;
+  readonly shaderTexture: {readonly texture: number};
   readonly width: number;
   readonly height: number;
   readonly format?: 0 | 1 | 2;
@@ -300,6 +309,7 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
   /** Engine screenshot surface +0x1c0 at stage size, null until `takeScreenshot`. */
   private screenshot: CaptureTexture | null = null;
   private nativeSlotOne: Float32Array | null = null;
+  private dx9DeviceBlend = artemisDx9DeviceBlend();
   private readonly wrappers = new Map<
     ArtemisImageActor['wrapper'],
     {
@@ -456,10 +466,15 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
     if (texture && texture.managed !== (resource.lease !== undefined))
       throw new Error('Artemis image cannot mix cached and unmanaged raster ownership');
     if (!texture) {
-      this.target.prepareImage(image);
+      const upload =
+        resource.surfaceFormat === 0 && artemisRevision(this.hash).graphicsApi === 'd3d9'
+          ? createAlphaTextureImage(image, 'red')
+          : image;
+      this.target.prepareImage(upload);
       texture = {
         id: this.nextTexture++,
-        image,
+        image: upload,
+        ...(upload === image ? {} : {sourceImage: image}),
         references: 0,
         managed: resource.lease !== undefined,
         ...(resource.surfaceFormat === undefined ? {} : {format: resource.surfaceFormat}),
@@ -576,6 +591,7 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
     const image = this.check(holder);
     return {
       holder,
+      shaderTexture: Object.freeze({texture: holder.texture}),
       width: image.image.width,
       height: image.image.height,
       ...(image.format === undefined ? {} : {format: image.format}),
@@ -584,6 +600,26 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
   }
   private releaseMask(mask: LayerMask | undefined): void {
     if (mask && --mask.references <= 0) this.releaseImageLayer(mask.holder);
+  }
+  private leaseMask(mask: LayerMask): ArtemisShaderTextureLease<{readonly texture: number}> {
+    const create = (): ArtemisShaderTextureLease<{readonly texture: number}> => {
+      mask.references++;
+      let live = true;
+      return {
+        resource: mask.shaderTexture,
+        retain: () => {
+          if (!live) throw Error('Released Artemis mask loan');
+          return create();
+        },
+        release: () => {
+          if (live) {
+            live = false;
+            this.releaseMask(mask);
+          }
+        },
+      };
+    };
+    return create();
   }
   /** Native 0x1400a4490 keeps a mask only on an image of format 1 or 2 whose dimensions
    * match a format 0 mask; a null mask clears it and any other mask is dropped. */
@@ -785,9 +821,9 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
     if (isText(actor)) actor.text.release();
     if (texture && --texture.references === 0) {
       this.textures.delete(texture.id);
-      if (!texture.video) this.images.delete(texture.image);
+      if (!texture.video) this.images.delete(texture.sourceImage ?? texture.image);
       texture.video?.decoder.close();
-      if (!texture.managed) this.target.invalidate(texture.image);
+      if (!texture.managed || texture.sourceImage) this.target.invalidate(texture.image);
     }
     const wrapper = this.wrappers.get(actor.wrapper)!;
     if (--wrapper.references === 0) {
@@ -1286,7 +1322,16 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
     try {
       const clear = (context: RenderContext) => {
         if (context.pendingClear) {
-          commands.push({kind: 'gpu-target', surface: context.surface, clearColor: [0, 0, 0, 0]});
+          commands.push({
+            kind: 'gpu-target',
+            surface: context.surface,
+            clearColor: [
+              0,
+              0,
+              0,
+              artemisRevision(this.hash).graphicsApi === 'd3d9' && context.format !== 2 ? 1 : 0,
+            ],
+          });
           context.pendingClear = false;
         }
       };
@@ -1303,6 +1348,7 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
         const image = this.image(texture),
           imageWidth = f(image.width),
           imageHeight = f(image.height);
+        const dx9 = artemisRevision(this.hash).graphicsApi === 'd3d9';
         clear(context); // Native clears lazily before source clip rejection.
         let width = imageWidth,
           height = imageHeight,
@@ -1323,12 +1369,16 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
         }
         const shaderName = actor.shaderState.shaderName;
         let custom: ReturnType<ArtemisDrawShaderResource['preset']> | undefined;
+        let customMask: {texture: number; uv: Float32Array; filter: 'linear'} | undefined;
         let parameters: Float32Array | undefined;
         let userTextures: {texture: number; uv: Float32Array; filter: 'nearest' | 'linear'}[] = [];
         if (shaderName) {
           if (!this.shaderPrograms) throw Error('Unsupported Artemis shader program owner');
-          const prepared = actor.shaderConstants.update(actor.shaderState.constantValues());
-          if (prepared) this.nativeSlotOne = prepared;
+          const named = artemisRevision(this.hash).shaderConstantBinding === 'named-effect';
+          if (!named) {
+            const prepared = actor.shaderConstants.update(actor.shaderState.constantValues());
+            if (prepared) this.nativeSlotOne = prepared;
+          }
           const loan = this.shaderPrograms.bind(shaderName);
           if (!loan) {
             // Native null pixel shader emits no target pixels, but capture copy still occurs.
@@ -1341,7 +1391,25 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
             return;
           }
           shaderLoans.push(loan);
-          custom = loan.shader.preset(context.format === 2);
+          if (named) {
+            const maskLoan = mask ? this.leaseMask(mask) : undefined;
+            let bound: ArtemisShaderTextureLease<{readonly texture: number}> | undefined;
+            try {
+              bound = loan.shader.bindMask(maskLoan);
+            } finally {
+              maskLoan?.release();
+            }
+            if (bound) {
+              shaderLoans.push(bound);
+              customMask = {
+                texture: bound.resource.texture,
+                uv: new Float32Array(8),
+                filter: 'linear',
+              };
+            }
+            custom = loan.shader.preset(context.format === 2, false, customMask !== undefined);
+            parameters = loan.shader.namedParameters(actor.shaderState.constantValues(), alpha);
+          } else custom = loan.shader.preset(context.format === 2);
           if (custom.needsUserTexture) {
             const leases = actor.shaderState.leaseTextures();
             shaderLoans.push(...leases.map((entry) => entry.lease));
@@ -1360,30 +1428,47 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
               ];
             }
           }
-          parameters = custom.bufferParameters(this.nativeSlotOne);
+          if (!named) parameters = custom.bufferParameters(this.nativeSlotOne);
         }
-        const mode = custom
-          ? context.format === 2
+        if (dx9 && context.format !== 2)
+          this.dx9DeviceBlend = artemisDx9DeviceBlend(raster.layerMode);
+        const mode =
+          custom && dx9
             ? {
-                blend: {
-                  color: {
-                    source: 'one' as const,
-                    destination: 'zero' as const,
-                    operation: 'add' as const,
-                  },
-                  alpha: {
-                    source: 'one' as const,
-                    destination: 'zero' as const,
-                    operation: 'add' as const,
-                  },
-                },
+                blend:
+                  context.format === 2
+                    ? this.dx9DeviceBlend
+                    : {
+                        color: this.dx9DeviceBlend.color,
+                        alpha: {
+                          source: 'zero' as const,
+                          destination: 'one' as const,
+                          operation: 'add' as const,
+                        },
+                      },
               }
-            : this.raster.layerMode?.(raster.layerMode)
-          : context.format === 2
-            ? this.raster.captured?.(raster.layerMode, raster)
-            : artemisHasRasterEffects(raster)
-              ? this.raster.effects?.(raster.layerMode, raster)
-              : this.raster.layerMode?.(raster.layerMode);
+            : custom
+              ? context.format === 2
+                ? {
+                    blend: {
+                      color: {
+                        source: 'one' as const,
+                        destination: 'zero' as const,
+                        operation: 'add' as const,
+                      },
+                      alpha: {
+                        source: 'one' as const,
+                        destination: 'zero' as const,
+                        operation: 'add' as const,
+                      },
+                    },
+                  }
+                : this.raster.layerMode?.(raster.layerMode)
+              : context.format === 2
+                ? this.raster.captured?.(raster.layerMode, raster)
+                : artemisHasRasterEffects(raster)
+                  ? this.raster.effects?.(raster.layerMode, raster)
+                  : this.raster.layerMode?.(raster.layerMode);
         if (context.format === 2 && !mode)
           throw new Error('Artemis captured raster policy owner missing');
         if (!custom && context.format !== 2 && artemisHasRasterEffects(raster) && !mode)
@@ -1392,9 +1477,10 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
         // multiply foreground alpha by its red channel before any other step. Custom
         // shaders receive the mask as a resource and decide themselves.
         const maskTexture =
-          mask && !custom
+          customMask ??
+          (mask && !custom
             ? {texture: mask.holder.texture, uv: new Float32Array(8), filter: this.raster.filter}
-            : undefined;
+            : undefined);
         const vertices = new Float32Array(36),
           backgroundUV = new Float32Array(8),
           color = raster.colorMultiply,
@@ -1447,16 +1533,34 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
           normalizedUV: true,
           transform: identity.slice(),
           depthClip: false,
-          filter: this.raster.filter,
-          blendState: mode?.blend ?? this.raster.blend,
-          fragment: maskTexture
-            ? artemisMaskedFragment(mode?.fragment, context.format === 2 ? 1 : 0)
-            : (custom?.fragment ?? mode?.fragment),
+          filter:
+            custom && artemisRevision(this.hash).graphicsApi === 'd3d9'
+              ? 'linear'
+              : this.raster.filter,
+          blendState:
+            dx9 && context.format !== 2
+              ? {
+                  color: (mode?.blend ?? this.raster.blend).color,
+                  alpha: {source: 'zero', destination: 'one', operation: 'add'},
+                }
+              : (mode?.blend ?? this.raster.blend),
+          fragment:
+            maskTexture && !custom
+              ? artemisMaskedFragment(
+                  mode?.fragment,
+                  context.format === 2 ? 1 : 0,
+                  artemisRevision(this.hash).graphicsApi === 'd3d9' ? 'alpha' : 'red',
+                )
+              : (custom?.fragment ?? mode?.fragment),
           parameters,
           additionalTextures:
             context.format === 2
               ? [
-                  {texture: context.back!.id, uv: backgroundUV, filter: this.raster.filter},
+                  {
+                    texture: context.back!.id,
+                    uv: backgroundUV,
+                    filter: dx9 ? 'nearest' : this.raster.filter,
+                  },
                   ...userTextures,
                   ...(maskTexture ? [maskTexture] : []),
                 ]

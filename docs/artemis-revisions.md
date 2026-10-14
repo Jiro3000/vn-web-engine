@@ -20,7 +20,7 @@ Executable `d20ffaa064efa01eeccf4e315de99a419492e5fe7a8e44bc1a0eb22fc719883e`
 is an independent x86 profile (`ARTEMIS_2898_EXECUTABLE_SHA256`), image base
 `0x400000`, entry `0x6821ec`, PE timestamp `0x610e8906`. It is not a resource
 variant of any x64 revision. Runtime acceptance and the complete address map are
-still pending; the profile does not imply that its DX9 shaders are implemented.
+still pending. The profile selects its reconstructed DX9 presets and bindings.
 
 Boot publication `0x539360` identifies Rev.2898, build
 `Sat Aug 7 22:21:32 2021`, support 1103 and save version 1003. It publishes
@@ -51,6 +51,51 @@ has no texture-path lookup or setter. `shaderTextureProperties = false` leaves
 `shadertexture` and its listed paths unconsumed: no file opens, texture loans or
 shader-owner requirement arise from that property alone. All four supported
 x64 hashes retain their texture-property parser and resource ownership.
+
+The DX9 source registry recognizes nineteen complete raw HLSL signatures for this
+exact hash. Their Fore/User coordinates are foreground UV; eighteen programs
+sample mask alpha at the original UV, independently of foreground displacement.
+Reset ignores the mask. Add also applies mask alpha to the user RGB addition.
+These are finite, reconstructed presets rather than a general HLSL compiler.
+
+Draw `0x5cf080` assigns builtin alpha first, then calls effect `SetFloatArray`
+with each property's name, values and count. The created effect (`0x5d0ee0`,
+`0x4013cc`, factory `0x421217`) has its own parameter state. PE32 vtable
+`0x6f71a0 + 0x80` resolves to `0x44858f`: partial writes stop at the count or
+field end and preserve remaining values. Missing names return an HRESULT that
+the draw caller ignores. Array element names are resolved by `0x440638`.
+`shaderConstantBinding = named-effect` keeps this state per shader resource;
+the other exact hashes retain their ordered constant buffers.
+
+GPU surface allocation `0x5d2cf0` selects D3DFMT_A8 (28) for format 0. Its upload
+view stores the source gray byte in alpha and zero in RGB, following the
+[Direct3D 9 format specification](https://learn.microsoft.com/en-us/windows/win32/direct3d9/d3dformat).
+The view has separate GPU ownership; it does not modify cached PNG pixels or
+use PNG transparency to replace the gray byte. DX9 mask variants sample alpha;
+the older profiles retain red-channel masks.
+
+The draw calls `SetTexture` for a mask only when the actor has one. Method
+`0x447968` and helper `0x43e1d4` retain the new interface before releasing the
+previous assignment. An omitted mask therefore keeps the effect's previous
+binding, including across actors using that effect. The browser keeps that
+dependency until replacement or effect disposal. Foreground and background
+inputs are supplied by each draw; these nineteen sources never sample Back.
+User remains unbound because this property parser has no texture assignment.
+The null sampler value is opaque black, consistent with the upstream
+[D3D9 unbound-sampler test](https://list.winehq.org/hyperkitty/list/wine-commits%40list.winehq.org/thread/3YHC4JEKGTOFBHUH52XCK5VRO6H4JENY/).
+
+DX9 ordinary draws also update the device's SRCBLEND/DESTBLEND factors in
+`0x5cf080`; its captured branch does not. The builtin HLSL table at `0x7a0a08`
+contains 168 passes: captured passes disable blending, while custom sources
+enable it. Neither source sets SRCBLEND/DESTBLEND or separate alpha factors.
+D3DX Begin `0x449417` records the technique's state writes with
+BeginStateBlock/EndStateBlock; End `0x4413c1` restores that recorded set.
+The outside blend-factor writes therefore persist across effect switches and
+frames. Captured custom draws use those inherited color and alpha factors;
+the D3D11 profiles continue to replace RGBA in their captured custom path.
+Ordinary RGB targets preserve opaque alpha, format-2 captures preserve RGBA,
+and builtin captured Back sampling uses POINT/CLAMP. No alpha-test or shader
+discard is introduced into these DX9 passes.
 
 ## Rev.3257
 

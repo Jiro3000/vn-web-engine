@@ -5180,6 +5180,60 @@ test('Draw-list shader binding requires explicit constants and packs blur arrays
   assert.throws(() => createArtemisDrawShaderPreset(hash, 'unknown'), /Unsupported/);
 });
 
+test('Named DX9 effects keep partial array writes and alpha overrides in their own program state', async () => {
+  const {
+    ArtemisDrawShaderResource,
+    createArtemisDrawShaderPreset,
+    createArtemisDrawShaderCompiler,
+  } = await import('../dist/engines/artemis/draw-shader.js');
+  const {ARTEMIS_2898_EXECUTABLE_SHA256: hash, ARTEMIS_3179_EXECUTABLE_SHA256: legacy} =
+    await import('../dist/engines/artemis/revision.js');
+  const resource = new ArtemisDrawShaderResource(hash, 'blur_v', () => {});
+  const p = resource.namedParameters(
+    [
+      {name: 'height', values: [0.125]},
+      {name: 'unknown', values: [100]},
+      {name: 'weights', values: [1, 2, 3, 4, 5, 6, 7, 8, 99]},
+    ],
+    0.75,
+  );
+  assert.deepEqual([...p.slice(0, 9)], [1, 2, 3, 4, 5, 6, 7, 8, 0.125]);
+  assert.equal(p[31], 0.75);
+  const reused = resource.namedParameters(
+    [
+      {name: 'weights', values: [9, 10]},
+      {name: 'weights[3]', values: [20, 21]},
+      {name: 'alpha', values: [0.5, 99]},
+    ],
+    0.25,
+  );
+  assert.deepEqual([...reused.slice(0, 9)], [9, 10, 3, 20, 5, 6, 7, 8, 0.125]);
+  assert.equal(reused[31], 0.5);
+  const empty = resource.namedParameters(
+    [
+      {name: 'weights', values: []},
+      {name: 'height[0]', values: [999]},
+    ],
+    1,
+  );
+  assert.deepEqual([...empty.slice(0, 9)], [9, 10, 3, 20, 5, 6, 7, 8, 0.125]);
+  assert.equal(empty[31], 1);
+  p.fill(100); // Command snapshots do not mutate effect state.
+  assert.equal(resource.namedParameters([], 1)[0], 9);
+  const separate = new ArtemisDrawShaderResource(hash, 'blur_v', () => {});
+  assert.deepEqual([...separate.namedParameters([], 1).slice(0, 9)], new Array(9).fill(0));
+  assert.throws(() => createArtemisDrawShaderPreset(hash, 'noise'), /Unsupported.*DX9/);
+  const old = new ArtemisDrawShaderResource(legacy, 'blur_v', () => {});
+  assert.throws(() => old.namedParameters([], 1), /owner missing/);
+  await assert.rejects(
+    createArtemisDrawShaderCompiler(hash, () => {}).compile('bad', new Uint8Array([1])),
+    /Unsupported/,
+  );
+  resource.dispose();
+  separate.dispose();
+  old.dispose();
+  assert.throws(() => resource.namedParameters([], 1), /owner missing/);
+});
 test('Native shader constant buffer uses list order rather than parameter-name reflection', async () => {
   const {createArtemisDrawShaderPreset} = await import('../dist/engines/artemis/draw-shader.js');
   const hash = '8953562b80608046662bd8c89015d04236b0ba3afee10c36469c11403de3ebaf';

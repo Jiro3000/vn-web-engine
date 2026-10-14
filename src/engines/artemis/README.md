@@ -1153,7 +1153,11 @@ PNG grayscale is 0, every other PNG colour type 2. An unknown format is refused.
 
 A stored mask selects the masked shader variants: before the alpha multiplier and
 effects, foreground alpha is multiplied by the mask's red channel sampled at the
-foreground coordinates. Custom layer shaders receive no mask term. The
+foreground coordinates in the D3D11 profiles. Rev.2898 uses an A8 upload view and
+samples its alpha instead. Its eighteen mask-using custom presets also sample
+alpha at the original foreground UV; reset ignores it. The DX9 effect retains
+its mask assignment when a later actor omits the setter. Other custom preset
+sources receive no mask term. The
 transition-mask variant (CLayer `+0x150`) is not modeled.
 
 ## Merged PSD images
@@ -1949,6 +1953,24 @@ The resource loader remains mandatory; parsing paths alone does not load texture
 The exact Rev.2898 profile omits texture-property parsing: its `0x58cc90` reads
 shader names and constants but never queries `shadertexture`. Listed texture paths
 therefore cause no resource loads or shader-owner requirement on that hash.
+
+`dx9-shader.ts` selects nineteen raw HLSL signatures only for the exact Rev.2898
+profile and supplies their mask-aware CPU/GLSL executables. Draw `0x5cf080` and
+the executable's D3DX `SetFloatArray` (`0x44858f`) select fields by name and
+preserve unwritten elements in each effect. The renderer assigns builtin alpha
+before the custom list; a listed `alpha` can override it. Captured and ordinary
+DrawList adapters use the same effect state. Mask texture assignments retain a
+resource dependency across draws, with replacement/disposal releasing it.
+Finite source coefficients, UV, alpha and LINEAR/CLAMP sampler behavior are
+preserved; unsupported source signatures remain refused. `docs/artemis-revisions.md`
+describes the A8 view and native ownership evidence. The D3D11 ordered-buffer
+description below applies to the four existing x64 profiles.
+DX9 custom capture blending follows the retained device factors, updated only by
+ordinary draws in `0x5cf080`. Builtin captures disable hardware blending; custom
+passes enable it without changing those factors. The D3DX state blocks record
+the effect's state writes and leave the caller's SRCBLEND/DESTBLEND writes intact.
+This behavior and RGB/A8 surface formats are selected by the exact profile's
+`graphicsApi` field, independently of constant binding and texture properties.
 
 `draw-shader.ts` adapts all twenty reconstructed programs to the shared DrawList
 shade/atlas/tex/tint/parameters ABI, with explicit required named uniform values and

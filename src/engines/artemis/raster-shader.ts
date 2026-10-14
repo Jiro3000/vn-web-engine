@@ -29,6 +29,14 @@ import {
 } from './color-shader.js';
 import {artemisRevision} from './revision.js';
 import {ARTEMIS_SCREEN_FRAGMENT_SOURCE, artemisScreenShade} from './screen-shader.js';
+import {
+  artemisDx9ShaderSources,
+  artemisDx9ShaderFragmentSource,
+  artemisDx9ShaderShade,
+  artemisDx9ShaderExecutable,
+  type ArtemisDx9ShaderKind,
+  type ArtemisDx9ShaderExecutable,
+} from './dx9-shader.js';
 
 export interface ArtemisRasterUniforms {
   readonly alpha: number;
@@ -95,11 +103,20 @@ export async function compileArtemisRasterPreset(
   readonly fragmentSource: string;
   readonly shade: typeof artemisRasterShade;
 }> {
-  artemisRevision(hash);
+  const revision = artemisRevision(hash);
   const digest = await crypto.subtle.digest('SHA-256', Uint8Array.from(bytes).buffer),
     signature = [...new Uint8Array(digest)]
       .map((value) => value.toString(16).padStart(2, '0'))
       .join('');
+  if (revision.graphicsApi === 'd3d9') {
+    if (artemisDx9ShaderSources[signature] !== 'raster')
+      throw Error('Unsupported Artemis custom shader source');
+    return {
+      kind: 'raster',
+      fragmentSource: artemisDx9ShaderFragmentSource('raster'),
+      shade: (sample, u, v, p) => artemisDx9ShaderShade('raster', sample, u, v, p),
+    };
+  }
   if (signature !== '56f51f6ef596f287bc75bfe9266ce382a98884b8659267822ca74c1a22e49aba')
     throw Error('Unsupported Artemis custom shader source');
   return {
@@ -113,6 +130,11 @@ export async function compileArtemisShaderPreset(
   hash: string,
   bytes: Uint8Array,
 ): Promise<
+  | {
+      readonly kind: ArtemisDx9ShaderKind;
+      readonly fragmentSource: string;
+      readonly shade: ArtemisDx9ShaderExecutable;
+    }
   | {
       readonly kind: 'raster';
       readonly fragmentSource: string;
@@ -180,11 +202,20 @@ export async function compileArtemisShaderPreset(
       readonly shade: typeof artemisNoiseShade;
     }
 > {
-  artemisRevision(hash);
+  const revision = artemisRevision(hash);
   const digest = await crypto.subtle.digest('SHA-256', Uint8Array.from(bytes).buffer),
     signature = [...new Uint8Array(digest)]
       .map((value) => value.toString(16).padStart(2, '0'))
       .join('');
+  if (revision.graphicsApi === 'd3d9') {
+    const kind = artemisDx9ShaderSources[signature];
+    if (!kind) throw Error('Unsupported Artemis custom shader source');
+    return {
+      kind,
+      fragmentSource: artemisDx9ShaderFragmentSource(kind),
+      shade: artemisDx9ShaderExecutable(kind),
+    };
+  }
   if (signature === '56f51f6ef596f287bc75bfe9266ce382a98884b8659267822ca74c1a22e49aba')
     return {
       kind: 'raster',
@@ -241,7 +272,8 @@ export async function compileArtemisShaderPreset(
     return {
       kind,
       fragmentSource: artemisColorFragmentSource(kind),
-      shade: (sample, u, v, p) => artemisColorShade(kind, sample, u, v, p),
+      shade: (sample: ArtemisShaderSample, u: number, v: number, p: ArtemisColorUniforms) =>
+        artemisColorShade(kind, sample, u, v, p),
     };
   const blurKind =
     signature === 'd39f149a08d912ab94ab6770fb4fa082a8df78d8e3ad5fef449ffdbad3b6d799'
@@ -253,7 +285,8 @@ export async function compileArtemisShaderPreset(
     return {
       kind: blurKind,
       fragmentSource: artemisBlurFragmentSource(blurKind),
-      shade: (sample, u, v, p) => artemisBlurShade(blurKind, sample, u, v, p),
+      shade: (sample: ArtemisShaderSample, u: number, v: number, p: ArtemisBlurUniforms) =>
+        artemisBlurShade(blurKind, sample, u, v, p),
     };
   if (signature === '33f20c759657d25064c273dcc5f55b6d25de00c49d1fc3b4d21fa307f53c3f96')
     return {
@@ -274,7 +307,13 @@ export async function compileArtemisShaderPreset(
     return {
       kind: comp,
       fragmentSource: artemisCompositeFragmentSource(comp),
-      shade: (fore, user, u, v, p) => artemisCompositeShade(comp, fore, user, u, v, p),
+      shade: (
+        fore: ArtemisShaderSample,
+        user: ArtemisShaderSample,
+        u: number,
+        v: number,
+        p: ArtemisCompositeUniforms,
+      ) => artemisCompositeShade(comp, fore, user, u, v, p),
     };
   if (signature === 'faf7e8e1e83551bdfde4c5bc1b3af08cb9d4c9a06fa1b2d8f5b529bb52c94e0d')
     return {

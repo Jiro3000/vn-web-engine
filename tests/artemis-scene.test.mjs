@@ -1263,6 +1263,248 @@ async function cachedLayerFixture(budget = 0n, source) {
   return {...f, graphics, layers: new ArtemisLayers(revision, f.cache, graphics)};
 }
 
+test('Rev.2898 named effects retain coefficients and A8 masks across actor changes and release their upload views', async () => {
+  const {ARTEMIS_2898_EXECUTABLE_SHA256: hash} =
+    await import('../dist/engines/artemis/revision.js');
+  const {ArtemisImageGraphics} = await import('../dist/engines/artemis/image-graphics.js');
+  const {ArtemisLayers} = await import('../dist/engines/artemis/layers.js');
+  const {ArtemisShaderLibrary} = await import('../dist/engines/artemis/shader-library.js');
+  const {ArtemisDrawShaderResource} = await import('../dist/engines/artemis/draw-shader.js');
+  const uploaded = [],
+    invalidated = [],
+    released = [];
+  const target = {
+    width: 2,
+    height: 1,
+    prepareImage: (image) => uploaded.push(image),
+    invalidate: (image) => invalidated.push(image),
+    draw(list, resolve) {
+      for (const c of list.commands) for (const t of c.additionalTextures ?? []) resolve(t.texture);
+    },
+  };
+  const library = new ArtemisShaderLibrary(
+    hash,
+    async () => new Uint8Array([1]),
+    {
+      // Synthetic calibration compiler; installation checks exercise real-source signatures.
+      compile: async () => ({shader: new ArtemisDrawShaderResource(hash, 'raster', () => {})}),
+      dispose: (shader) => shader.dispose(),
+    },
+    () => assert.fail('shader compilation failed'),
+  );
+  const tag = (name, args) => ({name, args: new Map(Object.entries(args))});
+  await library.dispatch(tag('lyshader', {id: 'warp', file: 'calibration'}));
+  await library.dispatch(tag('lyshader', {id: 'other', file: 'calibration'}));
+  const graphics = new ArtemisImageGraphics(
+    hash,
+    target,
+    {
+      creationMode: () => 0,
+      clearLayerCommands() {},
+      resetLayerCommands() {},
+      recordLayerProperties() {},
+      imageLoadFailed: () => assert.fail('image failed'),
+      layerNotFound: () => assert.fail('layer missing'),
+    },
+    {filter: 'nearest', blend: straightBlend},
+    library,
+  );
+  const fore = {width: 2, height: 1, pixels: new Uint8Array([10, 20, 30, 255, 40, 50, 60, 255])};
+  const gray = {width: 2, height: 1, pixels: new Uint8Array([64, 64, 64, 0, 192, 192, 192, 0])};
+  const secondGray = {
+    width: 2,
+    height: 1,
+    pixels: new Uint8Array([128, 128, 128, 0, 255, 255, 255, 0]),
+  };
+  const layers = new ArtemisLayers(
+    hash,
+    {
+      load: async (path) => {
+        const image =
+          path === 'fore'
+            ? fore
+            : path === 'mask'
+              ? gray
+              : path === 'second-mask'
+                ? secondGray
+                : null;
+        if (!image) return null;
+        return {
+          path,
+          image,
+          surfaceFormat: path === 'fore' ? 2 : 0,
+          lease: {release: () => released.push(path)},
+        };
+      },
+    },
+    graphics,
+  );
+  try {
+    await layers.dispatch(tag('lyc', {id: '1', file: 'fore'}));
+    layers.commit();
+    await layers.dispatch(
+      tag('lyprop', {
+        id: '1',
+        shader: 'warp',
+        shaderconstant: 'size,angle,inter,alpha',
+        size: '.25',
+        angle: '90',
+        inter: '0',
+        alpha: '.5',
+        intermediate_render_mask: 'mask',
+      }),
+    );
+    layers.commit();
+    const first = graphics.drawCommitted(layers.scene).commands[0];
+    assert.deepEqual([...first.parameters.slice(0, 3)], [90, 0, 0.25]);
+    assert.equal(first.parameters[31], 0.5);
+    assert.equal(first.filter, 'linear');
+    const maskId = first.additionalTextures[0].texture;
+    const mask = graphics.image(maskId);
+    assert.notEqual(mask, gray);
+    assert.deepEqual([...mask.pixels], [0, 0, 0, 64, 0, 0, 0, 192]);
+    assert.deepEqual([...gray.pixels], [64, 64, 64, 0, 192, 192, 192, 0]);
+    assert.ok(first.fragment.includes('additionalAtlas0,additionalUV0).a'));
+    await layers.dispatch(
+      tag('lyprop', {id: '1', intermediate_render_mask: '', shaderconstant: ''}),
+    );
+    layers.commit();
+    const retained = graphics.drawCommitted(layers.scene).commands[0];
+    assert.equal(retained.additionalTextures[0].texture, maskId);
+    assert.deepEqual([...retained.parameters.slice(0, 3)], [90, 0, 0.25]);
+    assert.equal(retained.parameters[31], retained.vertices[6]); // Builtin alpha is assigned for each draw.
+    await layers.dispatch(tag('lyc', {id: '2', file: 'fore'}));
+    layers.commit();
+    await layers.dispatch(tag('lyprop', {id: '2', shader: 'warp'}));
+    layers.commit();
+    const shared = graphics.drawCommitted(layers.scene).commands[1];
+    assert.deepEqual([...shared.parameters.slice(0, 3)], [90, 0, 0.25]);
+    assert.equal(shared.additionalTextures[0].texture, maskId);
+    await layers.dispatch(tag('lyprop', {id: '2', shader: 'other'}));
+    layers.commit();
+    const separate = graphics.drawCommitted(layers.scene).commands[1];
+    assert.deepEqual([...separate.parameters.slice(0, 3)], [0, 0, 0]);
+    assert.equal(separate.additionalTextures, undefined);
+    // First actor samples the retained old mask; a later actor replaces the same effect's
+    // binding before batch submission. Both command dependencies must remain resolvable.
+    await layers.dispatch(
+      tag('lyprop', {id: '2', shader: 'warp', intermediate_render_mask: 'second-mask'}),
+    );
+    layers.commit();
+    const replaced = graphics.drawCommitted(layers.scene).commands;
+    assert.equal(replaced[0].additionalTextures[0].texture, maskId);
+    assert.notEqual(replaced[1].additionalTextures[0].texture, maskId);
+    assert.equal(released.filter((p) => p === 'mask').length, 1);
+    layers.close();
+    assert.ok(!released.includes('second-mask'));
+    library.close();
+    assert.equal(released.filter((p) => p === 'mask').length, 1);
+    assert.equal(released.filter((p) => p === 'second-mask').length, 1);
+    assert.equal(invalidated.filter((i) => i === mask).length, 1);
+    assert.throws(() => graphics.image(maskId), /released/);
+  } finally {
+    layers.close();
+    library.close();
+  }
+});
+test('DX9 captured custom passes inherit device blend factors while legacy captures replace RGBA', async () => {
+  const {ARTEMIS_2898_EXECUTABLE_SHA256: dx9, ARTEMIS_3179_EXECUTABLE_SHA256: old} =
+    await import('../dist/engines/artemis/revision.js');
+  const {ArtemisImageGraphics} = await import('../dist/engines/artemis/image-graphics.js');
+  const {ArtemisLayers} = await import('../dist/engines/artemis/layers.js');
+  const {ArtemisDrawShaderResource} = await import('../dist/engines/artemis/draw-shader.js');
+  const {createArtemisOrdinaryGpuRaster} = await import('../dist/engines/artemis/gpu-raster.js');
+  const tag = (name, args) => ({name, args: new Map(Object.entries(args))});
+  for (const hash of [dx9, old]) {
+    const shader = new ArtemisDrawShaderResource(hash, 'raster', () => {});
+    const target = {
+      width: 2,
+      height: 1,
+      prepareImage() {},
+      prepareRenderSurface() {},
+      invalidate() {},
+      draw() {},
+    };
+    const graphics = new ArtemisImageGraphics(
+      hash,
+      target,
+      {
+        creationMode: () => 0,
+        clearLayerCommands() {},
+        resetLayerCommands() {},
+        recordLayerProperties() {},
+        imageLoadFailed: () => assert.fail('image failed'),
+        layerNotFound: () => assert.fail('layer missing'),
+      },
+      createArtemisOrdinaryGpuRaster(hash),
+      {bind: () => ({shader, release() {}})},
+    );
+    const image = {
+      width: 2,
+      height: 1,
+      pixels: new Uint8Array([100, 20, 30, 128, 40, 50, 60, 128]),
+    };
+    const layers = new ArtemisLayers(
+      hash,
+      {load: async (path) => ({path, image, surfaceFormat: 2})},
+      graphics,
+    );
+    try {
+      await layers.dispatch(tag('lyc', {id: '1', file: 'fore'}));
+      await layers.dispatch(tag('lyprop', {id: '1', layermode: 'add'}));
+      await layers.dispatch(tag('lyc', {id: '2.a', file: 'fore'}));
+      await layers.dispatch(
+        tag('lyprop', {
+          id: '2.a',
+          shader: 'warp',
+          shaderconstant: 'angle,inter,size',
+          angle: '0',
+          inter: '0',
+          size: '0',
+        }),
+      );
+      await layers.dispatch(tag('lyprop', {id: '2', intermediate_render: '1', clip: '0,0,2,1'}));
+      layers.commit();
+      const custom = () =>
+        graphics
+          .drawCommitted(layers.scene)
+          .commands.find((c) => c.kind === 'triangles' && c.parameters);
+      const add = custom();
+      const replace = {source: 'one', destination: 'zero', operation: 'add'};
+      assert.deepEqual(
+        add.blendState.color,
+        hash === dx9 ? {source: 'source-alpha', destination: 'one', operation: 'add'} : replace,
+      );
+      assert.deepEqual(add.blendState.alpha, add.blendState.color);
+      assert.equal(add.discardTransparent, false);
+      assert.equal(add.additionalTextures[0].filter, hash === dx9 ? 'nearest' : 'linear');
+      await layers.dispatch(tag('lyprop', {id: '1', layermode: 'screen'}));
+      await layers.dispatch(tag('lyprop', {id: '2.a', shaderconstant: 'angle', angle: '1'}));
+      layers.commit();
+      const screen = custom();
+      assert.deepEqual(
+        screen.blendState.color,
+        hash === dx9
+          ? {source: 'inverse-destination-color', destination: 'one', operation: 'add'}
+          : replace,
+      );
+      // The group's final ordinary draw sets normal factors; they survive to the next render.
+      await layers.dispatch(tag('lydel', {id: '1'}));
+      await layers.dispatch(tag('lyprop', {id: '2.a', shaderconstant: 'angle', angle: '2'}));
+      layers.commit();
+      const next = custom();
+      assert.deepEqual(
+        next.blendState.color,
+        hash === dx9
+          ? {source: 'source-alpha', destination: 'inverse-source-alpha', operation: 'add'}
+          : replace,
+      );
+    } finally {
+      layers.close();
+      shader.dispose();
+    }
+  }
+});
 test('Artemis rule transitions upload the gray rule as equal RGBA channels once per revision', async () => {
   const {ArtemisImageGraphics} = await import('../dist/engines/artemis/image-graphics.js');
   const {ArtemisScene} = await import('../dist/engines/artemis/scene.js');

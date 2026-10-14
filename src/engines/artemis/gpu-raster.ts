@@ -39,7 +39,7 @@ export function createArtemisOrdinaryGpuRaster(
   executableSha256: string,
   trig?: ArtemisFloatTrig,
 ): ArtemisRasterPolicy {
-  artemisRevision(executableSha256);
+  const dx9 = artemisRevision(executableSha256).graphicsApi === 'd3d9';
   const effects: NonNullable<ArtemisRasterPolicy['effects']> = (mode, effects) => {
     const alpha: BlendState['alpha'] = {
       source: 'source-alpha',
@@ -120,10 +120,37 @@ export function createArtemisOrdinaryGpuRaster(
       alpha: {source: 'source-alpha', destination: 'one', operation: 'add'},
     },
     discardTransparent: false,
-    clearColor: [0, 0, 0, 0],
+    clearColor: dx9 ? [0, 0, 0, 1] : [0, 0, 0, 0],
     trig,
     layerMode,
     effects,
     captured,
   };
+}
+
+/** 2898 CGpuLayer5cf080 updates SRCBLEND/DESTBLEND only on an ordinary target.
+ * Separate alpha blending stays disabled. Captured custom passes inherit these
+ * device factors; builtin captured passes disable blending themselves. */
+export function artemisDx9DeviceBlend(mode?: ArtemisLayerMode): BlendState {
+  let channel: BlendState['color'];
+  switch (mode) {
+    case undefined:
+      channel = {source: 'one', destination: 'zero', operation: 'add'};
+      break;
+    case 'normal':
+      channel = {source: 'source-alpha', destination: 'inverse-source-alpha', operation: 'add'};
+      break;
+    case 'add':
+      channel = {source: 'source-alpha', destination: 'one', operation: 'add'};
+      break;
+    case 'screen':
+      channel = {source: 'inverse-destination-color', destination: 'one', operation: 'add'};
+      break;
+    case 'multiply':
+      channel = {source: 'zero', destination: 'source-color', operation: 'add'};
+      break;
+    default:
+      throw Error('Unsupported Artemis DX9 layer mode');
+  }
+  return {color: channel, alpha: {...channel}};
 }
