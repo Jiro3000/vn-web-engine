@@ -5876,6 +5876,87 @@ test('Default event handlers use a fresh local scope and filtered priority tag, 
   lua.close();
 });
 
+test('PCM EOF waits for script and frame resource loads before entering its scoped handler', async () => {
+  const {openArtemisRuntimeFixture} = await import('./artemis-runtime-fixture.mjs');
+  const revisions = await import('../dist/engines/artemis/revision.js');
+  const {encodeWav} = await import('../dist/audio/pcm.js');
+  const hashes = Object.entries(revisions)
+    .filter(([name]) => /^ARTEMIS_.*(?:EXECUTABLE|RESOURCE_VARIANT)_SHA256$/.test(name))
+    .map(([, hash]) => hash);
+  const pcm = encodeWav({sampleRate: 48000, sampleCount: 48, channels: [new Float32Array(48)]});
+  const input = {sample: {down: new Set(), wheel: [], pointerInside: true, foreground: true}};
+  for (const hash of hashes) {
+    for (const phase of ['script', 'frame']) {
+      let release,
+        requested = 0;
+      const resource = new Promise((resolve) => (release = resolve));
+      const fixture = await openArtemisRuntimeFixture(
+        {
+          'one.wav': pcm,
+          'system/first.iet': `[seplay id="voice" file="one.wav" buffer="-1"]
+            [setonsoundfinish id="voice" handler="calllua" function="finished"]
+            ${phase === 'script' ? '[calllua function="loadcache"]' : ''}[stop]
+            [lua]
+              function finished(e)
+                assert(cacheCompleted)
+                e:tag{'var', name='f.finished', data='1'}
+              end
+              function loadcache(e)
+                e:setEventHandler{onEnterFrame=''}
+                e:restoreFontCache('cache/')
+                cacheCompleted = true
+              end
+              ${phase === 'frame' ? "engine:setEventHandler{onEnterFrame='loadcache'}" : ''}
+            [/lua]`,
+        },
+        {
+          hash,
+          glyphsOverrides: {
+            restoreFontCache: () => (++requested, resource),
+          },
+        },
+      );
+      try {
+        const {runtime, sound, effects} = fixture;
+        await runtime.boot();
+        await runtime.settleResource(); // Actual PCM preparation, then registration/load.
+        if (phase === 'frame') runtime.frame(1, input);
+        assert.equal(requested, 1);
+        assert.equal(runtime.resourcePending, true);
+        runtime.advanceTo(10); // Resource still pending.
+        assert.equal(sound.summary().renderedFrames, 0);
+        const settled = runtime.settleResource();
+        assert.equal(runtime.resourcePending, false);
+        runtime.advanceTo(20); // Promise taken by the owner, still awaiting it.
+        assert.equal(sound.summary().renderedFrames, 0);
+        assert.equal(runtime.lua.vm.getGlobal('cacheCompleted'), null);
+        release();
+        await settled;
+        assert.equal(runtime.lua.vm.getGlobal('cacheCompleted'), true);
+        runtime.frame(30, input);
+        runtime.frame(31, input); // Offline rendering exposes EOF to the next manager poll.
+        assert.ok(sound.summary().renderedFrames > 0);
+        assert.equal(
+          luaText(runtime.variables.read('f.finished')),
+          '1',
+          JSON.stringify({hash, phase, effects, state: runtime.script.state}),
+        );
+        assert.equal(runtime.script.callDepth, 0);
+        assert.equal(runtime.script.state, 'waiting');
+        assert.equal(runtime.script.currentFile, 'system/first.iet');
+        assert.equal(effects.filter((event) => event.soundFinishCommand).length, 1);
+        assert.deepEqual(
+          effects.filter((event) => event.eventError || event.enterFrameError),
+          [],
+        );
+      } finally {
+        release();
+        await fixture.close();
+      }
+    }
+  }
+});
+
 test('Actual PCM EOF flows through captured sound-finish event into a filtered scoped script handler', async () => {
   const {createArtemisOfflineSoundVoices} =
     await import('../dist/engines/artemis/offline-sound-voices.js');

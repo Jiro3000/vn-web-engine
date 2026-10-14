@@ -1500,12 +1500,15 @@ export class ArtemisRuntime {
     const held = this.heldCall;
     if (held) {
       this.heldCall = null;
+      this.resourceInFlight = true;
       try {
         await operation;
       } catch (error) {
         held.task.close();
         this.frameSteps = [];
         throw error;
+      } finally {
+        this.resourceInFlight = false;
       }
       let result: LuaThreadResult | undefined;
       this.frameCalls++;
@@ -1562,9 +1565,12 @@ export class ArtemisRuntime {
     script.run(1000);
     return 'resumed';
   }
-  /** Moves the frame clock to `now` and advances sound voices and layer tweens. */
+  /** Moves the wall clock to `now`. Native resource loads block the frame, including
+   * the sound-manager updates (2898 535c30 before onEnterFrame). A browser load yields
+   * instead: retain the new timestamp, but poll voices/tweens only after it returns. */
   advanceTo(now: number): void {
     this.now = now;
+    if (this.pendingResource || this.resourceInFlight || this.heldCall) return;
     this.services.sound.advanceToTick(now);
     this.layers.tickTweens(now);
   }
@@ -1578,8 +1584,9 @@ export class ArtemisRuntime {
    * and 3 deliver the push handlers (slot 0 on decide, slot 1 on
    * push), and a delivered handler ends the frame; the wait (run modes 1, 3 and 4) checks
    * the role 0 decision in run mode 1, its deadline or display completion; then a ready
-   * script runs up to `steps` tags. While a resource load holds the script only the input
-   * and clock advance; `settleResource` resumes it. An event filter or `onEnterFrame` whose
+   * script runs up to `steps` tags. While a resource load holds the script the browser
+   * retains the wall clock without polling frame-owned voices/tweens; `settleResource`
+   * resumes it. An event filter or `onEnterFrame` whose
    * tag loads a resource holds the frame instead (native loads inside the call):
    * `settleResource` finishes the call and then the rest of the frame. */
   frame(now: number, input: ArtemisFrameInput, steps = 1000): void {

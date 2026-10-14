@@ -16,7 +16,12 @@ const encode = (text) => new TextEncoder().encode(text);
  * the runtime and the fixture workers. */
 export async function openArtemisRuntimeFixture(
   files,
-  {hash = ARTEMIS_3179_EXECUTABLE_SHA256, services = {}, savedFiles = {}} = {},
+  {
+    hash = ARTEMIS_3179_EXECUTABLE_SHA256,
+    services = {},
+    savedFiles = {},
+    glyphsOverrides = {},
+  } = {},
 ) {
   const entries = new Map(
     Object.entries({
@@ -46,7 +51,7 @@ export async function openArtemisRuntimeFixture(
     },
     randomSeed: 0,
     createLayers: (host) => createMetadataLayerFixture(hash, read, host, true),
-    glyphs,
+    glyphs: {...glyphs, ...glyphsOverrides},
     surfaces: surfaces.manager,
     sound,
     moviePlayer: {playing: false, play: async () => false, close() {}},

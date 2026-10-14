@@ -16,6 +16,16 @@ every Rev.3139 address and field below.
 
 ## Rev.2898 (PE32)
 
+Frame `0x535c30` updates the window and input owners through their own vtables,
+clears the two event latches, polls the two sound managers, then calls
+`onEnterFrame`. Its modes 1/3 deliver push handlers before the wait; mode 4
+branches directly to the wait. Resource loads inside these operations are
+blocking. The browser runtime therefore retains wall timestamps during async
+resource work without polling frame-owned voices/tweens, including a held frame
+callback whose resource promise is already being awaited. This scheduling rule
+is shared with the older synchronous native frames, rather than selected as a
+2898 behavior difference.
+
 Executable `d20ffaa064efa01eeccf4e315de99a419492e5fe7a8e44bc1a0eb22fc719883e`
 is an independent x86 profile (`ARTEMIS_2898_EXECUTABLE_SHA256`), image base
 `0x400000`, entry `0x6821ec`, PE timestamp `0x610e8906`. It is not a resource

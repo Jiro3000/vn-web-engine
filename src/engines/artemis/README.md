@@ -289,8 +289,12 @@ Delivering pointer events one frame late keeps the native order of a button pres
 push handler of the press is queued first and ends its frame, and the layer click's
 handler scope, raised next frame, runs above it. A press sampled in the frame whose window
 update raises a rollover is not pushed: the rollover handler scope is in run mode 0 until it
-returns, so the layer click alone follows. While a resource holds the script only
-the input and clock advance. `acceptsInput` reports run modes 1 and 3. `advanceTo`,
+returns, so the layer click alone follows. While a resource holds the script or a
+frame call, `advanceTo` retains the wall timestamp without polling voices or tweens.
+Native resource loading blocks the frame: polling sound EOF during the browser's
+yield could otherwise enter a handler scope above a suspended Lua caller. The next
+frame polls the real voice state after the load returns; callbacks are not discarded
+or replaced with timers. `acceptsInput` reports run modes 1 and 3. `advanceTo`,
 `layerEvent` and `keyPush` are the individual steps, and `save`/`load` with
 `scenarioArchive()` and `flushSaves()` serve save tooling. `runMode` is the current caret's
 native mode (0 script, 1 click wait, 2 transition, 3 stop, 4 wait, 7 video, 13 load,
