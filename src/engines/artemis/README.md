@@ -1565,6 +1565,21 @@ Coverage is copied, painted pixels are transferred and close rejects pending job
 Native atlas allocation is replaced by independent images; packed-bit/RGBA font
 sources and oversized/negative edge cases remain explicitly unsupported.
 
+The exact Rev.2898 profile returns a clipped cell instead of separate bearings and
+advance. Its FreeType bitmap is placed at nonnegative bearings in an advance-wide,
+byte-size-high cell, enlarged for bitmap overflow. Normal/ruby layout advances by
+the painted clip width. Other exact profiles preserve their bearing/advance result.
+Lua `restoreFontCache(path)` holds its calling coroutine while the glyph owner reads
+numbered PNG atlases from zero through the first missing file, then `index.dat`.
+The 2898 index restores painted cells by face, size, shadow, outline, colors and
+packed style/UTF-16 character. Atlas images are decoded once and shared by entries;
+individual crops enter the bounded glyph cache only when used. A later restore
+replaces matching entries, while existing insertion blocks keep their storage.
+Scenario reset retains this process cache; player disposal releases it. Reports
+include retained atlas bytes, entry count and hits. Other revisions' restore formats,
+gray atlases, non-UTF-8 faces and fractional clips remain unsupported and fail
+explicitly; missing index files leave the cache unchanged. PNG decode errors propagate.
+
 A generated rectangle font verifies FreeType worker → native glyph paint worker →
 GPU output in the browser.
 

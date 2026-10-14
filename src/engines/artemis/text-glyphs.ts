@@ -15,6 +15,7 @@ import {
 } from './text-block.js';
 import type {ArtemisFontFace} from './font-state.js';
 import {artemisRevision} from './revision.js';
+import {ArtemisRestoredFontCache, artemisClippedCellGlyph} from './font-cache.js';
 
 export interface ArtemisTextGlyphStyle extends ArtemisTextBlockStyle {
   readonly face: ArtemisFontFace;
@@ -55,6 +56,11 @@ const emptyGlyph = (codePoint: number): ArtemisTextGlyphResource =>
     surface: Object.freeze({image: null, left: 0, top: 0, advance: 0}),
   });
 const glyphWindow = 16;
+const nativeFontStyle = (provider: number, current: number) =>
+  (provider & 8 ? 1 : 0) |
+  (provider & 16 ? 2 : 0) |
+  (current & 32 ? 8 : 0) |
+  (current & 64 ? 16 : 0);
 interface Cached {
   promise: Promise<ArtemisTextGlyphResource>;
   bytes: number;
@@ -68,12 +74,56 @@ export class ArtemisTextGlyphs {
   private readonly glyphs = new Map<string, Cached>();
   private cachedBytes = 0;
   private closed = false;
+  private readonly restored: ArtemisRestoredFontCache | undefined;
   constructor(
     private readonly hash: string,
     private readonly fontOwner: ArtemisFileFonts,
     private readonly painter: ArtemisGlyphPainter,
   ) {
-    artemisRevision(hash);
+    if (artemisRevision(hash).glyphGeometry === 'clipped-cell')
+      this.restored = new ArtemisRestoredFontCache(hash, (path) =>
+        fontOwner.readCacheResource(path),
+      );
+  }
+  async restoreFontCache(path: string): Promise<void> {
+    this.assertOpen();
+    if (!this.restored) throw Error('Unsupported Artemis font cache layout');
+    await this.restored.restore(path);
+    // Restored entries replace generated entries with the same native key only.
+    for (const [name, entry] of this.glyphs) {
+      const [
+        ,
+        face,
+        size,
+        providerStyle,
+        style,
+        shadow,
+        outline,
+        color,
+        shadowColor,
+        outlineColor,
+        codePoint,
+      ] = JSON.parse(name);
+      if (
+        this.restored.has({
+          face,
+          size,
+          shadow,
+          outline,
+          color,
+          shadowColor,
+          outlineColor,
+          codePoint,
+          style: nativeFontStyle(providerStyle, style),
+        })
+      ) {
+        this.glyphs.delete(name);
+        this.cachedBytes -= entry.bytes;
+      }
+    }
+  }
+  restoredFontCacheStatistics(): {entries: number; atlasBytes: number; hits: number} | null {
+    return this.restored?.statistics() ?? null;
   }
   async load(
     mainText: string,
@@ -199,9 +249,31 @@ export class ArtemisTextGlyphs {
           const entry: Cached = {
             bytes: 0,
             promise: Promise.resolve().then(async () => {
-              const glyph = await font.glyph(codePoint);
+              const nativeStyle = nativeFontStyle(provider.styleBits, snapshot.styleBits);
+              const restored = this.restored?.get({
+                face: provider.path,
+                size: provider.size,
+                shadow,
+                outline,
+                color: snapshot.color,
+                shadowColor: snapshot.shadowcolor,
+                outlineColor: snapshot.outlinecolor,
+                style: nativeStyle,
+                codePoint,
+              });
+              if (restored) {
+                entry.bytes = restored.image?.pixels.byteLength ?? 0;
+                if (this.glyphs.get(key) === entry) {
+                  this.cachedBytes += entry.bytes;
+                  this.trim();
+                }
+                return Object.freeze({codePoint, surface: restored});
+              }
+              let glyph = await font.glyph(this.restored ? codePoint & 65535 : codePoint);
               this.assertOpen();
               if (!glyph) return emptyGlyph(codePoint);
+              if (this.restored && provider.kind === 'file')
+                glyph = artemisClippedCellGlyph(glyph, font.metrics.size);
               const surface = await this.painter.paint(glyph, {
                 shadow,
                 outline,
@@ -213,12 +285,15 @@ export class ArtemisTextGlyphs {
                 decorationMetrics: font.metrics,
               });
               this.assertOpen();
+              const result = this.restored
+                ? {...surface, left: 0, top: 0, advance: surface.image?.width ?? surface.advance}
+                : surface;
               entry.bytes = surface.image?.pixels.byteLength ?? 0;
               if (this.glyphs.get(key) === entry) {
                 this.cachedBytes += entry.bytes;
                 this.trim();
               }
-              return Object.freeze({codePoint, surface});
+              return Object.freeze({codePoint, surface: result});
             }),
           };
           entry.promise.catch(() => {
@@ -265,6 +340,7 @@ export class ArtemisTextGlyphs {
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    this.restored?.close();
     this.glyphs.clear();
     this.cachedBytes = 0;
     const fonts = [...this.fonts.values()];

@@ -52,6 +52,26 @@ It does not draw a new scene (`screenshot = presented`). Sound loaders
 size, caches that byte and requests CELL size `uint(size) << 6`; this profile
 retains the legacy 8-bit provider policy. Rev.3257 keeps all 32 bits.
 
+`glyphGeometry = clipped-cell` selects the Rev.2898 result ABI. FreeType glyph
+provider `0x5d75c0` returns a cell width from `advance.x >> 6`, height from the
+byte size, nonnegative bitmap bearings and expanded cell dimensions for overflow.
+Renderer `0x5d3e50` pads this cell for shadow/outline and returns `CClippedSurface`.
+Character constructor `0x5bba50` installs its clip and reads the layer width for
+normal/ruby advance, adding the respective kerning. The newer `CCharSurface`
+bearing/advance ABI remains selected for all four x64 identities.
+
+Lua restore wrapper `0x5a6e90` validates a string, constructs a pack-file owner
+through `0x56d430` and invokes `0x4a6280`. That operation loads numbered PNGs
+until the first open failure, then reads `index.dat`: u32 count followed by a
+length-prefixed face and seven u32 key fields (size, shadow, outline, foreground,
+shadow and outline colors, packed style/character), atlas index and four f32
+inclusive clip edges. The key's last field is `(style << 16) | (character & 65535)`;
+renderer `0x5d3d20` supplies bold/italic bits 0/1, and decoration bits are 3/4.
+`0x4a4bf0` constructs the shared clipped surface; `0x4a8cd0` replaces its global
+cache entry. The declared record count controls parsing, without an EOF check.
+This restore format is implemented only for the independently confirmed 2898
+profile; an unsupported format remains an error, rather than a successful no-op.
+
 Scenario loader `0x5b3240` pushes mode 13 at `0x5b4bb4` before history replay.
 Mode entry `0x53b8b0` refuses changes while the current mode is 13. Exit
 `0x53dd40` enters 14; the root-return wrapper `0x53dd20` uses the same exit.

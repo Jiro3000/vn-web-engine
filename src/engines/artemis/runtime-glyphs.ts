@@ -10,6 +10,7 @@ import type {ArtemisMessageResource, ArtemisRuntimeGlyphs} from './runtime.js';
 
 /** Actual glyph blocks: font faces, rasterized and painted glyph surfaces. */
 export interface ArtemisGlyphBlockSource {
+  restoreFontCache?(path: string): Promise<void>;
   load(
     main: string,
     ruby: string,
@@ -31,6 +32,10 @@ export class ArtemisRuntimeGlyphOwner implements ArtemisRuntimeGlyphs {
       block: ArtemisTextBlock<ArtemisTextGlyphResource>,
     ) => void,
   ) {}
+  restoreFontCache(path: string): Promise<void> {
+    if (!this.blocks.restoreFontCache) throw Error('Artemis font cache owner unavailable');
+    return this.blocks.restoreFontCache(path);
+  }
   private style(resource: ArtemisMessageResource): ArtemisInsertionStyle {
     return {
       ...artemisDefaultFontAttributes(this.hash),

@@ -1087,6 +1087,43 @@ test('Runtime boot publishes touch registration independently of live contacts f
   }
 });
 
+test('Game Lua restores real PNG font cache through a suspended runtime call and resumes without a return value', async () => {
+  const {openArtemisRuntimeFixture} = await import('./artemis-runtime-fixture.mjs');
+  const {fontCacheFixture} = await import('./artemis-font-cache-fixtures.mjs');
+  const {ARTEMIS_2898_EXECUTABLE_SHA256: hash} =
+    await import('../dist/engines/artemis/revision.js');
+  const errors = [];
+  const fixture = await openArtemisRuntimeFixture(
+    {
+      ...fontCacheFixture(),
+      'system/first.iet': `[calllua function="bootcache"][stop]
+    [lua]
+      function bootcache(e)
+        cacheResult = e:restoreFontCache('cache/')
+        cacheCompleted = true
+        e:restoreFontCache(false)
+      end
+    [/lua]`,
+    },
+    {hash, services: {reportError: (message) => errors.push(message)}},
+  );
+  try {
+    await fixture.runtime.boot();
+    assert.equal(fixture.runtime.lua.vm.getGlobal('cacheCompleted'), null);
+    assert.equal(fixture.runtime.resourcePending, true);
+    await fixture.runtime.settleResource();
+    fixture.runtime.script.run(100);
+    assert.equal(fixture.runtime.lua.vm.getGlobal('cacheCompleted'), true);
+    assert.equal(fixture.runtime.lua.vm.getGlobal('cacheResult'), null);
+    assert.equal(fixture.runtime.resourcePending, false);
+    assert.equal(errors.length, 1);
+    assert.equal(Buffer.from(errors[0]).subarray(0, 16).toString(), 'restoreFontCache');
+    assert.equal(fixture.runtime.script.state, 'waiting');
+  } finally {
+    await fixture.close();
+  }
+});
+
 test('Windows version initialization preserves failed platform queries as native zero values', async () => {
   const {ArtemisVariables} = await import('../dist/engines/artemis/variables.js');
   const {initializeArtemisWindowsVersion} = await import('../dist/engines/artemis/revision.js');

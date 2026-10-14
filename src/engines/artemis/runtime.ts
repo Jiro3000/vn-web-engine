@@ -193,6 +193,7 @@ export interface ArtemisRuntimeLayerHost {
 }
 /** Text glyph owner: one text insertion per message resource. */
 export interface ArtemisRuntimeGlyphs {
+  restoreFontCache?(path: string): Promise<void>;
   get(resource: ArtemisMessageResource): ArtemisTextInsertion;
   copy(old: ArtemisMessageResource, resource: ArtemisMessageResource): void;
   release(resource: ArtemisMessageResource): void;
@@ -1116,6 +1117,14 @@ export class ArtemisRuntime {
     const random = new ArtemisRandom(hash, services.randomSeed);
     const surfaces = services.surfaces;
     lua = this.lua = new ArtemisLua({
+      ...(services.glyphs.restoreFontCache
+        ? {
+            restoreFontCache: (path: string) => {
+              suspend(services.glyphs.restoreFontCache!(path));
+              return 'suspended' as const;
+            },
+          }
+        : {}),
       bindSurface: (name) => {
         // Foreground load; the returned lease is released at once (native 0x140134180).
         suspend(surfaces.load(name).then((image) => image?.lease?.release()));

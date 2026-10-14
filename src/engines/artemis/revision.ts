@@ -44,6 +44,8 @@ export interface ArtemisRevision {
   readonly indentModify: boolean;
   /** Provider size argument: older callers narrow to uint8; Rev.3257 passes all 32 bits. */
   readonly fontSizeBits: 8 | 32;
+  /** Glyph result ABI: 2898 returns a clipped cell; newer revisions preserve bearings/advance. */
+  readonly glyphGeometry: 'clipped-cell' | 'bearing-advance';
   /** Temporary scenario replay hold and application exit; Rev.3257 inserted a mode. */
   readonly loadRunMode: 13 | 14;
   readonly exitRunMode: 14 | 15;
@@ -65,6 +67,7 @@ const rev3139 = {
   soundLoaderRewinds: false,
   indentModify: false,
   fontSizeBits: 8 as const,
+  glyphGeometry: 'bearing-advance' as const,
   loadRunMode: 13 as const,
   exitRunMode: 14 as const,
 };
@@ -91,6 +94,7 @@ const revisions: ReadonlyMap<string, ArtemisRevision> = new Map(
       soundLoaderRewinds: false,
       indentModify: false,
       fontSizeBits: 8 as const,
+      glyphGeometry: 'clipped-cell' as const,
       // 0x5b4bb4 pushes 13 before replay; 0x53dd40 enters 14 for exit.
       loadRunMode: 13 as const,
       exitRunMode: 14 as const,
@@ -98,6 +102,7 @@ const revisions: ReadonlyMap<string, ArtemisRevision> = new Map(
     {
       executableSha256: ARTEMIS_3179_EXECUTABLE_SHA256,
       engineVersion: 3179,
+      glyphGeometry: 'bearing-advance' as const,
       indentModify: false,
       fontSizeBits: 8 as const,
       loadRunMode: 13 as const,
@@ -119,6 +124,7 @@ const revisions: ReadonlyMap<string, ArtemisRevision> = new Map(
     {
       executableSha256: ARTEMIS_3257_EXECUTABLE_SHA256,
       engineVersion: 3257,
+      glyphGeometry: 'bearing-advance' as const,
       indentModify: true,
       fontSizeBits: 32 as const,
       loadRunMode: 14 as const,

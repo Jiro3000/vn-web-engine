@@ -58,6 +58,7 @@ export function createArtemisGlyphLayoutFixture(hash, readFont) {
       });
   });
   return {
+    restoreFontCache: (path) => glyphs.restoreFontCache(path),
     get: (resource) => owner.get(resource),
     copy: (old, resource) => owner.copy(old, resource),
     release: (resource) => owner.release(resource),
@@ -66,6 +67,7 @@ export function createArtemisGlyphLayoutFixture(hash, readFont) {
       sceneRendering: false,
       gameVisualAssetsDisplayed: false,
       rasterJobs,
+      restoredFontCache: glyphs.restoredFontCacheStatistics(),
       openedFonts,
       samples,
       layers: owner.entries().map(([resource, insertion]) => ({

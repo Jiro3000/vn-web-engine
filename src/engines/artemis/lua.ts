@@ -79,6 +79,7 @@ export interface ArtemisLuaHost {
   frameNumber?(): number;
   /** The touch device: `getTouchCount` (virtual +0x18) and `setUseTouchHold` (+0x30). */
   touch?: {count(): number; setHold(enabled: boolean): void};
+  restoreFontCache?(path: string): void | 'suspended';
 }
 // 0x140375c08, 0x140375b78 and 0x140375ba8 (Shift-JIS).
 const sjis = (hex: string) =>
@@ -302,6 +303,15 @@ export class ArtemisLua {
         return [];
       });
     }
+    if (host.restoreFontCache && host.reportError) {
+      this.vm.bind('restoreFontCache', (args) => {
+        if (!(args[0] instanceof Uint8Array)) {
+          host.reportError!(argumentError('restoreFontCache'));
+          return [false];
+        }
+        return [host.restoreFontCache!(luaText(args[0])) === 'suspended'];
+      });
+    }
     if (host.scriptStatus && host.setScriptStatus && host.reportError) {
       this.vm.bind('getScriptStatus', () => [host.scriptStatus!()]);
       const error = argumentError('setScriptStatus');
@@ -429,6 +439,17 @@ export class ArtemisLua {
           ? `local nativeBindSurface = engine.bindSurface
         engine.bindSurface = function(self, name)
           if nativeBindSurface(self, name) then
+            local ok, message = coroutine.yield()
+            if ok == false then resourceFailure(self, message) end
+          end
+        end`
+          : ''
+      }
+      ${
+        host.restoreFontCache
+          ? `local nativeRestoreFontCache = engine.restoreFontCache
+        engine.restoreFontCache = function(self, path)
+          if nativeRestoreFontCache(self, path) then
             local ok, message = coroutine.yield()
             if ok == false then resourceFailure(self, message) end
           end

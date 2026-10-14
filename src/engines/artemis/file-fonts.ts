@@ -118,6 +118,10 @@ export class ArtemisFileFonts {
     if (this.closed) throw Error('Artemis file fonts closed');
     return this.host.hasSystemFontFamily(name);
   }
+  readCacheResource(path: string): Promise<Uint8Array | null> {
+    if (this.closed) throw Error('Artemis file fonts closed');
+    return this.host.readFontFile(path);
+  }
   private async open(path: string): Promise<ArtemisFileFontFace> {
     const bytes = await this.host.readFontFile(path);
     if (!bytes) throw new ArtemisMissingFontFile(path);
