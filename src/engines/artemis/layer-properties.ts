@@ -94,6 +94,7 @@ function decimal(value: string): number {
 /** Ordinary image geometry subset of 0x140115650 and wrapper alpha in 0x1400d76d0. */
 export function artemisLayerProperties(
   args: ReadonlyMap<string, string>,
+  executableSha256?: string,
 ): ArtemisLayerPropertyPatch {
   const named = new Set<string>();
   for (const key of ['shaderconstant', 'shadertexture'])
@@ -103,8 +104,10 @@ export function artemisLayerProperties(
     if (!supported.has(key) && !named.has(key))
       throw new Error(`Unsupported Artemis layer property ${key}`);
   const patch: ArtemisLayerPropertyPatch = {};
-  if (['shader', 'shaderconstant', 'shadertexture'].some((key) => args.has(key)))
-    patch.customShader = artemisShaderProperties(args);
+  if (['shader', 'shaderconstant', 'shadertexture'].some((key) => args.has(key))) {
+    const shader = artemisShaderProperties(args, executableSha256);
+    if (Object.keys(shader).length) patch.customShader = shader;
+  }
   if (args.has('intermediate_render')) {
     const value = args.get('intermediate_render');
     patch.intermediateRender = {

@@ -256,7 +256,7 @@ export class ArtemisLayers<T extends object, I extends ArtemisImageDimensions = 
         this.host.layerNotFound(tag);
         return true;
       }
-      const properties = artemisLayerProperties(tag.args);
+      const properties = artemisLayerProperties(tag.args, this.hash);
       const shader = properties.customShader;
       if (shader && (!this.host.applyShaderProperties || !this.host.supportsShaderProperties?.()))
         throw Error('Unsupported Artemis shader property owner');
@@ -451,7 +451,11 @@ export class ArtemisLayers<T extends object, I extends ArtemisImageDimensions = 
       }
       try {
         const properties = new Map([...args].filter(([key]) => !animationKeys.has(key)));
-        host.applyImageProperties(args.get('id') ?? '', frame, artemisLayerProperties(properties));
+        host.applyImageProperties(
+          args.get('id') ?? '',
+          frame,
+          artemisLayerProperties(properties, this.hash),
+        );
       } catch (error) {
         host.releaseImageLayer(frame);
         throw error;

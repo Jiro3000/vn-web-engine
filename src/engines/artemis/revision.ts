@@ -26,6 +26,8 @@ export interface ArtemisRevision {
   readonly publishesGraphicsFeatureLevel: boolean;
   /** Proven absent boot fields whose literal queries create native integer zero. */
   readonly absentSystemVariables: readonly string[];
+  /** Native actor-property parser accepts shadertexture paths (absent in Rev.2898). */
+  readonly shaderTextureProperties: boolean;
   /** What `takess` puts into the screenshot surface +0x1c0. 'scene': Rev.3179 0x1400e1cf0
    * renders the committed scene offscreen. 'presented': Rev.3139 0x1400e1cf0 copies the
    * frame presented last (renderer virtual +0x48 reads the swap chain buffer) and records
@@ -54,6 +56,7 @@ const rev3139 = {
   llp64: true,
   publishesGraphicsFeatureLevel: true,
   absentSystemVariables: Object.freeze([] as string[]),
+  shaderTextureProperties: true,
   screenshot: 'presented' as const,
   soundLoaderRewinds: false,
   indentModify: false,
@@ -74,6 +77,8 @@ const revisions: ReadonlyMap<string, ArtemisRevision> = new Map(
       llp64: false,
       publishesGraphicsFeatureLevel: false,
       absentSystemVariables: Object.freeze(['s.llp64', 's.windowsfeaturelevel']),
+      // 0x58cc90 ends after shaderconstant; no texture-path property setter.
+      shaderTextureProperties: false,
       // 0x558900 -> renderer 0x5d0db0 reads the existing GPU buffer. Sound
       // loaders 0x5f8ab0/0x5f89e0 reuse the opened file without a rewind.
       screenshot: 'presented' as const,
@@ -97,6 +102,7 @@ const revisions: ReadonlyMap<string, ArtemisRevision> = new Map(
       llp64: true,
       publishesGraphicsFeatureLevel: true,
       absentSystemVariables: Object.freeze([] as string[]),
+      shaderTextureProperties: true,
       screenshot: 'scene' as const,
       soundLoaderRewinds: true,
     },
@@ -115,6 +121,7 @@ const revisions: ReadonlyMap<string, ArtemisRevision> = new Map(
       llp64: true,
       publishesGraphicsFeatureLevel: true,
       absentSystemVariables: Object.freeze([] as string[]),
+      shaderTextureProperties: true,
       // 0x1400ee300 renders the scene into the screenshot target; 0x140197120/
       // 0x140197010 seek the opened file to 0 before a further sound loader.
       screenshot: 'scene' as const,

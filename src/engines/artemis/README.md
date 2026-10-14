@@ -1946,6 +1946,9 @@ float32 equality and copied state; texture assignments retain complete replaceme
 before releasing old resources, and always invalidate preparation. Native parsing
 of nonfinite/hexadecimal floating literals is outside the finite-decimal subset.
 The resource loader remains mandatory; parsing paths alone does not load textures.
+The exact Rev.2898 profile omits texture-property parsing: its `0x58cc90` reads
+shader names and constants but never queries `shadertexture`. Listed texture paths
+therefore cause no resource loads or shader-owner requirement on that hash.
 
 `draw-shader.ts` adapts all twenty reconstructed programs to the shared DrawList
 shade/atlas/tex/tint/parameters ABI, with explicit required named uniform values and

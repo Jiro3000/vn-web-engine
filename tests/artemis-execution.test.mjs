@@ -5297,6 +5297,78 @@ test('Layer shader properties admit only named coefficient keys and require a re
   await assert.rejects(compiler.compile('bad', new Uint8Array([1])), /Unsupported/);
   assert.equal(prepared, 0);
 });
+test('Exact revision layer dispatch ignores absent texture properties and preserves legacy texture ownership', async () => {
+  const {ArtemisLayers} = await import('../dist/engines/artemis/layers.js');
+  const revision = await import('../dist/engines/artemis/revision.js');
+  const hashes = [
+    revision.ARTEMIS_2898_EXECUTABLE_SHA256,
+    revision.ARTEMIS_3179_EXECUTABLE_SHA256,
+    revision.ARTEMIS_3139_EXECUTABLE_SHA256,
+    revision.ARTEMIS_3139_RESOURCE_VARIANT_SHA256,
+    revision.ARTEMIS_3257_EXECUTABLE_SHA256,
+  ];
+  const tag = (name, args) => ({name, args: new Map(Object.entries(args))});
+  for (const hash of hashes) {
+    const absent = hash === revision.ARTEMIS_2898_EXECUTABLE_SHA256;
+    const reads = [],
+      patches = [];
+    let acquired = 0,
+      released = 0;
+    const host = {
+      creationMode: () => 0,
+      createImageLayer: () => ({}),
+      releaseImageLayer: () => {},
+      copyImageLayer: () => ({}),
+      applyImageProperties: () => {},
+      recordLayerProperties: () => {},
+      layerNotFound: () => assert.fail('missing layer'),
+      clearLayerCommands: () => {},
+      resetLayerCommands: () => {},
+      imageLoadFailed: () => assert.fail('failed image'),
+      supportsShaderProperties: () => true,
+      createShaderTexture: () => {
+        acquired++;
+        return {resource: {}, release: () => released++};
+      },
+      applyShaderProperties: (_actor, patch, textures) => patches.push({patch, textures}),
+    };
+    const layers = new ArtemisLayers(
+      hash,
+      {
+        load: async (path) => {
+          reads.push(path);
+          return {path, image: {width: 1, height: 1, pixels: new Uint8Array(4)}, surfaceFormat: 1};
+        },
+      },
+      host,
+    );
+    await layers.dispatch(tag('lyc', {id: '1', file: 'fore'}));
+    layers.commit();
+    // The absent property alone has no shader-owner dependency.
+    if (absent) host.supportsShaderProperties = () => false;
+    await layers.dispatch(tag('lyprop', {id: '1', shadertexture: 'user', user: 'user-image'}));
+    assert.deepEqual(reads, absent ? ['fore'] : ['fore', 'user-image']);
+    assert.equal(acquired, absent ? 0 : 1);
+    assert.equal(released, acquired);
+    assert.equal(patches.length, absent ? 0 : 1);
+    host.supportsShaderProperties = () => true;
+    await layers.dispatch(
+      tag('lyprop', {
+        id: '1',
+        shader: 'raster',
+        shaderconstant: 'size',
+        size: '.25',
+        shadertexture: 'user',
+        user: 'user-image',
+      }),
+    );
+    const last = patches.at(-1).patch;
+    assert.equal(last.shader, 'raster');
+    assert.deepEqual(last.constants, [{name: 'size', values: [0.25]}]);
+    assert.deepEqual(last.textures, absent ? undefined : [{name: 'user', path: 'user-image'}]);
+    layers.close();
+  }
+});
 test('Cancelled shader texture loading releases real resources before creating a GPU lease or editing the layer', async () => {
   const {ArtemisLayers} = await import('../dist/engines/artemis/layers.js');
   const hash = '8953562b80608046662bd8c89015d04236b0ba3afee10c36469c11403de3ebaf';

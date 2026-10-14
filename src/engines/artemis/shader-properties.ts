@@ -24,7 +24,10 @@ function fields(value: string): string[] {
  */
 export function artemisShaderProperties(
   args: ReadonlyMap<string, string>,
+  executableSha256?: string,
 ): ArtemisShaderPropertyPatch {
+  const acceptsTextures =
+    executableSha256 === undefined || artemisRevision(executableSha256).shaderTextureProperties;
   const patch: {
     shader?: string;
     constants?: ArtemisShaderConstant[];
@@ -43,7 +46,7 @@ export function artemisShaderProperties(
       patch.constants.push({name, values});
     }
   }
-  if (args.has('shadertexture')) {
+  if (acceptsTextures && args.has('shadertexture')) {
     patch.textures = [];
     for (const name of fields(args.get('shadertexture')!))
       if (args.has(name)) patch.textures.push({name, path: args.get(name)!});

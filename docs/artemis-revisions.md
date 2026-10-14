@@ -45,6 +45,13 @@ Mode entry `0x53b8b0` refuses changes while the current mode is 13. Exit
 `0x53dd40` enters 14; the root-return wrapper `0x53dd20` uses the same exit.
 These are checked native enum values, independent of pointer width.
 
+Actor-property parser `0x58cc90` reads `shader` and `shaderconstant`, then
+returns after the constant-list setter at virtual `+0xac`. Its complete body
+has no texture-path lookup or setter. `shaderTextureProperties = false` leaves
+`shadertexture` and its listed paths unconsumed: no file opens, texture loans or
+shader-owner requirement arise from that property alone. All four supported
+x64 hashes retain their texture-property parser and resource ownership.
+
 ## Rev.3257
 
 Executable `7c604c92b434cbee3620dcf4af8dde40d9313d04cefa794d168b03477135a08a`
