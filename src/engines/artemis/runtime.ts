@@ -482,6 +482,7 @@ export class ArtemisRuntime {
     let messageStage: ArtemisMessageLayers<ArtemisMessageResource>;
     const windowDisplay = () => ({width, height, fullscreen: false});
     const variables = (this.variables = new ArtemisVariables({
+      executableSha256: hash,
       stageSize: () => ({width, height}),
       windowDisplay,
       applicationArguments: {readApplicationArguments: () => new Map()},

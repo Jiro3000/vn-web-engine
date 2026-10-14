@@ -1,5 +1,7 @@
 import type {ArtemisVariables} from './variables.js';
 
+export const ARTEMIS_2898_EXECUTABLE_SHA256 =
+  'd20ffaa064efa01eeccf4e315de99a419492e5fe7a8e44bc1a0eb22fc719883e';
 export const ARTEMIS_3179_EXECUTABLE_SHA256 =
   '8953562b80608046662bd8c89015d04236b0ba3afee10c36469c11403de3ebaf';
 export const ARTEMIS_3139_EXECUTABLE_SHA256 =
@@ -19,6 +21,11 @@ export interface ArtemisRevision {
   readonly buildDate: string;
   readonly minimumSupportVersion: number;
   readonly saveDataVersion: number;
+  /** Native boot publication, independently checked for each exact hash. */
+  readonly llp64: boolean;
+  readonly publishesGraphicsFeatureLevel: boolean;
+  /** Proven absent boot fields whose literal queries create native integer zero. */
+  readonly absentSystemVariables: readonly string[];
   /** What `takess` puts into the screenshot surface +0x1c0. 'scene': Rev.3179 0x1400e1cf0
    * renders the committed scene offscreen. 'presented': Rev.3139 0x1400e1cf0 copies the
    * frame presented last (renderer virtual +0x48 reads the swap chain buffer) and records
@@ -44,6 +51,9 @@ const rev3139 = {
   buildDate: 'Wed Aug 30 19:57:57 2023',
   minimumSupportVersion: 1103,
   saveDataVersion: 1003,
+  llp64: true,
+  publishesGraphicsFeatureLevel: true,
+  absentSystemVariables: Object.freeze([] as string[]),
   screenshot: 'presented' as const,
   soundLoaderRewinds: false,
   indentModify: false,
@@ -54,6 +64,27 @@ const rev3139 = {
 const revisions: ReadonlyMap<string, ArtemisRevision> = new Map(
   [
     {
+      executableSha256: ARTEMIS_2898_EXECUTABLE_SHA256,
+      engineVersion: 2898,
+      buildDate: 'Sat Aug 7 22:21:32 2021',
+      minimumSupportVersion: 1103,
+      saveDataVersion: 1003,
+      // 0x539360 publishes neither field. 0x5ca1a0 creates an integer-zero
+      // expression leaf for an absent name; this is not a boot initializer.
+      llp64: false,
+      publishesGraphicsFeatureLevel: false,
+      absentSystemVariables: Object.freeze(['s.llp64', 's.windowsfeaturelevel']),
+      // 0x558900 -> renderer 0x5d0db0 reads the existing GPU buffer. Sound
+      // loaders 0x5f8ab0/0x5f89e0 reuse the opened file without a rewind.
+      screenshot: 'presented' as const,
+      soundLoaderRewinds: false,
+      indentModify: false,
+      fontSizeBits: 8 as const,
+      // 0x5b4bb4 pushes 13 before replay; 0x53dd40 enters 14 for exit.
+      loadRunMode: 13 as const,
+      exitRunMode: 14 as const,
+    },
+    {
       executableSha256: ARTEMIS_3179_EXECUTABLE_SHA256,
       engineVersion: 3179,
       indentModify: false,
@@ -63,6 +94,9 @@ const revisions: ReadonlyMap<string, ArtemisRevision> = new Map(
       buildDate: 'Thu Dec 21 04:26:04 2023',
       minimumSupportVersion: 1103,
       saveDataVersion: 1003,
+      llp64: true,
+      publishesGraphicsFeatureLevel: true,
+      absentSystemVariables: Object.freeze([] as string[]),
       screenshot: 'scene' as const,
       soundLoaderRewinds: true,
     },
@@ -78,6 +112,9 @@ const revisions: ReadonlyMap<string, ArtemisRevision> = new Map(
       buildDate: 'Thu Apr 17 21:58:09 2025',
       minimumSupportVersion: 1103,
       saveDataVersion: 1003,
+      llp64: true,
+      publishesGraphicsFeatureLevel: true,
+      absentSystemVariables: Object.freeze([] as string[]),
       // 0x1400ee300 renders the scene into the screenshot target; 0x140197120/
       // 0x140197010 seek the opened file to 0 before a further sound loader.
       screenshot: 'scene' as const,
@@ -105,7 +142,7 @@ export function initializeArtemisVariables(
   variables.write('s.builddate', version.buildDate);
   variables.write('s.minimumsupportversion', String(version.minimumSupportVersion));
   variables.write('s.savedataversion', String(version.saveDataVersion));
-  variables.write('s.llp64', '1');
+  if (version.llp64) variables.write('s.llp64', '1');
   for (const key of [
     'automode',
     'commandskip',
@@ -150,7 +187,7 @@ export function initializeArtemisGraphicsFeatureLevel(
   executableSha256: string,
   readFeatureLevel: () => number,
 ): void {
-  artemisRevision(executableSha256);
+  if (!artemisRevision(executableSha256).publishesGraphicsFeatureLevel) return;
   const value = readFeatureLevel();
   if (!Number.isInteger(value) || value < 0 || value > 0x7fffffff)
     throw Error('Invalid Artemis graphics feature level');

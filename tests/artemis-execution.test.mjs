@@ -959,6 +959,82 @@ test('Native boot constants require an exact executable hash and reject other re
   assert.throws(() => variables.read('s.windowsfeaturelevel'), /Unsupported/);
 });
 
+test('Rev.2898 keeps absent boot fields absent until real Lua queries create integer zero', async () => {
+  const {ArtemisVariables} = await import('../dist/engines/artemis/variables.js');
+  const {
+    artemisRevision,
+    initializeArtemisVariables,
+    initializeArtemisGraphicsFeatureLevel,
+    ARTEMIS_2898_EXECUTABLE_SHA256: hash,
+  } = await import('../dist/engines/artemis/revision.js');
+  const variables = new ArtemisVariables({
+    executableSha256: hash,
+    stageSize: () => ({width: 8, height: 8}),
+  });
+  initializeArtemisVariables(variables, hash);
+  assert.deepEqual(
+    ['s.engineversion', 's.builddate', 's.minimumsupportversion', 's.savedataversion'].map((key) =>
+      luaText(variables.read(key)),
+    ),
+    ['2898', 'Sat Aug 7 22:21:32 2021', '1103', '1003'],
+  );
+  assert.equal(variables.lookup('s.llp64'), undefined);
+  assert.equal(variables.lookup('s.windowsfeaturelevel'), undefined);
+  initializeArtemisGraphicsFeatureLevel(variables, hash, () => {
+    throw Error('Absent native graphics query must not call its host');
+  });
+  assert.equal(variables.lookup('s.windowsfeaturelevel'), undefined);
+  const lua = new ArtemisLua({
+    readFile: () => null,
+    variable: (name) => variables.queryLiteral(name),
+  });
+  try {
+    lua.vm.execute(
+      bytes(
+        'function fixture(e) result=e:var("s.llp64") .. ":" .. e:var("s.windowsfeaturelevel") end',
+      ),
+      'fixture',
+    );
+    lua.call('fixture');
+    assert.equal(luaText(lua.vm.getGlobal('result')), '0:0');
+    assert.deepEqual(variables.expressionValue('s.llp64'), {kind: 'integer', value: 0});
+    assert.equal(variables.globalDirty, false);
+    assert.throws(() => variables.queryLiteral('s.unimplemented_device'), /Unsupported/);
+    variables.restore('s.llp64', bytes('7'));
+    initializeArtemisVariables(variables, hash);
+    assert.equal(luaText(variables.read('s.llp64')), '7'); // Native boot neither writes nor deletes it.
+  } finally {
+    lua.close();
+  }
+  assert.equal(Object.isFrozen(artemisRevision(hash).absentSystemVariables), true);
+  assert.throws(() => artemisRevision('d20ffaa0' + '0'.repeat(56)), /Unsupported/);
+});
+
+test('Legacy exact hashes retain their LLP64, graphics and font-size policies beside Rev.2898', async () => {
+  const {ArtemisVariables} = await import('../dist/engines/artemis/variables.js');
+  const revisions = await import('../dist/engines/artemis/revision.js');
+  for (const [hash, sizeBits] of [
+    [revisions.ARTEMIS_3179_EXECUTABLE_SHA256, 8],
+    [revisions.ARTEMIS_3139_EXECUTABLE_SHA256, 8],
+    [revisions.ARTEMIS_3139_RESOURCE_VARIANT_SHA256, 8],
+    [revisions.ARTEMIS_3257_EXECUTABLE_SHA256, 32],
+  ]) {
+    const variables = new ArtemisVariables({
+      executableSha256: hash,
+      stageSize: () => ({width: 8, height: 8}),
+    });
+    revisions.initializeArtemisVariables(variables, hash);
+    assert.equal(luaText(variables.read('s.llp64')), '1');
+    let calls = 0;
+    revisions.initializeArtemisGraphicsFeatureLevel(variables, hash, () => (++calls, 45056));
+    assert.equal(calls, 1);
+    assert.equal(luaText(variables.read('s.windowsfeaturelevel')), '45056');
+    assert.equal(revisions.artemisRevision(hash).fontSizeBits, sizeBits);
+    assert.throws(() => variables.queryLiteral('s.unimplemented_device'), /Unsupported/);
+  }
+  assert.throws(() => new ArtemisVariables({executableSha256: '0'.repeat(64)}), /Unsupported/);
+});
+
 test('Windows version initialization preserves failed platform queries as native zero values', async () => {
   const {ArtemisVariables} = await import('../dist/engines/artemis/variables.js');
   const {initializeArtemisWindowsVersion} = await import('../dist/engines/artemis/revision.js');

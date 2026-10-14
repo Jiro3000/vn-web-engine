@@ -7,6 +7,7 @@ import {artemisLayerInfoFields, type ArtemisLayerInfo} from './layer-info.js';
 import type {ArtemisFontFrameRecord} from './font-state.js';
 import {artemisFontText, artemisTagText} from './message-tags.js';
 import {crc32} from '../../core/crc32.js';
+import {artemisRevision} from './revision.js';
 
 const encoder = new TextEncoder();
 const empty = new Uint8Array();
@@ -30,6 +31,8 @@ function literal(name: string): void {
 }
 
 export interface ArtemisVariableHost {
+  /** Exact revision identity for confirmed absent system fields; omission keeps strict guards. */
+  readonly executableSha256?: string;
   /** Only supplied for revisions with the native nesting query. */
   messageLayerIndentationDepth?(): number;
   /** Logical stage dimensions; supplied by the configuration/rendering owner. */
@@ -178,7 +181,15 @@ const flag = (args: ReadonlyMap<string, string>, key: string) =>
   args.has(key) && args.get(key) !== '0';
 
 export class ArtemisVariables {
-  constructor(private readonly host?: ArtemisVariableHost) {}
+  private readonly absentSystemVariables: ReadonlySet<string>;
+  constructor(private readonly host?: ArtemisVariableHost) {
+    this.absentSystemVariables = new Set(
+      host?.executableSha256 ? artemisRevision(host.executableSha256).absentSystemVariables : [],
+    );
+  }
+  private unsupportedSystem(name: string): boolean {
+    return unsupportedSystem(name) && !this.absentSystemVariables.has(name);
+  }
   private dirty = false;
   get globalDirty(): boolean {
     return this.dirty;
@@ -208,7 +219,7 @@ export class ArtemisVariables {
     literal(name);
     const local = this.locals.at(-1);
     const value = local?.get(name) ?? this.global.get(name);
-    if (!value && unsupportedSystem(name))
+    if (!value && this.unsupportedSystem(name))
       throw new Error(`Unsupported native Artemis variable ${name}`);
     return (value ?? empty).slice();
   }
@@ -216,7 +227,8 @@ export class ArtemisVariables {
   queryLiteral(name: string): Uint8Array {
     literal(name);
     if (!this.locals.at(-1)?.has(name) && !this.global.has(name)) {
-      if (unsupportedSystem(name)) throw new Error(`Unsupported native Artemis variable ${name}`);
+      if (this.unsupportedSystem(name))
+        throw new Error(`Unsupported native Artemis variable ${name}`);
       this.write(name, '0');
       this.integers.add(this.global.get(name)!);
     }

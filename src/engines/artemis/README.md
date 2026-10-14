@@ -109,6 +109,12 @@ that API, or when it is denied, the list is empty.
 `revision.ts` initializes the confirmed static boot variables only after exact
 executable-hash selection. Host Windows-version failure produces native 0.0;
 platform identity/capabilities are never invented.
+The exact Rev.2898 PE32 hash has its own boot record. Its publication omits
+`s.llp64` and `s.windowsfeaturelevel`; a later literal Lua query creates native
+integer zero for these confirmed absent names. Boot does not insert them or
+invoke a graphics-feature query, and preserves values restored from system data.
+Other unsupported system names retain their guards. Its screenshot, sound-loader
+and mode fields are documented with x86 evidence in `docs/artemis-revisions.md`.
 Rev.3257 has an independent hash and boot record; its screenshot and sound-loader
 rewind fields match Rev.3179. Its recompiled native addresses require the mapping in
 `docs/artemis-revisions.md`; Rev.3179 address literals are not its native addresses.

@@ -14,6 +14,37 @@ only `.rsrc` and the header fields that size it (SizeOfInitializedData, SizeOfIm
 CheckSum, the resource directory size and the `.rsrc` section header) differ. It shares
 every Rev.3139 address and field below.
 
+## Rev.2898 (PE32)
+
+Executable `d20ffaa064efa01eeccf4e315de99a419492e5fe7a8e44bc1a0eb22fc719883e`
+is an independent x86 profile (`ARTEMIS_2898_EXECUTABLE_SHA256`), image base
+`0x400000`, entry `0x6821ec`, PE timestamp `0x610e8906`. It is not a resource
+variant of any x64 revision. Runtime acceptance and the complete address map are
+still pending; the profile does not imply that its DX9 shaders are implemented.
+
+Boot publication `0x539360` identifies Rev.2898, build
+`Sat Aug 7 22:21:32 2021`, support 1103 and save version 1003. It publishes
+neither `s.llp64` nor `s.windowsfeaturelevel`. The browser leaves those fields
+absent at boot and does not query the host's feature level. Native Lua `var`
+`0x5a5670` calls expression conversion `0x524e90` and `0x5ca1a0`: a missing
+literal leaf is inserted by the variable interface's integer setter with zero,
+then queried again. The profile permits this lazy creation only for these two
+proven absent fields; unsupported device/system queries retain their guards.
+An existing value restored from system data is left intact by boot publication.
+
+Screenshot tag `0x558900` calls renderer `0x5d0db0`, which copies the existing
+GPU buffer through `GetRenderTargetData` into system memory and copies its rows.
+It does not draw a new scene (`screenshot = presented`). Sound loaders
+`0x5f8ab0`/`0x5f89e0` retry the same opened file without a seek
+(`soundLoaderRewinds = false`). The FreeType provider `0x5d7090` receives a byte
+size, caches that byte and requests CELL size `uint(size) << 6`; this profile
+retains the legacy 8-bit provider policy. Rev.3257 keeps all 32 bits.
+
+Scenario loader `0x5b3240` pushes mode 13 at `0x5b4bb4` before history replay.
+Mode entry `0x53b8b0` refuses changes while the current mode is 13. Exit
+`0x53dd40` enters 14; the root-return wrapper `0x53dd20` uses the same exit.
+These are checked native enum values, independent of pointer width.
+
 ## Rev.3257
 
 Executable `7c604c92b434cbee3620dcf4af8dde40d9313d04cefa794d168b03477135a08a`
