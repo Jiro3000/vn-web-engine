@@ -2,6 +2,10 @@ import type {ArtemisVariables} from './variables.js';
 
 export const ARTEMIS_2898_EXECUTABLE_SHA256 =
   'd20ffaa064efa01eeccf4e315de99a419492e5fe7a8e44bc1a0eb22fc719883e';
+/** Root wrapper containing the statically identified Rev.3083 PE32 engine.
+ * Embedded PE SHA-256: abbaf6524cdaf7ac4c4c5ac50af63a74c6a4f5b22d5a4336f95ab5d85c863a87. */
+export const ARTEMIS_3083_EXECUTABLE_SHA256 =
+  '1249dc214c68e781ad57bf99126986d37892280342961f6dc898eee72f9bba51';
 export const ARTEMIS_3179_EXECUTABLE_SHA256 =
   '8953562b80608046662bd8c89015d04236b0ba3afee10c36469c11403de3ebaf';
 export const ARTEMIS_3139_EXECUTABLE_SHA256 =
@@ -26,6 +30,8 @@ export interface ArtemisRevision {
   readonly publishesGraphicsFeatureLevel: boolean;
   /** Proven absent boot fields whose literal queries create native integer zero. */
   readonly absentSystemVariables: readonly string[];
+  /** Names explicitly deleted by native boot, including any restored value. */
+  readonly bootDeletedSystemVariables?: readonly string[];
   /** Native actor-property parser accepts shadertexture paths (absent in Rev.2898). */
   readonly shaderTextureProperties: boolean;
   readonly shaderConstantBinding: 'named-effect' | 'ordered-buffer';
@@ -109,6 +115,30 @@ const revisions: ReadonlyMap<string, ArtemisRevision> = new Map(
       publishesFullscreenAtExit: false,
     },
     {
+      executableSha256: ARTEMIS_3083_EXECUTABLE_SHA256,
+      engineVersion: 3083,
+      buildDate: 'Thu Oct 6 02:52:54 2022',
+      minimumSupportVersion: 1103,
+      saveDataVersion: 1003,
+      // PE32 DX9 boot 0x552cb0 deletes these names through variable virtual +0x18.
+      llp64: false,
+      publishesGraphicsFeatureLevel: false,
+      absentSystemVariables: Object.freeze(['s.llp64', 's.windowsfeaturelevel']),
+      bootDeletedSystemVariables: Object.freeze(['s.llp64', 's.windowsfeaturelevel']),
+      shaderTextureProperties: true,
+      shaderConstantBinding: 'named-effect' as const,
+      graphicsApi: 'd3d9' as const,
+      screenshot: 'presented' as const,
+      soundLoaderRewinds: false,
+      vorbisHeaderSyncBoundary: 65536,
+      indentModify: false,
+      fontSizeBits: 8 as const,
+      glyphGeometry: 'clipped-cell' as const,
+      loadRunMode: 13 as const,
+      exitRunMode: 14 as const,
+      publishesFullscreenAtExit: true,
+    },
+    {
       executableSha256: ARTEMIS_3179_EXECUTABLE_SHA256,
       engineVersion: 3179,
       glyphGeometry: 'bearing-advance' as const,
@@ -179,6 +209,7 @@ export function initializeArtemisVariables(
   variables.write('s.minimumsupportversion', String(version.minimumSupportVersion));
   variables.write('s.savedataversion', String(version.saveDataVersion));
   if (version.llp64) variables.write('s.llp64', '1');
+  for (const key of version.bootDeletedSystemVariables ?? []) variables.delete(key);
   for (const key of [
     'automode',
     'commandskip',

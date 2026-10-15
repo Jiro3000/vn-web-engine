@@ -1010,6 +1010,42 @@ test('Rev.2898 keeps absent boot fields absent until real Lua queries create int
   assert.throws(() => artemisRevision('d20ffaa0' + '0'.repeat(56)), /Unsupported/);
 });
 
+test('Rev.3083 boot deletes restored DX11 fields while keeping its independent x86 identity', async () => {
+  const {ArtemisVariables} = await import('../dist/engines/artemis/variables.js');
+  const {
+    artemisRevision,
+    initializeArtemisVariables,
+    initializeArtemisGraphicsFeatureLevel,
+    ARTEMIS_3083_EXECUTABLE_SHA256: hash,
+  } = await import('../dist/engines/artemis/revision.js');
+  const variables = new ArtemisVariables({executableSha256: hash});
+  variables.restore('s.llp64', bytes('7'));
+  variables.restore('s.windowsfeaturelevel', bytes('45056'));
+  variables.restore('s.user_setting', bytes('retained'));
+  initializeArtemisVariables(variables, hash);
+  assert.deepEqual(
+    ['s.engineversion', 's.builddate', 's.minimumsupportversion', 's.savedataversion'].map((key) =>
+      luaText(variables.read(key)),
+    ),
+    ['3083', 'Thu Oct 6 02:52:54 2022', '1103', '1003'],
+  );
+  assert.equal(variables.lookup('s.llp64'), undefined);
+  assert.equal(variables.lookup('s.windowsfeaturelevel'), undefined);
+  assert.equal(luaText(variables.lookup('s.user_setting')), 'retained');
+  initializeArtemisGraphicsFeatureLevel(variables, hash, () => {
+    throw Error('DX9 boot must not query a DX11 feature level');
+  });
+  assert.equal(luaText(variables.queryLiteral('s.llp64')), '0');
+  assert.equal(luaText(variables.queryLiteral('s.windowsfeaturelevel')), '0');
+  assert.equal(variables.globalDirty, false);
+  assert.equal(artemisRevision(hash).llp64, false);
+  assert.throws(() => artemisRevision(hash.slice(0, 63) + '0'), /Unsupported/);
+  assert.throws(
+    () => artemisRevision('abbaf6524cdaf7ac4c4c5ac50af63a74c6a4f5b22d5a4336f95ab5d85c863a87'),
+    /Unsupported/,
+  );
+});
+
 test('Legacy exact hashes retain their LLP64, graphics and font-size policies beside Rev.2898', async () => {
   const {ArtemisVariables} = await import('../dist/engines/artemis/variables.js');
   const revisions = await import('../dist/engines/artemis/revision.js');
@@ -1041,7 +1077,7 @@ test('Runtime boot publishes touch registration independently of live contacts f
   const hashes = Object.entries(revisions)
     .filter(([name]) => /^ARTEMIS_.*(?:EXECUTABLE|RESOURCE_VARIANT)_SHA256$/.test(name))
     .map(([, hash]) => hash);
-  assert.equal(hashes.length, 5);
+  assert.equal(hashes.length, 6);
   for (const hash of hashes) {
     for (const device of [
       null,
@@ -1124,41 +1160,45 @@ test('Game Lua restores real PNG font cache through a suspended runtime call and
   }
 });
 
-test('Rev.2898 scenario state and continuation survive a new runtime over copied save files', async () => {
+test('Rev.2898 and Rev.3083 scenario continuation survives a fresh runtime over copied saves', async () => {
   const {openArtemisRuntimeFixture} = await import('./artemis-runtime-fixture.mjs');
-  const {ARTEMIS_2898_EXECUTABLE_SHA256: hash} =
-    await import('../dist/engines/artemis/revision.js');
-  const files = {
-    'system/first.iet':
-      '[var name="f.persisted" data="123"][font size="300"][wait time="500"][var name="f.continued" data="456"][stop]',
-  };
-  let expected, savedFiles;
-  const first = await openArtemisRuntimeFixture(files, {hash});
-  try {
-    await first.runtime.boot();
-    assert.equal(first.runtime.runMode, 4);
-    first.runtime.save.request('restart.dat', true, true);
-    await first.runtime.flushSaves();
-    expected = first.runtime.scenarioArchive(true);
-    savedFiles = Object.fromEntries(first.saves);
-  } finally {
-    await first.close();
-  }
-  const second = await openArtemisRuntimeFixture(files, {hash, savedFiles});
-  try {
-    await second.runtime.boot();
-    let actual;
-    second.runtime.scenarioLoaded = () => {
-      actual = second.runtime.scenarioArchive();
+  const revisions = await import('../dist/engines/artemis/revision.js');
+  for (const hash of [
+    revisions.ARTEMIS_2898_EXECUTABLE_SHA256,
+    revisions.ARTEMIS_3083_EXECUTABLE_SHA256,
+  ]) {
+    const files = {
+      'system/first.iet':
+        '[var name="f.persisted" data="123"][font size="300"][wait time="500"][var name="f.continued" data="456"][stop]',
     };
-    assert.equal(await second.runtime.load.load('restart.dat', true), true);
-    assert.deepEqual(actual, expected);
-    assert.equal(luaText(second.runtime.variables.read('f.persisted')), '123');
-    assert.equal(second.runtime.runMode, 0);
-    second.runtime.script.run(100);
-    assert.equal(luaText(second.runtime.variables.read('f.continued')), '456');
-  } finally {
-    await second.close();
+    let expected, savedFiles;
+    const first = await openArtemisRuntimeFixture(files, {hash});
+    try {
+      await first.runtime.boot();
+      assert.equal(first.runtime.runMode, 4);
+      first.runtime.save.request('restart.dat', true, true);
+      await first.runtime.flushSaves();
+      expected = first.runtime.scenarioArchive(true);
+      savedFiles = Object.fromEntries(first.saves);
+    } finally {
+      await first.close();
+    }
+    const second = await openArtemisRuntimeFixture(files, {hash, savedFiles});
+    try {
+      await second.runtime.boot();
+      let actual;
+      second.runtime.scenarioLoaded = () => {
+        actual = second.runtime.scenarioArchive();
+      };
+      assert.equal(await second.runtime.load.load('restart.dat', true), true);
+      assert.deepEqual(actual, expected);
+      assert.equal(luaText(second.runtime.variables.read('f.persisted')), '123');
+      assert.equal(second.runtime.runMode, 0);
+      second.runtime.script.run(100);
+      assert.equal(luaText(second.runtime.variables.read('f.continued')), '456');
+    } finally {
+      await second.close();
+    }
   }
 });
 
@@ -1606,6 +1646,7 @@ test('Exact-hash exit saves preserve absent or restored fullscreen status only f
   const revision = await import('../dist/engines/artemis/revision.js');
   const hashes = [
     revision.ARTEMIS_2898_EXECUTABLE_SHA256,
+    revision.ARTEMIS_3083_EXECUTABLE_SHA256,
     revision.ARTEMIS_3179_EXECUTABLE_SHA256,
     revision.ARTEMIS_3139_EXECUTABLE_SHA256,
     revision.ARTEMIS_3139_RESOURCE_VARIANT_SHA256,

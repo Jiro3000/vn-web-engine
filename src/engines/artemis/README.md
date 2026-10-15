@@ -120,7 +120,12 @@ integer zero for these confirmed absent names. Boot does not insert them or
 invoke a graphics-feature query, and preserves values restored from system data.
 Other unsupported system names retain their guards. Its screenshot, sound-loader
 and mode fields are documented with x86 evidence in `docs/artemis-revisions.md`.
-Its Vorbis opener synchronizes to the first CRC-valid Ogg page before the native
+The independent Rev.3083 PE32 profile deletes restored `s.llp64` and
+`s.windowsfeaturelevel` at boot before their later zero-creating queries. It uses
+the DX9/clipped-cell path, accepts shader texture properties, and publishes
+fullscreen status at exit. The exact wrapper identity and native operations are
+listed in `docs/artemis-revisions.md`; executable names do not select a profile.
+Both PE32 profiles synchronize to the first CRC-valid Ogg page before the native
 65536-byte boundary. This accepts a leading `bw  ` header through the ordinary
 Vorbis loader, without retrying another codec or rewinding the opened file.
 The shared Vorbis decoder exposes this as an optional first-page search; its default

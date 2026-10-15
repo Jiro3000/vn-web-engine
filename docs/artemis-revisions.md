@@ -14,6 +14,51 @@ only `.rsrc` and the header fields that size it (SizeOfInitializedData, SizeOfIm
 CheckSum, the resource directory size and the `.rsrc` section header) differ. It shares
 every Rev.3139 address and field below.
 
+## Rev.3083 (PE32, wrapped executable)
+
+Root executable SHA-256
+`1249dc214c68e781ad57bf99126986d37892280342961f6dc898eee72f9bba51`
+contains an unencrypted PE32 engine at file offset `0x80000`. The embedded image
+is 5,267,456 bytes, SHA-256
+`abbaf6524cdaf7ac4c4c5ac50af63a74c6a4f5b22d5a4336f95ab5d85c863a87`,
+image base `0x400000`, entry `0x69d05c`. Its executable code differs from Rev.2898;
+this is an independent profile, not a resource variant. Only the exact root hash
+selects it. The wrapper and embedded Windows program are not executed by the
+browser; the player interprets the installation's game resources.
+
+Boot `0x552cb0` publishes Rev.3083, `Thu Oct 6 02:52:54 2022`, support 1103 and
+save version 1003. Its Windows/DX9 branch explicitly deletes `s.llp64` and
+`s.windowsfeaturelevel` through variable virtual `+0x18` (`0x53f800`), including
+restored values. Later literal queries create integer zero. This differs from
+Rev.2898, whose boot leaves restored values intact. `bootDeletedSystemVariables`
+models the deletion independently of the existing absent-field query policy.
+
+The profile keeps DX9 named effect constants, presented-buffer screenshots,
+byte-sized fonts and clipped-cell glyph geometry. FreeType open `0x5f18a0`
+reads the byte size; glyph provider `0x5f1dd0` uses the cell advance and clamps
+negative bearings. The actor-property path `0x568e50` accepts `shadertexture`,
+unlike Rev.2898. Sound-loader `0x613930` offers the same file to successive
+codecs without a rewind. Vorbis open `0x61f560` → `0x519350` → `0x5190a0` →
+`0x518020` passes the initial `0x10000` page-search boundary to `0x517c50`.
+Root return `0x557df0` and exit `0x557f40` retain load hold 13 and exit mode 14,
+publish fullscreen-at-exit and force the global/system save.
+
+Static evidence and validation reports are kept in the surrounding workspace
+under `local-runtime/sakuranotoki/new-exe300/`. Registration does not accept
+other wrapper versions or arbitrary embedded PE files.
+
+The short installation check advances 300 clicks / 387 text waits, decodes 87
+images and 89 sound files, and uses the restored painted-glyph cache. Include,
+Lua-call, unknown-tag and tag-error reports are zero. Save/load/reload and a
+fresh process over copied test saves have identical scenario-state SHA-256;
+the new process continues for another 12 text waits. A Brave DOM-text check
+exercises title/start, config, volume drag and native exit with zero console
+messages, exceptions or HTML dialogs. A fresh process on the same origin and
+profile retains BGM 82 / master 100, group gains 656 / 1000, without save imports.
+This is a compatibility smoke check,
+not a repeated complete route on Rev.3083. The relevant runtime/scene tests
+pass 297/297, including fresh saves and exit for the new profile.
+
 ## Rev.2898 (PE32)
 
 Frame `0x535c30` updates the window and input owners through their own vtables,
