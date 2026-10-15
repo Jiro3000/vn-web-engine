@@ -339,6 +339,16 @@ insertion per message resource over a glyph block source.
 
 ## Browser player
 
+Menu availability and key defaults belong to the game's Lua configuration.
+The player exposes the controls that configuration enables; a hidden menu layer
+does not establish an available action. The Rev.2898 validation uses the game's
+save/load/config/backlog panels and their return controls because its merged
+configuration disables the separate game menu. Its right-click default hides
+the message window. Reset also runs the game's font warmup, including four
+U+3000 `print` tags after the scenario text has stopped. The validation scope and
+the distinction between direct native citations and verified cross-revision
+operations are recorded in `docs/artemis-revisions.md`.
+
 `browser/player.ts` (`ArtemisBrowserPlayer`) composes the runtime for a page: the stage
 canvas (`WebGLDrawTarget` sized from system.ini), the surface manager over the PNG, JPEG
 and merged PSD decoders (decoded off the main thread), FreeType glyph rasterization and

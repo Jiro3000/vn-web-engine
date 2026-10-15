@@ -29,8 +29,9 @@ is shared with the older synchronous native frames, rather than selected as a
 Executable `d20ffaa064efa01eeccf4e315de99a419492e5fe7a8e44bc1a0eb22fc719883e`
 is an independent x86 profile (`ARTEMIS_2898_EXECUTABLE_SHA256`), image base
 `0x400000`, entry `0x6821ec`, PE timestamp `0x610e8906`. It is not a resource
-variant of any x64 revision. Runtime acceptance and the complete address map are
-still pending. The profile selects its reconstructed DX9 presets and bindings.
+variant of any x64 revision. The profile selects its reconstructed DX9 presets
+and bindings. Route, state, media and browser checks are recorded below; the
+complete cross-revision address map remains unfinished.
 
 Boot publication `0x539360` identifies Rev.2898, build
 `Sat Aug 7 22:21:32 2021`, support 1103 and save version 1003. It publishes
@@ -153,6 +154,73 @@ Ordinary RGB targets preserve opaque alpha, format-2 captures preserve RGBA,
 and builtin captured Back sampling uses POINT/CLAMP. No alpha-test or shader
 discard is introduced into these DX9 passes.
 
+### File and library ownership
+
+The pack-file opener normalizes separators and tries a loose file first. A
+successful open, including an empty file, keeps that file; only failure enters
+the archive registry lookup. The direct file owner returns success as a zero
+byte in AL. Its Unicode-path mode converts UTF-8 to UTF-16 before `_wfopen`;
+the other mode passes the original bytes to `_fopen`. Both request binary reads.
+The PE32 call passes `this` in ECX and one filename pointer on the stack.
+Decompiler signatures that discard this byte result are incomplete.
+
+The exact companion `iarsys.dll` SHA-256 is
+`5dd56ceed78bc4af337ec5143d221f72183873252a180161486df842c1eb012a`.
+Its application DllMain returns success without an application action. Its raw
+callback is null in read-only data, and it has no PE TLS callback directory.
+The sole C++ initializer registers locale-facet cleanup with `atexit`; the
+manual TLS-init pointer is initially zero and has no recognized explicit writer.
+The reviewed entry, CRT dispatch and initializer hooks contain no authorization
+check. This static result does not establish the EXE's complete startup or
+network call closure. Neither binary was executed.
+
+### Validation scope
+
+The runtime built from `e058761` completes a first-visible-enabled-choice route
+in Sakura no Toki: ten choices, ending/staff credits, the game's own clear/seen
+records, save/reset and title. A fresh process loading copies of the test saves
+retains those records and continues the scenario. The saved, loaded, reloaded
+and fresh-process state SHA-256 values agree. All linked route NDJSON streams
+were read completely; include errors, Lua call errors, unknown-tag reports and
+tag-error reports are zero.
+
+After reset there are zero scenario `rt`/`rt2` tags and four raw `print` tags
+containing U+3000 for the game's font warmup. Its merged configuration disables
+the separate game menu and maps right-click to `MWOFF`; save/load/config/backlog
+panels and return to the scenario are exercised through their available native
+controls. These two acceptance interpretations are explicitly user-approved in
+`local-runtime/sakuranotoki/criteria223-approved.safe.json`; the raw reports are
+retained without filtering.
+
+The final route loads the same 1,827 image paths and the same ordered 11,305
+audio file identities as the complete decode audits. All three installed movies
+also have complete nonvisual decode receipts. Lua's sampled maximum is
+5,568.98 KiB. The observed main-thread Wasm memories have a sampled aggregate
+maximum of 270,401,536 bytes, below 2 GiB; this is not an absolute peak or a
+measurement of browser workers. The route retains 73 image surfaces totaling
+529,579,712 bytes at its final observation.
+
+The connected Brave run covers title/start, native panels, backlog scrolling,
+save/load confirmation, configuration, skip, advancing auto, choice, natural full
+movie playback and native exit. A fresh run on the same settings profile retains
+the UI changes. Supported-game regression console counts are NUKITASHI 2: 268,
+NUKITASHI 1: 60, Hatsuyuki: 3 and SakuraNoUta: 0, with zero exceptions or HTML
+dialogs. The complete original NUKITASHI 1 recipe produces the same 60 messages
+on the base and current runtime; this replacement for the incomplete 59-message
+baseline is user-approved. The full suite has 2,018 passes and the exact same
+37 known failures, with no skipped or cancelled tests.
+
+The source-scoped native inventory contains 463 revision/address rows, covering
+472 exact-SHA/address cases and 462 distinct numeric addresses. It separates
+Rev.3139 citations from canonical Rev.3179 operations, including equal addresses
+whose meanings differ between revisions. The current semantic ledger verifies
+14 direct Rev.2898 citations and two cross-revision boot-operation rows; 447
+rows remain unresolved. Registration, RTTI and signature matches remain
+candidates until their bodies, owners and ABI have been checked.
+The surrounding analysis workspace retains the full evidence index, route
+review, fresh-process proof and semantic ledger under
+`local-runtime/sakuranotoki/`; game data and native dumps are not committed.
+
 ## Rev.3257
 
 Executable `7c604c92b434cbee3620dcf4af8dde40d9313d04cefa794d168b03477135a08a`
@@ -210,65 +278,64 @@ entries whose implementation is part of a containing operation. Its path is
 `local-runtime/sakuranouta/map-cited-final1.txt`; the adjacent safe JSON receipt
 records its SHA256 and coverage audit. The tables below explain selected pairs.
 
-| Rev.3179 | Rev.3257 | Checked operation |
-| --- | --- | --- |
-| `0x140015b50` | `0x140013140` | Theora constructor and BT.601 conversion table arithmetic |
-| `0x14009d200` | `0x14009ff90` | INI shared-holder constructor, flags and map slots |
-| `0x1400a3640` | `0x1400a6450` | Actor constructor, virtual-base layout and property defaults |
-| `0x1400b1860` | `0x1400b4a90` | Scene node destruction, captures and map/actor release order |
-| `0x1400ef000` | `0x1400fed50` | Float tween constructor, state offsets and callback ownership |
-| `0x140149760` | `0x140152ea0` | Tween-id query across active and pending registries |
-| `0x140171140` | `0x1401791d0` | Horizontal rule copies and vertical row wrapping |
-| `0x140190920` | `0x140197920` | Sound manager load, inactive-handle pruning and index insertion |
-| `0x14019aa00` | `0x1401a0f80` | Tween frame completion, destruction and pending-registry merge |
-| `0x1400a54b0` | `0x1400a8580` | Tween finish lookup and virtual `+0x18` (cancel uses `+0x10`) |
-| `0x1400adcf0` | `0x1400b0d80` | Sound handle lookup and playing query at virtual `+0x30` |
-| `0x1400b6520` | `0x1400b9b10` | File/label jump, script load and caret transfer |
-| `0x140138f10` | `0x140140230` | Lua float table setter, stack values and registry lookup |
-| `0x14014f2a0` | `0x140158e80` | Capture enumeration/transfer and temporary identifier lifetime |
-| `0x140178e80` | `0x140181900` | JPEG file read/rewind, buffer sizing and decode result |
-| `0x1400a1060` | `0x1400a3d80` | Display base constructor, virtual-base adjustment and member defaults |
-| `0x1400b5a30` | `0x1400b8cd0` | Caret constructor, wait fields and pending-command queue |
-| `0x1400b5b20` | `0x1400b8dc0` | Caret destructor and string/map/queue release order |
-| `0x1400b6cf0` | `0x1400ba2c0` | Pending capture restoration; text virtual `+0x1b0` becomes `+0x1c0` |
-| `0x140057750` | `0x1400562e0` | Decoder read-context flags and callback setup; callback construction is inlined |
-| `0x1400a0340` | `0x1400a2fd0` | Encoding-aware replacement for Shift-JIS, EUC and UTF-8 |
-| `0x1400add70` | `0x1400b0e00` | Scoped sound gain query, missing-handle result and scope conversion |
+| Rev.3179      | Rev.3257      | Checked operation                                                                   |
+| ------------- | ------------- | ----------------------------------------------------------------------------------- |
+| `0x140015b50` | `0x140013140` | Theora constructor and BT.601 conversion table arithmetic                           |
+| `0x14009d200` | `0x14009ff90` | INI shared-holder constructor, flags and map slots                                  |
+| `0x1400a3640` | `0x1400a6450` | Actor constructor, virtual-base layout and property defaults                        |
+| `0x1400b1860` | `0x1400b4a90` | Scene node destruction, captures and map/actor release order                        |
+| `0x1400ef000` | `0x1400fed50` | Float tween constructor, state offsets and callback ownership                       |
+| `0x140149760` | `0x140152ea0` | Tween-id query across active and pending registries                                 |
+| `0x140171140` | `0x1401791d0` | Horizontal rule copies and vertical row wrapping                                    |
+| `0x140190920` | `0x140197920` | Sound manager load, inactive-handle pruning and index insertion                     |
+| `0x14019aa00` | `0x1401a0f80` | Tween frame completion, destruction and pending-registry merge                      |
+| `0x1400a54b0` | `0x1400a8580` | Tween finish lookup and virtual `+0x18` (cancel uses `+0x10`)                       |
+| `0x1400adcf0` | `0x1400b0d80` | Sound handle lookup and playing query at virtual `+0x30`                            |
+| `0x1400b6520` | `0x1400b9b10` | File/label jump, script load and caret transfer                                     |
+| `0x140138f10` | `0x140140230` | Lua float table setter, stack values and registry lookup                            |
+| `0x14014f2a0` | `0x140158e80` | Capture enumeration/transfer and temporary identifier lifetime                      |
+| `0x140178e80` | `0x140181900` | JPEG file read/rewind, buffer sizing and decode result                              |
+| `0x1400a1060` | `0x1400a3d80` | Display base constructor, virtual-base adjustment and member defaults               |
+| `0x1400b5a30` | `0x1400b8cd0` | Caret constructor, wait fields and pending-command queue                            |
+| `0x1400b5b20` | `0x1400b8dc0` | Caret destructor and string/map/queue release order                                 |
+| `0x1400b6cf0` | `0x1400ba2c0` | Pending capture restoration; text virtual `+0x1b0` becomes `+0x1c0`                 |
+| `0x140057750` | `0x1400562e0` | Decoder read-context flags and callback setup; callback construction is inlined     |
+| `0x1400a0340` | `0x1400a2fd0` | Encoding-aware replacement for Shift-JIS, EUC and UTF-8                             |
+| `0x1400add70` | `0x1400b0e00` | Scoped sound gain query, missing-handle result and scope conversion                 |
 | `0x1400ae110` | `0x1400b1220` | Pan tween cancellation, current-pan query and setter; registry insertion is inlined |
-| `0x1400afc60` | `0x1400b2ee0` | Expression string read, empty result and temporary release |
-| `0x1400b0e90` | `0x1400b40a0` | Save-state clone, maps and scalar fields |
-| `0x1400b1690` | `0x1400b4890` | Scene-node construction, reference counts, actor arrays and inlined payload copy |
-| `0x1400c6480` | `0x1400cb6d0` | Run-mode scope release, scheduler, pending queue and modes 5/6 |
-| `0x140134ca0` | `0x14013b680` | Lua display-info float extraction and property setter |
-| `0x14013ef10` | `0x140146c60` | String-map restoration |
-| `0x1401593a0` | `0x140161f40` | Operator-byte classification, including punctuation predicates and result masks |
-| `0x1401856c0` | `0x14018d0c0` | Integer-string predicate: empty rejection, leading minus and digit checks |
-| `0x1401990e0` | `0x1401a0110` | Relative float tween construction, six properties and from/to reversal |
-| `0x1400a5ac0` | `0x1400a89e0` | Property block assignment, scalar/flag fields and two strings |
-| `0x1400c2400` | `0x1400c6bf0` | Tag copy constructor, string/map members and field `+0x58` |
-| `0x1400adf30` | `0x1400b0fb0` | Scoped sound-volume tween, prior tween cancellation and default gain 1000 |
-| `0x140144960` | `0x14014cfe0` | Layer history erase, argument subset matching, shifting and recursive removal |
-| `0x140165bb0` | `0x14016de30` | Directory preparation, multibyte path stepping and A/W file open |
-| `0x1400f53d0` | `0x140103010` | Shared-owner dynamic cast with identical RTTI source/destination descriptors |
-| `0x1400f8820` | `0x1401063b0` | Second shared-owner dynamic cast and matching reference release |
-| `0x140176b10` | `0x14017f5f0` | INI string query, section/key presence and missing empty result |
-| `0x1400a4eb0` | `0x1400a7ec0` | Actor property assignment; base copy is outlined and shared transfers inlined |
-| `0x1400a0770` | `0x1400a33a0` | Encoding-aware string splitting, empty fields and delimiter boundaries |
-| `0x1400ae440` | `0x1400b1590` | Sound handle lookup and virtual `+0x70` query |
-| `0x1400b8090` | `0x1400bbd80` | Command state assignment, three strings and unchanged scalar/flag offsets |
-| `0x1400ecc70` | `0x1400fc9b0` | Curve member assignment and tagged callable transfer/release |
-| `0x1400ae2e0` | `0x1400b1440` | Sound callback setter at virtual `+0x68`, callable copy and release |
-| `0x1400ed9d0` | `0x1400fd750` | Integer tween constructor, from/to conversion and callable ownership |
-| `0x1400f8050` | `0x1401058c0` | Script event callable construction, tag copies and temporary release |
-| `0x1400acbb0` | `0x1400b0230` | Key-role binding, wheel flags and unique integer-key set insertion |
-| `0x1400c9870` | `0x1400d0090` | Caption conversion, encoding guard and native window handle lookup |
-| `0x14009d150` | `0x14009fe60` | Archive string length/bytes and field-id bookkeeping; bookkeeping is inlined |
-| `0x1400b9cd0` | `0x1400bdfc0` | Empty history argument-map construction, copy and append |
-| `0x1400ebf10` | `0x1400fbab0` | Automode indicator-map search/insert and default member layout |
-| `0x14012d490` | `0x1401325e0` | Native report encoding guard, conversion and temporary release |
-| `0x1400b5690` | `0x1400b8a10` | Key-role decide query, wheel/ordinary keys and Alt+Enter suppression |
-| `0x140130350` | `0x140135db0` | Lua tag parsing, script-queue append and severity-1 report branch |
-
+| `0x1400afc60` | `0x1400b2ee0` | Expression string read, empty result and temporary release                          |
+| `0x1400b0e90` | `0x1400b40a0` | Save-state clone, maps and scalar fields                                            |
+| `0x1400b1690` | `0x1400b4890` | Scene-node construction, reference counts, actor arrays and inlined payload copy    |
+| `0x1400c6480` | `0x1400cb6d0` | Run-mode scope release, scheduler, pending queue and modes 5/6                      |
+| `0x140134ca0` | `0x14013b680` | Lua display-info float extraction and property setter                               |
+| `0x14013ef10` | `0x140146c60` | String-map restoration                                                              |
+| `0x1401593a0` | `0x140161f40` | Operator-byte classification, including punctuation predicates and result masks     |
+| `0x1401856c0` | `0x14018d0c0` | Integer-string predicate: empty rejection, leading minus and digit checks           |
+| `0x1401990e0` | `0x1401a0110` | Relative float tween construction, six properties and from/to reversal              |
+| `0x1400a5ac0` | `0x1400a89e0` | Property block assignment, scalar/flag fields and two strings                       |
+| `0x1400c2400` | `0x1400c6bf0` | Tag copy constructor, string/map members and field `+0x58`                          |
+| `0x1400adf30` | `0x1400b0fb0` | Scoped sound-volume tween, prior tween cancellation and default gain 1000           |
+| `0x140144960` | `0x14014cfe0` | Layer history erase, argument subset matching, shifting and recursive removal       |
+| `0x140165bb0` | `0x14016de30` | Directory preparation, multibyte path stepping and A/W file open                    |
+| `0x1400f53d0` | `0x140103010` | Shared-owner dynamic cast with identical RTTI source/destination descriptors        |
+| `0x1400f8820` | `0x1401063b0` | Second shared-owner dynamic cast and matching reference release                     |
+| `0x140176b10` | `0x14017f5f0` | INI string query, section/key presence and missing empty result                     |
+| `0x1400a4eb0` | `0x1400a7ec0` | Actor property assignment; base copy is outlined and shared transfers inlined       |
+| `0x1400a0770` | `0x1400a33a0` | Encoding-aware string splitting, empty fields and delimiter boundaries              |
+| `0x1400ae440` | `0x1400b1590` | Sound handle lookup and virtual `+0x70` query                                       |
+| `0x1400b8090` | `0x1400bbd80` | Command state assignment, three strings and unchanged scalar/flag offsets           |
+| `0x1400ecc70` | `0x1400fc9b0` | Curve member assignment and tagged callable transfer/release                        |
+| `0x1400ae2e0` | `0x1400b1440` | Sound callback setter at virtual `+0x68`, callable copy and release                 |
+| `0x1400ed9d0` | `0x1400fd750` | Integer tween constructor, from/to conversion and callable ownership                |
+| `0x1400f8050` | `0x1401058c0` | Script event callable construction, tag copies and temporary release                |
+| `0x1400acbb0` | `0x1400b0230` | Key-role binding, wheel flags and unique integer-key set insertion                  |
+| `0x1400c9870` | `0x1400d0090` | Caption conversion, encoding guard and native window handle lookup                  |
+| `0x14009d150` | `0x14009fe60` | Archive string length/bytes and field-id bookkeeping; bookkeeping is inlined        |
+| `0x1400b9cd0` | `0x1400bdfc0` | Empty history argument-map construction, copy and append                            |
+| `0x1400ebf10` | `0x1400fbab0` | Automode indicator-map search/insert and default member layout                      |
+| `0x14012d490` | `0x1401325e0` | Native report encoding guard, conversion and temporary release                      |
+| `0x1400b5690` | `0x1400b8a10` | Key-role decide query, wheel/ordinary keys and Alt+Enter suppression                |
+| `0x140130350` | `0x140135db0` | Lua tag parsing, script-queue append and severity-1 report branch                   |
 
 | `0x1400b73e0` | `0x1400bac20` | Event delivery callback: guards, delivery modes and queued-tag fallback |
 | `0x1400e10a0` | `0x1400ed4f0` | Flip command, debug-skip guard and inlined stage commit |
@@ -281,7 +348,6 @@ records its SHA256 and coverage audit. The tables below explain selected pairs.
 | `0x140131480` | `0x1401371b0` | Lua script-status result from current script run-mode field `+0xc70` |
 | `0x140134180` | `0x14013a2b0` | Lua foreground surface load at virtual `+8` and immediate lease release |
 | `0x140182710` | `0x14018afb0` | Font enumeration callback, four filter flags and UTF-16 name insertion |
-
 
 | `0x140017010` | `0x140014a10` | Video packet worker, EOF/rewind, decode budget and granule position |
 | `0x1400a0560` | `0x1400a31d0` | Substring character boundaries for Shift-JIS, EUC and UTF-8 |
@@ -304,7 +370,6 @@ records its SHA256 and coverage audit. The tables below explain selected pairs.
 | `0x14011ef00` | `0x140124f60` | Scenario-state serialization: section 7 and collection fields 1–6 |
 | `0x140193720` | `0x14019aab0` | Text-block defaults and two inline default-font strings |
 
-
 | `0x1400f0f70` | `0x140107260` | Recursive tree-node destruction and payload release |
 | `0x140122c60` | `0x140128810` | Point-vector archive serialization and extension-provider traversal |
 | `0x140123ba0` | `0x140129ad0` | Deque of serializable objects and nested section completion |
@@ -325,14 +390,14 @@ records its SHA256 and coverage audit. The tables below explain selected pairs.
 Some cited helpers have been inlined or folded into a containing operation.
 These entries identify the checked component, rather than a separate Rev.3257 entry:
 
-| Rev.3179 helper | Rev.3257 containing operation | Checked component |
-| --- | --- | --- |
-| `0x14009ff30` | `0x1400a2a60` | Six epsilon clamps after the enclosing translation operation |
-| `0x140185740` | `0x14018f7c0`, `0x14018d8a0` | Numeric ordering when both keys are integer strings; byte ordering otherwise |
-| `0x140182640` | `0x14009d710` | Shutdown module-cache walk, FreeLibrary calls, tree clear and sentinel restoration |
-| `0x14019a940` | `0x1400d3630`, `0x1400df290`, `0x140163310` | Shared once-only timeBeginPeriod(1) guard followed by timeGetTime |
-| `0x1400ad130` | `0x1400b8a10` | Key-role down-edge query before the enclosing Alt+Enter guard |
-| `0x140105530` | `0x140106a60` | Click-glyph map-node construction and default members |
+| Rev.3179 helper | Rev.3257 containing operation               | Checked component                                                                  |
+| --------------- | ------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `0x14009ff30`   | `0x1400a2a60`                               | Six epsilon clamps after the enclosing translation operation                       |
+| `0x140185740`   | `0x14018f7c0`, `0x14018d8a0`                | Numeric ordering when both keys are integer strings; byte ordering otherwise       |
+| `0x140182640`   | `0x14009d710`                               | Shutdown module-cache walk, FreeLibrary calls, tree clear and sentinel restoration |
+| `0x14019a940`   | `0x1400d3630`, `0x1400df290`, `0x140163310` | Shared once-only timeBeginPeriod(1) guard followed by timeGetTime                  |
+| `0x1400ad130`   | `0x1400b8a10`                               | Key-role down-edge query before the enclosing Alt+Enter guard                      |
+| `0x140105530`   | `0x140106a60`                               | Click-glyph map-node construction and default members                              |
 
 The lookup at `0x1400eb500` returns the click-glyph payload directly. Its checked
 Rev.3257 counterpart `0x140106a60` returns a node iterator and insertion flag;
@@ -347,7 +412,6 @@ virtual refresh slot moves from `+0x228` to `+0x238`; its extracted helper retai
 line positions, maximum width, accumulated height and alignment calculations.
 The two default-font strings copied by the text-block constructor have identical
 13-byte SHA256 values in both binaries; their contents are not part of this evidence.
-
 
 | `0x14013f940` | `0x1401475d0` | Compressed save archive writing, version 1003 and encoding-aware paths |
 | `0x140157ff0` | `0x140160770` | Expression tokenization/evaluation and integer-zero variable leaves |
@@ -402,7 +466,6 @@ it cancels pending activation and playback, disposes the audio voice, joins deco
 shutdown, releases the renderer and removes the movie surface. This lifecycle already
 covers the additional native owner; the native pointer layout is not reproduced in
 browser memory. Existing revision behavior is unchanged.
-
 
 Font-provider size width is selected by the executable hash through
 `ArtemisRevision.fontSizeBits`. Rev.3257 `0x14016e6f0` forwards the full word:
