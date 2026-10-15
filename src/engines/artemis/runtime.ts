@@ -656,6 +656,7 @@ export class ArtemisRuntime {
         writeStatus: (name, value) => variables.write(name, value),
       },
       this.loadRunMode,
+      revision.publishesFullscreenAtExit,
     );
     // Text display owners per message resource. Glyph and block actors are property stores
     // that the presentation reads.

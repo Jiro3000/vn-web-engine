@@ -307,6 +307,10 @@ script: unless a load holds run mode 13, the script enters run mode 14, writes
 `exited` then reports true and `frame` refuses further frames. The window owner closes the
 application after that frame (`0x14013cec0` posts WM_DESTROY); the browser player waits
 for the pending save writes, disposes itself and reports `closed`.
+The exact Rev.2898 profile enters exit mode and forces the same global/system
+save without querying fullscreen or assigning `s.status.fullscreenatexit`.
+An existing value is preserved in that save; the other four profiles retain the
+publication described above.
 
 `input.ts` is CArtemisInput. Keys 0..0xff hold 0 idle, 1 pressed this update, 2 held,
 3 held past the 500 ms repeat delay and 4 released this update; wheel notches (136 up,

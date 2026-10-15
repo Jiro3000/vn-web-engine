@@ -52,6 +52,8 @@ export interface ArtemisRevision {
   /** Temporary scenario replay hold and application exit; Rev.3257 inserted a mode. */
   readonly loadRunMode: 13 | 14;
   readonly exitRunMode: 14 | 15;
+  /** Exit queries and publishes fullscreen state; absent in the exact Rev.2898 build. */
+  readonly publishesFullscreenAtExit: boolean;
 }
 // Rev.3139 0x1400c36f0 publishes the same support and save data versions.
 const rev3139 = {
@@ -74,6 +76,7 @@ const rev3139 = {
   glyphGeometry: 'bearing-advance' as const,
   loadRunMode: 13 as const,
   exitRunMode: 14 as const,
+  publishesFullscreenAtExit: true,
 };
 const revisions: ReadonlyMap<string, ArtemisRevision> = new Map(
   [
@@ -103,6 +106,7 @@ const revisions: ReadonlyMap<string, ArtemisRevision> = new Map(
       // 0x5b4bb4 pushes 13 before replay; 0x53dd40 enters 14 for exit.
       loadRunMode: 13 as const,
       exitRunMode: 14 as const,
+      publishesFullscreenAtExit: false,
     },
     {
       executableSha256: ARTEMIS_3179_EXECUTABLE_SHA256,
@@ -112,6 +116,7 @@ const revisions: ReadonlyMap<string, ArtemisRevision> = new Map(
       fontSizeBits: 8 as const,
       loadRunMode: 13 as const,
       exitRunMode: 14 as const,
+      publishesFullscreenAtExit: true,
       buildDate: 'Thu Dec 21 04:26:04 2023',
       minimumSupportVersion: 1103,
       saveDataVersion: 1003,
@@ -135,6 +140,7 @@ const revisions: ReadonlyMap<string, ArtemisRevision> = new Map(
       fontSizeBits: 32 as const,
       loadRunMode: 14 as const,
       exitRunMode: 15 as const,
+      publishesFullscreenAtExit: true,
       buildDate: 'Thu Apr 17 21:58:09 2025',
       minimumSupportVersion: 1103,
       saveDataVersion: 1003,

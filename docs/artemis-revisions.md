@@ -102,6 +102,12 @@ Mode entry `0x53b8b0` refuses changes while the current mode is 13. Exit
 `0x53dd40` enters 14; the root-return wrapper `0x53dd20` uses the same exit.
 These are checked native enum values, independent of pointer width.
 
+`publishesFullscreenAtExit = false` preserves the Rev.2898 exit operation:
+it changes the run mode, releases the scheduler and forces the global/system
+save without querying fullscreen or writing `s.status.fullscreenatexit`.
+An existing value restored from system data remains intact. The other four
+supported exact hashes retain their fullscreen query and status write.
+
 Actor-property parser `0x58cc90` reads `shader` and `shaderconstant`, then
 returns after the constant-list setter at virtual `+0xac`. Its complete body
 has no texture-path lookup or setter. `shaderTextureProperties = false` leaves

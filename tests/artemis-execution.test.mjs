@@ -1601,6 +1601,93 @@ test('The exit tag enters run mode 14, writes fullscreenatexit and forces the gl
   assert.deepEqual(calls, []);
 });
 
+test('Exact-hash exit saves preserve absent or restored fullscreen status only for Rev.2898', async () => {
+  const {openArtemisRuntimeFixture} = await import('./artemis-runtime-fixture.mjs');
+  const revision = await import('../dist/engines/artemis/revision.js');
+  const hashes = [
+    revision.ARTEMIS_2898_EXECUTABLE_SHA256,
+    revision.ARTEMIS_3179_EXECUTABLE_SHA256,
+    revision.ARTEMIS_3139_EXECUTABLE_SHA256,
+    revision.ARTEMIS_3139_RESOURCE_VARIANT_SHA256,
+    revision.ARTEMIS_3257_EXECUTABLE_SHA256,
+  ];
+  const key = 's.status.fullscreenatexit';
+  for (const hash of hashes) {
+    for (const restored of [false, true]) {
+      const prefix = restored ? `[var name="${key}" data="retained"]` : '';
+      const first = await openArtemisRuntimeFixture(
+        {'system/first.iet': `${prefix}[exit]`},
+        {hash},
+      );
+      let savedFiles;
+      const expected =
+        hash === revision.ARTEMIS_2898_EXECUTABLE_SHA256
+          ? restored
+            ? 'retained'
+            : undefined
+          : '0';
+      try {
+        await first.runtime.boot();
+        assert.equal(first.runtime.runMode, revision.artemisRevision(hash).exitRunMode);
+        await first.runtime.flushSaves();
+        const value = first.runtime.variables.lookup(key);
+        assert.equal(value === undefined ? undefined : luaText(value), expected);
+        // Even clean globals must be saved when exit omits the status write.
+        assert.ok(first.saves.has('saveg.dat'));
+        assert.ok(first.saves.has('system.dat'));
+        savedFiles = Object.fromEntries(first.saves);
+      } finally {
+        await first.close();
+      }
+      const fresh = await openArtemisRuntimeFixture(
+        {'system/first.iet': '[stop]'},
+        {hash, savedFiles},
+      );
+      try {
+        await fresh.runtime.boot();
+        const value = fresh.runtime.variables.lookup(key);
+        assert.equal(value === undefined ? undefined : luaText(value), expected);
+      } finally {
+        await fresh.close();
+      }
+    }
+  }
+});
+
+test('Rev.2898 exit needs no fullscreen owner and still respects the replay hold', async () => {
+  const {ArtemisSave} = await import('../dist/engines/artemis/save.js');
+  const {ArtemisExit} = await import('../dist/engines/artemis/exit.js');
+  const {ArtemisVariables} = await import('../dist/engines/artemis/variables.js');
+  const {artemisRevision, ARTEMIS_2898_EXECUTABLE_SHA256} =
+    await import('../dist/engines/artemis/revision.js');
+  const profile = artemisRevision(ARTEMIS_2898_EXECUTABLE_SHA256);
+  const calls = [];
+  let mode = profile.loadRunMode;
+  const save = new ArtemisSave(new ArtemisVariables(), {
+    beforeScenario: () => assert.fail('exit is not a scenario save'),
+    reportEventError: () => assert.fail('unexpected save callback'),
+    writeScenario: () => assert.fail('exit is not a scenario save'),
+    writeGlobal: () => calls.push('global'),
+    writeSystem: () => calls.push('system'),
+  });
+  const exit = new ArtemisExit(
+    save,
+    {
+      runMode: () => mode,
+      enterExitMode: () => calls.push(['mode', (mode = profile.exitRunMode)]),
+      fullscreen: () => assert.fail('this native exit never queries fullscreen'),
+      writeStatus: () => assert.fail('this native exit never writes fullscreen status'),
+    },
+    profile.loadRunMode,
+    profile.publishesFullscreenAtExit,
+  );
+  exit.exit();
+  assert.deepEqual(calls, []);
+  mode = 1;
+  exit.exit();
+  assert.deepEqual(calls, [['mode', 14], 'global', 'system']);
+});
+
 test('Timed wait preserves strict deadline, event/save/message ordering and zero sentinel', async () => {
   const {ArtemisTimedWait} = await import('../dist/engines/artemis/wait.js');
   const {ArtemisModes} = await import('../dist/engines/artemis/modes.js');

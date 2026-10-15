@@ -21,6 +21,7 @@ export class ArtemisExit {
     private readonly save: ArtemisSave,
     private readonly host: ArtemisExitHost,
     private readonly loadRunMode = 13,
+    private readonly publishesFullscreenAtExit = true,
   ) {}
   dispatch(tag: AsbTag): boolean {
     if (tag.name !== 'exit') return false;
@@ -31,7 +32,8 @@ export class ArtemisExit {
     const host = this.host;
     if (host.runMode() === this.loadRunMode) return;
     host.enterExitMode();
-    host.writeStatus('s.status.fullscreenatexit', host.fullscreen() ? '1' : '0');
+    if (this.publishesFullscreenAtExit)
+      host.writeStatus('s.status.fullscreenatexit', host.fullscreen() ? '1' : '0');
     this.save.request('', false, true);
   }
 }
