@@ -182,7 +182,7 @@ network call closure. Neither binary was executed.
 
 ### Validation scope
 
-The runtime built from `e058761` completes a first-visible-enabled-choice route
+The runtime built from `42fa4da` completes a first-visible-enabled-choice route
 in Sakura no Toki: ten choices, ending/staff credits, the game's own clear/seen
 records, save/reset and title. A fresh process loading copies of the test saves
 retains those records and continues the scenario. The saved, loaded, reloaded
@@ -202,19 +202,35 @@ The final route loads the same 1,827 image paths and the same ordered 11,305
 audio file identities as the complete decode audits. All three installed movies
 also have complete nonvisual decode receipts. Lua's sampled maximum is
 5,568.98 KiB. The observed main-thread Wasm memories have a sampled aggregate
-maximum of 270,401,536 bytes, below 2 GiB; this is not an absolute peak or a
-measurement of browser workers. The route retains 73 image surfaces totaling
-529,579,712 bytes at its final observation.
+maximum of 236,584,960 bytes, below 2 GiB; this is not an absolute peak or a
+measurement of browser workers. The route retains 70 image surfaces totaling
+536,653,504 bytes at its final observation.
 
-The connected Brave run covers title/start, native panels, backlog scrolling,
+The complete connected Brave run on `e058761` covers title/start, native panels, backlog scrolling,
 save/load confirmation, configuration, skip, advancing auto, choice, natural full
 movie playback and native exit. A fresh run on the same settings profile retains
 the UI changes. Supported-game regression console counts are NUKITASHI 2: 268,
 NUKITASHI 1: 60, Hatsuyuki: 3 and SakuraNoUta: 0, with zero exceptions or HTML
 dialogs. The complete original NUKITASHI 1 recipe produces the same 60 messages
-on the base and current runtime; this replacement for the incomplete 59-message
-baseline is user-approved. The full suite has 2,018 passes and the exact same
+on the base and `e058761` runtime; this replacement for the incomplete 59-message
+baseline is user-approved. The final `42fa4da` suite has 2,020 passes and the exact same
 37 known failures, with no skipped or cancelled tests.
+
+The final critical Brave check on `42fa4da` repeats title/start, save/load with
+native confirmation, backlog scrolling, config, skip, auto and native exit.
+Auto advances 13 text waits in 55 seconds. All 27,949 trace entries and 93 input
+acknowledgements were checked, with zero console messages, exceptions or HTML
+dialogs. The two native print-overflow reports belong to the save-slot preview's
+explicit clipping policy. A new process on the same profile and origin, without
+save imports, retains the UI's BGM change from group gain 480 to 656 (`conf.bgm`
+82, master 100). Full movie playback and choice interaction remain covered by the earlier
+complete connected Brave run and the final route/media receipts.
+
+The only runtime change after those complete browser regressions is the
+exact-hash exit-publication policy described above. System tests exercise exit,
+global/system persistence and fresh restoration for all five supported hashes;
+the other four retain their previous fullscreen publication. The historical
+browser recipes are not represented as reruns on `42fa4da`.
 
 The source-scoped native inventory contains 463 revision/address rows, covering
 472 exact-SHA/address cases and 462 distinct numeric addresses. It separates
@@ -223,6 +239,9 @@ whose meanings differ between revisions. The current semantic ledger verifies
 14 direct Rev.2898 citations and two cross-revision boot-operation rows; 447
 rows remain unresolved. Registration, RTTI and signature matches remain
 candidates until their bodies, owners and ABI have been checked.
+The accepted delivery scope is a working game with critical checks and a final
+route; the complete native-reference audit is deferred separately by explicit
+user decision (`local-runtime/sakuranotoki/scope281-approved.safe.json`).
 The surrounding analysis workspace retains the full evidence index, route
 review, fresh-process proof and semantic ledger under
 `local-runtime/sakuranotoki/`; game data and native dumps are not committed.

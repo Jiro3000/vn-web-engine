@@ -352,6 +352,8 @@ the message window. Reset also runs the game's font warmup, including four
 U+3000 `print` tags after the scenario text has stopped. The validation scope and
 the distinction between direct native citations and verified cross-revision
 operations are recorded in `docs/artemis-revisions.md`.
+Functional route validation and the full native-reference audit have separate
+scope: the latter remains deferred, with unresolved mappings explicitly retained.
 
 `browser/player.ts` (`ArtemisBrowserPlayer`) composes the runtime for a page: the stage
 canvas (`WebGLDrawTarget` sized from system.ini), the surface manager over the PNG, JPEG
