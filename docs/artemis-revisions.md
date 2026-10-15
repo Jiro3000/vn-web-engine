@@ -47,17 +47,32 @@ Static evidence and validation reports are kept in the surrounding workspace
 under `local-runtime/sakuranotoki/new-exe300/`. Registration does not accept
 other wrapper versions or arbitrary embedded PE files.
 
-The short installation check advances 300 clicks / 387 text waits, decodes 87
-images and 89 sound files, and uses the restored painted-glyph cache. Include,
-Lua-call, unknown-tag and tag-error reports are zero. Save/load/reload and a
-fresh process over copied test saves have identical scenario-state SHA-256;
-the new process continues for another 12 text waits. A Brave DOM-text check
-exercises title/start, config, volume drag and native exit with zero console
-messages, exceptions or HTML dialogs. A fresh process on the same origin and
-profile retains BGM 82 / master 100, group gains 656 / 1000, without save imports.
-This is a compatibility smoke check,
-not a repeated complete route on Rev.3083. The relevant runtime/scene tests
-pass 297/297, including fresh saves and exit for the new profile.
+The full nonvisual installation probe selects the first visible enabled option
+at all 10 choices. It completes 23,121 clicks / 27,543 text waits, executes the
+staff-roll scroll and exit callbacks, records the game's clear/staff flags,
+resets and returns to title. Include, Lua-call, unknown-tag and tag-error reports
+are zero. All seven NDJSON streams (2,968,408 records) are read and hashed.
+After reset there are no scenario `rt`/`rt2` tags; the four U+3000 `print` calls
+are the accepted native font warmup. Save/load/reload at click 2,000 and a fresh
+process over copies of the completed route's own saves have identical
+scenario-state SHA-256. The fresh process continues for 20 text waits and
+retains `mis=1`, `staff01=1`, `staff03mis=1` and `movieop=true`.
+
+The route resolves 1,827 image paths, performs 6,193 real nonvisual image decodes
+without failures, and decodes 11,305 sound files. Image paths and ordered audio
+metadata/hashes match the previous route. The real font path performs 255 raster
+jobs with 15,112 restored cache entries. Sampled Lua peak is 5,568.979 KiB;
+observed main-thread Wasm memories peak at 274 MiB, below the 2 GiB limit.
+These are sampled measurements, not absolute process peaks. The probe simulates
+movie waits and screenshot surfaces; it does not establish visual fidelity or
+natural browser movie playback. Reports: `route320/review321.safe.json` and
+`fresh322/review323.safe.json` under the evidence directory above.
+
+A separate Brave DOM-text check exercises title/start, config, volume drag and
+native exit with zero console messages, exceptions or HTML dialogs. A fresh
+process on the same origin and profile retains BGM 82 / master 100, group gains
+656 / 1000, without save imports. The relevant runtime/scene tests pass 297/297,
+including fresh saves and exit for the new profile.
 
 ## Rev.2898 (PE32)
 
