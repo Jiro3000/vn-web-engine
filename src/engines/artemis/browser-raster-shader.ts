@@ -6,6 +6,11 @@ import {
 import {ARTEMIS_MOSAIC_FRAGMENT_SOURCE, type ArtemisMosaicUniforms} from './mosaic-shader.js';
 import {ARTEMIS_NOISE_FRAGMENT_SOURCE, type ArtemisNoiseUniforms} from './noise-shader.js';
 import {
+  artemisDimensionFragmentSource,
+  type ArtemisDimensionKind,
+  type ArtemisDimensionUniforms,
+} from './dimension-shader.js';
+import {
   artemisPerspectiveFragmentSource,
   type ArtemisPerspectiveKind,
   type ArtemisPerspectiveUniforms,
@@ -63,6 +68,7 @@ export class ArtemisBrowserRasterShader {
       | ArtemisPerspectiveKind
       | ArtemisOffsetBlurKind
       | 'noise'
+      | ArtemisDimensionKind
       | ArtemisCompositeKind = 'raster',
   ) {
     artemisRevision(hash);
@@ -84,25 +90,27 @@ export class ArtemisBrowserRasterShader {
     try {
       fragment = compile(
         gl.FRAGMENT_SHADER,
-        kind === 'noise'
-          ? ARTEMIS_NOISE_FRAGMENT_SOURCE
-          : kind === 'raster'
-            ? ARTEMIS_RASTER_FRAGMENT_SOURCE
-            : kind === 'screen'
-              ? ARTEMIS_SCREEN_FRAGMENT_SOURCE
-              : kind === 'blur_h' || kind === 'blur_v'
-                ? artemisBlurFragmentSource(kind)
-                : ['blur_diag', 'blur_pair_h', 'blur_pair_v'].includes(kind)
-                  ? artemisOffsetBlurFragmentSource(kind as ArtemisOffsetBlurKind)
-                  : kind === 'radial'
-                    ? ARTEMIS_RADIAL_FRAGMENT_SOURCE
-                    : kind === 'mosaic'
-                      ? ARTEMIS_MOSAIC_FRAGMENT_SOURCE
-                      : kind.startsWith('perspective')
-                        ? artemisPerspectiveFragmentSource(kind as ArtemisPerspectiveKind)
-                        : ['add', 'mul', 'compbr', 'compbrc', 'compdk', 'compdkc'].includes(kind)
-                          ? artemisCompositeFragmentSource(kind as ArtemisCompositeKind)
-                          : artemisColorFragmentSource(kind as ArtemisColorKind),
+        kind === 'dimhole' || kind === 'dimring'
+          ? artemisDimensionFragmentSource(kind)
+          : kind === 'noise'
+            ? ARTEMIS_NOISE_FRAGMENT_SOURCE
+            : kind === 'raster'
+              ? ARTEMIS_RASTER_FRAGMENT_SOURCE
+              : kind === 'screen'
+                ? ARTEMIS_SCREEN_FRAGMENT_SOURCE
+                : kind === 'blur_h' || kind === 'blur_v'
+                  ? artemisBlurFragmentSource(kind)
+                  : ['blur_diag', 'blur_pair_h', 'blur_pair_v'].includes(kind)
+                    ? artemisOffsetBlurFragmentSource(kind as ArtemisOffsetBlurKind)
+                    : kind === 'radial'
+                      ? ARTEMIS_RADIAL_FRAGMENT_SOURCE
+                      : kind === 'mosaic'
+                        ? ARTEMIS_MOSAIC_FRAGMENT_SOURCE
+                        : kind.startsWith('perspective')
+                          ? artemisPerspectiveFragmentSource(kind as ArtemisPerspectiveKind)
+                          : ['add', 'mul', 'compbr', 'compbrc', 'compdk', 'compdkc'].includes(kind)
+                            ? artemisCompositeFragmentSource(kind as ArtemisCompositeKind)
+                            : artemisColorFragmentSource(kind as ArtemisColorKind),
       );
       program = gl.createProgram();
       if (!program) throw Error('Cannot allocate raster program');
@@ -146,6 +154,7 @@ export class ArtemisBrowserRasterShader {
       | ArtemisNoiseUniforms
       | ArtemisRadialUniforms
       | ArtemisMosaicUniforms
+      | ArtemisDimensionUniforms
       | ArtemisPerspectiveUniforms
       | ArtemisCompositeUniforms,
     sampler: {readonly filter: 'nearest' | 'linear'; readonly address: 'clamp' | 'repeat'},
@@ -298,6 +307,22 @@ export class ArtemisBrowserRasterShader {
       const c = p as ArtemisCompositeUniforms;
       if (!Number.isFinite(c.param)) throw Error('Missing composite uniforms');
       gl.uniform1f(gl.getUniformLocation(this.program, 'uParam'), c.param);
+    }
+    if (this.kind === 'dimhole' || this.kind === 'dimring') {
+      const d = p as ArtemisDimensionUniforms;
+      if (![d.centerX, d.centerY, d.radius, d.ratio].every(Number.isFinite))
+        throw Error('Missing dimension uniforms');
+      for (const [name, value] of [
+        ['uCenterX', d.centerX],
+        ['uCenterY', d.centerY],
+        ['uRadius', d.radius],
+        ['uRatio', d.ratio],
+      ] as const)
+        gl.uniform1f(gl.getUniformLocation(this.program, name), value);
+      if (this.kind === 'dimring') {
+        if (!Number.isFinite(d.thick)) throw Error('Missing dimension ring thickness');
+        gl.uniform1f(gl.getUniformLocation(this.program, 'uThick'), d.thick!);
+      }
     }
     if (this.kind === 'mosaic') {
       const m = p as ArtemisMosaicUniforms;

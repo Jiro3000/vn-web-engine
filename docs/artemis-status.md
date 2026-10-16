@@ -25,7 +25,7 @@ Unknown executable hashes are refused.
   voices. It covers boot, the prologue with its fullscreen movies, the title, scenario
   text with click-waits, choices through layer events, and a scenario save/load round
   trip. It displays no game assets and opens no audio device.
-- Fullscreen movies: ASF files (WMV3 with WMA Standard, Pro or Lossless audio) decode
+- Fullscreen movies: ASF files (WMV3 or WVC1 with WMA Standard, Pro or Lossless audio) decode
   in the movie worker with the Windows Media wasm decoder and play on the audio clock
   over a canvas; other containers play in a `<video>` element.
 - Screenshots: `takess`/`savess` render offscreen and write PNG thumbnails into save

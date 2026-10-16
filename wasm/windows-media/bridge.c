@@ -1,5 +1,5 @@
 /* Windows Media decoder bridge over the libavcodec subset in vendor/. One handle wraps one
- * decoder: WMV3 video (planar 8-bit 4:2:0) or WMA Standard/Pro/Lossless audio (converted to
+ * decoder: WMV3/VC-1 video (planar 8-bit 4:2:0) or WMA Standard/Pro/Lossless audio (converted to
  * planar float). Timestamps are milliseconds and pass through the decoder unchanged. */
 #include <stdint.h>
 #include <stdlib.h>
@@ -16,12 +16,13 @@ typedef struct {
   int pcm_capacity;
 } decoder;
 
-/* kind 0: video, `tag` a FourCC (WMV3); kind 1: audio, `tag` a WAVEFORMATEX format tag. */
+/* kind 0: video, `tag` a FourCC (WMV3/WVC1); kind 1: audio, `tag` a WAVEFORMATEX format tag. */
 decoder *wm_open(int kind, uint32_t tag, int width, int height, int sample_rate, int channels,
                  int bit_rate, int block_align, int bits_per_sample, const uint8_t *extra,
                  int extra_size) {
   enum AVCodecID id = AV_CODEC_ID_NONE;
   if (kind == 0 && tag == 0x33564d57u) id = AV_CODEC_ID_WMV3;
+  if (kind == 0 && tag == 0x31435657u) id = AV_CODEC_ID_VC1;
   if (kind == 1 && tag == 0x161) id = AV_CODEC_ID_WMAV2;
   if (kind == 1 && tag == 0x162) id = AV_CODEC_ID_WMAPRO;
   if (kind == 1 && tag == 0x163) id = AV_CODEC_ID_WMALOSSLESS;

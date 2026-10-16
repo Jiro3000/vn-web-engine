@@ -7,6 +7,7 @@ import {
   ARTEMIS_3139_EXECUTABLE_SHA256,
   ARTEMIS_3139_RESOURCE_VARIANT_SHA256,
   ARTEMIS_3257_EXECUTABLE_SHA256,
+  ARTEMIS_3257_WRAPPED_RESOURCE_VARIANT_SHA256,
 } from '../dist/engines/artemis/revision.js';
 import {rectangleFont, createNodeFontWorker} from './freetype-fixtures.mjs';
 
@@ -17,36 +18,37 @@ const legacy = [
   ARTEMIS_3139_RESOURCE_VARIANT_SHA256,
 ];
 
-test('Rev3257 preserves a 300-pixel file-font request through real FreeType rasterization', async () => {
-  const worker = await createNodeFontWorker();
-  const requests = [];
-  const owner = new ArtemisFileFonts(ARTEMIS_3257_EXECUTABLE_SHA256, {
-    readFontFile: async () => rectangleFont(),
-    hasSystemFontFamily: async () => false,
-    openFontFace: async (bytes) => {
-      const face = await worker.open(bytes);
-      return {
-        requestSize: (...args) => {
-          requests.push(args);
-          return face.requestSize(...args);
-        },
-        rasterize: (...args) => face.rasterize(...args),
-        close: () => face.close(),
-      };
-    },
+for (const hash of [ARTEMIS_3257_EXECUTABLE_SHA256, ARTEMIS_3257_WRAPPED_RESOURCE_VARIANT_SHA256])
+  test(`Rev3257 ${hash.slice(0, 8)} preserves a 300-pixel file-font request through real FreeType rasterization`, async () => {
+    const worker = await createNodeFontWorker();
+    const requests = [];
+    const owner = new ArtemisFileFonts(hash, {
+      readFontFile: async () => rectangleFont(),
+      hasSystemFontFamily: async () => false,
+      openFontFace: async (bytes) => {
+        const face = await worker.open(bytes);
+        return {
+          requestSize: (...args) => {
+            requests.push(args);
+            return face.requestSize(...args);
+          },
+          rasterize: (...args) => face.rasterize(...args),
+          close: () => face.close(),
+        };
+      },
+    });
+    try {
+      const font = await owner.load('synthetic.ttf', 300);
+      assert.deepEqual(requests, [[3, 0, 19200]]);
+      assert.equal(font.metrics.size, 300);
+      const glyph = await font.glyph(65);
+      assert.deepEqual([glyph.width, glyph.height, glyph.advance], [75, 150, 225]);
+      await font.close();
+    } finally {
+      await owner.close();
+      worker.close();
+    }
   });
-  try {
-    const font = await owner.load('synthetic.ttf', 300);
-    assert.deepEqual(requests, [[3, 0, 19200]]);
-    assert.equal(font.metrics.size, 300);
-    const glyph = await font.glyph(65);
-    assert.deepEqual([glyph.width, glyph.height, glyph.advance], [75, 150, 225]);
-    await font.close();
-  } finally {
-    await owner.close();
-    worker.close();
-  }
-});
 
 test('Legacy file-font hashes keep uint8 sizing and the zero-size refusal', async () => {
   for (const hash of legacy) {

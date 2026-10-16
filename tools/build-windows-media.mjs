@@ -4,7 +4,7 @@ import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {fileURLToPath} from 'node:url';
 
-// Builds the Windows Media decoder (WMV3 video; WMA Standard, Pro and Lossless audio) from the
+// Builds the Windows Media decoder (WMV3/VC-1 video; WMA Standard, Pro and Lossless audio) from the
 // FFmpeg 7.1.1 libavcodec/libavutil subset in wasm/windows-media/vendor with the flags FFmpeg's
 // configure chose for that subset (see wasm/windows-media/README.md).
 const root = fileURLToPath(new URL('../', import.meta.url));

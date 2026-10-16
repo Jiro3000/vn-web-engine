@@ -6,14 +6,20 @@ export function fontCacheFixture({
   codePoint = 65,
   clip = [1, 0, 2, 1],
   layout = 'expanded',
+  metrics = [-2, 5, 23],
+  style = 0,
   packedKey = ((32 << 24) | ((size & 255) << 16) | (codePoint & 65535)) >>> 0,
 } = {}) {
   const face = Buffer.from('synthetic.ttf');
   const fields =
     layout === 'packed'
       ? [color, 0, 0x0000ff, packedKey, 0]
-      : [size, 0, 1, color, 0, 0x0000ff, codePoint, 0];
-  const bytes = Buffer.alloc(8 + face.length + fields.length * 4 + 16 + 3);
+      : layout === 'expanded-metrics'
+        ? [size, 0, 1, color, 0, 0x0000ff, style, codePoint, 0]
+        : [size, 0, 1, color, 0, 0x0000ff, codePoint, 0];
+  const bytes = Buffer.alloc(
+    8 + face.length + fields.length * 4 + 16 + (layout === 'expanded-metrics' ? 12 : 0) + 3,
+  );
   bytes.writeUInt32LE(1, 0);
   bytes.writeUInt32LE(face.length, 4);
   bytes.set(face, 8);
@@ -22,7 +28,7 @@ export function fontCacheFixture({
     bytes.writeUInt32LE(value, offset);
     offset += 4;
   }
-  for (const value of clip) {
+  for (const value of layout === 'expanded-metrics' ? [...metrics, ...clip] : clip) {
     bytes.writeFloatLE(value, offset);
     offset += 4;
   }

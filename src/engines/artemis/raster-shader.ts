@@ -7,6 +7,12 @@ import {
 import {artemisMosaicShade, ARTEMIS_MOSAIC_FRAGMENT_SOURCE} from './mosaic-shader.js';
 import {artemisNoiseShade, ARTEMIS_NOISE_FRAGMENT_SOURCE} from './noise-shader.js';
 import {
+  artemisDimensionShade,
+  artemisDimensionFragmentSource,
+  type ArtemisDimensionKind,
+  type ArtemisDimensionUniforms,
+} from './dimension-shader.js';
+import {
   artemisPerspectiveShade,
   artemisPerspectiveFragmentSource,
   type ArtemisPerspectiveKind,
@@ -202,6 +208,16 @@ export async function compileArtemisShaderPreset(
       readonly fragmentSource: string;
       readonly shade: typeof artemisNoiseShade;
     }
+  | {
+      readonly kind: ArtemisDimensionKind;
+      readonly fragmentSource: string;
+      readonly shade: (
+        sample: ArtemisShaderSample,
+        u: number,
+        v: number,
+        p: ArtemisDimensionUniforms,
+      ) => readonly [number, number, number, number];
+    }
 > {
   const revision = artemisRevision(hash);
   const digest = await crypto.subtle.digest('SHA-256', Uint8Array.from(bytes).buffer),
@@ -322,6 +338,19 @@ export async function compileArtemisShaderPreset(
       fragmentSource: ARTEMIS_MOSAIC_FRAGMENT_SOURCE,
       shade: artemisMosaicShade,
     };
+  const dimension =
+    signature === 'a939dd872d2d041cb9e45eb6ddda4bb771709672c8b10572ca242a50cf3daa5d'
+      ? 'dimhole'
+      : signature === '0da6785d89443f1b11d4beba44b1e197cb4d773e35cba2540b6574f35f1e67ea'
+        ? 'dimring'
+        : null;
+  if (dimension)
+    return {
+      kind: dimension,
+      fragmentSource: artemisDimensionFragmentSource(dimension),
+      shade: (sample: ArtemisShaderSample, u: number, v: number, p: ArtemisDimensionUniforms) =>
+        artemisDimensionShade(dimension, sample, u, v, p),
+    };
   throw Error('Unsupported Artemis custom shader source');
 }
 
@@ -336,6 +365,7 @@ export type ArtemisShaderPresetKind =
   | ArtemisPerspectiveKind
   | ArtemisOffsetBlurKind
   | 'noise'
+  | ArtemisDimensionKind
   | ArtemisCompositeKind;
 /** Reconstructed preset source, independent of resource selection/registration. */
 export function artemisShaderFragmentSource(kind: ArtemisShaderPresetKind): string {
@@ -359,6 +389,9 @@ export function artemisShaderFragmentSource(kind: ArtemisShaderPresetKind): stri
       return ARTEMIS_RADIAL_FRAGMENT_SOURCE;
     case 'mosaic':
       return ARTEMIS_MOSAIC_FRAGMENT_SOURCE;
+    case 'dimhole':
+    case 'dimring':
+      return artemisDimensionFragmentSource(kind);
     case 'perspective':
     case 'perspective_anchored':
     case 'perspective_vertical':

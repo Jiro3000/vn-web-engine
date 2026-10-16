@@ -97,6 +97,14 @@ export function createArtemisDrawShaderPreset(
       scalar('size', 'uSize');
       scalar('ratio', 'uRatio');
       break;
+    case 'dimhole':
+    case 'dimring':
+      scalar('centerX', 'uCenterX');
+      scalar('centerY', 'uCenterY');
+      scalar('radius', 'uRadius');
+      scalar('ratio', 'uRatio');
+      if (kind === 'dimring') scalar('thick', 'uThick');
+      break;
     case 'perspective':
     case 'perspective_anchored':
     case 'perspective_vertical':

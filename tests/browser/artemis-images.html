@@ -1646,6 +1646,8 @@
         'compbrc',
         'compdk',
         'compdkc',
+        'dimhole',
+        'dimring',
         'gray',
         'mosaic',
         'mul',
@@ -1668,6 +1670,10 @@
           inter: 0,
           size: kind === 'mosaic' ? 2 : kind === 'radial' ? 0.8 : 0.25,
           ratio: 1,
+          centerX: 0.5,
+          centerY: 0.5,
+          radius: 0.2,
+          thick: 0.1,
           step: 0.25,
           weights: [0.5, 0.25, 0, 0, 0, 0, 0, 0],
           ax: 0.5,
@@ -1702,6 +1708,9 @@
                   filter: 'nearest',
                   blendState: replaceBlend,
                   fragment: adapter.fragment,
+                  // Compare full shader RGBA under replacement blending, including
+                  // RGB beneath dimhole's zero alpha. Normal scene draws discard it.
+                  discardTransparent: false,
                   parameters: adapter.bufferParameters(
                     new ArtemisShaderConstantStorage(revision).update(
                       [...constants.values()].map((values, i) => ({name: 'ignored' + i, values})),

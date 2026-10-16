@@ -50,8 +50,9 @@ not a separately invented AST VM.
 `convertEncoding` accepts explicit `sjis` / `utf8` byte-string conversions through
 the shared text codecs, preserving embedded NUL. Its Rev.2601 registration and
 argument handling are documented in `docs/artemis-revisions.md`. EUC/JIS and native
-input auto-detection remain refused. Game licensing continues through the original
-Lua checks and the user's key; it is not supplied by the engine profile.
+input auto-detection remain refused. The engine profile supplies no activation
+result. Original Lua checks run unless the installation includes a separate
+user-provided compatibility overlay.
 
 `httpget` waits in mode 8 while frame callbacks continue. It uses the shared fetch
 host, publishes real response status/bytes or native negative failure codes, and
@@ -1353,7 +1354,7 @@ the movie on key role 0 or active skip, skip 2 on key role 1, closing the player
 releasing the run mode and writing `s.clickskip`.
 
 The native player is a DirectShow graph rendering the loose file. The game's movies are
-ASF files with WMV3 video and WMA Standard, Pro or Lossless audio, which browsers cannot
+ASF files with WMV3 or WVC1 video and WMA Standard, Pro or Lossless audio, which browsers cannot
 decode. `BrowserFullscreenMoviePlayer` streams an ASF file through the shared software
 movie player: `AsfMovie` (`src/formats/asf/movie.ts`) decodes it in the movie worker
 with the Windows Media decoder (`wasm/windows-media/`), the audio clock paces the
@@ -1639,8 +1640,13 @@ packed style/UTF-16 character. Atlas images are decoded once and shared by entri
 individual crops enter the bounded glyph cache only when used. A later restore
 replaces matching entries, while existing insertion blocks keep their storage.
 Scenario reset retains this process cache; player disposal releases it. Reports
-include retained atlas bytes, entry count and hits. Other revisions' restore formats,
-gray atlases, non-UTF-8 faces and fractional clips remain unsupported and fail
+include retained atlas bytes, entry count and hits. Rev.3257 uses eight separate
+32-bit key fields followed by atlas index, float bearings/advance and inclusive
+clip coordinates (`0x1400092e0`, Lua adapter `0x140139640`). Its restored glyphs
+retain those metrics; misses keep full-size FreeType bearing geometry. Both exact
+Rev.3257 roots share this format; the wrapped variant has byte-identical embedded
+engine sections, as documented in `docs/artemis-revisions.md`.
+Other revisions' restore formats, gray atlases, non-UTF-8 faces and fractional clips remain unsupported and fail
 explicitly; missing index files leave the cache unchanged. PNG decode errors propagate.
 
 A generated rectangle font verifies FreeType worker → native glyph paint worker →

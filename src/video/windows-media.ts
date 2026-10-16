@@ -8,7 +8,7 @@ let compiled: WebAssembly.Module | undefined;
 export type WindowsMediaCodec =
   | {
       readonly kind: 'video';
-      /** BITMAPINFOHEADER FourCC; WMV3 (Windows Media Video 9) is supported. */
+      /** BITMAPINFOHEADER FourCC: WMV3 (Video 9 Simple/Main) or WVC1 (VC-1 Advanced). */
       readonly codec: number;
       readonly width: number;
       readonly height: number;

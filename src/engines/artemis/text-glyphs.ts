@@ -80,7 +80,7 @@ export class ArtemisTextGlyphs {
     private readonly fontOwner: ArtemisFileFonts,
     private readonly painter: ArtemisGlyphPainter,
   ) {
-    if (artemisRevision(hash).glyphGeometry === 'clipped-cell')
+    if (artemisRevision(hash).fontCacheKey !== null)
       this.restored = new ArtemisRestoredFontCache(hash, (path) =>
         fontOwner.readCacheResource(path),
       );
@@ -269,10 +269,17 @@ export class ArtemisTextGlyphs {
                 }
                 return Object.freeze({codePoint, surface: restored});
               }
-              let glyph = await font.glyph(this.restored ? codePoint & 65535 : codePoint);
+              let glyph = await font.glyph(
+                artemisRevision(this.hash).glyphGeometry === 'clipped-cell'
+                  ? codePoint & 65535
+                  : codePoint,
+              );
               this.assertOpen();
               if (!glyph) return emptyGlyph(codePoint);
-              if (this.restored && provider.kind === 'file')
+              if (
+                artemisRevision(this.hash).glyphGeometry === 'clipped-cell' &&
+                provider.kind === 'file'
+              )
                 glyph = artemisClippedCellGlyph(glyph, font.metrics.size);
               const surface = await this.painter.paint(glyph, {
                 shadow,
@@ -285,9 +292,10 @@ export class ArtemisTextGlyphs {
                 decorationMetrics: font.metrics,
               });
               this.assertOpen();
-              const result = this.restored
-                ? {...surface, left: 0, top: 0, advance: surface.image?.width ?? surface.advance}
-                : surface;
+              const result =
+                artemisRevision(this.hash).glyphGeometry === 'clipped-cell'
+                  ? {...surface, left: 0, top: 0, advance: surface.image?.width ?? surface.advance}
+                  : surface;
               entry.bytes = surface.image?.pixels.byteLength ?? 0;
               if (this.glyphs.get(key) === entry) {
                 this.cachedBytes += entry.bytes;

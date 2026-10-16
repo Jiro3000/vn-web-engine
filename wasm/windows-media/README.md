@@ -1,7 +1,8 @@
 # Windows Media decoder
 
 This module decodes the Windows Media codecs of ASF movies, which browsers cannot play:
-WMV3 (Windows Media Video 9, Simple and Main profile) video and WMA Standard (0x161),
+WMV3 (Windows Media Video 9, Simple and Main profile) and WVC1 (VC-1 Advanced Profile)
+video and WMA Standard (0x161),
 WMA Pro (0x162) and WMA Lossless (0x163) audio. `src/video/windows-media.ts` wraps it as
 `WindowsMediaDecoder`, and `src/formats/asf/movie.ts` combines it with the ASF demuxer
 (`src/formats/asf/demux.ts`) into a `MovieStream`. Fullscreen ASF movies therefore play
@@ -28,7 +29,7 @@ movies.
     --disable-postproc --disable-avfilter --disable-asm --disable-inline-asm \
     --disable-x86asm --disable-pthreads --disable-iconv --disable-zlib --disable-bzlib \
     --disable-lzma --disable-runtime-cpudetect --disable-debug \
-    --enable-decoder='wmv3,wmav2,wmapro,wmalossless'
+    --enable-decoder='vc1,wmv3,wmav2,wmapro,wmalossless'
   ```
 
   The source archive is `ffmpeg-7.1.1.tar.xz` (SHA-256
@@ -55,7 +56,9 @@ the 1.2 MB module does not enlarge pages that never play an ASF movie.
 `tests/asf-windows-media.test.mjs` checks the ASF layout and demuxer on synthetic files,
 including split, multiple and compressed payloads. It also decodes a synthetic WMA
 fixture (`tests/fixtures/asf/sine-wmav2.wma`, two sine tones) and checks its sample count
-and per-channel tone. No WMV3 encoder exists, so video is verified against the native
+and per-channel tone. Generated VC-1 Advanced Profile headers exercise native initialization,
+required sequence/entry markers, drain and disposal. WVC1 FourCC dispatch uses the existing
+libavcodec VC-1 decoder; unknown video tags remain refused. No WMV3 encoder exists, so video is verified against the native
 FFmpeg build outside the suite. Every decoded frame of three 720p and 1080p WMV3 movies
 had the same `framemd5` hash, and every movie had the same audio sample count. WMA
 Lossless audio was bit-identical. WMA Standard and Pro audio differed by at most 3.6e-7,

@@ -3,6 +3,55 @@ import assert from 'node:assert/strict';
 import {ArtemisScene} from '../dist/engines/artemis/scene.js';
 import {ARTEMIS_3179_EXECUTABLE_SHA256 as revision} from '../dist/engines/artemis/revision.js';
 
+test('Dimension effects preserve reversed-edge smoothstep, raw Fore UV and aspect-correct distance', async () => {
+  const {artemisDimensionShade: shade} =
+    await import('../dist/engines/artemis/dimension-shader.js');
+  const p = {alpha: 0.5, centerX: 0.5, centerY: 0.5, radius: 0.2, ratio: 2, thick: 0.1};
+  const sample = (u, v) => [u, v, 0.6, 0.8];
+  const close = (actual, expected) =>
+    actual.forEach((v, i) =>
+      assert.ok(Math.abs(v - expected[i]) < 1e-5, `${i}: ${v}/${expected[i]}`),
+    );
+  // Halfway through the native distortion range: source UV approaches the centre.
+  close(shade('dimhole', sample, 0.75, 0.5, p), [0.625, 0.5, 0.6, 0.4]);
+  // Ratio changes the distance; interpolation still uses uncorrected Fore coordinates.
+  close(shade('dimhole', sample, 0.5, 0.625, p), [0.5, 0.5625, 0.6, 0.4]);
+  assert.equal(shade('dimhole', sample, 0.5, 0.5, p)[3], 0);
+  close(shade('dimring', sample, 0.75, 0.5, p), [1.25, 1, 1.1, 0.4]);
+  close(shade('dimring', sample, 0.5, 0.625, p), [1, 1.125, 1.1, 0.4]);
+  close(shade('dimring', sample, 0.6, 0.5, p), [0.6, 0.5, 0.6, 0.4]);
+  close(shade('dimring', sample, 0.9, 0.5, p), [0.9, 0.5, 0.6, 0.4]);
+  // Collapsed equal edges follow HLSL saturate(0/0)=0, with finite output.
+  assert.ok(shade('dimhole', sample, 0.5, 0.5, {...p, radius: 0}).every(Number.isFinite));
+  assert.throws(() => shade('dimring', sample, 0.5, 0.5, {...p, thick: undefined}), /thickness/);
+});
+
+test('Dimension draw presets consume native ordered vectors across the second constant-buffer row', async () => {
+  const {createArtemisDrawShaderPreset} = await import('../dist/engines/artemis/draw-shader.js');
+  const {ARTEMIS_3257_WRAPPED_RESOURCE_VARIANT_SHA256: hash} =
+    await import('../dist/engines/artemis/revision.js');
+  const ring = createArtemisDrawShaderPreset(hash, 'dimring');
+  const buffer = ring.nativeParameters([
+    {name: 'ignored-order', values: [0.5, 0.5, 0.2, 2]},
+    {name: 'ignored-thickness', values: [0.1]},
+  ]);
+  assert.deepEqual(Array.from(buffer.slice(0, 8)), [
+    0.5,
+    0.5,
+    Math.fround(0.2),
+    2,
+    Math.fround(0.1),
+    0,
+    0,
+    0,
+  ]);
+  assert.equal(ring.needsUserTexture, false);
+  assert.equal(ring.requiresBackground, false);
+  assert.equal(ring.replacesDestination, false);
+  assert.match(ring.fragment, /uThick=parameters\[1\]\.x/);
+  assert.match(ring.fragment, /fore\.a\*=tint\.a/);
+});
+
 test('Artemis child maps retain each nested structure until recursive commit', () => {
   const scene = new ArtemisScene(revision);
   const old = {image: 'old'},
@@ -6078,6 +6127,166 @@ test('DX9 AA blur capture binds independent background UV and disables blending 
     } finally {
       layers.close();
       shader.dispose();
+    }
+  }
+});
+
+test('Rev.3257 restored atlases preserve independent style/codepoint, 32-bit sizes and bearing/advance metrics', async () => {
+  const {ArtemisRestoredFontCache} = await import('../dist/engines/artemis/font-cache.js');
+  const {fontCacheFixture} = await import('./artemis-font-cache-fixtures.mjs');
+  const revisions = await import('../dist/engines/artemis/revision.js');
+  for (const hash of [
+    revisions.ARTEMIS_3257_EXECUTABLE_SHA256,
+    revisions.ARTEMIS_3257_WRAPPED_RESOURCE_VARIANT_SHA256,
+  ]) {
+    const files = fontCacheFixture({
+      layout: 'expanded-metrics',
+      size: 300,
+      style: 0x10001,
+      codePoint: 0x1f600,
+    });
+    const cache = new ArtemisRestoredFontCache(hash, async (path) => files[path] ?? null);
+    const key = {
+      face: 'synthetic.ttf',
+      size: 300,
+      shadow: 0,
+      outline: 1,
+      color: 0xff0000,
+      shadowColor: 0,
+      outlineColor: 0x0000ff,
+      style: 0x10001,
+      codePoint: 0x1f600,
+    };
+    try {
+      await cache.restore('cache/');
+      const glyph = cache.get(key);
+      assert.deepEqual(
+        [glyph.left, glyph.top, glyph.advance, glyph.image.width, glyph.image.height],
+        [-2, 5, 23, 2, 2],
+      );
+      assert.deepEqual(
+        [...glyph.image.pixels],
+        [10, 20, 30, 40, 50, 60, 70, 80, 130, 140, 150, 160, 170, 180, 190, 200],
+      );
+      assert.equal(cache.has({...key, size: 44}), false);
+      assert.equal(cache.has({...key, size: 556}), false);
+      assert.equal(cache.has({...key, style: 1}), false);
+      assert.equal(cache.has({...key, codePoint: 0xf600}), false);
+      Object.assign(
+        files,
+        fontCacheFixture({
+          layout: 'expanded-metrics',
+          size: 300,
+          style: 0x10001,
+          codePoint: 0x1f600,
+          metrics: [-3, 4, 21],
+          clip: [0, 0, 0, 0],
+        }),
+      );
+      await cache.restore('cache/');
+      assert.deepEqual(
+        [
+          cache.get(key).left,
+          cache.get(key).top,
+          cache.get(key).advance,
+          cache.get(key).image.width,
+        ],
+        [-3, 4, 21, 1],
+      );
+      assert.equal(glyph.image.width, 2);
+      delete files['cache/0.png'];
+      await cache.restore('cache/');
+      assert.deepEqual(cache.get(key), {image: null, left: -3, top: 4, advance: 21});
+      files['cache/index.dat'] = fontCacheFixture({
+        layout: 'expanded-metrics',
+        metrics: [NaN, 0, 1],
+      })['cache/index.dat'];
+      await assert.rejects(cache.restore('cache/'), /metrics/);
+      assert.equal(cache.get(key).advance, 21);
+    } finally {
+      cache.close();
+    }
+  }
+});
+
+test('Rev.3257 atlas hits reach normal/ruby layout while misses retain full-size FreeType bearing geometry', async () => {
+  const {ArtemisTextGlyphs} = await import('../dist/engines/artemis/text-glyphs.js');
+  const {ArtemisFileFonts} = await import('../dist/engines/artemis/file-fonts.js');
+  const {fontCacheFixture} = await import('./artemis-font-cache-fixtures.mjs');
+  const {rectangleFont, createNodeFontWorker, createNodeGlyphPainter} =
+    await import('./freetype-fixtures.mjs');
+  const revisions = await import('../dist/engines/artemis/revision.js');
+  for (const hash of [
+    revisions.ARTEMIS_3257_EXECUTABLE_SHA256,
+    revisions.ARTEMIS_3257_WRAPPED_RESOURCE_VARIANT_SHA256,
+  ]) {
+    const files = {
+      ...fontCacheFixture({layout: 'expanded-metrics', size: 300}),
+      'synthetic.ttf': rectangleFont(),
+    };
+    const worker = await createNodeFontWorker(),
+      painter = await createNodeGlyphPainter(hash);
+    let rasterJobs = 0;
+    const fonts = new ArtemisFileFonts(hash, {
+      readFontFile: async (path) => files[path] ?? null,
+      hasSystemFontFamily: async () => false,
+      openFontFace: async (bytes) => {
+        const face = await worker.open(bytes);
+        return {
+          requestSize: (...args) => face.requestSize(...args),
+          close: () => face.close(),
+          rasterize: (...args) => {
+            rasterJobs++;
+            return face.rasterize(...args);
+          },
+        };
+      },
+    });
+    const loader = new ArtemisTextGlyphs(hash, fonts, painter);
+    const style = {
+      face: 'synthetic.ttf',
+      rubyface: 'synthetic.ttf',
+      size: 300,
+      rubysize: 300,
+      shadow: 0,
+      outline: 1,
+      rubyshadow: 0,
+      rubyoutline: 1,
+      spacetop: 0,
+      spacemiddle: 0,
+      spacebottom: 0,
+      kerning: 0,
+      rubykerning: 0,
+      color: 0xff0000,
+      shadowcolor: 0,
+      outlinecolor: 0x0000ff,
+      styleBits: 0,
+    };
+    try {
+      await loader.restoreFontCache('cache/');
+      const hit = await loader.load('AA', 'A', style);
+      assert.equal(rasterJobs, 0);
+      assert.equal(hit.main[0].advance, 23);
+      assert.equal(hit.ruby[0].advance, 23);
+      assert.deepEqual([hit.main[0].glyph.surface.left, hit.main[0].glyph.surface.top], [-2, 5]);
+      const miss = await loader.load('A', '', {...style, color: 0xffffff});
+      assert.equal(rasterJobs, 1);
+      assert.deepEqual(
+        [
+          miss.main[0].advance,
+          miss.main[0].glyph.surface.image.width,
+          miss.main[0].glyph.surface.image.height,
+        ],
+        [227, 77, 152],
+      );
+      await loader.restoreFontCache('cache/');
+      await loader.load('A', '', {...style, color: 0xffffff});
+      assert.equal(rasterJobs, 1);
+    } finally {
+      await loader.close();
+      await fonts.close();
+      painter.close();
+      worker.close();
     }
   }
 });

@@ -14,6 +14,68 @@ only `.rsrc` and the header fields that size it (SizeOfInitializedData, SizeOfIm
 CheckSum, the resource directory size and the `.rsrc` section header) differ. It shares
 every Rev.3139 address and field below.
 
+## Wrapped Rev.3257 resource variant
+
+Ryuusei World Actor: Gaslight Bullet root executable SHA-256
+`116507c5967b82f7816b69aeeb1553b47f2bfd2b91aac6dc02eb9371497d0c66`
+selects the Rev.3257 profile independently. Its outer PE32 wrapper is never executed.
+An unencrypted PE64 engine begins at file offset `0x7e000`; its SHA-256 is
+`c0e25d283b3f838dddf456eb26e4846bef9316cebfe1cb52054c55be6d21f4b4`.
+The embedded identity alone is not accepted as a root installation identity.
+Its `.text`, `.rdata`, `.data`, `.pdata`, second `.text` and `_RDATA` sections
+are byte-identical at the same RVAs to the supported `7c604c92…135a08a` executable.
+Only `.rsrc` differs. The embedded boot function `0x1400c7d80` independently confirms
+Rev.3257, `Thu Apr 17 21:58:09 2025`, support 1103, save version 1003 and LLP64.
+The existing Rev.3257 address map therefore applies to this embedded engine.
+The DLL is a separate set of window/process helpers; it is not executed.
+
+Both exact Rev.3257 identities support the native painted-font cache. Registration
+`0x140130100` binds `restoreFontCache` to `0x140139640`, which invokes
+`0x1400092e0`. After the UTF-8 face, each index record has eight independent
+32-bit fields: size, shadow, outline, three colors, style and character. An atlas
+index, float left/top/advance and four inclusive clip coordinates follow.
+The hash at `0x140008210` consumes all eight fields; style and character are
+not the older combined 16-bit pair. Bearings and advance survive atlas restoration,
+including missing-atlas entries. A cache miss retains full-size FreeType geometry;
+the older packed/expanded PE32 cell formats and their byte sizing stay separate.
+
+Two exact DX11 source programs are supported: dimension hole
+`a939dd872d2d041cb9e45eb6ddda4bb771709672c8b10572ca242a50cf3daa5d`
+and dimension ring
+`0da6785d89443f1b11d4beba44b1e197cb4d773e35cba2540b6574f35f1e67ea`.
+Their second constant buffer contains center X/Y, radius and aspect ratio; ring
+adds thickness in the next row. Fore uses TEXCOORD1; sampled Back/Mask values and
+colorMultiply do not affect the output. Hole distorts Fore toward the center and
+cuts alpha; ring adds a narrow RGB highlight. Reversed-edge HLSL smoothstep uses
+an explicit clamp polynomial in GLSL. The shared Windows Media bridge also accepts WVC1 (VC-1 Advanced Profile), used by
+the two fullscreen ASF movies; it selects the existing libavcodec VC-1 decoder and
+retains WMV3/WMA dispatch and normal decode errors.
+The malformed `dimover` source remains
+refused and is disabled by the original Lua registration table.
+
+Local compatibility launchers in the surrounding analysis workspace add a tiny
+private `.pfs.999` authentication overlay through the player's existing file-import
+control. The original EXE/PFS/movie files and existing browser saves are retained.
+These user-authorized overlays are outside Git and outside revision selection;
+the engine does not fabricate CRC values, Windows capabilities or DLL results.
+
+Opening acceptance covers 300 scenario advances, matching save/load/reload hashes
+and a fresh process that restores the same state and continues. A fresh Brave/Metal
+DOM run on the final build passes Start, quick-save/load with native confirmations
+and subsequent text advancement, without a key, console errors, exceptions or HTML
+dialogs. Both WVC1 movies decode completely through the shared codecs: 5,307 and
+2,938 video frames, with no decode failures. This verifies opening compatibility
+and whole-file decoding; a complete story route and natural fullscreen playback
+have not been retested for this installation.
+
+The final suite has 2,081 tests, 2,044 passes and exactly the same 37 named baseline
+failures, with no skips or cancellations. Synthetic Metal coverage includes both
+dimension programs and the existing 100 DX9 cases. Fresh key-free Brave checks also
+pass for World Actor and Badge & Dagger; their existing player profiles remain
+separate from the test profiles. Original Sakura no Toki and Sakura no Uta resources
+each pass a fresh opening/save-load regression. Static evidence and receipts live
+under `local-runtime/ryuusei-gaslight-bullet/` in the surrounding workspace.
+
 ## Rev.2868 (PE32)
 
 Ryuusei World Actor: Badge & Dagger executable SHA-256

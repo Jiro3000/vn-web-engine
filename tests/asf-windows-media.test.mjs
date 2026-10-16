@@ -265,3 +265,94 @@ test('Movie streams select ASF and require a video stream', async () => {
   const source = {size: bytes.length, read: async (o, n) => bytes.slice(o, o + n)};
   await assert.rejects(openMovieStream(source), /ASF movie without a video stream/);
 });
+
+test('WVC1 Advanced Profile headers initialize the real decoder and require both sequence and entry points', () => {
+  const bits = (fields) => {
+    const text = fields.map(([width, value]) => value.toString(2).padStart(width, '0')).join('');
+    return Buffer.from(
+      text
+        .padEnd(Math.ceil(text.length / 8) * 8, '0')
+        .match(/.{8}/g)
+        .map((v) => parseInt(v, 2)),
+    );
+  };
+  // Generated 16x16 progressive, 4:2:0 Advanced Profile sequence and closed entry.
+  // FFmpeg's vc1.c owns these syntax fields; there is no movie/image fixture.
+  const sequence = Buffer.concat([
+    Buffer.from([0, 0, 1, 0x0f]),
+    bits([
+      [2, 3],
+      [3, 0],
+      [2, 1],
+      [3, 0],
+      [5, 0],
+      [1, 0],
+      [12, 7],
+      [12, 7],
+      [1, 0],
+      [1, 0],
+      [1, 0],
+      [1, 0],
+      [1, 1],
+      [1, 0],
+      [1, 0],
+      [1, 0],
+    ]),
+  ]);
+  const entry = Buffer.concat([
+    Buffer.from([0, 0, 1, 0x0e]),
+    bits([
+      [1, 0],
+      [1, 1],
+      [1, 0],
+      [1, 0],
+      [1, 0],
+      [1, 0],
+      [1, 0],
+      [2, 0],
+      [1, 0],
+      [1, 0],
+      [2, 0],
+      [1, 0],
+      [1, 0],
+      [1, 0],
+    ]),
+  ]);
+  const codec = {
+    kind: 'video',
+    codec: 0x31435657,
+    width: 16,
+    height: 16,
+    extra: Buffer.concat([sequence, entry]),
+  };
+  const decoder = new WindowsMediaDecoder(codec);
+  try {
+    assert.deepEqual(decoder.decode(null), []);
+  } finally {
+    decoder.close();
+  }
+  assert.throws(() => decoder.decode(null), /closed/);
+  const corrupt = new WindowsMediaDecoder(codec);
+  try {
+    // A frame marker with no picture header must surface the codec failure.
+    assert.throws(() => corrupt.decode(Uint8Array.of(0, 0, 1, 0x0d)), /Windows Media decode error/);
+  } finally {
+    corrupt.close();
+  }
+  assert.throws(
+    () => new WindowsMediaDecoder({...codec, extra: sequence}),
+    /Unsupported Windows Media video codec/,
+  );
+  assert.throws(
+    () =>
+      new WindowsMediaDecoder({
+        ...codec,
+        extra: Buffer.concat([Buffer.alloc(sequence.length), entry]),
+      }),
+    /Unsupported Windows Media video codec/,
+  );
+  assert.throws(
+    () => new WindowsMediaDecoder({...codec, codec: 0x32505657}),
+    /Unsupported Windows Media video codec/,
+  );
+});

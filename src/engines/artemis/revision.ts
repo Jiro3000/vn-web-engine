@@ -22,6 +22,10 @@ export const ARTEMIS_3139_RESOURCE_VARIANT_SHA256 =
 /** Rev.3257 is a recompiled engine, not a resource-only variant of an older build. */
 export const ARTEMIS_3257_EXECUTABLE_SHA256 =
   '7c604c92b434cbee3620dcf4af8dde40d9313d04cefa794d168b03477135a08a';
+/** Wrapped resource variant. Its embedded PE at 0x7e000 has byte-identical code,
+ * constants, data and unwind sections to the original Rev.3257; only .rsrc differs. */
+export const ARTEMIS_3257_WRAPPED_RESOURCE_VARIANT_SHA256 =
+  '116507c5967b82f7816b69aeeb1553b47f2bfd2b91aac6dc02eb9371497d0c66';
 
 export interface ArtemisRevision {
   readonly executableSha256: string;
@@ -62,7 +66,7 @@ export interface ArtemisRevision {
   /** Glyph result ABI: 2898 returns a clipped cell; newer revisions preserve bearings/advance. */
   readonly glyphGeometry: 'clipped-cell' | 'bearing-advance';
   /** Painted-glyph index key layout; null where restore has not been reconstructed. */
-  readonly fontCacheKey: 'packed' | 'expanded' | null;
+  readonly fontCacheKey: 'packed' | 'expanded' | 'expanded-metrics' | null;
   /** Temporary scenario replay hold and application exit; Rev.3257 inserted a mode. */
   readonly loadRunMode: 13 | 14;
   readonly exitRunMode: 14 | 15;
@@ -93,6 +97,31 @@ const rev3139 = {
   loadRunMode: 13 as const,
   exitRunMode: 14 as const,
   publishesFullscreenAtExit: true,
+};
+const rev3257: ArtemisRevision = {
+  executableSha256: ARTEMIS_3257_EXECUTABLE_SHA256,
+  engineVersion: 3257,
+  glyphGeometry: 'bearing-advance',
+  fontCacheKey: 'expanded-metrics',
+  indentModify: true,
+  fontSizeBits: 32,
+  loadRunMode: 14,
+  exitRunMode: 15,
+  publishesFullscreenAtExit: true,
+  buildDate: 'Thu Apr 17 21:58:09 2025',
+  minimumSupportVersion: 1103,
+  saveDataVersion: 1003,
+  llp64: true,
+  publishesGraphicsFeatureLevel: true,
+  absentSystemVariables: Object.freeze([] as string[]),
+  shaderProperties: true,
+  shaderTextureProperties: true,
+  shaderConstantBinding: 'ordered-buffer',
+  graphicsApi: 'd3d11',
+  // 0x1400ee300 renders the scene; 0x140197120/0x140197010 rewind sound inputs.
+  screenshot: 'scene',
+  soundLoaderRewinds: true,
+  vorbisHeaderSyncBoundary: null,
 };
 const revisions: ReadonlyMap<string, ArtemisRevision> = new Map(
   [
@@ -238,32 +267,8 @@ const revisions: ReadonlyMap<string, ArtemisRevision> = new Map(
     },
     rev3139,
     {...rev3139, executableSha256: ARTEMIS_3139_RESOURCE_VARIANT_SHA256},
-    {
-      executableSha256: ARTEMIS_3257_EXECUTABLE_SHA256,
-      engineVersion: 3257,
-      glyphGeometry: 'bearing-advance' as const,
-      fontCacheKey: null,
-      indentModify: true,
-      fontSizeBits: 32 as const,
-      loadRunMode: 14 as const,
-      exitRunMode: 15 as const,
-      publishesFullscreenAtExit: true,
-      buildDate: 'Thu Apr 17 21:58:09 2025',
-      minimumSupportVersion: 1103,
-      saveDataVersion: 1003,
-      llp64: true,
-      publishesGraphicsFeatureLevel: true,
-      absentSystemVariables: Object.freeze([] as string[]),
-      shaderProperties: true,
-      shaderTextureProperties: true,
-      shaderConstantBinding: 'ordered-buffer' as const,
-      graphicsApi: 'd3d11' as const,
-      // 0x1400ee300 renders the scene into the screenshot target; 0x140197120/
-      // 0x140197010 seek the opened file to 0 before a further sound loader.
-      screenshot: 'scene' as const,
-      soundLoaderRewinds: true,
-      vorbisHeaderSyncBoundary: null,
-    },
+    rev3257,
+    {...rev3257, executableSha256: ARTEMIS_3257_WRAPPED_RESOURCE_VARIANT_SHA256},
   ].map((revision) => [revision.executableSha256, Object.freeze(revision)]),
 );
 
