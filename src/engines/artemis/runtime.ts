@@ -1141,6 +1141,7 @@ export class ArtemisRuntime {
     const random = new ArtemisRandom(hash, services.randomSeed);
     const surfaces = services.surfaces;
     lua = this.lua = new ArtemisLua({
+      debugMode: () => scenarioScalars.debugMode,
       ...(services.glyphs.restoreFontCache
         ? {
             restoreFontCache: (path: string) => {

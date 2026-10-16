@@ -30,6 +30,8 @@ export interface ArtemisLuaHost {
   reportIncludeError?(path: string, error: unknown): void;
   fileExists(path: string): boolean;
   now(): number;
+  /** Rev.2868 0x5a2300 checks the script debug mode before inspecting arguments. */
+  debugMode?(): number;
   /** The platform behind the Lua `os` library (lua-os.ts); without it `os.execute` and
    * `os.getenv` are refused. */
   os?: ArtemisLuaOsHost;
@@ -119,6 +121,13 @@ export class ArtemisLua {
   ) {
     this.vm = new Lua51(instructionLimit);
     this.events = new ArtemisEvents((name, args) => this.call(name, args));
+    this.vm.bindReferences('debug', () => {
+      // Native release mode returns before type checking or LogFilter/output work.
+      // Keep enabled debug output explicit until its console/filter owner exists.
+      if ((host.debugMode?.() ?? 0) !== 0)
+        throw new Error('Unsupported Artemis enabled debug console');
+      return [];
+    });
     // Rev.2601 4f6300: string fields only, byte-preserving std::string source.
     // The Japanese codecs are shared text services, not game-specific conversions.
     this.vm.bind('convertEncoding', (args) => {

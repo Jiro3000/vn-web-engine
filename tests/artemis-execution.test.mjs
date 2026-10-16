@@ -6,6 +6,28 @@ import {ArtemisScript} from '../dist/engines/artemis/script.js';
 import {luaText} from '../dist/core/lua51/runtime.js';
 const bytes = (s) => new TextEncoder().encode(s);
 
+test('Release-mode Lua debug skips arbitrary arguments before validation and follows the current debug mode', () => {
+  let mode = 0;
+  const lua = new ArtemisLua({debugMode: () => mode});
+  try {
+    lua.vm.execute(
+      bytes(`
+      local cyclic = {}; cyclic.self = cyclic
+      assert(select('#', engine:debug(cyclic)) == 0)
+      assert(select('#', engine:debug(function() end)) == 0)
+      engine:debug{data='release', raw=true}
+      engine:debug()
+    `),
+    );
+    mode = 1;
+    assert.throws(() => lua.vm.execute(bytes("engine:debug('enabled')")), /enabled debug console/);
+    mode = 0;
+    lua.vm.execute(bytes("engine:debug('release again')"));
+  } finally {
+    lua.close();
+  }
+});
+
 test('Lua encoding conversion retains Japanese byte strings through activation-style save/restore calls', () => {
   const reports = [];
   const lua = new ArtemisLua({readFile: () => null, reportError: (v) => reports.push(v)});

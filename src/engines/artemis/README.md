@@ -136,9 +136,11 @@ Rev.2868 has an independently verified PE32 boot and behavior profile, documente
 in `docs/artemis-revisions.md`. Its eight raw blur-source signatures select
 plain, mask and captured-background AA executables. AA output replaces the target;
 using it outside a captured target is refused until that Back ownership is modeled.
-Its current Badge & Dagger installation has an
-unresolved original SoftDenchi checksum mismatch; accepting its executable hash
-is not evidence that the game passes authentication or reaches its story.
+The supplied Badge & Dagger files have an original SoftDenchi checksum mismatch.
+Gameplay validation uses a separate local copy with user-authorized authentication
+overrides, kept outside this repository. That copy reaches its title and story and
+passes save/load and fresh-process restoration; the runtime retains the original
+checksum and platform semantics. See the revision notes for the validation scope.
 The independent Rev.3083 PE32 profile deletes restored `s.llp64` and
 `s.windowsfeaturelevel` at boot before their later zero-creating queries. It uses
 the DX9/clipped-cell path, accepts shader texture properties, and publishes
@@ -2139,6 +2141,13 @@ through a host method, so both stay strict, as do VM traps, the memory cap and
 non-string error values. Without the owner every failure keeps the strict fault.
 Debug gating (+0x3524/+0x3528), the Lua LogFilter and console output belong to the
 owner. Probe --native-calllua-reporting records reports without that policy.
+
+Lua `debug` checks the current scenario debug mode before reading any arguments
+(Rev.2868 `0x5a2300`, registered by `0x59fc00`). In release mode it returns no
+values, including for invalid or cyclic arguments, and performs no output. A restored
+nonzero mode is explicitly refused until the enabled console and LogFilter owner is
+implemented. The binding reads the scenario owner dynamically rather than freezing
+the mode at construction.
 
 `reportUnknownTag` is the unknown-command owner of the dispatcher `0x1400c5800`. A tag
 the Lua filter does not take is looked up in the native command map, which `0x1400b9e80`

@@ -44,6 +44,11 @@ exit mode 14 and force saves without publishing fullscreen-at-exit status.
 Pack mount `0x512270` opens the base and existing numbered archives through
 `.999`, retaining ascending override order and continuing after gaps.
 
+Lua binding registration `0x59fc00` maps `debug` to `0x5a2300`. It checks the
+script's debug mode at `+0x33d0` before inspecting the argument, returning no values
+when disabled. The runtime implements that release path using the current scenario
+mode; enabled debug console output remains an explicit unsupported operation.
+
 The eight exact raw blur-source signatures in `dx9-shader.ts` select horizontal
 or vertical convolution with optional mask and optional background composition.
 All eight use eight symmetric weights and named width/height steps. Plain variants
@@ -59,15 +64,22 @@ This installation contains no painted-font cache index, so that format is checke
 against native code and synthetic real-PNG/FreeType fixtures rather than an
 installation atlas.
 
-Gameplay validation for this installation is pending. Its unmodified
-`script.ini` enables SoftDenchi and expects executable CRC32 `e0000172`,
-whereas the supplied executable has CRC32 `aacc732b`. The original
-`softdc_init` / `getWindowsCrc` check therefore has a mismatched input pair.
-Engine support neither rewrites this expectation nor disables authentication.
-Synthetic runtime checks cover boot capabilities, fonts, shaders, cached glyphs,
-exit saves and fresh scenario restoration; they do not establish that this
-installation reaches its title or story. The build and all 327 targeted tests pass.
-The full suite has 2,073 tests, 2,036 passes and exactly the same 37 named baseline
+The unmodified `script.ini` enables SoftDenchi and expects executable CRC32
+`e0000172`, whereas the supplied executable has CRC32 `aacc732b`. Local gameplay
+validation uses a separate private copy with two explicitly user-authorized loose
+authentication overrides: the SoftDenchi callback and the loose-script guard.
+The executable, both archives and movie retain their original bytes. The overrides
+remain outside Git; runtime checksum, platform and file APIs retain their semantics.
+The copy reaches the title and completes 300 diagnostic story advances with zero
+Lua/include/tag/resource errors, real image/audio decode and real font rasterization.
+Save/load at advance 100 produces identical saved/loaded/reloaded state hashes;
+a fresh process restores the same state and continues eight advances. Brave/Metal
+in DOM text mode passes Start, quick-save/load with native layered confirmations,
+and subsequent text advancement, with zero console errors, exceptions or HTML
+dialogs. This is opening-gameplay validation; a complete route remains unchecked.
+
+The build and all 328 targeted tests pass. The full suite has 2,074 tests,
+2,037 passes and exactly the same 37 named baseline
 failures, with no skips or cancellations. Brave/Metal passes 100 synthetic DX9
 cases, including the new variants. Fresh-process regressions restore identical
 prior scenario hashes and continue for World Actor and Sakura no Toki. The one
