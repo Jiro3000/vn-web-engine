@@ -90,18 +90,33 @@ The dispatcher forwards it through the layer owner, so saved looping tweens rest
 without appending a second copy of their command on each scenario load. This fixes
 save-state growth in the shared replay path while preserving ordinary recording.
 
-Validation covers startup and the opening story segment: 263 delivered probe clicks,
-27 `rt` tags, 95 real image decodes without failures, and a save/load round trip at
-click 100 with identical saved/loaded/reloaded state hashes. A fresh process restores
-that hash and continues for eight clicks. A Brave DOM/Metal run verifies the original
-key check and persisted activation; a separate native UI recipe exercises quicksave,
-both layered confirmations, quickload and three further story lines with no console
-errors, exceptions or HTML dialogs. Game images and saved thumbnails were not viewed.
-The 322 targeted Lua/Artemis tests pass. The full suite has 2,071 tests, 2,034 passes
-and exactly the same 37 named baseline failures, with no skips or cancellations.
-Sakura no Toki also restores its previous save hash in a fresh process and continues.
-Commands, private save copies and complete stream reviews remain in
-`local-runtime/ryuusei-world-actor/` in the surrounding workspace.
+Validation includes one complete nonvisual Chiffon route from native title/start:
+23,484 delivered probe clicks and 11 first-option choices reach the original
+`staffroll_start`, `staffroll_bgm`, `staffroll_scroll` and `staffroll_exit`, then
+reset and return to title. The game's own `gscr.vari.chi`, `gscr.staff.chi` and
+`gscr.movie.chi` persist as 1 in a fresh process; the initial own save copies have
+no Chiffon completion. Story `g.*` belongs to Lua's `gscr.vari`, separate from
+engine variables queried with `e:var`. After reset there are no story `rt`/`rt2`
+tags; four U+3000 print commands belong to the normal font warmup.
+
+At click 10,000, saved/loaded/reloaded scenario hashes match. A fresh process
+restores that hash and continues for eight clicks. All 7,899 route image decodes
+succeed, with 31,784 real font raster jobs and 792,944,208 offline PCM frames.
+Both installation movies fully decode through the shared ASF codecs without
+failures; the probe itself only simulates fullscreen movie duration. The ending
+uses the original Lua staffroll. Main-thread Wasm sampling stays below 2 GiB;
+samples do not establish an absolute peak or cover worker heaps. No Lua/include/
+unknown-tag/tag errors or refusals occur. Complete stream reviews and receipts
+are indexed by `local-runtime/ryuusei-world-actor/full-route109.safe.json` in the
+surrounding workspace. This is an automated nonvisual route pass; the separate
+Brave UI check covers title/start, native quicksave/quickload, layered confirmations
+and continued text. Game images, frames and saved thumbnails were not viewed.
+
+The unchanged runtime build passes all 322 targeted Lua/Artemis tests. Its full
+suite has 2,071 tests, 2,034 passes and exactly the same 37 named baseline failures,
+with no skips or cancellations. Sakura no Toki also restores its previous save
+hash in a fresh process and continues. Commands and private own save copies remain
+in `local-runtime/ryuusei-world-actor/` in the surrounding workspace.
 
 ## Rev.3083 (PE32, wrapped executable)
 
