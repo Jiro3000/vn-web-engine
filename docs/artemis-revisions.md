@@ -53,11 +53,18 @@ retains WMV3/WMA dispatch and normal decode errors.
 The malformed `dimover` source remains
 refused and is disabled by the original Lua registration table.
 
-Local compatibility launchers in the surrounding analysis workspace add a tiny
-private `.pfs.999` authentication overlay through the player's existing file-import
-control. The original EXE/PFS/movie files and existing browser saves are retained.
-These user-authorized overlays are outside Git and outside revision selection;
-the engine does not fabricate CRC values, Windows capabilities or DLL results.
+The ordinary browser player applies authorization compatibility in memory through
+`ui/game-profiles/artemis.ts`. Each rule requires both an exact executable identity
+and the original Lua module SHA-256. The World Actor rule substitutes only
+`init_dmmck` in `system/dmmck.lua`; Badge & Dagger and Gaslight Bullet substitute only
+`authentication` in `system/extend/auth.lua`. Remaining helpers and their source
+line numbers are retained. Different or absent modules are passed through.
+`ArtemisRuntimeServices.luaSourceOverrides` feeds compilation and both plain/packed
+include paths; raw file reads and CRC queries continue to see the original bytes.
+The player mounts the original folder, adds no files and needs no external overlay
+or per-game launcher. The exact revision profile, existing browser save namespace,
+Windows capabilities and DLL results are unchanged. Other runtime hosts retain
+native authorization unless they explicitly supply source substitutions.
 
 Opening acceptance covers 300 scenario advances, matching save/load/reload hashes
 and a fresh process that restores the same state and continues. A fresh Brave/Metal
@@ -68,11 +75,14 @@ dialogs. Both WVC1 movies decode completely through the shared codecs: 5,307 and
 and whole-file decoding; a complete story route and natural fullscreen playback
 have not been retested for this installation.
 
-The final suite has 2,081 tests, 2,044 passes and exactly the same 37 named baseline
+The final suite has 2,083 tests, 2,046 passes and exactly the same 37 named baseline
 failures, with no skips or cancellations. Synthetic Metal coverage includes both
 dimension programs and the existing 100 DX9 cases. Fresh key-free Brave checks also
-pass for World Actor and Badge & Dagger; their existing player profiles remain
-separate from the test profiles. Original Sakura no Toki and Sakura no Uta resources
+pass for all three World Actor installations in the ordinary production page with
+only original folder files. Their existing player profiles remain separate from
+the test profiles. Synthetic Lua tests cover exact identity guards, absent or
+different modules, repeated plain/packed includes, preserved helper source lines,
+and unchanged raw file/CRC values. Original Sakura no Toki and Sakura no Uta resources
 each pass a fresh opening/save-load regression. Static evidence and receipts live
 under `local-runtime/ryuusei-gaslight-bullet/` in the surrounding workspace.
 
@@ -130,8 +140,9 @@ The unmodified `script.ini` enables SoftDenchi and expects executable CRC32
 `e0000172`, whereas the supplied executable has CRC32 `aacc732b`. Local gameplay
 validation uses a separate private copy with two explicitly user-authorized loose
 authentication overrides: the SoftDenchi callback and the loose-script guard.
-The executable, both archives and movie retain their original bytes. The overrides
-remain outside Git; runtime checksum, platform and file APIs retain their semantics.
+The executable, both archives and movie retain their original bytes. Those evidence files remain outside Git. The ordinary browser now applies the
+verified in-memory authorization policy to the original installation, preserving
+runtime checksum, platform and file API semantics.
 The copy completes one full Fuyumi route in the nonvisual probe: 8,798 advances,
 three first-option choices, original staffroll, reset and return to title. The
 `01_07_1` first option sets `f.huy=1`, which takes chapter 1 part 7 into parts
@@ -217,8 +228,8 @@ Native save writer `0x504a40` emits version 1002 with zlib compression. The web
 runtime keeps its established canonical version-1003 browser containers; the
 published native `s.savedataversion` remains 1002. Native version-1002 scenario
 imports have not been validated. Evidence is kept in the surrounding workspace
-under `local-runtime/ryuusei-world-actor/`; game scripts and activation state are
-not patched or preset.
+under `local-runtime/ryuusei-world-actor/`. Installed game files and stored activation
+state remain unchanged; the browser-only source policy is described above.
 
 Lua registration `0x4f35a0` binds `convertEncoding` to `0x4f6300`. It reads
 string-valued `from`, `to`, and `source` table fields; the source and result keep
@@ -226,8 +237,9 @@ their byte lengths, including embedded NUL. The browser binds explicit `sjis`
 and `utf8` conversions using shared text codecs. Invalid tables or target names
 produce the native level-1 argument report and nil. Native EUC/JIS conversion
 and input auto-detection (`0x586390`, up to 8192 bytes) remain explicit refusals.
-Conversion dispatch is `0x586350` → `0x587950`. No activation data is synthesized:
-the unmodified game verifies the user's key and writes its own activation record.
+Conversion dispatch is `0x586350` → `0x587950`. No activation data is synthesized.
+Native Lua authorization uses these conversions to verify a key and save its own
+record; the ordinary browser suppresses the verified authorization entry separately.
 
 HTTP GET `0x4b7510` enters mode 8, clears `s.http.cancel`, and starts
 `0x4dd190`; frame `0x48fe40` polls `0x4dd0c0` or cancels and releases the mode.

@@ -18,6 +18,7 @@ import {
   rememberArtemisGame,
 } from '../player/artemis-library.js';
 import {rememberLastPlayed} from '../player/last-played.js';
+import {prepareArtemisLuaCompatibility} from '../game-profiles/artemis.js';
 
 /** The Windows version this page reports to games (Windows 10, 10.0). Games that check the
  * version see a supported system instead of the unknown one a browser would report. */
@@ -50,6 +51,7 @@ fullscreenControls = mountFullscreenControls(displayHost);
 
 interface Installation {
   executableSha256: string;
+  luaSourceOverrides: ReadonlyMap<string, Uint8Array>;
   files: ArtemisFiles;
   paths: ReadonlySet<string>;
   saves: IndexedDbStore;
@@ -123,12 +125,15 @@ async function loadInstallation(cached: CachedInstallation): Promise<void> {
     throw new Error('Choose the game folder, including its base .pfs archive.');
   const {executableSha256, executableName} = await identify(byPath);
   const files = await ArtemisFiles.mount(bases[0]!, (segments) => byPath.get(segments.join('/')));
+  const luaSourceOverrides = await prepareArtemisLuaCompatibility(executableSha256, (path) =>
+    files.read(path),
+  );
   const paths = new Set(byPath.keys());
   for (const {archive} of files.archives)
     for (const entry of archive.entries) paths.add(pfsPathKey(entry.name));
   const namespace = artemisSaveNamespace(executableSha256, bases[0]!);
   const saves = await IndexedDbStore.open(namespace);
-  installation = {executableSha256, files, paths, saves};
+  installation = {executableSha256, luaSourceOverrides, files, paths, saves};
   // The executable carries no product name, so the game is named by its folder.
   const title = cached.metadata.title || executableName.replace(/\.exe$/i, '');
   const game = {title, namespace};
@@ -254,11 +259,12 @@ function pageTrace() {
 
 play.onclick = () => {
   if (!installation || busy || saveBusy || started) return;
-  const {executableSha256, files, paths, saves} = installation;
+  const {executableSha256, luaSourceOverrides, files, paths, saves} = installation;
   started = true;
   player = new ArtemisBrowserPlayer({
     document,
     executableSha256,
+    luaSourceOverrides,
     files,
     paths,
     storage: storage(saves),

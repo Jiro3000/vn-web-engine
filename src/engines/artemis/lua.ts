@@ -20,6 +20,8 @@ import {installArtemisLuaOs, type ArtemisLuaOsHost} from './lua-os.js';
 export interface ArtemisLuaHost {
   /** Synchronous prepared byte sources; null means the file does not exist. */
   readFile(path: string): Uint8Array | null;
+  /** Host compatibility policy for compiled includes only; raw file reads stay native. */
+  prepareIncludeSource?(path: string, bytes: Uint8Array): Uint8Array;
   /** Optional prepared CFile owner. Include tries luaL_loadfile here before
    * retrying the normal loose-first CArtemisPackFile read on any failure.
    */
@@ -446,7 +448,9 @@ export class ArtemisLua {
         const path = luaText(args[0]);
         if (args[1] === true) {
           try {
-            const raw = host.readPlainFile?.(path) ?? null;
+            const original = host.readPlainFile?.(path) ?? null;
+            const raw =
+              original === null ? null : (host.prepareIncludeSource?.(path, original) ?? original);
             return raw === null
               ? [null]
               : [
@@ -458,7 +462,11 @@ export class ArtemisLua {
             return [null];
           }
         }
-        return [host.readFile(path), new TextEncoder().encode(path)];
+        const original = host.readFile(path);
+        return [
+          original === null ? null : (host.prepareIncludeSource?.(path, original) ?? original),
+          new TextEncoder().encode(path),
+        ];
       });
       this.vm.bind('artemisIncludeFailure', (args) => {
         const error = this.vm.errorFromValue(args[1], args[2] === 3 ? 3 : 2);
@@ -559,7 +567,9 @@ export class ArtemisLua {
   include(path: string): void {
     if (this.host.readPlainFile) {
       try {
-        const plain = this.host.readPlainFile(path);
+        const original = this.host.readPlainFile(path);
+        const plain =
+          original === null ? null : (this.host.prepareIncludeSource?.(path, original) ?? original);
         if (plain !== null) {
           this.vm.executeFile(plain, path, windowsTextFileBytes(plain));
           return;
@@ -572,7 +582,7 @@ export class ArtemisLua {
     const bytes = this.host.readFile(path);
     try {
       if (bytes === null) throw new Error(`Missing Artemis Lua include ${path}`);
-      this.vm.execute(bytes, path); // Native packed luaL_loadbuffer uses the literal filename.
+      this.vm.execute(this.host.prepareIncludeSource?.(path, bytes) ?? bytes, path); // Packed filename stays literal.
     } catch (error) {
       if (!this.vm.usable || !this.host.reportIncludeError) throw error;
       this.host.reportIncludeError(path, error);

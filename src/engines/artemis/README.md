@@ -51,8 +51,14 @@ not a separately invented AST VM.
 the shared text codecs, preserving embedded NUL. Its Rev.2601 registration and
 argument handling are documented in `docs/artemis-revisions.md`. EUC/JIS and native
 input auto-detection remain refused. The engine profile supplies no activation
-result. Original Lua checks run unless the installation includes a separate
-user-provided compatibility overlay.
+result. The browser's compatibility policy is separate: `ui/game-profiles/artemis.ts`
+matches the executable and original authorization module SHA-256, then supplies a
+Lua-only source substitution. It disables the verified authorization entry function
+for the three World Actor installations. Standard folder selection in `artemis.html`
+applies this in memory without extra archives, loose files or launch scripts.
+Raw file reads, CRCs, native capabilities and the save namespace stay unchanged.
+Other source identities keep their original behavior; hosts without source
+substitutions retain native include behavior.
 
 `httpget` waits in mode 8 while frame callbacks continue. It uses the shared fetch
 host, publishes real response status/bytes or native negative failure codes, and
@@ -138,11 +144,13 @@ in `docs/artemis-revisions.md`. Its eight raw blur-source signatures select
 plain, mask and captured-background AA executables. AA output replaces the target;
 using it outside a captured target is refused until that Back ownership is modeled.
 The supplied Badge & Dagger files have an original SoftDenchi checksum mismatch.
-Gameplay validation uses a separate local copy with user-authorized authentication
+Full-route evidence uses a separate local copy with user-authorized authentication
 overrides, kept outside this repository. That copy completes a full nonvisual
 Fuyumi route through original staffroll and reset/title, with save/load and fresh
 restoration of the game's clear records. The runtime retains the original checksum
-and platform semantics. See the revision notes for the validation scope.
+and platform semantics. The ordinary browser player supplies the verified in-memory
+policy described above for original installation files. See the revision notes
+for the validation scope.
 The independent Rev.3083 PE32 profile deletes restored `s.llp64` and
 `s.windowsfeaturelevel` at boot before their later zero-creating queries. It uses
 the DX9/clipped-cell path, accepts shader texture properties, and publishes

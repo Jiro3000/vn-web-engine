@@ -244,6 +244,8 @@ export type ArtemisRuntimeSound = Omit<
 export interface ArtemisRuntimeServices {
   readonly executableSha256: string;
   readonly files: ArtemisRuntimeFiles;
+  /** Host-owned Lua-only substitutions; installation bytes and CRC queries stay original. */
+  readonly luaSourceOverrides?: ReadonlyMap<string, Uint8Array>;
   readonly storage: ArtemisRuntimeStorage;
   /** Seconds since the Unix epoch that seed the script random generator. */
   readonly randomSeed: number;
@@ -470,6 +472,8 @@ export class ArtemisRuntime {
         throw new Error(`Resource is not prepared for synchronous Lua: ${path}`);
       return null;
     };
+    const includeSource = (path: string, bytes: Uint8Array) =>
+      services.luaSourceOverrides?.get(files.resolvePath(path)) ?? bytes;
     const suspend = (operation: Promise<unknown>) => {
       if (this.pendingResource) throw Error('Artemis resource operation overlaps');
       this.pendingResource = operation;
@@ -1166,6 +1170,7 @@ export class ArtemisRuntime {
         services.trace?.include?.(path);
         return plainFiles.get(path.replaceAll('\\', '/')) ?? null;
       },
+      prepareIncludeSource: includeSource,
       readFile: (path) => {
         services.trace?.include?.(path);
         return readFile(path);
@@ -1224,8 +1229,10 @@ export class ArtemisRuntime {
       // An unused library for another ABI must not prevent the installation boot.
       if (/\.(lua|ast)$/.test(path)) {
         const text = plainFiles.get(path);
-        if (text !== undefined) lua.vm.compileFile(text, path, windowsTextFileBytes(text));
-        else lua.vm.compile(bytes, `@${path}`);
+        if (text !== undefined) {
+          const source = includeSource(path, text);
+          lua.vm.compileFile(source, path, windowsTextFileBytes(source));
+        } else lua.vm.compile(includeSource(path, bytes), `@${path}`);
         compiled++;
       }
     this.compiled = compiled;

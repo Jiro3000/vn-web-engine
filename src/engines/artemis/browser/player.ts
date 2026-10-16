@@ -71,6 +71,7 @@ import {beginRuntimeSpan} from '../../../platform/runtime-performance.js';
 export interface ArtemisBrowserPlayerOptions {
   readonly document: Document;
   readonly executableSha256: string;
+  readonly luaSourceOverrides?: ReadonlyMap<string, Uint8Array>;
   /** The mounted installation. */
   readonly files: ArtemisFiles;
   /** Every archive and loose file name ('/'-separated). */
@@ -278,6 +279,7 @@ export class ArtemisBrowserPlayer {
     this.bindInput();
     this.open = ArtemisRuntime.open({
       executableSha256: hash,
+      luaSourceOverrides: options.luaSourceOverrides,
       files: {
         read,
         readPlain: (path) => files.readPlain(path),

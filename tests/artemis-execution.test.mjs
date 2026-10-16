@@ -9193,3 +9193,120 @@ test('var url, file and font queries follow the native handler', async () => {
   );
   assert.deepEqual(await fonts([['vertical', '0']]), ['Alpha', long, 'Zeta', 'ＭＳ ゴシック']);
 });
+
+test('Browser Lua compatibility requires both exact identities and leaves unknown or absent modules alone', async () => {
+  const {prepareArtemisLuaCompatibility: prepare} = await import('../ui/game-profiles/artemis.ts');
+  const {createHash} = await import('node:crypto');
+  const source = bytes(
+    '\ufeff-- 合成\r\nfunction gate()\r\n  error("BLOCKED")\r\nend\r\n-- retained helper\r\nfunction helper() return 42 end\r\n',
+  );
+  const before = source.slice();
+  const policy = [
+    {
+      executableSha256: 'verified-exe',
+      path: 'system/check.lua',
+      sourceSha256: createHash('sha256').update(source).digest('hex'),
+      begin: 'function gate()',
+      end: 'function helper()',
+      replacement: 'function gate()\nend\n',
+    },
+  ];
+  const reads = [];
+  assert.equal(
+    (
+      await prepare(
+        'other-exe',
+        async (p) => {
+          reads.push(p);
+          return source;
+        },
+        policy,
+      )
+    ).size,
+    0,
+  );
+  assert.equal(reads.length, 0);
+  assert.equal((await prepare('verified-exe', async () => null, policy)).size, 0);
+  assert.equal(
+    (await prepare('verified-exe', async () => bytes('unprotected edition'), policy)).size,
+    0,
+  );
+  const overrides = await prepare('verified-exe', async () => source, policy);
+  const rewritten = new TextDecoder('utf-8', {ignoreBOM: true}).decode(
+    overrides.get('system/check.lua'),
+  );
+  assert.ok(rewritten.startsWith('\ufeff-- 合成\r\nfunction gate()\nend\n'));
+  assert.ok(rewritten.endsWith('function helper() return 42 end\r\n'));
+  assert.equal(rewritten.split('\n').length, new TextDecoder().decode(source).split('\n').length);
+  assert.ok(!rewritten.includes('BLOCKED'));
+  assert.deepEqual(source, before);
+});
+
+test('Lua-only host substitutions survive plain/packed repeated includes while raw file and CRC reads stay original', async () => {
+  const {prepareArtemisLuaCompatibility: prepare} = await import('../ui/game-profiles/artemis.ts');
+  const {openArtemisRuntimeFixture} = await import('./artemis-runtime-fixture.mjs');
+  const {createHash} = await import('node:crypto');
+  const {crc32} = await import('../dist/core/crc32.js');
+  const source = bytes(
+    'included=(included or 0)+1\nfunction gate()\n error("BLOCKED")\nend\nfunction helper() return 42 end\n',
+  );
+  const overrides = await prepare('fixture-exe', async () => source, [
+    {
+      executableSha256: 'fixture-exe',
+      path: 'system/check.lua',
+      sourceSha256: createHash('sha256').update(source).digest('hex'),
+      begin: 'function gate()',
+      end: 'function helper()',
+      replacement: 'function gate()\nend\n',
+    },
+  ]);
+  for (const plain of [true, false]) {
+    const entries = {
+      'system.ini': bytes('[WINDOWS]\nWIDTH=640\nHEIGHT=360\nBOOT=system/first.iet\n'),
+      'system/check.lua': source,
+      'system/first.iet': bytes(`[calllua function="verify"][stop]
+[lua]
+function verify(e)
+  e:include('system/check.lua')
+  gate()
+  assert(helper()==42)
+  e:include('system/check.lua')
+  gate()
+  assert(included==2)
+  assert(string.find(e:file('system/check.lua'),'BLOCKED',1,true))
+  e:tag{'var',name='f.rawcrc',system='file_crc',file='system/check.lua'}
+  verified=true
+end
+[/lua]`),
+    };
+    const fixture = await openArtemisRuntimeFixture(entries, {
+      services: {
+        luaSourceOverrides: overrides,
+        files: {
+          paths: new Set(Object.keys(entries)),
+          resolvePath: (p) => p.replaceAll('\\', '/'),
+          setMagicPath() {},
+          read: async (p) => entries[p] ?? null,
+          readPlain: async (p) => (plain ? (entries[p] ?? null) : null),
+        },
+      },
+    });
+    try {
+      await fixture.runtime.boot();
+      while (fixture.runtime.resourcePending) {
+        await fixture.runtime.settleResource();
+        fixture.runtime.script.run(100);
+      }
+      assert.equal(fixture.runtime.lua.vm.getGlobal('verified'), true);
+      assert.equal(fixture.runtime.lua.vm.getGlobal('included'), 2);
+      assert.equal(fixture.runtime.runMode, 3);
+      assert.equal(
+        luaText(fixture.runtime.variables.lookup('f.rawcrc')),
+        crc32(source).toString(16),
+      );
+      assert.deepEqual(fixture.runtime.prepared.get('system/check.lua'), source);
+    } finally {
+      await fixture.close();
+    }
+  }
+});
