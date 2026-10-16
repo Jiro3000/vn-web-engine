@@ -10,8 +10,12 @@ Base/coroutine, table, string, math and Pluto 2.4 (`pluto.persist(perms, value)`
 `pluto.unpersist(perms, bytes)`) libraries are available. Filesystem and process
 services, package loading and debug are not exposed. Include and
 other platform effects use explicit host bindings. The execute/compile entry APIs
-reject precompiled bytecode; this embedding does not reproduce the Windows x64
-native bytecode ABI. It is not a full native Lua library replacement.
+accept Lua 5.1 bytecode only when its complete header matches the module ABI:
+little-endian, 32-bit `int`/`size_t`/instructions and 64-bit floating-point numbers.
+This matches PE32 Lua chunks. Upstream undump still validates prototypes and
+instructions; compile does not execute the chunk, and execution keeps the shared
+instruction budget. Foreign headers, including the Windows x64 `size_t` layout,
+are rejected without conversion. It is not a full native Lua library replacement.
 
 Host calls preserve coroutine state and reentrant execution. Protected Lua/host
 errors restore the VM stack. A nonzero status throws `LuaRuntimeError` with the Lua

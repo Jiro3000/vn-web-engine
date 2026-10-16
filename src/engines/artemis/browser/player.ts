@@ -13,6 +13,7 @@ import {BrowserWindowsFolderPaths} from '../../../platform/windows-folder-path.j
 import {BrowserWindowCaptionHost} from '../../../platform/window-caption.js';
 import {BrowserWindowStateHost} from '../../../platform/window-state.js';
 import {BrowserTextDialogHost} from '../../../platform/text-dialog.js';
+import {FetchHttpClient} from '../../../platform/http-client.js';
 import {FreeTypeWorker} from '../../../text/freetype-worker-client.js';
 import {readBrowserLocalFontMetadata} from '../../../text/browser-local-fonts.js';
 import {browserDrawsFamily, enumerateGdiFontFamiliesW} from '../../../text/gdi-font-families.js';
@@ -338,6 +339,7 @@ export class ArtemisBrowserPlayer {
         this.sound.music.tick(now);
       }),
       moviePlayer: this.movie,
+      http: new FetchHttpClient(),
       dialogs: new BrowserTextDialogHost(this.panel, () =>
         this.canvas.focus({preventScroll: true}),
       ),

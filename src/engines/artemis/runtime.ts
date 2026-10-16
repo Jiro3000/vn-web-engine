@@ -24,6 +24,8 @@ import type {FullscreenMoviePlayer} from '../../video/fullscreen-movie.js';
 import {ArtemisCaption} from './caption.js';
 import {ArtemisClickGlyphs} from './click-glyph.js';
 import {ArtemisDialog} from './dialog.js';
+import {ArtemisHttp} from './http.js';
+import type {HttpClientHost} from '../../platform/http-client.js';
 import {ArtemisEventCommands, type ArtemisCommandEvent} from './event-commands.js';
 import {ArtemisExec} from './exec.js';
 import {artemisExpressionBytes} from './expression.js';
@@ -256,6 +258,7 @@ export interface ArtemisRuntimeServices {
   readonly moviePlayer: FullscreenMoviePlayer;
   /** Reads the movie duration for a fullscreen movie request. */
   readonly dialogs: TextDialogHost;
+  readonly http?: HttpClientHost;
   readonly window: WindowStateHost & {displayModeChanged(): void};
   readonly caption: WindowCaptionHost;
   readonly cursor: CursorHost;
@@ -349,6 +352,7 @@ export class ArtemisRuntime {
   readonly modes: ArtemisModes;
   readonly wait: ArtemisTimedWait;
   readonly dialog: ArtemisDialog;
+  readonly http: ArtemisHttp | undefined;
   readonly keyBindings: ArtemisKeyBindings;
   readonly fullscreenVideo: ArtemisFullscreenVideo;
   readonly layers: ArtemisRuntimeLayers;
@@ -401,7 +405,7 @@ export class ArtemisRuntime {
   /** Called after the scenario loader, before `onLoad`. */
   scenarioLoaded: (() => void) | null = null;
 
-  /** Reads the script corpus and sound-loop sidecars for synchronous Lua file reads. */
+  /** Reads the script corpus, CSV tables and sound-loop sidecars for synchronous Lua reads. */
   static async open(services: ArtemisRuntimeServices): Promise<ArtemisRuntime> {
     const {files} = services;
     const iniBytes = await files.read('system.ini');
@@ -414,12 +418,12 @@ export class ArtemisRuntime {
       if (bytes > MEMORY_BUDGET) throw new Error('Script corpus exceeds memory budget');
     };
     for (const path of files.paths)
-      if (/\.(lua|ast|iet|ipt|asb|tbl|ini|sli)$/.test(path)) {
+      if (/\.(lua|lub|ast|iet|ipt|asb|tbl|csv|ini|sli)$/.test(path)) {
         const data = await files.read(path);
         if (data === null) throw new Error(`Missing inventoried source ${path}`);
         budget(data.length);
         prepared.set(path, data);
-        if (/\.(lua|ast)$/.test(path)) {
+        if (/\.(lua|lub|ast)$/.test(path)) {
           const text = await files.readPlain(path);
           if (text !== null) {
             plain.set(path, text);
@@ -629,6 +633,24 @@ export class ArtemisRuntime {
       endWait: () => script.resume(),
       writeVariable: (name, value) => variables.write(name, value),
     }));
+    const http = (this.http =
+      services.http &&
+      new ArtemisHttp(services.http, {
+        beginWait: () => {
+          if (this.mode === this.loadRunMode) return;
+          script.enterRunMode(8);
+          script.pause();
+        },
+        endWait: () => {
+          script.releaseRunMode();
+          this.scriptEvents.releasePending();
+          if (this.mode === 0) script.resume();
+        },
+        cancelled: () =>
+          artemisInteger(new TextDecoder().decode(variables.read('s.http.cancel'))) !== 0,
+        writeVariable: (name, value) => variables.write(name, value),
+      }));
+    if (http) this.closers.push(() => http.close());
     const clickGlyphs = new ArtemisClickGlyphs({
       currentMessageLayer: () => messageSelection.currentMessageLayer(),
       setLayerDraggable: (name, value) => layers.setDraggable(name, value),
@@ -1082,6 +1104,7 @@ export class ArtemisRuntime {
           sceneTweens,
           textBreakControls,
           dialog,
+          ...(http ? {http} : {}),
           keyBindings,
           eventCommands,
           nativeLibrary,
@@ -1196,6 +1219,8 @@ export class ArtemisRuntime {
     this.closers.unshift(() => lua.close());
     let compiled = 0;
     for (const [path, bytes] of prepared)
+      // Binary libraries are checked when included, like native luaL_loadbuffer.
+      // An unused library for another ABI must not prevent the installation boot.
       if (/\.(lua|ast)$/.test(path)) {
         const text = plainFiles.get(path);
         if (text !== undefined) lua.vm.compileFile(text, path, windowsTextFileBytes(text));
@@ -1278,6 +1303,7 @@ export class ArtemisRuntime {
       },
     }));
     const resetOwners = () => {
+      http?.close();
       exec.clearRequests();
       clickGlyphs.reset();
       scriptEvents.clear();
@@ -1728,6 +1754,7 @@ export class ArtemisRuntime {
       } else this.layers.tickTransition(now);
     }
     if (this.mode === 7) this.fullscreenVideo.frame();
+    if (this.mode === 8) this.http?.tick();
     if (this.acceptsInput) {
       // A delivered push handler ends the frame before the wait sees the click.
       const delivered = this.keyBindings.deliverPushed(

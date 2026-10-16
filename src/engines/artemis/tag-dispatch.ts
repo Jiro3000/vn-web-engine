@@ -20,7 +20,7 @@ export interface ArtemisLayerTagOwner {
   dispatch(tag: AsbTag, recordHistory: boolean): Promise<unknown>;
   /** A rule transition returns its asynchronous rule load; others complete at once. */
   dispatchTransition(tag: AsbTag): unknown;
-  dispatchTween(tag: AsbTag): void;
+  dispatchTween(tag: AsbTag, recordHistory: boolean): void;
 }
 
 /** Every native tag owner, in the order the dispatcher consults them. Owners that need
@@ -41,6 +41,7 @@ export interface ArtemisTagOwners {
   readonly sceneTweens?: SyncOwner;
   readonly textBreakControls?: HistoryOwner;
   readonly dialog: SyncOwner;
+  readonly http?: SyncOwner;
   readonly keyBindings: SyncOwner;
   readonly eventCommands: SyncOwner;
   readonly nativeLibrary: SyncOwner;
@@ -94,7 +95,7 @@ export function createArtemisTagDispatch(
       return result instanceof Promise ? pending(result) : undefined;
     }
     if (layers && ['lytween', 'lytweendel', 'tweenset', '/tweenset'].includes(tag.name)) {
-      layers.dispatchTween(tag);
+      layers.dispatchTween(tag, recordHistory);
       return;
     }
     if (owners.fullscreenVideo.accepts(tag)) return pending(owners.fullscreenVideo.dispatch(tag));
@@ -105,6 +106,7 @@ export function createArtemisTagDispatch(
       owners.sceneTweens?.dispatch(tag) ||
       owners.textBreakControls?.dispatch(tag, recordHistory) ||
       owners.dialog.dispatch(tag) ||
+      owners.http?.dispatch(tag) ||
       owners.keyBindings.dispatch(tag) ||
       owners.eventCommands.dispatch(tag) ||
       owners.nativeLibrary.dispatch(tag) ||

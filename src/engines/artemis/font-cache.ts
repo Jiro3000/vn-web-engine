@@ -23,8 +23,22 @@ interface Entry {
   readonly width: number;
   readonly height: number;
 }
-const key = (v: ArtemisFontCacheKey) =>
-  JSON.stringify([
+const key = (v: ArtemisFontCacheKey, layout: 'packed' | 'expanded') => {
+  if (layout === 'packed') {
+    // Rev.2601 0x525720 stores byte size and bold/italic/underline/strike flags.
+    // 0x525830 uses shadow/outline bits 4/5 and this ushort above char16.
+    const style =
+      (v.style & 3) | ((v.style & 24) >> 1) | (v.shadow ? 16 : 0) | (v.outline ? 32 : 0);
+    const packed = ((style << 24) | ((v.size & 255) << 16) | (v.codePoint & 65535)) >>> 0;
+    return JSON.stringify([
+      v.face,
+      v.color >>> 0,
+      v.shadowColor >>> 0,
+      v.outlineColor >>> 0,
+      packed,
+    ]);
+  }
+  return JSON.stringify([
     v.face,
     v.size >>> 0,
     v.shadow >>> 0,
@@ -34,20 +48,24 @@ const key = (v: ArtemisFontCacheKey) =>
     v.outlineColor >>> 0,
     (((v.style & 255) << 16) | (v.codePoint & 65535)) >>> 0,
   ]);
+};
 
-/** Rev.2898 global painted-glyph cache (4a6280 / 4a8cd0). Atlas storage is shared
+/** Global painted-glyph cache: Rev.2601 402c40, Rev.2898 4a6280 / 4a8cd0.
+ * Exact revision selects packed or expanded keys. Atlas storage is shared
  * by index entries; cropped glyph storage is allocated only when a renderer uses it.
  */
 export class ArtemisRestoredFontCache {
   private readonly entries = new Map<string, Entry>();
   private hits = 0;
   private closed = false;
+  private readonly layout: 'packed' | 'expanded';
   constructor(
     hash: string,
     private readonly read: (path: string) => Promise<Uint8Array | null>,
   ) {
-    if (artemisRevision(hash).glyphGeometry !== 'clipped-cell')
-      throw Error('Unsupported Artemis font cache layout');
+    const layout = artemisRevision(hash).fontCacheKey;
+    if (layout === null) throw Error('Unsupported Artemis font cache layout');
+    this.layout = layout;
   }
   async restore(path: string): Promise<void> {
     this.assertOpen();
@@ -78,7 +96,7 @@ export class ArtemisRestoredFontCache {
     const u32 = () => view.getUint32(take(4), true);
     const f32 = () => view.getFloat32(take(4), true);
     const count = u32();
-    if (count > Math.floor((bytes.length - offset) / 52))
+    if (count > Math.floor((bytes.length - offset) / (this.layout === 'packed' ? 40 : 52)))
       throw Error('Truncated Artemis font cache records');
     const pending = new Map<string, Entry>();
     for (let index = 0; index < count; index++) {
@@ -86,13 +104,9 @@ export class ArtemisRestoredFontCache {
       const face = new TextDecoder('utf-8', {fatal: true, ignoreBOM: true}).decode(
         bytes.subarray(take(length), offset),
       );
-      const size = u32(),
-        shadow = u32(),
-        outline = u32();
-      const color = u32(),
-        shadowColor = u32(),
-        outlineColor = u32(),
-        packed = u32();
+      const identity: (string | number)[] = [face];
+      if (this.layout === 'expanded') identity.push(u32(), u32(), u32());
+      identity.push(u32(), u32(), u32(), u32());
       const atlas = atlases[u32()];
       const left = f32(),
         top = f32(),
@@ -110,10 +124,7 @@ export class ArtemisRestoredFontCache {
         throw Error('Unsupported Artemis font cache clip');
       if (atlas && (left + width > atlas.width || top + height > atlas.height))
         throw Error('Artemis font cache clip outside atlas');
-      pending.set(
-        JSON.stringify([face, size, shadow, outline, color, shadowColor, outlineColor, packed]),
-        {atlas, left, top, width, height},
-      );
+      pending.set(JSON.stringify(identity), {atlas, left, top, width, height});
     }
     // Native does not require EOF after the declared records. Existing keys are replaced;
     // other cached glyphs survive another restore and scenario reset.
@@ -121,7 +132,7 @@ export class ArtemisRestoredFontCache {
   }
   get(value: ArtemisFontCacheKey): ArtemisGlyphSurface | undefined {
     this.assertOpen();
-    const entry = this.entries.get(key(value));
+    const entry = this.entries.get(key(value, this.layout));
     if (!entry) return undefined;
     this.hits++;
     const {atlas, left, top, width, height} = entry;
@@ -135,7 +146,7 @@ export class ArtemisRestoredFontCache {
   }
   has(value: ArtemisFontCacheKey): boolean {
     this.assertOpen();
-    return this.entries.has(key(value));
+    return this.entries.has(key(value, this.layout));
   }
   statistics(): {entries: number; atlasBytes: number; hits: number} {
     const atlases = new Set([...this.entries.values()].map((v) => v.atlas));

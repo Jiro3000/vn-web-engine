@@ -14,6 +14,95 @@ only `.rsrc` and the header fields that size it (SizeOfInitializedData, SizeOfIm
 CheckSum, the resource directory size and the `.rsrc` section header) differ. It shares
 every Rev.3139 address and field below.
 
+## Rev.2601 (PE32)
+
+Ryuusei World Actor executable SHA-256
+`38feda70823430350ae58086225ac4a983ab727bd68b4800c4bbeed285ea0123`
+is an independent x86 build, image base `0x400000`, entry `0x5dd8a8`, PE timestamp
+`0x5cd31dcb`. Only this exact identity selects its profile.
+
+Boot `0x493520` publishes Rev.2601, `Thu May  9 03:14:56 2019`, support 1103 and
+save version 1002. It neither writes nor deletes `s.llp64` or
+`s.windowsfeaturelevel`; restored values survive, and later missing literal queries
+create zero. It queries the registered-touch flag independently of contacts.
+The profile uses DX9, byte-sized fonts and clipped-cell glyphs: FreeType open
+`0x528170` narrows the size to a byte, and glyph `0x528400` uses cell advance and
+clamps negative bearings. Sound loaders `0x5491d0` / `0x5492a0` reuse the opened
+file without rewinding. The first-page Vorbis search has not been audited for
+this revision; its profile retains the strict decoder.
+
+The complete actor-property parser `0x4e1b70` ends after `visible`, with no custom
+shader name, constant or texture lookup. `shaderProperties = false` leaves these
+keys and their named values unconsumed, including malformed numeric values;
+ordinary geometry still applies. The six previous exact identities retain their
+shader behavior. Screenshot `0x4acc30` → `0x4854a0` calls renderer virtual `+0x24`,
+`0x522370`, which copies the presented DX9 target rather than drawing a new scene.
+Return `0x496d40` and exit `0x496d60` enter mode 14; `0x495130` preserves replay
+hold 13 and forces saves without publishing fullscreen status. Scenario replay
+`0x5061a0` enters hold 13. Pack open `0x53a550` merges the base and existing
+`.000` through `.999` archives in ascending order, despite gaps, replacing prior
+entries with later ones. The existing mount implementation is unchanged.
+
+Font wrapper `0x49b8a0` and attributes `0x479a00` read `rubyface`, never the `ruby`
+alias that game Lua forwards after resolving it. The shared font parser leaves
+that alias out of the font state while keeping the resolved face and ruby size.
+The installation also contains native Lua 5.1 `.lub` chunks. They join the prepared
+script corpus and are validated when included; each include still executes normally.
+Their 32-bit bytecode ABI matches the shared Lua module's checked loader.
+
+Painted-font cache writer `0x402630` and restore `0x402c40` use a compact key:
+face string, three u32 colors and one u32 packing character/size/style, followed
+by atlas index and four inclusive float clip edges. Setter `0x525720` stores
+byte size and bold/italic/underline/strike bits 0–3; glyph `0x525830` uses
+shadow/outline bits 4–5 and forms `(style << 24) | (size << 16) | char16`.
+`fontCacheKey = packed` selects this layout; Rev.2898/3083 retain expanded keys.
+The cache consumes the declared count without requiring EOF, and cropped glyphs
+still use the real atlas pixels. Failed or out-of-bounds records remain errors.
+
+Native save writer `0x504a40` emits version 1002 with zlib compression. The web
+runtime keeps its established canonical version-1003 browser containers; the
+published native `s.savedataversion` remains 1002. Native version-1002 scenario
+imports have not been validated. Evidence is kept in the surrounding workspace
+under `local-runtime/ryuusei-world-actor/`; game scripts and activation state are
+not patched or preset.
+
+Lua registration `0x4f35a0` binds `convertEncoding` to `0x4f6300`. It reads
+string-valued `from`, `to`, and `source` table fields; the source and result keep
+their byte lengths, including embedded NUL. The browser binds explicit `sjis`
+and `utf8` conversions using shared text codecs. Invalid tables or target names
+produce the native level-1 argument report and nil. Native EUC/JIS conversion
+and input auto-detection (`0x586390`, up to 8192 bytes) remain explicit refusals.
+Conversion dispatch is `0x586350` → `0x587950`. No activation data is synthesized:
+the unmodified game verifies the user's key and writes its own activation record.
+
+HTTP GET `0x4b7510` enters mode 8, clears `s.http.cancel`, and starts
+`0x4dd190`; frame `0x48fe40` polls `0x4dd0c0` or cancels and releases the mode.
+Completion `0x4de830` publishes the actual HTTP status and C-string response bytes.
+Request, connection and receive failures are -1, -2 and -3; cancellation leaves
+result variables untouched. The browser and probe use the shared fetch host,
+retaining browser CORS restrictions. Fetch has no native socket error pair, so
+negative result messages use zero for those two unavailable details. Headers,
+response-file output and POST remain refused. Frame handlers continue during the
+wait, allowing the game's own update-check cancellation.
+
+Layer tween handler `0x4a7090` and removal `0x4a9370` take the native replay flag.
+The dispatcher forwards it through the layer owner, so saved looping tweens restart
+without appending a second copy of their command on each scenario load. This fixes
+save-state growth in the shared replay path while preserving ordinary recording.
+
+Validation covers startup and the opening story segment: 263 delivered probe clicks,
+27 `rt` tags, 95 real image decodes without failures, and a save/load round trip at
+click 100 with identical saved/loaded/reloaded state hashes. A fresh process restores
+that hash and continues for eight clicks. A Brave DOM/Metal run verifies the original
+key check and persisted activation; a separate native UI recipe exercises quicksave,
+both layered confirmations, quickload and three further story lines with no console
+errors, exceptions or HTML dialogs. Game images and saved thumbnails were not viewed.
+The 322 targeted Lua/Artemis tests pass. The full suite has 2,071 tests, 2,034 passes
+and exactly the same 37 named baseline failures, with no skips or cancellations.
+Sakura no Toki also restores its previous save hash in a fresh process and continues.
+Commands, private save copies and complete stream reviews remain in
+`local-runtime/ryuusei-world-actor/` in the surrounding workspace.
+
 ## Rev.3083 (PE32, wrapped executable)
 
 Root executable SHA-256
@@ -154,8 +243,9 @@ inclusive clip edges. The key's last field is `(style << 16) | (character & 6553
 renderer `0x5d3d20` supplies bold/italic bits 0/1, and decoration bits are 3/4.
 `0x4a4bf0` constructs the shared clipped surface; `0x4a8cd0` replaces its global
 cache entry. The declared record count controls parsing, without an EOF check.
-This restore format is implemented only for the independently confirmed 2898
-profile; an unsupported format remains an error, rather than a successful no-op.
+This expanded restore format is used by the confirmed Rev.2898/3083 profiles;
+Rev.2601 selects its compact key layout described above. Unsupported layouts
+remain errors, rather than successful no-ops.
 
 Scenario loader `0x5b3240` pushes mode 13 at `0x5b4bb4` before history replay.
 Mode entry `0x53b8b0` refuses changes while the current mode is 13. Exit

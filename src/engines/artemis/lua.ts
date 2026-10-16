@@ -2,6 +2,7 @@ import {
   Lua51,
   LuaRuntimeError,
   luaText,
+  luaFileBytes,
   type LuaReference,
   type LuaTable,
   type LuaValue,
@@ -12,6 +13,7 @@ import {ArtemisEvents} from './events.js';
 import type {AsbTag} from '../../formats/artemis/asb.js';
 import type {PointerPositionHost} from '../../input/cursor-host.js';
 import {windowsTextFileBytes} from '../../platform/windows-text-file.js';
+import {decodeCp932, encodeCp932} from '../../text/cp932.js';
 import {readArtemisPngComments} from './png-comments.js';
 import {installArtemisLuaOs, type ArtemisLuaOsHost} from './lua-os.js';
 
@@ -117,6 +119,36 @@ export class ArtemisLua {
   ) {
     this.vm = new Lua51(instructionLimit);
     this.events = new ArtemisEvents((name, args) => this.call(name, args));
+    // Rev.2601 4f6300: string fields only, byte-preserving std::string source.
+    // The Japanese codecs are shared text services, not game-specific conversions.
+    this.vm.bind('convertEncoding', (args) => {
+      const invalid = () => {
+        const message = argumentError('convertEncoding');
+        if (!host.reportError) throw Error('Invalid Artemis convertEncoding arguments');
+        host.reportError(message);
+        return [null];
+      };
+      const table = args[0];
+      if (!(table instanceof Map)) return invalid();
+      const fields = new Map<string, Uint8Array>();
+      for (const [key, value] of table)
+        if (typeof key === 'string' && value instanceof Uint8Array)
+          fields.set(key.split('\0', 1)[0]!, value);
+      const from = luaText(fields.get('from'));
+      const to = luaText(fields.get('to'));
+      if (!['sjis', 'utf8', 'euc', 'jis'].includes(to)) return invalid();
+      // Native also exposes EUC/JIS and automatic input detection. Keep those
+      // explicit refusals until their conversion tables and detector are modeled.
+      if (!['sjis', 'utf8'].includes(from) || !['sjis', 'utf8'].includes(to))
+        throw Error('Unsupported Artemis convertEncoding codec or automatic detection');
+      const source = fields.get('source') ?? new Uint8Array();
+      if (from === to) return [source.slice()];
+      return [
+        from === 'sjis'
+          ? new TextEncoder().encode(decodeCp932(source))
+          : encodeCp932(new TextDecoder().decode(source)),
+      ];
+    });
     this.vm.bind('setEventHandler', (args) => {
       const table = args[0];
       if (!(table instanceof Map)) throw new Error('Expected Artemis event handler table');
@@ -401,6 +433,30 @@ export class ArtemisLua {
       return [];
     });
     if (host.suspendableTags) {
+      this.vm.bind('artemisIncludeSource', (args) => {
+        const path = luaText(args[0]);
+        if (args[1] === true) {
+          try {
+            const raw = host.readPlainFile?.(path) ?? null;
+            return raw === null
+              ? [null]
+              : [
+                  luaFileBytes(raw, windowsTextFileBytes(raw)),
+                  new TextEncoder().encode(`@${path}`),
+                ];
+          } catch (error) {
+            if (!this.vm.usable) throw error;
+            return [null];
+          }
+        }
+        return [host.readFile(path), new TextEncoder().encode(path)];
+      });
+      this.vm.bind('artemisIncludeFailure', (args) => {
+        const error = this.vm.errorFromValue(args[1], args[2] === 3 ? 3 : 2);
+        if (!this.vm.usable || !host.reportIncludeError) throw error;
+        host.reportIncludeError(luaText(args[0]), error);
+        return [];
+      });
       // Resource failures are raised by a host method so they keep a host cause.
       this.vm.bind('artemisResourceFailure', (args) => {
         const message = args[0];
@@ -415,6 +471,35 @@ export class ArtemisLua {
         local nativeTag = engine.tag
         local resourceFailure = engine.artemisResourceFailure
         engine.artemisResourceFailure = nil
+        local includeSource = engine.artemisIncludeSource
+        local includeFailure = engine.artemisIncludeFailure
+        engine.artemisIncludeSource = nil
+        engine.artemisIncludeFailure = nil
+        local function pack(...) return {n=select('#', ...), ...} end
+        -- A child coroutine supplies the native protected include boundary
+        -- without a Lua 5.1 C pcall remaining on the stack across resource waits.
+        engine.include = function(self, path)
+          local function attempt(plain)
+            local source, name = includeSource(self, path, plain)
+            if source == nil then return false, 'Missing Artemis Lua include '..path, 3 end
+            local chunk, message = loadstring(source, name)
+            if not chunk then return false, message, 3 end
+            local child = coroutine.create(chunk)
+            local args = {n=0}
+            while true do
+              local result = pack(coroutine.resume(child, unpack(args, 1, args.n)))
+              if not result[1] then return false, result[2], 2 end
+              if coroutine.status(child) == 'dead' then return true end
+              args = pack(coroutine.yield(unpack(result, 2, result.n)))
+            end
+          end
+          if attempt(true) then return end
+          local ok, message, status = attempt(false)
+          if not ok then
+            if type(message) ~= 'string' then message = nil end
+            includeFailure(self, path, message, status)
+          end
+        end
         engine.tag = function(self, command)
           if nativeTag(self, command) then
             local ok, message = coroutine.yield()

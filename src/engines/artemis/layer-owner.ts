@@ -311,9 +311,9 @@ export class ArtemisLayerOwner<
   get tweenSyncPending(): boolean {
     return this.tweenSync;
   }
-  dispatchTween(tag: AsbTag): boolean {
+  dispatchTween(tag: AsbTag, recordHistory = true): boolean {
     this.host.trace?.({kind: 'tween', name: tag.name, id: tag.args.get('id'), simulation: true});
-    return this.layerTweens.dispatch(tag);
+    return this.layerTweens.dispatch(tag, recordHistory);
   }
   hasLayer(id: string): boolean {
     return !!this.layers.scene.entry(id);

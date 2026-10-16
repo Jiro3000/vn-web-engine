@@ -63,6 +63,10 @@ const supported = new Set<string>([
   'indent',
   'prohibit',
   'wordparts',
+  // Lua may forward its ruby-face alias after resolving rubyface. Rev.2601
+  // font wrapper 0x49b8a0 / attribute setter 0x479a00 never query this key;
+  // the separate ruby tag is registered at 0x48b340.
+  'ruby',
 ]);
 
 /** a74d0 font-frame attributes. Omitted values remain owned by the selected font;

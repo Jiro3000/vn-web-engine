@@ -47,6 +47,18 @@ conversion follows the investigated string/numeric subset; other values fail.
 AST files are Lua assignments. Story traversal must run the game's Lua interpreter,
 not a separately invented AST VM.
 
+`convertEncoding` accepts explicit `sjis` / `utf8` byte-string conversions through
+the shared text codecs, preserving embedded NUL. Its Rev.2601 registration and
+argument handling are documented in `docs/artemis-revisions.md`. EUC/JIS and native
+input auto-detection remain refused. Game licensing continues through the original
+Lua checks and the user's key; it is not supplied by the engine profile.
+
+`httpget` waits in mode 8 while frame callbacks continue. It uses the shared fetch
+host, publishes real response status/bytes or native negative failure codes, and
+honors `s.http.cancel` without replacing the result variables. Browser CORS rules
+still apply. Custom headers, response files and POST remain refused; native
+Rev.2601 entries are listed in `docs/artemis-revisions.md`.
+
 `variables.ts` preserves byte strings and resolves only the current local scope
 before globals (`0x1400b0880`). An exact delete removes only that key; otherwise
 it removes keys starting with the name plus a dot (`0x1400af990`). Expressions,
@@ -125,11 +137,11 @@ The independent Rev.3083 PE32 profile deletes restored `s.llp64` and
 the DX9/clipped-cell path, accepts shader texture properties, and publishes
 fullscreen status at exit. The exact wrapper identity and native operations are
 listed in `docs/artemis-revisions.md`; executable names do not select a profile.
-Both PE32 profiles synchronize to the first CRC-valid Ogg page before the native
+Rev.2898 and Rev.3083 synchronize to the first CRC-valid Ogg page before the native
 65536-byte boundary. This accepts a leading `bw  ` header through the ordinary
 Vorbis loader, without retrying another codec or rewinding the opened file.
 The shared Vorbis decoder exposes this as an optional first-page search; its default
-remains strict, as do the other four Artemis profiles pending their header-search
+remains strict, as do the other Artemis profiles pending their header-search
 audit. Incomplete candidates and malformed subsequent pages still fail decoding.
 Rev.3257 has an independent hash and boot record; its screenshot and sound-loader
 rewind fields match Rev.3179. Its recompiled native addresses require the mapping in
@@ -259,8 +271,9 @@ elsewhere report the uncreatable destination, removals elsewhere are ignored, an
 ## Engine runtime
 
 `runtime.ts` is the engine object of `0x1400b9e80`. `ArtemisRuntime.open(services)` reads
-system.ini ([WINDOWS] WIDTH/HEIGHT/BOOT/SAVEPATH), the Lua/AST/script corpus and `.sli`
-sound-loop sidecars, which Lua reads synchronously with `file`. Sidecar bytes remain
+system.ini ([WINDOWS] WIDTH/HEIGHT/BOOT/SAVEPATH), the Lua/AST/script corpus (including
+ABI-compatible binary `.lub` chunks), CSV tables and `.sli` sound-loop sidecars,
+which Lua reads synchronously with `file`. Sidecar bytes remain
 unchanged: the game's Lua interprets them, rather than an engine-specific loop parser.
 They share the corpus memory budget. The runtime then builds every tag owner, the Lua runtime, the script,
 the tag dispatch (`tag-dispatch.ts`), reset, save and load. The services supply what the
@@ -1082,7 +1095,9 @@ registration order.
   body (`ArtemisLayers.deleteLayer`). `file`, `label` or `handler` emits the tag as a
   script event.
 - History: infinite `loop`/`yoyo` or `delete` appends the tag to the layer's command list.
-  Otherwise an `lyprop` with the end value string is recorded.
+  Otherwise an `lyprop` with the end value string is recorded. Scenario replay forwards
+  the history flag through the dispatcher and layer owner: the tween is recreated without
+  recording it again, so repeated loads keep the same command registry.
 - `lytweendel` finishes every tween registered on the layer and erases its `lytween`
   commands.
 - `tweenset` opens a tween group (`ArtemisTweenQueue`, CTweenQueue) unless one is open.
@@ -1462,7 +1477,9 @@ Owners remain responsible for complete font resources and actual text rendering.
 preserving omitted defaults. Numeric conversions, double division before float32,
 colors, modes, alignment and comma-separated style flags follow a74d0. Style spans
 are not trimmed. Overflow belongs to the command frame rather than copied font
-attributes. Unknown keys and out-of-range conversions are refused.
+attributes. The forwarded Lua `ruby` face alias is left out of the font state;
+the resolved `rubyface` and `rubysize` are applied normally (Rev.2601
+`0x49b8a0` → `0x479a00`). Unknown keys and out-of-range conversions are refused.
 
 Display property revisions invalidate intermediate captures when an owner changes
 a descendant directly; identical assignments and parent-only transforms reuse
@@ -2089,9 +2106,12 @@ Lua include accepts an explicit prepared `readPlainFile` owner: plain CFile uses
 Lua loadfile header/line framing and Windows CRT text input, then any open/load/
 protected execution failure retries normal loose-first pack bytes. Empty plain
 files succeed without fallback; first-attempt Lua side effects survive. Shared
-Lua51 executeFile/compileFile operate on prepared raw/text bytes and preserve the
-existing explicit bytecode refusal. Hosts without the plain provider retain the
-pack-only subset. `reportIncludeError` (below) reports final failures.
+Lua51 executeFile/compileFile operate on prepared raw/text bytes, preserving binary
+reopen and exact bytecode ABI checks. Suspendable includes use a child coroutine
+for the protected execution boundary, forwarding resource waits to their caller;
+nested includes retain locals without yielding across a C pcall. Fatal instruction
+budgets remain fatal. Hosts without the plain provider retain the pack-only subset.
+`reportIncludeError` (below) reports final failures.
 
 `reportIncludeError` supplies native12d080 level1 final-error reporting and return
 to the include caller. Without that owner, diagnostics retain final refusal.

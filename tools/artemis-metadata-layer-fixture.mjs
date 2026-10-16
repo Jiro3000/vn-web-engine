@@ -281,11 +281,21 @@ export function createMetadataLayerFixture(
     },
     imageLoadFailed: (tag) => {
       if (!reportFailures) throw Error('Probe image metadata missing: ' + tag.args.get('file'));
-      failures.push({kind: 'image', tag: tag.name, file: tag.args.get('file') ?? null, ...failureContext()});
+      failures.push({
+        kind: 'image',
+        tag: tag.name,
+        file: tag.args.get('file') ?? null,
+        ...failureContext(),
+      });
     },
     layerNotFound: (tag) => {
       if (!reportFailures) throw Error('Probe layer missing: ' + tag.args.get('id'));
-      failures.push({kind: 'layer', tag: tag.name, id: tag.args.get('id') ?? null, ...failureContext()});
+      failures.push({
+        kind: 'layer',
+        tag: tag.name,
+        id: tag.args.get('id') ?? null,
+        ...failureContext(),
+      });
     },
   });
   // Rule images use the stage loader; only PNG has a decoded native surface here.
@@ -404,7 +414,7 @@ export function createMetadataLayerFixture(
     },
     /** The global tween registry shared with text display tweens. */
     tweenRegistry: owner.tweenRegistry,
-    dispatchTween: (tag) => owner.dispatchTween(tag),
+    dispatchTween: (tag, recordHistory) => owner.dispatchTween(tag, recordHistory),
     hasLayer: (id) => owner.hasLayer(id),
     layerInfo: (id) => owner.layerInfo(id),
     /** Runs the registered transition tween from `start` (nonzero uint32) to natural

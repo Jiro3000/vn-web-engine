@@ -20,6 +20,7 @@ import {BrowserWindowsSystemProfileHost} from '../dist/platform/browser-windows-
 import {BrowserWindowsProcessHost} from '../dist/platform/browser-windows-process.js';
 import {BrowserWindowsDynamicLibraryHost} from '../dist/platform/windows-dynamic-library.js';
 import {BrowserWindowsFolderPaths} from '../dist/platform/windows-folder-path.js';
+import {FetchHttpClient} from '../dist/platform/http-client.js';
 import {packArtemisSaveFile} from '../dist/formats/artemis/save-file.js';
 import {readAsfHeader} from '../dist/formats/asf/header.js';
 import {ArtemisRuntime} from '../dist/engines/artemis/runtime.js';
@@ -35,6 +36,12 @@ const simulatedDialogResult = dialogResultArgument
   : null;
 if (simulatedDialogResult !== null && ![0, 1].includes(simulatedDialogResult))
   throw new Error('Probe dialog result must be 0 or 1');
+const httpCancelArgument = process.argv.find((value) =>
+  value.startsWith('--http-cancel-after-ms='),
+);
+const httpCancelAfter = httpCancelArgument ? Number(httpCancelArgument.split('=')[1]) : null;
+if (httpCancelAfter !== null && (!Number.isFinite(httpCancelAfter) || httpCancelAfter < 0))
+  throw Error('Probe HTTP cancellation delay must be nonnegative');
 const advanceWaits = process.argv.slice(3).includes('--advance-waits');
 const nativeIncludeReporting = process.argv.slice(3).includes('--native-include-reporting');
 // --native-load-reporting: missing images and layers are recorded (metadataLayerFixture
@@ -345,6 +352,7 @@ try {
           complete({result: simulatedDialogResult, text: request.message});
       },
     },
+    http: new FetchHttpClient(),
     window: {
       minimized: () => false,
       show: (command) => modeEffects.push({windowShow: command, simulation: true}),
@@ -522,6 +530,7 @@ try {
   };
   // Durations of click-waits that automode ended, in milliseconds.
   const automodeWaits = [];
+  const httpWaits = [];
   let automodeStop = null;
   let refusal = null;
   try {
@@ -571,6 +580,30 @@ try {
           runtime.fullscreenVideo.frame();
         }
         script.run(1000);
+        continue;
+      }
+      if (runtime.runMode === 8) {
+        // Network progress needs the host event loop and real frame callbacks. A waiting
+        // script alone is not evidence that boot or the requested click recipe completed.
+        const started = Date.now();
+        let cancelledWithEscape = false;
+        while (runtime.runMode === 8 && !runtime.resourcePending) {
+          if (Date.now() - started > 30000) throw Error('Probe HTTP wait exceeded 30 seconds');
+          await new Promise((resolve) => setTimeout(resolve, 10));
+          const cancel =
+            httpCancelAfter !== null &&
+            !cancelledWithEscape &&
+            Date.now() - started >= httpCancelAfter;
+          runtime.frame((runtime.now + 16) >>> 0 || 1, {
+            sample: {down: new Set(cancel ? [27] : []), pointerInside: true},
+          });
+          cancelledWithEscape ||= cancel;
+        }
+        httpWaits.push({
+          wallMilliseconds: Date.now() - started,
+          cancelledWithEscape,
+          runMode: runtime.runMode,
+        });
         continue;
       }
       if (
@@ -760,6 +793,36 @@ try {
         script.run(1000);
         continue;
       }
+      if (
+        advanceWaits &&
+        !wait.pending &&
+        runtime.runMode !== 3 &&
+        lua.events.handler('onEnterFrame')
+      ) {
+        // Lua may hold a caret until an asynchronous preload completes in onEnterFrame.
+        // Advancing only sound/tween time cannot release that wait.
+        const tagsBefore = nativeTags.length,
+          modeBefore = runtime.runMode;
+        let progressed = false;
+        for (let count = 0; count < 500; count++) {
+          await new Promise((resolve) => setTimeout(resolve, 10));
+          runtime.frame((runtime.now + 16) >>> 0 || 1, {
+            sample: {down: new Set(), pointerInside: true},
+          });
+          if (
+            runtime.resourcePending ||
+            wait.pending ||
+            script.state !== 'waiting' ||
+            runtime.runMode !== modeBefore ||
+            nativeTags.length !== tagsBefore
+          ) {
+            progressed = true;
+            break;
+          }
+        }
+        if (!progressed) throw Error('Probe frame-owned wait did not progress in 5 seconds');
+        continue;
+      }
       if (!advanceWaits || !wait.pending || wait.clickPending || advancedWaits >= 1000000) break;
       // 16 ms frames up to the deadline keep sound and video layers advancing meanwhile.
       const deadline = (wait.deadlineTick + 1) >>> 0;
@@ -820,6 +883,7 @@ try {
       autoChoices: autoChoiceLog,
       clickableLayers: runtime.layers.clickableLayers(),
       automodeWaits,
+      httpWaits,
       automodeStop,
       probeLua,
       saveFiles: Object.fromEntries(

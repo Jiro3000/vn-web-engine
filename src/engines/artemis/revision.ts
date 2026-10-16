@@ -1,5 +1,7 @@
 import type {ArtemisVariables} from './variables.js';
 
+export const ARTEMIS_2601_EXECUTABLE_SHA256 =
+  '38feda70823430350ae58086225ac4a983ab727bd68b4800c4bbeed285ea0123';
 export const ARTEMIS_2898_EXECUTABLE_SHA256 =
   'd20ffaa064efa01eeccf4e315de99a419492e5fe7a8e44bc1a0eb22fc719883e';
 /** Root wrapper containing the statically identified Rev.3083 PE32 engine.
@@ -32,6 +34,8 @@ export interface ArtemisRevision {
   readonly absentSystemVariables: readonly string[];
   /** Names explicitly deleted by native boot, including any restored value. */
   readonly bootDeletedSystemVariables?: readonly string[];
+  /** Native actor parser accepts custom shader names/constants (absent in Rev.2601). */
+  readonly shaderProperties: boolean;
   /** Native actor-property parser accepts shadertexture paths (absent in Rev.2898). */
   readonly shaderTextureProperties: boolean;
   readonly shaderConstantBinding: 'named-effect' | 'ordered-buffer';
@@ -55,6 +59,8 @@ export interface ArtemisRevision {
   readonly fontSizeBits: 8 | 32;
   /** Glyph result ABI: 2898 returns a clipped cell; newer revisions preserve bearings/advance. */
   readonly glyphGeometry: 'clipped-cell' | 'bearing-advance';
+  /** Painted-glyph index key layout; null where restore has not been reconstructed. */
+  readonly fontCacheKey: 'packed' | 'expanded' | null;
   /** Temporary scenario replay hold and application exit; Rev.3257 inserted a mode. */
   readonly loadRunMode: 13 | 14;
   readonly exitRunMode: 14 | 15;
@@ -71,6 +77,7 @@ const rev3139 = {
   llp64: true,
   publishesGraphicsFeatureLevel: true,
   absentSystemVariables: Object.freeze([] as string[]),
+  shaderProperties: true,
   shaderTextureProperties: true,
   shaderConstantBinding: 'ordered-buffer' as const,
   graphicsApi: 'd3d11' as const,
@@ -80,12 +87,41 @@ const rev3139 = {
   indentModify: false,
   fontSizeBits: 8 as const,
   glyphGeometry: 'bearing-advance' as const,
+  fontCacheKey: null,
   loadRunMode: 13 as const,
   exitRunMode: 14 as const,
   publishesFullscreenAtExit: true,
 };
 const revisions: ReadonlyMap<string, ArtemisRevision> = new Map(
   [
+    {
+      executableSha256: ARTEMIS_2601_EXECUTABLE_SHA256,
+      // PE32 boot 0x493520; native writer 0x504a40 emits version 1002.
+      engineVersion: 2601,
+      buildDate: 'Thu May  9 03:14:56 2019',
+      minimumSupportVersion: 1103,
+      saveDataVersion: 1002,
+      llp64: false,
+      publishesGraphicsFeatureLevel: false,
+      absentSystemVariables: Object.freeze(['s.llp64', 's.windowsfeaturelevel']),
+      // Complete property parser 0x4e1b70 ends at visible, without shader keys.
+      shaderProperties: false,
+      shaderTextureProperties: false,
+      shaderConstantBinding: 'named-effect' as const,
+      graphicsApi: 'd3d9' as const,
+      // 0x4854a0 -> renderer +0x24 / 0x522370 copies the existing GPU target.
+      screenshot: 'presented' as const,
+      soundLoaderRewinds: false,
+      vorbisHeaderSyncBoundary: null,
+      indentModify: false,
+      fontSizeBits: 8 as const,
+      glyphGeometry: 'clipped-cell' as const,
+      fontCacheKey: 'packed' as const,
+      // Replay 0x5061a0 holds 13; return/exit 0x496d40/0x496d60 enter 14.
+      loadRunMode: 13 as const,
+      exitRunMode: 14 as const,
+      publishesFullscreenAtExit: false,
+    },
     {
       executableSha256: ARTEMIS_2898_EXECUTABLE_SHA256,
       engineVersion: 2898,
@@ -98,6 +134,7 @@ const revisions: ReadonlyMap<string, ArtemisRevision> = new Map(
       publishesGraphicsFeatureLevel: false,
       absentSystemVariables: Object.freeze(['s.llp64', 's.windowsfeaturelevel']),
       // 0x58cc90 ends after shaderconstant; no texture-path property setter.
+      shaderProperties: true,
       shaderTextureProperties: false,
       shaderConstantBinding: 'named-effect' as const,
       graphicsApi: 'd3d9' as const,
@@ -109,6 +146,7 @@ const revisions: ReadonlyMap<string, ArtemisRevision> = new Map(
       indentModify: false,
       fontSizeBits: 8 as const,
       glyphGeometry: 'clipped-cell' as const,
+      fontCacheKey: 'expanded' as const,
       // 0x5b4bb4 pushes 13 before replay; 0x53dd40 enters 14 for exit.
       loadRunMode: 13 as const,
       exitRunMode: 14 as const,
@@ -125,6 +163,7 @@ const revisions: ReadonlyMap<string, ArtemisRevision> = new Map(
       publishesGraphicsFeatureLevel: false,
       absentSystemVariables: Object.freeze(['s.llp64', 's.windowsfeaturelevel']),
       bootDeletedSystemVariables: Object.freeze(['s.llp64', 's.windowsfeaturelevel']),
+      shaderProperties: true,
       shaderTextureProperties: true,
       shaderConstantBinding: 'named-effect' as const,
       graphicsApi: 'd3d9' as const,
@@ -134,6 +173,7 @@ const revisions: ReadonlyMap<string, ArtemisRevision> = new Map(
       indentModify: false,
       fontSizeBits: 8 as const,
       glyphGeometry: 'clipped-cell' as const,
+      fontCacheKey: 'expanded' as const,
       loadRunMode: 13 as const,
       exitRunMode: 14 as const,
       publishesFullscreenAtExit: true,
@@ -142,6 +182,7 @@ const revisions: ReadonlyMap<string, ArtemisRevision> = new Map(
       executableSha256: ARTEMIS_3179_EXECUTABLE_SHA256,
       engineVersion: 3179,
       glyphGeometry: 'bearing-advance' as const,
+      fontCacheKey: null,
       indentModify: false,
       fontSizeBits: 8 as const,
       loadRunMode: 13 as const,
@@ -153,6 +194,7 @@ const revisions: ReadonlyMap<string, ArtemisRevision> = new Map(
       llp64: true,
       publishesGraphicsFeatureLevel: true,
       absentSystemVariables: Object.freeze([] as string[]),
+      shaderProperties: true,
       shaderTextureProperties: true,
       shaderConstantBinding: 'ordered-buffer' as const,
       graphicsApi: 'd3d11' as const,
@@ -166,6 +208,7 @@ const revisions: ReadonlyMap<string, ArtemisRevision> = new Map(
       executableSha256: ARTEMIS_3257_EXECUTABLE_SHA256,
       engineVersion: 3257,
       glyphGeometry: 'bearing-advance' as const,
+      fontCacheKey: null,
       indentModify: true,
       fontSizeBits: 32 as const,
       loadRunMode: 14 as const,
@@ -177,6 +220,7 @@ const revisions: ReadonlyMap<string, ArtemisRevision> = new Map(
       llp64: true,
       publishesGraphicsFeatureLevel: true,
       absentSystemVariables: Object.freeze([] as string[]),
+      shaderProperties: true,
       shaderTextureProperties: true,
       shaderConstantBinding: 'ordered-buffer' as const,
       graphicsApi: 'd3d11' as const,

@@ -3074,95 +3074,139 @@ test('Native glyph block pipeline shares file faces and cached painted glyphs ac
   }
 });
 
-test('Rev.2898 restored atlas glyphs reach normal/ruby layout and missing keys use real FreeType cells', async () => {
+test('PE32 restored atlas formats reach normal/ruby layout and missing keys use real FreeType cells', async () => {
   const {ArtemisTextGlyphs} = await import('../dist/engines/artemis/text-glyphs.js');
   const {ArtemisFileFonts} = await import('../dist/engines/artemis/file-fonts.js');
   const {fontCacheFixture} = await import('./artemis-font-cache-fixtures.mjs');
   const {rectangleFont, createNodeFontWorker, createNodeGlyphPainter} =
     await import('./freetype-fixtures.mjs');
-  const {ARTEMIS_2898_EXECUTABLE_SHA256: hash} =
+  const revisions = await import('../dist/engines/artemis/revision.js');
+  for (const [hash, layout] of [
+    [revisions.ARTEMIS_2601_EXECUTABLE_SHA256, 'packed'],
+    [revisions.ARTEMIS_2898_EXECUTABLE_SHA256, 'expanded'],
+    [revisions.ARTEMIS_3083_EXECUTABLE_SHA256, 'expanded'],
+  ]) {
+    const files = {...fontCacheFixture({layout}), 'synthetic.ttf': rectangleFont()};
+    const reads = [],
+      worker = await createNodeFontWorker(),
+      painter = await createNodeGlyphPainter(hash);
+    let rasterJobs = 0;
+    const fonts = new ArtemisFileFonts(hash, {
+      readFontFile: async (path) => {
+        reads.push(path);
+        return files[path] ?? null;
+      },
+      hasSystemFontFamily: async () => false,
+      openFontFace: async (bytes) => {
+        const face = await worker.open(bytes);
+        return {
+          requestSize: (...args) => face.requestSize(...args),
+          close: () => face.close(),
+          rasterize: (...args) => {
+            rasterJobs++;
+            return face.rasterize(...args);
+          },
+        };
+      },
+    });
+    const loader = new ArtemisTextGlyphs(hash, fonts, painter);
+    const style = {
+      face: 'synthetic.ttf',
+      rubyface: 'synthetic.ttf',
+      size: 32,
+      rubysize: 32,
+      shadow: 0,
+      outline: 1,
+      rubyshadow: 0,
+      rubyoutline: 1,
+      spacetop: 0,
+      spacemiddle: 0,
+      spacebottom: 0,
+      kerning: 0,
+      rubykerning: 0,
+      color: 0xff0000,
+      shadowcolor: 0,
+      outlinecolor: 0x0000ff,
+      styleBits: 0,
+    };
+    try {
+      await loader.restoreFontCache('cache/');
+      assert.deepEqual(reads, ['cache/0.png', 'cache/1.png', 'cache/index.dat']);
+      const block = await loader.load('AA', 'A', style);
+      assert.equal(rasterJobs, 0);
+      assert.equal(block.main[0].advance, 2);
+      assert.equal(block.ruby[0].advance, 2);
+      assert.deepEqual(
+        Array.from(block.main[0].glyph.surface.image.pixels),
+        [10, 20, 30, 40, 50, 60, 70, 80, 130, 140, 150, 160, 170, 180, 190, 200],
+      );
+      assert.deepEqual(loader.restoredFontCacheStatistics(), {entries: 1, atlasBytes: 24, hits: 1});
+      const miss = await loader.load('A', '', {...style, color: 0xffffff});
+      assert.equal(rasterJobs, 1);
+      assert.equal(miss.main[0].advance, 26); // 0.75 * 32 cell advance + two 1px outlines.
+      assert.deepEqual(
+        [miss.main[0].glyph.surface.image.width, miss.main[0].glyph.surface.image.height],
+        [26, 34],
+      );
+      assert.deepEqual([miss.main[0].glyph.surface.left, miss.main[0].glyph.surface.top], [0, 0]);
+      files['cache/index.dat'] = fontCacheFixture({layout, clip: [0, 0, 0, 0]})['cache/index.dat'];
+      await loader.restoreFontCache('cache/');
+      const replaced = await loader.load('A', '', style);
+      assert.equal(replaced.main[0].advance, 1);
+      await loader.load('A', '', {...style, color: 0xffffff});
+      assert.equal(rasterJobs, 1); // An unrelated generated key survives another restore.
+      const byteSize = await loader.load('A', '', {...style, size: 300});
+      assert.deepEqual(
+        [byteSize.main[0].glyph.surface.image.width, byteSize.main[0].glyph.surface.image.height],
+        [35, 46],
+      ); // Provider size 300 & 255 = 44.
+      // Existing insertion blocks retain independent glyph storage through a later restore.
+      assert.equal(block.main[0].glyph.surface.image.width, 2);
+    } finally {
+      await loader.close();
+      await fonts.close();
+      painter.close();
+      worker.close();
+    }
+  }
+});
+
+test('Rev.2601 compact cache keys retain native byte-size and decoration bits without cross-key hits', async () => {
+  const {ArtemisRestoredFontCache} = await import('../dist/engines/artemis/font-cache.js');
+  const {ARTEMIS_2601_EXECUTABLE_SHA256: hash} =
     await import('../dist/engines/artemis/revision.js');
-  const files = {...fontCacheFixture(), 'synthetic.ttf': rectangleFont()};
-  const reads = [],
-    worker = await createNodeFontWorker(),
-    painter = await createNodeGlyphPainter(hash);
-  let rasterJobs = 0;
-  const fonts = new ArtemisFileFonts(hash, {
-    readFontFile: async (path) => {
-      reads.push(path);
-      return files[path] ?? null;
-    },
-    hasSystemFontFamily: async () => false,
-    openFontFace: async (bytes) => {
-      const face = await worker.open(bytes);
-      return {
-        requestSize: (...args) => face.requestSize(...args),
-        close: () => face.close(),
-        rasterize: (...args) => {
-          rasterJobs++;
-          return face.rasterize(...args);
-        },
-      };
-    },
-  });
-  const loader = new ArtemisTextGlyphs(hash, fonts, painter);
-  const style = {
+  const {fontCacheFixture} = await import('./artemis-font-cache-fixtures.mjs');
+  // Native ushort: size 44, underline/strike/shadow/outline = 0x3c; character A.
+  const files = fontCacheFixture({layout: 'packed', packedKey: 0x3c2c0041});
+  const cache = new ArtemisRestoredFontCache(hash, async (path) => files[path] ?? null);
+  const key = {
     face: 'synthetic.ttf',
-    rubyface: 'synthetic.ttf',
-    size: 32,
-    rubysize: 32,
-    shadow: 0,
+    size: 44,
+    shadow: 1,
     outline: 1,
-    rubyshadow: 0,
-    rubyoutline: 1,
-    spacetop: 0,
-    spacemiddle: 0,
-    spacebottom: 0,
-    kerning: 0,
-    rubykerning: 0,
     color: 0xff0000,
-    shadowcolor: 0,
-    outlinecolor: 0x0000ff,
-    styleBits: 0,
+    shadowColor: 0,
+    outlineColor: 0x0000ff,
+    style: 24,
+    codePoint: 65,
   };
   try {
-    await loader.restoreFontCache('cache/');
-    assert.deepEqual(reads, ['cache/0.png', 'cache/1.png', 'cache/index.dat']);
-    const block = await loader.load('AA', 'A', style);
-    assert.equal(rasterJobs, 0);
-    assert.equal(block.main[0].advance, 2);
-    assert.equal(block.ruby[0].advance, 2);
-    assert.deepEqual(
-      Array.from(block.main[0].glyph.surface.image.pixels),
-      [10, 20, 30, 40, 50, 60, 70, 80, 130, 140, 150, 160, 170, 180, 190, 200],
-    );
-    assert.deepEqual(loader.restoredFontCacheStatistics(), {entries: 1, atlasBytes: 24, hits: 1});
-    const miss = await loader.load('A', '', {...style, color: 0xffffff});
-    assert.equal(rasterJobs, 1);
-    assert.equal(miss.main[0].advance, 26); // 0.75 * 32 cell advance + two 1px outlines.
-    assert.deepEqual(
-      [miss.main[0].glyph.surface.image.width, miss.main[0].glyph.surface.image.height],
-      [26, 34],
-    );
-    assert.deepEqual([miss.main[0].glyph.surface.left, miss.main[0].glyph.surface.top], [0, 0]);
-    files['cache/index.dat'] = fontCacheFixture({clip: [0, 0, 0, 0]})['cache/index.dat'];
-    await loader.restoreFontCache('cache/');
-    const replaced = await loader.load('A', '', style);
-    assert.equal(replaced.main[0].advance, 1);
-    await loader.load('A', '', {...style, color: 0xffffff});
-    assert.equal(rasterJobs, 1); // An unrelated generated key survives another restore.
-    const byteSize = await loader.load('A', '', {...style, size: 300});
-    assert.deepEqual(
-      [byteSize.main[0].glyph.surface.image.width, byteSize.main[0].glyph.surface.image.height],
-      [35, 46],
-    ); // Provider size 300 & 255 = 44.
-    // Existing insertion blocks retain independent glyph storage through a later restore.
-    assert.equal(block.main[0].glyph.surface.image.width, 2);
+    await cache.restore('cache/');
+    assert.equal(cache.get(key).advance, 2);
+    assert.equal(cache.has({...key, size: 300}), true);
+    for (const changed of [
+      {size: 45},
+      {shadow: 0},
+      {outline: 0},
+      {style: 8},
+      {style: 16},
+      {style: 25},
+      {codePoint: 66},
+      {color: 0xffffff},
+    ])
+      assert.equal(cache.has({...key, ...changed}), false);
   } finally {
-    await loader.close();
-    await fonts.close();
-    painter.close();
-    worker.close();
+    cache.close();
   }
 });
 

@@ -26,8 +26,10 @@ export function artemisShaderProperties(
   args: ReadonlyMap<string, string>,
   executableSha256?: string,
 ): ArtemisShaderPropertyPatch {
-  const acceptsTextures =
-    executableSha256 === undefined || artemisRevision(executableSha256).shaderTextureProperties;
+  const revision = executableSha256 === undefined ? undefined : artemisRevision(executableSha256);
+  // Rev.2601 0x4e1b70 never queries these keys, including their named values.
+  if (revision && !revision.shaderProperties) return {};
+  const acceptsTextures = revision?.shaderTextureProperties ?? true;
   const patch: {
     shader?: string;
     constants?: ArtemisShaderConstant[];

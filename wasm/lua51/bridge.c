@@ -2,8 +2,10 @@
 #include "lua.h"
 #include "lauxlib.h"
 #include "lualib.h"
+#include "lundump.h"
 #include <stdlib.h>
 #include <stdint.h>
+#include <string.h>
 
 int luaopen_pluto(lua_State *L);
 
@@ -65,20 +67,27 @@ void lua51_bind(lua_State *L, const char *name, size_t length) {
   lua_getglobal(L, "engine"); lua_pushlstring(L, name, length);
   lua_pushvalue(L, -1); lua_pushcclosure(L, dispatch, 1); lua_rawset(L, -3); lua_pop(L, 1);
 }
+/* Only the exact module ABI is accepted: Lua 5.1, little-endian, 32-bit int,
+ * size_t and Instruction, 64-bit floating lua_Number. Upstream undump retains
+ * its complete header/prototype/instruction checks; binaries are not trusted. */
+static int load_chunk(lua_State *L, const char *bytes, size_t length, const char *name) {
+  if (length && (unsigned char)bytes[0] == 0x1b) {
+    char header[LUAC_HEADERSIZE];
+    luaU_header(header);
+    if (length < sizeof(header) || memcmp(bytes, header, sizeof(header))) {
+      lua_pushliteral(L, "Unsupported Lua bytecode ABI"); return LUA_ERRSYNTAX;
+    }
+  }
+  return luaL_loadbuffer(L, bytes, length, name);
+}
 int lua51_eval(lua_State *L, const char *bytes, size_t length, const char *name, int limit) {
   budget(L, limit);
-  if (length && (unsigned char)bytes[0] == 0x1b) {
-    lua_pushliteral(L, "Precompiled Lua bytecode is not supported"); return LUA_ERRSYNTAX;
-  }
-  int result = luaL_loadbuffer(L, bytes, length, name);
+  int result = load_chunk(L, bytes, length, name);
   if (result) return result;
   return lua_pcall(L, 0, 0, 0);
 }
 int lua51_compile(lua_State *L, const char *bytes, size_t length, const char *name) {
-  if (length && (unsigned char)bytes[0] == 0x1b) {
-    lua_pushliteral(L, "Precompiled Lua bytecode is not supported"); return LUA_ERRSYNTAX;
-  }
-  int result = luaL_loadbuffer(L, bytes, length, name);
+  int result = load_chunk(L, bytes, length, name);
   if (!result) lua_pop(L, 1);
   return result;
 }

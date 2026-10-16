@@ -253,7 +253,80 @@ test('Thread errors preserve other VM work; budgets abort loops after a yield an
   vm.close();
 });
 
-test('Prepared loadfile preserves header line numbers, text translation and binary reopen refusal', async () => {
+test('Lua 5.1 bytecode uses its exact ABI, validates instructions and preserves binary file bytes', async () => {
+  const {windowsTextFileBytes} = await import('../dist/platform/windows-text-file.js');
+  const vm = new Lua51();
+  try {
+    vm.execute(
+      bytes(`binary=string.dump(function()
+        local function add(x) return x+7 end
+        result=add(35)
+        payload="A\\r\\nB\\026\\000\\255"
+      end)`),
+    );
+    const binary = vm.getGlobal('binary');
+    assert.ok(binary instanceof Uint8Array);
+    assert.deepEqual(
+      binary.subarray(0, 12),
+      Uint8Array.of(27, 76, 117, 97, 81, 0, 1, 4, 4, 4, 8, 0),
+    );
+    vm.compile(binary, 'binary-fixture');
+    assert.equal(vm.getGlobal('result'), null);
+    const raw = Uint8Array.from([...bytes('#!/lua\r\n'), ...binary]);
+    const text = windowsTextFileBytes(raw);
+    assert.ok(text.length < raw.length);
+    vm.executeFile(raw, 'fixture.lub', text);
+    assert.equal(vm.getGlobal('result'), 42);
+    assert.deepEqual(vm.getGlobal('payload'), Uint8Array.of(65, 13, 10, 66, 26, 0, 255));
+    for (const [at, value] of [
+      [4, 82],
+      [6, 0],
+      [7, 8],
+      [8, 8],
+      [9, 8],
+      [10, 4],
+      [11, 1],
+    ]) {
+      const foreign = binary.slice();
+      foreign[at] = value;
+      assert.throws(() => vm.compile(foreign), /Unsupported Lua bytecode ABI/);
+      assert.throws(() => vm.execute(foreign), /Unsupported Lua bytecode ABI/);
+    }
+    assert.throws(() => vm.compile(binary.subarray(0, binary.length - 1)), /unexpected end/);
+    const invalid = binary.slice(),
+      view = new DataView(invalid.buffer);
+    let at = 12;
+    at += 4 + view.getUint32(at, true); // Source string, including its NUL.
+    at += 8 + 4; // Definition lines, upvalues/parameters/vararg/stack size.
+    assert.ok(view.getUint32(at, true) > 0);
+    view.setUint32(at + 4, 63, true); // An opcode outside Lua 5.1's instruction set.
+    assert.throws(() => vm.compile(invalid), /bad code/);
+    vm.execute(bytes('afterBinaryFailures=73'));
+    assert.equal(vm.getGlobal('afterBinaryFailures'), 73);
+  } finally {
+    vm.close();
+  }
+});
+
+test('Precompiled loops retain the shared instruction budget and invalidate interrupted states', () => {
+  const producer = new Lua51();
+  let binary;
+  try {
+    producer.execute(bytes('binary=string.dump(function() while true do end end)'));
+    binary = producer.getGlobal('binary');
+  } finally {
+    producer.close();
+  }
+  const vm = new Lua51(1000);
+  try {
+    assert.throws(() => vm.execute(binary), /instruction budget exceeded/);
+    assert.throws(() => vm.getGlobal('result'), /closed or interrupted/);
+  } finally {
+    vm.close();
+  }
+});
+
+test('Prepared loadfile preserves header line numbers, text translation and binary ABI refusal', async () => {
   const {windowsTextFileBytes} = await import('../dist/platform/windows-text-file.js');
   const vm = new Lua51();
   try {

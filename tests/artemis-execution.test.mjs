@@ -6,6 +6,234 @@ import {ArtemisScript} from '../dist/engines/artemis/script.js';
 import {luaText} from '../dist/core/lua51/runtime.js';
 const bytes = (s) => new TextEncoder().encode(s);
 
+test('Lua encoding conversion retains Japanese byte strings through activation-style save/restore calls', () => {
+  const reports = [];
+  const lua = new ArtemisLua({readFile: () => null, reportError: (v) => reports.push(v)});
+  try {
+    lua.vm.execute(
+      bytes(`
+      local source = '日本語'..string.char(0)..'名前'
+      local raw = engine:convertEncoding{from='utf8', to='sjis', source=source}
+      assert(raw == string.char(0x93,0xfa,0x96,0x7b,0x8c,0xea,0,0x96,0xbc,0x91,0x4f))
+      local restored = engine:convertEncoding{from='sjis', to='utf8', source=raw}
+      assert(restored == source)
+      assert(engine:convertEncoding{from='sjis', to='sjis', source=raw} == raw)
+      assert(engine:convertEncoding{from='utf8', to='utf8', source=source} == source)
+      assert(engine:convertEncoding{from='sjis', to='utf8', source='none'} == 'none')
+      assert(engine:convertEncoding{from='utf8', to='sjis', source=17} == '')
+      assert(engine:convertEncoding{from='utf8', to='bogus', source='x'} == nil)
+      assert(engine:convertEncoding(false) == nil)
+      assert(not pcall(function() engine:convertEncoding{to='utf8',source='x'} end))
+      assert(not pcall(function() engine:convertEncoding{from='euc',to='utf8',source='x'} end))
+      assert(not pcall(function() engine:convertEncoding{from='utf8',to='jis',source='x'} end))
+    `),
+    );
+    assert.equal(reports.length, 2);
+    assert.deepEqual(reports[0], reports[1]);
+  } finally {
+    lua.close();
+  }
+});
+
+test('HTTP waits keep frame callbacks alive, publish real status/bytes and resume the queued script', async () => {
+  const {openArtemisRuntimeFixture} = await import('./artemis-runtime-fixture.mjs');
+  const {FetchHttpClient} = await import('../dist/platform/http-client.js');
+  let deliver, requestSignal;
+  const calls = [];
+  const fixture = await openArtemisRuntimeFixture(
+    {
+      'system/first.iet': `
+    [calllua function="start"]
+    [var name="t.done" data="1"]
+    [stop]
+    [lua]
+    function start(e)
+      e:setEventHandler{onEnterFrame='http_frame'}
+      e:tag{'httpget',url='https://example.invalid/patch',varname_code='t.code',varname_data='t.body'}
+      started=true
+    end
+    function http_frame(e) frames=(frames or 0)+1 end
+    [/lua]`,
+    },
+    {
+      services: {
+        http: new FetchHttpClient(async (url, {signal}) => {
+          calls.push(url);
+          requestSignal = signal;
+          return new Promise((r) => {
+            deliver = r;
+          });
+        }),
+      },
+    },
+  );
+  const {runtime} = fixture;
+  const frame = () =>
+    runtime.frame(runtime.now + 16, {sample: {down: new Set(), pointerInside: true}});
+  try {
+    await runtime.boot();
+    await new Promise((r) => setImmediate(r));
+    assert.equal(runtime.runMode, 8);
+    assert.equal(runtime.resourcePending, false);
+    assert.equal(runtime.lua.vm.getGlobal('started'), true);
+    frame();
+    frame();
+    assert.equal(runtime.lua.vm.getGlobal('frames'), 2);
+    assert.equal(runtime.variables.lookup('t.done'), undefined);
+    assert.deepEqual(calls, ['https://example.invalid/patch']);
+    deliver(new Response(Uint8Array.of(0x93, 0xfa, 0, 0x96, 0x7b), {status: 404}));
+    await new Promise((r) => setImmediate(r));
+    frame();
+    assert.equal(runtime.runMode, 8);
+    assert.equal(luaText(runtime.variables.read('t.code')), '404');
+    assert.deepEqual(runtime.variables.read('t.body'), Uint8Array.of(0x93, 0xfa));
+    frame();
+    assert.equal(runtime.runMode, 3);
+    assert.equal(luaText(runtime.variables.read('t.done')), '1');
+    assert.equal(requestSignal.aborted, false);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test('HTTP cancellation aborts the request without fabricating a result or stopping frame input', async () => {
+  const {openArtemisRuntimeFixture} = await import('./artemis-runtime-fixture.mjs');
+  let deliver, signal;
+  const fixture = await openArtemisRuntimeFixture(
+    {
+      'system/first.iet': `
+    [calllua function="start"]
+    [var name="t.done" data="1"]
+    [stop]
+    [lua]
+    function start(e)
+      e:setEventHandler{onEnterFrame='cancel_request'}
+      e:tag{'httpget',url='https://example.invalid/',varname_code='t.code',varname_data='t.body'}
+    end
+    function cancel_request(e) e:tag{'var',name='s.http.cancel',data='1'} end
+    [/lua]`,
+    },
+    {
+      services: {
+        http: {
+          get: async (_url, s) => {
+            signal = s;
+            return new Promise((r) => {
+              deliver = r;
+            });
+          },
+        },
+      },
+    },
+  );
+  try {
+    await fixture.runtime.boot();
+    await new Promise((r) => setImmediate(r));
+    fixture.runtime.frame(17, {sample: {down: new Set(), pointerInside: true}});
+    assert.equal(signal.aborted, true);
+    assert.equal(fixture.runtime.runMode, 3);
+    assert.equal(luaText(fixture.runtime.variables.read('t.done')), '1');
+    assert.equal(fixture.runtime.variables.lookup('t.code'), undefined);
+    deliver({status: 200, body: bytes('late')});
+    await new Promise((r) => setImmediate(r));
+    fixture.runtime.frame(33, {sample: {down: new Set(), pointerInside: true}});
+    assert.equal(fixture.runtime.variables.lookup('t.body'), undefined);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test('HTTP request, connection and receive failures remain distinct native negative results', async () => {
+  const {FetchHttpClient} = await import('../dist/platform/http-client.js');
+  const {ArtemisHttp} = await import('../dist/engines/artemis/http.js');
+  for (const [url, fetcher, code] of [
+    ['not a URL', () => assert.fail('Invalid URL must not fetch'), -1],
+    [
+      'https://example.invalid/',
+      async () => {
+        throw TypeError('blocked by host');
+      },
+      -2,
+    ],
+    [
+      'https://example.invalid/',
+      async () => ({
+        status: 200,
+        arrayBuffer: async () => {
+          throw Error('body stream lost');
+        },
+      }),
+      -3,
+    ],
+  ]) {
+    const writes = new Map();
+    let waiting = false;
+    const owner = new ArtemisHttp(new FetchHttpClient(fetcher), {
+      beginWait: () => {
+        waiting = true;
+      },
+      endWait: () => {
+        waiting = false;
+      },
+      cancelled: () => false,
+      writeVariable: (k, v) => writes.set(k, v),
+    });
+    assert.equal(
+      owner.dispatch({
+        name: 'httpget',
+        args: new Map(Object.entries({url, varname_code: 't.code', varname_data: 't.body'})),
+        sourceLine: 0,
+      }),
+      true,
+    );
+    await new Promise((r) => setImmediate(r));
+    owner.tick();
+    assert.equal(writes.get('t.code'), String(code));
+    assert.ok(luaText(writes.get('t.body')).endsWith(' (0,0)'));
+    assert.equal(waiting, true);
+    owner.tick();
+    assert.equal(waiting, false);
+    owner.close();
+  }
+});
+
+test('Repeated scenario loads retain looping layer tweens without adding replay commands to the save', async () => {
+  const {openArtemisRuntimeFixture} = await import('./artemis-runtime-fixture.mjs');
+  const {ARTEMIS_2601_EXECUTABLE_SHA256} = await import('../dist/engines/artemis/revision.js');
+  const {png} = await import('./png-fixtures.mjs');
+  const fixture = await openArtemisRuntimeFixture(
+    {
+      'system/first.iet':
+        '[lyc id="1" file="pixel.png"]\n[lytween id="1" param="rotate" from="0" to="360" time="2000" loop="-1"]\n[@]\n[stop]',
+      'pixel.png': png({width: 1, height: 1, raw: Buffer.from([0, 255, 255, 255, 255])}),
+    },
+    {hash: ARTEMIS_2601_EXECUTABLE_SHA256},
+  );
+  const {runtime} = fixture;
+  try {
+    await runtime.boot();
+    while (runtime.resourcePending) {
+      await runtime.settleResource();
+      runtime.script.run(1000);
+    }
+    const commands = runtime.layers.snapshotLayerCommands();
+    assert.equal(commands.get('1').filter((t) => t.name === 'lytween').length, 1);
+    const expected = runtime.scenarioArchive(true);
+    runtime.save.request('loop.dat', true, true);
+    await runtime.flushSaves();
+    for (let n = 0; n < 3; n++) {
+      assert.equal(await runtime.load.load('loop.dat', true), true);
+      assert.deepEqual(runtime.layers.snapshotLayerCommands(), commands);
+      assert.deepEqual(runtime.scenarioArchive(), expected);
+      // Re-save the loaded state as well: duplication must not compound across generations.
+      runtime.save.request('loop.dat', true, true);
+      await runtime.flushSaves();
+    }
+  } finally {
+    await fixture.close();
+  }
+});
+
 test('IET boot grammar retains label positions, comments, quoted brackets and positional arguments', () => {
   const program = parseIet(
     bytes(
@@ -959,6 +1187,36 @@ test('Native boot constants require an exact executable hash and reject other re
   assert.throws(() => variables.read('s.windowsfeaturelevel'), /Unsupported/);
 });
 
+test('Rev.2601 publishes its native save version and preserves restored absent DX11 fields', async () => {
+  const {ArtemisVariables} = await import('../dist/engines/artemis/variables.js');
+  const {
+    initializeArtemisVariables,
+    initializeArtemisGraphicsFeatureLevel,
+    artemisRevision,
+    ARTEMIS_2601_EXECUTABLE_SHA256: hash,
+  } = await import('../dist/engines/artemis/revision.js');
+  const variables = new ArtemisVariables({executableSha256: hash});
+  initializeArtemisVariables(variables, hash);
+  assert.deepEqual(
+    ['s.engineversion', 's.builddate', 's.minimumsupportversion', 's.savedataversion'].map((key) =>
+      luaText(variables.read(key)),
+    ),
+    ['2601', 'Thu May  9 03:14:56 2019', '1103', '1002'],
+  );
+  assert.equal(variables.lookup('s.llp64'), undefined);
+  assert.equal(variables.lookup('s.windowsfeaturelevel'), undefined);
+  initializeArtemisGraphicsFeatureLevel(variables, hash, () => assert.fail('no DX11 query'));
+  assert.equal(luaText(variables.queryLiteral('s.llp64')), '0');
+  assert.equal(luaText(variables.queryLiteral('s.windowsfeaturelevel')), '0');
+  variables.restore('s.llp64', bytes('7'));
+  variables.restore('s.windowsfeaturelevel', bytes('45056'));
+  initializeArtemisVariables(variables, hash);
+  assert.equal(luaText(variables.read('s.llp64')), '7');
+  assert.equal(luaText(variables.read('s.windowsfeaturelevel')), '45056');
+  assert.throws(() => artemisRevision(hash.slice(0, 63) + '0'), /Unsupported/);
+  assert.throws(() => variables.queryLiteral('s.unimplemented_device'), /Unsupported/);
+});
+
 test('Rev.2898 keeps absent boot fields absent until real Lua queries create integer zero', async () => {
   const {ArtemisVariables} = await import('../dist/engines/artemis/variables.js');
   const {
@@ -1077,7 +1335,7 @@ test('Runtime boot publishes touch registration independently of live contacts f
   const hashes = Object.entries(revisions)
     .filter(([name]) => /^ARTEMIS_.*(?:EXECUTABLE|RESOURCE_VARIANT)_SHA256$/.test(name))
     .map(([, hash]) => hash);
-  assert.equal(hashes.length, 6);
+  assert.equal(hashes.length, 7);
   for (const hash of hashes) {
     for (const device of [
       null,
@@ -1160,10 +1418,11 @@ test('Game Lua restores real PNG font cache through a suspended runtime call and
   }
 });
 
-test('Rev.2898 and Rev.3083 scenario continuation survives a fresh runtime over copied saves', async () => {
+test('PE32 scenario continuation survives a fresh runtime over copied saves', async () => {
   const {openArtemisRuntimeFixture} = await import('./artemis-runtime-fixture.mjs');
   const revisions = await import('../dist/engines/artemis/revision.js');
   for (const hash of [
+    revisions.ARTEMIS_2601_EXECUTABLE_SHA256,
     revisions.ARTEMIS_2898_EXECUTABLE_SHA256,
     revisions.ARTEMIS_3083_EXECUTABLE_SHA256,
   ]) {
@@ -1641,10 +1900,11 @@ test('The exit tag enters run mode 14, writes fullscreenatexit and forces the gl
   assert.deepEqual(calls, []);
 });
 
-test('Exact-hash exit saves preserve absent or restored fullscreen status only for Rev.2898', async () => {
+test('Exact-hash exit saves preserve absent or restored fullscreen status for the older PE32 profiles', async () => {
   const {openArtemisRuntimeFixture} = await import('./artemis-runtime-fixture.mjs');
   const revision = await import('../dist/engines/artemis/revision.js');
   const hashes = [
+    revision.ARTEMIS_2601_EXECUTABLE_SHA256,
     revision.ARTEMIS_2898_EXECUTABLE_SHA256,
     revision.ARTEMIS_3083_EXECUTABLE_SHA256,
     revision.ARTEMIS_3179_EXECUTABLE_SHA256,
@@ -1661,12 +1921,14 @@ test('Exact-hash exit saves preserve absent or restored fullscreen status only f
         {hash},
       );
       let savedFiles;
-      const expected =
-        hash === revision.ARTEMIS_2898_EXECUTABLE_SHA256
-          ? restored
-            ? 'retained'
-            : undefined
-          : '0';
+      const expected = [
+        revision.ARTEMIS_2601_EXECUTABLE_SHA256,
+        revision.ARTEMIS_2898_EXECUTABLE_SHA256,
+      ].includes(hash)
+        ? restored
+          ? 'retained'
+          : undefined
+        : '0';
       try {
         await first.runtime.boot();
         assert.equal(first.runtime.runMode, revision.artemisRevision(hash).exitRunMode);
@@ -3575,6 +3837,175 @@ test('Artemis fontinit snapshots current font, font stack zero replaces its top,
     fonts.close();
   }
   assert.equal(released.size, snapshots.length);
+});
+
+test('Nested runtime includes preserve Lua locals across real asynchronous layer preparation', async () => {
+  const {openArtemisRuntimeFixture} = await import('./artemis-runtime-fixture.mjs');
+  const {encodePng} = await import('../dist/formats/png/encode.js');
+  const fixture = await openArtemisRuntimeFixture({
+    'system/first.iet': `[lua]
+      function fixture(e) e:include('system/outer.lua'); callerContinued=true end
+      [/lua][calllua function="fixture"][stop]`,
+    'system/outer.lua':
+      "outerStarted=true; engine:include('system/nested.lua'); outerFinished=true",
+    'system/nested.lua':
+      "local saved=41; engine:tag{'lyc',id='1',file='pixel.png'}; nestedResult=saved+1",
+    'pixel.png': await encodePng(1, 1, Uint8Array.of(7, 11, 13, 255)),
+  });
+  try {
+    await fixture.runtime.boot();
+    assert.equal(fixture.runtime.resourcePending, true);
+    assert.equal(fixture.runtime.lua.vm.getGlobal('outerStarted'), true);
+    assert.equal(fixture.runtime.lua.vm.getGlobal('callerContinued'), null);
+    for (let n = 0; n < 10 && fixture.runtime.resourcePending; n++) {
+      await fixture.runtime.settleResource();
+      fixture.runtime.script.run(100);
+    }
+    assert.equal(fixture.runtime.resourcePending, false);
+    assert.equal(fixture.runtime.lua.vm.getGlobal('nestedResult'), 42);
+    assert.equal(fixture.runtime.lua.vm.getGlobal('outerFinished'), true);
+    assert.equal(fixture.runtime.lua.vm.getGlobal('callerContinued'), true);
+    assert.equal(fixture.runtime.script.state, 'waiting');
+  } finally {
+    await fixture.close();
+  }
+});
+
+test('Suspendable includes retry after protected Lua errors, report final host causes and keep fatal budgets', () => {
+  const reports = [],
+    reads = [];
+  const hostFailure = Error('include host failure');
+  const lua = new ArtemisLua({
+    suspendableTags: true,
+    readPlainFile: (path) => {
+      reads.push(['plain', path]);
+      return path === 'retry.lua'
+        ? bytes("partial=1; engine:tag{'resource'}; error('plain failed')")
+        : null;
+    },
+    readFile: (path) => {
+      reads.push(['packed', path]);
+      return path === 'retry.lua'
+        ? bytes("assert(partial==1); engine:tag{'resource'}; retried=true")
+        : path === 'failed.lua'
+          ? bytes("engine:tag{'hostFailure'}")
+          : path === 'nil.lua'
+            ? bytes('error(nil)')
+            : path === 'loop.lua'
+              ? bytes('while true do end')
+              : null;
+    },
+    tag: (tag) => {
+      if (tag.name === 'hostFailure') throw hostFailure;
+      return 'suspended';
+    },
+    reportIncludeError: (path, error) => reports.push([path, error]),
+  });
+  let call;
+  try {
+    lua.vm.execute(
+      bytes(`function fixture(e)
+      e:include('retry.lua'); e:include('failed.lua'); e:include('nil.lua'); continued=true
+    end
+    function loop(e) e:include('loop.lua') end`),
+    );
+    call = lua.createCall('fixture');
+    assert.equal(call.resume().status, 'yielded');
+    assert.equal(call.resume().status, 'yielded');
+    assert.equal(call.resume().status, 'done');
+    assert.equal(lua.vm.getGlobal('partial'), 1);
+    assert.equal(lua.vm.getGlobal('retried'), true);
+    assert.equal(lua.vm.getGlobal('continued'), true);
+    assert.deepEqual(reads.slice(0, 2), [
+      ['plain', 'retry.lua'],
+      ['packed', 'retry.lua'],
+    ]);
+    assert.equal(reports.length, 2);
+    assert.equal(reports[0][0], 'failed.lua');
+    assert.equal(reports[0][1].hostCause, hostFailure);
+    assert.equal(reports[1][0], 'nil.lua');
+    assert.equal(reports[1][1].message, 'Lua error 2');
+    call.close();
+    call = lua.createCall('loop');
+    assert.throws(() => call.resume(), /instruction budget exceeded/);
+    assert.equal(lua.vm.usable, false);
+    assert.equal(reports.length, 2);
+  } finally {
+    call?.close();
+    lua.close();
+  }
+});
+
+test('Runtime prepares binary Lua includes without executing them until each include call', async () => {
+  const {openArtemisRuntimeFixture} = await import('./artemis-runtime-fixture.mjs');
+  const {ARTEMIS_2601_EXECUTABLE_SHA256: hash} =
+    await import('../dist/engines/artemis/revision.js');
+  const compiler = new ArtemisLua({readFile: () => null});
+  let binary;
+  try {
+    compiler.vm.execute(
+      bytes(`binary=string.dump(function()
+        compiledLoads=(compiledLoads or 0)+1
+        csvText=engine:file('system/table/data.csv')
+      end)`),
+      'fixture',
+    );
+    binary = compiler.vm.getGlobal('binary');
+    assert.ok(binary instanceof Uint8Array);
+  } finally {
+    compiler.close();
+  }
+  const fixture = await openArtemisRuntimeFixture(
+    {
+      'system/first.iet': `[lua]
+        function fixture(e)
+          e:include('system/fixture.lub')
+          e:include('system/fixture.lub')
+        end
+        [/lua][calllua function="fixture"][stop]`,
+      'system/fixture.lub': binary,
+      'system/unused-foreign.lub': Uint8Array.of(27, 76, 117, 97, 81, 0, 1, 4, 8, 4, 8, 0),
+      'system/table/data.csv': 'name,value\r\n雪,73\r\n',
+    },
+    {hash},
+  );
+  try {
+    assert.equal(fixture.runtime.lua.vm.getGlobal('compiledLoads'), null);
+    await fixture.runtime.boot();
+    assert.equal(fixture.runtime.lua.vm.getGlobal('compiledLoads'), 2);
+    assert.deepEqual(fixture.runtime.lua.vm.getGlobal('csvText'), bytes('name,value\r\n雪,73\r\n'));
+    assert.equal(fixture.runtime.script.state, 'waiting');
+  } finally {
+    await fixture.close();
+  }
+});
+
+test('Forwarded Lua ruby aliases preserve resolved ruby faces in every runtime font stack', async () => {
+  const {openArtemisRuntimeFixture} = await import('./artemis-runtime-fixture.mjs');
+  const revisions = await import('../dist/engines/artemis/revision.js');
+  const hashes = Object.entries(revisions)
+    .filter(([name]) => /^ARTEMIS_.*(?:EXECUTABLE|RESOURCE_VARIANT)_SHA256$/.test(name))
+    .map(([, hash]) => hash);
+  for (const hash of hashes) {
+    const fixture = await openArtemisRuntimeFixture(
+      {
+        'system/first.iet':
+          '[chgmsg id="text"][fontinit][font ruby="lua-alias" rubyface="font/ruby.ttf" rubysize="28" size="54"][stop]',
+      },
+      {hash},
+    );
+    try {
+      await fixture.runtime.boot();
+      assert.equal(fixture.runtime.script.state, 'waiting');
+      const font = fixture.runtime.fontStack.borrowFrames('text').at(-1).font;
+      assert.equal(font.get('rubyface'), 'font/ruby.ttf');
+      assert.equal(font.get('rubysize'), 28);
+      assert.equal(font.get('size'), 54);
+      assert.equal(font.has('ruby'), false);
+    } finally {
+      await fixture.close();
+    }
+  }
 });
 
 test('Artemis font attributes use integer sizes/flags, double-before-float ratios and style override order', async () => {
@@ -5606,11 +6037,13 @@ test('Layer shader properties admit only named coefficient keys and require a re
   await assert.rejects(compiler.compile('bad', new Uint8Array([1])), /Unsupported/);
   assert.equal(prepared, 0);
 });
-test('Exact revision layer dispatch ignores absent texture properties and preserves legacy texture ownership', async () => {
+test('Exact revision layer dispatch ignores absent shader properties and preserves texture ownership', async () => {
   const {ArtemisLayers} = await import('../dist/engines/artemis/layers.js');
   const revision = await import('../dist/engines/artemis/revision.js');
   const hashes = [
+    revision.ARTEMIS_2601_EXECUTABLE_SHA256,
     revision.ARTEMIS_2898_EXECUTABLE_SHA256,
+    revision.ARTEMIS_3083_EXECUTABLE_SHA256,
     revision.ARTEMIS_3179_EXECUTABLE_SHA256,
     revision.ARTEMIS_3139_EXECUTABLE_SHA256,
     revision.ARTEMIS_3139_RESOURCE_VARIANT_SHA256,
@@ -5618,9 +6051,11 @@ test('Exact revision layer dispatch ignores absent texture properties and preser
   ];
   const tag = (name, args) => ({name, args: new Map(Object.entries(args))});
   for (const hash of hashes) {
-    const absent = hash === revision.ARTEMIS_2898_EXECUTABLE_SHA256;
+    const shaderAbsent = hash === revision.ARTEMIS_2601_EXECUTABLE_SHA256;
+    const absent = shaderAbsent || hash === revision.ARTEMIS_2898_EXECUTABLE_SHA256;
     const reads = [],
-      patches = [];
+      patches = [],
+      imagePatches = [];
     let acquired = 0,
       released = 0;
     const host = {
@@ -5628,7 +6063,7 @@ test('Exact revision layer dispatch ignores absent texture properties and preser
       createImageLayer: () => ({}),
       releaseImageLayer: () => {},
       copyImageLayer: () => ({}),
-      applyImageProperties: () => {},
+      applyImageProperties: (_id, _actor, patch) => imagePatches.push(patch),
       recordLayerProperties: () => {},
       layerNotFound: () => assert.fail('missing layer'),
       clearLayerCommands: () => {},
@@ -5660,17 +6095,27 @@ test('Exact revision layer dispatch ignores absent texture properties and preser
     assert.equal(acquired, absent ? 0 : 1);
     assert.equal(released, acquired);
     assert.equal(patches.length, absent ? 0 : 1);
-    host.supportsShaderProperties = () => true;
+    host.supportsShaderProperties = () => !shaderAbsent;
     await layers.dispatch(
       tag('lyprop', {
         id: '1',
+        left: '12',
         shader: 'raster',
         shaderconstant: 'size',
-        size: '.25',
+        size: shaderAbsent ? '1e99999' : '.25',
         shadertexture: 'user',
         user: 'user-image',
       }),
     );
+    assert.equal(imagePatches.at(-1).left, 12);
+    if (shaderAbsent) {
+      assert.deepEqual(reads, ['fore']);
+      assert.equal(patches.length, 0);
+      assert.equal(acquired, 0);
+      assert.equal(imagePatches.at(-1).customShader, undefined);
+      layers.close();
+      continue;
+    }
     const last = patches.at(-1).patch;
     assert.equal(last.shader, 'raster');
     assert.deepEqual(last.constants, [{name: 'size', values: [0.25]}]);

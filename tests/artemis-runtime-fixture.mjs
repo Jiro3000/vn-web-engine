@@ -35,44 +35,50 @@ export async function openArtemisRuntimeFixture(
   const sound = createArtemisOfflineSoundFixture(hash, read),
     glyphs = createArtemisGlyphLayoutFixture(hash, read),
     surfaces = createArtemisSurfacePreloadFixture(hash, read);
-  const runtime = await ArtemisRuntime.open({
-    executableSha256: hash,
-    files: {
-      read,
-      readPlain: read,
-      resolvePath: (path) => path.replace(/\\/g, '/').toLowerCase(),
-      setMagicPath: () => {},
-      paths: new Set(entries.keys()),
-    },
-    storage: {
-      read: async (name) => saves.get(name) ?? null,
-      write: (name, bytes) => void saves.set(name, bytes),
-      delete: (name) => void saves.delete(name),
-    },
-    randomSeed: 0,
-    createLayers: (host) => createMetadataLayerFixture(hash, read, host, true),
-    glyphs: {...glyphs, ...glyphsOverrides},
-    surfaces: surfaces.manager,
-    sound,
-    moviePlayer: {playing: false, play: async () => false, close() {}},
-    dialogs: {present: () => {}},
-    window: {
-      minimized: () => false,
-      show: () => {},
-      toggleFullscreen: () => {},
-      displayModeChanged: () => {},
-    },
-    caption: {setCaption: () => true},
-    cursor: {setVisible: () => {}, setPosition: () => {}},
-    pointer: {readPointerPosition: () => ({x: 0, y: 0})},
-    dynamicLibraries: new BrowserWindowsDynamicLibraryHost(),
-    windowsVersion: () => ({major: 10, minor: 0}),
-    applyVolumes: () => {},
-    setTouchLimit: () => {},
-    reportError: () => {},
-    trace: {effect: (effect) => effects.push(effect)},
-    ...services,
-  });
+  let runtime;
+  try {
+    runtime = await ArtemisRuntime.open({
+      executableSha256: hash,
+      files: {
+        read,
+        readPlain: read,
+        resolvePath: (path) => path.replace(/\\/g, '/').toLowerCase(),
+        setMagicPath: () => {},
+        paths: new Set(entries.keys()),
+      },
+      storage: {
+        read: async (name) => saves.get(name) ?? null,
+        write: (name, bytes) => void saves.set(name, bytes),
+        delete: (name) => void saves.delete(name),
+      },
+      randomSeed: 0,
+      createLayers: (host) => createMetadataLayerFixture(hash, read, host, true),
+      glyphs: {...glyphs, ...glyphsOverrides},
+      surfaces: surfaces.manager,
+      sound,
+      moviePlayer: {playing: false, play: async () => false, close() {}},
+      dialogs: {present: () => {}},
+      window: {
+        minimized: () => false,
+        show: () => {},
+        toggleFullscreen: () => {},
+        displayModeChanged: () => {},
+      },
+      caption: {setCaption: () => true},
+      cursor: {setVisible: () => {}, setPosition: () => {}},
+      pointer: {readPointerPosition: () => ({x: 0, y: 0})},
+      dynamicLibraries: new BrowserWindowsDynamicLibraryHost(),
+      windowsVersion: () => ({major: 10, minor: 0}),
+      applyVolumes: () => {},
+      setTouchLimit: () => {},
+      reportError: () => {},
+      trace: {effect: (effect) => effects.push(effect)},
+      ...services,
+    });
+  } catch (error) {
+    await Promise.allSettled([glyphs.close(), surfaces.close(), sound.close()]);
+    throw error;
+  }
   const close = async () => {
     runtime.close();
     await glyphs.close();

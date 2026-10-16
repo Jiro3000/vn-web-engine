@@ -18,6 +18,26 @@ export function luaText(value: LuaValue | undefined): string {
   return decoder.decode(value);
 }
 
+/** luaL_loadfile framing; binary reopen retains the original bytes. */
+export function luaFileBytes(raw: Uint8Array, text = raw): Uint8Array {
+  let offset = 0;
+  const header = text[0] === 35;
+  if (header) {
+    const newline = text.indexOf(10);
+    offset = newline < 0 ? text.length : newline + 1;
+  }
+  if (text[offset] === 27) {
+    const start = raw.indexOf(27);
+    if (start < 0) throw Error('Lua binary reopen requires original file bytes');
+    return raw.subarray(start);
+  }
+  if (!header) return text;
+  const body = new Uint8Array(1 + text.length - offset);
+  body[0] = 10;
+  body.set(text.subarray(offset), 1);
+  return body;
+}
+
 /** Nonzero Lua status from a protected load, call or resume. `value` holds the error
  * string bytes; other error values are null. `hostCause` is the host-method exception
  * the Lua error was raised from, so owners can keep host refusals distinct from
@@ -267,31 +287,10 @@ export class Lua51 {
    * to the platform owner; binary reopen uses the original borrowed bytes.
    */
   executeFile(raw: Uint8Array, path: string, text = raw): void {
-    this.execute(this.fileBytes(raw, text), `@${path}`);
+    this.execute(luaFileBytes(raw, text), `@${path}`);
   }
   compileFile(raw: Uint8Array, path: string, text = raw): void {
-    this.compile(this.fileBytes(raw, text), `@${path}`);
-  }
-  private fileBytes(raw: Uint8Array, text: Uint8Array): Uint8Array {
-    let offset = 0;
-    const header = text[0] === 35;
-    if (header) {
-      const newline = text.indexOf(10);
-      offset = newline < 0 ? text.length : newline + 1;
-    }
-    if (text[offset] === 27) {
-      // Lua 5.1 reopens in binary mode and scans from the beginning to ESC.
-      const start = raw.indexOf(27);
-      if (start < 0) throw Error('Lua binary reopen requires original file bytes');
-      return raw.subarray(start);
-    }
-    if (!header) return text;
-    else {
-      const body = new Uint8Array(1 + text.length - offset);
-      body[0] = 10; // Preserve source line numbers after skipping the header.
-      body.set(text.subarray(offset), 1);
-      return body;
-    }
+    this.compile(luaFileBytes(raw, text), `@${path}`);
   }
   compile(bytes: Uint8Array, name = 'chunk'): void {
     this.run(() =>
@@ -317,13 +316,7 @@ export class Lua51 {
       const status = action();
       if (status) {
         const value = this.fn('lua51_type')(state, -1) === 4 ? (this.read(-1) as Uint8Array) : null;
-        const message = value ? new TextDecoder().decode(value) : `Lua error ${status}`;
-        let cause: unknown;
-        // Lua error() at level >0 prefixes "chunk:line: " to a rethrown host message.
-        for (const failure of this.hostFailures)
-          if (message === failure.message || message.endsWith(`: ${failure.message}`))
-            cause = failure.error;
-        throw new LuaRuntimeError(message, status, value, cause);
+        throw this.errorFromValue(value, status);
       }
     } catch (error) {
       if (error instanceof WebAssembly.RuntimeError) this.poisoned = true;
@@ -332,6 +325,16 @@ export class Lua51 {
       this.depth--;
       if (!this.poisoned) this.fn('lua51_settop')(state, top);
     }
+  }
+  /** Preserve host attribution when a Lua coroutine returns a protected error. */
+  errorFromValue(value: LuaValue | undefined, status = 2): LuaRuntimeError {
+    const bytes = value instanceof Uint8Array ? value : null;
+    const message = bytes ? new TextDecoder().decode(bytes) : `Lua error ${status}`;
+    let cause: unknown;
+    for (const failure of this.hostFailures)
+      if (message === failure.message || message.endsWith(`: ${failure.message}`))
+        cause = failure.error;
+    return new LuaRuntimeError(message, status, bytes, cause);
   }
   getGlobal(name: string): LuaValue {
     this.assertOpen();
