@@ -2,6 +2,7 @@ import {ArtemisShaderConstantStorage, type ArtemisShaderConstant} from './shader
 import {artemisRevision} from './revision.js';
 import {
   ArtemisDx9EffectConstants,
+  artemisDx9BlurMode,
   artemisDx9ShaderFragmentSource,
   type ArtemisDx9ShaderKind,
 } from './dx9-shader.js';
@@ -23,6 +24,9 @@ export interface ArtemisDrawShaderPreset {
   readonly fragment: string;
   readonly fields: readonly {readonly name: string; readonly size: number}[];
   readonly needsUserTexture: boolean;
+  /** Exact-source AA programs sample the captured target and disable device blending. */
+  readonly requiresBackground: boolean;
+  readonly replacesDestination: boolean;
   /** Explicit required values, no inferred defaults or native reflection claim. */
   parameters(values: ReadonlyMap<string, readonly number[]>): Float32Array;
   /** Native render15d120 concatenates vectors in order, ignoring their names. */
@@ -63,8 +67,16 @@ export function createArtemisDrawShaderPreset(
       break;
     case 'blur_h':
     case 'blur_v':
+    case 'blur_h_plain':
+    case 'blur_h_aa':
+    case 'blur_h_mask':
+    case 'blur_h_mask_aa':
+    case 'blur_v_plain':
+    case 'blur_v_aa':
+    case 'blur_v_mask':
+    case 'blur_v_mask_aa':
       fields.push({name: 'weights', glsl: 'uWeights', size: 8});
-      scalar(kind === 'blur_h' ? 'width' : 'height', 'uStep');
+      scalar(kind.startsWith('blur_h') ? 'width' : 'height', 'uStep');
       break;
     case 'radial':
       scalar('ax', 'uAx');
@@ -149,9 +161,10 @@ export function createArtemisDrawShaderPreset(
           : 'vec4(0.0)',
     )
     .replace(/\buFore\b/g, 'atlas')
-    .replace(
-      /texture\(uBack,\s*uv\)/g,
-      userTextureIndex > 0 ? 'texture(additionalAtlas0,uv)' : 'vec4(0.0)',
+    .replace(/texture\(uBack,\s*(uv|vBackUv)\)/g, (_match, coordinate) =>
+      userTextureIndex > 0
+        ? `texture(additionalAtlas0,${coordinate === 'vBackUv' ? 'additionalUV0' : 'uv'})`
+        : 'vec4(0.0)',
     )
     .replace(/\bvBackUv\b/g, userTextureIndex > 0 ? 'additionalUV0' : 'vec2(0.0)')
     .replace(/\bvUv\b/g, 'tex')
@@ -167,6 +180,8 @@ export function createArtemisDrawShaderPreset(
     fragment: source,
     fields: fields.map(({name, size}) => ({name, size})),
     needsUserTexture,
+    requiresBackground: artemisDx9BlurMode(kind)?.background ?? false,
+    replacesDestination: artemisDx9BlurMode(kind)?.background ?? false,
     bufferParameters(buffer) {
       if (
         (buffer?.length ?? 0) > 32 ||

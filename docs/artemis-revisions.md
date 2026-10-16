@@ -14,6 +14,68 @@ only `.rsrc` and the header fields that size it (SizeOfInitializedData, SizeOfIm
 CheckSum, the resource directory size and the `.rsrc` section header) differ. It shares
 every Rev.3139 address and field below.
 
+## Rev.2868 (PE32)
+
+Ryuusei World Actor: Badge & Dagger executable SHA-256
+`e551146298aa98987b5965964610c909ae8f2c06ab3ac536a733b4bc1e9bbcde`
+selects an independent x86 profile: image base `0x400000`, entry `0x68167c`,
+PE timestamp `0x608e9c71`. Boot `0x539360` publishes Rev.2868,
+`Sun May 2 21:34:14 2021`, support 1103 and save version 1003. It leaves
+`s.llp64` and `s.windowsfeaturelevel` absent and preserves restored values;
+its touch-registration query uses the PE32 touch owner at virtual `+0x44`.
+The version and architecture do not select another executable's profile.
+
+Actor parser `0x58ca90` accepts `shader` and `shaderconstant`, then returns
+without a texture-path property. DX9 draw `0x5ce4d0` writes named effect
+parameters through `SetFloatArray` at virtual `+0x80`; it does not use an
+ordered constant buffer. FreeType open `0x5d64e0` receives a byte size, and
+glyph `0x5d6a10` returns cell advance, byte-sized height and clamped bearings.
+Painted-font restore `0x4a6280` reads the expanded key layout and real PNG
+atlases. These select the existing DX9, 8-bit font, clipped-cell and expanded
+cache owners. No additional font or shader behavior is inferred from the title.
+
+Screenshot tag `0x5588b0` calls renderer virtual `+0x24`, `0x5d0200`, to copy
+the presented DX9 target. Sound loaders `0x5f7e70` / `0x5f7f40` reuse an opened
+file without rewinding. Vorbis `0x51a090` opens `0x603b80`; its path through
+`0x501250`, `0x500fa0` and `0x4fff20` requests the initial exclusive `0x10000`
+page-search boundary from `0x4ffb50`. Scenario loader `0x5b3020` uses replay
+hold 13. Mode owner `0x53b8b0`, return `0x53dd20` and exit `0x53dd40` retain
+exit mode 14 and force saves without publishing fullscreen-at-exit status.
+Pack mount `0x512270` opens the base and existing numbered archives through
+`.999`, retaining ascending override order and continuing after gaps.
+
+The eight exact raw blur-source signatures in `dx9-shader.ts` select horizontal
+or vertical convolution with optional mask and optional background composition.
+All eight use eight symmetric weights and named width/height steps. Plain variants
+ignore masks; mask variants sample the original foreground UV and multiply alpha
+before the layer alpha. AA variants sample a separate captured-background UV,
+compute straight output RGB/alpha, and disable device blending for that pass.
+Their original game Lua selects intermediate format 2 for the AA path. Using an
+AA shader outside a captured target is explicitly refused until retained Back
+ownership for that native path is modeled. Existing nineteen-source DX9 programs
+retain their prior behavior. All eight real sources compile; synthetic numeric
+and Brave/Metal tests check masks, backdrop composition, blend state and UVs.
+This installation contains no painted-font cache index, so that format is checked
+against native code and synthetic real-PNG/FreeType fixtures rather than an
+installation atlas.
+
+Gameplay validation for this installation is pending. Its unmodified
+`script.ini` enables SoftDenchi and expects executable CRC32 `e0000172`,
+whereas the supplied executable has CRC32 `aacc732b`. The original
+`softdc_init` / `getWindowsCrc` check therefore has a mismatched input pair.
+Engine support neither rewrites this expectation nor disables authentication.
+Synthetic runtime checks cover boot capabilities, fonts, shaders, cached glyphs,
+exit saves and fresh scenario restoration; they do not establish that this
+installation reaches its title or story. The build and all 327 targeted tests pass.
+The full suite has 2,073 tests, 2,036 passes and exactly the same 37 named baseline
+failures, with no skips or cancellations. Brave/Metal passes 100 synthetic DX9
+cases, including the new variants. Fresh-process regressions restore identical
+prior scenario hashes and continue for World Actor and Sakura no Toki. The one
+Badge & Dagger movie fully decodes through shared ASF codecs: 2,594 video frames,
+4,150,400 audio samples per channel and no failures; no frames are displayed.
+Static evidence and receipts remain under `local-runtime/ryuusei-badge-dagger/`
+in the surrounding workspace.
+
 ## Rev.2601 (PE32)
 
 Ryuusei World Actor executable SHA-256
@@ -34,7 +96,7 @@ this revision; its profile retains the strict decoder.
 The complete actor-property parser `0x4e1b70` ends after `visible`, with no custom
 shader name, constant or texture lookup. `shaderProperties = false` leaves these
 keys and their named values unconsumed, including malformed numeric values;
-ordinary geometry still applies. The six previous exact identities retain their
+ordinary geometry still applies. The other supported exact identities retain their
 shader behavior. Screenshot `0x4acc30` → `0x4854a0` calls renderer virtual `+0x24`,
 `0x522370`, which copies the presented DX9 target rather than drawing a new scene.
 Return `0x496d40` and exit `0x496d60` enter mode 14; `0x495130` preserves replay
@@ -280,8 +342,8 @@ has no texture-path lookup or setter. `shaderTextureProperties = false` leaves
 shader-owner requirement arise from that property alone. All four supported
 x64 hashes retain their texture-property parser and resource ownership.
 
-The DX9 source registry recognizes nineteen complete raw HLSL signatures for this
-exact hash. Their Fore/User coordinates are foreground UV; eighteen programs
+Nineteen complete raw HLSL signatures from this installation are recognized by the
+DX9 source registry. Their Fore/User coordinates are foreground UV; eighteen programs
 sample mask alpha at the original UV, independently of foreground displacement.
 Reset ignores the mask. Add also applies mask alpha to the user RGB addition.
 These are finite, reconstructed presets rather than a general HLSL compiler.

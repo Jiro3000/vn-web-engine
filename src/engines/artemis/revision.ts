@@ -2,6 +2,8 @@ import type {ArtemisVariables} from './variables.js';
 
 export const ARTEMIS_2601_EXECUTABLE_SHA256 =
   '38feda70823430350ae58086225ac4a983ab727bd68b4800c4bbeed285ea0123';
+export const ARTEMIS_2868_EXECUTABLE_SHA256 =
+  'e551146298aa98987b5965964610c909ae8f2c06ab3ac536a733b4bc1e9bbcde';
 export const ARTEMIS_2898_EXECUTABLE_SHA256 =
   'd20ffaa064efa01eeccf4e315de99a419492e5fe7a8e44bc1a0eb22fc719883e';
 /** Root wrapper containing the statically identified Rev.3083 PE32 engine.
@@ -36,7 +38,7 @@ export interface ArtemisRevision {
   readonly bootDeletedSystemVariables?: readonly string[];
   /** Native actor parser accepts custom shader names/constants (absent in Rev.2601). */
   readonly shaderProperties: boolean;
-  /** Native actor-property parser accepts shadertexture paths (absent in Rev.2898). */
+  /** Native actor-property parser accepts shadertexture paths (absent in Rev.2868/2898). */
   readonly shaderTextureProperties: boolean;
   readonly shaderConstantBinding: 'named-effect' | 'ordered-buffer';
   readonly graphicsApi: 'd3d9' | 'd3d11';
@@ -118,6 +120,38 @@ const revisions: ReadonlyMap<string, ArtemisRevision> = new Map(
       glyphGeometry: 'clipped-cell' as const,
       fontCacheKey: 'packed' as const,
       // Replay 0x5061a0 holds 13; return/exit 0x496d40/0x496d60 enter 14.
+      loadRunMode: 13 as const,
+      exitRunMode: 14 as const,
+      publishesFullscreenAtExit: false,
+    },
+    {
+      executableSha256: ARTEMIS_2868_EXECUTABLE_SHA256,
+      // Independent PE32 boot 0x539360, before the Rev.2898 build.
+      engineVersion: 2868,
+      buildDate: 'Sun May 2 21:34:14 2021',
+      minimumSupportVersion: 1103,
+      saveDataVersion: 1003,
+      llp64: false,
+      publishesGraphicsFeatureLevel: false,
+      absentSystemVariables: Object.freeze(['s.llp64', 's.windowsfeaturelevel']),
+      // 0x58ca90 ends after shaderconstant; no texture-path property setter.
+      shaderProperties: true,
+      shaderTextureProperties: false,
+      shaderConstantBinding: 'named-effect' as const,
+      graphicsApi: 'd3d9' as const,
+      // 0x5588b0 -> renderer +0x24 / 0x5d0200 copies the presented target.
+      screenshot: 'presented' as const,
+      // 0x5f7e70 / 0x5f7f40 reuse the opened file for successive loaders.
+      soundLoaderRewinds: false,
+      // 0x603b80 -> 0x501250 -> 0x500fa0 -> 0x4fff20 -> 0x4ffb50.
+      vorbisHeaderSyncBoundary: 65536,
+      indentModify: false,
+      // 0x5d64e0 takes a byte; glyph 0x5d6a10 returns a clipped cell.
+      fontSizeBits: 8 as const,
+      glyphGeometry: 'clipped-cell' as const,
+      // 0x4a6280 restores the expanded painted-glyph index.
+      fontCacheKey: 'expanded' as const,
+      // 0x5b3020 holds 13; 0x53b8b0 / 0x53dd40 exit in 14 without fullscreen.
       loadRunMode: 13 as const,
       exitRunMode: 14 as const,
       publishesFullscreenAtExit: false,

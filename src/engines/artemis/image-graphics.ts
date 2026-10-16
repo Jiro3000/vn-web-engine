@@ -1428,12 +1428,28 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
               ];
             }
           }
+          if (custom.requiresBackground && context.format !== 2)
+            throw Error('Unsupported Artemis DX9 alpha blur outside a captured target');
           if (!named) parameters = custom.bufferParameters(this.nativeSlotOne);
         }
         if (dx9 && context.format !== 2)
           this.dx9DeviceBlend = artemisDx9DeviceBlend(raster.layerMode);
-        const mode =
-          custom && dx9
+        const mode = custom?.replacesDestination
+          ? {
+              blend: {
+                color: {
+                  source: 'one' as const,
+                  destination: 'zero' as const,
+                  operation: 'add' as const,
+                },
+                alpha: {
+                  source: 'one' as const,
+                  destination: 'zero' as const,
+                  operation: 'add' as const,
+                },
+              },
+            }
+          : custom && dx9
             ? {
                 blend:
                   context.format === 2

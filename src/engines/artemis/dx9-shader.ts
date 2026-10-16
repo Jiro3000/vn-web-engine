@@ -4,13 +4,45 @@ import {
   type ArtemisShaderSample,
 } from './raster-shader.js';
 import {artemisColorShade} from './color-shader.js';
-import {artemisBlurShade} from './blur-shader.js';
+import {artemisBlurShade, artemisBlurFragmentSource} from './blur-shader.js';
 import {artemisCompositeShade} from './composite-shader.js';
 import {artemisMosaicShade} from './mosaic-shader.js';
 import {artemisScreenShade} from './screen-shader.js';
 import type {ArtemisShaderConstant} from './shader-properties.js';
 
+export type ArtemisDx9BlurKind =
+  | 'blur_h_plain'
+  | 'blur_v_plain'
+  | 'blur_h_mask'
+  | 'blur_v_mask'
+  | 'blur_h_aa'
+  | 'blur_v_aa'
+  | 'blur_h_mask_aa'
+  | 'blur_v_mask_aa';
+
+export function artemisDx9BlurMode(
+  kind: string,
+): {axis: 'blur_h' | 'blur_v'; mask: boolean; background: boolean} | undefined {
+  const modes: readonly string[] = [
+    'blur_h_plain',
+    'blur_v_plain',
+    'blur_h_mask',
+    'blur_v_mask',
+    'blur_h_aa',
+    'blur_v_aa',
+    'blur_h_mask_aa',
+    'blur_v_mask_aa',
+  ];
+  if (!modes.includes(kind)) return undefined;
+  return {
+    axis: kind.startsWith('blur_h_') ? 'blur_h' : 'blur_v',
+    mask: kind.includes('_mask'),
+    background: kind.endsWith('_aa'),
+  };
+}
+
 export type ArtemisDx9ShaderKind =
+  | ArtemisDx9BlurKind
   | 'raster'
   | 'screen'
   | 'add'
@@ -33,6 +65,15 @@ export type ArtemisDx9ShaderKind =
 /** Raw source signatures, including original line endings and non-UTF8 comments. */
 export const artemisDx9ShaderSources: Readonly<Record<string, ArtemisDx9ShaderKind>> =
   Object.freeze({
+    e0ad84f7f214165bb7deb6c03afbb4f96b77b39364f4d888506f8e297f4881b1: 'blur_h_plain',
+    '0b34ebf9ec5746af9328da6b3e0d18a3401a45f4c2abd72febffac264f55d47a': 'blur_h_aa',
+    '6f13ce307619fc72de6387724f1557f0565f76e6a2500d90fdc41e2d4af6bd24': 'blur_h_mask',
+    d90f2dbf77627c0a218b86e58eb32ea47855b87d187746d49b7110deeb73ea37: 'blur_h_mask_aa',
+    '5129e456559f00a11a8bfa2f1ea07251129d665638347d50d15f5d4e1323a0a4': 'blur_v_plain',
+    d8f52e166c2d120362cfa7b71183f337c886bbb8bee7a03ac716c12fa892d621: 'blur_v_aa',
+    '6dd7f7ad0b2045bf1e384020f94517449d6ce85ec7e0c7f19439f5c3d0500e4f': 'blur_v_mask',
+    '4dc114788e9e8465a8533a5a44bdde276ed3f6a0ea9808c542e33881709d18eb': 'blur_v_mask_aa',
+
     ad94765fa25e003048372257de2c48f96efb0dd22a82f689a93ea13a99881207: 'add',
     '6fa56eb0e99084cb7d2298337b4ca484569888656cf2504076bc51ce15894538': 'blur_h',
     '110ec434d003b0848f28465834df5334da5f2f5b38f17f4850a4cacbfacfb09d': 'blur_v',
@@ -54,11 +95,36 @@ export const artemisDx9ShaderSources: Readonly<Record<string, ArtemisDx9ShaderKi
     '3350d77079ca7bcdc33ba515608596b8f764194adb4c9dc9a187bd4881c30d00': 'sepia2',
   });
 
-/** The eighteen mask programs use original foreground UV, even when the foreground
- * lookup is displaced/quantized. Reset still declares the mask but does not sample it. */
+/** The original nineteen-source set has eighteen mask programs; reset ignores its mask.
+ * The additional source-selected blur variants have explicit mask and captured-Back policies. */
 export function artemisDx9ShaderFragmentSource(kind: ArtemisDx9ShaderKind): string {
   if (!Object.values(artemisDx9ShaderSources).includes(kind))
     throw Error('Unsupported Artemis DX9 shader kind');
+  const blur = artemisDx9BlurMode(kind);
+  if (blur) {
+    let source = artemisBlurFragmentSource(blur.axis);
+    if (blur.mask)
+      source = source.replace(
+        'precision highp float;',
+        'precision highp float;\nuniform sampler2D uMask;',
+      );
+    if (blur.background)
+      source = source.replace(
+        'in vec2 vUv;',
+        'in vec2 vUv;\nin vec2 vBackUv;\nuniform sampler2D uBack;',
+      );
+    return source.replace(
+      'c.a *= uAlpha; outColor=c;',
+      `${blur.mask ? 'c.a *= texture(uMask,vUv).a;' : ''} c.a *= uAlpha;
+       ${
+         blur.background
+           ? `vec4 back = texture(uBack,vBackUv);
+       float a = back.a * (1.0-c.a) + c.a;
+       outColor = vec4((back.rgb * back.a * (1.0-c.a) + c.rgb*c.a)/a,a);`
+           : 'outColor=c;'
+       }`,
+    );
+  }
   let source = artemisShaderFragmentSource(kind);
   if (kind === 'reset') return source;
   source = source.replace('uniform float uAlpha;', '').replace(/\buAlpha\b/g, '(maskAlpha*uAlpha)');
@@ -88,6 +154,8 @@ export interface ArtemisDx9ShaderUniforms {
   readonly weights?: readonly number[];
   readonly mask?: ArtemisShaderSample;
   readonly user?: ArtemisShaderSample;
+  readonly back?: ArtemisShaderSample;
+  readonly backUV?: readonly [number, number];
 }
 const nullTexture: ArtemisShaderSample = () => [0, 0, 0, 1];
 export interface ArtemisDx9ShaderExecutable {
@@ -131,6 +199,29 @@ export function artemisDx9ShaderShade(
   v: number,
   p: ArtemisDx9ShaderUniforms,
 ): readonly [number, number, number, number] {
+  const blur = artemisDx9BlurMode(kind);
+  if (blur) {
+    const f = Math.fround;
+    const c = [
+      ...artemisBlurShade(blur.axis, fore, u, v, {
+        alpha: 1,
+        weights: p.weights ?? new Array(8).fill(0),
+        step: p.step ?? 0,
+      }),
+    ];
+    if (blur.mask) c[3] = f(c[3]! * f((p.mask ?? nullTexture)(u, v)[3]));
+    c[3] = f(c[3]! * f(p.alpha));
+    if (blur.background) {
+      if (!p.back) throw Error('Artemis DX9 alpha blur requires a background sample');
+      const back = p.back(...(p.backUV ?? [u, v]));
+      const inverse = f(1 - c[3]!);
+      const a = f(f(f(back[3]) * inverse) + c[3]!);
+      return [0, 1, 2]
+        .map((i) => f(f(f(f(f(back[i]!) * f(back[3])) * inverse) + f(c[i]! * c[3]!)) / a))
+        .concat(a) as [number, number, number, number];
+    }
+    return c as [number, number, number, number];
+  }
   const mask = kind === 'reset' ? 1 : (p.mask ?? nullTexture)(u, v)[3];
   const alpha = Math.fround(Math.fround(mask) * Math.fround(p.alpha));
   switch (kind) {
@@ -168,13 +259,22 @@ export function artemisDx9ShaderShade(
           : user;
       return artemisCompositeShade(kind, fore, sample, u, v, {alpha, param: p.param ?? 0});
     }
-    default:
+    case 'rgb':
+    case 'reset':
+    case 'sepia':
+    case 'sepia2':
+    case 'gray':
+    case 'nega':
+    case 'cadd':
+    case 'cmul':
       return artemisColorShade(kind, fore, u, v, {
         alpha,
         red: p.red ?? 0,
         green: p.green ?? 0,
         blue: p.blue ?? 0,
       });
+    default:
+      throw Error('Unsupported Artemis DX9 shader kind');
   }
 }
 

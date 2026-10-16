@@ -37,58 +37,67 @@ export function createArtemisShaderFixture(hash, readFile) {
                   size: 0.3,
                   fade: 0.5,
                 })
-              : program.kind === 'mosaic'
-                ? shader.shade((u, v) => [u, v, 0.6, 0.8], 0.55, 0.35, {
+              : /^(blur_[hv]_(?:plain|mask|aa|mask_aa))$/.test(program.kind)
+                ? shader.shade((u, v) => [u, v, 0.6, 0.8], 0.5, 0.25, {
                     alpha: 0.5,
-                    size: 4,
-                    ratio: 2,
+                    weights: [1, 0, 0, 0, 0, 0, 0, 0],
+                    step: 0.01,
+                    mask: () => [0, 0, 0, 0.5],
+                    back: () => [0.25, 0.5, 0.75, 0.5],
+                    backUV: [0.1, 0.2],
                   })
-                : program.kind === 'noise'
-                  ? shader.shade((u, v) => [u, v, 0.6, 0.8], 0.5, 0.25, {alpha: 0.5, size: 0.02})
-                  : ['blur_diag', 'blur_pair_h', 'blur_pair_v'].includes(program.kind)
-                    ? shader.shade((u, v) => [u, v, 0.6, 0.8], 0.5, 0.25, {
-                        alpha: 0.5,
-                        offset: 0.01,
-                        size: 1,
-                      })
-                    : program.kind.startsWith('perspective')
-                      ? shader.shade((u, v) => [u, v, 0.6, 0.8], 0.6, 0.6, {
+                : program.kind === 'mosaic'
+                  ? shader.shade((u, v) => [u, v, 0.6, 0.8], 0.55, 0.35, {
+                      alpha: 0.5,
+                      size: 4,
+                      ratio: 2,
+                    })
+                  : program.kind === 'noise'
+                    ? shader.shade((u, v) => [u, v, 0.6, 0.8], 0.5, 0.25, {alpha: 0.5, size: 0.02})
+                    : ['blur_diag', 'blur_pair_h', 'blur_pair_v'].includes(program.kind)
+                      ? shader.shade((u, v) => [u, v, 0.6, 0.8], 0.5, 0.25, {
                           alpha: 0.5,
-                          centerX: 0.5,
-                          centerY: 0.5,
-                          scale: 0.5,
-                          fade: 0.1,
+                          offset: 0.01,
+                          size: 1,
                         })
-                      : ['add', 'mul', 'compbr', 'compbrc', 'compdk', 'compdkc'].includes(
-                            program.kind,
-                          )
-                        ? shader.shade(
-                            () => [0.2, 0.4, 0.6, 0.8],
-                            () => [0.5, 0.25, 0, 0.5],
-                            0.5,
-                            0.25,
-                            {alpha: 0.5, param: 0.75},
-                          )
-                        : program.kind === 'screen'
+                      : program.kind.startsWith('perspective')
+                        ? shader.shade((u, v) => [u, v, 0.6, 0.8], 0.6, 0.6, {
+                            alpha: 0.5,
+                            centerX: 0.5,
+                            centerY: 0.5,
+                            scale: 0.5,
+                            fade: 0.1,
+                          })
+                        : ['add', 'mul', 'compbr', 'compbrc', 'compdk', 'compdkc'].includes(
+                              program.kind,
+                            )
                           ? shader.shade(
                               () => [0.2, 0.4, 0.6, 0.8],
                               () => [0.5, 0.25, 0, 0.5],
                               0.5,
                               0.25,
-                              {alpha: 0.5},
+                              {alpha: 0.5, param: 0.75},
                             )
-                          : program.kind === 'blur_h' || program.kind === 'blur_v'
-                            ? shader.shade((u, v) => [u, v, 0.6, 0.8], 0.5, 0.25, {
-                                alpha: 0.5,
-                                step: 0.01,
-                                weights: [0.4, 0.2, 0.1, 0, 0, 0, 0, 0],
-                              })
-                            : shader.shade(() => [0.2, 0.4, 0.6, 0.8], 0.5, 0.25, {
-                                alpha: 0.5,
-                                red: 0.1,
-                                green: 0.8,
-                                blue: 0.6,
-                              });
+                          : program.kind === 'screen'
+                            ? shader.shade(
+                                () => [0.2, 0.4, 0.6, 0.8],
+                                () => [0.5, 0.25, 0, 0.5],
+                                0.5,
+                                0.25,
+                                {alpha: 0.5},
+                              )
+                            : program.kind === 'blur_h' || program.kind === 'blur_v'
+                              ? shader.shade((u, v) => [u, v, 0.6, 0.8], 0.5, 0.25, {
+                                  alpha: 0.5,
+                                  step: 0.01,
+                                  weights: [0.4, 0.2, 0.1, 0, 0, 0, 0, 0],
+                                })
+                              : shader.shade(() => [0.2, 0.4, 0.6, 0.8], 0.5, 0.25, {
+                                  alpha: 0.5,
+                                  red: 0.1,
+                                  green: 0.8,
+                                  blue: 0.6,
+                                });
         compiled.push({
           id,
           kind: program.kind,

@@ -3083,6 +3083,7 @@ test('PE32 restored atlas formats reach normal/ruby layout and missing keys use 
   const revisions = await import('../dist/engines/artemis/revision.js');
   for (const [hash, layout] of [
     [revisions.ARTEMIS_2601_EXECUTABLE_SHA256, 'packed'],
+    [revisions.ARTEMIS_2868_EXECUTABLE_SHA256, 'expanded'],
     [revisions.ARTEMIS_2898_EXECUTABLE_SHA256, 'expanded'],
     [revisions.ARTEMIS_3083_EXECUTABLE_SHA256, 'expanded'],
   ]) {
@@ -5922,3 +5923,161 @@ test(
     await assert.rejects(() => decodeNodeOpaqueJpeg(Uint8Array.of(255, 216, 255, 217)));
   },
 );
+
+test('DX9 blur source variants keep masks at Fore UV and composite Back alpha before replacing the target', async () => {
+  const {artemisDx9ShaderShade: shade, artemisDx9ShaderFragmentSource: fragment} =
+    await import('../dist/engines/artemis/dx9-shader.js');
+  const f = Math.fround;
+  for (const axis of ['h', 'v']) {
+    for (const suffix of ['plain', 'mask', 'aa', 'mask_aa']) {
+      const kind = `blur_${axis}_${suffix}`;
+      const samples = [],
+        masks = [],
+        backgrounds = [];
+      const p = {
+        alpha: 0.5,
+        weights: [0.5, 0.25, 0, 0, 0, 0, 0, 0],
+        step: 0.125,
+        mask: (u, v) => {
+          masks.push([u, v]);
+          return [0.99, 0, 0, 0.5];
+        },
+        back: (u, v) => {
+          backgrounds.push([u, v]);
+          return [0.75, 0.25, 0, 0.5];
+        },
+        backUV: [0.75, 0.875],
+      };
+      const actual = shade(
+        kind,
+        (u, v) => {
+          samples.push([u, v]);
+          return [0.25, 0.5, 0.75, 0.5];
+        },
+        0.25,
+        0.5,
+        p,
+      );
+      const masked = suffix.includes('mask'),
+        aa = suffix.endsWith('aa');
+      const expected = aa
+        ? masked
+          ? [f(23 / 36), f(11 / 36), f(1 / 6), 0.5625]
+          : [f(0.55), f(0.35), f(0.3), 0.625]
+        : [0.25, 0.5, 0.75, masked ? 0.125 : 0.25];
+      assert.deepEqual(actual, expected);
+      assert.equal(samples.length, 15);
+      assert.deepEqual(samples[1], axis === 'h' ? [0.375, 0.5] : [0.25, 0.625]);
+      assert.deepEqual(samples[2], axis === 'h' ? [0.125, 0.5] : [0.25, 0.375]);
+      assert.deepEqual(masks, masked ? [[0.25, 0.5]] : []);
+      assert.deepEqual(backgrounds, aa ? [[0.75, 0.875]] : []);
+      const source = fragment(kind);
+      assert.equal(source.includes('texture(uMask,vUv).a'), masked);
+      assert.equal(source.includes('texture(uBack,vBackUv)'), aa);
+      if (aa) assert.throws(() => shade(kind, () => [0, 0, 0, 1], 0, 0, {alpha: 1}), /background/);
+    }
+  }
+});
+
+test('DX9 AA blur capture binds independent background UV and disables blending for its composited output', async () => {
+  const {ARTEMIS_2868_EXECUTABLE_SHA256: hash} =
+    await import('../dist/engines/artemis/revision.js');
+  const {ArtemisImageGraphics} = await import('../dist/engines/artemis/image-graphics.js');
+  const {ArtemisLayers} = await import('../dist/engines/artemis/layers.js');
+  const {ArtemisDrawShaderResource} = await import('../dist/engines/artemis/draw-shader.js');
+  const {createArtemisOrdinaryGpuRaster} = await import('../dist/engines/artemis/gpu-raster.js');
+  const tag = (name, args) => ({name, args: new Map(Object.entries(args))});
+  const replace = {source: 'one', destination: 'zero', operation: 'add'};
+  for (const kind of ['blur_h_plain', 'blur_v_mask', 'blur_h_aa', 'blur_v_mask_aa']) {
+    const shader = new ArtemisDrawShaderResource(hash, kind, () => {});
+    const graphics = new ArtemisImageGraphics(
+      hash,
+      {
+        width: 3,
+        height: 2,
+        prepareImage() {},
+        prepareRenderSurface() {},
+        invalidate() {},
+        draw() {},
+      },
+      {
+        creationMode: () => 0,
+        clearLayerCommands() {},
+        resetLayerCommands() {},
+        recordLayerProperties() {},
+        imageLoadFailed: () => assert.fail('missing image'),
+        layerNotFound: () => assert.fail('missing layer'),
+      },
+      createArtemisOrdinaryGpuRaster(hash),
+      {bind: () => ({shader, release() {}})},
+    );
+    const image = {
+      width: 2,
+      height: 1,
+      pixels: new Uint8Array([100, 20, 30, 128, 40, 50, 60, 128]),
+    };
+    const layers = new ArtemisLayers(
+      hash,
+      {load: async (path) => ({path, image, surfaceFormat: 2})},
+      graphics,
+    );
+    try {
+      await layers.dispatch(tag('lyc', {id: '1', file: 'background'}));
+      await layers.dispatch(tag('lyprop', {id: '1', layermode: 'add'}));
+      await layers.dispatch(tag('lyc', {id: '2.a', file: 'foreground'}));
+      await layers.dispatch(
+        tag('lyprop', {
+          id: '2.a',
+          left: '0.5',
+          shader: 'blur',
+          shaderconstant: 'weights,width,height',
+          weights: '0.5,0.25,0,0,0,0,0,0',
+          width: '0.125',
+          height: '0.25',
+        }),
+      );
+      await layers.dispatch(tag('lyprop', {id: '2', intermediate_render: '1', clip: '0,0,3,2'}));
+      layers.commit();
+      const command = graphics
+        .drawCommitted(layers.scene)
+        .commands.find((c) => c.kind === 'triangles' && c.parameters);
+      assert.ok(command);
+      assert.deepEqual(Array.from(command.parameters.slice(0, 9)), [
+        0.5,
+        0.25,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        kind.startsWith('blur_h') ? 0.125 : 0.25,
+      ]);
+      assert.equal(command.filter, 'linear');
+      assert.equal(command.additionalTextures[0].filter, 'nearest');
+      if (kind.endsWith('_aa')) {
+        assert.deepEqual(command.blendState, {color: replace, alpha: replace});
+        assert.ok(command.fragment.includes('texture(additionalAtlas0,additionalUV0)'));
+        assert.ok(command.additionalTextures[0].uv.some((x) => x > 0 && x < 1));
+        assert.notDeepEqual(
+          Array.from(command.additionalTextures[0].uv),
+          Array.from(command.vertices.filter((_, i) => i % 9 === 7 || i % 9 === 8)),
+        );
+        await layers.dispatch(tag('lyprop', {id: '2', intermediate_render: '0'}));
+        layers.commit();
+        assert.throws(
+          () => graphics.drawCommitted(layers.scene),
+          /alpha blur outside a captured target/,
+        );
+      } else
+        assert.deepEqual(command.blendState.color, {
+          source: 'source-alpha',
+          destination: 'one',
+          operation: 'add',
+        });
+    } finally {
+      layers.close();
+      shader.dispose();
+    }
+  }
+});

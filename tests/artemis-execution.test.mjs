@@ -1217,55 +1217,61 @@ test('Rev.2601 publishes its native save version and preserves restored absent D
   assert.throws(() => variables.queryLiteral('s.unimplemented_device'), /Unsupported/);
 });
 
-test('Rev.2898 keeps absent boot fields absent until real Lua queries create integer zero', async () => {
+test('Rev.2868/2898 keep absent boot fields absent until real Lua queries create integer zero', async () => {
   const {ArtemisVariables} = await import('../dist/engines/artemis/variables.js');
   const {
     artemisRevision,
     initializeArtemisVariables,
     initializeArtemisGraphicsFeatureLevel,
-    ARTEMIS_2898_EXECUTABLE_SHA256: hash,
+    ARTEMIS_2868_EXECUTABLE_SHA256: hash2868,
+    ARTEMIS_2898_EXECUTABLE_SHA256: hash2898,
   } = await import('../dist/engines/artemis/revision.js');
-  const variables = new ArtemisVariables({
-    executableSha256: hash,
-    stageSize: () => ({width: 8, height: 8}),
-  });
-  initializeArtemisVariables(variables, hash);
-  assert.deepEqual(
-    ['s.engineversion', 's.builddate', 's.minimumsupportversion', 's.savedataversion'].map((key) =>
-      luaText(variables.read(key)),
-    ),
-    ['2898', 'Sat Aug 7 22:21:32 2021', '1103', '1003'],
-  );
-  assert.equal(variables.lookup('s.llp64'), undefined);
-  assert.equal(variables.lookup('s.windowsfeaturelevel'), undefined);
-  initializeArtemisGraphicsFeatureLevel(variables, hash, () => {
-    throw Error('Absent native graphics query must not call its host');
-  });
-  assert.equal(variables.lookup('s.windowsfeaturelevel'), undefined);
-  const lua = new ArtemisLua({
-    readFile: () => null,
-    variable: (name) => variables.queryLiteral(name),
-  });
-  try {
-    lua.vm.execute(
-      bytes(
-        'function fixture(e) result=e:var("s.llp64") .. ":" .. e:var("s.windowsfeaturelevel") end',
-      ),
-      'fixture',
-    );
-    lua.call('fixture');
-    assert.equal(luaText(lua.vm.getGlobal('result')), '0:0');
-    assert.deepEqual(variables.expressionValue('s.llp64'), {kind: 'integer', value: 0});
-    assert.equal(variables.globalDirty, false);
-    assert.throws(() => variables.queryLiteral('s.unimplemented_device'), /Unsupported/);
-    variables.restore('s.llp64', bytes('7'));
+  for (const [hash, version, date] of [
+    [hash2868, '2868', 'Sun May 2 21:34:14 2021'],
+    [hash2898, '2898', 'Sat Aug 7 22:21:32 2021'],
+  ]) {
+    const variables = new ArtemisVariables({
+      executableSha256: hash,
+      stageSize: () => ({width: 8, height: 8}),
+    });
     initializeArtemisVariables(variables, hash);
-    assert.equal(luaText(variables.read('s.llp64')), '7'); // Native boot neither writes nor deletes it.
-  } finally {
-    lua.close();
+    assert.deepEqual(
+      ['s.engineversion', 's.builddate', 's.minimumsupportversion', 's.savedataversion'].map(
+        (key) => luaText(variables.read(key)),
+      ),
+      [version, date, '1103', '1003'],
+    );
+    assert.equal(variables.lookup('s.llp64'), undefined);
+    assert.equal(variables.lookup('s.windowsfeaturelevel'), undefined);
+    initializeArtemisGraphicsFeatureLevel(variables, hash, () => {
+      throw Error('Absent native graphics query must not call its host');
+    });
+    assert.equal(variables.lookup('s.windowsfeaturelevel'), undefined);
+    const lua = new ArtemisLua({
+      readFile: () => null,
+      variable: (name) => variables.queryLiteral(name),
+    });
+    try {
+      lua.vm.execute(
+        bytes(
+          'function fixture(e) result=e:var("s.llp64") .. ":" .. e:var("s.windowsfeaturelevel") end',
+        ),
+        'fixture',
+      );
+      lua.call('fixture');
+      assert.equal(luaText(lua.vm.getGlobal('result')), '0:0');
+      assert.deepEqual(variables.expressionValue('s.llp64'), {kind: 'integer', value: 0});
+      assert.equal(variables.globalDirty, false);
+      assert.throws(() => variables.queryLiteral('s.unimplemented_device'), /Unsupported/);
+      variables.restore('s.llp64', bytes('7'));
+      initializeArtemisVariables(variables, hash);
+      assert.equal(luaText(variables.read('s.llp64')), '7'); // Native boot neither writes nor deletes it.
+    } finally {
+      lua.close();
+    }
+    assert.equal(Object.isFrozen(artemisRevision(hash).absentSystemVariables), true);
+    assert.throws(() => artemisRevision('d20ffaa0' + '0'.repeat(56)), /Unsupported/);
   }
-  assert.equal(Object.isFrozen(artemisRevision(hash).absentSystemVariables), true);
-  assert.throws(() => artemisRevision('d20ffaa0' + '0'.repeat(56)), /Unsupported/);
 });
 
 test('Rev.3083 boot deletes restored DX11 fields while keeping its independent x86 identity', async () => {
@@ -1335,7 +1341,7 @@ test('Runtime boot publishes touch registration independently of live contacts f
   const hashes = Object.entries(revisions)
     .filter(([name]) => /^ARTEMIS_.*(?:EXECUTABLE|RESOURCE_VARIANT)_SHA256$/.test(name))
     .map(([, hash]) => hash);
-  assert.equal(hashes.length, 7);
+  assert.equal(hashes.length, 8);
   for (const hash of hashes) {
     for (const device of [
       null,
@@ -1423,6 +1429,7 @@ test('PE32 scenario continuation survives a fresh runtime over copied saves', as
   const revisions = await import('../dist/engines/artemis/revision.js');
   for (const hash of [
     revisions.ARTEMIS_2601_EXECUTABLE_SHA256,
+    revisions.ARTEMIS_2868_EXECUTABLE_SHA256,
     revisions.ARTEMIS_2898_EXECUTABLE_SHA256,
     revisions.ARTEMIS_3083_EXECUTABLE_SHA256,
   ]) {
@@ -1905,6 +1912,7 @@ test('Exact-hash exit saves preserve absent or restored fullscreen status for th
   const revision = await import('../dist/engines/artemis/revision.js');
   const hashes = [
     revision.ARTEMIS_2601_EXECUTABLE_SHA256,
+    revision.ARTEMIS_2868_EXECUTABLE_SHA256,
     revision.ARTEMIS_2898_EXECUTABLE_SHA256,
     revision.ARTEMIS_3083_EXECUTABLE_SHA256,
     revision.ARTEMIS_3179_EXECUTABLE_SHA256,
@@ -1923,6 +1931,7 @@ test('Exact-hash exit saves preserve absent or restored fullscreen status for th
       let savedFiles;
       const expected = [
         revision.ARTEMIS_2601_EXECUTABLE_SHA256,
+        revision.ARTEMIS_2868_EXECUTABLE_SHA256,
         revision.ARTEMIS_2898_EXECUTABLE_SHA256,
       ].includes(hash)
         ? restored
@@ -6042,6 +6051,7 @@ test('Exact revision layer dispatch ignores absent shader properties and preserv
   const revision = await import('../dist/engines/artemis/revision.js');
   const hashes = [
     revision.ARTEMIS_2601_EXECUTABLE_SHA256,
+    revision.ARTEMIS_2868_EXECUTABLE_SHA256,
     revision.ARTEMIS_2898_EXECUTABLE_SHA256,
     revision.ARTEMIS_3083_EXECUTABLE_SHA256,
     revision.ARTEMIS_3179_EXECUTABLE_SHA256,
@@ -6052,7 +6062,11 @@ test('Exact revision layer dispatch ignores absent shader properties and preserv
   const tag = (name, args) => ({name, args: new Map(Object.entries(args))});
   for (const hash of hashes) {
     const shaderAbsent = hash === revision.ARTEMIS_2601_EXECUTABLE_SHA256;
-    const absent = shaderAbsent || hash === revision.ARTEMIS_2898_EXECUTABLE_SHA256;
+    const absent =
+      shaderAbsent ||
+      [revision.ARTEMIS_2868_EXECUTABLE_SHA256, revision.ARTEMIS_2898_EXECUTABLE_SHA256].includes(
+        hash,
+      );
     const reads = [],
       patches = [],
       imagePatches = [];

@@ -132,6 +132,13 @@ integer zero for these confirmed absent names. Boot does not insert them or
 invoke a graphics-feature query, and preserves values restored from system data.
 Other unsupported system names retain their guards. Its screenshot, sound-loader
 and mode fields are documented with x86 evidence in `docs/artemis-revisions.md`.
+Rev.2868 has an independently verified PE32 boot and behavior profile, documented
+in `docs/artemis-revisions.md`. Its eight raw blur-source signatures select
+plain, mask and captured-background AA executables. AA output replaces the target;
+using it outside a captured target is refused until that Back ownership is modeled.
+Its current Badge & Dagger installation has an
+unresolved original SoftDenchi checksum mismatch; accepting its executable hash
+is not evidence that the game passes authentication or reaches its story.
 The independent Rev.3083 PE32 profile deletes restored `s.llp64` and
 `s.windowsfeaturelevel` at boot before their later zero-creating queries. It uses
 the DX9/clipped-cell path, accepts shader texture properties, and publishes

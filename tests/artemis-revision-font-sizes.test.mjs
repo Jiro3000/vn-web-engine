@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {ArtemisFileFonts} from '../dist/engines/artemis/file-fonts.js';
 import {
+  ARTEMIS_2868_EXECUTABLE_SHA256,
   ARTEMIS_3179_EXECUTABLE_SHA256,
   ARTEMIS_3139_EXECUTABLE_SHA256,
   ARTEMIS_3139_RESOURCE_VARIANT_SHA256,
@@ -10,6 +11,7 @@ import {
 import {rectangleFont, createNodeFontWorker} from './freetype-fixtures.mjs';
 
 const legacy = [
+  ARTEMIS_2868_EXECUTABLE_SHA256,
   ARTEMIS_3179_EXECUTABLE_SHA256,
   ARTEMIS_3139_EXECUTABLE_SHA256,
   ARTEMIS_3139_RESOURCE_VARIANT_SHA256,

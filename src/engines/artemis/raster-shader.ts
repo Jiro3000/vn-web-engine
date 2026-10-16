@@ -35,6 +35,7 @@ import {
   artemisDx9ShaderShade,
   artemisDx9ShaderExecutable,
   type ArtemisDx9ShaderKind,
+  type ArtemisDx9BlurKind,
   type ArtemisDx9ShaderExecutable,
 } from './dx9-shader.js';
 
@@ -325,6 +326,7 @@ export async function compileArtemisShaderPreset(
 }
 
 export type ArtemisShaderPresetKind =
+  | ArtemisDx9BlurKind
   | 'raster'
   | 'screen'
   | ArtemisColorKind
@@ -338,6 +340,15 @@ export type ArtemisShaderPresetKind =
 /** Reconstructed preset source, independent of resource selection/registration. */
 export function artemisShaderFragmentSource(kind: ArtemisShaderPresetKind): string {
   switch (kind) {
+    case 'blur_h_plain':
+    case 'blur_h_aa':
+    case 'blur_h_mask':
+    case 'blur_h_mask_aa':
+    case 'blur_v_plain':
+    case 'blur_v_aa':
+    case 'blur_v_mask':
+    case 'blur_v_mask_aa':
+      return artemisDx9ShaderFragmentSource(kind);
     case 'raster':
       return ARTEMIS_RASTER_FRAGMENT_SOURCE;
     case 'noise':
