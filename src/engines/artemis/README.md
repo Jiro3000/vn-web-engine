@@ -138,9 +138,10 @@ plain, mask and captured-background AA executables. AA output replaces the targe
 using it outside a captured target is refused until that Back ownership is modeled.
 The supplied Badge & Dagger files have an original SoftDenchi checksum mismatch.
 Gameplay validation uses a separate local copy with user-authorized authentication
-overrides, kept outside this repository. That copy reaches its title and story and
-passes save/load and fresh-process restoration; the runtime retains the original
-checksum and platform semantics. See the revision notes for the validation scope.
+overrides, kept outside this repository. That copy completes a full nonvisual
+Fuyumi route through original staffroll and reset/title, with save/load and fresh
+restoration of the game's clear records. The runtime retains the original checksum
+and platform semantics. See the revision notes for the validation scope.
 The independent Rev.3083 PE32 profile deletes restored `s.llp64` and
 `s.windowsfeaturelevel` at boot before their later zero-creating queries. It uses
 the DX9/clipped-cell path, accepts shader texture properties, and publishes

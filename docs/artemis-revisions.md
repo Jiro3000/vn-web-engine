@@ -70,13 +70,31 @@ validation uses a separate private copy with two explicitly user-authorized loos
 authentication overrides: the SoftDenchi callback and the loose-script guard.
 The executable, both archives and movie retain their original bytes. The overrides
 remain outside Git; runtime checksum, platform and file APIs retain their semantics.
-The copy reaches the title and completes 300 diagnostic story advances with zero
-Lua/include/tag/resource errors, real image/audio decode and real font rasterization.
-Save/load at advance 100 produces identical saved/loaded/reloaded state hashes;
-a fresh process restores the same state and continues eight advances. Brave/Metal
-in DOM text mode passes Start, quick-save/load with native layered confirmations,
-and subsequent text advancement, with zero console errors, exceptions or HTML
-dialogs. This is opening-gameplay validation; a complete route remains unchecked.
+The copy completes one full Fuyumi route in the nonvisual probe: 8,798 advances,
+three first-option choices, original staffroll, reset and return to title. The
+`01_07_1` first option sets `f.huy=1`, which takes chapter 1 part 7 into parts
+`08_01` through `08_03`. The final block runs `staffroll` for `冬美`, assigns
+`g.fuyclear=1`, then invokes `タイトル`. Original `staffroll_bgm`,
+`staffroll_scroll` and `staffroll_exit` finish normally. A fresh process over
+copies of the route's own saves retains `gscr.vari.fuyclear=1`,
+`gscr.staff["冬美"]=1` and `gscr.movie["冬美"]=1`; an empty-save baseline has
+clear 0 and no staff/movie records. The game uses `gscr.vari` for these globals,
+separate from the engine's `e:var` namespace.
+
+The full pass has zero Lua/include/tag/resource errors, 2,268 decoded images,
+real Theora layer updates, sound decode and 9,271 glyph raster jobs. Save/load
+at advance 2,000 produces identical saved/loaded/reloaded hashes; a fresh
+process restores that same state and continues eight advances. After reset there
+are no story `rt`/`rt2` tags; four U+3000 font-warmup prints match original game
+behavior. Sampled Lua heap reaches 5,199.891 KiB; the registered main-thread wasm
+owners reach a sampled total of 236,584,960 bytes. These are sampled observations
+with separate worker/browser scope, rather than an absolute process peak.
+The reproducible plan, all streamed-report hashes and fresh-process receipts are
+indexed in `local-runtime/ryuusei-badge-dagger/full-route70.safe.json` in the
+surrounding workspace. Probe fullscreen movie timing is simulated; the real
+whole-file decode is recorded below. A separate Brave/Metal DOM opening run passes
+Start, quick-save/load with native layered confirmations and subsequent text
+advancement, with zero console errors, exceptions or HTML dialogs.
 
 The build and all 328 targeted tests pass. The full suite has 2,074 tests,
 2,037 passes and exactly the same 37 named baseline
