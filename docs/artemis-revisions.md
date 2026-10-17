@@ -71,11 +71,25 @@ and a fresh process that restores the same state and continues. A fresh Brave/Me
 DOM run on the final build passes Start, quick-save/load with native confirmations
 and subsequent text advancement, without a key, console errors, exceptions or HTML
 dialogs. Both WVC1 movies decode completely through the shared codecs: 5,307 and
-2,938 video frames, with no decode failures. This verifies opening compatibility
-and whole-file decoding; a complete story route and natural fullscreen playback
-have not been retested for this installation.
+2,938 video frames, with no decode failures. Natural fullscreen
+playback has not been retested for this installation.
 
-The final suite has 2,083 tests, 2,046 passes and exactly the same 37 named baseline
+One complete route passes in the nonvisual probe from empty saves: original title
+Start, the first enabled option at each of 17 selects, the Tamako ending
+(`ルカと教団その09_a`), the `11_6` staffroll, the original `g.end` clear record,
+`extraopen` with the `title02` title and reset to title, over 40,175 clicks with no
+Lua, tag or resource errors. The script switches to automode near the end; a syncse
+voice holds those waits until it stops. The save/load round trip at click 2,000 is
+hash-stable. Fresh processes restore the clear record and title from the final
+saves, and resume the click-2,000 save with the identical state hash. A process
+with empty saves still shows `title01`.
+
+The message window recreates its rotating click glyph, a `loop=-1` lytween, on every
+page. The replaced layer nodes are destroyed, and their tweens have no completion
+effect. They leave the tween registry as soon as the node is destroyed, so the
+per-frame tween step stays bounded (about a hundred tweens over the whole route).
+
+The final suite has 2,084 tests, 2,047 passes and exactly the same 37 named baseline
 failures, with no skips or cancellations. Synthetic Metal coverage includes both
 dimension programs and the existing 100 DX9 cases. Fresh key-free Brave checks also
 pass for all three World Actor installations in the ordinary production page with
