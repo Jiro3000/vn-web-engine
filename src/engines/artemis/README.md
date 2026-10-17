@@ -171,6 +171,13 @@ The independent Rev.3083 PE32 profile deletes restored `s.llp64` and
 the DX9/clipped-cell path, accepts shader texture properties, and publishes
 fullscreen status at exit. The exact wrapper identity and native operations are
 listed in `docs/artemis-revisions.md`; executable names do not select a profile.
+The x64 build of the same Rev.3083 source (Hamidashi Creative Totsu) has its own
+exact-hash profile. It keeps the Rev.3139 DX11 boot fields, named shader properties,
+ordered-buffer constants and exit mode 14, and differs in clipped-cell glyphs with
+synthetic bold/italic, the expanded painted-font cache, 32-bit rendered glyphs and
+the fixed dialog style. Original folder selection uses the same browser player
+without added files. One full 妃愛 route through staffroll, clear record and
+reset/title passes in the nonvisual probe; see `docs/artemis-revisions.md`.
 Rev.2898 and Rev.3083 synchronize to the first CRC-valid Ogg page before the native
 65536-byte boundary. This accepts a leading `bw  ` header through the ordinary
 Vorbis loader, without retrying another codec or rewinding the opened file.
@@ -295,6 +302,9 @@ Cancel; Enter accepts and Escape cancels from any control, also without Cancel, 
 while an IME composition takes the Enter; Tab moves forward through field, OK and
 Cancel; accepting and cancelling are ignored for the first 500 ms; browser close
 requests are ignored. Keys do not reach the game while it is open.
+`fontsize`, `minwidth` and `applydesktopscale` set the window's font size (default 20),
+minimum width (default 240) and desktop scaling. Revisions with `fixedDialogStyle`
+(Rev.3083 x64) never read them and always use the defaults without desktop scaling.
 
 `file-command.ts` is the `file` tag (`0x1400ea0b0`): `copy` reads `src` like a resource
 and writes `dst`, `delete` removes `target`, `clear_cache` drops the archive caches, and

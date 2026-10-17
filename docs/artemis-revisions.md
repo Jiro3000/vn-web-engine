@@ -416,6 +416,87 @@ process on the same origin and profile retains BGM 82 / master 100, group gains
 656 / 1000, without save imports. The relevant runtime/scene tests pass 297/297,
 including fresh saves and exit for the new profile.
 
+## Rev.3083 (x64)
+
+Hamidashi Creative Totsu executable SHA-256
+`daf148ce01ca554fcf2db628b500310aa78835688375331fd745427da60d1d4a`
+(`ARTEMIS_3083_X64_EXECUTABLE_SHA256`) is an unwrapped PE64 image, 5,248,728 bytes,
+image base `0x140000000`, entry `0x14022a6a4`, PE timestamp `0x633dc4e2`, 12,657
+functions. It is the x64 build of the same source as the wrapped Rev.3083 PE32
+executable, but its code paths follow Rev.3139, not the PE32 build; only this exact
+identity selects its profile. Instruction-shape hashes align 12,250 functions with
+identical Rev.3139 bodies. Of 313 cited Rev.3179 function entries, 290 map to
+Rev.3139 functions with identical Totsu bodies; the other 23 were decompiled in both
+executables, and their differences follow.
+
+Boot `0x1400c3540` is identical to Rev.3139 `0x1400c36f0` except for the version
+(3083) and `Thu Oct 6 02:52:54 2022`: support 1103, save version 1003, and the DX11
+branch publishes `s.llp64` and `s.windowsfeaturelevel` without deleting them. Save
+writer `0x14013d730` is identical to Rev.3179 `0x14013f940`. Screenshot `0x1400e1950`
+calls renderer slot `+0x48` (`0x14015da60`), the Rev.3139 presented-buffer copy.
+Sound loaders `0x14018d360` / `0x14018d250` do not rewind. Shader properties,
+shader texture properties and ordered-buffer constants follow Rev.3139; return and
+exit keep load hold 13 and exit mode 14 and publish fullscreen status at exit.
+
+The text path differs from Rev.3139:
+
+- FreeType open `0x140167140` takes a byte size (`fontSizeBits = 8`). Glyph
+  `0x140167660` uses the 11-parameter clipped-cell interface of Rev.2762 `0x528650`:
+  it clamps negative bearings, sizes the cell as the larger of advance and ink, and
+  emboldens (`+0x50`) or shears (`+0x51`) the slot (`glyphGeometry = clipped-cell`,
+  `syntheticFontStyle = true`).
+- Glyph renderer `0x140163680` returns `CClippedSurface`, keyed by face, size
+  `+0x68`, shadow `+0x6c`, outline `+0x70`, the three colors and `style << 16 | code`.
+  Restore `0x1400096b0` (`restoreFontCache`) reads `index.dat` as a u32 count and
+  records of face, seven u32 key fields, atlas index and four f32 without an end
+  check (`fontCacheKey = expanded`). The installation ships 4,951 records in 30 atlases.
+- `.rft` glyph `0x1401877e0` returns 4 bytes per pixel when `COLOR_32` (`+0x61`) is set,
+  and the painter copies or composites those rows as in Rev.2601/2762
+  (`renderedColorGlyphs = true`); the installation's `extra_28.rft` uses it.
+- The `dialog` tag `0x1400c8f30` does not read `fontsize`, `minwidth` or
+  `applydesktopscale`. CDialog slot `+0xa0` (`0x140157380`) creates Tahoma 20 with
+  minimum width 240 and no desktop scaling (`fixedDialogStyle = true`); Rev.3139
+  reads all three (`0x1400c90e0` / `0x140158100`).
+
+Changed without a behavioral difference: the surface cache (`0x140010e90`,
+`0x1400114c0`, `0x1400118a0`, `0x140011fe0`; 64-bit usage counters, and the uncalled
+Rev.3139 mode-2 flag is absent), `var` `0x1400e5350`, `file` `0x1400e9d70`, load
+`0x14013dbd0`, loose-file open `0x140162b50`, pack `0x14017b7e0` / `0x14017c670` /
+`0x14017c9a0`, engine constructor `0x1400b9f70` and stage initializer `0x14014b210`
+(the PSD loader is constructed inline with the same matte flag). Exit window
+`0x14013acd0` lacks the Rev.3139 `IsIconic` check, which is host-only. The Lua
+constructor `0x140128f70` lacks `getScriptSize`, `saveToMemory` and `loadFromMemory`,
+which neither the game nor the runtime uses. All 10,647 Ogg files begin with `OggS`,
+so the initial Vorbis page search is not enabled.
+
+Validation includes one complete nonvisual 妃愛 route from native title Start
+(`500.d.2.0`) and heroine selection (`start02`): 4,087 delivered probe clicks,
+8,359 message blocks and one first-option choice (the `01_妃愛06_h01` system select)
+run `01_妃愛01_1` through `01_妃愛14_ed`, play `movie/o4p6jwsag.dat`, and reach
+`staffroll ch=妃愛`, which scrolls the 11 `hiy` staff images (`staff.r.pg` /
+`staff.r.bg`). The script records `g.hiyend = 1` and `g.hiy = 1`; `タイトル` saves and
+resets to the title, after which no story `rt`/`rt2` tags occur. In a fresh process
+both records persist and the other heroines' records stay unset; a fresh process with
+empty saves reports neither. At click 2,000 saved/loaded/reloaded scenario hashes match,
+and a fresh process restores that save in `01_妃愛07_2` and continues.
+
+All five NDJSON streams (644,024 records) are read. 3,266 route image decodes succeed;
+the restored font cache serves 10,771 glyph lookups beside 12 real raster jobs; offline
+PCM rendering produces 478,876,896 frames. No Lua/include/unknown-tag/tag errors,
+refusals, dialogs or HTTP waits occur. Two native layer-not-found reports are authored:
+`title_page()` sets visibility on the omake layer `500.s`, which no script, `.ipt` or
+table creates. All three installation movies (`movie/logo.dat`, `movie/o4p6jwsag.dat`,
+`movie/dcpyzcv3t.dat`) fully decode through the shared ASF codecs, 5,449 frames without
+failures; the probe itself only simulates fullscreen movie duration. Sampled Lua peak is
+4,444 KiB and main-thread Wasm samples stay below 2 GiB; neither is an absolute peak or
+covers worker heaps. Stream reviews are `route4-review.safe.json` and
+`fresh5-review.safe.json` in `local-runtime/hamidashi-creative-totsu/` in the
+surrounding workspace. This is an automated nonvisual route pass; game images and
+frames were not viewed.
+
+The runtime build passes the full suite of 2,092 tests with 2,055 passes and exactly
+the same 37 named baseline failures, with no skips or cancellations.
+
 ## Rev.2908 (PE32)
 
 Hentai Prison executable
