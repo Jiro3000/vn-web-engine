@@ -6,6 +6,8 @@ export const ARTEMIS_2868_EXECUTABLE_SHA256 =
   'e551146298aa98987b5965964610c909ae8f2c06ab3ac536a733b4bc1e9bbcde';
 export const ARTEMIS_2898_EXECUTABLE_SHA256 =
   'd20ffaa064efa01eeccf4e315de99a419492e5fe7a8e44bc1a0eb22fc719883e';
+export const ARTEMIS_2908_EXECUTABLE_SHA256 =
+  'ae16f3c762a036855edc3099cd96156b80f82546cf5686464179b1f8fafc96e4';
 /** Root wrapper containing the statically identified Rev.3083 PE32 engine.
  * Embedded PE SHA-256: abbaf6524cdaf7ac4c4c5ac50af63a74c6a4f5b22d5a4336f95ab5d85c863a87. */
 export const ARTEMIS_3083_EXECUTABLE_SHA256 =
@@ -42,7 +44,7 @@ export interface ArtemisRevision {
   readonly bootDeletedSystemVariables?: readonly string[];
   /** Native actor parser accepts custom shader names/constants (absent in Rev.2601). */
   readonly shaderProperties: boolean;
-  /** Native actor-property parser accepts shadertexture paths (absent in Rev.2868/2898). */
+  /** Native actor-property parser accepts shadertexture paths (absent in Rev.2868/2898/2908). */
   readonly shaderTextureProperties: boolean;
   readonly shaderConstantBinding: 'named-effect' | 'ordered-buffer';
   readonly graphicsApi: 'd3d9' | 'd3d11';
@@ -63,7 +65,7 @@ export interface ArtemisRevision {
   readonly indentModify: boolean;
   /** Provider size argument: older callers narrow to uint8; Rev.3257 passes all 32 bits. */
   readonly fontSizeBits: 8 | 32;
-  /** Glyph result ABI: 2898 returns a clipped cell; newer revisions preserve bearings/advance. */
+  /** Glyph result ABI: older PE32 profiles return clipped cells; PE64 preserves bearings/advance. */
   readonly glyphGeometry: 'clipped-cell' | 'bearing-advance';
   /** Painted-glyph index key layout; null where restore has not been reconstructed. */
   readonly fontCacheKey: 'packed' | 'expanded' | 'expanded-metrics' | null;
@@ -211,6 +213,38 @@ const revisions: ReadonlyMap<string, ArtemisRevision> = new Map(
       glyphGeometry: 'clipped-cell' as const,
       fontCacheKey: 'expanded' as const,
       // 0x5b4bb4 pushes 13 before replay; 0x53dd40 enters 14 for exit.
+      loadRunMode: 13 as const,
+      exitRunMode: 14 as const,
+      publishesFullscreenAtExit: false,
+    },
+    {
+      executableSha256: ARTEMIS_2908_EXECUTABLE_SHA256,
+      // Independent PE32 boot 0x53a650, not a resource alias of Rev.2898.
+      engineVersion: 2908,
+      buildDate: 'Tue Aug 24 23:19:23 2021',
+      minimumSupportVersion: 1103,
+      saveDataVersion: 1003,
+      llp64: false,
+      publishesGraphicsFeatureLevel: false,
+      absentSystemVariables: Object.freeze(['s.llp64', 's.windowsfeaturelevel']),
+      // Complete 0x58ea00 reads shader/constant, without shadertexture.
+      shaderProperties: true,
+      shaderTextureProperties: false,
+      shaderConstantBinding: 'named-effect' as const,
+      graphicsApi: 'd3d9' as const,
+      // 0x55a080 -> 0x5d0de0 copies the presented GPU buffer.
+      screenshot: 'presented' as const,
+      // 0x5f8990 / 0x5f88c0 retry the opened file without a seek.
+      soundLoaderRewinds: false,
+      // 0x6044b0 -> 0x5012b0 -> 0x501000 -> 0x4fff80 -> 0x4ffbb0.
+      vorbisHeaderSyncBoundary: 65536,
+      indentModify: false,
+      // 0x5d70c0 takes byte size; 0x5d75f0 returns clipped cells.
+      fontSizeBits: 8 as const,
+      glyphGeometry: 'clipped-cell' as const,
+      // 0x4a6280 restores the expanded key and inclusive clip edges.
+      fontCacheKey: 'expanded' as const,
+      // Replay 0x5b67e4 pushes 13; 0x53f040 exits in 14.
       loadRunMode: 13 as const,
       exitRunMode: 14 as const,
       publishesFullscreenAtExit: false,

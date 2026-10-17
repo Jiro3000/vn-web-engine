@@ -12,7 +12,10 @@
     artemisDx9ShaderSources,
     artemisDx9ShaderShade,
   } from '../../dist/engines/artemis/dx9-shader.js';
-  import {ARTEMIS_2898_EXECUTABLE_SHA256} from '../../dist/engines/artemis/revision.js';
+  import {
+    ARTEMIS_2898_EXECUTABLE_SHA256,
+    ARTEMIS_2908_EXECUTABLE_SHA256,
+  } from '../../dist/engines/artemis/revision.js';
   import {artemisRadialShade} from '../../dist/engines/artemis/radial-shader.js';
   import {ArtemisBrowserRasterShader} from '../../dist/engines/artemis/browser-raster-shader.js';
   import {createArtemisRollingVoice} from '../../dist/engines/artemis/browser-rolling-voice.js';
@@ -1785,7 +1788,7 @@
           for (const bound of [false, true]) {
             if (kind.endsWith('_aa') && !captured) continue; // Background owner is mandatory for AA.
             const adapter = createArtemisDrawShaderPreset(
-              ARTEMIS_2898_EXECUTABLE_SHA256,
+              kind === 'mul_lerp' ? ARTEMIS_2908_EXECUTABLE_SHA256 : ARTEMIS_2898_EXECUTABLE_SHA256,
               kind,
               captured ? 1 : 0,
               false,

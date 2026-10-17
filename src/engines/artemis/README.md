@@ -151,6 +151,13 @@ restoration of the game's clear records. The runtime retains the original checks
 and platform semantics. The ordinary browser player supplies the verified in-memory
 policy described above for original installation files. See the revision notes
 for the validation scope.
+Rev.2908 has its own exact-hash PE32 profile for Hentai Prison. Its independently
+checked operations retain DX9 named effects, byte-sized clipped-cell glyphs,
+expanded painted-font cache, initial Vorbis page search, replay mode 13 and exit
+mode 14 without fullscreen publication. The base archive and all existing numbered
+packs through `.999` mount through the shared loader. Original folder selection
+uses the same browser player; no extra installation files are required. Native
+entries and validation scope are recorded in `docs/artemis-revisions.md`.
 The independent Rev.3083 PE32 profile deletes restored `s.llp64` and
 `s.windowsfeaturelevel` at boot before their later zero-creating queries. It uses
 the DX9/clipped-cell path, accepts shader texture properties, and publishes
@@ -1637,10 +1644,10 @@ Coverage is copied, painted pixels are transferred and close rejects pending job
 Native atlas allocation is replaced by independent images; packed-bit/RGBA font
 sources and oversized/negative edge cases remain explicitly unsupported.
 
-The exact Rev.2898 profile returns a clipped cell instead of separate bearings and
-advance. Its FreeType bitmap is placed at nonnegative bearings in an advance-wide,
+The older PE32 profiles return a clipped cell instead of separate bearings and
+advance. Their FreeType bitmap is placed at nonnegative bearings in an advance-wide,
 byte-size-high cell, enlarged for bitmap overflow. Normal/ruby layout advances by
-the painted clip width. Other exact profiles preserve their bearing/advance result.
+the painted clip width. The PE64 profiles preserve their bearing/advance result.
 Lua `restoreFontCache(path)` holds its calling coroutine while the glyph owner reads
 numbered PNG atlases from zero through the first missing file, then `index.dat`.
 The 2898 index restores painted cells by face, size, shadow, outline, colors and
@@ -2001,6 +2008,11 @@ dedicated context; actor scene binding is described below.
 nonvisual probe. It does not display or shade game image pixels. Its optional
 feature-level input remains explicitly simulated. Unknown HLSL sources are refused;
 this is a verified preset port, not a general HLSL compiler.
+
+DX9 source `154274ae…4188c` selects a separate multiplication interpolation:
+RGB scales by `(1 - user.a*param) + user.rgb*user.a*param`, while mask and effect
+alpha scale foreground alpha. This source has no combined-alpha division, including
+for transparent foreground colors. The older `mul` source retains its equation.
 
 The recognized `screen` shader screens foreground RGB against `user.rgb*user.a`
 and scales foreground alpha independently. Its declared `param`, back/mask samples

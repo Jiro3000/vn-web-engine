@@ -1239,7 +1239,7 @@ test('Rev.2601 publishes its native save version and preserves restored absent D
   assert.throws(() => variables.queryLiteral('s.unimplemented_device'), /Unsupported/);
 });
 
-test('Rev.2868/2898 keep absent boot fields absent until real Lua queries create integer zero', async () => {
+test('Rev.2868/2898/2908 keep absent boot fields absent until real Lua queries create integer zero', async () => {
   const {ArtemisVariables} = await import('../dist/engines/artemis/variables.js');
   const {
     artemisRevision,
@@ -1247,10 +1247,12 @@ test('Rev.2868/2898 keep absent boot fields absent until real Lua queries create
     initializeArtemisGraphicsFeatureLevel,
     ARTEMIS_2868_EXECUTABLE_SHA256: hash2868,
     ARTEMIS_2898_EXECUTABLE_SHA256: hash2898,
+    ARTEMIS_2908_EXECUTABLE_SHA256: hash2908,
   } = await import('../dist/engines/artemis/revision.js');
   for (const [hash, version, date] of [
     [hash2868, '2868', 'Sun May 2 21:34:14 2021'],
     [hash2898, '2898', 'Sat Aug 7 22:21:32 2021'],
+    [hash2908, '2908', 'Tue Aug 24 23:19:23 2021'],
   ]) {
     const variables = new ArtemisVariables({
       executableSha256: hash,
@@ -1364,7 +1366,7 @@ test('Runtime boot publishes touch registration independently of live contacts f
   const hashes = Object.entries(revisions)
     .filter(([name]) => /^ARTEMIS_.*(?:EXECUTABLE|RESOURCE_VARIANT)_SHA256$/.test(name))
     .map(([, hash]) => hash);
-  assert.equal(hashes.length, 9);
+  assert.equal(hashes.length, 10);
   for (const hash of hashes) {
     for (const device of [
       null,
@@ -1937,6 +1939,7 @@ test('Exact-hash exit saves preserve absent or restored fullscreen status for th
     revision.ARTEMIS_2601_EXECUTABLE_SHA256,
     revision.ARTEMIS_2868_EXECUTABLE_SHA256,
     revision.ARTEMIS_2898_EXECUTABLE_SHA256,
+    revision.ARTEMIS_2908_EXECUTABLE_SHA256,
     revision.ARTEMIS_3083_EXECUTABLE_SHA256,
     revision.ARTEMIS_3179_EXECUTABLE_SHA256,
     revision.ARTEMIS_3139_EXECUTABLE_SHA256,
@@ -1957,6 +1960,7 @@ test('Exact-hash exit saves preserve absent or restored fullscreen status for th
         revision.ARTEMIS_2601_EXECUTABLE_SHA256,
         revision.ARTEMIS_2868_EXECUTABLE_SHA256,
         revision.ARTEMIS_2898_EXECUTABLE_SHA256,
+        revision.ARTEMIS_2908_EXECUTABLE_SHA256,
       ].includes(hash)
         ? restored
           ? 'retained'
@@ -6111,6 +6115,7 @@ test('Exact revision layer dispatch ignores absent shader properties and preserv
     revision.ARTEMIS_2601_EXECUTABLE_SHA256,
     revision.ARTEMIS_2868_EXECUTABLE_SHA256,
     revision.ARTEMIS_2898_EXECUTABLE_SHA256,
+    revision.ARTEMIS_2908_EXECUTABLE_SHA256,
     revision.ARTEMIS_3083_EXECUTABLE_SHA256,
     revision.ARTEMIS_3179_EXECUTABLE_SHA256,
     revision.ARTEMIS_3139_EXECUTABLE_SHA256,
@@ -6123,9 +6128,11 @@ test('Exact revision layer dispatch ignores absent shader properties and preserv
     const shaderAbsent = hash === revision.ARTEMIS_2601_EXECUTABLE_SHA256;
     const absent =
       shaderAbsent ||
-      [revision.ARTEMIS_2868_EXECUTABLE_SHA256, revision.ARTEMIS_2898_EXECUTABLE_SHA256].includes(
-        hash,
-      );
+      [
+        revision.ARTEMIS_2868_EXECUTABLE_SHA256,
+        revision.ARTEMIS_2898_EXECUTABLE_SHA256,
+        revision.ARTEMIS_2908_EXECUTABLE_SHA256,
+      ].includes(hash);
     const reads = [],
       patches = [],
       imagePatches = [];
@@ -9309,4 +9316,37 @@ end
       await fixture.close();
     }
   }
+});
+
+test('Source-selected DX9 multiply interpolation keeps strength, mask and transparent colors independent', async () => {
+  const {artemisDx9ShaderShade} = await import('../dist/engines/artemis/dx9-shader.js');
+  const {createArtemisDrawShaderPreset} = await import('../dist/engines/artemis/draw-shader.js');
+  const {ARTEMIS_2908_EXECUTABLE_SHA256: hash} =
+    await import('../dist/engines/artemis/revision.js');
+  const fore = () => [0.2, 0.4, 0.8, 0];
+  const user = () => [0.6, 0.3, 0.9, 0.5];
+  for (const param of [0, 0.75, 1, 2]) {
+    for (const mask of [0, 0.25, 1]) {
+      const actual = artemisDx9ShaderShade('mul_lerp', fore, 0.5, 0.5, {
+        param,
+        alpha: 0.7,
+        user,
+        mask: () => [0, 0, 0, mask],
+      });
+      for (let i = 0; i < 3; i++)
+        assert.ok(
+          Math.abs(actual[i] - fore()[i] * (1 - 0.5 * param + user()[i] * 0.5 * param)) < 1e-7,
+        );
+      assert.equal(actual[3], 0); // RGB is defined even with zero foreground alpha.
+    }
+  }
+  const p = {param: 0.75, alpha: 0.7, mask: () => [0, 0, 0, 0.25]};
+  const actual = artemisDx9ShaderShade('mul_lerp', () => [0.2, 0.4, 0.8, 0.8], 0, 0, p);
+  for (let i = 0; i < 3; i++) assert.ok(Math.abs(actual[i] - fore()[i] * 0.25) < 1e-7); // Native unbound User is opaque black.
+  assert.ok(Math.abs(actual[3] - 0.8 * 0.25 * 0.7) < 1e-7);
+  const preset = createArtemisDrawShaderPreset(hash, 'mul_lerp');
+  assert.deepEqual(preset.fields, [{name: 'param', size: 1}]);
+  const values = preset.nativeParameters([{name: 'param', values: [0.75]}], 0.7);
+  assert.equal(values[0], 0.75);
+  assert.equal(preset.needsUserTexture, false);
 });

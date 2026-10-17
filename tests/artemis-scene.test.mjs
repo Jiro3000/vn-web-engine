@@ -3134,6 +3134,7 @@ test('PE32 restored atlas formats reach normal/ruby layout and missing keys use 
     [revisions.ARTEMIS_2601_EXECUTABLE_SHA256, 'packed'],
     [revisions.ARTEMIS_2868_EXECUTABLE_SHA256, 'expanded'],
     [revisions.ARTEMIS_2898_EXECUTABLE_SHA256, 'expanded'],
+    [revisions.ARTEMIS_2908_EXECUTABLE_SHA256, 'expanded'],
     [revisions.ARTEMIS_3083_EXECUTABLE_SHA256, 'expanded'],
   ]) {
     const files = {...fontCacheFixture({layout}), 'synthetic.ttf': rectangleFont()};

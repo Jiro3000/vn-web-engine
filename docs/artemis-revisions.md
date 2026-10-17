@@ -344,6 +344,67 @@ process on the same origin and profile retains BGM 82 / master 100, group gains
 656 / 1000, without save imports. The relevant runtime/scene tests pass 297/297,
 including fresh saves and exit for the new profile.
 
+## Rev.2908 (PE32)
+
+Hentai Prison executable
+`ae16f3c762a036855edc3099cd96156b80f82546cf5686464179b1f8fafc96e4`
+is an independent x86 profile, image base `0x400000`, entry `0x681fac`,
+PE timestamp `0x61250019`. It is not a resource alias of Rev.2898.
+Boot `0x53a650` publishes 2908, `Tue Aug 24 23:19:23 2021`, support 1103
+and save version 1003. It leaves `s.llp64` and `s.windowsfeaturelevel`
+absent, including preserving restored values. These fields retain the older
+literal-query zero behavior; boot does not query DX11 capabilities.
+
+The independently inspected operations select DX9 named effects, presented
+screenshots, byte-sized FreeType cells and the expanded painted-font cache:
+
+| Operation            | Rev.2908 native entry and behavior                                                                         |
+| -------------------- | ---------------------------------------------------------------------------------------------------------- |
+| Actor properties     | `0x58ea00`: shader and shaderconstant, no shadertexture lookup                                             |
+| Screenshot           | `0x55a080` → renderer `0x5d0de0`, copies existing GPU target                                               |
+| Font selection/glyph | `0x5d70c0` / `0x5d75f0`, byte size and clipped cell result                                                 |
+| Glyph paint/cache    | `0x5d3e80` / `0x4a6280`, expanded key plus inclusive clip edges                                            |
+| Sound retry          | `0x5f8990` / `0x5f88c0`, same opened file, no rewind                                                       |
+| Vorbis open          | `0x6044b0` → `0x5012b0` → `0x501000` → `0x4fff80` → `0x4ffbb0`, initial exclusive 65536-byte sync boundary |
+| Replay / mode        | `0x5b67e4` pushes 13; mode owner `0x53cba0` holds 13                                                       |
+| Exit                 | `0x53f040` enters 14 without publishing fullscreen-at-exit                                                 |
+| Pack discovery       | `0x5122d0`, base then existing `%s.%03d`, 0 through 999, including after gaps                              |
+
+The exact DX9 source SHA-256
+`154274ae0ce16676298de24c66edf4200d5f8d3eb98a8a2c42e987b7c144188c`
+selects `mul_lerp`: foreground RGB is multiplied by
+`(1 - user.a * param) + user.rgb * user.a * param`; foreground alpha is
+multiplied by mask alpha and effect alpha. Unlike the earlier `mul` source,
+this calculation does not divide by combined foreground/user alpha. The existing
+`mul` signature keeps its original equation. Named `param` storage, opaque-black
+unbound User and mask ownership use the existing DX9 effect path. CPU and GLSL
+implementations share the source-selected operation; unknown source bytes still fail.
+
+Static evidence is retained outside the repository under
+`local-runtime/hentai-prison/`: exact identity, boot, complete operation exports
+and the independent function graph. Mnemonic hashes supplied candidates only;
+the profile fields above were checked against their actual arguments, constants,
+object layouts and calls. No native executable or DLL was run.
+The tested installation has no `system/extend/auth.lua`; original folder loading
+requires no authorization substitution or extra game files.
+
+The installation check advances 300 story click-waits (301 text waits), decodes
+435 images and 405 sound files, and performs 934 real glyph raster jobs.
+Save/load/reload at click 100 and a fresh process over copies of those test saves
+restore the same scenario-state SHA-256 and continue the story. All 12 ASF movies
+are fully decoded through the shared codecs without displaying frames or playing
+audio; all finish without failures. A separate Brave/Metal DOM-text check uses
+only the original folder in `artemis.html`, Start, native F1 quick save, F2 quick
+load with its game confirmation, and three further text waits. Exceptions and
+HTML dialogs are zero. This is critical compatibility coverage, not a full route.
+
+Diagnostics remain visible. The original boot sound table maps `boot` to absent
+`:sysse/none.ogg`; `title_page` hides optional group `500.s` before it exists.
+The story probe also records 101 authored `lytween` requests to layer `7`, which
+is never created in its complete native-tag stream. They follow the native
+missing-layer report path; image and sound decoding do not fail. Evidence is
+indexed in `critical31.safe.json` and `ui-review29.safe.json` in the local directory.
+
 ## Rev.2898 (PE32)
 
 Frame `0x535c30` updates the window and input owners through their own vtables,

@@ -415,6 +415,7 @@ export function artemisShaderFragmentSource(kind: ArtemisShaderPresetKind): stri
       return artemisColorFragmentSource(kind);
     case 'add':
     case 'mul':
+    case 'mul_lerp':
     case 'compbr':
     case 'compbrc':
     case 'compdk':

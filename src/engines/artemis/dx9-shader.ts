@@ -47,6 +47,7 @@ export type ArtemisDx9ShaderKind =
   | 'screen'
   | 'add'
   | 'mul'
+  | 'mul_lerp'
   | 'compbr'
   | 'compbrc'
   | 'compdk'
@@ -86,6 +87,7 @@ export const artemisDx9ShaderSources: Readonly<Record<string, ArtemisDx9ShaderKi
     cbdcebaa2a495912bc388e0c2b317230c94c2fc87a6eeb3d7ff976935b090cd2: 'gray',
     dd56e462d08e0c8cc7c6491b906883cc20904addbaa169678c6bf285ca965495: 'mosaic',
     '0a17fc5754a70db813fc340607b2f35f5122eef9a53725c037a6441ce0b4c8b5': 'mul',
+    '154274ae0ce16676298de24c66edf4200d5f8d3eb98a8a2c42e987b7c144188c': 'mul_lerp',
     '57c2ba521bc70163744ae7acdea4a214f0902ac3bd2f440ebbaffcdd8b46f6e2': 'nega',
     ee136fde3eb26cb5d262af876a7209eaf075f303ffb7911a400447bbc0507e32: 'raster',
     f658f114a137169216ed35860fc2d77f022a094f2ce533ccca6724bb856391be: 'reset',
@@ -245,6 +247,7 @@ export function artemisDx9ShaderShade(
       return artemisScreenShade(fore, p.user ?? nullTexture, u, v, {alpha});
     case 'add':
     case 'mul':
+    case 'mul_lerp':
     case 'compbr':
     case 'compbrc':
     case 'compdk':

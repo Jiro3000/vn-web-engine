@@ -116,6 +116,7 @@ export function createArtemisDrawShaderPreset(
       break;
     case 'add':
     case 'mul':
+    case 'mul_lerp':
     case 'compbr':
     case 'compbrc':
     case 'compdk':
@@ -132,7 +133,7 @@ export function createArtemisDrawShaderPreset(
   }
   const needsUserTexture =
     userTextureBound &&
-    ['screen', 'add', 'mul', 'compbr', 'compbrc', 'compdk', 'compdkc'].includes(kind);
+    ['screen', 'add', 'mul', 'mul_lerp', 'compbr', 'compbrc', 'compdk', 'compdkc'].includes(kind);
   let index = 0;
   const value = (offset: number) => `parameters[${Math.floor(offset / 4)}].${'xyzw'[offset % 4]}`;
   const declarations = fields
