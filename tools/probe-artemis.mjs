@@ -829,8 +829,15 @@ try {
       while (((deadline - runtime.now) | 0) > 16) frame();
       advancedWaits++;
       runtime.advanceTo(((deadline - runtime.now) | 0) > 0 ? deadline : runtime.now);
-      // A sound-finish handler may end the wait during the frames.
-      if (wait.pending && !wait.tick(runtime.now)) break;
+      // A sound-finish handler may end the wait during the frames. In automode a playing
+      // syncse sound holds the passed deadline; 16 ms frames continue until it stops.
+      if (wait.pending && !wait.tick(runtime.now)) {
+        if (!runtime.modes.automode) break;
+        for (let count = 0; wait.pending && !wait.tick(runtime.now); count++) {
+          if (count >= 100000) throw Error('Probe automode syncse wait did not finish');
+          frame();
+        }
+      }
       script.run(1000);
     }
   } catch (error) {
