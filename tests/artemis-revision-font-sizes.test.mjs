@@ -2,7 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {ArtemisFileFonts} from '../dist/engines/artemis/file-fonts.js';
 import {
+  ARTEMIS_2601_EXECUTABLE_SHA256,
   ARTEMIS_2868_EXECUTABLE_SHA256,
+  ARTEMIS_2898_EXECUTABLE_SHA256,
+  ARTEMIS_2908_EXECUTABLE_SHA256,
+  ARTEMIS_3083_EXECUTABLE_SHA256,
   ARTEMIS_3179_EXECUTABLE_SHA256,
   ARTEMIS_3139_EXECUTABLE_SHA256,
   ARTEMIS_3139_RESOURCE_VARIANT_SHA256,
@@ -16,6 +20,16 @@ const legacy = [
   ARTEMIS_3179_EXECUTABLE_SHA256,
   ARTEMIS_3139_EXECUTABLE_SHA256,
   ARTEMIS_3139_RESOURCE_VARIANT_SHA256,
+];
+const supported = [
+  ARTEMIS_2601_EXECUTABLE_SHA256,
+  ARTEMIS_2868_EXECUTABLE_SHA256,
+  ARTEMIS_2898_EXECUTABLE_SHA256,
+  ARTEMIS_2908_EXECUTABLE_SHA256,
+  ARTEMIS_3083_EXECUTABLE_SHA256,
+  ...legacy.slice(1),
+  ARTEMIS_3257_EXECUTABLE_SHA256,
+  ARTEMIS_3257_WRAPPED_RESOURCE_VARIANT_SHA256,
 ];
 
 for (const hash of [ARTEMIS_3257_EXECUTABLE_SHA256, ARTEMIS_3257_WRAPPED_RESOURCE_VARIANT_SHA256])
@@ -110,5 +124,46 @@ test('Rendered-font names and cached misses use the revision size width', async 
     } finally {
       await owner.close();
     }
+  }
+});
+
+test('File-font bold and italic follow the revision FreeType provider', async () => {
+  const worker = await createNodeFontWorker();
+  const owner = (hash) =>
+    new ArtemisFileFonts(hash, {
+      readFontFile: async () => rectangleFont(),
+      hasSystemFontFamily: async () => false,
+      openFontFace: (bytes) => worker.open(bytes),
+    });
+  const glyph = async (fonts, styleBits) => {
+    const font = await fonts.load('synthetic.ttf', 44, styleBits);
+    try {
+      return await font.glyph(65);
+    } finally {
+      await font.close();
+    }
+  };
+  try {
+    for (const hash of supported) {
+      const fonts = owner(hash);
+      try {
+        const plain = await glyph(fonts, 0);
+        const bold = await glyph(fonts, 8);
+        const italic = await glyph(fonts, 16);
+        const both = await glyph(fonts, 8 | 16);
+        if (hash === ARTEMIS_2601_EXECUTABLE_SHA256) {
+          for (const styled of [bold, italic, both]) assert.deepEqual(styled, plain);
+          continue;
+        }
+        assert.ok(bold.width > plain.width && bold.advance > plain.advance, hash);
+        // The render load leaves a bitmap slot, so the outline-only shear never applies.
+        assert.deepEqual(italic, plain, hash);
+        assert.deepEqual(both, bold, hash);
+      } finally {
+        await fonts.close();
+      }
+    }
+  } finally {
+    worker.close();
   }
 });

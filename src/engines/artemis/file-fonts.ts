@@ -50,12 +50,15 @@ export class ArtemisFileFonts {
   private readonly rendered = new Map<string, Promise<ArtemisRenderedFont | null>>();
   private readonly charsets = new Map<string, boolean>();
   private readonly fontSizeBits: 8 | 32;
+  private readonly syntheticStyle: boolean;
   private closed = false;
   constructor(
     executableSha256: string,
     private readonly host: ArtemisFileFontHost,
   ) {
-    this.fontSizeBits = artemisRevision(executableSha256).fontSizeBits;
+    const revision = artemisRevision(executableSha256);
+    this.fontSizeBits = revision.fontSizeBits;
+    this.syntheticStyle = revision.syntheticFontStyle;
   }
   async load(path: string, size: number, styleBits = 0): Promise<ArtemisFileFont> {
     if (this.closed) throw Error('Artemis file fonts closed');
@@ -85,7 +88,7 @@ export class ArtemisFileFonts {
       return new ArtemisFileFont(
         face,
         metrics,
-        styleBits,
+        this.syntheticStyle ? styleBits : 0,
         () => !this.closed,
         () => this.release(path, entry!),
       );
@@ -205,6 +208,7 @@ export function artemisFileFontMetrics(
 }
 export class ArtemisFileFont {
   private closed = false;
+  /** `styleBits` holds the bold (8) and italic (16) flags the revision's provider applies. */
   constructor(
     private readonly face: ArtemisFileFontFace,
     readonly metrics: ArtemisFileFontMetrics,

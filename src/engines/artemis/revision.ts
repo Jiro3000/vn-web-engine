@@ -65,6 +65,10 @@ export interface ArtemisRevision {
   readonly indentModify: boolean;
   /** Provider size argument: older callers narrow to uint8; Rev.3257 passes all 32 bits. */
   readonly fontSizeBits: 8 | 32;
+  /** CFreeTypeFont open stores the setter's bold/italic flags and glyph applies
+   * FT_GlyphSlot_Embolden, then shears outline glyphs by {0x10000,0x6000,0,0x10000}.
+   * Rev.2601 open takes no flags and glyph renders the loaded outline unchanged. */
+  readonly syntheticFontStyle: boolean;
   /** Glyph result ABI: older PE32 profiles return clipped cells; PE64 preserves bearings/advance. */
   readonly glyphGeometry: 'clipped-cell' | 'bearing-advance';
   /** Painted-glyph index key layout; null where restore has not been reconstructed. */
@@ -96,6 +100,8 @@ const rev3139 = {
   vorbisHeaderSyncBoundary: null,
   indentModify: false,
   fontSizeBits: 8 as const,
+  // Open 0x1401686c0 stores +0x50/+0x51; glyph 0x140168be0 emboldens/shears.
+  syntheticFontStyle: true,
   glyphGeometry: 'bearing-advance' as const,
   fontCacheKey: null,
   loadRunMode: 13 as const,
@@ -109,6 +115,8 @@ const rev3257: ArtemisRevision = {
   fontCacheKey: 'expanded-metrics',
   indentModify: true,
   fontSizeBits: 32,
+  // Open 0x140172580 stores +0x50/+0x51; glyph 0x140172c80 emboldens/shears.
+  syntheticFontStyle: true,
   loadRunMode: 14,
   exitRunMode: 15,
   publishesFullscreenAtExit: true,
@@ -150,6 +158,8 @@ const revisions: ReadonlyMap<string, ArtemisRevision> = new Map(
       vorbisHeaderSyncBoundary: null,
       indentModify: false,
       fontSizeBits: 8 as const,
+      // Open 0x528170 takes no style flags; glyph 0x528400 neither emboldens nor shears.
+      syntheticFontStyle: false,
       glyphGeometry: 'clipped-cell' as const,
       fontCacheKey: 'packed' as const,
       // Replay 0x5061a0 holds 13; return/exit 0x496d40/0x496d60 enter 14.
@@ -181,6 +191,8 @@ const revisions: ReadonlyMap<string, ArtemisRevision> = new Map(
       indentModify: false,
       // 0x5d64e0 takes a byte; glyph 0x5d6a10 returns a clipped cell.
       fontSizeBits: 8 as const,
+      // 0x5d64e0 stores +0x3c/+0x3d; 0x5d6a10 emboldens (0x651d10) and shears.
+      syntheticFontStyle: true,
       glyphGeometry: 'clipped-cell' as const,
       // 0x4a6280 restores the expanded painted-glyph index.
       fontCacheKey: 'expanded' as const,
@@ -212,6 +224,8 @@ const revisions: ReadonlyMap<string, ArtemisRevision> = new Map(
       vorbisHeaderSyncBoundary: 65536,
       indentModify: false,
       fontSizeBits: 8 as const,
+      // 0x5d7090 stores +0x3c/+0x3d; 0x5d75c0 emboldens (0x652880) and shears.
+      syntheticFontStyle: true,
       glyphGeometry: 'clipped-cell' as const,
       fontCacheKey: 'expanded' as const,
       // 0x5b4bb4 pushes 13 before replay; 0x53dd40 enters 14 for exit.
@@ -244,6 +258,8 @@ const revisions: ReadonlyMap<string, ArtemisRevision> = new Map(
       indentModify: false,
       // 0x5d70c0 takes byte size; 0x5d75f0 returns clipped cells.
       fontSizeBits: 8 as const,
+      // 0x5d70c0 stores +0x3c/+0x3d; 0x5d75f0 emboldens (0x652640) and shears.
+      syntheticFontStyle: true,
       glyphGeometry: 'clipped-cell' as const,
       // 0x4a6280 restores the expanded key and inclusive clip edges.
       fontCacheKey: 'expanded' as const,
@@ -272,6 +288,8 @@ const revisions: ReadonlyMap<string, ArtemisRevision> = new Map(
       vorbisHeaderSyncBoundary: 65536,
       indentModify: false,
       fontSizeBits: 8 as const,
+      // 0x5f18a0 stores +0x3c/+0x3d; 0x5f1dd0 emboldens (0x66d6f0) and shears.
+      syntheticFontStyle: true,
       glyphGeometry: 'clipped-cell' as const,
       fontCacheKey: 'expanded' as const,
       loadRunMode: 13 as const,
@@ -285,6 +303,8 @@ const revisions: ReadonlyMap<string, ArtemisRevision> = new Map(
       fontCacheKey: null,
       indentModify: false,
       fontSizeBits: 8 as const,
+      // Open 0x14016a0a0 stores +0x50/+0x51; glyph 0x14016a5c0 emboldens/shears.
+      syntheticFontStyle: true,
       loadRunMode: 13 as const,
       exitRunMode: 14 as const,
       publishesFullscreenAtExit: true,

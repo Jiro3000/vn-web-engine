@@ -192,7 +192,8 @@ save version 1002. It neither writes nor deletes `s.llp64` or
 create zero. It queries the registered-touch flag independently of contacts.
 The profile uses DX9, byte-sized fonts and clipped-cell glyphs: FreeType open
 `0x528170` narrows the size to a byte, and glyph `0x528400` uses cell advance and
-clamps negative bearings. Sound loaders `0x5491d0` / `0x5492a0` reuse the opened
+clamps negative bearings. The open takes no bold/italic flags and the glyph never
+emboldens (`syntheticFontStyle = false`). Sound loaders `0x5491d0` / `0x5492a0` reuse the opened
 file without rewinding. The first-page Vorbis search has not been audited for
 this revision; its profile retains the strict decoder.
 
@@ -928,6 +929,28 @@ to its low byte. File-font requests/metrics and rendered-font names/cache keys
 retain this difference. A synthetic 300-pixel FreeType glyph and rendered-font
 cache collision checks cover the wider case; all three older hashes retain byte
 sizing and their zero-size refusal.
+
+`ArtemisRevision.syntheticFontStyle` selects synthetic bold/italic in CFreeTypeFont.
+Where it is true, open stores the setter's bold and italic bytes and glyph loads with
+flags 6 (`NO_HINTING | RENDER`), calls `FT_GlyphSlot_Embolden` when bold is set, then
+applies `FT_Outline_Transform` with `{0x10000, 0x6000, 0, 0x10000}` when italic is
+set and the slot format is `outl`. The render load has already converted the slot
+to `bits`, so the shear does not change scalable glyphs; `wasm/freetype/bridge.c`
+keeps the same order and format test. Rev.2601 has neither step.
+
+| Revision | Open / flag fields             | Glyph         | `FT_GlyphSlot_Embolden` |
+| -------- | ------------------------------ | ------------- | ----------------------- |
+| 2601     | `0x528170`, none               | `0x528400`    | not called              |
+| 2868     | `0x5d64e0`, `+0x3c`/`+0x3d`    | `0x5d6a10`    | `0x651d10`              |
+| 2898     | `0x5d7090`, `+0x3c`/`+0x3d`    | `0x5d75c0`    | `0x652880`              |
+| 2908     | `0x5d70c0`, `+0x3c`/`+0x3d`    | `0x5d75f0`    | `0x652640`              |
+| 3083     | `0x5f18a0`, `+0x3c`/`+0x3d`    | `0x5f1dd0`    | `0x66d6f0`              |
+| 3179     | `0x14016a0a0`, `+0x50`/`+0x51` | `0x14016a5c0` | `0x1401f6100`           |
+| 3139     | `0x1401686c0`, `+0x50`/`+0x51` | `0x140168be0` | `0x1401f4aa0`           |
+| 3257     | `0x140172580`, `+0x50`/`+0x51` | `0x140172c80` | `0x140205880`           |
+
+Rev.3083 addresses belong to the embedded PE; Rev.3257 addresses were read from the
+wrapped variant's embedded PE, whose code is byte-identical to the original Rev.3257.
 
 ## How the revisions were compared
 
