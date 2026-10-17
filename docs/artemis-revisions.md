@@ -1105,6 +1105,68 @@ keeps the same order and format test. Rev.2601 has neither step.
 Rev.3083 addresses belong to the embedded PE; Rev.3257 addresses were read from the
 wrapped variant's embedded PE, whose code is byte-identical to the original Rev.3257.
 
+## Rev.3248
+
+Hamidashi Creative Re Re call executable SHA-256
+`86d8c7f9a27379647c20c31d1e42472787e2e85c9950bf035966f00a120dc32f`
+(`ARTEMIS_3248_EXECUTABLE_SHA256`) is an unwrapped PE64 image, 5,073,408 bytes,
+image base `0x140000000`, entry `0x14024532c`, PE timestamp `0x677bb265`, 7,269
+functions. Only this exact identity selects its profile. Instruction-shape hashes
+align 7,258 of its functions with identical Rev.3257 bodies, so the profile reuses
+every Rev.3257 field except the boot record. The functions that differ are:
+
+- Boot `0x1400c7d80` publishes 3248 and `Mon Jan 6 19:35:50 2025`, with support 1103
+  and save version 1003.
+- `CVideo` (constructor `0x14015b5f0`, playback functions `0x140164500`, `0x1401645e0`
+  and `0x140164d50`) builds only the DirectShow graph. Rev.3257 adds a Media Foundation
+  session beside it (`MFStartup`/`MFShutdown` in WinMain `0x14009d710`,
+  `MFCreateMediaSession` in `0x140164660`), so its object grows from `0x80` to `0x90`
+  bytes (allocation `0x14015d240` here, `0x14015d250` there). The playing checks in
+  `0x1400c4940`, window frame `0x140144a00` and `0x140158970` test only the graph field
+  `+0x18`, where Rev.3257 tests `+0x28` and `+0x18`. The browser movie host serves both.
+
+The Rev.3257 operations cited above are instruction-identical at these addresses:
+screenshot `0x1400ee310`, sound loaders `0x140196b10` / `0x140196a00`, font open
+`0x140171f70`, glyph `0x140172670`, scenario loader `0x14014a2b0`, mode entry
+`0x1400cb2a0`, exit `0x1400cdf50`, archive mount `0x140187e90`, scene draw
+`0x14015a220`, and the `indentmodify` functions `0x1400be300`, `0x1400d87b0`,
+`0x1401537d0`, `0x1401535f0` and `0x1400f4300`.
+
+`system.ini` sets `SAVEPATH = savedata` without a CSIDL, an installation-relative save
+directory that maps to the player's save storage. The installation ships
+`savedata/saveg.dat` and `savedata/system.dat` written by Rev.3248. Booting from copies
+of them yields the same route records (`g.end` 0) and configuration as an empty save
+directory, except the inert `conf.dummy` and `conf.langnum`; the player therefore
+starts with empty storage and never writes to the installation folder.
+
+Validation includes one complete nonvisual 莉々子 route from native title Start
+(`500.d.2.0`, `gamestart`): 7,198 delivered probe clicks, 18,684 message blocks and four
+first-option choices (`莉々子-00`, `莉々子-02` and the system selects of H-scenes 02 and 03) run all 36 main files and 8 H-scene files of the route, play `movie/d1e86u7ftq.dat`
+and `movie/d2z4ydi8wv.dat`, and reach `staffroll ch=莉々子`, which scrolls the six `rir`
+staff images (`staff.r.pg` / `staff.r.bg`). The branch files `莉々子-02b`, `莉々子-02c`,
+`hシーン02b` and `hシーン03b` are not entered. `莉々子-ep2` records `g.end = 1`, the global
+save records `scene01`–`scene04`, and `タイトル` saves and resets to the title, after which
+no story `rt`/`rt2` tags occur. In a fresh process `g.end` persists as 1; a fresh process
+with empty saves reports 0. At click 2,000 saved/loaded/reloaded scenario hashes match,
+and a fresh process restores that save in `莉々子-08_1` and continues.
+
+All five NDJSON streams (1,351,329 records) are read. 5,710 route image decodes succeed;
+the restored font cache (3,220 records) serves 16,902 glyph lookups beside 2,444 real
+raster jobs; offline PCM rendering produces 874,221,168 frames. No Lua/include/
+unknown-tag/tag errors, refusals, dialogs or HTTP waits occur. Two native
+layer-not-found reports are authored: `title_page()` sets properties on the layer
+`500.s`, which no script, `.ipt` or table creates. All three installation movies (`movie/logo.dat`,
+`movie/d1e86u7ftq.dat`, `movie/d2z4ydi8wv.dat`) fully decode through the shared ASF
+codecs, 4,469 frames without failures; the probe itself only simulates fullscreen movie
+duration. Sampled Lua peak is 5,276 KiB and main-thread Wasm samples stay below 2 GiB;
+neither is an absolute peak or covers worker heaps. Stream reviews are
+`route4-review.safe.json` and `fresh5-review.safe.json` in
+`local-runtime/hamidashi-rerecall/` in the surrounding workspace. This is an automated
+nonvisual route pass; game images and frames were not viewed.
+
+The runtime build passes the full suite of 2,093 tests with 2,056 passes and exactly
+the same 37 named baseline failures, with no skips or cancellations.
+
 ## How the revisions were compared
 
 Both executables were analyzed read-only in Ghidra (`scripts/ArtemisFunctionHashes.java`,

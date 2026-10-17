@@ -195,6 +195,13 @@ insertion owner's depth. Both operations are absent from the older revision maps
 Its scenario replay hold is mode 14 and its application exit is mode 15; earlier
 revisions keep modes 13/14. The revision fields select the loader bracket, exit guard,
 video-entry guard and host exit predicate. Lua status values remain native numbers.
+Rev.3248 (Hamidashi Creative Re Re call) has its own exact-hash profile with the
+Rev.3257 fields, including `indentmodify`, replay mode 14 and exit mode 15; only its
+boot record differs. Its native fullscreen video uses only the DirectShow graph, while
+Rev.3257 adds a Media Foundation session; the browser movie host serves both. The
+installation-relative `SAVEPATH = savedata` maps to the player's save storage. One
+full 莉々子 route through staffroll, epilogue, clear record and reset/title passes in
+the nonvisual probe; see `docs/artemis-revisions.md`.
 
 Exact shader source hashes `271173e7…d18d6`, `3a5b63e5…604b`, `07f6d756…763d`
 and `db1b5dc8…3ac9` select the perspective presets. They warp one texture coordinate
