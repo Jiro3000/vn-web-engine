@@ -1372,7 +1372,7 @@ test('Runtime boot publishes touch registration independently of live contacts f
   const hashes = Object.entries(revisions)
     .filter(([name]) => /^ARTEMIS_.*(?:EXECUTABLE|RESOURCE_VARIANT)_SHA256$/.test(name))
     .map(([, hash]) => hash);
-  assert.equal(hashes.length, 10);
+  assert.equal(hashes.length, 11);
   for (const hash of hashes) {
     for (const device of [
       null,

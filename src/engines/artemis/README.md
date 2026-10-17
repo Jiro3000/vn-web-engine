@@ -160,6 +160,12 @@ uses the same browser player; no extra installation files are required. One full
 Chisato route through ED, clear records and reset/title passes in the nonvisual
 probe. Native entries and validation scope are recorded in
 `docs/artemis-revisions.md`.
+Rev.2762 (Hamidashi Creative) has its own exact-hash PE32 profile. It shares the
+Rev.2601 DX9 property parser, packed painted-font cache, replay hold 13, exit mode
+14 and 32-bit rendered glyphs, and adds native synthetic bold and italic. Original
+folder selection uses the same browser player without added files. One full 妃愛 (`hiy`)
+route through staffroll, clear record and reset/title passes in the nonvisual probe;
+see `docs/artemis-revisions.md`.
 The independent Rev.3083 PE32 profile deletes restored `s.llp64` and
 `s.windowsfeaturelevel` at boot before their later zero-creating queries. It uses
 the DX9/clipped-cell path, accepts shader texture properties, and publishes

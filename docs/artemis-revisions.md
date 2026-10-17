@@ -179,6 +179,76 @@ Badge & Dagger movie fully decodes through shared ASF codecs: 2,594 video frames
 Static evidence and receipts remain under `local-runtime/ryuusei-badge-dagger/`
 in the surrounding workspace.
 
+## Rev.2762 (PE32)
+
+Hamidashi Creative executable SHA-256
+`541452b152b02c4e242f09dc31ef5061629318b31e85881e9084b5cba6fbfac7`
+is an independent x86 build, image base `0x400000`, entry `0x5dee68`, PE timestamp
+`0x5ed5c5d6`, 15,771 functions. Only this exact identity selects its profile.
+Instruction-shape hashes align 14,916 Rev.2601 functions with identical Rev.2762
+bodies; the addresses below that are called identical belong to that set, and the
+others were decompiled directly.
+
+Boot `0x4933a0` publishes Rev.2762, `Tue Jun  2 12:16:51 2020`, support 1103 and
+save version 1002, and like Rev.2601 neither writes nor deletes `s.llp64` or
+`s.windowsfeaturelevel`; `s.windowstouch` is the window's registered-touch flag.
+Save writer `0x5054b0` is identical to Rev.2601 `0x504a40`.
+The profile uses DX9 and the Rev.2601 actor-property parser (`0x4e2510`, identical
+to `0x4e1b70`), so custom shader keys remain unconsumed. Screenshot `0x4852d0` calls
+renderer virtual `+0x24`, `0x522b70`, which copies the presented target. Sound
+loaders `0x549990` / `0x549a60` reuse the opened file without rewinding.
+Return `0x496bd0` and exit `0x496bf0` enter mode 14; `0x494fb0` keeps replay hold
+13 without publishing fullscreen status, and scenario replay `0x506c30` enters
+hold 13. Layer tween handler `0x4a76c0` and removal `0x4a99a0` are identical
+to the Rev.2601 functions that take the native replay flag.
+
+FreeType open `0x528320` takes a byte size and stores the bold and italic flags at
+`+0x3c` / `+0x3d`. Glyph `0x528650` returns a clipped cell and, unlike Rev.2601,
+emboldens the slot for bold and applies an oblique outline transform for italic on
+outline faces; the shared FreeType path already applies both. Painted-font cache
+writer `0x402630`, restore `0x402c40`, setter `0x5258d0` and glyph key `0x5259e0`
+are identical to Rev.2601, so `fontCacheKey = packed` applies.
+
+CRenderedFont `.rft` files with `COLOR_32=1` hold straight-alpha RGBA glyph PNGs.
+Glyph `0x544440` (identical to Rev.2601 `0x543c80`) returns 4 bytes per pixel, and
+painter `0x5259e0` copies those rows unchanged; with shadow or outline it treats
+the alpha byte as coverage and composites the glyph's own color over the
+decoration. `renderedColorGlyphs = true` selects this for Rev.2601 and Rev.2762;
+`src/engines/artemis/README.md` describes the painter rules.
+
+Lua `convertEncoding` (`0x4f3f50` → `0x4f6cb0`) and its dispatch are identical to
+Rev.2601. HTTP GET `0x4b7d50` and completion `0x4df1d0` are identical, but the
+worker and frame poll (`0x4ddbc0`, `0x48fcc0`, `0x4ddaf0`) differ and have not been
+audited; the shared fetch host applies. The font attribute paths that read
+`rubyface` differ and have not been audited for this revision.
+
+Validation includes one complete nonvisual 妃愛 route from native title Start:
+14,475 delivered probe clicks and 8 first-option choices (seven common selects and
+one H-scene system select) raise `f.hiy` to 3, run `妃愛-01` through `妃愛-18` with
+H-scenes 01–05, and reach `staffroll ch=妃愛`, which scrolls the `hiy` staff images.
+In `妃愛-ep` the game's first-clear dialog (`exdlg hiy`, button `600.1.bt.3.0`) is
+answered once; the script then records `g.hiy = 1`, and `タイトル` saves and resets to
+the title. No story `rt`/`rt2` tags follow the reset. `g.hiy` persists as 1 in a fresh
+process, the other heroines' records stay 0, and a fresh process with empty saves
+reports 0. At click 2,000 saved/loaded/reloaded scenario hashes match; a fresh
+process restores that save at `共通-14` and continues.
+
+All 8,912 route image decodes succeed, with 35,951 real font raster jobs and
+1,058,974,512 offline PCM frames. No Lua/include/unknown-tag/tag errors, refusals,
+dialogs or HTTP waits occur. Four native layer-not-found reports are authored:
+`妃愛-02` stores a base `bg`, whose reset deletes layer `1.0`, before
+`cgdel id=5 mx=0 my=0`, so that command's zero-distance tween targets the already
+deleted cinema layer `1.0.5.bg.5`. Both installation movies (`movie/logo.dat`,
+`movie/omt2rs7.dat`, ASF 1280×720) fully decode through the shared ASF codecs,
+2,834 frames without failures; the probe itself only simulates fullscreen movie
+duration. Main-thread Wasm sampling stays below 2 GiB; samples do not establish an absolute peak or cover worker heaps. Stream
+reviews are `route19-review.safe.json` and `fresh20-review.safe.json` in
+`local-runtime/hamidashi-creative/` in the surrounding workspace. This is an
+automated nonvisual route pass; game images and frames were not viewed.
+
+The runtime build passes the full suite of 2,089 tests with 2,052 passes and exactly
+the same 37 named baseline failures, with no skips or cancellations.
+
 ## Rev.2601 (PE32)
 
 Ryuusei World Actor executable SHA-256
