@@ -28,7 +28,10 @@ export interface ArtemisFileGlyph {
   readonly left: number;
   readonly top: number;
   readonly advance: number;
+  /** One coverage byte per pixel; for a 32-bit rendered glyph, its alpha bytes. */
   readonly pixels: Uint8Array;
+  /** A 32-bit rendered glyph's own straight-alpha RGBA pixels, which replace the text color. */
+  readonly color?: Uint8Array;
 }
 /** The face file does not exist; CFreeTypeFont open (0x14016a0a0) then fails before it
  * changes any provider state. */
@@ -50,12 +53,14 @@ export class ArtemisFileFonts {
   private readonly rendered = new Map<string, Promise<ArtemisRenderedFont | null>>();
   private readonly charsets = new Map<string, boolean>();
   private readonly fontSizeBits: 8 | 32;
+  private readonly renderedColorGlyphs: boolean;
   private closed = false;
   constructor(
     executableSha256: string,
     private readonly host: ArtemisFileFontHost,
   ) {
     this.fontSizeBits = artemisRevision(executableSha256).fontSizeBits;
+    this.renderedColorGlyphs = !!artemisRevision(executableSha256).renderedColorGlyphs;
   }
   async load(path: string, size: number, styleBits = 0): Promise<ArtemisFileFont> {
     if (this.closed) throw Error('Artemis file fonts closed');
@@ -106,6 +111,7 @@ export class ArtemisFileFonts {
         face,
         size,
         this.fontSizeBits,
+        this.renderedColorGlyphs,
       );
       this.rendered.set(key, font);
       font.catch(() => {

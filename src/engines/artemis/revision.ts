@@ -2,6 +2,8 @@ import type {ArtemisVariables} from './variables.js';
 
 export const ARTEMIS_2601_EXECUTABLE_SHA256 =
   '38feda70823430350ae58086225ac4a983ab727bd68b4800c4bbeed285ea0123';
+export const ARTEMIS_2762_EXECUTABLE_SHA256 =
+  '541452b152b02c4e242f09dc31ef5061629318b31e85881e9084b5cba6fbfac7';
 export const ARTEMIS_2868_EXECUTABLE_SHA256 =
   'e551146298aa98987b5965964610c909ae8f2c06ab3ac536a733b4bc1e9bbcde';
 export const ARTEMIS_2898_EXECUTABLE_SHA256 =
@@ -74,6 +76,10 @@ export interface ArtemisRevision {
   readonly exitRunMode: 14 | 15;
   /** Exit queries and publishes fullscreen state; absent in the exact Rev.2898 build. */
   readonly publishesFullscreenAtExit: boolean;
+  /** CRenderedFont COLOR_32 glyphs: Rev.2601 0x543c80 / Rev.2762 0x544440 return the
+   * entry's 32-bit image rows (4 bytes per pixel), which painter 0x525830 / 0x5259e0 copies
+   * unchanged, or composites by its alpha byte over a shadow or outline. Unverified elsewhere. */
+  readonly renderedColorGlyphs?: boolean;
   /** Rev.2908 0x5eeb00 accepts empty decimal strings; atoi("") aliases zero. */
   readonly emptyLayerKeyIsZero?: boolean;
 }
@@ -156,6 +162,39 @@ const revisions: ReadonlyMap<string, ArtemisRevision> = new Map(
       loadRunMode: 13 as const,
       exitRunMode: 14 as const,
       publishesFullscreenAtExit: false,
+      renderedColorGlyphs: true,
+    },
+    {
+      executableSha256: ARTEMIS_2762_EXECUTABLE_SHA256,
+      // Independent PE32 boot 0x4933a0; save writer 0x5054b0 emits version 1002.
+      engineVersion: 2762,
+      buildDate: 'Tue Jun 2 12:16:51 2020',
+      minimumSupportVersion: 1103,
+      saveDataVersion: 1002,
+      llp64: false,
+      publishesGraphicsFeatureLevel: false,
+      absentSystemVariables: Object.freeze(['s.llp64', 's.windowsfeaturelevel']),
+      // Property parser 0x4e2510 is instruction-identical to Rev.2601 0x4e1b70.
+      shaderProperties: false,
+      shaderTextureProperties: false,
+      shaderConstantBinding: 'named-effect' as const,
+      graphicsApi: 'd3d9' as const,
+      // 0x4ad260 -> 0x4852d0 -> renderer +0x24 / 0x522b70 copies the presented target.
+      screenshot: 'presented' as const,
+      // 0x549990 / 0x549a60 reuse the opened file for successive loaders.
+      soundLoaderRewinds: false,
+      vorbisHeaderSyncBoundary: null,
+      indentModify: false,
+      // 0x528320 takes a byte; glyph 0x528650 returns a clipped cell.
+      fontSizeBits: 8 as const,
+      glyphGeometry: 'clipped-cell' as const,
+      // Writer 0x402630 / restore 0x402c40 and glyph key 0x5259e0 match Rev.2601.
+      fontCacheKey: 'packed' as const,
+      // Replay 0x506c30 holds 13; return/exit 0x496bd0 / 0x496bf0 enter 14.
+      loadRunMode: 13 as const,
+      exitRunMode: 14 as const,
+      publishesFullscreenAtExit: false,
+      renderedColorGlyphs: true,
     },
     {
       executableSha256: ARTEMIS_2868_EXECUTABLE_SHA256,

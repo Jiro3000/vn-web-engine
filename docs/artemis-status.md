@@ -3,7 +3,8 @@
 The reference reconstruction target is Artemis Rev.3179 from Hatsuyuki Sakura,
 executable SHA-256 `8953562b80608046662bd8c89015d04236b0ba3afee10c36469c11403de3ebaf`.
 Additional accepted executables and their exact behavior profiles are listed in
-[Artemis revisions](artemis-revisions.md), including Rev.2601 from Ryuusei World Actor.
+[Artemis revisions](artemis-revisions.md), including Rev.2601 from Ryuusei World Actor and
+Rev.2762 from Hamidashi Creative.
 Unknown executable hashes are refused.
 
 ## What exists

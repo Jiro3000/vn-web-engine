@@ -3195,6 +3195,7 @@ test('PE32 restored atlas formats reach normal/ruby layout and missing keys use 
   const revisions = await import('../dist/engines/artemis/revision.js');
   for (const [hash, layout] of [
     [revisions.ARTEMIS_2601_EXECUTABLE_SHA256, 'packed'],
+    [revisions.ARTEMIS_2762_EXECUTABLE_SHA256, 'packed'],
     [revisions.ARTEMIS_2868_EXECUTABLE_SHA256, 'expanded'],
     [revisions.ARTEMIS_2898_EXECUTABLE_SHA256, 'expanded'],
     [revisions.ARTEMIS_2908_EXECUTABLE_SHA256, 'expanded'],
@@ -4177,6 +4178,48 @@ test('setFont falls back from a missing font file to a rendered font, then keeps
     painter.close();
     worker.close();
     await fixture.close();
+  }
+});
+
+test('Rev.2762 32-bit rendered glyphs keep their own pixels and use alpha for the outline', async () => {
+  const {ArtemisFileFonts} = await import('../dist/engines/artemis/file-fonts.js');
+  const {paintArtemisGrayGlyph} = await import('../dist/engines/artemis/glyph-paint.js');
+  const {ARTEMIS_2762_EXECUTABLE_SHA256: hash} =
+    await import('../dist/engines/artemis/revision.js');
+  const {png} = await import('./png-fixtures.mjs');
+  const {rft} = await import('./artemis-rft-fixtures.mjs');
+  // 2x1 RGBA: opaque red, half-transparent blue.
+  const pixels = [255, 0, 0, 255, 0, 0, 255, 128];
+  const rgba = png({width: 2, height: 1, type: 6, raw: Buffer.from([0, ...pixels])});
+  const gray = png({width: 2, height: 1, type: 0, raw: Buffer.from([0, 200, 200])});
+  const ini = '[FONT]\r\nCOLOR_32 = 1\r\nCHARSET = UTF-8\r\n';
+  const files = new Map([
+    ['c_16.rft', rft({ini, entries: new Map([[0x41, rgba]])})],
+    ['g_16.rft', rft({ini, entries: new Map([[0x41, gray]])})],
+  ]);
+  const fonts = new ArtemisFileFonts(hash, {
+    readFontFile: async (path) => files.get(path) ?? null,
+    hasSystemFontFamily: async () => false,
+    openFontFace: () => assert.fail('no FreeType face'),
+  });
+  try {
+    const glyph = await (await fonts.loadRendered('c', 16)).glyph(0x41);
+    assert.deepEqual([glyph.width, glyph.height, glyph.advance], [2, 1, 2]);
+    assert.deepEqual([...glyph.pixels], [255, 128]);
+    assert.deepEqual([...glyph.color], pixels);
+    const style = {color: 0x00ff00, shadowColor: 0, outlineColor: 0xffffff, shadow: 0, outline: 0};
+    // Without an outline the glyph's own RGBA replaces the text color.
+    assert.deepEqual([...paintArtemisGrayGlyph(hash, glyph, style).image.pixels], pixels);
+    // With an outline the alpha is the coverage and the glyph RGB the foreground.
+    const outlined = paintArtemisGrayGlyph(hash, glyph, {...style, outline: 1}).image;
+    assert.deepEqual([outlined.width, outlined.height], [4, 3]);
+    const at = (x, y) => [...outlined.pixels.subarray((y * 4 + x) * 4, (y * 4 + x) * 4 + 4)];
+    assert.deepEqual(at(1, 1), [255, 0, 0, 255]);
+    assert.deepEqual(at(2, 1), [126, 126, 255, 255]);
+    assert.deepEqual(at(0, 0), [255, 255, 255, 255]);
+    await assert.rejects((await fonts.loadRendered('g', 16)).glyph(0x41), /pixel format/);
+  } finally {
+    await fonts.close();
   }
 });
 

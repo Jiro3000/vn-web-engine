@@ -44,13 +44,19 @@ export class ArtemisGlyphPainter {
     if (glyph.pixels.length > 4 * 1024 * 1024)
       return Promise.reject(Error('Artemis glyph coverage budget exceeded'));
     const id = ++this.serial,
-      pixels = Uint8Array.from(glyph.pixels);
+      pixels = Uint8Array.from(glyph.pixels),
+      color = glyph.color && Uint8Array.from(glyph.color);
     return new Promise((resolve, reject) => {
       this.jobs.set(id, {resolve, reject});
       try {
         this.worker.postMessage(
-          {id, executableSha256: this.hash, glyph: {...glyph, pixels}, style: {...style}},
-          [pixels.buffer],
+          {
+            id,
+            executableSha256: this.hash,
+            glyph: color ? {...glyph, pixels, color} : {...glyph, pixels},
+            style: {...style},
+          },
+          color ? [pixels.buffer, color.buffer] : [pixels.buffer],
         );
       } catch (error) {
         this.jobs.delete(id);

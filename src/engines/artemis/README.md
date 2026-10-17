@@ -1627,8 +1627,15 @@ underline metrics and `COLOR_32`; a file without them opens through its `A` entr
 zero metrics. Glyphs are 8-bit gray PNG entries placed at the line top that advance by
 their width; character codes are looked up unchanged, so the Shift-JIS versions see
 Unicode code points in this revision. Unindexed U+0020 and U+3000 advance by half the
-size (rounded up) and the size; other unindexed codes and empty entries fail. 32-bit
-(`COLOR_32`/`rft2`) glyphs and other image formats are refused.
+size (rounded up) and the size; other unindexed codes and empty entries fail.
+
+32-bit (`COLOR_32`/`rft2`) glyphs are supported where `ArtemisRevision.renderedColorGlyphs`
+records the verified PE32 path (Rev.2601 and Rev.2762): the glyph call reports 4 bytes per
+pixel, and the painter copies the entry's RGBA pixels unchanged, ignoring the text color.
+With an outline, the glyph alpha is the outline and shadow coverage and its RGB replaces
+the foreground color; underline and strikeout rows keep the foreground color. Such entries
+must be 8-bit RGBA PNG images. Other revisions refuse 32-bit glyphs, and other image
+formats are refused.
 
 `ArtemisPrint` handles print/ruby-buffer/debug-skip routing, diagnostics, overflow
 variable writes and consumed-prefix history. The required insertion owner returns

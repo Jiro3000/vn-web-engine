@@ -23,6 +23,11 @@ const channels = (color: number) => [(color >>> 16) & 255, (color >>> 8) & 255, 
 /** Grayscale branch of166420, including native underline/strikeout rows. Native atlas allocation is
  * replaced by independently owned RGBA storage; color math/quad padding remain.
  * CPU jobs run in the dedicated engine glyph worker, not the presentation frame.
+ *
+ * A glyph with its own `color` (32-bit rendered fonts; PE32 painter 0x525830/0x5259e0)
+ * keeps those RGBA pixels unchanged without an outline. Its alpha is the coverage for the
+ * outline and shadow, and its RGB replaces the foreground color where it is composited over
+ * the outline. Underline and strikeout rows keep the foreground color.
  */
 export function paintArtemisGrayGlyph(
   executableSha256: string,
@@ -43,6 +48,7 @@ export function paintArtemisGrayGlyph(
     ![glyph.left, glyph.top].every(Number.isFinite)
   )
     throw Error('Invalid Artemis glyph coverage');
+  if (glyph.color && glyph.color.length !== gw * gh * 4) throw Error('Invalid Artemis glyph color');
   if (!Number.isInteger(r) || r < 0 || r > 32 || !Number.isInteger(s) || s < 0 || s > 4096)
     throw Error('Unsupported Artemis glyph edge size');
   for (const value of [style.color, style.shadowColor, style.outlineColor])
@@ -121,25 +127,33 @@ export function paintArtemisGrayGlyph(
     outline = channels(style.outlineColor),
     shadow = channels(style.shadowColor),
     pixels = new Uint8Array(width * height * 4);
-  const coverage = (x: number, y: number) =>
+  const decoration = (y: number) =>
     (style.underline && y >= underlineY && y < underlineY + underlineThickness) ||
-    (style.strikeout && y >= strikeoutY && y < strikeoutY + strikeoutThickness)
-      ? 255
-      : empty || x < padX || y < padY || x >= rawWidth + padX || y >= rawHeight + padY
-        ? 0
-        : glyph.pixels[(y - padY) * gw + x - padX]!;
+    (style.strikeout && y >= strikeoutY && y < strikeoutY + strikeoutThickness);
+  // Index of the glyph pixel at (x, y), or -1 in padding.
+  const source = (x: number, y: number) =>
+    empty || x < padX || y < padY || x >= rawWidth + padX || y >= rawHeight + padY
+      ? -1
+      : (y - padY) * gw + x - padX;
+  const coverage = (x: number, y: number) => {
+    if (decoration(y)) return 255;
+    const index = source(x, y);
+    return index < 0 ? 0 : glyph.pixels[index]!;
+  };
   for (let y = 0; y < height; y++)
     for (let x = 0; x < width; x++) {
       const at = (y * width + x) * 4,
-        center = coverage(x, y);
+        center = coverage(x, y),
+        own = glyph.color && !decoration(y) ? source(x, y) : -1,
+        fill = own < 0 ? foreground : glyph.color!.subarray(own * 4, own * 4 + 3);
       if (!r) {
-        pixels.set(foreground, at);
+        pixels.set(fill, at);
         pixels[at + 3] = center;
       } else if (center) {
         const a = f(center / 255),
           inverse = f(1 - a);
         for (let c = 0; c < 3; c++)
-          pixels[at + c] = Math.trunc(f(f(outline[c]! * inverse) + f(foreground[c]! * a)));
+          pixels[at + c] = Math.trunc(f(f(outline[c]! * inverse) + f(fill[c]! * a)));
         pixels[at + 3] = 255;
       } else {
         let edge = 0;
