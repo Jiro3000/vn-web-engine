@@ -162,7 +162,7 @@ probe. Native entries and validation scope are recorded in
 `docs/artemis-revisions.md`.
 Rev.2762 (Hamidashi Creative) has its own exact-hash PE32 profile. It shares the
 Rev.2601 DX9 property parser, packed painted-font cache, replay hold 13, exit mode
-14 and 32-bit rendered glyphs, and adds native synthetic bold and italic. Original
+14 and 32-bit rendered glyphs, and adds native synthetic bold. Original
 folder selection uses the same browser player without added files. One full 妃愛 (`hiy`)
 route through staffroll, clear record and reset/title passes in the nonvisual probe;
 see `docs/artemis-revisions.md`.
