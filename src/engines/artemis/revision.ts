@@ -14,6 +14,9 @@ export const ARTEMIS_2908_EXECUTABLE_SHA256 =
  * Embedded PE SHA-256: abbaf6524cdaf7ac4c4c5ac50af63a74c6a4f5b22d5a4336f95ab5d85c863a87. */
 export const ARTEMIS_3083_EXECUTABLE_SHA256 =
   '1249dc214c68e781ad57bf99126986d37892280342961f6dc898eee72f9bba51';
+/** The x64 build of the same Rev.3083 source (unwrapped PE64); an independent profile. */
+export const ARTEMIS_3083_X64_EXECUTABLE_SHA256 =
+  'daf148ce01ca554fcf2db628b500310aa78835688375331fd745427da60d1d4a';
 export const ARTEMIS_3179_EXECUTABLE_SHA256 =
   '8953562b80608046662bd8c89015d04236b0ba3afee10c36469c11403de3ebaf';
 export const ARTEMIS_3139_EXECUTABLE_SHA256 =
@@ -86,6 +89,9 @@ export interface ArtemisRevision {
   readonly renderedColorGlyphs?: boolean;
   /** Rev.2908 0x5eeb00 accepts empty decimal strings; atoi("") aliases zero. */
   readonly emptyLayerKeyIsZero?: boolean;
+  /** The `dialog` tag ignores fontsize/minwidth/applydesktopscale: CDialog always uses
+   * Tahoma 20 and width 240 without desktop scaling (Rev.3083 x64 0x1400c8f30/0x140157380). */
+  readonly fixedDialogStyle?: boolean;
 }
 // Rev.3139 0x1400c36f0 publishes the same support and save data versions.
 const rev3139 = {
@@ -336,6 +342,41 @@ const revisions: ReadonlyMap<string, ArtemisRevision> = new Map(
       loadRunMode: 13 as const,
       exitRunMode: 14 as const,
       publishesFullscreenAtExit: true,
+    },
+    {
+      executableSha256: ARTEMIS_3083_X64_EXECUTABLE_SHA256,
+      // Boot 0x1400c3540 equals Rev.3139 0x1400c36f0 except version 0xc0b and date.
+      engineVersion: 3083,
+      buildDate: 'Thu Oct 6 02:52:54 2022',
+      minimumSupportVersion: 1103,
+      // Save writer 0x14013d730 is instruction-identical to Rev.3179 0x14013f940.
+      saveDataVersion: 1003,
+      llp64: true,
+      publishesGraphicsFeatureLevel: true,
+      absentSystemVariables: Object.freeze([] as string[]),
+      shaderProperties: true,
+      shaderTextureProperties: true,
+      shaderConstantBinding: 'ordered-buffer' as const,
+      graphicsApi: 'd3d11' as const,
+      // takess 0x1400e1950 and renderer +0x48 0x14015da60 equal Rev.3139's.
+      screenshot: 'presented' as const,
+      // 0x14018d360 / 0x14018d250 equal Rev.3139's non-rewinding loaders.
+      soundLoaderRewinds: false,
+      vorbisHeaderSyncBoundary: null,
+      indentModify: false,
+      // Open 0x140167140 equals Rev.3139 0x1401686c0 (byte size, +0x50/+0x51).
+      fontSizeBits: 8 as const,
+      // Glyph 0x140167660 emboldens/shears, then returns a clipped cell.
+      syntheticFontStyle: true,
+      glyphGeometry: 'clipped-cell' as const,
+      // 0x1400096b0 restores the expanded key; renderer 0x140163680 returns CClippedSurface.
+      fontCacheKey: 'expanded' as const,
+      loadRunMode: 13 as const,
+      exitRunMode: 14 as const,
+      publishesFullscreenAtExit: true,
+      // rft glyph 0x1401877e0 returns 32-bit rows; 0x140163680 copies or composites them.
+      renderedColorGlyphs: true,
+      fixedDialogStyle: true,
     },
     {
       executableSha256: ARTEMIS_3179_EXECUTABLE_SHA256,

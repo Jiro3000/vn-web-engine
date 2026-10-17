@@ -631,12 +631,16 @@ export class ArtemisRuntime {
     });
     const caption = new ArtemisCaption(services.caption);
     const mouse = new ArtemisMouse(services.cursor, () => this.now);
-    const dialog = (this.dialog = new ArtemisDialog(services.dialogs, {
-      blocked: () => false,
-      beginWait: () => script.pause(),
-      endWait: () => script.resume(),
-      writeVariable: (name, value) => variables.write(name, value),
-    }));
+    const dialog = (this.dialog = new ArtemisDialog(
+      services.dialogs,
+      {
+        blocked: () => false,
+        beginWait: () => script.pause(),
+        endWait: () => script.resume(),
+        writeVariable: (name, value) => variables.write(name, value),
+      },
+      revision.fixedDialogStyle === true,
+    ));
     const http = (this.http =
       services.http &&
       new ArtemisHttp(services.http, {

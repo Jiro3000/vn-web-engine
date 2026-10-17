@@ -27,12 +27,14 @@ function leadingCharacters(text: string, count: number): string {
  *
  * `varname` makes the dialog cancellable and receives the result (1 accepted, 0 cancelled).
  * `textfield` adds a single-line field holding `message`; on either result its name receives
- * the field text, cut to `textfieldsize` characters when that is not 0. */
+ * the field text, cut to `textfieldsize` characters when that is not 0. A revision with a
+ * fixed dialog style never reads fontsize, minwidth or applydesktopscale. */
 export class ArtemisDialog {
   private active: object | null = null;
   constructor(
     private readonly host: TextDialogHost,
     private readonly effects: ArtemisDialogEffects,
+    private readonly fixedStyle = false,
   ) {}
   get pending(): boolean {
     return this.active !== null;
@@ -48,9 +50,10 @@ export class ArtemisDialog {
       title: p.get('title') ?? '',
       message: p.get('message') ?? '',
       canCancel: p.has('varname'),
-      fontSize: p.has('fontsize') ? integer(p.get('fontsize')!) : 20,
-      minimumWidth: p.has('minwidth') ? integer(p.get('minwidth')!) : 240,
-      applyDesktopScale: p.has('applydesktopscale') && p.get('applydesktopscale') !== '0',
+      fontSize: !this.fixedStyle && p.has('fontsize') ? integer(p.get('fontsize')!) : 20,
+      minimumWidth: !this.fixedStyle && p.has('minwidth') ? integer(p.get('minwidth')!) : 240,
+      applyDesktopScale:
+        !this.fixedStyle && p.has('applydesktopscale') && p.get('applydesktopscale') !== '0',
       textField: p.has('textfield'),
       // CDialog ignores input for its first 500 ms (GetTickCount against the creation time).
       inputDelay: 500,

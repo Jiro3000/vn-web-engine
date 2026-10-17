@@ -1340,10 +1340,38 @@ test('Rev.3083 boot deletes restored DX11 fields while keeping its independent x
   );
 });
 
+test('Rev.3083 x64 publishes its own version beside the Rev.3139 DX11 boot fields', async () => {
+  const {ArtemisVariables} = await import('../dist/engines/artemis/variables.js');
+  const revisions = await import('../dist/engines/artemis/revision.js');
+  const hash = revisions.ARTEMIS_3083_X64_EXECUTABLE_SHA256;
+  const variables = new ArtemisVariables({executableSha256: hash});
+  variables.restore('s.llp64', bytes('7'));
+  revisions.initializeArtemisVariables(variables, hash);
+  assert.deepEqual(
+    [
+      's.engineversion',
+      's.builddate',
+      's.minimumsupportversion',
+      's.savedataversion',
+      's.llp64',
+    ].map((key) => luaText(variables.read(key))),
+    ['3083', 'Thu Oct 6 02:52:54 2022', '1103', '1003', '1'],
+  );
+  const x64 = revisions.artemisRevision(hash);
+  const x86 = revisions.artemisRevision(revisions.ARTEMIS_3083_EXECUTABLE_SHA256);
+  assert.deepEqual(
+    [x64.graphicsApi, x64.glyphGeometry, x64.fontCacheKey, x64.renderedColorGlyphs],
+    ['d3d11', 'clipped-cell', 'expanded', true],
+  );
+  assert.equal(x86.fixedDialogStyle, undefined);
+  assert.equal(x64.fixedDialogStyle, true);
+});
+
 test('Legacy exact hashes retain their LLP64, graphics and font-size policies beside Rev.2898', async () => {
   const {ArtemisVariables} = await import('../dist/engines/artemis/variables.js');
   const revisions = await import('../dist/engines/artemis/revision.js');
   for (const [hash, sizeBits] of [
+    [revisions.ARTEMIS_3083_X64_EXECUTABLE_SHA256, 8],
     [revisions.ARTEMIS_3179_EXECUTABLE_SHA256, 8],
     [revisions.ARTEMIS_3139_EXECUTABLE_SHA256, 8],
     [revisions.ARTEMIS_3139_RESOURCE_VARIANT_SHA256, 8],
@@ -1372,7 +1400,7 @@ test('Runtime boot publishes touch registration independently of live contacts f
   const hashes = Object.entries(revisions)
     .filter(([name]) => /^ARTEMIS_.*(?:EXECUTABLE|RESOURCE_VARIANT)_SHA256$/.test(name))
     .map(([, hash]) => hash);
-  assert.equal(hashes.length, 11);
+  assert.equal(hashes.length, 12);
   for (const hash of hashes) {
     for (const device of [
       null,
@@ -1682,6 +1710,31 @@ test('Synchronous dialog completion leaves no pending wait and preserves native 
   assert.deepEqual(order, ['begin', 'end']);
 });
 
+test('A fixed-style dialog revision ignores the font, width and desktop-scale arguments', async () => {
+  const {ArtemisDialog} = await import('../dist/engines/artemis/dialog.js');
+  const requests = [];
+  const args = new Map([
+    ['fontsize', '32'],
+    ['minwidth', '500'],
+    ['applydesktopscale', '1'],
+  ]);
+  for (const fixed of [false, true]) {
+    const dialog = new ArtemisDialog(
+      {present: (request, done) => (requests.push(request), done({result: 0, text: ''}))},
+      {blocked: () => false, beginWait: () => {}, endWait: () => {}, writeVariable: () => {}},
+      fixed,
+    );
+    dialog.dispatch({kind: 'tag', name: 'dialog', sourceLine: -1, args});
+  }
+  assert.deepEqual(
+    requests.map((r) => [r.fontSize, r.minimumWidth, r.applyDesktopScale]),
+    [
+      [32, 500, true],
+      [20, 240, false],
+    ],
+  );
+});
+
 test('Text-field dialogs write the result, then the field text cut to its size in characters', async () => {
   const {ArtemisDialog} = await import('../dist/engines/artemis/dialog.js');
   const requests = [],
@@ -1949,6 +2002,7 @@ test('Exact-hash exit saves preserve absent or restored fullscreen status for th
     revision.ARTEMIS_2898_EXECUTABLE_SHA256,
     revision.ARTEMIS_2908_EXECUTABLE_SHA256,
     revision.ARTEMIS_3083_EXECUTABLE_SHA256,
+    revision.ARTEMIS_3083_X64_EXECUTABLE_SHA256,
     revision.ARTEMIS_3179_EXECUTABLE_SHA256,
     revision.ARTEMIS_3139_EXECUTABLE_SHA256,
     revision.ARTEMIS_3139_RESOURCE_VARIANT_SHA256,
@@ -6127,6 +6181,7 @@ test('Exact revision layer dispatch ignores absent shader properties and preserv
     revision.ARTEMIS_2898_EXECUTABLE_SHA256,
     revision.ARTEMIS_2908_EXECUTABLE_SHA256,
     revision.ARTEMIS_3083_EXECUTABLE_SHA256,
+    revision.ARTEMIS_3083_X64_EXECUTABLE_SHA256,
     revision.ARTEMIS_3179_EXECUTABLE_SHA256,
     revision.ARTEMIS_3139_EXECUTABLE_SHA256,
     revision.ARTEMIS_3139_RESOURCE_VARIANT_SHA256,
