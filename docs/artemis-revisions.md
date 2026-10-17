@@ -388,6 +388,17 @@ object layouts and calls. No native executable or DLL was run.
 The tested installation has no `system/extend/auth.lua`; original folder loading
 requires no authorization substitution or extra game files.
 
+Layer lookup `0x5eebd0` and mutation `0x5eef90` use the numeric-aware child-map
+comparator `0x5eeb50`: signed `atoi` only when both predicates pass, byte comparison
+otherwise. Predicate `0x5eeb00` accepts empty strings and lone minus as zero.
+Only this exact profile selects the newly verified empty-component alias.
+The shared scene accepts mixed components such as `4time` when the actual sibling
+domain and lookup aliases preserve strict weak ordering. It validates every
+sibling comparison before lookup/mutation; cyclic domains remain explicitly
+unsupported rather than approximating native red/black tree rotation behavior.
+Synthetic scene tests cover retained ownership, ordered selection, zero aliases,
+cyclic insertion and inconsistent alias lookup without partial mutation.
+
 The installation check advances 300 story click-waits (301 text waits), decodes
 435 images and 405 sound files, and performs 934 real glyph raster jobs.
 Save/load/reload at click 100 and a fresh process over copies of those test saves

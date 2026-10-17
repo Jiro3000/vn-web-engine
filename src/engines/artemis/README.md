@@ -803,9 +803,14 @@ Presentation timing remains a separate owner. Relevant native entries:
 Child order compares signed decimal keys numerically when both are numeric and
 otherwise compares UTF-8 bytes (`0x140185740`). Equivalent keys such as `2` and
 `02` preserve the first stored spelling. Native accepts a lone minus as numeric
-zero. Numeric overflow and numeric-looking nonnumeric components are refused:
-the latter can make the native comparator nontransitive, so a sorted-array model
-cannot reproduce their native tree behavior. This scene subset requires the
+zero. Rev.2908's predicate (`0x5eeb00`, comparator `0x5eeb50`) also accepts an
+empty component as numeric zero; other profiles retain their previous empty-key
+behavior. Numeric-looking nonnumeric components such as `4time` are accepted
+when all sibling comparisons, including aliases used for lookup, preserve a
+strict weak order. Every lookup/insertion in such a domain checks all siblings
+before mutation. Cyclic domains (for example `2 < 10 < 1x < 2`), inconsistent
+alias queries and numeric overflow remain explicit refusals: a sorted-array
+model cannot reproduce an ambiguous native red/black tree. This scene subset requires the
 exact executable hash. `entries()` exposes structural traversal for owners; it
 is separate from native selection. `select(id)` expands the current selected
 subtree in child order and preserves the requested id spelling in its prefix

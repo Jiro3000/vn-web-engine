@@ -126,13 +126,7 @@ test('Artemis UTF-8 child ordering and empty dotted components are explicit', ()
 test('Artemis scene refuses unproved comparator cases before mutating any parent', () => {
   const scene = new ArtemisScene(revision);
   assert.throws(() => new ArtemisScene('unknown'), /Unsupported Artemis executable/);
-  for (const id of [
-    'parent.1a',
-    'parent.2147483648',
-    'parent.-2147483649',
-    'parent.\ud800',
-    'parent.\0',
-  ])
+  for (const id of ['parent.2147483648', 'parent.-2147483649', 'parent.\ud800', 'parent.\0'])
     assert.throws(() => scene.set(id, 'bad'), /Unsupported|Invalid/);
   assert.throws(() => scene.set(Array(257).fill('x').join('.'), 'bad'), /depth limit/);
   assert.deepEqual(scene.entries(), []);
@@ -142,6 +136,75 @@ test('Artemis scene refuses unproved comparator cases before mutating any parent
     scene.entries().map((x) => x.value),
     ['min', 'max'],
   );
+});
+
+test('Artemis mixed layer components preserve traversal, aliases and retained ownership', () => {
+  const released = [];
+  const scene = new ArtemisScene(revision, (value) => released.push(value));
+  for (const id of ['5', '4time', '2', '4', 'name']) scene.set(`group.${id}`, id);
+  const ids = ['group', 'group.2', 'group.4', 'group.4time', 'group.5', 'group.name'];
+  assert.deepEqual(
+    scene.entries().map((entry) => entry.id),
+    ids,
+  );
+  scene.commit();
+  scene.set('group.04', 'replacement');
+  scene.remove('group.4time');
+  assert.equal(scene.entry('group.004').id, 'group.4');
+  assert.equal(scene.entry('group.004').value, 'replacement');
+  assert.equal(scene.entry('group.4time'), undefined);
+  assert.deepEqual(
+    scene.entries('retained').map((entry) => entry.id),
+    ids,
+  );
+  assert.deepEqual(released, []);
+  scene.commit();
+  assert.deepEqual(released, ['4time', '4']);
+  assert.deepEqual(
+    scene.select('group').map((entry) => entry.id),
+    ids.filter((id) => id !== 'group.4time'),
+  );
+});
+
+test('Artemis rejects cyclic sibling order and inconsistent alias queries before mutation', () => {
+  const scene = new ArtemisScene(revision);
+  scene.set('group.2', 'two');
+  scene.set('group.10', 'ten');
+  const before = scene.entries();
+  for (const action of [
+    () => scene.set('group.1x.new.child', 'bad'),
+    () => scene.entry('group.1x'),
+    () => scene.remove('group.1x'),
+  ])
+    assert.throws(action, /nontransitive/);
+  assert.deepEqual(scene.entries(), before);
+  const aliases = new ArtemisScene(revision);
+  aliases.set('02', 'two');
+  aliases.set('1x', 'mixed');
+  assert.throws(() => aliases.entry('2'), /nontransitive/);
+  assert.throws(() => aliases.set('2', 'bad'), /nontransitive/);
+  assert.equal(aliases.entry('02').value, 'two');
+});
+
+test('Artemis Rev.2908 empty components alias native atoi zero independently of older profiles', async () => {
+  const {ARTEMIS_2908_EXECUTABLE_SHA256: henpri} =
+    await import('../dist/engines/artemis/revision.js');
+  const scene = new ArtemisScene(henpri);
+  scene.set('parent.', 'empty');
+  scene.commit();
+  scene.set('parent.00', 'zero');
+  assert.equal(scene.entry('parent.-').id, 'parent.');
+  assert.equal(scene.entry('parent.0').value, 'zero');
+  assert.equal(scene.entry('parent.', 'retained').value, 'empty');
+  const old = new ArtemisScene(revision);
+  old.set('parent.', 'empty');
+  old.set('parent.0', 'zero');
+  assert.equal(old.entry('parent.').value, 'empty');
+  assert.equal(old.entry('parent.0').value, 'zero');
+  const cyclic = new ArtemisScene(henpri);
+  cyclic.set('-1', 'negative');
+  cyclic.set('', 'empty');
+  assert.throws(() => cyclic.set('+group', 'bad'), /nontransitive/);
 });
 
 test('Artemis native selection uses the requested prefix and only expands groups', () => {

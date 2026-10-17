@@ -74,6 +74,8 @@ export interface ArtemisRevision {
   readonly exitRunMode: 14 | 15;
   /** Exit queries and publishes fullscreen state; absent in the exact Rev.2898 build. */
   readonly publishesFullscreenAtExit: boolean;
+  /** Rev.2908 0x5eeb00 accepts empty decimal strings; atoi("") aliases zero. */
+  readonly emptyLayerKeyIsZero?: boolean;
 }
 // Rev.3139 0x1400c36f0 publishes the same support and save data versions.
 const rev3139 = {
@@ -221,6 +223,7 @@ const revisions: ReadonlyMap<string, ArtemisRevision> = new Map(
       executableSha256: ARTEMIS_2908_EXECUTABLE_SHA256,
       // Independent PE32 boot 0x53a650, not a resource alias of Rev.2898.
       engineVersion: 2908,
+      emptyLayerKeyIsZero: true,
       buildDate: 'Tue Aug 24 23:19:23 2021',
       minimumSupportVersion: 1103,
       saveDataVersion: 1003,

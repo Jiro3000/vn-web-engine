@@ -29,9 +29,6 @@ function keyKind(key: string): number | null {
   if (kind === null) {
     if (key.includes('\0') || /[\uD800-\uDFFF]/u.test(key))
       throw new Error('Invalid Artemis UTF-8 layer id');
-    // Numeric-looking nonnumeric keys can make the native comparator nontransitive.
-    // Refuse this subset rather than substitute Array.sort ordering for the native tree.
-    if (/^[\x2d-\x39]/.test(key)) throw new Error('Unsupported Artemis mixed numeric layer id');
   }
   // Layer ids repeat; the bound only limits a script that generates them without end.
   if (keyKinds.size >= 0x4000) keyKinds.clear();
@@ -39,9 +36,9 @@ function keyKind(key: string): number | null {
   return kind;
 }
 const astral = /[\uD800-\uDBFF]/;
-function compare(a: string, b: string): number {
-  const left = keyKind(a),
-    right = keyKind(b);
+function compare(a: string, b: string, emptyIsZero: boolean): number {
+  const left = emptyIsZero && a === '' ? 0 : keyKind(a),
+    right = emptyIsZero && b === '' ? 0 : keyKind(b);
   if (left !== null && right !== null) return left < right ? -1 : left > right ? 1 : 0;
   // UTF-8 byte order is code-point order, shorter prefix first. Without surrogate pairs
   // that is UTF-16 code-unit order.
@@ -59,6 +56,7 @@ interface Child<T> {
 class PayloadLifetime<T> {
   readonly references = new Map<T, number>();
   constructor(
+    readonly emptyIsZero: boolean,
     private readonly released?: (value: T) => void,
     readonly nodeReleased?: (values: readonly T[]) => void,
   ) {}
@@ -142,11 +140,29 @@ class Node<T> implements ArtemisSceneLayer<T> {
     return this.maps[view === 'current' ? this.currentMap : this.retainedMap]!;
   }
   private index(key: string, entries: readonly Child<T>[]): number {
+    const cmp = (a: string, b: string): number => compare(a, b, this.lifetime.emptyIsZero);
+    // Rev.2908 0x5eeb50 / Rev.3179 0x140185740: numeric/numeric uses atoi,
+    // every other pair uses byte order. Mixed components are valid when this
+    // sibling domain (including the lookup key) still has a strict weak order.
+    // E.g. 2 < 10 < 1x < 2 is cyclic; binary search cannot model that native tree.
+    // Validate ALL comparisons for risky domains, including equivalent spellings
+    // on lookup; never silently impose an arbitrary JS sort order on a cycle.
+    const risky = (value: string): boolean =>
+      (this.lifetime.emptyIsZero && value === '') ||
+      (keyKind(value) === null && /^[\x2d-\x39]/.test(value));
+    if (risky(key) || entries.some((entry) => risky(entry.key))) {
+      let previous = -1;
+      for (const entry of entries) {
+        const order = cmp(entry.key, key);
+        if (order < previous) throw new Error('Unsupported Artemis nontransitive layer key domain');
+        previous = order;
+      }
+    }
     let low = 0,
       high = entries.length;
     while (low < high) {
       const middle = (low + high) >>> 1;
-      if (compare(entries[middle]!.key, key) < 0) low = middle + 1;
+      if (cmp(entries[middle]!.key, key) < 0) low = middle + 1;
       else high = middle;
     }
     return low;
@@ -154,12 +170,13 @@ class Node<T> implements ArtemisSceneLayer<T> {
   child(key: string, view: ArtemisSceneView): Child<T> | undefined {
     const entries = this.children(view),
       entry = entries[this.index(key, entries)];
-    return entry && compare(entry.key, key) === 0 ? entry : undefined;
+    return entry && compare(entry.key, key, this.lifetime.emptyIsZero) === 0 ? entry : undefined;
   }
   assign(key: string, node: Node<T> | null): boolean {
     let entries = this.maps[this.currentMap]!;
     const index = this.index(key, entries);
-    const exists = index < entries.length && compare(entries[index]!.key, key) === 0;
+    const exists =
+      index < entries.length && compare(entries[index]!.key, key, this.lifetime.emptyIsZero) === 0;
     if (!node && !exists) return false;
     if (this.currentMap === this.retainedMap) {
       this.currentMap = 1 - this.retainedMap;
@@ -201,8 +218,12 @@ export class ArtemisScene<T> {
     private readonly createGroup?: () => T,
     onNodeReleased?: (values: readonly T[]) => void,
   ) {
-    artemisRevision(executableSha256);
-    this.lifetime = new PayloadLifetime(onPayloadReleased, onNodeReleased);
+    const revision = artemisRevision(executableSha256);
+    this.lifetime = new PayloadLifetime(
+      revision.emptyLayerKeyIsZero === true,
+      onPayloadReleased,
+      onNodeReleased,
+    );
     this.root = new Node(undefined, true, this.lifetime);
     this.root.retain();
   }
