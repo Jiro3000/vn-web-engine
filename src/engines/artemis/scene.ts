@@ -11,6 +11,9 @@ export interface ArtemisSceneLayer<T> {
   /** CArtemisLayer setters 0x1400b22e0..0x1400b2660: the current inner actor, then the
    * retained one when the two indices differ. Empty once the node is destroyed. */
   actors(): readonly T[];
+  /** True once the last tree reference is released; a destroyed node never returns to a
+   * tree, so a lookup by id can no longer reach it. */
+  readonly destroyed: boolean;
 }
 function integerKey(key: string): number | null {
   // Native 0x1401856c0 accepts a lone minus sign; atoi then yields zero.
@@ -83,6 +86,7 @@ class Node<T> implements ArtemisSceneLayer<T> {
   private currentValue = 0;
   private retainedValue = 0;
   private references = 0;
+  private released = false;
   constructor(
     value: T | undefined,
     readonly acceptsChildren: boolean,
@@ -94,8 +98,12 @@ class Node<T> implements ArtemisSceneLayer<T> {
   retain(): void {
     this.references++;
   }
+  get destroyed(): boolean {
+    return this.released;
+  }
   release(): void {
     if (--this.references) return;
+    this.released = true;
     // Capture/mask members precede both child-map and holder-slot destructors.
     this.lifetime.nodeReleased?.(this.values.filter((value): value is T => value !== undefined));
     // 0x1400b1860 destroys map slots 1,0 before inner-actor slots 1,0.

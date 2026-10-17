@@ -6,6 +6,7 @@ import {
   ArtemisFloatTween,
   ArtemisTweenQueue,
   artemisEaseId,
+  type ArtemisRegisteredTween,
   type ArtemisTweenRegistry,
 } from './tween.js';
 import {artemisDecimal, artemisInteger} from './numbers.js';
@@ -37,10 +38,29 @@ function decimal(value: string): number {
   return number;
 }
 
+/** A direct tween without a completion effect. Once its layer node is destroyed the setter
+ * finds no actors and no `lytweendel` can reach the node's id set, so stepping it has no
+ * observable effect. The registry drops it then instead of stepping it until it ends, which
+ * for `loop=-1` is never; scripts that recreate a looping layer on every page would
+ * otherwise grow the per-frame step without bound. */
+class DetachedLayerTween<T> implements ArtemisRegisteredTween {
+  constructor(
+    private readonly layer: ArtemisSceneLayer<T>,
+    private readonly tween: ArtemisFloatTween,
+  ) {}
+  tick(now: number): boolean {
+    return this.layer.destroyed || this.tween.tick(now);
+  }
+  finish(): void {
+    this.tween.finish();
+  }
+}
+
 /** lytween 0x1400da830, lytweendel 0x1400dd3a0, tweenset 0x1400dd840 and /tweenset
  * 0x1400dd8f0 for direct scene layers. The setter holds the layer node, so a replaced or
- * deleted layer keeps animating its detached actors until the tween ends. Per-layer id
- * sets mirror CArtemisLayer +0xf0.
+ * deleted layer keeps animating its detached actors until the tween ends; a tween with no
+ * completion effect leaves the registry as soon as the node is destroyed (see
+ * `DetachedLayerTween`). Per-layer id sets mirror CArtemisLayer +0xf0.
  *
  * `tweenset` opens a CTweenQueue at script +0x3860 when none is open. While it is open,
  * lytween neither applies the start value nor registers the tween: it appends it to the
@@ -119,13 +139,14 @@ export class ArtemisLayerTweens<T> {
     };
     const sync = args.has('sync') && args.get('sync') !== '0';
     const copy: AsbTag = {...tag, args: new Map(args)};
+    const silent = !sync && !remove && !['file', 'label', 'handler'].some((key) => args.has(key));
     const completion = sync
       ? () => this.host.endSyncWait()
       : remove
         ? () => this.host.deleteLayer(copy, recordHistory)
-        : ['file', 'label', 'handler'].some((key) => args.has(key))
-          ? () => this.host.emitEvent(copy)
-          : () => {};
+        : silent
+          ? () => {}
+          : () => this.host.emitEvent(copy);
     const tween = new ArtemisFloatTween(this.hash, from, to, time, set, completion, {
       ease,
       delay,
@@ -139,7 +160,10 @@ export class ArtemisLayerTweens<T> {
     } else {
       // Outside a tween group the start value is applied at creation.
       set(from);
-      this.add(layer, this.registry.register(tween));
+      this.add(
+        layer,
+        this.registry.register(silent ? new DetachedLayerTween(layer, tween) : tween),
+      );
     }
     if (sync) this.host.enterRunMode(4);
     if (!recordHistory) return;

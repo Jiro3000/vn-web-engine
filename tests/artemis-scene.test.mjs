@@ -5586,6 +5586,67 @@ test('Artemis lytween animates current and retained actors, then syncs, deletes,
   }
 });
 
+test('Artemis drops silent layer tweens once their layer node is destroyed', async () => {
+  const {ArtemisLayerTweens} = await import('../dist/engines/artemis/layer-tweens.js');
+  const {ArtemisLayerCommands} = await import('../dist/engines/artemis/layer-commands.js');
+  const {ArtemisTweenRegistry} = await import('../dist/engines/artemis/tween.js');
+  const image = await syntheticImage();
+  const {layers} = await layerFixture(async (path) => (path === 'synthetic.png' ? image : null));
+  const registry = new ArtemisTweenRegistry(revision),
+    log = [];
+  const tweens = new ArtemisLayerTweens(
+    revision,
+    layers.scene,
+    registry,
+    new ArtemisLayerCommands(revision),
+    {
+      applyImageProperties: (id, actor, patch) => log.push([id, actor.number, patch]),
+      layerNotFound: () => {},
+      enterRunMode: () => {},
+      endSyncWait: () => {},
+      deleteLayer: () => {},
+      emitEvent: (tag) => log.push(['event', tag.args.get('label')]),
+      recordLayerProperties: () => {},
+    },
+  );
+  const spin = {id: 'g', param: 'rotate', from: '0', to: '360', time: '4000', loop: '-1'};
+  try {
+    await layers.dispatch(command('lyc', {id: 'g', file: 'synthetic'}));
+    layers.commit();
+    tweens.dispatch(command('lytween', spin));
+    tweens.dispatch(command('lytween', {...spin, loop: '0', time: '100', label: 'end'}));
+    registry.tick(1000);
+    assert.equal(registry.size, 2);
+    // Recreating the layer replaces its node; the old node stays reachable from the
+    // retained tree until the commit.
+    await layers.dispatch(command('lyc', {id: 'g', file: 'synthetic'}));
+    tweens.dispatch(command('lytween', spin));
+    registry.tick(1010);
+    assert.equal(registry.size, 3);
+    layers.commit();
+    log.splice(0);
+    registry.tick(1020);
+    // Only the looping tween without a completion effect on the destroyed node is gone;
+    // the labelled one still runs its completion on its own schedule.
+    assert.equal(registry.size, 2);
+    registry.tick(1200);
+    assert.deepEqual(
+      log.filter((entry) => entry[0] === 'event'),
+      [['event', 'end']],
+    );
+    assert.equal(registry.size, 1);
+    // The live layer's looping tween keeps animating it.
+    log.splice(0);
+    registry.tick(2010);
+    assert.deepEqual(
+      log.map((entry) => entry[2]),
+      [{rotate: Math.fround(90)}],
+    );
+  } finally {
+    layers.close();
+  }
+});
+
 test('Artemis tween groups queue layer tweens, play them in order and share one registry id', async () => {
   const {ArtemisLayerTweens} = await import('../dist/engines/artemis/layer-tweens.js');
   const {ArtemisLayerCommands} = await import('../dist/engines/artemis/layer-commands.js');
