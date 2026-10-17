@@ -156,8 +156,10 @@ checked operations retain DX9 named effects, byte-sized clipped-cell glyphs,
 expanded painted-font cache, initial Vorbis page search, replay mode 13 and exit
 mode 14 without fullscreen publication. The base archive and all existing numbered
 packs through `.999` mount through the shared loader. Original folder selection
-uses the same browser player; no extra installation files are required. Native
-entries and validation scope are recorded in `docs/artemis-revisions.md`.
+uses the same browser player; no extra installation files are required. One full
+Chisato route through ED, clear records and reset/title passes in the nonvisual
+probe. Native entries and validation scope are recorded in
+`docs/artemis-revisions.md`.
 The independent Rev.3083 PE32 profile deletes restored `s.llp64` and
 `s.windowsfeaturelevel` at boot before their later zero-creating queries. It uses
 the DX9/clipped-cell path, accepts shader texture properties, and publishes

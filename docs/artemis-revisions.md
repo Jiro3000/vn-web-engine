@@ -407,7 +407,31 @@ are fully decoded through the shared codecs without displaying frames or playing
 audio; all finish without failures. A separate Brave/Metal DOM-text check uses
 only the original folder in `artemis.html`, Start, native F1 quick save, F2 quick
 load with its game confirmation, and three further text waits. Exceptions and
-HTML dialogs are zero. This is critical compatibility coverage, not a full route.
+HTML dialogs are zero.
+
+The runtime built from `cc16f53` completes one full Chisato route in the
+nonvisual probe from empty own saves: Start, the first visible option of
+`d01_c08_6` (`route_c_01` → `d02_ik01_1`), 22,732 advances (22,401 `rt`) through
+`d02_ik12_2`, the original `ed` movie, `g.chisatoclear=1`, `g.d02_ik13_1=1`,
+one reset and the native title, with no story waits after reset. Save/load at
+advance 2,000 gives identical saved/loaded/reloaded state SHA-256; a fresh process
+restores it and continues ten advances. A fresh process over copies of the
+route's own saves keeps `chisatoclear=1`, the extra chapter flag and the
+`op`/`ed` movie records; an empty-save baseline has none of them. The pass decodes
+37,070 images, 18,185 sound files and performs 38,048 glyph raster jobs; the
+sampled Lua heap reaches 6,802.7 KiB. All streamed reports are fully read.
+
+Route diagnostics are original data and follow native reporting paths. Two
+authored `cgdel id="6time"` tags in `d02_ik10_3` make `quickjump.lua:755`
+`(p.id or 0) + 1` fail, and `cgact loop="1ease"` in `d02_ik04_5` makes
+`image_act.lua:547` compare a string with a number; Lua 5.1 rejects both natively
+and the c84b0 report continues the script. `system/ui.asb` calls
+`sewait_dlgyes`, which is neither a command name in the executable nor a defined
+macro, so it takes the unknown-tag report. The authored background
+`:bg/26_更生不能房独房内a` is absent from every archive; its dependent effect
+property reports a missing layer. The ordinary-player UI check above passes on
+this build with the same two native warnings. Evidence is indexed in `route75-review.safe.json`,
+`fresh76-review.safe.json` and `ui-review78.safe.json` in the local directory.
 
 Diagnostics remain visible. The original boot sound table maps `boot` to absent
 `:sysse/none.ogg`; `title_page` hides optional group `500.s` before it exists.
