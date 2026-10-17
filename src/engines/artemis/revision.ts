@@ -29,6 +29,10 @@ export const ARTEMIS_3139_RESOURCE_VARIANT_SHA256 =
 /** Rev.3257 is a recompiled engine, not a resource-only variant of an older build. */
 export const ARTEMIS_3257_EXECUTABLE_SHA256 =
   '7c604c92b434cbee3620dcf4af8dde40d9313d04cefa794d168b03477135a08a';
+/** Rev.3248 shares every modeled Rev.3257 operation; only its fullscreen video lacks the
+ * Media Foundation session (DirectShow graph only). An independent profile. */
+export const ARTEMIS_3248_EXECUTABLE_SHA256 =
+  '86d8c7f9a27379647c20c31d1e42472787e2e85c9950bf035966f00a120dc32f';
 /** Wrapped resource variant. Its embedded PE at 0x7e000 has byte-identical code,
  * constants, data and unwind sections to the original Rev.3257; only .rsrc differs. */
 export const ARTEMIS_3257_WRAPPED_RESOURCE_VARIANT_SHA256 =
@@ -408,6 +412,15 @@ const revisions: ReadonlyMap<string, ArtemisRevision> = new Map(
     {...rev3139, executableSha256: ARTEMIS_3139_RESOURCE_VARIANT_SHA256},
     rev3257,
     {...rev3257, executableSha256: ARTEMIS_3257_WRAPPED_RESOURCE_VARIANT_SHA256},
+    // Boot 0x1400c7d80 publishes 3248 and its date. Screenshot 0x1400ee310, sound loaders
+    // 0x140196b10/0x140196a00, font open 0x140171f70 and glyph 0x140172670 are
+    // instruction-identical to the Rev.3257 functions cited above.
+    {
+      ...rev3257,
+      executableSha256: ARTEMIS_3248_EXECUTABLE_SHA256,
+      engineVersion: 3248,
+      buildDate: 'Mon Jan 6 19:35:50 2025',
+    },
   ].map((revision) => [revision.executableSha256, Object.freeze(revision)]),
 );
 

@@ -1377,6 +1377,7 @@ test('Legacy exact hashes retain their LLP64, graphics and font-size policies be
     [revisions.ARTEMIS_3139_RESOURCE_VARIANT_SHA256, 8],
     [revisions.ARTEMIS_3257_EXECUTABLE_SHA256, 32],
     [revisions.ARTEMIS_3257_WRAPPED_RESOURCE_VARIANT_SHA256, 32],
+    [revisions.ARTEMIS_3248_EXECUTABLE_SHA256, 32],
   ]) {
     const variables = new ArtemisVariables({
       executableSha256: hash,
@@ -1400,7 +1401,7 @@ test('Runtime boot publishes touch registration independently of live contacts f
   const hashes = Object.entries(revisions)
     .filter(([name]) => /^ARTEMIS_.*(?:EXECUTABLE|RESOURCE_VARIANT)_SHA256$/.test(name))
     .map(([, hash]) => hash);
-  assert.equal(hashes.length, 12);
+  assert.equal(hashes.length, 13);
   for (const hash of hashes) {
     for (const device of [
       null,
@@ -2008,6 +2009,7 @@ test('Exact-hash exit saves preserve absent or restored fullscreen status for th
     revision.ARTEMIS_3139_RESOURCE_VARIANT_SHA256,
     revision.ARTEMIS_3257_EXECUTABLE_SHA256,
     revision.ARTEMIS_3257_WRAPPED_RESOURCE_VARIANT_SHA256,
+    revision.ARTEMIS_3248_EXECUTABLE_SHA256,
   ];
   const key = 's.status.fullscreenatexit';
   for (const hash of hashes) {
@@ -5055,6 +5057,32 @@ test('Wrapped Rev.3257 resource variant boots the same native profile under its 
   }
 });
 
+test('Rev.3248 boots the Rev.3257 profile under its own version and build date', async () => {
+  const {openArtemisRuntimeFixture} = await import('./artemis-runtime-fixture.mjs');
+  const {
+    artemisRevision,
+    ARTEMIS_3257_EXECUTABLE_SHA256: rev3257,
+    ARTEMIS_3248_EXECUTABLE_SHA256: hash,
+  } = await import('../dist/engines/artemis/revision.js');
+  assert.deepEqual(
+    {...artemisRevision(hash), executableSha256: rev3257, engineVersion: 3257, buildDate: ''},
+    {...artemisRevision(rev3257), buildDate: ''},
+  );
+  assert.throws(() => artemisRevision(hash.slice(0, 63) + '0'), /Unsupported Artemis executable/);
+  const fixture = await openArtemisRuntimeFixture({'system/first.iet': '[stop]'}, {hash});
+  try {
+    await fixture.runtime.boot();
+    assert.deepEqual(
+      ['s.engineversion', 's.builddate', 's.minimumsupportversion', 's.savedataversion'].map(
+        (key) => luaText(fixture.runtime.variables.lookup(key)),
+      ),
+      ['3248', 'Mon Jan 6 19:35:50 2025', '1103', '1003'],
+    );
+  } finally {
+    await fixture.close();
+  }
+});
+
 test('Rev.3139 sound loaders do not rewind: a further loader of a failed exact file is refused', async () => {
   const {createArtemisSoundLoader} = await import('../dist/engines/artemis/sound-loader.js');
   const {ARTEMIS_3139_EXECUTABLE_SHA256: sha} = await import('../dist/engines/artemis/revision.js');
@@ -6187,6 +6215,7 @@ test('Exact revision layer dispatch ignores absent shader properties and preserv
     revision.ARTEMIS_3139_RESOURCE_VARIANT_SHA256,
     revision.ARTEMIS_3257_EXECUTABLE_SHA256,
     revision.ARTEMIS_3257_WRAPPED_RESOURCE_VARIANT_SHA256,
+    revision.ARTEMIS_3248_EXECUTABLE_SHA256,
   ];
   const tag = (name, args) => ({name, args: new Map(Object.entries(args))});
   for (const hash of hashes) {
@@ -8891,11 +8920,13 @@ test('Artemis runtime selects native load and exit modes by exact revision witho
     ARTEMIS_3179_EXECUTABLE_SHA256,
     ARTEMIS_3139_EXECUTABLE_SHA256,
     ARTEMIS_3257_EXECUTABLE_SHA256,
+    ARTEMIS_3248_EXECUTABLE_SHA256,
   } = await import('../dist/engines/artemis/revision.js');
   for (const [hash, loadMode, exitMode] of [
     [ARTEMIS_3179_EXECUTABLE_SHA256, 13, 14],
     [ARTEMIS_3139_EXECUTABLE_SHA256, 13, 14],
     [ARTEMIS_3257_EXECUTABLE_SHA256, 14, 15],
+    [ARTEMIS_3248_EXECUTABLE_SHA256, 14, 15],
   ]) {
     assert.deepEqual(
       [artemisRevision(hash).loadRunMode, artemisRevision(hash).exitRunMode],
