@@ -556,7 +556,7 @@ class Node {
       this.hasCombinator = false;
       this.mstate = null;
       this.states = [];
-      this.ovVisible = false;
+      this.ovVisible = true;
       this.item = null;
       this.shapeInfo = null;
     } else {
