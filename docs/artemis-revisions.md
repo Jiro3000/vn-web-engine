@@ -1125,8 +1125,8 @@ Where it is true, open stores the setter's bold and italic bytes and glyph loads
 flags 6 (`NO_HINTING | RENDER`), calls `FT_GlyphSlot_Embolden` when bold is set, then
 applies `FT_Outline_Transform` with `{0x10000, 0x6000, 0, 0x10000}` when italic is
 set and the slot format is `outl`. The render load has already converted the slot
-to `bits`, so the shear does not change scalable glyphs; `wasm/freetype/bridge.c`
-keeps the same order and format test. Rev.2601 has neither step.
+to `bits`, so the shear does not change scalable glyphs; `src/text/freetype.ts`
+accepts the shear and returns the rendered bitmap unchanged. Rev.2601 has neither step.
 
 | Revision | Open / flag fields             | Glyph         | `FT_GlyphSlot_Embolden` |
 | -------- | ------------------------------ | ------------- | ----------------------- |

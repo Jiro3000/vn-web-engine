@@ -113,3 +113,18 @@ test('Real font worker retains copied input, transfers raster coverage and survi
     service.close();
   }
 });
+
+test('WebAssembly and JavaScript rasterizers return identical glyphs', () => {
+  const faces = [new FreeType(), new FreeType({wasm: false})].map((library) =>
+    library.open(rectangleFont()),
+  );
+  // Fractional 26.6 sizes leave partially covered edge pixels.
+  for (let height = 5 * 64; height <= 80 * 64; height += 157)
+    for (const bold of [false, true]) {
+      const [wasm, javascript] = faces.map((face) =>
+        face.rasterize(65, {bold, size: {type: 3, width: 0, height}}),
+      );
+      assert.deepEqual(wasm, javascript, `height ${height}, bold ${bold}`);
+    }
+  assert.throws(() => faces[0].rasterize(65, {flags: 6 | 8}), /Unsupported FreeType load flags/);
+});
