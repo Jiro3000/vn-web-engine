@@ -959,6 +959,75 @@ test('Artemis anime builds a timed animation layer that draws its current frame 
   }
 });
 
+test('Artemis E-mote layers redraw their player into the layer target once per draw', async () => {
+  let now = 500;
+  const {graphics, layers, prepared, invalidated} = await rasterFixture(undefined, true, {
+    now: () => now,
+  });
+  const advanced = [];
+  const atlas = {type: 'L8', width: 4, height: 4, pixel: {bytes: new Uint8Array(16)}};
+  const item = {
+    blank: false,
+    clipFlags: 0,
+    bm: 0x10,
+    bmParam: 0,
+    grayscaleMode: 0,
+    grayscaleLevel: 0,
+    z: 0,
+    texIndex: 0,
+    file: {sources: new Map([['s', {texture: atlas}]])},
+    attr: 0,
+    left: 0,
+    top: 0,
+    width: 4,
+    height: 4,
+    opa: 255,
+    colors: Uint32Array.of(0x808080ff, 0x808080ff, 0x808080ff, 0x808080ff),
+    grid: {cols: 1, rows: 1, points: Float32Array.of(-2, -1, 2, -1, -2, 1, 2, 1)},
+    stencilType: 0,
+    stencilParent: null,
+    composite: [],
+  };
+  const emote = {
+    width: 4,
+    height: 2,
+    player: {clip: {drawList: [item], smoothing: false}},
+    advance: (time) => advanced.push(time),
+  };
+  try {
+    const actor = graphics.createEmoteLayer(emote);
+    assert.equal(graphics.emoteOf(actor), emote);
+    assert.throws(() => graphics.copyImageLayer(actor), /E-mote layer copy/);
+    assert.ok(layers.attachActor('e', actor));
+    layers.commit();
+    const commands = graphics.drawCommitted(layers.scene).commands;
+    const layer = graphics.image(actor.texture);
+    const kinds = commands.map((c) =>
+      c.kind === 'gpu-target'
+        ? c.surface === layer
+          ? 'layer'
+          : c.surface
+            ? 'surface'
+            : 'screen'
+        : c.kind,
+    );
+    // Atlas decode, the player's draw into the layer, then the layer's own quad.
+    assert.deepEqual(kinds, ['surface', 'triangles', 'layer', 'triangles', 'screen', 'triangles']);
+    assert.equal(commands.at(-1).texture, actor.texture);
+    assert.deepEqual(advanced, [500]);
+    now = 516;
+    assert.equal(graphics.drawCommitted(layers.scene).commands.length, 4);
+    assert.deepEqual(advanced, [500, 516]);
+    assert.ok(prepared.includes(layer));
+    await layers.dispatch(command('lydel', {id: 'e'}));
+    layers.commit();
+    assert.ok(invalidated.includes(layer));
+    assert.throws(() => graphics.image(actor.texture), /released/);
+  } finally {
+    layers.close();
+  }
+});
+
 test('Artemis raster upload refusal preserves the old scene and hidden images retain resource ownership', async () => {
   const {graphics, layers, prepared, invalidated, setRejectUpload} = await rasterFixture();
   try {

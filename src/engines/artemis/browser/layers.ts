@@ -244,7 +244,7 @@ function textSource(
   };
 }
 
-/** The browser layer system: image, group, animation, video and message-layer actors
+/** The browser layer system: image, group, animation, video, E-mote and message-layer actors
  * drawn through the shared raster target. Layer images load through the surface manager
  * so they share its cache and loans. */
 export function createArtemisBrowserLayers(options: ArtemisBrowserLayerOptions): {
@@ -292,6 +292,7 @@ export function createArtemisBrowserLayers(options: ArtemisBrowserLayerOptions):
       graphics!.createTextLayer(textSource(options, message, messageOwner)),
     applyTweenProperties: (id, actor, patch) => graphics!.applyImageProperties(id, actor, patch),
     videoOf: (actor) => graphics!.videoOf(actor),
+    emoteOf: (actor) => graphics!.emoteOf(actor),
     displayOf: (actor) => actor.display,
     layerInfo: (actor) => graphics!.layerInfo(actor),
   });

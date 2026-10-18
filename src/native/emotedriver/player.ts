@@ -15,6 +15,7 @@
  */
 
 import type {EmoteMetadata} from '../../formats/emote/metadata.js';
+import type {EmoteDrawItem} from './clip.js';
 import {
   EmoteEyeControl,
   EmoteEyebrowControl,
@@ -79,6 +80,8 @@ export interface EmoteClip {
   meshDivisionRatio: number;
   /** Device +0x88. */
   smoothing: boolean;
+  /** +0x4b0: the draw list `progress` rebuilds, in node order. */
+  readonly drawList: readonly EmoteDrawItem[];
   /** Any node +0x35 flag. */
   readonly modified: boolean;
   /** 0x18000e6d0 clip part: the layer's world position when it is a plain layer. */

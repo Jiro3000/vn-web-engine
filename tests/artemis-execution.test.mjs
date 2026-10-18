@@ -1398,10 +1398,17 @@ test('Legacy exact hashes retain their LLP64, graphics and font-size policies be
 test('Runtime boot publishes touch registration independently of live contacts for every exact hash', async () => {
   const {openArtemisRuntimeFixture} = await import('./artemis-runtime-fixture.mjs');
   const revisions = await import('../dist/engines/artemis/revision.js');
-  const hashes = Object.entries(revisions)
+  const all = Object.entries(revisions)
     .filter(([name]) => /^ARTEMIS_.*(?:EXECUTABLE|RESOURCE_VARIANT)_SHA256$/.test(name))
     .map(([, hash]) => hash);
-  assert.equal(hashes.length, 13);
+  assert.equal(all.length, 14);
+  // E-mote revisions open only with their exact emotedriver.dll, which is game data.
+  const hashes = all.filter((hash) => !revisions.artemisRevision(hash).emote);
+  for (const hash of all.filter((hash) => revisions.artemisRevision(hash).emote))
+    await assert.rejects(
+      openArtemisRuntimeFixture({'system/first.iet': '[stop]'}, {hash}),
+      /Missing emotedriver\.dll/,
+    );
   for (const hash of hashes) {
     for (const device of [
       null,
@@ -4087,7 +4094,9 @@ test('Forwarded Lua ruby aliases preserve resolved ruby faces in every runtime f
   const revisions = await import('../dist/engines/artemis/revision.js');
   const hashes = Object.entries(revisions)
     .filter(([name]) => /^ARTEMIS_.*(?:EXECUTABLE|RESOURCE_VARIANT)_SHA256$/.test(name))
-    .map(([, hash]) => hash);
+    .map(([, hash]) => hash)
+    // E-mote revisions open only with their exact emotedriver.dll.
+    .filter((hash) => !revisions.artemisRevision(hash).emote);
   for (const hash of hashes) {
     const fixture = await openArtemisRuntimeFixture(
       {
@@ -6632,7 +6641,9 @@ test('PCM EOF waits for script and frame resource loads before entering its scop
   const {encodeWav} = await import('../dist/audio/pcm.js');
   const hashes = Object.entries(revisions)
     .filter(([name]) => /^ARTEMIS_.*(?:EXECUTABLE|RESOURCE_VARIANT)_SHA256$/.test(name))
-    .map(([, hash]) => hash);
+    .map(([, hash]) => hash)
+    // E-mote revisions open only with their exact emotedriver.dll.
+    .filter((hash) => !revisions.artemisRevision(hash).emote);
   const pcm = encodeWav({sampleRate: 48000, sampleCount: 48, channels: [new Float32Array(48)]});
   const input = {sample: {down: new Set(), wheel: [], pointerInside: true, foreground: true}};
   for (const hash of hashes) {

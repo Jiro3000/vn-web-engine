@@ -26,6 +26,10 @@ Unknown executable hashes are refused.
   voices. It covers boot, the prologue with its fullscreen movies, the title, scenario
   text with click-waits, choices through layer events, and a scenario save/load round
   trip. It displays no game assets and opens no audio device.
+- E-mote layers (Rev.3258): the E-mote 3.9.8 driver port (`src/native/emotedriver`)
+  plays the character models and renders their draw lists into the layer's GPU target
+  with the native ordering, alpha masks and destination blends. Checked on synthetic
+  textures against CPU references; game frames were not viewed.
 - Fullscreen movies: ASF files (WMV3 or WVC1 with WMA Standard, Pro or Lossless audio) decode
   in the movie worker with the Windows Media wasm decoder and play on the audio clock
   over a canvas; other containers play in a `<video>` element.

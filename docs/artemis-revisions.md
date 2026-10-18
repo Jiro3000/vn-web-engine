@@ -1167,6 +1167,47 @@ nonvisual route pass; game images and frames were not viewed.
 The runtime build passes the full suite of 2,093 tests with 2,056 passes and exactly
 the same 37 named baseline failures, with no skips or cancellations.
 
+## Rev.3258
+
+Amakano 3 executable SHA-256
+`5132eed8c2e4a7d0ec4d853cd2b8247f3a0641c4a3825a8210fd435530e7d716`
+(`ARTEMIS_3258_EXECUTABLE_SHA256`) is an unwrapped PE64 image, 5,170,176 bytes, image
+base `0x140000000`, entry `0x14025b15c`, PE timestamp `0x6838299c`. Boot `0x1400dc4b0`
+publishes 3258 and `Thu May 29 18:30:58 2025`. Only this exact identity selects its
+profile, which reuses every Rev.3257 field and adds `emote`.
+
+The new code is one block `0x1400196c0`–`0x14002e3e4` (285 functions): the luabind
+glue of `IEmotePlayer` (class registration `0x14001b070`, method thunks from
+`0x14002e0f4`), CEmoteLayer (load `0x14001a5b0`, draw `0x14001adf0`, copy
+`0x14001a4f0`) and its surface. The Lua `engine` methods `createEmoteLayer`
+`0x140151480`, `getEmoteLayer` `0x140152960` and `getEmoteVersion` `0x1401535d0` are
+registered in `0x140143b30`; `var system=is_emote` is answered in `0x140108a20`.
+Outside the block the instruction-hash diff pairs 22 changed Rev.3257 regions, among
+them the boot record, the `system` variable query, the Lua `engine` registration and the
+layer allocation and cast functions (`0x140156370`, `0x1401566e0`) that gain the
+CEmoteLayer cases.
+
+The executable imports `emotedriver.dll`. The driver is selected by its exact hash
+`80d28bd088dda8e97c7c47a9c664e55159f70505b0f9fde3158d8ce2a3e1e051` (x64 D3D11,
+SDK 3.9.8, 33,446,856 bytes); the runtime refuses to open without it. Its port is
+`src/native/emotedriver` (see its README).
+
+Validation includes one complete nonvisual `tou` heroine route from native title Start:
+13,279 delivered probe clicks, two name dialogs answered with their default text, and
+five first-option choices (`1.80.120.1.0.0.0` twice, then `500.zch.4.0` three
+times). The route reaches the `tou` staff roll (`staff_tx_tou_*` images) and returns
+to the title menu (`500.d`). 2,647 E-mote layers are created; the run plays the three
+WMV movies and 95 Theora video layers. The probe advances every retained E-mote player
+on each draw. No Lua/include/unknown-tag/tag errors, layer failures, refusals or
+HTTP waits occur; 777 surface preloads decode and offline PCM rendering produces
+647,177,856 frames. Sampled Lua peak is 8,640 KiB. This is an automated nonvisual route
+pass; game images and frames were not viewed.
+
+The renderer was checked separately without displaying game assets: all 132 character
+models (`image/fg/*.psb`) play 240 frames each through the player and `EmoteRenderer`
+without errors, and the WebGL program variants were compared against CPU references on
+synthetic textures.
+
 ## How the revisions were compared
 
 Both executables were analyzed read-only in Ghidra (`scripts/ArtemisFunctionHashes.java`,

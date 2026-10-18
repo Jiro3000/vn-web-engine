@@ -202,6 +202,10 @@ Rev.3257 adds a Media Foundation session; the browser movie host serves both. Th
 installation-relative `SAVEPATH = savedata` maps to the player's save storage. One
 full 莉々子 route through staffroll, epilogue, clear record and reset/title passes in
 the nonvisual probe; see `docs/artemis-revisions.md`.
+Rev.3258 (Amakano 3) has its own exact-hash profile: the Rev.3257 fields plus E-mote
+layers over `emotedriver.dll` 3.9.8 (see [E-mote layers](#e-mote-layers)). Its boot
+record differs; the executable imports the DLL, so the runtime refuses to open without
+it and selects the driver by the DLL's exact hash.
 
 Exact shader source hashes `271173e7…d18d6`, `3a5b63e5…604b`, `07f6d756…763d`
 and `db1b5dc8…3ac9` select the perspective presets. They warp one texture coordinate
@@ -1423,6 +1427,31 @@ delaymargin skipping, looping, the open
 order and errors, the wait, the fullscreen tag and frame branch, and the ASF reader.
 `tests/asf-windows-media.test.mjs` covers the ASF demuxer, the preroll decoding order and
 the decoder.
+
+## E-mote layers
+
+Rev.3258 adds the Lua `engine` methods `getEmoteVersion` (0x1401535d0),
+`createEmoteLayer` (0x140151480) and `getEmoteLayer` (0x140152960), the `IEmotePlayer`
+class (0x14001b070) and `var system=is_emote` (0x140108a20). The player itself is the
+shared E-mote driver port in `src/native/emotedriver` (see its README).
+
+- `createEmoteLayer{id=, files={...}, width=, height=, progress=}` reads the motion files
+  (the Lua call suspends while they load and repeats once they are read), builds one
+  player over all of them and inserts a CEmoteLayer at `id`, replacing the layer there.
+  A missing file reports the native error and returns nil. A zero width or height takes
+  the rectangle of the `boundsLeft`/`boundsTop`/`boundsRight`/`boundsBottom` chara
+  profiles (`artemisEmoteLayerSize`), or the stage size when it is empty.
+- `getEmoteLayer(id)` returns the player of the current actor at `id`; the luabind
+  wrapper (`emote-lua.ts`) exposes the `IEmotePlayer` methods with the native argument
+  conversions.
+- Drawing (`ArtemisEmoteLayer`, CEmoteLayer draw 0x14001adf0): each draw that reaches the
+  layer advances the player by the elapsed clock time (at most 1000 ms, as 60 fps frames;
+  `progress(0)` on the first draw) when `progress` is set, then renders the clip's draw
+  list into the layer's render target, cleared to transparent black. `image-graphics.ts`
+  holds the layer as an image actor whose texture is that target; the E-mote commands of a
+  draw list precede its other targets, and each layer renders once per draw list.
+- A CEmoteLayer copy clones its player natively (0x14001a4f0); that clone is not modeled
+  and a copy is refused.
 
 ## Nonvisual resource geometry probe
 
