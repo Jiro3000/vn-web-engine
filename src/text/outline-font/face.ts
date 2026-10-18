@@ -7,6 +7,7 @@ import {CffOutlines} from './cff.js';
 import {divFix, mulDiv, mulFix, pixCeil, pixFloor, pixRound} from './fixed.js';
 import {Outline} from './outline.js';
 import {JsOutlineRasterizer, type OutlineRasterizer} from './raster.js';
+import {OutlineRasterWasm} from './raster-wasm.js';
 import {FontError, FontErrorCode, Sfnt, tag} from './sfnt.js';
 import {TrueTypeOutlines} from './truetype.js';
 
@@ -71,8 +72,10 @@ export class OutlineFace {
   private readonly outline = new Outline();
   private readonly raster: OutlineRasterizer;
 
-  constructor(data: Uint8Array, faceIndex = 0) {
-    this.raster = new JsOutlineRasterizer();
+  /** `wasm: false` selects the JavaScript rasterizer; output is identical. */
+  constructor(data: Uint8Array, faceIndex = 0, options: {wasm?: boolean} = {}) {
+    this.raster =
+      (options.wasm === false ? null : OutlineRasterWasm.create()) ?? new JsOutlineRasterizer();
     const sfnt = (this.sfnt = new Sfnt(data, faceIndex));
     const format = sfnt.formatTag;
     if (format === 0x00010000 || format === 0x00020000 || format === tag('true')) {
@@ -86,6 +89,11 @@ export class OutlineFace {
     this.unitsPerEm = sfnt.unitsPerEm;
     this.faceCount = sfnt.faceCount;
     this.charIndex = defaultCharmap(sfnt.bytes, sfnt.cmap);
+  }
+
+  /** Whether glyphs rasterize in WebAssembly. */
+  get accelerated(): boolean {
+    return this.raster instanceof OutlineRasterWasm;
   }
 
   get metrics(): FaceMetrics {
