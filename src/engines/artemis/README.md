@@ -221,6 +221,11 @@ for RGB, adds their alpha to the retained center alpha, then applies layer alpha
 The two native constant slots are diagonal offset and its size multiplier.
 Hashes `b993e902…38a2` and `613c946b…3122` select the corresponding two-sample
 horizontal and vertical filters, preserving the same center-alpha addition and layout.
+The kawase passes `91b27ada…7cb1` (`blur_k`), `d26e58ce…849b` (`blur_kx`) and
+`ff65397a…4fe4` (`blur_ky`) use the same sample offsets but start from zero, so alpha is
+averaged too, and layer alpha scales only the summed alpha. Their premultiplied sources
+`eb511278…efef`, `6caab0c6…c757` and `bd8aa1e5…ad5c` multiply every sample, colour
+included, by layer alpha as it is accumulated (`*_premultiplied` kinds).
 Hash `c4bf785c…e20a` selects a background-noise displacement preset. It reads the captured
 background through native UV2, adds the same sine/frac offset to both coordinates with
 fixed zero time, and scales background alpha. Its single constant is offset amplitude.

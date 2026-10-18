@@ -37,6 +37,11 @@ export const ARTEMIS_3248_EXECUTABLE_SHA256 =
  * constants, data and unwind sections to the original Rev.3257; only .rsrc differs. */
 export const ARTEMIS_3257_WRAPPED_RESOURCE_VARIANT_SHA256 =
   '116507c5967b82f7816b69aeeb1553b47f2bfd2b91aac6dc02eb9371497d0c66';
+/** Resource variant. Code, constants, data, unwind sections and the PE timestamp are
+ * byte-identical to ARTEMIS_3257_EXECUTABLE_SHA256; only .rsrc (and the header fields that
+ * size it) differ. Every Rev.3257 address applies. */
+export const ARTEMIS_3257_RESOURCE_VARIANT_SHA256 =
+  'a6fe69476863660d2cea9dfa7d93d78484f8ac2ab8a9bfd0f3fff587ca903aa4';
 /** Rev.3258 adds the E-mote layer (emotedriver.dll) to the Rev.3257 operations. */
 export const ARTEMIS_3258_EXECUTABLE_SHA256 =
   '5132eed8c2e4a7d0ec4d853cd2b8247f3a0641c4a3825a8210fd435530e7d716';
@@ -418,6 +423,7 @@ const revisions: ReadonlyMap<string, ArtemisRevision> = new Map(
     {...rev3139, executableSha256: ARTEMIS_3139_RESOURCE_VARIANT_SHA256},
     rev3257,
     {...rev3257, executableSha256: ARTEMIS_3257_WRAPPED_RESOURCE_VARIANT_SHA256},
+    {...rev3257, executableSha256: ARTEMIS_3257_RESOURCE_VARIANT_SHA256},
     // Boot 0x1400c7d80 publishes 3248 and its date. Screenshot 0x1400ee310, sound loaders
     // 0x140196b10/0x140196a00, font open 0x140171f70 and glyph 0x140172670 are
     // instruction-identical to the Rev.3257 functions cited above.

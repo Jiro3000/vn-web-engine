@@ -66,7 +66,7 @@ export function createArtemisShaderFixture(hash, readFile) {
                           alpha: 0.5,
                           size: 0.02,
                         })
-                      : /^blur_(diag|pair_[hv]|k[xy]?)$/.test(program.kind)
+                      : /^blur_(diag|pair_[hv]|k[xy]?(?:_premultiplied)?)$/.test(program.kind)
                         ? shader.shade((u, v) => [u, v, 0.6, 0.8], 0.5, 0.25, {
                             alpha: 0.5,
                             offset: 0.01,

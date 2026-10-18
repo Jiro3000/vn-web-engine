@@ -90,6 +90,9 @@ export function createArtemisDrawShaderPreset(
     case 'blur_k':
     case 'blur_kx':
     case 'blur_ky':
+    case 'blur_k_premultiplied':
+    case 'blur_kx_premultiplied':
+    case 'blur_ky_premultiplied':
       scalar('offset', 'uOffset');
       scalar('size', 'uSize');
       break;

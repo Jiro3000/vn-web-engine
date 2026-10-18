@@ -14,6 +14,30 @@ only `.rsrc` and the header fields that size it (SizeOfInitializedData, SizeOfIm
 CheckSum, the resource directory size and the `.rsrc` section header) differ. It shares
 every Rev.3139 address and field below.
 
+## Rev.3257 resource variant
+
+Aibeya 3 executable SHA-256
+`a6fe69476863660d2cea9dfa7d93d78484f8ac2ab8a9bfd0f3fff587ca903aa4`
+(`ARTEMIS_3257_RESOURCE_VARIANT_SHA256`), 4,877,312 bytes, has the PE timestamp
+`0x6800fb55` and byte-identical `.text`, `.rdata`, `.data`, `.pdata`, second `.text` and
+`_RDATA` sections at the same RVAs as the Rev.3257 executable `7c604c92…135a08a`. Only
+`.rsrc` and the header fields that size it (SizeOfInitializedData, SizeOfImage,
+CheckSum, the resource directory size and the `.rsrc` section header) differ, and the
+certificate table entry is empty (the variant carries no Authenticode signature). It
+shares every Rev.3257 address and field.
+
+Validation includes one complete nonvisual route from native title Start (the story is
+linear, without choices or name dialogs): 5,726 delivered probe clicks through
+`aibeya03_01-1` … `aibeya03_10-3`, the staff roll (`staff/*`), `aibeya03_11_ed` with
+`g.end` and `g.afteropen` set, and the return to the title menu (`500.d`). The run
+compiles 21 named shaders, among them the premultiplied kawase blurs, and plays four
+Theora video layers. No Lua/include/unknown-tag/tag errors, layer failures, refusals or
+HTTP waits occur; 1,283 surface preloads decode without failures and offline PCM
+rendering produces 375,434,544 frames. Sampled Lua peak is 4,513 KiB. The bundled
+`iarsys64.dll` (`9eae6425…0337`) is not loaded by the browser host; `callnative` returns
+empty results, as for the other Rev.3257 installations. This is an automated
+nonvisual route pass; game images and frames were not viewed.
+
 ## Wrapped Rev.3257 resource variant
 
 Ryuusei World Actor: Gaslight Bullet root executable SHA-256
@@ -29,7 +53,7 @@ Rev.3257, `Thu Apr 17 21:58:09 2025`, support 1103, save version 1003 and LLP64.
 The existing Rev.3257 address map therefore applies to this embedded engine.
 The DLL is a separate set of window/process helpers; it is not executed.
 
-Both exact Rev.3257 identities support the native painted-font cache. Registration
+The three exact Rev.3257 identities support the native painted-font cache. Registration
 `0x140130100` binds `restoreFontCache` to `0x140139640`, which invokes
 `0x1400092e0`. After the UTF-8 face, each index record has eight independent
 32-bit fields: size, shadow, outline, three colors, style and character. An atlas

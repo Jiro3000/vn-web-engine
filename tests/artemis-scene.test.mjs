@@ -6376,6 +6376,7 @@ test('Rev.3257 restored atlases preserve independent style/codepoint, 32-bit siz
   for (const hash of [
     revisions.ARTEMIS_3257_EXECUTABLE_SHA256,
     revisions.ARTEMIS_3257_WRAPPED_RESOURCE_VARIANT_SHA256,
+    revisions.ARTEMIS_3257_RESOURCE_VARIANT_SHA256,
   ]) {
     const files = fontCacheFixture({
       layout: 'expanded-metrics',
@@ -6457,6 +6458,7 @@ test('Rev.3257 atlas hits reach normal/ruby layout while misses retain full-size
   for (const hash of [
     revisions.ARTEMIS_3257_EXECUTABLE_SHA256,
     revisions.ARTEMIS_3257_WRAPPED_RESOURCE_VARIANT_SHA256,
+    revisions.ARTEMIS_3257_RESOURCE_VARIANT_SHA256,
   ]) {
     const files = {
       ...fontCacheFixture({layout: 'expanded-metrics', size: 300}),

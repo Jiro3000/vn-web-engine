@@ -266,6 +266,9 @@ export async function compileArtemisShaderPreset(
     '91b27ada3f68ff604b7aad330ac03d91f20fafff36e63bf0111fd0f8fb977cb1': 'blur_k',
     d26e58ceae414ca0b8df667eea57ccd099096c0e64d55ef37ce215a7971d849b: 'blur_kx',
     ff65397a10c8423873969453701754d6bbba5ebc441dfb8ad85e097d66c94fe4: 'blur_ky',
+    eb5112786c30de01300e5623be2261daaacb9f12eedc3ee8fefb70020021efef: 'blur_k_premultiplied',
+    '6caab0c658ae5139d4a7b1ebcbba09ab3304784aa05d65869f80eb08a119c757': 'blur_kx_premultiplied',
+    bd8aa1e5b8f8e8dc552572915766ef8b19a58a6760d9db84c5c50b691712ad5c: 'blur_ky_premultiplied',
   };
   const offsetBlur = offsetBlurs[signature];
   if (offsetBlur)
@@ -409,6 +412,9 @@ export function artemisShaderFragmentSource(kind: ArtemisShaderPresetKind): stri
     case 'blur_k':
     case 'blur_kx':
     case 'blur_ky':
+    case 'blur_k_premultiplied':
+    case 'blur_kx_premultiplied':
+    case 'blur_ky_premultiplied':
       return artemisOffsetBlurFragmentSource(kind);
     case 'sepia':
     case 'sepia2':

@@ -1377,6 +1377,7 @@ test('Legacy exact hashes retain their LLP64, graphics and font-size policies be
     [revisions.ARTEMIS_3139_RESOURCE_VARIANT_SHA256, 8],
     [revisions.ARTEMIS_3257_EXECUTABLE_SHA256, 32],
     [revisions.ARTEMIS_3257_WRAPPED_RESOURCE_VARIANT_SHA256, 32],
+    [revisions.ARTEMIS_3257_RESOURCE_VARIANT_SHA256, 32],
     [revisions.ARTEMIS_3248_EXECUTABLE_SHA256, 32],
   ]) {
     const variables = new ArtemisVariables({
@@ -1401,7 +1402,7 @@ test('Runtime boot publishes touch registration independently of live contacts f
   const all = Object.entries(revisions)
     .filter(([name]) => /^ARTEMIS_.*(?:EXECUTABLE|RESOURCE_VARIANT)_SHA256$/.test(name))
     .map(([, hash]) => hash);
-  assert.equal(all.length, 14);
+  assert.equal(all.length, 15);
   // E-mote revisions open only with their exact emotedriver.dll, which is game data.
   const hashes = all.filter((hash) => !revisions.artemisRevision(hash).emote);
   for (const hash of all.filter((hash) => revisions.artemisRevision(hash).emote))
@@ -2016,6 +2017,7 @@ test('Exact-hash exit saves preserve absent or restored fullscreen status for th
     revision.ARTEMIS_3139_RESOURCE_VARIANT_SHA256,
     revision.ARTEMIS_3257_EXECUTABLE_SHA256,
     revision.ARTEMIS_3257_WRAPPED_RESOURCE_VARIANT_SHA256,
+    revision.ARTEMIS_3257_RESOURCE_VARIANT_SHA256,
     revision.ARTEMIS_3248_EXECUTABLE_SHA256,
   ];
   const key = 's.status.fullscreenatexit';
@@ -6224,6 +6226,7 @@ test('Exact revision layer dispatch ignores absent shader properties and preserv
     revision.ARTEMIS_3139_RESOURCE_VARIANT_SHA256,
     revision.ARTEMIS_3257_EXECUTABLE_SHA256,
     revision.ARTEMIS_3257_WRAPPED_RESOURCE_VARIANT_SHA256,
+    revision.ARTEMIS_3257_RESOURCE_VARIANT_SHA256,
     revision.ARTEMIS_3248_EXECUTABLE_SHA256,
   ];
   const tag = (name, args) => ({name, args: new Map(Object.entries(args))});
@@ -8860,6 +8863,23 @@ test('Diagonal blur averages four RGB samples and retains the center alpha befor
     ].slice(0, 2),
     [0.25, 2],
   );
+});
+
+test('Premultiplied kawase blurs scale each accumulated sample, colour included, by alpha', async () => {
+  const {artemisDiagonalBlurShade, artemisOffsetBlurFragmentSource} =
+    await import('../dist/engines/artemis/blur-shader.js');
+  const sample = (x, y) => [x, y, 0.6, 0.8];
+  const p = {alpha: 0.5, offset: 0.25, size: 0.5};
+  for (const base of ['blur_k', 'blur_kx', 'blur_ky']) {
+    const plain = artemisDiagonalBlurShade(sample, 0.5, 0.25, p, base);
+    const scaled = artemisDiagonalBlurShade(sample, 0.5, 0.25, p, `${base}_premultiplied`);
+    for (let i = 0; i < 3; i++) assert.ok(Math.abs(scaled[i] - plain[i] * 0.5) < 1e-7, base);
+    assert.ok(Math.abs(scaled[3] - plain[3]) < 1e-7, base);
+    const source = artemisOffsetBlurFragmentSource(`${base}_premultiplied`);
+    assert.match(source, /\*uAlpha;/);
+    assert.doesNotMatch(source, /c\.a\*=uAlpha/);
+    assert.match(artemisOffsetBlurFragmentSource(base), /c\.a\*=uAlpha/);
+  }
 });
 
 test('Perspective shader preserves identity, warps UVs, clips X and fades the native Y edges', async () => {

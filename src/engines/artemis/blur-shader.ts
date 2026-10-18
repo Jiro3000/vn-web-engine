@@ -8,7 +8,8 @@ export interface ArtemisDiagonalBlurUniforms {
 /**
  * Offset-sample blurs. `blur_diag`, `blur_pair_h` and `blur_pair_v` keep the center sample's
  * alpha; the dx11 kawase passes `blur_k`, `blur_kx` and `blur_ky` clear `fore` first and so
- * average alpha too.
+ * average alpha too. The `_premultiplied` kawase sources scale every sample, colour included,
+ * by `alpha` as it is accumulated instead of scaling only the summed alpha.
  */
 export const ARTEMIS_OFFSET_BLUR_KINDS = [
   'blur_diag',
@@ -17,17 +18,23 @@ export const ARTEMIS_OFFSET_BLUR_KINDS = [
   'blur_k',
   'blur_kx',
   'blur_ky',
+  'blur_k_premultiplied',
+  'blur_kx_premultiplied',
+  'blur_ky_premultiplied',
 ] as const;
 export type ArtemisOffsetBlurKind = (typeof ARTEMIS_OFFSET_BLUR_KINDS)[number];
 export function isArtemisOffsetBlurKind(kind: string): kind is ArtemisOffsetBlurKind {
   return (ARTEMIS_OFFSET_BLUR_KINDS as readonly string[]).includes(kind);
 }
-const offsetBlurAxis = (kind: ArtemisOffsetBlurKind): 'diag' | 'h' | 'v' =>
-  kind === 'blur_diag' || kind === 'blur_k'
+const premultiplied = (kind: ArtemisOffsetBlurKind): boolean => kind.endsWith('_premultiplied');
+const offsetBlurAxis = (kind: ArtemisOffsetBlurKind): 'diag' | 'h' | 'v' => {
+  const base = kind.replace('_premultiplied', '');
+  return base === 'blur_diag' || base === 'blur_k'
     ? 'diag'
-    : kind === 'blur_pair_h' || kind === 'blur_kx'
+    : base === 'blur_pair_h' || base === 'blur_kx'
       ? 'h'
       : 'v';
+};
 const kawase = (kind: ArtemisOffsetBlurKind): boolean => kind.startsWith('blur_k');
 export function artemisDiagonalBlurShade(
   sample: ArtemisShaderSample,
@@ -60,15 +67,21 @@ export function artemisDiagonalBlurShade(
             [0, -1],
           ];
   const weight = axis === 'diag' ? 0.25 : 0.5;
+  const scaled = premultiplied(kind);
   for (const [sx, sy] of offsets) {
     const pixel = sample(
       Math.fround(Math.fround(u) + Math.fround(sx * distance)),
       Math.fround(Math.fround(v) + Math.fround(sy * distance)),
     );
-    for (let i = 0; i < 4; i++)
-      color[i] = Math.fround(color[i]! + Math.fround(Math.fround(pixel[i]!) * weight));
+    for (let i = 0; i < 4; i++) {
+      // sample * weight * mask_a * alpha with mask_a = 1.0.
+      const term = Math.fround(Math.fround(pixel[i]!) * weight);
+      color[i] = Math.fround(
+        color[i]! + (scaled ? Math.fround(term * Math.fround(p.alpha)) : term),
+      );
+    }
   }
-  color[3] = Math.fround(color[3]! * Math.fround(p.alpha));
+  if (!scaled) color[3] = Math.fround(color[3]! * Math.fround(p.alpha));
   return color as [number, number, number, number];
 }
 export function artemisOffsetBlurFragmentSource(kind: ArtemisOffsetBlurKind): string {
@@ -90,8 +103,8 @@ out vec4 outColor;
 void main(){
  vec4 c=${kawase(kind) ? 'vec4(0.0)' : 'texture(uFore,vUv);c.rgb=vec3(0.0)'};
  float d=uOffset*uSize;
- ${samples.map((uv) => `c+=texture(uFore,vUv+vec2(${uv}))*${axis === 'diag' ? '0.25' : '0.5'};`).join('\n ')}
- c.a*=uAlpha;outColor=c;
+ ${samples.map((uv) => `c+=texture(uFore,vUv+vec2(${uv}))*${axis === 'diag' ? '0.25' : '0.5'}${premultiplied(kind) ? '*uAlpha' : ''};`).join('\n ')}
+ ${premultiplied(kind) ? '' : 'c.a*=uAlpha;'}outColor=c;
 }`;
 }
 export const ARTEMIS_DIAGONAL_BLUR_FRAGMENT_SOURCE = artemisOffsetBlurFragmentSource('blur_diag');
