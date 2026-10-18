@@ -97,4 +97,4 @@ This is an unofficial compatibility and preservation project, unaffiliated with 
 The bundled Vorbis decoder's dependency attribution and notices are in [third_party/ogg-vorbis](third_party/ogg-vorbis/README.md); the build also distributes them with the decoder.
 The shared MPEG-1 Layer II decoder's source attribution and MIT license are in [src/formats/mp2](src/formats/mp2/README.md).
 
-Portions of this software are copyright © 2011 The FreeType Project (www.freetype.org). All rights reserved. See [FreeType attribution](third_party/freetype/README.md).
+Portions of this software are copyright © 2011 The FreeType Project (www.freetype.org). All rights reserved. The font rasterizer in [src/text/outline-font](src/text/outline-font/README.md) is derived from FreeType 2.4.8 and distributed under the FreeType License.
