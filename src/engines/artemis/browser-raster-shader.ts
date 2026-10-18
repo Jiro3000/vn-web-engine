@@ -19,6 +19,7 @@ import {ARTEMIS_RADIAL_FRAGMENT_SOURCE, type ArtemisRadialUniforms} from './radi
 import {
   artemisBlurFragmentSource,
   artemisOffsetBlurFragmentSource,
+  isArtemisOffsetBlurKind,
   type ArtemisOffsetBlurKind,
   type ArtemisDiagonalBlurUniforms,
   type ArtemisBlurKind,
@@ -100,8 +101,8 @@ export class ArtemisBrowserRasterShader {
                 ? ARTEMIS_SCREEN_FRAGMENT_SOURCE
                 : kind === 'blur_h' || kind === 'blur_v'
                   ? artemisBlurFragmentSource(kind)
-                  : ['blur_diag', 'blur_pair_h', 'blur_pair_v'].includes(kind)
-                    ? artemisOffsetBlurFragmentSource(kind as ArtemisOffsetBlurKind)
+                  : isArtemisOffsetBlurKind(kind)
+                    ? artemisOffsetBlurFragmentSource(kind)
                     : kind === 'radial'
                       ? ARTEMIS_RADIAL_FRAGMENT_SOURCE
                       : kind === 'mosaic'
@@ -330,7 +331,7 @@ export class ArtemisBrowserRasterShader {
       gl.uniform1f(gl.getUniformLocation(this.program, 'uSize'), m.size);
       gl.uniform1f(gl.getUniformLocation(this.program, 'uRatio'), m.ratio);
     }
-    if (['blur_diag', 'blur_pair_h', 'blur_pair_v'].includes(this.kind)) {
+    if (isArtemisOffsetBlurKind(this.kind)) {
       const diagonal = p as ArtemisDiagonalBlurUniforms;
       if (![diagonal.offset, diagonal.size].every(Number.isFinite))
         throw Error('Missing diagonal blur uniforms');

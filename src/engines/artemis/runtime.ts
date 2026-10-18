@@ -49,7 +49,12 @@ import {ArtemisKeyBindings} from './key-bindings.js';
 import type {ArtemisLayerEventSink, ArtemisLayerEventType} from './layer-events.js';
 import type {ArtemisTweenRegistry} from './tween.js';
 import {ArtemisLoad} from './load.js';
-import {ArtemisLua, artemisEventFilterResult, type ArtemisLuaCall} from './lua.js';
+import {
+  ArtemisLua,
+  artemisEventFilterResult,
+  type ArtemisLuaCall,
+  type ArtemisLuaEmoteHost,
+} from './lua.js';
 import type {LuaThreadResult, LuaValue} from '../../core/lua51/runtime.js';
 import {ArtemisMessageLayers, ArtemisMessageSelection} from './message-layers.js';
 import {ArtemisModes} from './modes.js';
@@ -99,6 +104,14 @@ import type {ArtemisTextInsertion} from './text-insertion.js';
 import {ArtemisTimedWait, type ArtemisWaitFlags} from './wait.js';
 import {ArtemisInput, type ArtemisInputSample} from './input.js';
 import {ArtemisVariables} from './variables.js';
+import {ArtemisEmoteLayer, artemisEmoteLayerSize} from './emote-layer.js';
+import {
+  EmoteDevice,
+  emoteDriverProfile,
+  type EmoteDriverProfile,
+} from '../../native/emotedriver/driver.js';
+import type {EmoteModel} from '../../formats/emote/model.js';
+import {sha256} from '../../core/sha256.js';
 
 /** Font-stack frame: attribute overrides over the 0x140193720 defaults and the overflow
  * policy of the frame's `font` tag. */
@@ -137,6 +150,9 @@ export interface ArtemisRuntimeLayers extends ArtemisLayerTagOwner {
   readonly tweenSyncPending: boolean;
   /** Steps every registered tween and video layer to `now`. */
   tickTweens(now: number): void;
+  /** Rev.3258 E-mote layers (`ArtemisLayerOwner.createEmoteLayer`/`emoteLayer`). */
+  createEmoteLayer?(id: string, emote: ArtemisEmoteLayer): void;
+  emoteLayer?(id: string): ArtemisEmoteLayer | null | undefined;
   /** Runs the pending transition tween from `start` to its end; returns the end tick. */
   finishTransition(start: number): number;
   /** Steps the pending transition tween to `now`. */
@@ -434,7 +450,25 @@ export class ArtemisRuntime {
         }
       }
     const saves = await ArtemisSaveDirectory.open(services.storage);
-    return new ArtemisRuntime(services, readSystemIni(iniBytes), prepared, plain, bytes, saves);
+    // The executable imports emotedriver.dll; its exact build selects the driver profile.
+    let emoteDriver: EmoteDriverProfile | null = null;
+    if (artemisRevision(services.executableSha256).emote) {
+      const dll = await files.read('emotedriver.dll');
+      if (dll === null) throw new Error('Missing emotedriver.dll');
+      const digest = await sha256(dll);
+      emoteDriver = emoteDriverProfile(
+        [...digest].map((byte) => byte.toString(16).padStart(2, '0')).join(''),
+      );
+    }
+    return new ArtemisRuntime(
+      services,
+      readSystemIni(iniBytes),
+      prepared,
+      plain,
+      bytes,
+      saves,
+      emoteDriver,
+    );
   }
 
   private constructor(
@@ -444,6 +478,7 @@ export class ArtemisRuntime {
     plainFiles: ReadonlyMap<string, Uint8Array>,
     readonly preparedBytes: number,
     private readonly saves: ArtemisSaveDirectory,
+    emoteDriver: EmoteDriverProfile | null,
   ) {
     const hash = services.executableSha256,
       {files, sound, glyphs} = services,
@@ -1148,6 +1183,52 @@ export class ArtemisRuntime {
     };
     const random = new ArtemisRandom(hash, services.randomSeed);
     const surfaces = services.surfaces;
+    // createEmoteLayer: motion files not yet read suspend the Lua call, which repeats after
+    // they are read; models parse at the repeated call.
+    const emoteDevice = emoteDriver && new EmoteDevice(emoteDriver, services.randomSeed);
+    const emoteBytes = new Map<string, Uint8Array>();
+    const emote: ArtemisLuaEmoteHost | null = emoteDevice && {
+      version: `${emoteDevice.profile.sdkVersion}\n${emoteDevice.profile.buildDateTime}`,
+      createLayer: (request) => {
+        const layers = this.layers;
+        if (!layers.createEmoteLayer) throw Error('Unsupported Artemis E-mote layer owner');
+        const models: EmoteModel[] = [],
+          reads: Promise<void>[] = [];
+        for (const file of request.files) {
+          const resolved = files.resolvePath(file);
+          const model = emoteDevice.cachedModel(resolved);
+          const bytes = emoteBytes.get(resolved);
+          if (model) models.push(model);
+          else if (bytes) {
+            emoteBytes.delete(resolved);
+            models.push(emoteDevice.loadModel(resolved, bytes));
+          } else if (!files.paths.has(resolved)) return 'missing';
+          else
+            reads.push(
+              files.read(file).then((data) => {
+                if (data === null) throw Error('Artemis E-mote file disappeared: ' + file);
+                emoteBytes.set(resolved, data);
+              }),
+            );
+        }
+        if (reads.length) {
+          suspend(Promise.all(reads));
+          return 'suspended';
+        }
+        const player = emoteDevice.createPlayer(models);
+        const size = artemisEmoteLayerSize(player, request.width, request.height, {width, height});
+        layers.createEmoteLayer(
+          request.id,
+          new ArtemisEmoteLayer(player, size.width, size.height, request.progress),
+        );
+        return player;
+      },
+      layer: (id) => {
+        if (!this.layers.emoteLayer) throw Error('Unsupported Artemis E-mote layer owner');
+        const layer = this.layers.emoteLayer(id);
+        return layer === undefined ? 'not-found' : layer === null ? 'not-emote' : layer.player;
+      },
+    };
     lua = this.lua = new ArtemisLua({
       debugMode: () => scenarioScalars.debugMode,
       ...(services.glyphs.restoreFontCache
@@ -1205,6 +1286,7 @@ export class ArtemisRuntime {
         return 'suspended';
       },
       reportError: services.reportError,
+      ...(emote ? {emote} : {}),
       fileExists: (path) => {
         const name = this.saveFileName(path);
         return name === undefined ? files.paths.has(files.resolvePath(path)) : this.saves.has(name);

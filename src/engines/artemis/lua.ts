@@ -16,6 +16,28 @@ import {windowsTextFileBytes} from '../../platform/windows-text-file.js';
 import {decodeCp932, encodeCp932} from '../../text/cp932.js';
 import {readArtemisPngComments} from './png-comments.js';
 import {installArtemisLuaOs, type ArtemisLuaOsHost} from './lua-os.js';
+import {artemisEmoteLuaPrelude, callArtemisEmotePlayer} from './emote-lua.js';
+import type {EmotePlayer} from '../../native/emotedriver/player.js';
+
+/** `createEmoteLayer` arguments after luabind's type filter (0x140151480). */
+export interface ArtemisEmoteLayerRequest {
+  readonly id: string;
+  readonly files: readonly string[];
+  readonly width: number;
+  readonly height: number;
+  readonly progress: boolean;
+}
+/** The Rev.3258 E-mote layer methods of the Lua `engine` object. */
+export interface ArtemisLuaEmoteHost {
+  /** `getEmoteVersion` (0x1401535d0): `EmoteGetSDKVersion`, a newline, then
+   * `EmoteGetBuildDateTime`. */
+  readonly version: string;
+  /** Creates the layer and returns its player; 'missing' when a file does not exist, and
+   * 'suspended' while files are read (the call is repeated on resume). */
+  createLayer(request: ArtemisEmoteLayerRequest): EmotePlayer | 'missing' | 'suspended';
+  /** The player of the current actor at `id`. */
+  layer(id: string): EmotePlayer | 'not-found' | 'not-emote';
+}
 
 export interface ArtemisLuaHost {
   /** Synchronous prepared byte sources; null means the file does not exist. */
@@ -86,6 +108,8 @@ export interface ArtemisLuaHost {
   /** The touch device: `getTouchCount` (virtual +0x18) and `setUseTouchHold` (+0x30). */
   touch?: {count(): number; setHold(enabled: boolean): void};
   restoreFontCache?(path: string): void | 'suspended';
+  /** E-mote layers (Rev.3258); requires `suspendableTags` and `reportError`. */
+  emote?: ArtemisLuaEmoteHost;
 }
 // 0x140375c08, 0x140375b78 and 0x140375ba8 (Shift-JIS).
 const sjis = (hex: string) =>
@@ -99,6 +123,14 @@ export const artemisLuaErrors = {
   pngCommentsUnreadable: sjis(
     pngCommentsPrefix +
       '82c591ce8fdb82cc837483408343838b82a982e7835283818393836782f093c782dd8d9e82df82dc82b982f1',
+  ),
+  // 0x1403870d0, 0x140387188, 0x1403871e0.
+  emoteFileMissing: sjis(
+    '637265617465456d6f74654c6179657282c591ce8fdb82cc837483408343838b82aa8ca982c282a982e882dc82b982f1',
+  ),
+  layerNotFound: sjis('8e7792e882b382ea82bd838c83438384815b82aa8ca982c282a982e882dc82b982f1'),
+  notEmoteLayer: sjis(
+    '8e7792e882b382ea82bd838c83438384815b82cd452d6d6f7465838c83438384815b82c582cd82a082e882dc82b982f1',
   ),
 } as const;
 // `<name>の引数が不正です` (0x140375910..0x140375d68).
@@ -443,6 +475,7 @@ export class ArtemisLua {
       host.enqueueTag(luaTag(args[0]));
       return [];
     });
+    if (host.emote) this.bindEmote(host.emote);
     if (host.suspendableTags) {
       this.vm.bind('artemisIncludeSource', (args) => {
         const path = luaText(args[0]);
@@ -547,6 +580,7 @@ export class ArtemisLua {
         end`
           : ''
       }
+      ${host.emote ? artemisEmoteLuaPrelude() : ''}
       ${
         host.restoreFontCache
           ? `local nativeRestoreFontCache = engine.restoreFontCache
@@ -563,6 +597,73 @@ export class ArtemisLua {
       );
     }
     installArtemisLuaOs(this.vm, host.os, () => (host.wallClock ? host.wallClock() : Date.now()));
+  }
+  private readonly emotePlayers = new Map<number, EmotePlayer>();
+  private emoteHandle = 0;
+  /** `getEmoteVersion`, `createEmoteLayer` and `getEmoteLayer` (Rev.3258 0x1401535d0,
+   * 0x140151480, 0x140152960). Players reach Lua as handles that the prelude wraps. */
+  private bindEmote(emote: ArtemisLuaEmoteHost): void {
+    const host = this.host;
+    if (!host.suspendableTags || !host.reportError)
+      throw Error('Artemis E-mote layers require a coroutine owner and error reports');
+    const handle = (player: EmotePlayer) => {
+      const id = ++this.emoteHandle;
+      this.emotePlayers.set(id, player);
+      return id;
+    };
+    const report = (message: Uint8Array) => {
+      host.reportError!(message);
+      return null;
+    };
+    this.vm.bind('getEmoteVersion', () => [new TextEncoder().encode(emote.version)]);
+    this.vm.bind('artemisEmoteCreate', (args) => {
+      const table = args[0];
+      if (!(table instanceof Map)) return [false, report(argumentError('createEmoteLayer'))];
+      // Keys and values of another Lua type are skipped.
+      let id = '',
+        width = 0,
+        height = 0,
+        progress = true;
+      const files: string[] = [];
+      for (const [key, value] of table) {
+        if (key === 'id' && value instanceof Uint8Array) id = luaText(value);
+        else if (key === 'files' && value instanceof Map) {
+          for (const file of value.values())
+            if (file instanceof Uint8Array) files.push(luaText(file));
+        } else if (key === 'width' && typeof value === 'number') width = nativeInt(value);
+        else if (key === 'height' && typeof value === 'number') height = nativeInt(value);
+        else if (key === 'progress' && typeof value === 'boolean') progress = value;
+      }
+      const player = emote.createLayer({id, files, width, height, progress});
+      if (player === 'suspended') return [true];
+      if (player === 'missing') return [false, report(artemisLuaErrors.emoteFileMissing)];
+      return [false, handle(player)];
+    });
+    this.vm.bind('artemisEmoteGet', (args) => {
+      const table = args[0];
+      if (!(table instanceof Map)) return [report(argumentError('getEmoteLayer'))];
+      let id = '',
+        next = false;
+      for (const [key, value] of table) {
+        if (key === 'id' && value instanceof Uint8Array) id = luaText(value);
+        else if (key === 'next' && typeof value === 'boolean') next = value;
+      }
+      // The node's other actor (virtual +0x130) is not modeled.
+      if (next) throw Error('Unsupported Artemis getEmoteLayer next layer');
+      const player = emote.layer(id);
+      if (player === 'not-found') return [report(artemisLuaErrors.layerNotFound)];
+      if (player === 'not-emote') return [report(artemisLuaErrors.notEmoteLayer)];
+      return [handle(player)];
+    });
+    this.vm.bind('artemisEmoteCall', (args) => {
+      const player = this.emotePlayers.get(args[0] as number);
+      if (!player) throw Error('Released Artemis E-mote player handle');
+      return callArtemisEmotePlayer(player, luaText(args[1]), args.slice(2));
+    });
+    this.vm.bind('artemisEmoteRelease', (args) => {
+      for (const id of args) this.emotePlayers.delete(id as number);
+      return [];
+    });
   }
   include(path: string): void {
     if (this.host.readPlainFile) {

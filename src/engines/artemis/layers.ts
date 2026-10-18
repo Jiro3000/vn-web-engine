@@ -12,6 +12,7 @@ import {createSolidImage} from '../../graphics/solid-image.js';
 import {artemisHexUint32, artemisInteger} from './numbers.js';
 import {ArtemisAnimationFrames} from './animation-layer.js';
 import {ArtemisTheoraVideo, artemisVideoMaskName, type ArtemisTheoraThreadOpener} from './video.js';
+import type {ArtemisEmoteLayer} from './emote-layer.js';
 
 function dimension(value: string): number {
   const token = /^[\t\n\v\f\r ]*([+-]?\d+)/.exec(value);
@@ -98,6 +99,9 @@ export interface ArtemisLayerHost<
   videoError?(tag: AsbTag, error: 'not-found' | 'unsupported'): void;
   /** Where the CTheora decode threads run; absent, on the caller's thread. */
   readonly videoThreads?: ArtemisTheoraThreadOpener;
+  /** CEmoteLayer allocation (0x140156370) in its CArtemisLayer wrapper (0x1400cba00). An
+   * actor copy clones the player natively (0x14001a4f0). */
+  createEmoteLayer?(emote: ArtemisEmoteLayer): T;
 }
 
 /** anime keys that 0x140115650 never queries. */

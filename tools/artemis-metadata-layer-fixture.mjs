@@ -191,6 +191,21 @@ export function createMetadataLayerFixture(
       effects.push({kind: 'video', width: video.width, height: video.height, mask: video.hasMask});
       return actor;
     },
+    createEmoteLayer(emote) {
+      const actor = {
+        id: ++sequence,
+        kind: 'emote',
+        emote,
+        width: emote.width,
+        height: emote.height,
+        display: new ArtemisDisplayObject(hash),
+        wrapper: {alpha: 1},
+        properties: {},
+      };
+      actors.add(actor);
+      effects.push({kind: 'emote', width: emote.width, height: emote.height});
+      return actor;
+    },
     videoError: (tag, error) => {
       throw Error(`Probe video ${error}: ` + tag.args.get('file'));
     },
@@ -203,6 +218,8 @@ export function createMetadataLayerFixture(
     },
     copyImageLayer(old) {
       if (!actors.has(old)) throw Error('Probe actor released');
+      // A CEmoteLayer copy clones its player (0x14001a4f0), which is not modeled.
+      if (old.kind === 'emote') throw Error('Unsupported Artemis E-mote layer copy');
       const actor = {
         ...old,
         id: ++sequence,
@@ -376,10 +393,11 @@ export function createMetadataLayerFixture(
       tweenFrames++;
     },
     videoOf: (actor) => actor.video,
+    emoteOf: (actor) => actor.emote,
     // CLayer getters over the recorded properties; an empty group reads as a CLayer
     // without a surface. Animation and message actors read other native getters.
     layerInfo(actor) {
-      if (actor.kind !== 'image' && actor.kind !== 'video' && actor.kind !== 'group')
+      if (!['image', 'video', 'emote', 'group'].includes(actor.kind))
         throw Error('Unsupported Artemis layer info actor');
       const props = actor.properties,
         surface = actor.kind === 'group' ? null : {width: actor.width, height: actor.height};
@@ -402,8 +420,14 @@ export function createMetadataLayerFixture(
   const layers = owner.layers,
     layerCommands = owner.commands;
   return {
-    /** Steps every registered layer tween and updates every video at the probe clock. */
-    tickTweens: (now) => owner.tickTweens(now),
+    /** Steps every registered layer tween and updates every video at the probe clock; the
+     * fixture's draw (the E-mote layers' player advance) follows. */
+    tickTweens: (now) => {
+      owner.tickTweens(now);
+      owner.drawEmoteLayers(now);
+    },
+    createEmoteLayer: (id, emote) => owner.createEmoteLayer(id, emote),
+    emoteLayer: (id) => owner.emoteLayer(id),
     /** wait video= frame check: layer `id` is a video layer that is still playing. */
     videoPlaying: (id) => owner.videoPlaying(id),
     get tweenSyncPending() {
@@ -484,6 +508,14 @@ export function createMetadataLayerFixture(
               ...entry.value.video.frame,
               revision: entry.value.video.revision,
               pixelsSha256: createHash('sha256').update(entry.value.video.pixels).digest('hex'),
+            }
+          : null,
+        emote: entry.value?.emote
+          ? {
+              progress: entry.value.emote.progress,
+              hidden: entry.value.emote.player.isHidden(),
+              playing: entry.value.emote.player.countPlayingTimelines(),
+              animating: entry.value.emote.player.isAnimating(),
             }
           : null,
         events: entry.value

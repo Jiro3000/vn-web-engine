@@ -23,6 +23,7 @@ import {
 } from './transition.js';
 import {ArtemisTweenRegistry} from './tween.js';
 import type {ArtemisTheoraVideo} from './video.js';
+import type {ArtemisEmoteLayer} from './emote-layer.js';
 
 /** The script services the layer owner uses: the transition and sync-tween run modes, the
  * frame clock, tween completion events, the stage size and the skip state. */
@@ -66,6 +67,8 @@ export interface ArtemisLayerOwnerHost<T extends object, I extends ArtemisImageD
   applyTweenProperties(id: string, actor: T, patch: ArtemisLayerPropertyPatch): void;
   /** The video decoder a video actor holds. */
   videoOf(actor: T): ArtemisTheoraVideo | undefined;
+  /** The CEmoteLayer of an E-mote actor (dynamic cast 0x1401566e0). */
+  emoteOf?(actor: T): ArtemisEmoteLayer | undefined;
   /** The CLayer display state of an actor; without it actors expose `properties`. */
   displayOf?(actor: T): ArtemisDisplayObject;
   /** The fields `var system=get_layer_info` reads from an actor. */
@@ -344,6 +347,31 @@ export class ArtemisLayerOwner<
     return end;
   }
   /** Attaches a message layer's actor at `name` (stage message-layer wrapper). */
+  /** `createEmoteLayer` (Rev.3258 0x140151480): the layer set's insertion +0x168 of a new
+   * E-mote actor at `id`, replacing any node there. Command registrations are untouched. */
+  createEmoteLayer(id: string, emote: ArtemisEmoteLayer): void {
+    if (!this.graphics.createEmoteLayer) throw Error('Unsupported Artemis E-mote layer owner');
+    if (!this.layers.attachActor(id, this.graphics.createEmoteLayer(emote)))
+      throw Error('Unsupported Artemis E-mote layer under an image layer: ' + id);
+    this.host.trace?.({kind: 'emoteLayer', id, width: emote.width, height: emote.height});
+  }
+  /** `getEmoteLayer` lookup (+0x140) of `id` and the cast of its current actor: undefined
+   * without the layer, null when it is not an E-mote layer. */
+  emoteLayer(id: string): ArtemisEmoteLayer | null | undefined {
+    const entry = this.layers.scene.entry(id);
+    if (!entry) return undefined;
+    return (entry.value !== undefined && this.host.emoteOf?.(entry.value)) || null;
+  }
+  /** The draw-time player advance (0x14001adf0) of every E-mote layer the retained
+   * structure draws, each once. */
+  drawEmoteLayers(now: number): void {
+    const emotes = new Set<ArtemisEmoteLayer>();
+    for (const entry of this.layers.scene.entries('retained')) {
+      const emote = entry.value && this.host.emoteOf?.(entry.value);
+      if (emote) emotes.add(emote);
+    }
+    for (const emote of emotes) emote.advance(now);
+  }
   attachMessageActor(name: string, message: M, owner: ArtemisMessageActorOwner<M>): void {
     const actor = this.host.createMessageActor(message, owner);
     if (!this.layers.attachActor(name, actor))

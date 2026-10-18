@@ -182,10 +182,11 @@ const flag = (args: ReadonlyMap<string, string>, key: string) =>
 
 export class ArtemisVariables {
   private readonly absentSystemVariables: ReadonlySet<string>;
+  private readonly emote: boolean;
   constructor(private readonly host?: ArtemisVariableHost) {
-    this.absentSystemVariables = new Set(
-      host?.executableSha256 ? artemisRevision(host.executableSha256).absentSystemVariables : [],
-    );
+    const revision = host?.executableSha256 ? artemisRevision(host.executableSha256) : null;
+    this.absentSystemVariables = new Set(revision?.absentSystemVariables ?? []);
+    this.emote = revision?.emote ?? false;
   }
   private unsupportedSystem(name: string): boolean {
     return unsupportedSystem(name) && !this.absentSystemVariables.has(name);
@@ -314,6 +315,8 @@ export class ArtemisVariables {
     const local = p.has('writelocal') && p.get('writelocal') !== '0';
     // The native handler gives data precedence over system queries.
     if (p.has('data')) this.write(name, tag.bytes?.get('data') ?? p.get('data')!, local);
+    // Rev.3258 0x140108a20 answers the E-mote capability with integer 1.
+    else if (p.get('system') === 'is_emote' && this.emote) this.write(name, '1', local);
     else if (!nativeVarSystems.has(p.get('system') ?? '')) return true;
     else if (p.get('system') === 'get_message_layer_indent_nest') {
       // Earlier revisions do not recognize this system name and write nothing.

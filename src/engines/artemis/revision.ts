@@ -37,6 +37,9 @@ export const ARTEMIS_3248_EXECUTABLE_SHA256 =
  * constants, data and unwind sections to the original Rev.3257; only .rsrc differs. */
 export const ARTEMIS_3257_WRAPPED_RESOURCE_VARIANT_SHA256 =
   '116507c5967b82f7816b69aeeb1553b47f2bfd2b91aac6dc02eb9371497d0c66';
+/** Rev.3258 adds the E-mote layer (emotedriver.dll) to the Rev.3257 operations. */
+export const ARTEMIS_3258_EXECUTABLE_SHA256 =
+  '5132eed8c2e4a7d0ec4d853cd2b8247f3a0641c4a3825a8210fd435530e7d716';
 
 export interface ArtemisRevision {
   readonly executableSha256: string;
@@ -96,6 +99,9 @@ export interface ArtemisRevision {
   /** The `dialog` tag ignores fontsize/minwidth/applydesktopscale: CDialog always uses
    * Tahoma 20 and width 240 without desktop scaling (Rev.3083 x64 0x1400c8f30/0x140157380). */
   readonly fixedDialogStyle?: boolean;
+  /** E-mote layers: `e:createEmoteLayer`/`getEmoteLayer`/`getEmoteVersion` and the
+   * `var system=is_emote` query (Rev.3258 0x140151480/0x140152960/0x1401535d0/0x140108a20). */
+  readonly emote?: boolean;
 }
 // Rev.3139 0x1400c36f0 publishes the same support and save data versions.
 const rev3139 = {
@@ -420,6 +426,13 @@ const revisions: ReadonlyMap<string, ArtemisRevision> = new Map(
       executableSha256: ARTEMIS_3248_EXECUTABLE_SHA256,
       engineVersion: 3248,
       buildDate: 'Mon Jan 6 19:35:50 2025',
+    },
+    {
+      ...rev3257,
+      executableSha256: ARTEMIS_3258_EXECUTABLE_SHA256,
+      engineVersion: 3258,
+      buildDate: 'Thu May 29 18:30:58 2025',
+      emote: true,
     },
   ].map((revision) => [revision.executableSha256, Object.freeze(revision)]),
 );
