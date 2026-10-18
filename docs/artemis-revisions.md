@@ -1199,8 +1199,10 @@ times). The route reaches the `tou` staff roll (`staff_tx_tou_*` images) and ret
 to the title menu (`500.d`). 2,647 E-mote layers are created; the run plays the three
 WMV movies and 95 Theora video layers. The probe advances every retained E-mote player
 on each draw. No Lua/include/unknown-tag/tag errors, layer failures, refusals or
-HTTP waits occur; 777 surface preloads decode and offline PCM rendering produces
-647,177,856 frames. Sampled Lua peak is 8,640 KiB. This is an automated nonvisual route
+HTTP waits occur. Offline PCM rendering produces 647,177,856 frames. Between 773 and
+777 surface preloads decode without failures; the count depends on when asynchronous
+decodes complete relative to surface release, while the script, tag and event streams
+are identical across runs. Sampled Lua peak is 8,640 KiB. This is an automated nonvisual route
 pass; game images and frames were not viewed.
 
 The renderer was checked separately without displaying game assets: all 132 character
