@@ -55,4 +55,21 @@ when acceleration is unavailable so callers can use `WmaStandardDecoder` as the
 fallback. The packet front end and Rust block loop share a private 512 KiB arena.
 One frame crosses the ABI once; entropy, coefficient scaling, stereo, IMDCT and
 overlap windows execute in Rust, with SIMD for contiguous scaling and windowing.
-The front end copies completed PCM into caller-owned output. Pro decoding is not supported.
+The front end copies completed PCM into caller-owned output.
+
+`WmaProDecoder` in `pro.ts` implements the stereo 24-bit, 44.1 kHz Pro profile
+with channel mask 3 and flags `0x00e0`. Length-prefixed frames contain 2048
+samples and support 128–2048 sample tiles, DPCM scale factors, scale-factor
+resampling and run/level updates, vector and run/level coefficients, and
+band-selective stereo reconstruction. The inverse quantizer preserves float
+rounding before a middle-half IMDCT and sine overlap window. The first decoded
+frame is suppressed; explicit start/end trims reduce the returned sample count
+without changing its timestamp. Draining returns no additional output, matching
+the source codec's lack of delayed-output capability.
+
+Pro codec packets and the bit reservoir are bounded to 32 KiB, media objects to
+16 MiB. Each channel retains 1024 samples of overlap between 2048-sample frames.
+Multichannel layouts, XMA variants and reserved transform modes are rejected.
+Postprocessing and DRC fields are consumed as metadata, matching the source decoder.
+`pro-tables.ts` supplies canonical VLC and coefficient tables. Pro currently uses
+the TypeScript implementation; the shared Rust IMDCT also supports its scaling.
