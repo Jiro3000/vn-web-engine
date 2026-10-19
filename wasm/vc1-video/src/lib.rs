@@ -3,6 +3,10 @@
 //! Host-owned planes and coefficient buffers live in this instance's linear memory.
 #![no_std]
 use core::arch::wasm32::*;
+mod bits;
+mod block_support;
+mod blocks;
+mod tables;
 
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
@@ -327,6 +331,36 @@ unsafe fn filter_bytes(p: *const u8, step: isize, mode: i32) -> v128 {
         mode,
     )
 }
+/// Integral motion needs no interpolation or clipping. Reference and output planes
+/// are disjoint; averaging is the unsigned rounded average of corresponding bytes.
+#[inline(always)]
+unsafe fn copy_block(dst: *mut u8, src: *const u8, stride: usize, w: usize, h: usize, avg: bool) {
+    for row in 0..h {
+        let d = dst.add(row * stride);
+        let s = src.add(row * stride);
+        if w == 16 {
+            let mut v = v128_load(s.cast());
+            if avg {
+                v = u8x16_avgr(v, v128_load(d.cast()));
+            }
+            v128_store(d.cast(), v);
+        } else if w == 8 {
+            let mut v = v128_load64_zero(s.cast());
+            if avg {
+                v = u8x16_avgr(v, v128_load64_zero(d.cast()));
+            }
+            v128_store64_lane::<0>(v, d.cast());
+        } else {
+            for col in (0..w).step_by(4) {
+                let mut v = v128_load32_zero(s.add(col).cast());
+                if avg {
+                    v = u8x16_avgr(v, v128_load32_zero(d.add(col).cast()));
+                }
+                v128_store32_lane::<0>(v, d.add(col).cast());
+            }
+        }
+    }
+}
 #[no_mangle]
 pub unsafe extern "C" fn vc1_mspel(
     dst: *mut u8,
@@ -338,6 +372,10 @@ pub unsafe extern "C" fn vc1_mspel(
     rnd: i32,
     avg: bool,
 ) {
+    if hm == 0 && vm == 0 {
+        copy_block(dst, src, stride, n, n, avg);
+        return;
+    }
     if hm != 0 && vm != 0 {
         let shifts = [0, 5, 1, 5];
         let shift = (shifts[hm as usize] + shifts[vm as usize]) >> 1;
@@ -410,6 +448,10 @@ pub unsafe extern "C" fn vc1_hpel(
     no_rnd: bool,
     avg: bool,
 ) {
+    if dxy == 0 {
+        copy_block(dst, src, stride, n, n, avg);
+        return;
+    }
     let r2 = i32x4_splat(if no_rnd { 0 } else { 1 });
     let r4 = i32x4_splat(if no_rnd { 1 } else { 2 });
     for row in 0..n {
@@ -447,6 +489,10 @@ pub unsafe extern "C" fn vc1_chroma(
     no_rnd: bool,
     avg: bool,
 ) {
+    if x == 0 && y == 0 {
+        copy_block(dst, src, stride, w, h, avg);
+        return;
+    }
     let a = (8 - x) * (8 - y);
     let b = x * (8 - y);
     let c = (8 - x) * y;
