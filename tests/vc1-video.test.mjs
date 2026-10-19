@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import * as D from '../dist/formats/vc1/dsp.js';
+import {VC1_VIDEO_WASM_BINARY} from '../dist/formats/vc1/wasm-binary.js';
 import {
   Vc1Decoder,
   FOURCC_WMV3,
   FOURCC_WVC1,
   VC1_PACKET_LIMIT,
 } from '../dist/formats/vc1/reference.js';
+import {Vc1Decoder as PortableDecoder} from '../dist/formats/vc1/decoder.js';
 
 // Synthetic 16×16 Main-profile stream: quantizer 8, no AC or DC differentials.
 // The default DC predictor and inverse transform produce constant sample value 143.
@@ -110,4 +113,149 @@ test('VC-1 refuses unsupported tools and bounds storage before allocation', () =
     assert.throws(() => new Vc1Decoder(FOURCC_WVC1, 16, 16, advancedExtra(options)), message);
   const decoder = new Vc1Decoder(FOURCC_WVC1, 16, 16, advancedExtra());
   assert.throws(() => decoder.decode(bits('1110' + '1' + '01000' + '0'), 1), /B pictures/);
+});
+
+for (const wasm of [false, true]) {
+  test(`VC-1 facade runs synthetic I/P pictures with wasm=${wasm}`, () => {
+    const decoder = new PortableDecoder(FOURCC_WMV3, 16, 16, mainExtra, {wasm});
+    assert.equal(decoder.accelerated, wasm);
+    constantPicture(decoder.decode(mainI, 12), 1, 12, 143);
+    for (let time = 45; time < 300; time += 33)
+      constantPicture(decoder.decode(mainP, time), 2, time, 143);
+    assert.equal(decoder.decode(null, 0), null);
+    const leadingP = new PortableDecoder(FOURCC_WMV3, 16, 16, mainExtra, {wasm});
+    constantPicture(leadingP.decode(mainP, 99), 2, 99, 128);
+  });
+}
+
+test('VC-1 SIMD kernels preserve reference arithmetic across transforms, prediction and filters', () => {
+  const k = new WebAssembly.Instance(
+    new WebAssembly.Module(Buffer.from(VC1_VIDEO_WASM_BINARY, 'base64')),
+  ).exports;
+  k.memory.grow(4);
+  const start = (Number(k.__heap_base.value) + 15) & ~15;
+  const block = new Int16Array(k.memory.buffer, start, 64);
+  const dst = new Uint8Array(k.memory.buffer, start + 256, 2048);
+  const src = new Uint8Array(k.memory.buffer, start + 256 + 2048, 2048);
+  let seed = 0x675893;
+  const random = () => {
+    seed ^= seed << 13;
+    seed ^= seed >>> 17;
+    seed ^= seed << 5;
+    return seed >>> 0;
+  };
+  const fill = (a, max = 256) => {
+    for (let i = 0; i < a.length; i++) a[i] = random() % max;
+  };
+  let checks = 0;
+  const check = (label, fn, native) => {
+    const expected = dst.slice(),
+      b = block.slice();
+    fn(expected, b);
+    native();
+    assert.deepEqual(dst, expected, label + ' pixels');
+    assert.deepEqual(block, b, label + ' coefficients');
+    checks++;
+  };
+  for (let trial = 0; trial < 200; trial++) {
+    fill(block, 4096);
+    for (let i = 0; i < 64; i++) block[i] -= 2048;
+    fill(dst);
+    fill(src);
+    check(
+      '8x8',
+      (_, b) => D.invTrans8x8(b, 0),
+      () => k.vc1_tx8(block.byteOffset),
+    );
+    for (const [name, w, h] of [
+      ['invTrans8x4', 8, 4],
+      ['invTrans4x8', 4, 8],
+      ['invTrans4x4', 4, 4],
+    ]) {
+      fill(block, 4096);
+      for (let i = 0; i < 64; i++) block[i] -= 2048;
+      check(
+        name,
+        (d, b) => D[name](d, 128, 32, b, 0),
+        () => k.vc1_tx_small(dst.byteOffset + 128, 32, block.byteOffset, w, h),
+      );
+    }
+    for (const [name, mode] of [
+      ['putPixelsClamped', 0],
+      ['putSignedPixelsClamped', 1],
+      ['addPixelsClamped', 2],
+    ]) {
+      fill(block, 65536);
+      check(
+        name,
+        (d, b) => D[name](b, 0, d, 128, 32),
+        () => k.vc1_pixels(block.byteOffset, dst.byteOffset + 128, 32, mode),
+      );
+    }
+    for (const [name, w, h] of [
+      ['invTrans8x8Dc', 8, 8],
+      ['invTrans8x4Dc', 8, 4],
+      ['invTrans4x8Dc', 4, 8],
+      ['invTrans4x4Dc', 4, 4],
+    ]) {
+      const dc = (random() & 65535) - 32768;
+      check(
+        name,
+        (d) => D[name](d, 128, 32, dc),
+        () => k.vc1_tx_dc(dst.byteOffset + 128, 32, w, h, dc),
+      );
+    }
+    for (const n of [8, 16])
+      for (const rnd of [0, 1])
+        for (const avg of [false, true]) {
+          for (let h = 0; h < 4; h++)
+            for (let v = 0; v < 4; v++)
+              check(
+                'mspel ' + [n, rnd, avg, h, v],
+                (d) => D.mspelMc(d, 128, src, 128, 32, n, h, v, rnd, avg),
+                () =>
+                  k.vc1_mspel(dst.byteOffset + 128, src.byteOffset + 128, 32, n, h, v, rnd, +avg),
+              );
+          for (let xy = 0; xy < 4; xy++)
+            check(
+              'hpel',
+              (d) => D.hpelMc(d, 128, src, 128, 32, n, xy, !!rnd, avg),
+              () => k.vc1_hpel(dst.byteOffset + 128, src.byteOffset + 128, 32, n, xy, rnd, +avg),
+            );
+          for (let x = 0; x < 8; x++)
+            for (let y = 0; y < 8; y++)
+              check(
+                'chroma',
+                (d) => D.chromaMc(d, 128, src, 128, 32, 8, 8, x, y, !!rnd, avg),
+                () =>
+                  k.vc1_chroma(
+                    dst.byteOffset + 128,
+                    src.byteOffset + 128,
+                    32,
+                    8,
+                    8,
+                    x,
+                    y,
+                    rnd,
+                    +avg,
+                  ),
+              );
+        }
+    // Correlated and uncorrelated samples exercise both filter decisions and clipping.
+    fill(dst, trial & 1 ? 16 : 256);
+    for (const pq of [1, 4, 8, 16, 31])
+      for (const len of [4, 8, 16]) {
+        check(
+          'vloop',
+          (d) => D.vLoopFilter(d, 256, 32, len, pq),
+          () => k.vc1_loop(dst.byteOffset + 256, 1, 32, len, pq),
+        );
+        check(
+          'hloop',
+          (d) => D.hLoopFilter(d, 264, 32, len, pq),
+          () => k.vc1_loop(dst.byteOffset + 264, 32, 1, len, pq),
+        );
+      }
+  }
+  assert.equal(checks, 142600);
 });

@@ -1,6 +1,6 @@
 # VC-1 video
 
-`Vc1Decoder` in `reference.ts` accepts complete ASF video media objects for WMV3
+`Vc1Decoder` in `decoder.ts` accepts complete ASF video media objects for WMV3
 Main profile and WVC1 Advanced profile. It decodes progressive I and P pictures
 into planar 8-bit 4:2:0, preserving FFmpeg 7.1.1 integer rounding and packet
 presentation times. ASF demuxing and WMA audio decoding belong to other modules.
@@ -10,6 +10,12 @@ current picture; Advanced profile delays one reference picture. Call
 `decode(null, 0)` until it returns `null` to drain. Returned planes belong to the
 decoder and must be copied before its next call. Use `width` and `height` to crop
 the padded planes; luma and chroma have separate strides.
+
+The facade selects `wasm-decoder.ts` when WebAssembly SIMD is available, or
+`reference.ts` with `{wasm: false}` or when module initialization fails.
+`accelerated` reports the selected backend. Each accelerated decoder keeps its
+pixel buffers in one private Wasm instance, bounded to 128 MiB. Parsing and
+prediction state use the same TypeScript implementation for both backends.
 
 `bitstream.ts` implements the checked MSB-first reader and multilevel VLC tables.
 `tables.ts` contains the progressive decoding tables. `dsp.ts` implements inverse
@@ -24,7 +30,7 @@ B/BI pictures, sprites, X8 intra coding, multiresolution, range reduction or
 mapping, overlap transforms and macroblock quantizer changes are refused.
 
 `tests/vc1-video.test.mjs` exercises synthetic I/P streams and the delayed-output
-contract without game data. This module is independent of the existing
+contract and kernel arithmetic without game data. This module is independent of the existing
 `src/video/windows-media.ts` decoder.
 
 The implementation is derived from FFmpeg 7.1.1 and distributed under LGPL 2.1
