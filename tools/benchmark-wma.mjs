@@ -18,13 +18,7 @@ const max = Number(count);
 if (!Number.isSafeInteger(max) || max < 1 || max > 10000) throw Error('Invalid object limit');
 const load = (dir, file) => import(new URL(file, pathToFileURL(resolve(dir) + '/')));
 const {readAsfLayout, AsfDemuxer} = await load(currentDir, 'formats/asf/demux.js');
-const {WmaLosslessDecoder} = await load(currentDir, 'formats/wma/lossless.js');
-const {WmaStandardDecoder} = await load(currentDir, 'formats/wma/standard.js');
-const {WmaProDecoder} = await load(currentDir, 'formats/wma/pro.js');
-const {createWmaLosslessDecoder, createWmaStandardDecoder, createWmaProDecoder} = await load(
-  currentDir,
-  'formats/wma/wasm-decoder.js',
-);
+const {WindowsMediaDecoder: CurrentDecoder} = await load(currentDir, 'video/windows-media.js');
 const {WindowsMediaDecoder} = await load(baselineDir, 'video/windows-media.js');
 const fd = openSync(path, 'r');
 const read = (at, n) => {
@@ -86,26 +80,15 @@ function run(create) {
   }
   return {milliseconds, frames, samples, hash: hash.digest('hex')};
 }
+function portable(wasm) {
+  const decoder = new CurrentDecoder(codec, {wasm});
+  assert.equal(decoder.accelerated, wasm, 'Requested backend is unavailable');
+  return decoder;
+}
 const variants = [
   ['baseline', () => new WindowsMediaDecoder(codec)],
-  [
-    'wasm',
-    () =>
-      codec.codec === 0x161
-        ? createWmaStandardDecoder(codec)
-        : codec.codec === 0x162
-          ? createWmaProDecoder(codec)
-          : createWmaLosslessDecoder(codec),
-  ],
-  [
-    'javascript',
-    () =>
-      codec.codec === 0x161
-        ? new WmaStandardDecoder(codec)
-        : codec.codec === 0x162
-          ? new WmaProDecoder(codec)
-          : new WmaLosslessDecoder(codec),
-  ],
+  ['wasm', () => portable(true)],
+  ['javascript', () => portable(false)],
 ];
 let expected;
 const samples = Object.fromEntries(variants.map(([name]) => [name, []]));

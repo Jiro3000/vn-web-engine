@@ -1,5 +1,9 @@
 # WMA audio
 
+`src/video/windows-media.ts` selects these decoders for ASF audio playback, using
+Rust SIMD when available and the same TypeScript front end with JavaScript kernels
+otherwise. The facade preserves the shared player API and owns stream lifetime.
+
 `WmaLosslessDecoder` in `lossless.ts` decodes complete ASF audio media objects
 to caller-owned planar float, retaining packet timestamps and the decoder's
 end-of-stream sample trim. `decode(null)` drains the bit reservoir; further

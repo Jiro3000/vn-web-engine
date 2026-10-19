@@ -1411,7 +1411,7 @@ The native player is a DirectShow graph rendering the loose file. The game's mov
 ASF files with WMV3 or WVC1 video and WMA Standard, Pro or Lossless audio, which browsers cannot
 decode. `BrowserFullscreenMoviePlayer` streams an ASF file through the shared software
 movie player: `AsfMovie` (`src/formats/asf/movie.ts`) decodes it in the movie worker
-with the Windows Media decoder (`wasm/windows-media/`), the audio clock paces the
+with the standalone Windows Media decoder (`src/formats/vc1/`, `src/formats/wma/`), the audio clock paces the
 pictures and a canvas covering the game element shows them. The game's muxer places WMA
 blocks up to the ASF preroll (1451 or 3000 ms) behind the video of the same time, so the
 reader decodes audio as it reads packets and holds video objects compressed until packets

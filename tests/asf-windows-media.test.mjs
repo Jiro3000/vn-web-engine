@@ -220,43 +220,49 @@ test('ASF preroll queue releases video after audio muxed up to a preroll late', 
   );
 });
 
-test('Windows Media decoder decodes WMA audio from an ASF file to planar float', () => {
-  // Synthetic fixture: 0.6 s of a 440 Hz (left) and 660 Hz (right) sine at 44.1 kHz, encoded
-  // as WMA (0x161) by FFmpeg.
-  const bytes = new Uint8Array(
-    readFileSync(new URL('./fixtures/asf/sine-wmav2.wma', import.meta.url)),
-  );
-  const layout = readAsfLayout(bytes);
-  const [stream] = layout.streams;
-  assert.equal(stream.codec, 0x161);
-  const decoder = new WindowsMediaDecoder(stream);
-  const demuxer = new AsfDemuxer(layout);
-  const channels = [[], []];
-  for (let p = 0; p < layout.packetCount; p++) {
-    const at = layout.dataOffset + p * layout.packetSize;
-    for (const o of demuxer.packet(bytes.subarray(at, at + layout.packetSize)))
-      for (const out of decoder.decode(o.data, o.time, o.key))
-        out.channels.forEach((c, i) => channels[i].push(...c));
-  }
-  for (const out of decoder.decode(null)) out.channels.forEach((c, i) => channels[i].push(...c));
-  decoder.close();
-  assert.equal(channels[0].length, 24576);
-  // Goertzel power at the tone frequency dominates a neighbouring frequency.
-  const power = (samples, frequency) => {
-    const k = 2 * Math.cos((2 * Math.PI * frequency) / 44100);
-    let a = 0,
-      b = 0;
-    for (const x of samples.slice(4096, 20480)) [a, b] = [x + k * a - b, a];
-    return a * a + b * b - k * a * b;
-  };
-  assert.ok(power(channels[0], 440) > 1000 * power(channels[0], 660));
-  assert.ok(power(channels[1], 660) > 1000 * power(channels[1], 440));
-  assert.throws(() => decoder.decode(new Uint8Array(1)), /closed/);
-  assert.throws(
-    () => new WindowsMediaDecoder({...stream, codec: 0x160}),
-    /Unsupported Windows Media audio codec 0x160/,
-  );
-});
+for (const wasm of [false, true])
+  test(`Windows Media decoder emits planar WMA audio, wasm=${wasm}`, () => {
+    // Synthetic fixture: 0.6 s of a 440 Hz (left) and 660 Hz (right) sine at 44.1 kHz, encoded
+    // as WMA (0x161) by FFmpeg.
+    const bytes = new Uint8Array(
+      readFileSync(new URL('./fixtures/asf/sine-wmav2.wma', import.meta.url)),
+    );
+    const layout = readAsfLayout(bytes);
+    const [stream] = layout.streams;
+    assert.equal(stream.codec, 0x161);
+    const decoder = new WindowsMediaDecoder(stream, {wasm});
+    assert.equal(decoder.accelerated, wasm);
+    const demuxer = new AsfDemuxer(layout);
+    const channels = [[], []];
+    for (let p = 0; p < layout.packetCount; p++) {
+      const at = layout.dataOffset + p * layout.packetSize;
+      for (const o of demuxer.packet(bytes.subarray(at, at + layout.packetSize)))
+        for (const out of decoder.decode(o.data, o.time, o.key))
+          out.channels.forEach((c, i) => channels[i].push(...c));
+    }
+    for (const out of decoder.decode(null)) out.channels.forEach((c, i) => channels[i].push(...c));
+    assert.deepEqual(decoder.decode(null), []);
+    assert.deepEqual(decoder.decode(new Uint8Array()), []);
+    assert.throws(() => decoder.decode(Uint8Array.of(0)), /decode error -541478725/);
+    decoder.close();
+    decoder.close();
+    assert.equal(channels[0].length, 24576);
+    // Goertzel power at the tone frequency dominates a neighbouring frequency.
+    const power = (samples, frequency) => {
+      const k = 2 * Math.cos((2 * Math.PI * frequency) / 44100);
+      let a = 0,
+        b = 0;
+      for (const x of samples.slice(4096, 20480)) [a, b] = [x + k * a - b, a];
+      return a * a + b * b - k * a * b;
+    };
+    assert.ok(power(channels[0], 440) > 1000 * power(channels[0], 660));
+    assert.ok(power(channels[1], 660) > 1000 * power(channels[1], 440));
+    assert.throws(() => decoder.decode(new Uint8Array(1)), /closed/);
+    assert.throws(
+      () => new WindowsMediaDecoder({...stream, codec: 0x160}),
+      /Unsupported Windows Media audio codec 0x160/,
+    );
+  });
 
 test('Movie streams select ASF and require a video stream', async () => {
   const bytes = new Uint8Array(
@@ -356,3 +362,40 @@ test('WVC1 Advanced Profile headers initialize the real decoder and require both
     /Unsupported Windows Media video codec/,
   );
 });
+
+for (const wasm of [false, true])
+  test(`Windows Media video frames belong to the caller, wasm=${wasm}`, () => {
+    const decoder = new WindowsMediaDecoder(
+      {
+        kind: 'video',
+        codec: 0x33564d57,
+        width: 16,
+        height: 16,
+        extra: Buffer.from('4ff94801', 'hex'),
+      },
+      {wasm},
+    );
+    assert.equal(decoder.accelerated, wasm);
+    const intra = Buffer.from('00100bc0', 'hex'),
+      skipped = Buffer.from('28200840', 'hex');
+    const [first] = decoder.decode(intra, 12, true);
+    assert.equal(first.time, 12);
+    assert.equal(first.frame.index, 0);
+    assert.equal(first.frame.pictureType, 1);
+    assert.deepEqual(first.frame.y, new Uint8Array(256).fill(143));
+    first.frame.y.fill(0);
+    const [second] = decoder.decode(skipped, 45);
+    assert.equal(second.time, 45);
+    assert.equal(second.frame.index, 1);
+    assert.equal(second.frame.pictureType, 2);
+    assert.deepEqual(second.frame.y, new Uint8Array(256).fill(143));
+    decoder.decode(intra, 78);
+    assert.deepEqual(first.frame.y, new Uint8Array(256));
+    assert.deepEqual(second.frame.y, new Uint8Array(256).fill(143));
+    assert.deepEqual(decoder.decode(null), []);
+    assert.deepEqual(decoder.decode(null), []);
+    assert.deepEqual(decoder.decode(new Uint8Array()), []);
+    assert.throws(() => decoder.decode(intra), /decode error -541478725/);
+    decoder.close();
+    assert.throws(() => decoder.decode(null), /closed/);
+  });

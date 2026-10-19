@@ -19,8 +19,7 @@ const max = Number(count);
 if (!Number.isSafeInteger(max) || max < 1 || max > 10000) throw Error('Invalid picture limit');
 const load = (dir, file) => import(new URL(file, pathToFileURL(resolve(dir) + '/')));
 const {readAsfLayout, AsfDemuxer} = await load(currentDir, 'formats/asf/demux.js');
-const {allocateFrame} = await load(currentDir, 'video/frame.js');
-const {Vc1Decoder} = await load(currentDir, 'formats/vc1/decoder.js');
+const {WindowsMediaDecoder: CurrentDecoder} = await load(currentDir, 'video/windows-media.js');
 const {WindowsMediaDecoder} = await load(baselineDir, 'video/windows-media.js');
 
 const fd = openSync(path, 'r');
@@ -55,45 +54,9 @@ try {
 }
 
 function portable(wasm) {
-  const decoder = new Vc1Decoder(codec.codec, codec.width, codec.height, codec.extra, {wasm});
+  const decoder = new CurrentDecoder(codec, {wasm});
   assert.equal(decoder.accelerated, wasm, 'Requested backend is unavailable');
-  let index = 0;
-  return {
-    decode(data, time) {
-      const out = [];
-      do {
-        const picture = decoder.decode(data, time);
-        if (!picture) break;
-        const frame = allocateFrame(decoder.width, decoder.height);
-        for (const [src, stride, dst, dstStride, width, height] of [
-          [picture.y, picture.stride, frame.y, frame.stride, frame.width, frame.height],
-          [
-            picture.cb,
-            picture.chromaStride,
-            frame.cb,
-            frame.stride >> 1,
-            (frame.width + 1) >> 1,
-            (frame.height + 1) >> 1,
-          ],
-          [
-            picture.cr,
-            picture.chromaStride,
-            frame.cr,
-            frame.stride >> 1,
-            (frame.width + 1) >> 1,
-            (frame.height + 1) >> 1,
-          ],
-        ])
-          for (let y = 0; y < height; y++)
-            dst.set(src.subarray(y * stride, y * stride + width), y * dstStride);
-        frame.index = index++;
-        frame.pictureType = picture.type;
-        out.push({frame, time: picture.time});
-      } while (data === null);
-      return out;
-    },
-    close() {},
-  };
+  return decoder;
 }
 function run(create) {
   const decoder = create(),

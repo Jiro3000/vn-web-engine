@@ -33,8 +33,8 @@ B/BI pictures, sprites, X8 intra coding, multiresolution, range reduction or
 mapping, overlap transforms and macroblock quantizer changes are refused.
 
 `tests/vc1-video.test.mjs` exercises synthetic I/P streams and the delayed-output
-contract and kernel arithmetic without game data. This module is independent of the existing
-`src/video/windows-media.ts` decoder.
+contract and kernel arithmetic without game data. `src/video/windows-media.ts`
+adapts this decoder to caller-owned cropped frames for ASF playback.
 
 The implementation is derived from FFmpeg 7.1.1 and distributed under LGPL 2.1
 or later. See [NOTICE](NOTICE) for copyright notices and [LICENSE](LICENSE) for
