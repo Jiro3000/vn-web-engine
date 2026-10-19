@@ -5,6 +5,7 @@
 use core::arch::wasm32::*;
 use core::slice;
 mod imdct;
+mod standard;
 
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
@@ -17,6 +18,12 @@ struct Bits {
     size: u32,
 }
 impl Bits {
+    #[inline(always)]
+    unsafe fn show(&self, n: u32) -> u32 {
+        let p = self.data.add((self.index >> 3) as usize);
+        let word = u32::from_be(core::ptr::read_unaligned(p.cast::<u32>()));
+        (word << (self.index & 7)) >> (32 - n)
+    }
     #[inline(always)]
     unsafe fn get(&mut self, n: u32) -> u32 {
         if n == 0 {

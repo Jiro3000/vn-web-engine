@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {InverseMdct, wmaSineWindow} from '../dist/formats/wma/imdct.js';
 import {WmaStandardDecoder} from '../dist/formats/wma/standard.js';
+import {createWmaStandardDecoder} from '../dist/formats/wma/wasm-decoder.js';
 import {standardConfig, standardPacket} from './helpers/wma-standard-packet.mjs';
 import {mdctKernel} from './helpers/wma-mdct-kernel.mjs';
 
@@ -72,6 +73,26 @@ test('WMA Standard synthetic VLC exponents and DC spectrum preserve float sample
   );
   for (let i = 0; i < 2048; i++) assert.equal(out[0].channels[1][i], -out[0].channels[0][i]);
   decoder.close();
+});
+
+test('WMA Rust Standard frame loop preserves packet output and instance isolation', () => {
+  const plain = createWmaStandardDecoder(standardConfig());
+  const coded = createWmaStandardDecoder(standardConfig());
+  assert.ok(plain);
+  assert.ok(coded);
+  for (const [decoder, value] of [
+    [plain, false],
+    [coded, true],
+  ]) {
+    const reference = new WmaStandardDecoder(standardConfig()),
+      packet = standardPacket(value);
+    assert.deepEqual(decoder.decode(packet, 500), reference.decode(packet, 500));
+    assert.deepEqual(decoder.decode(null), reference.decode(null));
+    assert.deepEqual(decoder.decode(null), []);
+    decoder.close();
+    reference.close();
+    assert.throws(() => decoder.decode(packet), /closed/);
+  }
 });
 
 test('WMA Rust full/half IMDCT matches float bits, including signed zeros', () => {

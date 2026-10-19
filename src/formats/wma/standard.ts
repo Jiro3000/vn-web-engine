@@ -20,11 +20,27 @@ export interface StandardConfig {
   readonly extra: Uint8Array;
 }
 
+export interface StandardBackend {
+  u8(length: number): Uint8Array;
+  u16(length: number): Uint16Array;
+  i16(length: number): Int16Array;
+  i32(length: number): Int32Array;
+  f32(length: number): Float32Array;
+  f64(length: number): Float64Array;
+  decodeFrame(state: Int32Array, reader: BitReader): void;
+}
+const jsMemory = {
+  u8: (n: number): Uint8Array => new Uint8Array(n),
+  i32: (n: number): Int32Array => new Int32Array(n),
+  f32: (n: number): Float32Array => new Float32Array(n),
+};
+
 /** WMA v2 with VLC exponents, reservoir and variable blocks, without noise coding. */
 export class WmaStandardDecoder {
   private readonly gb = new BitReader();
   private readonly packet: Uint8Array;
-  private readonly reservoir = new Uint8Array(32768 + 64);
+  private readonly reservoir: Uint8Array;
+  private readonly state: Int32Array;
   private lastLength = 0;
   private lastOffset = 0;
   private skipSamples = 4096;
@@ -40,19 +56,22 @@ export class WmaStandardDecoder {
     (_, i) => new InverseMdct(2048 >> i, 1 / 32768),
   );
   private readonly windows = Array.from({length: 5}, (_, i) => wmaSineWindow(2048 >> i));
-  private readonly exponents = [new Float32Array(2048), new Float32Array(2048)];
-  private readonly exponentSize = new Int32Array(2);
-  private readonly maximumExponent = new Float32Array([1, 1]);
-  private readonly initialized = new Uint8Array(2);
-  private readonly coded = new Uint8Array(2);
-  private readonly coefficients = [new Float32Array(2048), new Float32Array(2048)];
-  private readonly levels = [new Float32Array(2048), new Float32Array(2048)];
-  private readonly transformOutput = new Float32Array(4096);
-  private readonly frameOutput = [new Float32Array(4096), new Float32Array(4096)];
+  private readonly exponents: Float32Array[];
+  private readonly exponentSize: Int32Array;
+  private readonly maximumExponent: Float32Array;
+  private readonly initialized: Uint8Array;
+  private readonly coded: Uint8Array;
+  private readonly coefficients: Float32Array[];
+  private readonly levels: Float32Array[];
+  private readonly transformOutput: Float32Array;
+  private readonly frameOutput: Float32Array[];
   private drained = false;
   private closed = false;
 
-  constructor(readonly config: StandardConfig) {
+  constructor(
+    readonly config: StandardConfig,
+    private readonly backend?: StandardBackend,
+  ) {
     const extra = config.extra;
     if (
       extra.length < 6 ||
@@ -72,7 +91,20 @@ export class WmaStandardDecoder {
     this.offsetBits = 31 - Math.clz32(Math.trunc(f(bps * 2048) / 8 + 0.5)) + 2;
     if (this.offsetBits + 3 > 25) throw Error('Unsupported WMA Standard bitrate');
     this.tables = adjusted < 1.16 ? COEFFICIENTS.slice(0, 2) : COEFFICIENTS.slice(2, 4);
-    this.packet = new Uint8Array(config.blockAlign + 64);
+    const memory = backend ?? jsMemory;
+    this.packet = memory.u8(config.blockAlign + 64);
+    this.reservoir = memory.u8(32768 + 64);
+    this.state = memory.i32(26);
+    this.exponents = [memory.f32(2048), memory.f32(2048)];
+    this.exponentSize = memory.i32(2);
+    this.maximumExponent = memory.f32(2);
+    this.maximumExponent.fill(1);
+    this.initialized = memory.u8(2);
+    this.coded = memory.u8(2);
+    this.coefficients = [memory.f32(2048), memory.f32(2048)];
+    this.levels = [memory.f32(2048), memory.f32(2048)];
+    this.transformOutput = memory.f32(4096);
+    this.frameOutput = [memory.f32(4096), memory.f32(4096)];
     this.bands = Array.from({length: 5}, (_, size) => {
       const a = 4 - size;
       if (a < 3) return SHORT_BANDS[a]!;
@@ -91,6 +123,59 @@ export class WmaStandardDecoder {
       }
       return Uint16Array.from(bands);
     });
+    if (backend) this.initializeBackend(backend);
+  }
+
+  private initializeBackend(memory: StandardBackend): void {
+    const s = this.state;
+    const copy = (
+      source: ArrayLike<number>,
+      target: Int16Array | Uint16Array | Int32Array | Float32Array,
+    ) => {
+      target.set(source);
+      return target.byteOffset;
+    };
+    s[4] = copy(EXP_VLC.sym, memory.i16(EXP_VLC.sym.length));
+    s[5] = copy(EXP_VLC.len, memory.i16(EXP_VLC.len.length));
+    s[6] = copy(POW10, memory.f32(POW10.length));
+    const gain = memory.f64(890);
+    for (let i = 0; i < gain.length; i++) gain[i] = 2 ** (3.32192809488736234787 * (i * 0.05));
+    s[7] = gain.byteOffset;
+    const bands = memory.i32(5),
+      counts = memory.i32(5);
+    this.bands.forEach((band, i) => {
+      bands[i] = copy(band, memory.u16(band.length));
+      counts[i] = band.length;
+    });
+    s[8] = bands.byteOffset;
+    s[9] = counts.byteOffset;
+    s[10] = this.maximumExponent.byteOffset;
+    s[11] = this.exponentSize.byteOffset;
+    s[12] = this.initialized.byteOffset;
+    s[13] = this.coded.byteOffset;
+    for (let ch = 0; ch < 2; ch++) {
+      s[14 + ch] = this.exponents[ch]!.byteOffset;
+      s[16 + ch] = this.coefficients[ch]!.byteOffset;
+      s[18 + ch] = this.levels[ch]!.byteOffset;
+      s[21 + ch] = this.frameOutput[ch]!.byteOffset;
+    }
+    s[20] = this.transformOutput.byteOffset;
+    const plans = memory.i32(5),
+      windows = memory.i32(5);
+    for (let i = 0; i < 5; i++) {
+      plans[i] = this.transforms[i]!.copyPlan(memory).byteOffset;
+      windows[i] = copy(this.windows[i]!, memory.f32(this.windows[i]!.length));
+    }
+    s[23] = plans.byteOffset;
+    s[24] = windows.byteOffset;
+    const tables = memory.i32(8);
+    this.tables.forEach((t, i) => {
+      tables[i * 4] = copy(t.vlc.sym, memory.i16(t.vlc.sym.length));
+      tables[i * 4 + 1] = copy(t.vlc.len, memory.i16(t.vlc.len.length));
+      tables[i * 4 + 2] = copy(t.run, memory.u16(t.run.length));
+      tables[i * 4 + 3] = copy(t.level, memory.f32(t.level.length));
+    });
+    s[25] = tables.byteOffset;
   }
 
   decode(data: Uint8Array | null, time = 0): LosslessAudio[] {
@@ -192,8 +277,21 @@ export class WmaStandardDecoder {
   }
 
   private frame(pcm: Float32Array[], offset: number): void {
-    let position = 0;
-    while (position < 2048) position += this.block(position);
+    if (this.backend) {
+      const s = this.state;
+      s[0] = Number(this.resetLengths);
+      s[1] = this.blockBits;
+      s[2] = this.previousBits;
+      s[3] = this.nextBits;
+      this.backend.decodeFrame(s, this.gb);
+      this.resetLengths = !!s[0];
+      this.blockBits = s[1]!;
+      this.previousBits = s[2]!;
+      this.nextBits = s[3]!;
+    } else {
+      let position = 0;
+      while (position < 2048) position += this.block(position);
+    }
     for (let c = 0; c < 2; c++) {
       pcm[c]!.set(this.frameOutput[c]!.subarray(0, 2048), offset);
       this.frameOutput[c]!.copyWithin(0, 2048, 4096);

@@ -2,6 +2,10 @@
 const f = Math.fround;
 const cosineTables = new Map<number, Float32Array>();
 const windows = new Map<number, Float32Array>();
+export interface MdctMemory {
+  i32(length: number): Int32Array;
+  f32(length: number): Float32Array;
+}
 
 /** Sine-window initialization rounds the angle before evaluating sine, matching
  * the decoder's `sinf(double_expression)` conversion. */
@@ -119,6 +123,24 @@ export class InverseMdct {
       output[i] = -output[length - i - 1]!;
       output[length * 2 - i - 1] = output[length + i]!;
     }
+  }
+
+  /** Copies the immutable pointer plan into a private Rust audio arena. */
+  copyPlan(memory: MdctMemory): Int32Array {
+    const plan = memory.i32(12),
+      map = memory.i32(this.map.length);
+    map.set(this.map);
+    const copy = (source: Float32Array) => {
+      const target = memory.f32(source.length);
+      target.set(source);
+      return target.byteOffset;
+    };
+    plan[0] = this.length;
+    plan[1] = map.byteOffset;
+    plan[2] = copy(this.pre);
+    plan[3] = copy(this.post);
+    for (let n = 8, i = 4; n <= this.length / 2; n *= 2, i++) plan[i] = copy(cosines(n));
+    return plan;
   }
 }
 

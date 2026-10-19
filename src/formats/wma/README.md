@@ -50,5 +50,9 @@ window caches. The float angle is rounded before evaluating each window's sine.
 Transform calls use caller-supplied buffers and allocate no temporary arrays.
 `standard-tables.ts` contains exponent, coefficient and frequency-band tables.
 Standard packets are bounded to 32 KiB, media objects to 16 MiB and the reservoir
-to 32 KiB. The Standard implementation currently runs in TypeScript; its Rust
-backend is separate from the Lossless factory. Pro decoding is not supported.
+to 32 KiB. `createWmaStandardDecoder` selects the Rust backend, returning `null`
+when acceleration is unavailable so callers can use `WmaStandardDecoder` as the
+fallback. The packet front end and Rust block loop share a private 512 KiB arena.
+One frame crosses the ABI once; entropy, coefficient scaling, stereo, IMDCT and
+overlap windows execute in Rust, with SIMD for contiguous scaling and windowing.
+The front end copies completed PCM into caller-owned output. Pro decoding is not supported.

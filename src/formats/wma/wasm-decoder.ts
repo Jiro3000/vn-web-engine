@@ -2,6 +2,7 @@ import {instantiateEmbeddedWasm} from '../../core/wasm.js';
 import {reportWasmVideoFallback} from '../../platform/runtime-advisories.js';
 import type {BitReader} from '../vc1/bitstream.js';
 import {WmaLosslessDecoder, type LosslessBackend, type LosslessConfig} from './lossless.js';
+import {WmaStandardDecoder, type StandardBackend, type StandardConfig} from './standard.js';
 import {WMA_AUDIO_WASM_BINARY} from './wasm-binary.js';
 
 interface Kernel extends WebAssembly.Exports {
@@ -9,10 +10,11 @@ interface Kernel extends WebAssembly.Exports {
   __heap_base: WebAssembly.Global;
   wma_lossless_channel(state: number, data: number, index: number, size: number): number;
   wma_lossless_finish(state: number): void;
+  wma_standard_frame(state: number, input: number, index: number, size: number): number;
 }
 
 /** A fixed arena is grown before any views are created. Instances do not share state. */
-class Backend implements LosslessBackend {
+class Backend implements LosslessBackend, StandardBackend {
   private cursor: number;
   private readonly end: number;
   constructor(private readonly kernel: Kernel) {
@@ -33,6 +35,15 @@ class Backend implements LosslessBackend {
   i16(n: number): Int16Array {
     return new Int16Array(this.kernel.memory.buffer, this.allocate(n * 2), n);
   }
+  u16(n: number): Uint16Array {
+    return new Uint16Array(this.kernel.memory.buffer, this.allocate(n * 2), n);
+  }
+  f32(n: number): Float32Array {
+    return new Float32Array(this.kernel.memory.buffer, this.allocate(n * 4), n);
+  }
+  f64(n: number): Float64Array {
+    return new Float64Array(this.kernel.memory.buffer, this.allocate(n * 8), n);
+  }
   i32(n: number): Int32Array {
     return new Int32Array(this.kernel.memory.buffer, this.allocate(n * 4), n);
   }
@@ -49,9 +60,19 @@ class Backend implements LosslessBackend {
   finish(state: Int32Array): void {
     this.kernel.wma_lossless_finish(state.byteOffset);
   }
+  decodeFrame(state: Int32Array, reader: BitReader): void {
+    const index = this.kernel.wma_standard_frame(
+      state.byteOffset,
+      reader.buffer.byteOffset,
+      reader.index,
+      reader.sizeInBits,
+    );
+    if (index < 0) throw Error('Invalid WMA Standard frame');
+    reader.index = index;
+  }
 }
 
-export function createWmaLosslessDecoder(config: LosslessConfig): WmaLosslessDecoder | null {
+function createBackend(): Backend | null {
   const instance = instantiateEmbeddedWasm(WMA_AUDIO_WASM_BINARY, {}, reportWasmVideoFallback);
   if (!instance) return null;
   let backend: Backend;
@@ -62,5 +83,15 @@ export function createWmaLosslessDecoder(config: LosslessConfig): WmaLosslessDec
     reportWasmVideoFallback();
     return null;
   }
-  return new WmaLosslessDecoder(config, backend);
+  return backend;
+}
+
+export function createWmaLosslessDecoder(config: LosslessConfig): WmaLosslessDecoder | null {
+  const backend = createBackend();
+  return backend ? new WmaLosslessDecoder(config, backend) : null;
+}
+
+export function createWmaStandardDecoder(config: StandardConfig): WmaStandardDecoder | null {
+  const backend = createBackend();
+  return backend ? new WmaStandardDecoder(config, backend) : null;
 }

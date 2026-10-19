@@ -20,5 +20,12 @@ FFT codelets. A caller-owned plan contains gather maps, pre/post rotations and
 cosine table pointers. All products and sums retain separate float rounding;
 full and middle-half transforms share the same code and caller-owned buffers.
 
+`standard.rs` decodes a WMA v2 frame in one call: variable block headers, VLC
+exponents, run/level coefficients, normalization, stereo and windowed IMDCT.
+Predictors, coefficient tables and overlap buffers share the front end's arena.
+The host initializes a bounded double-precision gain table; reconstruction rounds
+the gain division to float before the block normalization multiply. SIMD kernels
+preserve the same product/add order for contiguous coefficients and overlap windows.
+
 Derived from FFmpeg 7.1.1 under LGPL 2.1 or later; attribution and license text are
 in `src/formats/wma/NOTICE` and `src/formats/wma/LICENSE`.

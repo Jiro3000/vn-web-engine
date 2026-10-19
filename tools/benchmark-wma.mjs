@@ -19,7 +19,11 @@ if (!Number.isSafeInteger(max) || max < 1 || max > 10000) throw Error('Invalid o
 const load = (dir, file) => import(new URL(file, pathToFileURL(resolve(dir) + '/')));
 const {readAsfLayout, AsfDemuxer} = await load(currentDir, 'formats/asf/demux.js');
 const {WmaLosslessDecoder} = await load(currentDir, 'formats/wma/lossless.js');
-const {createWmaLosslessDecoder} = await load(currentDir, 'formats/wma/wasm-decoder.js');
+const {WmaStandardDecoder} = await load(currentDir, 'formats/wma/standard.js');
+const {createWmaLosslessDecoder, createWmaStandardDecoder} = await load(
+  currentDir,
+  'formats/wma/wasm-decoder.js',
+);
 const {WindowsMediaDecoder} = await load(baselineDir, 'video/windows-media.js');
 const fd = openSync(path, 'r');
 const read = (at, n) => {
@@ -36,7 +40,8 @@ try {
     length = Number(new DataView(header.buffer).getBigUint64(16, true));
   const layout = readAsfLayout(read(0, length + 50));
   codec = layout.streams.find((s) => s.kind === 'audio');
-  if (!codec || codec.codec !== 0x163) throw Error('ASF needs WMA Lossless audio');
+  if (!codec || ![0x161, 0x163].includes(codec.codec))
+    throw Error('ASF needs WMA Standard or Lossless audio');
   const demux = new AsfDemuxer(layout);
   outer: for (let p = 0; p < layout.packetCount; p++)
     for (const object of demux.packet(
@@ -83,8 +88,15 @@ function run(create) {
 }
 const variants = [
   ['baseline', () => new WindowsMediaDecoder(codec)],
-  ['wasm', () => createWmaLosslessDecoder(codec)],
-  ['javascript', () => new WmaLosslessDecoder(codec)],
+  [
+    'wasm',
+    () =>
+      codec.codec === 0x161 ? createWmaStandardDecoder(codec) : createWmaLosslessDecoder(codec),
+  ],
+  [
+    'javascript',
+    () => (codec.codec === 0x161 ? new WmaStandardDecoder(codec) : new WmaLosslessDecoder(codec)),
+  ],
 ];
 let expected;
 const samples = Object.fromEntries(variants.map(([name]) => [name, []]));
