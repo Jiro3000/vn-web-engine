@@ -25,6 +25,7 @@ try {
       ['-C', 'target-feature=+simd128'],
     ],
     ['vc1-video', 'VC1_VIDEO_WASM_BINARY', 'src/formats/vc1/wasm-binary.ts', kernel],
+    ['wma-audio', 'WMA_AUDIO_WASM_BINARY', 'src/formats/wma/wasm-binary.ts', kernel],
     [
       'aokana-bitmap',
       'BURIKO_BITMAP_WASM_BINARY',
