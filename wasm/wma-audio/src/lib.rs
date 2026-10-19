@@ -1,9 +1,10 @@
-//! WMA Lossless entropy decoding and adaptive prediction.
+//! WMA Lossless entropy decoding, adaptive prediction and shared float transforms.
 //! Derived from FFmpeg 7.1.1; LGPL-2.1-or-later. See src/formats/wma/NOTICE.
 #![no_std]
 
 use core::arch::wasm32::*;
 use core::slice;
+mod imdct;
 
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {

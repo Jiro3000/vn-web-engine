@@ -3,6 +3,7 @@ import test from 'node:test';
 import {InverseMdct, wmaSineWindow} from '../dist/formats/wma/imdct.js';
 import {WmaStandardDecoder} from '../dist/formats/wma/standard.js';
 import {standardConfig, standardPacket} from './helpers/wma-standard-packet.mjs';
+import {mdctKernel} from './helpers/wma-mdct-kernel.mjs';
 
 test('WMA IMDCT basis vectors agree with the direct cosine definition', () => {
   for (const n of [128, 256, 512, 1024, 2048]) {
@@ -71,4 +72,31 @@ test('WMA Standard synthetic VLC exponents and DC spectrum preserve float sample
   );
   for (let i = 0; i < 2048; i++) assert.equal(out[0].channels[1][i], -out[0].channels[0][i]);
   decoder.close();
+});
+
+test('WMA Rust full/half IMDCT matches float bits, including signed zeros', () => {
+  const kernel = mdctKernel();
+  let seed = 0x159bca1;
+  const random = () => {
+    seed ^= seed << 13;
+    seed ^= seed >>> 17;
+    seed ^= seed << 5;
+    return seed >>> 0;
+  };
+  for (const n of [128, 256, 512, 1024, 2048])
+    for (const scale of [1 / 32768, 2 / (n * 2 ** 23)]) {
+      const transform = new InverseMdct(n, scale),
+        plan = kernel.createPlan(transform);
+      const input = new Float32Array(n),
+        expected = new Float32Array(n * 2);
+      for (let vector = 0; vector < 30; vector++) {
+        if (vector < 2) input.fill(vector ? -0 : 0);
+        else
+          for (let i = 0; i < n; i++)
+            input[i] = Math.fround(((random() % 65536) - 32768) / 2 ** (random() % 24));
+        transform.full(input, expected);
+        assert.deepEqual(plan.decode(input), expected);
+        assert.deepEqual(plan.decode(input, false), expected.subarray(n / 2, (n * 3) / 2));
+      }
+    }
 });
