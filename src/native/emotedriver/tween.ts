@@ -1,3 +1,9 @@
+import {
+  EmoteRotateTween as SharedRotateTween,
+  wrapAngle as sharedWrapAngle,
+  EMOTE_TWO_PI,
+} from './runtime/controls/rotate.js';
+export {EMOTE_TWO_PI};
 import {EMOTEDRIVER_X64_SHA256} from './build.js';
 import {
   EmoteTween as SharedTween,
@@ -18,9 +24,6 @@ import {
  */
 
 const f32 = Math.fround;
-/** `float` 1 and the end tolerance −0.0001 compared with `t − 1` (0x181fcd554, 0x181fcd5d8). */
-const ONE = 1;
-const END_EPSILON = f32(-0.0001);
 
 /** Inlined at every API entry: easing value → `pow` exponent. */
 export function easingPower(easing: number): number {
@@ -39,131 +42,15 @@ export class EmoteTween extends SharedTween {
   }
 }
 
-/** `float` 2π and π as the angle code compares them. */
-export const EMOTE_TWO_PI = f32(2 * Math.PI);
-const PI = f32(Math.PI);
-
-/** Wraps `value` into [0, `period`), each step stored as float. */
+/** x64 wrapping retains non-finite values before entering the finite native loop. */
 export function wrapAngle(value: number, period: number): number {
-  let x = f32(value);
-  const m = f32(period);
-  if (!Number.isFinite(x)) return x;
-  while (x < 0) x = f32(m + x);
-  while (m <= x) x = f32(x - m);
-  return x;
+  const rounded = f32(value);
+  return Number.isFinite(rounded) ? sharedWrapAngle(rounded, period) : rounded;
 }
 
-interface RotateEntry {
-  readonly angle: number;
-  readonly frames: number;
-  readonly power: number;
-}
-
-export class EmoteRotateTween {
-  private queue: RotateEntry[] = [];
-  state = 0;
-  current = 0;
-  start = 0;
-  target = 0;
-  power = 0;
-  t = 0;
-  invFrames = 0;
-
-  get queued(): number {
-    return this.queue.length;
-  }
-
-  get busy(): boolean {
-    return this.state !== 0 || this.queue.length !== 0;
-  }
-
-  /**
-   * 0x18002bdc0: the angle is wrapped to [0, 2π) first. `frames > 0` without `queue` is
-   * ignored while the running tween heads for the same angle and ends sooner; otherwise the
-   * queue is replaced.
-   */
-  set(radians: number, frames: number, power: number, queue: boolean): void {
-    const a = wrapAngle(radians, EMOTE_TWO_PI);
-    const fr = f32(frames);
-    if (fr > 0) {
-      const entry = {angle: a, frames: fr, power: f32(power)};
-      if (!queue) {
-        if (
-          this.state !== 0 &&
-          wrapAngle(this.target, EMOTE_TWO_PI) === a &&
-          f32(f32(ONE - this.t) / this.invFrames) < fr
-        )
-          return;
-        this.queue = [entry];
-        this.state = 0;
-        return;
-      }
-      this.queue.push(entry);
-      return;
-    }
-    this.queue = [];
-    this.current = a;
-    this.state = 0;
-  }
-
-  /** 0x18002bb10: as `EmoteTween.step`; the target takes the shorter way round. */
-  step(frames: number): number {
-    const dt = f32(frames);
-    for (;;) {
-      if (this.state === 0) {
-        const entry = this.queue.shift();
-        if (!entry) break;
-        const cur = this.current,
-          a = entry.angle;
-        this.start = cur;
-        this.target = a;
-        if (a <= cur) {
-          if (PI < f32(cur - a)) this.target = f32(a + EMOTE_TWO_PI);
-        } else if (PI < f32(a - cur)) this.target = f32(a - EMOTE_TWO_PI);
-        this.t = 0;
-        this.state = 1;
-        this.invFrames = f32(ONE / entry.frames);
-        this.power = entry.power;
-        continue;
-      }
-      if (this.state !== 1) break;
-      const t = f32(dt * this.invFrames + this.t);
-      this.t = t;
-      if (f32(t - ONE) < END_EPSILON) {
-        const k = powf(t, this.power);
-        this.current = wrapAngle(f32(f32(this.target - this.start) * k + this.start), EMOTE_TWO_PI);
-        break;
-      }
-      this.t = ONE;
-      this.current = wrapAngle(this.target, EMOTE_TWO_PI);
-      this.state = 0;
-    }
-    return this.current;
-  }
-
-  /** 0x18002bd10. */
-  skip(): void {
-    const last = this.queue[this.queue.length - 1];
-    if (!last) {
-      if (this.state !== 0) {
-        this.state = 0;
-        this.current = wrapAngle(this.target, EMOTE_TWO_PI);
-      }
-      return;
-    }
-    this.state = 0;
-    this.current = last.angle;
-    this.queue = [];
-  }
-
-  copyFrom(source: EmoteRotateTween): void {
-    this.queue = source.queue.slice();
-    this.state = source.state;
-    this.current = source.current;
-    this.start = source.start;
-    this.target = source.target;
-    this.power = source.power;
-    this.t = source.t;
-    this.invFrames = source.invFrames;
+/** Compatibility constructor over the shared exact-build rotation tween. */
+export class EmoteRotateTween extends SharedRotateTween {
+  constructor() {
+    super(EMOTEDRIVER_X64_SHA256);
   }
 }

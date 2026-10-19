@@ -505,3 +505,22 @@ test('exact x64 DLL identity selects immediate tween progress and completed queu
   assert.throws(() => new EmoteTween(1, 'unknown'), /unsupported DLL build/);
   assert.throws(() => easingPower(0, '3.9.8'), /unsupported DLL build/);
 });
+
+test('x64 rotation queues advance immediately and retain the shorter wrapped target', () => {
+  const tween = new EmoteRotateTween(EMOTEDRIVER_X64_SHA256);
+  tween.set(1, 4, 1, false);
+  assert.equal(tween.step(1), 0.25);
+  tween.set(1, 20, 1, false);
+  assert.equal(tween.step(1), 0.5);
+  tween.set(2, 1, 1, true);
+  tween.set(3, 1, 1, true);
+  assert.equal(tween.step(2), 3);
+  assert.equal(tween.busy, false);
+  tween.set(-1, 0, 1, false);
+  assert.equal(tween.current, f32(f32(2 * Math.PI) - 1));
+  tween.set(Infinity, 1, 1, false);
+  tween.step(0);
+  tween.skip();
+  assert.equal(tween.current, Infinity);
+  assert.throws(() => new EmoteRotateTween('unknown'), /unsupported DLL build/);
+});
