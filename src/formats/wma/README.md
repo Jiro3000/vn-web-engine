@@ -71,5 +71,9 @@ Pro codec packets and the bit reservoir are bounded to 32 KiB, media objects to
 16 MiB. Each channel retains 1024 samples of overlap between 2048-sample frames.
 Multichannel layouts, XMA variants and reserved transform modes are rejected.
 Postprocessing and DRC fields are consumed as metadata, matching the source decoder.
-`pro-tables.ts` supplies canonical VLC and coefficient tables. Pro currently uses
-the TypeScript implementation; the shared Rust IMDCT also supports its scaling.
+`pro-tables.ts` supplies canonical VLC and coefficient tables. `createWmaProDecoder`
+uses the shared Rust arena and returns `null` when acceleration is unavailable.
+The TypeScript front end parses packet/frame metadata and tiling, then calls Rust
+once per frame for scale factors, coefficients, stereo, inverse quantization,
+IMDCT and overlap. Channel histories and predictors stay in the same private arena.
+The direct `WmaProDecoder` constructor provides the typed-array JavaScript fallback.

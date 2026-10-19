@@ -3,6 +3,7 @@ import {reportWasmVideoFallback} from '../../platform/runtime-advisories.js';
 import type {BitReader} from '../vc1/bitstream.js';
 import {WmaLosslessDecoder, type LosslessBackend, type LosslessConfig} from './lossless.js';
 import {WmaStandardDecoder, type StandardBackend, type StandardConfig} from './standard.js';
+import {WmaProDecoder, type ProBackend, type ProConfig} from './pro.js';
 import {WMA_AUDIO_WASM_BINARY} from './wasm-binary.js';
 
 interface Kernel extends WebAssembly.Exports {
@@ -11,10 +12,11 @@ interface Kernel extends WebAssembly.Exports {
   wma_lossless_channel(state: number, data: number, index: number, size: number): number;
   wma_lossless_finish(state: number): void;
   wma_standard_frame(state: number, input: number, index: number, size: number): number;
+  wma_pro_frame(state: number, input: number, index: number, size: number): number;
 }
 
 /** A fixed arena is grown before any views are created. Instances do not share state. */
-class Backend implements LosslessBackend, StandardBackend {
+class Backend implements LosslessBackend, StandardBackend, ProBackend {
   private cursor: number;
   private readonly end: number;
   constructor(private readonly kernel: Kernel) {
@@ -70,6 +72,16 @@ class Backend implements LosslessBackend, StandardBackend {
     if (index < 0) throw Error('Invalid WMA Standard frame');
     reader.index = index;
   }
+  decodeProFrame(state: Int32Array, reader: BitReader): void {
+    const index = this.kernel.wma_pro_frame(
+      state.byteOffset,
+      reader.buffer.byteOffset,
+      reader.index,
+      reader.sizeInBits,
+    );
+    if (index < 0) throw Error('Invalid WMA Pro subframe');
+    reader.index = index;
+  }
 }
 
 function createBackend(): Backend | null {
@@ -94,4 +106,9 @@ export function createWmaLosslessDecoder(config: LosslessConfig): WmaLosslessDec
 export function createWmaStandardDecoder(config: StandardConfig): WmaStandardDecoder | null {
   const backend = createBackend();
   return backend ? new WmaStandardDecoder(config, backend) : null;
+}
+
+export function createWmaProDecoder(config: ProConfig): WmaProDecoder | null {
+  const backend = createBackend();
+  return backend ? new WmaProDecoder(config, backend) : null;
 }

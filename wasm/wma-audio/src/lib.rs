@@ -5,6 +5,7 @@
 use core::arch::wasm32::*;
 use core::slice;
 mod imdct;
+mod pro;
 mod standard;
 
 #[panic_handler]

@@ -22,6 +22,22 @@ export interface ProConfig {
   readonly extra: Uint8Array;
 }
 
+export interface ProBackend {
+  u8(length: number): Uint8Array;
+  u16(length: number): Uint16Array;
+  i16(length: number): Int16Array;
+  i32(length: number): Int32Array;
+  f32(length: number): Float32Array;
+  decodeProFrame(state: Int32Array, reader: BitReader): void;
+}
+type ProMemory = Pick<ProBackend, 'u8' | 'u16' | 'i32' | 'f32'>;
+const jsMemory: ProMemory = {
+  u8: (n) => new Uint8Array(n),
+  u16: (n) => new Uint16Array(n),
+  i32: (n) => new Int32Array(n),
+  f32: (n) => new Float32Array(n),
+};
+
 class Channel {
   previousLength = 2048;
   count = 0;
@@ -36,10 +52,16 @@ class Channel {
   maximumScale = 0;
   scaleIndex = 0;
   tableIndex = 0;
-  readonly lengths = new Uint16Array(32);
-  readonly output = new Float32Array(3072);
-  readonly savedScales = [new Int32Array(29), new Int32Array(29)];
-  scales = this.savedScales[0]!;
+  readonly lengths: Uint16Array;
+  readonly output: Float32Array;
+  readonly savedScales: Int32Array[];
+  scales: Int32Array;
+  constructor(memory: ProMemory) {
+    this.lengths = memory.u16(32);
+    this.output = memory.f32(3072);
+    this.savedScales = [memory.i32(29), memory.i32(29)];
+    this.scales = this.savedScales[0]!;
+  }
 }
 
 /** Stereo 24-bit WMA Pro, 44.1 kHz, length-prefixed 2048-sample frames. */
@@ -47,7 +69,9 @@ export class WmaProDecoder {
   private readonly gb = new BitReader();
   private readonly pgb = new BitReader();
   private readonly packet: Uint8Array;
-  private readonly reservoir = new Uint8Array(32768 + 64);
+  private readonly reservoir: Uint8Array;
+  private readonly state: Int32Array;
+  private readonly channelState: Int32Array;
   private saved = 0;
   private frameOffset = 0;
   private packetLoss = true;
@@ -59,7 +83,7 @@ export class WmaProDecoder {
   private trimEnd = 0;
   private drained = false;
   private closed = false;
-  private readonly channel = [new Channel(), new Channel()];
+  private readonly channel: Channel[];
   private readonly bandOffsets: Int32Array[];
   private readonly scaleOffsets: Int32Array[][];
   private readonly transforms = Array.from({length: 5}, (_, i) => {
@@ -76,9 +100,12 @@ export class WmaProDecoder {
   private readonly transformBand = new Uint8Array(29);
   private transmitVectors = 0;
   private readonly values = new Float32Array(4);
-  private readonly scratch = new Float32Array(2048);
+  private readonly scratch: Float32Array;
 
-  constructor(readonly config: ProConfig) {
+  constructor(
+    readonly config: ProConfig,
+    private readonly backend?: ProBackend,
+  ) {
     const extra = config.extra;
     if (extra.length < 18) throw Error('Unsupported WMA Pro extradata');
     const view = new DataView(extra.buffer, extra.byteOffset, extra.byteLength);
@@ -95,6 +122,12 @@ export class WmaProDecoder {
       throw Error('Unsupported WMA Pro configuration');
     this.sizeBits = 31 - Math.clz32(config.blockAlign) + 4;
     this.packet = new Uint8Array(config.blockAlign + 64);
+    const memory = backend ?? jsMemory;
+    this.reservoir = memory.u8(32768 + 64);
+    this.state = memory.i32(22);
+    this.channelState = memory.i32(36);
+    this.channel = [new Channel(memory), new Channel(memory)];
+    this.scratch = memory.f32(2048);
     this.bandOffsets = Array.from({length: 5}, (_, i) => {
       const length = 2048 >> i,
         offsets = [0];
@@ -122,6 +155,77 @@ export class WmaProDecoder {
         return map;
       }),
     );
+    if (backend) this.initializeBackend(backend);
+  }
+
+  private initializeBackend(memory: ProBackend): void {
+    const s = this.state,
+      channels = this.channelState;
+    const copy = (
+      source: ArrayLike<number>,
+      target: Int16Array | Int32Array | Uint16Array | Float32Array,
+    ) => {
+      target.set(source);
+      return target.byteOffset;
+    };
+    s[0] = channels.byteOffset;
+    for (let ch = 0; ch < 2; ch++) {
+      const c = this.channel[ch]!,
+        i = ch * 18;
+      channels[i] = 2048;
+      channels[i + 13] = c.lengths.byteOffset;
+      channels[i + 14] = c.output.byteOffset;
+      channels[i + 15] = c.savedScales[0]!.byteOffset;
+      channels[i + 16] = c.savedScales[1]!.byteOffset;
+      channels[i + 17] = c.scales.byteOffset;
+    }
+    const bands = memory.i32(5),
+      counts = memory.i32(5),
+      maps = memory.i32(25);
+    for (let i = 0; i < 5; i++) {
+      const offsets = this.bandOffsets[i]!;
+      bands[i] = copy(offsets, memory.i32(offsets.length));
+      counts[i] = offsets.length - 1;
+      for (let j = 0; j < 5; j++) {
+        const map = this.scaleOffsets[i]![j]!;
+        maps[i * 5 + j] = copy(map, memory.i32(map.length));
+      }
+    }
+    s[2] = bands.byteOffset;
+    s[3] = counts.byteOffset;
+    s[4] = maps.byteOffset;
+    const plans = memory.i32(5),
+      windows = memory.i32(5);
+    for (let i = 0; i < 5; i++) {
+      plans[i] = this.transforms[i]!.copyPlan(memory).byteOffset;
+      windows[i] = copy(this.windows[i]!, memory.f32(this.windows[i]!.length));
+    }
+    s[5] = plans.byteOffset;
+    s[6] = windows.byteOffset;
+    const quant = memory.f32(1674);
+    for (let i = -903; i <= 770; i++) quant[i + 903] = 2 ** (3.32192809488736234787 * (i / 20));
+    s[7] = quant.byteOffset;
+    for (const [index, table] of [
+      [8, SCALE_VLC],
+      [10, SCALE_RL_VLC],
+      [14, VEC4],
+      [16, VEC2],
+      [18, VEC1],
+    ] as const) {
+      s[index] = copy(table.sym, memory.i16(table.sym.length));
+      s[index + 1] = copy(table.len, memory.i16(table.len.length));
+    }
+    s[12] = copy(SCALE_RUN, memory.u16(SCALE_RUN.length));
+    s[13] = copy(SCALE_LEVEL, memory.i16(SCALE_LEVEL.length));
+    const coefficients = memory.i32(8);
+    COEFFICIENTS.forEach((table, i) => {
+      coefficients[i * 4] = copy(table.vlc.sym, memory.i16(table.vlc.sym.length));
+      coefficients[i * 4 + 1] = copy(table.vlc.len, memory.i16(table.vlc.len.length));
+      coefficients[i * 4 + 2] = copy(table.run, memory.u16(table.run.length));
+      coefficients[i * 4 + 3] = copy(table.level, memory.f32(table.level.length));
+    });
+    s[20] = coefficients.byteOffset;
+    s[21] = this.scratch.byteOffset;
   }
 
   decode(data: Uint8Array | null, time = 0): LosslessAudio[] {
@@ -259,9 +363,14 @@ export class WmaProDecoder {
       c.current = 0;
       c.reuse = false;
     }
-    for (let i = 0; this.channel.some((c) => c.decoded < 2048); i++) {
-      if (i >= 64) throw Error('Invalid WMA Pro subframe count');
-      this.subframe();
+    if (this.backend) {
+      for (let i = 0; i < 2; i++) this.channelState[i * 18 + 1] = this.channel[i]!.count;
+      this.backend.decodeProFrame(this.state, this.gb);
+    } else {
+      for (let i = 0; this.channel.some((c) => c.decoded < 2048); i++) {
+        if (i >= 64) throw Error('Invalid WMA Pro subframe count');
+        this.subframe();
+      }
     }
     const pcm = this.skipFrame ? null : this.channel.map((c) => c.output.slice(0, 2048));
     this.skipFrame = false;

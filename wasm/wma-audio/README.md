@@ -27,5 +27,12 @@ The host initializes a bounded double-precision gain table; reconstruction round
 the gain division to float before the block normalization multiply. SIMD kernels
 preserve the same product/add order for contiguous coefficients and overlap windows.
 
+`pro.rs` decodes stereo WMA Pro subframes in one frame call. Eighteen-word channel
+records retain scale-factor buffers, resampling state and overlap lengths; the host
+only supplies new tile lengths and copies completed PCM. The quantizer uses a
+bounded float table for exponents -903 through 770, with zero/infinity outside the
+float range. SIMD stereo, coefficient scaling and paired overlap products retain
+the scalar decoder's operation order.
+
 Derived from FFmpeg 7.1.1 under LGPL 2.1 or later; attribution and license text are
 in `src/formats/wma/NOTICE` and `src/formats/wma/LICENSE`.

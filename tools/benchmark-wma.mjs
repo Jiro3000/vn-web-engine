@@ -20,7 +20,8 @@ const load = (dir, file) => import(new URL(file, pathToFileURL(resolve(dir) + '/
 const {readAsfLayout, AsfDemuxer} = await load(currentDir, 'formats/asf/demux.js');
 const {WmaLosslessDecoder} = await load(currentDir, 'formats/wma/lossless.js');
 const {WmaStandardDecoder} = await load(currentDir, 'formats/wma/standard.js');
-const {createWmaLosslessDecoder, createWmaStandardDecoder} = await load(
+const {WmaProDecoder} = await load(currentDir, 'formats/wma/pro.js');
+const {createWmaLosslessDecoder, createWmaStandardDecoder, createWmaProDecoder} = await load(
   currentDir,
   'formats/wma/wasm-decoder.js',
 );
@@ -40,8 +41,7 @@ try {
     length = Number(new DataView(header.buffer).getBigUint64(16, true));
   const layout = readAsfLayout(read(0, length + 50));
   codec = layout.streams.find((s) => s.kind === 'audio');
-  if (!codec || ![0x161, 0x163].includes(codec.codec))
-    throw Error('ASF needs WMA Standard or Lossless audio');
+  if (!codec || ![0x161, 0x162, 0x163].includes(codec.codec)) throw Error('ASF needs WMA audio');
   const demux = new AsfDemuxer(layout);
   outer: for (let p = 0; p < layout.packetCount; p++)
     for (const object of demux.packet(
@@ -91,11 +91,20 @@ const variants = [
   [
     'wasm',
     () =>
-      codec.codec === 0x161 ? createWmaStandardDecoder(codec) : createWmaLosslessDecoder(codec),
+      codec.codec === 0x161
+        ? createWmaStandardDecoder(codec)
+        : codec.codec === 0x162
+          ? createWmaProDecoder(codec)
+          : createWmaLosslessDecoder(codec),
   ],
   [
     'javascript',
-    () => (codec.codec === 0x161 ? new WmaStandardDecoder(codec) : new WmaLosslessDecoder(codec)),
+    () =>
+      codec.codec === 0x161
+        ? new WmaStandardDecoder(codec)
+        : codec.codec === 0x162
+          ? new WmaProDecoder(codec)
+          : new WmaLosslessDecoder(codec),
   ],
 ];
 let expected;

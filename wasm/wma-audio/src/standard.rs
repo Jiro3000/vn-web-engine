@@ -4,7 +4,7 @@ use super::{imdct::wma_imdct, Bits};
 use core::{arch::wasm32::*, ptr, slice};
 
 #[inline(always)]
-unsafe fn vlc(g: &mut Bits, sym: u32, len: u32, width: u32) -> i32 {
+pub(super) unsafe fn vlc(g: &mut Bits, sym: u32, len: u32, width: u32) -> i32 {
     let sym = sym as *const i16;
     let len = len as *const i16;
     let mut index = g.show(width) as usize;
