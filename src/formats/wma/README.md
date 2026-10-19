@@ -35,5 +35,20 @@ decode timings against an existing decoder build without displaying or saving
 decoded audio.
 
 The implementation is derived from FFmpeg 7.1.1 under LGPL 2.1 or later. See
-[NOTICE](NOTICE) and [LICENSE](LICENSE). WMA Standard and Pro are separate codec
-variants; this module does not yet implement them.
+[NOTICE](NOTICE) and [LICENSE](LICENSE).
+
+`WmaStandardDecoder` in `standard.ts` implements stereo WMA v2 with VLC exponents,
+bit reservoir and five variable block sizes (128 through 2048). Supported streams
+have flags `0x000f`, 44.1/48 kHz rates and bitrates that disable noise coding.
+Spectral run/level decoding, independent or mid/side stereo, float IMDCT and
+overlap windows preserve the source decoder's float operation order. The first
+4096 samples are suppressed, with the corresponding packet timestamp adjustment;
+draining returns the final 2048 samples of overlap output.
+
+`imdct.ts` supplies the power-of-two split-radix inverse MDCT and bounded sine
+window caches. The float angle is rounded before evaluating each window's sine.
+Transform calls use caller-supplied buffers and allocate no temporary arrays.
+`standard-tables.ts` contains exponent, coefficient and frequency-band tables.
+Standard packets are bounded to 32 KiB, media objects to 16 MiB and the reservoir
+to 32 KiB. The Standard implementation currently runs in TypeScript; its Rust
+backend is separate from the Lossless factory. Pro decoding is not supported.

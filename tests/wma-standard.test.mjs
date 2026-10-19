@@ -1,0 +1,74 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import {InverseMdct, wmaSineWindow} from '../dist/formats/wma/imdct.js';
+import {WmaStandardDecoder} from '../dist/formats/wma/standard.js';
+import {standardConfig, standardPacket} from './helpers/wma-standard-packet.mjs';
+
+test('WMA IMDCT basis vectors agree with the direct cosine definition', () => {
+  for (const n of [128, 256, 512, 1024, 2048]) {
+    const transform = new InverseMdct(n, 1 / 32768),
+      input = new Float32Array(n),
+      out = new Float32Array(n * 2);
+    for (const k of [0, 1, 7]) {
+      input.fill(0);
+      input[k] = 1;
+      out.fill(NaN);
+      transform.full(input, out);
+      for (let i = 0; i < out.length; i++) {
+        const expected = -Math.cos((Math.PI / n) * (i + 0.5 + n / 2) * (k + 0.5)) / 32768;
+        assert.ok(Math.abs(out[i] - expected) < 2e-11, `${n}/${k}/${i}`);
+      }
+    }
+    const window = wmaSineWindow(n);
+    assert.equal(wmaSineWindow(n), window);
+    for (let i = 0; i < n; i++)
+      assert.ok(Math.abs(window[i] ** 2 + window[n - 1 - i] ** 2 - 1) < 2e-7);
+  }
+  assert.throws(() => new InverseMdct(100, 1), /Unsupported/);
+  assert.throws(() => wmaSineWindow(NaN), /Unsupported/);
+  assert.throws(
+    () => new InverseMdct(128, 1).full(new Float32Array(1), new Float32Array(256)),
+    /Short/,
+  );
+});
+
+test('WMA Standard packet delay, sample trimming, timestamp and drain', () => {
+  const decoder = new WmaStandardDecoder(standardConfig());
+  const out = decoder.decode(standardPacket(), 100);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].time, 185);
+  for (const c of out[0].channels) assert.deepEqual(c, new Float32Array(2048));
+  const tail = decoder.decode(null);
+  assert.equal(tail.length, 1);
+  assert.equal(tail[0].time, -1);
+  assert.equal(tail[0].channels[0].length, 2048);
+  assert.deepEqual(decoder.decode(null), []);
+  decoder.close();
+  decoder.close();
+  assert.throws(() => decoder.decode(null), /closed/);
+});
+
+test('WMA Standard validates supported configurations and packet bounds', () => {
+  const config = standardConfig();
+  assert.throws(() => new WmaStandardDecoder({...config, channels: 1}), /Unsupported/);
+  assert.throws(() => new WmaStandardDecoder({...config, extra: new Uint8Array(6)}), /Unsupported/);
+  assert.throws(() => new WmaStandardDecoder(config).decode(new Uint8Array(10)), /Truncated/);
+  assert.throws(() => new WmaStandardDecoder(config).decode(new Uint8Array(2731)), /superframe/);
+});
+
+test('WMA Standard synthetic VLC exponents and DC spectrum preserve float samples', () => {
+  const decoder = new WmaStandardDecoder(standardConfig());
+  const out = decoder.decode(standardPacket(true), 100);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].time, 185);
+  // Independently checked using the original decoder on the generated packet.
+  assert.deepEqual(
+    out[0].channels[0].subarray(0, 8),
+    new Float32Array([
+      2.3644770408282056e-7, 2.3644771829367528e-7, 2.3644770408282056e-7, 2.3644773250453e-7,
+      2.3644770408282056e-7, 2.3644773250453e-7, 2.3644773250453e-7, 2.3644771829367528e-7,
+    ]),
+  );
+  for (let i = 0; i < 2048; i++) assert.equal(out[0].channels[1][i], -out[0].channels[0][i]);
+  decoder.close();
+});
