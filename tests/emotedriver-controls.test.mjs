@@ -1,3 +1,5 @@
+import {EmoteEye} from '../dist/native/emotedriver/runtime/controls/eye.js';
+import {EmoteEyebrow} from '../dist/native/emotedriver/runtime/controls/eyebrow.js';
 import {EmoteGraph, EmoteGraphFollower} from '../dist/native/emotedriver/runtime/controls/graph.js';
 import {EMOTEDRIVER_X64_SHA256} from '../dist/native/emotedriver/build.js';
 import test from 'node:test';
@@ -381,4 +383,31 @@ test('x64 graph preserves fractional frames and advances queued motion immediate
   assert.equal(follower.value, 0.25);
   assert.equal(follower.busy, false);
   assert.throws(() => new EmoteGraph([], [], 'unknown'), /unsupported DLL build/);
+});
+
+test('x64 blink consumes phase changes immediately and disabling resets its cycle', () => {
+  let draws = 0;
+  const random = () => {
+    draws++;
+    return 0;
+  };
+  const settings = eyeControl({blinkIntervalMin: 0, blinkIntervalMax: 0, blinkFrameCount: 10});
+  const eye = new EmoteEye(settings, random, EMOTEDRIVER_X64_SHA256);
+  const values = Array.from({length: 12}, () => eye.update(1, random));
+  assert.deepEqual(values, [2.5, 5, 7.5, 10, 10, 10, 7.5, 5, 2.5, 2.5, 5, 7.5]);
+  const before = draws;
+  eye.setBlinkEnabled(false);
+  assert.equal(draws, before + 1);
+  assert.equal(eye.update(1, random), 0);
+  eye.setBlinkEnabled(false);
+  assert.equal(draws, before + 1);
+  eye.setBlinkEnabled(true);
+  assert.equal(eye.update(1, random), 2.5);
+  const brow = new EmoteEyebrow(
+    {label: 'brow', beginFrame: 0.25, edge: [[0.25, 10.75]], node: []},
+    EMOTEDRIVER_X64_SHA256,
+  );
+  assert.equal(brow.update(0), 0.25);
+  brow.set(10.75, 4, 1, false);
+  assert.equal(brow.update(1), 2.875);
 });

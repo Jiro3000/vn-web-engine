@@ -177,3 +177,10 @@ frames and rounds backtracking differences before updating path cost. The
 shared follower retains each image's queue timing, retarget behavior and
 overshoot accounting. The x64 names in `controls.ts` delegate to it. Both
 images use the same xorshift word update and 23-bit uniform output.
+
+`runtime/controls/eye.ts` and `eyebrow.ts` share graph motion for both images.
+The x64 image preserves float frame labels and consumes specific blink phase
+changes in the current call. Its blink toggle resets the open position and
+interval when disabled. The x86 image keeps its integer frame loading and
+one-phase-per-call behavior. Compatibility names in `controls.ts` delegate
+to these controls, sharing the process random source.

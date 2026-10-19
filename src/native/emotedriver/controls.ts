@@ -1,3 +1,5 @@
+import {EmoteEye} from './runtime/controls/eye.js';
+import {EmoteEyebrow} from './runtime/controls/eyebrow.js';
 import {EMOTEDRIVER_X64_SHA256} from './build.js';
 import {EmoteGraph as SharedGraph, EmoteGraphFollower} from './runtime/controls/graph.js';
 import {EmoteXorshift128} from './runtime/controls/random.js';
@@ -14,9 +16,6 @@ import {EmoteTween} from './tween.js';
 
 const f32 = Math.fround;
 const REACH_EPSILON = f32(0.0001);
-/** Blink speed factor 2.5 (0x181fcd578) and hold divisor 5 (0x181fcd58c). */
-const BLINK_SPEED = f32(2.5);
-const BLINK_HOLD = f32(5);
 /** `FLT_EPSILON` (0x181fcd510). */
 const FLT_EPSILON = f32(2 ** -23);
 
@@ -86,117 +85,18 @@ export interface EmoteEyeSettings {
 }
 
 /** `EPEyeControl` (0xf8 bytes, loader 0x180014640, step 0x180028ab0). */
-export class EmoteEyeControl {
-  readonly label: string;
-  readonly walker: EmoteGraphWalker;
-  private readonly begin: number;
-  private readonly end: number;
-  private readonly blinkMin: number;
-  private readonly blinkMax: number;
-  private readonly blinkFrames: number;
-  /** +0xc8 (the API toggles it). */
-  blinkEnabled: number;
-  /** +0xbc: 0 open, 10 closing, 11 closed, 12 opening. */
-  blinkState = 0;
-  private blinkPos: number;
-  private blinkTimer: number;
-
-  constructor(
-    s: EmoteEyeSettings,
-    private readonly random: EmoteRandom,
-  ) {
-    this.label = s.label;
-    this.begin = f32(s.beginFrame);
-    this.end = f32(s.endFrame);
-    this.blinkMin = f32(s.blinkIntervalMin);
-    this.blinkMax = f32(s.blinkIntervalMax);
-    this.blinkFrames = f32(s.blinkFrameCount);
-    this.blinkEnabled = s.blinkEnabled ? 1 : 0;
-    this.walker = new EmoteGraphWalker(
-      new EmoteGraph(
-        s.edge.map(([a, b]) => [f32(a), f32(b)] as const),
-        s.node.map((n) => n.map(f32)),
-      ),
-      this.begin,
-    );
-    this.blinkPos = this.begin;
-    this.blinkTimer = this.interval();
+export class EmoteEyeControl extends EmoteEye {
+  private readonly nextRandom: () => number;
+  constructor(settings: EmoteEyeSettings, random: EmoteRandom) {
+    const nextRandom = () => random.next();
+    super(settings, nextRandom, EMOTEDRIVER_X64_SHA256);
+    this.nextRandom = nextRandom;
   }
-
-  /** `setBlinkEnabled`: disabling restarts the blink cycle with an open eye. */
-  setBlinkEnabled(enabled: boolean): void {
-    const b = enabled ? 1 : 0;
-    if (b === this.blinkEnabled) return;
-    this.blinkEnabled = b;
-    if (b === 0) {
-      this.blinkState = 0;
-      this.blinkPos = this.begin;
-      this.blinkTimer = this.interval();
-    }
+  get walker(): EmoteGraphFollower {
+    return this.motion;
   }
-
-  private interval(): number {
-    return f32(f32(this.random.next() * f32(this.blinkMax - this.blinkMin)) + this.blinkMin);
-  }
-
-  /** Steps the walk and the blink, then returns the output value. */
   step(frames: number): number {
-    const dt = f32(frames);
-    this.walker.step(dt);
-    const speed = f32(f32(dt * BLINK_SPEED) / this.blinkFrames);
-    const range = f32(this.end - this.begin);
-    for (;;) {
-      if (this.blinkState === 0) {
-        if (this.blinkEnabled !== 0 && Math.trunc(this.blinkPos) === this.begin) {
-          this.blinkTimer = f32(this.blinkTimer - dt);
-          if (this.blinkTimer <= 0) {
-            this.blinkState = 10;
-            continue;
-          }
-        }
-        break;
-      }
-      if (this.blinkState === 10) {
-        this.blinkPos = f32(this.blinkPos + f32(range * speed));
-        if (this.blinkPos >= this.end) {
-          this.blinkState = 11;
-          this.blinkPos = this.end;
-          this.blinkTimer = f32(this.blinkFrames / BLINK_HOLD);
-        }
-        break;
-      }
-      if (this.blinkState === 11) {
-        this.blinkTimer = f32(this.blinkTimer - dt);
-        if (this.blinkTimer <= 0) {
-          this.blinkState = 12;
-          this.blinkTimer = this.interval();
-        }
-        break;
-      }
-      if (this.blinkState === 12) {
-        this.blinkPos = f32(this.blinkPos - f32(speed * range));
-        if (this.blinkPos <= this.begin) {
-          this.blinkPos = this.begin;
-          this.blinkState = 0;
-          continue;
-        }
-        break;
-      }
-      break;
-    }
-    return this.output();
-  }
-
-  output(): number {
-    const cur = this.walker.current;
-    if (this.begin <= cur && cur <= this.end) {
-      return f32(
-        f32(
-          f32(f32(this.blinkPos - this.begin) * f32(this.end - cur)) / f32(this.end - this.begin),
-        ) + cur,
-      );
-    }
-    return cur;
+    return this.update(frames, this.nextRandom);
   }
 }
 
@@ -208,24 +108,15 @@ export interface EmoteEyebrowSettings {
 }
 
 /** `EPEyebrowControl` (loader 0x180015540, step 0x180027f20): the walk without blinking. */
-export class EmoteEyebrowControl {
-  readonly label: string;
-  readonly walker: EmoteGraphWalker;
-
-  constructor(s: EmoteEyebrowSettings) {
-    this.label = s.label;
-    this.walker = new EmoteGraphWalker(
-      new EmoteGraph(
-        s.edge.map(([a, b]) => [f32(a), f32(b)] as const),
-        s.node.map((n) => n.map(f32)),
-      ),
-      f32(s.beginFrame),
-    );
+export class EmoteEyebrowControl extends EmoteEyebrow {
+  constructor(settings: EmoteEyebrowSettings) {
+    super(settings, EMOTEDRIVER_X64_SHA256);
   }
-
+  get walker(): EmoteGraphFollower {
+    return this.motion;
+  }
   step(frames: number): number {
-    this.walker.step(frames);
-    return this.walker.current;
+    return this.update(frames);
   }
 }
 
