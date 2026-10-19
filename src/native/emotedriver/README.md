@@ -170,3 +170,10 @@ completion tolerance and repeated-target behavior retain each image's semantics.
 `runtime/controls/rotate.ts` similarly preserves each build's shortest-arc
 rotation, retarget retention and queue timing. The x64 compatibility constructors
 in `tween.ts` delegate to these shared implementations.
+
+`runtime/controls/graph.ts` shares path search between the two images. The x86
+loader truncates graph frames to integers; the x64 loader preserves float32
+frames and rounds backtracking differences before updating path cost. The
+shared follower retains each image's queue timing, retarget behavior and
+overshoot accounting. The x64 names in `controls.ts` delegate to it. Both
+images use the same xorshift word update and 23-bit uniform output.

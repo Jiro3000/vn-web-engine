@@ -1,3 +1,7 @@
+import {EMOTEDRIVER_X64_SHA256} from './build.js';
+import {EmoteGraph as SharedGraph, EmoteGraphFollower} from './runtime/controls/graph.js';
+import {EmoteXorshift128} from './runtime/controls/random.js';
+
 /**
  * Automatic face controls of the E-mote 3.9.8 player (`emotedriver.dll` x64, SHA-256
  * `80d28bd088dda8e97c7c47a9c664e55159f70505b0f9fde3158d8ce2a3e1e051`): the gaze graph walk
@@ -6,14 +10,9 @@
  * writes its result into the player's variable values.
  */
 
-import {EmoteTween, powf} from './tween.js';
+import {EmoteTween} from './tween.js';
 
 const f32 = Math.fround;
-const NONE = -1;
-/** `float` 99999: candidates at or above it are ignored (0x181fcd5c8). */
-const COST_LIMIT = f32(99999);
-/** Search restarts (0x180029470). */
-const SEARCH_LIMIT = 10;
 const REACH_EPSILON = f32(0.0001);
 /** Blink speed factor 2.5 (0x181fcd578) and hold divisor 5 (0x181fcd58c). */
 const BLINK_SPEED = f32(2.5);
@@ -25,189 +24,31 @@ const FLT_EPSILON = f32(2 ** -23);
  * Process-wide generator of 0x180028950, an xorshift variant whose last word mixes
  * `((w >> 11) ^ t) >> 8`. The native fourth word is seeded from `_time64`.
  */
-export class EmoteRandom {
-  private s0 = 123456789;
-  private s1 = 362436069;
-  private s2 = 521288629;
-  private s3: number;
-
+export class EmoteRandom extends EmoteXorshift128 {
   constructor(seed: number) {
-    this.s3 = seed >>> 0;
-  }
-
-  /** A float in [0, 1): 23 random mantissa bits under exponent 0. */
-  next(): number {
-    const t = (this.s0 ^ (this.s0 << 11)) >>> 0;
-    this.s0 = this.s1;
-    this.s1 = this.s2;
-    this.s2 = this.s3;
-    this.s3 = ((((this.s3 >>> 11) ^ t) >>> 8) ^ this.s3 ^ t) >>> 0;
-    return f32(1 + (this.s3 & 0x7fffff) / 0x800000) - 1;
+    super(seed >>> 0);
   }
 }
 
 type Segment = readonly [number, number];
 
-interface Candidate {
-  readonly segments: Segment[];
-  readonly cost: number;
-}
-
-/**
- * `EPGraph`: value ranges (`edge`, integer pairs read as floats) joined by nodes (`node`,
- * lists of values that connect ranges). `path` finds a walk from one value to another that
- * stays inside ranges and crosses between them only through node values.
- */
-export class EmoteGraph {
-  /** Cost of the last path (`+0x38`). */
-  cost = 0;
-
-  constructor(
-    readonly edges: readonly Segment[],
-    readonly nodes: readonly (readonly number[])[],
-  ) {}
-
-  /** 0x180029310. */
-  edgeOf(x: number): number {
-    for (let i = 0; i < this.edges.length; i++) {
-      const [lo, hi] = this.edges[i]!;
-      if (lo <= x && x <= hi) return i;
-    }
-    return NONE;
+/** Compatibility names for the x64 bindings over the shared exact-build graph. */
+export class EmoteGraph extends SharedGraph {
+  constructor(edges: readonly Segment[], nodes: readonly (readonly number[])[]) {
+    super(edges, nodes, EMOTEDRIVER_X64_SHA256);
   }
-
-  /** 0x180029350: the first value of node `k` not yet visited. */
-  private firstUnvisited(k: number, visited: readonly number[]): number {
-    for (const v of this.nodes[k]!) if (!visited.includes(v)) return v;
-    return NONE;
+  get cost(): number {
+    return this.total;
   }
-
-  /** 0x1800290e0: the cheapest candidate's segments, or the single segment (to, to). */
+  set cost(value: number) {
+    this.total = value;
+  }
+  edgeOf(value: number): number {
+    return this.edgeAt(value);
+  }
   path(from: number, to: number): Segment[] {
-    const candidates = this.search(f32(from), f32(to));
-    let best = NONE;
-    let bestCost = COST_LIMIT;
-    for (let i = 0; i < candidates.length; i++) {
-      const c = candidates[i]!.cost;
-      if (c !== -1 && c < bestCost) {
-        best = i;
-        bestCost = c;
-      }
-    }
-    if (best === NONE) {
-      this.cost = 0;
-      return [[to, to]];
-    }
-    this.cost = bestCost;
-    return candidates[best]!.segments.slice();
+    return this.search(from, to);
   }
-
-  /** 0x180029470: a depth-first walk restarted up to ten times, keeping visited values. */
-  private search(from: number, to: number): Candidate[] {
-    const candidates: Candidate[] = [];
-    const visited: number[] = [];
-    const stack: number[] = [];
-    let segments: Segment[] = [];
-    let cost = 0;
-    let dirFlag = 1;
-    let iterations = 0;
-    let pos = from;
-    const fail = (): void => {
-      candidates.push({segments: segments.slice(), cost: -1});
-    };
-    const walk = (pt: number): void => {
-      cost = f32(cost + Math.abs(f32(pt - pos)));
-      segments.push([pos, pt]);
-    };
-    const backtrack = (): boolean => {
-      if (stack.length === 0) return false;
-      pos = stack[stack.length - 1]!;
-      const last = segments.pop();
-      if (last) cost = f32(cost - Math.abs(f32(last[1] - last[0])));
-      stack.pop();
-      return true;
-    };
-    outer: for (;;) {
-      // State 0.
-      dirFlag = 1;
-      cost = 0;
-      segments = [];
-      stack.length = 0;
-      if (this.edges.length < 1 || this.edgeOf(from) === NONE || this.edgeOf(to) === NONE) {
-        fail();
-        break;
-      }
-      pos = from;
-      let state = 1;
-      for (;;) {
-        if (state === 1) {
-          const e = this.edgeOf(pos);
-          if (e !== this.edgeOf(to)) {
-            state = dirFlag === 1 ? 2 : 3;
-            continue;
-          }
-          const [lo, hi] = this.edges[e]!;
-          removeAll(visited, lo);
-          removeAll(visited, hi);
-          walk(to);
-          if (!candidates.some((c) => c.cost === cost)) {
-            candidates.push({segments: segments.slice(), cost});
-          }
-          if (stack.length === 0) break outer;
-          if (++iterations >= SEARCH_LIMIT) break outer;
-          continue outer;
-        }
-        const up = state === 2;
-        const edge = this.edges[this.edgeOf(pos)]!;
-        const end = up ? edge[1] : edge[0];
-        const k = this.nodes.findIndex((n) => n.includes(end));
-        let moved = false;
-        if (k !== NONE) {
-          visited.push(end);
-          const next = this.firstUnvisited(k, visited);
-          if (next !== NONE) {
-            walk(end);
-            visited.push(next);
-            stack.push(pos);
-            pos = next;
-            state = 1;
-            moved = true;
-          }
-        }
-        if (moved) continue;
-        if (backtrack()) continue;
-        if (up) {
-          dirFlag = -1;
-          state = 3;
-          continue;
-        }
-        // Interior approach: a node value inside the current range.
-        const [lo, hi] = this.edges[this.edgeOf(pos)]!;
-        const n = this.nodes.findIndex((values) => values.some((v) => lo <= v && v <= hi));
-        if (n === NONE) {
-          fail();
-          break outer;
-        }
-        const a = this.firstUnvisited(n, visited);
-        visited.push(a);
-        const b = this.firstUnvisited(n, visited);
-        if (b === NONE) {
-          fail();
-          break outer;
-        }
-        walk(a);
-        visited.push(b);
-        stack.push(pos);
-        pos = b;
-        state = 1;
-      }
-    }
-    return candidates;
-  }
-}
-
-function removeAll(values: number[], value: number): void {
-  for (let i = values.length - 1; i >= 0; i--) if (values[i] === value) values.splice(i, 1);
 }
 
 interface WalkEntry {
@@ -220,128 +61,15 @@ interface WalkEntry {
  * The graph walker shared by the eye (+0x20…+0xd0) and eyebrow (+0x8…+0xa8) controls: the
  * value moves along the path's segments with `powf` easing over the whole path length.
  */
-export class EmoteGraphWalker {
-  private queue: WalkEntry[] = [];
-  private segments: Segment[] = [];
-  /** 0 idle, 1 next segment, 2 moving. */
-  state = 0;
-  current: number;
-  private inv = 0;
-  private dir = 1;
-  private target = 0;
-  private total = 0;
-  private traveled = 0;
-  private power = 0;
-
-  constructor(
-    readonly graph: EmoteGraph,
-    begin: number,
-  ) {
-    this.current = f32(begin);
+export class EmoteGraphWalker extends EmoteGraphFollower {
+  get current(): number {
+    return this.value;
   }
-
-  get busy(): boolean {
-    return this.state !== 0 || this.queue.length !== 0;
+  set current(value: number) {
+    this.value = value;
   }
-
-  /** setVariable kinds 4 and 5. */
-  set(value: number, frames: number, power: number, queuing: boolean): void {
-    const v = f32(value);
-    const fr = f32(frames);
-    if (fr > 0) {
-      if (queuing) {
-        this.queue.push({value: v, frames: fr, power});
-        return;
-      }
-      if (this.state !== 0) {
-        const last = this.segments.length
-          ? this.segments[this.segments.length - 1]![1]
-          : this.target;
-        const remaining = f32(
-          f32(1 - powf(f32(this.traveled / this.total), f32(1 / this.power))) / this.inv,
-        );
-        if (last === v && remaining < fr) return;
-      }
-      this.queue = [{value: v, frames: fr, power}];
-      this.segments = [];
-      this.state = 0;
-      return;
-    }
-    this.queue = [];
-    this.segments = [];
-    this.state = 0;
-    this.current = v;
-  }
-
-  /** 0x180015400 / 0x180016110: jumps to the final queued or targeted value. */
-  skip(): void {
-    const last = this.queue[this.queue.length - 1];
-    if (last) {
-      this.state = 0;
-      this.current = last.value;
-      this.queue = [];
-      this.segments = [];
-      return;
-    }
-    if (this.state !== 0) {
-      this.current = this.segments.length
-        ? this.segments[this.segments.length - 1]![1]
-        : this.target;
-      this.segments = [];
-      this.state = 0;
-    }
-  }
-
-  /** The walk part of 0x180028ab0 and 0x180027f20. */
   step(frames: number): void {
-    const dt = f32(frames);
-    for (;;) {
-      if (this.state === 0) {
-        const entry = this.queue.shift();
-        if (!entry) return;
-        this.segments = this.graph.path(this.current, entry.value);
-        this.state = 1;
-        this.total = this.graph.cost;
-        this.traveled = 0;
-        this.inv = f32(1 / entry.frames);
-        this.power = entry.power;
-        continue;
-      }
-      if (this.state === 1) {
-        const seg = this.segments.shift();
-        if (!seg) {
-          this.state = 0;
-          continue;
-        }
-        const [from, to] = seg;
-        if (from === to) {
-          this.current = to;
-          continue;
-        }
-        this.target = to;
-        this.current = from;
-        this.dir = f32(to - from) >= 0 ? 1 : -1;
-        this.state = 2;
-        continue;
-      }
-      const u = f32(
-        powf(f32(this.traveled / this.total), f32(1 / this.power)) + f32(dt * this.inv),
-      );
-      const delta = f32(f32(powf(u, this.power) * this.total) - this.traveled);
-      const cur = f32(this.current + f32(this.dir * delta));
-      const reached =
-        this.dir > 0
-          ? !(f32(cur - this.target) < -REACH_EPSILON)
-          : !(f32(cur - this.target) > REACH_EPSILON);
-      if (!reached) {
-        this.current = cur;
-        this.traveled = f32(this.traveled + delta);
-        return;
-      }
-      this.traveled = f32(f32(f32(this.target - cur) * this.dir) + f32(this.traveled + delta));
-      this.current = this.target;
-      this.state = 1;
-    }
+    this.advance(frames);
   }
 }
 

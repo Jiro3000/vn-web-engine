@@ -1,3 +1,5 @@
+import {EmoteGraph, EmoteGraphFollower} from '../dist/native/emotedriver/runtime/controls/graph.js';
+import {EMOTEDRIVER_X64_SHA256} from '../dist/native/emotedriver/build.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
@@ -361,4 +363,22 @@ test('assignState copies eye motion by label', () => {
   a.setVariable(4, 0, 'eye', 15, 0, 1, false);
   b.assignState(a);
   assert.equal(b.eyes[0].motion.value, 15);
+});
+
+test('x64 graph preserves fractional frames and advances queued motion immediately', () => {
+  const graph = new EmoteGraph([[0.25, 10.75]], [[0.25], [10.75]], EMOTEDRIVER_X64_SHA256);
+  assert.deepEqual(graph.search(0.25, 10.75), [[0.25, 10.75]]);
+  assert.equal(graph.total, 10.5);
+  const follower = new EmoteGraphFollower(graph, 0.25);
+  follower.set(10.75, 4, 1, false);
+  follower.advance(1);
+  assert.equal(follower.value, 2.875);
+  follower.set(10.75, 20, 1, false);
+  follower.advance(1);
+  assert.equal(follower.value, 5.5);
+  follower.set(0.25, 1, 1, true);
+  follower.advance(2);
+  assert.equal(follower.value, 0.25);
+  assert.equal(follower.busy, false);
+  assert.throws(() => new EmoteGraph([], [], 'unknown'), /unsupported DLL build/);
 });
