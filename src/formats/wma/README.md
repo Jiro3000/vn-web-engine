@@ -39,7 +39,8 @@ The implementation is derived from FFmpeg 7.1.1 under LGPL 2.1 or later. See
 
 `WmaStandardDecoder` in `standard.ts` implements stereo WMA v2 with VLC exponents,
 bit reservoir and five variable block sizes (128 through 2048). Supported streams
-have flags `0x000f`, 44.1/48 kHz rates and bitrates that disable noise coding.
+have flags `0x000f`, or `0x0001` for fixed blocks without a reservoir,
+44.1/48 kHz rates and bitrates that disable noise coding.
 Spectral run/level decoding, independent or mid/side stereo, float IMDCT and
 overlap windows preserve the source decoder's float operation order. The first
 4096 samples are suppressed, with the corresponding packet timestamp adjustment;

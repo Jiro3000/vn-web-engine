@@ -35,7 +35,7 @@ const jsMemory = {
   f32: (n: number): Float32Array => new Float32Array(n),
 };
 
-/** WMA v2 with VLC exponents, reservoir and variable blocks, without noise coding. */
+/** WMA v2 with VLC exponents, fixed or variable blocks, without noise coding. */
 export class WmaStandardDecoder {
   private readonly gb = new BitReader();
   private readonly packet: Uint8Array;
@@ -49,6 +49,7 @@ export class WmaStandardDecoder {
   private previousBits = 11;
   private nextBits = 11;
   private readonly offsetBits: number;
+  private readonly flags: number;
   private readonly tables: readonly CoefficientTable[];
   private readonly bands: Uint16Array[];
   private readonly transforms = Array.from(
@@ -73,9 +74,12 @@ export class WmaStandardDecoder {
     private readonly backend?: StandardBackend,
   ) {
     const extra = config.extra;
+    this.flags =
+      extra.length < 6
+        ? 0
+        : new DataView(extra.buffer, extra.byteOffset, extra.byteLength).getUint16(4, true);
     if (
-      extra.length < 6 ||
-      new DataView(extra.buffer, extra.byteOffset, extra.byteLength).getUint16(4, true) !== 15 ||
+      (this.flags !== 1 && this.flags !== 15) ||
       config.channels !== 2 ||
       (config.sampleRate !== 44100 && config.sampleRate !== 48000) ||
       !Number.isSafeInteger(config.blockAlign) ||
@@ -94,7 +98,8 @@ export class WmaStandardDecoder {
     const memory = backend ?? jsMemory;
     this.packet = memory.u8(config.blockAlign + 64);
     this.reservoir = memory.u8(32768 + 64);
-    this.state = memory.i32(26);
+    this.state = memory.i32(27);
+    this.state[26] = Number(!!(this.flags & 4));
     this.exponents = [memory.f32(2048), memory.f32(2048)];
     this.exponentSize = memory.i32(2);
     this.maximumExponent = memory.f32(2);
@@ -227,6 +232,11 @@ export class WmaStandardDecoder {
     const g = this.gb,
       bytes = this.config.blockAlign;
     g.reset(this.packet, bytes * 8);
+    if (!(this.flags & 2)) {
+      const pcm = [new Float32Array(2048), new Float32Array(2048)];
+      this.frame(pcm, 0);
+      return pcm;
+    }
     g.skip(4);
     let frames = g.bits(4) - (this.lastLength <= 0 ? 1 : 0);
     if (frames <= 0) {
@@ -300,7 +310,9 @@ export class WmaStandardDecoder {
 
   private block(position: number): number {
     const g = this.gb;
-    if (this.resetLengths) {
+    if (!(this.flags & 4)) {
+      this.previousBits = this.blockBits = this.nextBits = 11;
+    } else if (this.resetLengths) {
       this.resetLengths = false;
       this.previousBits = this.readBlockBits();
       this.blockBits = this.readBlockBits();
@@ -308,7 +320,7 @@ export class WmaStandardDecoder {
       this.previousBits = this.blockBits;
       this.blockBits = this.nextBits;
     }
-    this.nextBits = this.readBlockBits();
+    if (this.flags & 4) this.nextBits = this.readBlockBits();
     const length = 1 << this.blockBits,
       size = 11 - this.blockBits;
     if (position + length > 2048) throw Error('WMA Standard frame length overflow');

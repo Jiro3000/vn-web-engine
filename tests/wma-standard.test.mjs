@@ -121,3 +121,22 @@ test('WMA Rust full/half IMDCT matches float bits, including signed zeros', () =
       }
     }
 });
+
+test('WMA Standard fixed blocks omit reservoir and block-length headers', () => {
+  const config = standardConfig();
+  config.extra[4] = 1;
+  for (const decoder of [new WmaStandardDecoder(config), createWmaStandardDecoder(config)]) {
+    assert.ok(decoder);
+    const packet = new Uint8Array(config.blockAlign);
+    // Every packet contains one silent 2048-sample frame, starting with three
+    // zero channel/stereo bits. The initial two frames are decoder delay.
+    assert.deepEqual(decoder.decode(packet, 0), []);
+    assert.deepEqual(decoder.decode(packet, 43), []);
+    const out = decoder.decode(packet, 85);
+    assert.equal(out.length, 1);
+    assert.equal(out[0].time, 85);
+    for (const channel of out[0].channels) assert.deepEqual(channel, new Float32Array(2048));
+    assert.equal(decoder.decode(null)[0].channels[0].length, 2048);
+    decoder.close();
+  }
+});

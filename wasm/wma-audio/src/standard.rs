@@ -39,7 +39,7 @@ unsafe fn block_bits(g: &mut Bits) -> Result<i32, ()> {
 /// 0..3: reset/current/previous/next block lengths. 4..7: exponent VLC, powers,
 /// gain table. 8..13: band directories, maximum/exponent-size/initialized/coded
 /// arrays. 14..22: exponent/coefficient/level, transform and overlap buffers.
-/// 23..25: MDCT-plan, window and coefficient-VLC directories.
+/// 23..25: MDCT-plan, window and coefficient-VLC directories. 26: variable blocks.
 /// Returns the checked bit position, or -1 for malformed/truncated frame data.
 #[no_mangle]
 pub unsafe extern "C" fn wma_standard_frame(
@@ -48,7 +48,7 @@ pub unsafe extern "C" fn wma_standard_frame(
     index: u32,
     size: u32,
 ) -> i32 {
-    let s = slice::from_raw_parts_mut(state, 26);
+    let s = slice::from_raw_parts_mut(state, 27);
     let mut g = Bits {
         data: input,
         index,
@@ -65,7 +65,11 @@ pub unsafe extern "C" fn wma_standard_frame(
 }
 
 unsafe fn block(s: &mut [i32], g: &mut Bits, position: usize) -> Result<usize, ()> {
-    if s[0] != 0 {
+    if s[26] == 0 {
+        s[1] = 11;
+        s[2] = 11;
+        s[3] = 11;
+    } else if s[0] != 0 {
         s[0] = 0;
         s[2] = block_bits(g)?;
         s[1] = block_bits(g)?;
@@ -73,7 +77,9 @@ unsafe fn block(s: &mut [i32], g: &mut Bits, position: usize) -> Result<usize, (
         s[2] = s[1];
         s[1] = s[3];
     }
-    s[3] = block_bits(g)?;
+    if s[26] != 0 {
+        s[3] = block_bits(g)?;
+    }
     let length = 1_usize << s[1];
     let size = (11 - s[1]) as usize;
     if position + length > 2048 {
