@@ -128,6 +128,26 @@ for (const wasm of [false, true]) {
   });
 }
 
+for (const wasm of [false, true]) {
+  test(`VC-1 skipped references keep storage alive across later I pictures, wasm=${wasm}`, () => {
+    const decoder = new PortableDecoder(FOURCC_WVC1, 16, 16, advancedExtra(), {wasm});
+    const header = '110' + '1' + '01000' + '0' + '00000' + '000' + '1' + '0';
+    assert.equal(decoder.decode(bits(header + '11110000'), 12), null);
+    constantPicture(decoder.decode(bits('1111'), 45), 1, 12, 128);
+    constantPicture(decoder.decode(bits('1111'), 78), 2, 45, 128);
+    // DC differential +1 in the first luma block, propagated to its three neighbours.
+    const previous = decoder.decode(bits(header + '0101110000'), 111);
+    constantPicture(previous, 2, 78, 128);
+    const current = decoder.decode(null, 0);
+    assert.equal(current.type, 1);
+    assert.equal(current.time, 111);
+    assert.deepEqual(current.y.subarray(0, 256), new Uint8Array(256).fill(129));
+    assert.deepEqual(current.cb.subarray(0, 64), new Uint8Array(64).fill(128));
+    assert.deepEqual(current.cr.subarray(0, 64), new Uint8Array(64).fill(128));
+    assert.equal(decoder.decode(null, 0), null);
+  });
+}
+
 test('VC-1 SIMD kernels preserve reference arithmetic across transforms, prediction and filters', () => {
   const k = new WebAssembly.Instance(
     new WebAssembly.Module(Buffer.from(VC1_VIDEO_WASM_BINARY, 'base64')),

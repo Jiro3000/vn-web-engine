@@ -9,6 +9,7 @@ import {BitReader, BITSTREAM_PADDING, buildVlc} from './bitstream.js';
 import type {Vlc} from './bitstream.js';
 import * as D from './dsp.js';
 import * as T from './tables.js';
+import {VC1_BLOCK_SCALARS, VC1_BLOCK_BUFFERS} from './block-state.js';
 
 export const FOURCC_WMV3 = 0x33564d57;
 export const FOURCC_WVC1 = 0x31435657;
@@ -190,12 +191,14 @@ function unescape(src: Uint8Array, s: number, size: number, dst: Uint8Array): nu
   return n;
 }
 
-/** Storage and pixel operations supplied by the optional Rust backend. */
-export interface Vc1PixelBackend {
-  readonly dsp: typeof D;
+/** Storage and slice decoding supplied by the optional Rust backend. */
+export interface Vc1WasmBackend {
   reset(bytes: number): void;
   u8(length: number): Uint8Array;
   i16(length: number): Int16Array;
+  i8(length: number): Int8Array;
+  i32(length: number): Int32Array;
+  decodeBlocks(state: Int32Array, bits: BitReader, lutY: Uint8Array, lutUv: Uint8Array): void;
 }
 
 class Picture {
@@ -204,10 +207,16 @@ class Picture {
   readonly cr: Uint8Array;
   type = 0;
   time = 0;
-  constructor(lumaSize: number, chromaSize: number, slack: number, backend?: Vc1PixelBackend) {
-    this.y = backend?.u8(lumaSize + slack) ?? new Uint8Array(lumaSize + slack);
-    this.cb = backend?.u8(chromaSize + slack) ?? new Uint8Array(chromaSize + slack);
-    this.cr = backend?.u8(chromaSize + slack) ?? new Uint8Array(chromaSize + slack);
+  constructor(
+    lumaSize: number,
+    chromaSize: number,
+    slack: number,
+    backend?: Vc1WasmBackend,
+    repeated?: Picture,
+  ) {
+    this.y = repeated?.y ?? backend?.u8(lumaSize + slack) ?? new Uint8Array(lumaSize + slack);
+    this.cb = repeated?.cb ?? backend?.u8(chromaSize + slack) ?? new Uint8Array(chromaSize + slack);
+    this.cr = repeated?.cr ?? backend?.u8(chromaSize + slack) ?? new Uint8Array(chromaSize + slack);
   }
 }
 
@@ -221,7 +230,6 @@ export class Vc1Decoder {
   width: number;
   height: number;
   private readonly advanced: boolean;
-  private readonly dsp: typeof D;
 
   // Sequence and entry point.
   private loopFilter = 0;
@@ -272,21 +280,24 @@ export class Vc1Decoder {
   private vEdge = 0;
   /** Origin of the block-indexed arrays (`b8_stride + 1`). */
   private origin = 0;
-  private dcVal = new Int16Array(0);
-  private acVal = new Int16Array(0);
-  private codedBlock = new Uint8Array(0);
-  private mbType = new Uint8Array(0);
-  private motion = new Int16Array(0);
-  private qscale = new Int8Array(0);
-  private cbpRow = new Int32Array(0);
-  private ttblkRow = new Int32Array(0);
-  private isIntraRow = new Uint8Array(0);
-  private lumaMv = new Int16Array(0);
-  private mvTypePlane = new Uint8Array(0);
-  private skipPlane = new Uint8Array(0);
-  private acpredPlane = new Uint8Array(0);
+  private dcVal: Int16Array = new Int16Array(0);
+  private acVal: Int16Array = new Int16Array(0);
+  private codedBlock: Uint8Array = new Uint8Array(0);
+  private mbType: Uint8Array = new Uint8Array(0);
+  private motion: Int16Array = new Int16Array(0);
+  private qscale: Int8Array = new Int8Array(0);
+  private cbpRow: Int32Array = new Int32Array(0);
+  private ttblkRow: Int32Array = new Int32Array(0);
+  private isIntraRow: Uint8Array = new Uint8Array(0);
+  private lumaMv: Int16Array = new Int16Array(0);
+  private mvTypePlane: Uint8Array = new Uint8Array(0);
+  private skipPlane: Uint8Array = new Uint8Array(0);
+  private acpredPlane: Uint8Array = new Uint8Array(0);
   private blocks: Int16Array = new Int16Array(0);
   private emu: Uint8Array = new Uint8Array(0);
+  private readonly blockState = new Int32Array(
+    VC1_BLOCK_SCALARS.length + VC1_BLOCK_BUFFERS.length + 8,
+  );
   private pool: Picture[] = [];
   private cur: Picture | null = null;
   private last: Picture | null = null;
@@ -367,9 +378,8 @@ export class Vc1Decoder {
     width: number,
     height: number,
     extra: Uint8Array,
-    private readonly backend?: Vc1PixelBackend,
+    private readonly backend?: Vc1WasmBackend,
   ) {
-    this.dsp = backend?.dsp ?? D;
     this.checkDimensions(width, height);
     vlcTables();
     for (let k = 0; k < 4; k++) {
@@ -849,29 +859,38 @@ export class Vc1Decoder {
     const ySize = b8 * (2 * mbhA + 1),
       cSize = mbs * (mbhA + 1),
       yc = ySize + 2 * cSize;
-    this.dcVal = new Int16Array(yc).fill(1024);
-    this.acVal = new Int16Array(yc * 16);
-    this.codedBlock = new Uint8Array(ySize);
-    this.mbType = new Uint8Array(b8 * (mbhA * 2 + 1) + mbs * (mbhA + 1) * 2);
-    this.motion = new Int16Array((b8 * 2 * mbhA + 8) * 2);
-    this.qscale = new Int8Array(mbs * (mbh + 1) + mbs);
-    this.cbpRow = new Int32Array(3 * mbs);
-    this.ttblkRow = new Int32Array(3 * mbs);
-    this.isIntraRow = new Uint8Array(3 * mbs);
-    this.lumaMv = new Int16Array(3 * mbs * 2);
-    this.mvTypePlane = new Uint8Array(mbs * (mbh + 1));
-    this.skipPlane = new Uint8Array(mbs * (mbh + 1));
-    this.acpredPlane = new Uint8Array(mbs * (mbh + 1));
     const blockLength = (mbw + 2) * 6 * 64;
     const emuLength = this.ls * 19 + this.uvls * 18 + 64;
     const lumaSize = this.ls * mbh * 16,
       chromaSize = this.uvls * mbh * 8;
     const slack = this.ls * 2 + 64;
-    // Three rotating references plus the optional gray reference for a leading P picture.
-    // Reserve before making views: memory growth must never detach active picture planes.
+    const contextBytes =
+      yc * 35 + ySize + (b8 * 2 * mbhA + 8) * 4 + mbs * (mbh + 2) + mbs * 39 + mbs * (mbh + 1) * 3;
+    // Reserve every context and picture buffer before creating views. Later memory growth
+    // must never detach arrays that the JS header parser and Rust block loop share.
     this.backend?.reset(
-      4 * (lumaSize + 2 * chromaSize + 3 * slack) + blockLength * 2 + emuLength + 256,
+      contextBytes +
+        4 * (lumaSize + 2 * chromaSize + 3 * slack) +
+        blockLength * 2 +
+        emuLength +
+        512,
     );
+    this.dcVal = (this.backend?.i16(yc) ?? new Int16Array(yc)).fill(1024);
+    this.acVal = this.backend?.i16(yc * 16) ?? new Int16Array(yc * 16);
+    this.codedBlock = this.backend?.u8(ySize) ?? new Uint8Array(ySize);
+    this.mbType =
+      this.backend?.u8(b8 * (mbhA * 2 + 1) + mbs * (mbhA + 1) * 2) ??
+      new Uint8Array(b8 * (mbhA * 2 + 1) + mbs * (mbhA + 1) * 2);
+    this.motion =
+      this.backend?.i16((b8 * 2 * mbhA + 8) * 2) ?? new Int16Array((b8 * 2 * mbhA + 8) * 2);
+    this.qscale = this.backend?.i8(mbs * (mbh + 1) + mbs) ?? new Int8Array(mbs * (mbh + 1) + mbs);
+    this.cbpRow = this.backend?.i32(3 * mbs) ?? new Int32Array(3 * mbs);
+    this.ttblkRow = this.backend?.i32(3 * mbs) ?? new Int32Array(3 * mbs);
+    this.isIntraRow = this.backend?.u8(3 * mbs) ?? new Uint8Array(3 * mbs);
+    this.lumaMv = this.backend?.i16(3 * mbs * 2) ?? new Int16Array(3 * mbs * 2);
+    this.mvTypePlane = this.backend?.u8(mbs * (mbh + 1)) ?? new Uint8Array(mbs * (mbh + 1));
+    this.skipPlane = this.backend?.u8(mbs * (mbh + 1)) ?? new Uint8Array(mbs * (mbh + 1));
+    this.acpredPlane = this.backend?.u8(mbs * (mbh + 1)) ?? new Uint8Array(mbs * (mbh + 1));
     this.blocks = this.backend?.i16(blockLength) ?? new Int16Array(blockLength);
     this.emu = this.backend?.u8(emuLength) ?? new Uint8Array(emuLength);
     this.pool = [];
@@ -892,7 +911,7 @@ export class Vc1Decoder {
   }
 
   private newPicture(): Picture {
-    const free = this.pool.find((p) => p !== this.last && p !== this.next);
+    const free = this.pool.find((p) => p.y !== this.last?.y && p.y !== this.next?.y);
     if (free) return free;
     const pic = new Picture(
       this.ls * this.mbh * 16,
@@ -906,7 +925,10 @@ export class Vc1Decoder {
 
   /** `ff_mpv_frame_start`, including the gray dummy reference for a P picture without one. */
   private frameStart(time: number): void {
-    const cur = this.newPicture();
+    // A whole skipped picture keeps the reference storage and gets independent metadata.
+    // Pool selection compares plane identities so a later frame cannot overwrite an alias.
+    const cur =
+      this.skipped && this.next ? new Picture(0, 0, 0, undefined, this.next) : this.newPicture();
     cur.type = this.pictType;
     cur.time = time;
     this.cur = cur;
@@ -1046,6 +1068,23 @@ export class Vc1Decoder {
   // Macroblock layer
 
   private decodeBlocks(): void {
+    if (this.skipped && this.cur?.y === this.last?.y) return;
+    if (this.backend) {
+      const state = this.blockState;
+      let at = 0;
+      for (const name of VC1_BLOCK_SCALARS) state[at++] = Number(this[name]);
+      for (const name of VC1_BLOCK_BUFFERS) state[at++] = this[name].byteOffset;
+      const current = this.cur!,
+        last = this.last;
+      state[at++] = current.y.byteOffset;
+      state[at++] = current.cb.byteOffset;
+      state[at++] = current.cr.byteOffset;
+      state[at++] = last?.y.byteOffset ?? 0;
+      state[at++] = last?.cb.byteOffset ?? 0;
+      state[at++] = last?.cr.byteOffset ?? 0;
+      this.backend.decodeBlocks(state, this.gb, this.lutY, this.lutUv);
+      return;
+    }
     this.esc3Level = 0;
     this.curBlk = 0;
     this.leftBlk = -1;
@@ -1159,7 +1198,7 @@ export class Vc1Decoder {
           }
           cbp |= val << (5 - k);
           this.iBlock(base + k * 64, k, val, k < 4 ? this.codingset : this.codingset2);
-          this.dsp.invTrans8x8(blocks, base + k * 64);
+          D.invTrans8x8(blocks, base + k * 64);
         }
         this.putBlocks(false);
         if (this.loopFilter) this.iLoopFilter();
@@ -1208,7 +1247,7 @@ export class Vc1Decoder {
           this.aAvail = !this.firstSliceLine || k === 2 || k === 3 ? 1 : 0;
           this.cAvail = this.mbX || k === 1 || k === 3 ? 1 : 0;
           this.iBlockAdv(base + k * 64, k, val, k < 4 ? this.codingset : this.codingset2, mquant);
-          this.dsp.invTrans8x8(blocks, base + k * 64);
+          D.invTrans8x8(blocks, base + k * 64);
         }
         this.putBlocks(true);
         if (this.loopFilter) this.iLoopFilter();
@@ -1322,7 +1361,7 @@ export class Vc1Decoder {
                 i & 4 ? this.codingset2 : this.codingset,
               );
               if (ret < 0) return ret;
-              this.dsp.invTrans8x8(blocks, base + i * 64);
+              D.invTrans8x8(blocks, base + i * 64);
               blockCbp |= 0xf << (i << 2);
               blockIntra |= 1 << i;
             } else if (val) {
@@ -1410,7 +1449,7 @@ export class Vc1Decoder {
               i & 4 ? this.codingset2 : this.codingset,
             );
             if (ret < 0) return ret;
-            this.dsp.invTrans8x8(blocks, base + i * 64);
+            D.invTrans8x8(blocks, base + i * 64);
             blockCbp |= 0xf << (i << 2);
             blockIntra |= 1 << i;
           } else if (isCoded[i]) {
@@ -1948,10 +1987,10 @@ export class Vc1Decoder {
         pat = 0xf;
         const i = coefficients(this.zz8x8[0]!, 0, 63, 0);
         if (i < 0) return i;
-        if (i === 1) this.dsp.invTrans8x8Dc(dst, d, ls, block[b]!);
+        if (i === 1) D.invTrans8x8Dc(dst, d, ls, block[b]!);
         else {
-          this.dsp.invTrans8x8(block, b);
-          this.dsp.addPixelsClamped(block, b, dst, d, ls);
+          D.invTrans8x8(block, b);
+          D.addPixelsClamped(block, b, dst, d, ls);
         }
         break;
       }
@@ -1963,8 +2002,8 @@ export class Vc1Decoder {
           if (i < 0) return i;
           if (!(subblkpat & (1 << (3 - j)))) {
             const o = d + (j & 1) * 4 + (j & 2) * 2 * ls;
-            if (i === 1) this.dsp.invTrans4x4Dc(dst, o, ls, block[b + off]!);
-            else this.dsp.invTrans4x4(dst, o, ls, block, b + off);
+            if (i === 1) D.invTrans4x4Dc(dst, o, ls, block[b + off]!);
+            else D.invTrans4x4(dst, o, ls, block, b + off);
           }
         }
         break;
@@ -1976,8 +2015,8 @@ export class Vc1Decoder {
           if (i < 0) return i;
           if (!(subblkpat & (1 << (1 - j)))) {
             const o = d + j * 4 * ls;
-            if (i === 1) this.dsp.invTrans8x4Dc(dst, o, ls, block[b + off]!);
-            else this.dsp.invTrans8x4(dst, o, ls, block, b + off);
+            if (i === 1) D.invTrans8x4Dc(dst, o, ls, block[b + off]!);
+            else D.invTrans8x4(dst, o, ls, block, b + off);
           }
         }
         break;
@@ -1989,8 +2028,8 @@ export class Vc1Decoder {
           if (i < 0) return i;
           if (!(subblkpat & (1 << (1 - j)))) {
             const o = d + j * 4;
-            if (i === 1) this.dsp.invTrans4x8Dc(dst, o, ls, block[b + off]!);
-            else this.dsp.invTrans4x8(dst, o, ls, block, b + off);
+            if (i === 1) D.invTrans4x8Dc(dst, o, ls, block[b + off]!);
+            else D.invTrans4x8(dst, o, ls, block, b + off);
           }
         }
         break;
@@ -2001,7 +2040,7 @@ export class Vc1Decoder {
 
   /** `vc1_put_blocks_clamped`: writes intra blocks one row and one column behind decoding. */
   private putBlocks(signed: boolean): void {
-    const put = signed ? this.dsp.putSignedPixelsClamped : this.dsp.putPixelsClamped;
+    const put = signed ? D.putSignedPixelsClamped : D.putPixelsClamped;
     const cur = this.cur!,
       bi = this.bi,
       o = this.origin,
@@ -2288,23 +2327,12 @@ export class Vc1Decoder {
       vs = vbuf;
     }
     const noRnd = this.rnd !== 0;
-    if (ms) this.dsp.mspelMc(cur.y, this.dest0, ySrc, ys, ls, 16, mx & 3, my & 3, this.rnd, false);
-    else
-      this.dsp.hpelMc(
-        cur.y,
-        this.dest0,
-        ySrc,
-        ys,
-        ls,
-        16,
-        (my & 2) | ((mx & 2) >> 1),
-        noRnd,
-        false,
-      );
+    if (ms) D.mspelMc(cur.y, this.dest0, ySrc, ys, ls, 16, mx & 3, my & 3, this.rnd, false);
+    else D.hpelMc(cur.y, this.dest0, ySrc, ys, ls, 16, (my & 2) | ((mx & 2) >> 1), noRnd, false);
     uvmx = (uvmx & 3) << 1;
     uvmy = (uvmy & 3) << 1;
-    this.dsp.chromaMc(cur.cb, this.dest1, uSrc, us, uvls, 8, 8, uvmx, uvmy, noRnd, false);
-    this.dsp.chromaMc(cur.cr, this.dest1, vSrc, vs, uvls, 8, 8, uvmx, uvmy, noRnd, false);
+    D.chromaMc(cur.cb, this.dest1, uSrc, us, uvls, 8, 8, uvmx, uvmy, noRnd, false);
+    D.chromaMc(cur.cr, this.dest1, vSrc, vs, uvls, 8, 8, uvmx, uvmy, noRnd, false);
   }
 
   /** `ff_vc1_mc_4mv_luma` for P pictures. */
@@ -2344,10 +2372,9 @@ export class Vc1Decoder {
       s = ms * (1 + ls);
     }
     const cur = this.cur!;
-    if (ms)
-      this.dsp.mspelMc(cur.y, this.dest0 + off, src, s, ls, 8, mx & 3, my & 3, this.rnd, false);
+    if (ms) D.mspelMc(cur.y, this.dest0 + off, src, s, ls, 8, mx & 3, my & 3, this.rnd, false);
     else
-      this.dsp.hpelMc(
+      D.hpelMc(
         cur.y,
         this.dest0 + off,
         src,
@@ -2448,8 +2475,8 @@ export class Vc1Decoder {
       noRnd = this.rnd !== 0;
     uvmx = (uvmx & 3) << 1;
     uvmy = (uvmy & 3) << 1;
-    this.dsp.chromaMc(cur.cb, this.dest1, uSrc, us, uvls, 8, 8, uvmx, uvmy, noRnd, false);
-    this.dsp.chromaMc(cur.cr, this.dest1, vSrc, vs, uvls, 8, 8, uvmx, uvmy, noRnd, false);
+    D.chromaMc(cur.cb, this.dest1, uSrc, us, uvls, 8, 8, uvmx, uvmy, noRnd, false);
+    D.chromaMc(cur.cr, this.dest1, vSrc, vs, uvls, 8, 8, uvmx, uvmy, noRnd, false);
   }
 
   // ---------------------------------------------------------------------------------------
@@ -2499,15 +2526,8 @@ export class Vc1Decoder {
     if (n & 2) return;
     if (!(flags & LEFT_EDGE) || (n & 5) === 1) {
       const cur = this.cur!;
-      if (n > 3) this.dsp.hLoopFilter(this.plane(cur, n), dest, this.uvls, 8, this.pq);
-      else
-        this.dsp.hLoopFilter(
-          cur.y,
-          dest + (n & 2) * 4 * this.ls + (n & 1) * 8,
-          this.ls,
-          16,
-          this.pq,
-        );
+      if (n > 3) D.hLoopFilter(this.plane(cur, n), dest, this.uvls, 8, this.pq);
+      else D.hLoopFilter(cur.y, dest + (n & 2) * 4 * this.ls + (n & 1) * 8, this.ls, 16, this.pq);
     }
   }
 
@@ -2515,15 +2535,8 @@ export class Vc1Decoder {
     if ((n & 5) === 1) return;
     if (!(flags & TOP_EDGE) || n & 2) {
       const cur = this.cur!;
-      if (n > 3) this.dsp.vLoopFilter(this.plane(cur, n), dest, this.uvls, 8, this.pq);
-      else
-        this.dsp.vLoopFilter(
-          cur.y,
-          dest + (n & 2) * 4 * this.ls + (n & 1) * 8,
-          this.ls,
-          16,
-          this.pq,
-        );
+      if (n > 3) D.vLoopFilter(this.plane(cur, n), dest, this.uvls, 8, this.pq);
+      else D.vLoopFilter(cur.y, dest + (n & 2) * 4 * this.ls + (n & 1) * 8, this.ls, 16, this.pq);
     }
   }
 
@@ -2605,17 +2618,17 @@ export class Vc1Decoder {
             motion[k * 2] !== motion[(k + b8) * 2] ||
             motion[k * 2 + 1] !== motion[(k + b8) * 2 + 1];
         }
-        if (topIntra || bottomIntra || differ) this.dsp.vLoopFilter(p, dst + 8 * lsz, lsz, 8, pq);
+        if (topIntra || bottomIntra || differ) D.vLoopFilter(p, dst + 8 * lsz, lsz, 8, pq);
         else {
           const idx = (topCbp | (bottomCbp >>> 2)) & 3;
-          if (idx & 1) this.dsp.vLoopFilter(p, dst + 8 * lsz + 4, lsz, 4, pq);
-          if (idx & 2) this.dsp.vLoopFilter(p, dst + 8 * lsz, lsz, 4, pq);
+          if (idx & 1) D.vLoopFilter(p, dst + 8 * lsz + 4, lsz, 4, pq);
+          if (idx & 2) D.vLoopFilter(p, dst + 8 * lsz, lsz, 4, pq);
         }
       }
       const tt = (this.ttblkRow[m]! >> (n * 4)) & 0xf;
       if (tt === TT_4X4 || tt === TT_8X4) {
-        if (topCbp & 5) this.dsp.vLoopFilter(p, dst + 4 * lsz + 4, lsz, 4, pq);
-        if (topCbp & 10) this.dsp.vLoopFilter(p, dst + 4 * lsz, lsz, 4, pq);
+        if (topCbp & 5) D.vLoopFilter(p, dst + 4 * lsz + 4, lsz, 4, pq);
+        if (topCbp & 10) D.vLoopFilter(p, dst + 4 * lsz, lsz, 4, pq);
       }
     }
   }
@@ -2663,17 +2676,17 @@ export class Vc1Decoder {
           differ =
             motion[k * 2] !== motion[(k + 1) * 2] || motion[k * 2 + 1] !== motion[(k + 1) * 2 + 1];
         }
-        if (leftIntra || rightIntra || differ) this.dsp.hLoopFilter(p, dst + 8, lsz, 8, pq);
+        if (leftIntra || rightIntra || differ) D.hLoopFilter(p, dst + 8, lsz, 8, pq);
         else {
           const idx = (leftCbp | (rightCbp >>> 1)) & 5;
-          if (idx & 1) this.dsp.hLoopFilter(p, dst + 4 * lsz + 8, lsz, 4, pq);
-          if (idx & 4) this.dsp.hLoopFilter(p, dst + 8, lsz, 4, pq);
+          if (idx & 1) D.hLoopFilter(p, dst + 4 * lsz + 8, lsz, 4, pq);
+          if (idx & 4) D.hLoopFilter(p, dst + 8, lsz, 4, pq);
         }
       }
       const tt = (this.ttblkRow[m]! >> (n * 4)) & 0xf;
       if (tt === TT_4X4 || tt === TT_4X8) {
-        if (leftCbp & 3) this.dsp.hLoopFilter(p, dst + 4 * lsz + 4, lsz, 4, pq);
-        if (leftCbp & 12) this.dsp.hLoopFilter(p, dst + 4, lsz, 4, pq);
+        if (leftCbp & 3) D.hLoopFilter(p, dst + 4 * lsz + 4, lsz, 4, pq);
+        if (leftCbp & 12) D.hLoopFilter(p, dst + 4, lsz, 4, pq);
       }
     }
   }

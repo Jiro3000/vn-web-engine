@@ -1,11 +1,18 @@
-# VC-1 pixel kernels
+# VC-1 block decoder
 
-This crate supplies the pixel operations of `src/formats/vc1/dsp.ts` in Rust and
-WebAssembly SIMD. The host in `src/formats/vc1/wasm-decoder.ts` reserves the
-coefficient ring, edge-emulation buffer and rotating picture planes in one
-private instance. Kernels receive offsets into that memory and do not allocate
-or copy individual blocks. Compressed input parsing and prediction state belong
-to `src/formats/vc1/reference.ts`.
+This crate implements the progressive VC-1 macroblock loop of
+`src/formats/vc1/reference.ts`. `blocks.rs` decodes VLCs and AC/DC coefficients,
+predicts motion and intra blocks, compensates motion and applies the loop
+filters. `bits.rs` and `tables.rs` use the checked bit-reader behavior and VLC
+layout of the JS fallback. `lib.rs` supplies SIMD pixel operations, and
+`block_support.rs` provides internal views into the bounded decoder arena.
+
+The TypeScript front end parses sequence/picture headers and manages reference
+pictures. `src/formats/vc1/wasm-decoder.ts` reserves all context, coefficient and
+picture storage in one private instance. The header parser and Rust block loop
+share their bitplanes and prediction arrays. Each slice crosses the ABI once;
+no copies or host calls occur for individual blocks. Whole skipped pictures
+share reference storage and keep independent metadata.
 
 The 8×8 inverse transform processes four columns at a time. Interpolation uses
 four-lane integer vectors, clipping before averaging; smaller transforms and

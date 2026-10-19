@@ -14,13 +14,16 @@ the padded planes; luma and chroma have separate strides.
 The facade selects `wasm-decoder.ts` when WebAssembly SIMD is available, or
 `reference.ts` with `{wasm: false}` or when module initialization fails.
 `accelerated` reports the selected backend. Each accelerated decoder keeps its
-pixel buffers in one private Wasm instance, bounded to 128 MiB. Parsing and
-prediction state use the same TypeScript implementation for both backends.
+pixel buffers in one private Wasm instance, bounded to 128 MiB. Sequence and picture headers use the shared TypeScript parser. The Rust block
+loop handles entropy decoding, prediction, transforms, motion compensation and
+filtering with one call per slice; the JS fallback performs the same operations
+in `reference.ts`.
 
 `bitstream.ts` implements the checked MSB-first reader and multilevel VLC tables.
 `tables.ts` contains the progressive decoding tables. `dsp.ts` implements inverse
 transforms, interpolation and loop filters with reusable typed-array scratch
-storage. Picture storage is reused in a bounded pool. Dimensions are limited to
+storage. Picture storage is reused in a bounded pool; whole skipped pictures share their
+reference planes while retaining independent type and timestamp metadata. Dimensions are limited to
 4096 by 2160 and compressed packets to 16 MiB.
 
 Supported tools include 1-MV and mixed 4-MV motion compensation, half- and
