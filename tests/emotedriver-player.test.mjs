@@ -1,3 +1,4 @@
+import {EMOTEDRIVER_X86_SHA256, EMOTEDRIVER_X64_SHA256} from '../dist/native/emotedriver/build.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {EmotePlayerCore} from '../dist/native/emotedriver/runtime/player-core.js';
@@ -481,4 +482,26 @@ test('variableList queries, wind, show/hide, clone and assignState', () => {
   assert.equal(rendered[0], q);
   assert.throws(() => p.assignState({}), TypeError);
   assert.equal(p.release(), 0);
+});
+
+test('exact x64 DLL identity selects immediate tween progress and completed queue carry', () => {
+  const t = new EmoteTween(1, EMOTEDRIVER_X64_SHA256.toUpperCase());
+  t.set([10], 4, 1, false);
+  assert.equal(t.step(1)[0], 2.5);
+  // A repeated target over a longer duration retains the earlier completion.
+  t.set([10], 20, 1, false);
+  assert.equal(t.step(1)[0], 5);
+  t.set([20], 1, 1, true);
+  t.set([30], 1, 1, true);
+  assert.equal(t.step(2)[0], 30);
+  assert.equal(t.busy, false);
+  t.set([40], 10, 1, false);
+  t.set([50], 10, 1, true);
+  t.skip();
+  assert.equal(t.current[0], 50);
+  assert.equal(t.busy, false);
+  assert.equal(easingPower(-0.001, EMOTEDRIVER_X64_SHA256), 0.9990009665489197);
+  assert.equal(easingPower(-0.001, EMOTEDRIVER_X86_SHA256), 0.9990010261535645);
+  assert.throws(() => new EmoteTween(1, 'unknown'), /unsupported DLL build/);
+  assert.throws(() => easingPower(0, '3.9.8'), /unsupported DLL build/);
 });

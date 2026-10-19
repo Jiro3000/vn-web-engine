@@ -159,3 +159,12 @@ mode and blend indices 13–15.
 - Amakano 3's 132 character models (`image/fg/*.psb`, BC7 and DXT5 atlases) play 240
   frames each through the player and the renderer without errors; their draw lists use
   blend modes 0x10, 0x13 and 0x118 and composite intersect masks (stencil type 5).
+
+## Shared value tweens
+
+`runtime/controls/transition.ts` implements value tweens for both exact DLL images
+listed in `build.ts`. Unknown identities are rejected. The x86 image starts a
+queued entry without advancing it; the x64 image advances it immediately and
+passes the full interval to each entry completed in the same call. Float stores,
+completion tolerance and repeated-target behavior retain each image's semantics.
+The x64 compatibility constructor in `tween.ts` delegates to this shared code.

@@ -1,3 +1,4 @@
+import {EMOTEDRIVER_X64_SHA256} from './build.js';
 import {PsbFile} from '../../formats/psb/psb.js';
 import {readEmoteModel, type EmoteModel} from '../../formats/emote/model.js';
 import {EmoteMotionClip, EmoteResource} from './clip.js';
@@ -20,7 +21,7 @@ const profiles: ReadonlyMap<string, EmoteDriverProfile> = new Map(
     {
       // x64 D3D11 build (Artemis Rev.3258); exports 0x180004130/0x180004120, key at
       // file offset 0x8f7b8.
-      sha256: '80d28bd088dda8e97c7c47a9c664e55159f70505b0f9fde3158d8ce2a3e1e051',
+      sha256: EMOTEDRIVER_X64_SHA256,
       sdkVersion: '3.9.8',
       buildDateTime: '2022/12/28-13:02:35',
       psbKey: 49327924,
