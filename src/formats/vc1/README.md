@@ -1,0 +1,32 @@
+# VC-1 video
+
+`Vc1Decoder` in `reference.ts` accepts complete ASF video media objects for WMV3
+Main profile and WVC1 Advanced profile. It decodes progressive I and P pictures
+into planar 8-bit 4:2:0, preserving FFmpeg 7.1.1 integer rounding and packet
+presentation times. ASF demuxing and WMA audio decoding belong to other modules.
+
+The decoder returns one picture or `null` per packet. Main profile outputs the
+current picture; Advanced profile delays one reference picture. Call
+`decode(null, 0)` until it returns `null` to drain. Returned planes belong to the
+decoder and must be copied before its next call. Use `width` and `height` to crop
+the padded planes; luma and chroma have separate strides.
+
+`bitstream.ts` implements the checked MSB-first reader and multilevel VLC tables.
+`tables.ts` contains the progressive decoding tables. `dsp.ts` implements inverse
+transforms, interpolation and loop filters with reusable typed-array scratch
+storage. Picture storage is reused in a bounded pool. Dimensions are limited to
+4096 by 2160 and compressed packets to 16 MiB.
+
+Supported tools include 1-MV and mixed 4-MV motion compensation, half- and
+quarter-pel interpolation, intensity compensation, bitplanes, AC/DC prediction,
+8×8/8×4/4×8/4×4 transforms, loop filtering and progressive slices. Interlacing,
+B/BI pictures, sprites, X8 intra coding, multiresolution, range reduction or
+mapping, overlap transforms and macroblock quantizer changes are refused.
+
+`tests/vc1-video.test.mjs` exercises synthetic I/P streams and the delayed-output
+contract without game data. This module is independent of the existing
+`src/video/windows-media.ts` decoder.
+
+The implementation is derived from FFmpeg 7.1.1 and distributed under LGPL 2.1
+or later. See [NOTICE](NOTICE) for copyright notices and [LICENSE](LICENSE) for
+the license terms.
