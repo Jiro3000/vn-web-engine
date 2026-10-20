@@ -13,6 +13,7 @@ import {
   emoteSoftAngle,
 } from '../dist/native/emotedriver/runtime/controls/index.js';
 import {EmoteTween} from '../dist/native/emotedriver/runtime/controls/transition.js';
+import {EmoteSelector} from '../dist/native/emotedriver/runtime/controls/selector.js';
 
 const f32 = Math.fround;
 const vec = (x = 0, y = 0, z = 0) => ({x, y, z});
@@ -209,6 +210,42 @@ test('selector drives transition tweens to on and off values', () => {
   for (let i = 0; i < 12; i++) for (const t of tweens.values()) t.step(1);
   assert.equal(tweens.get('a').current[0], 0);
   assert.equal(tweens.get('b').current[0], 1);
+});
+
+test('selector accepts an alternate transition and preserves each build’s distance threshold', () => {
+  const control = {
+    label: 'select',
+    optionList: [{label: 'option', offValue: 0, onValue: 100000000}],
+    unread: {},
+  };
+  const calls = [];
+  const transition = {
+    busy: false,
+    step: () => [99999992],
+    set: (...args) => calls.push(args),
+  };
+  new EmoteSelector(control, () => transition);
+  assert.deepEqual(calls, []);
+  new EmoteSelector(control, () => transition, EMOTEDRIVER_X64_SHA256);
+  assert.deepEqual(calls, [[[100000000], 0, 0, false]]);
+  assert.throws(
+    () => new EmoteSelector(control, () => transition, 'unknown'),
+    /unsupported DLL build/,
+  );
+});
+
+test('x64 selector advances queued selections in the completing call', () => {
+  const control = {label: 'select', optionList: [], unread: {}};
+  const selector = new EmoteSelector(control, () => null, EMOTEDRIVER_X64_SHA256);
+  selector.set(1, 1, 1, false);
+  selector.set(2, 1, 1, true);
+  assert.equal(selector.update(1), 2);
+  assert.equal(selector.busy, false);
+  const upstream = new EmoteSelector(control, () => null);
+  upstream.set(1, 1, 1, false);
+  upstream.set(2, 1, 1, true);
+  assert.equal(upstream.update(1), 1);
+  assert.equal(upstream.busy, true);
 });
 
 test('wind spawns, moves and retires gusts', () => {

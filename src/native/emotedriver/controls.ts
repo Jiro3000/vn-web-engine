@@ -1,3 +1,4 @@
+import {EmoteSelector, type EmoteSelectorTransition} from './runtime/controls/selector.js';
 import {EmoteEye} from './runtime/controls/eye.js';
 import {EmoteEyebrow} from './runtime/controls/eyebrow.js';
 import {EMOTEDRIVER_X64_SHA256} from './build.js';
@@ -15,9 +16,6 @@ import {EmoteXorshift128} from './runtime/controls/random.js';
 import {EmoteTween} from './tween.js';
 
 const f32 = Math.fround;
-const REACH_EPSILON = f32(0.0001);
-/** `FLT_EPSILON` (0x181fcd510). */
-const FLT_EPSILON = f32(2 ** -23);
 
 /**
  * Process-wide generator of 0x180028950, an xorshift variant whose last word mixes
@@ -48,12 +46,6 @@ export class EmoteGraph extends SharedGraph {
   path(from: number, to: number): Segment[] {
     return this.search(from, to);
   }
-}
-
-interface WalkEntry {
-  readonly value: number;
-  readonly frames: number;
-  readonly power: number;
 }
 
 /**
@@ -137,98 +129,30 @@ export class EmoteMouthControl {
 
 export interface EmoteSelectorOption {
   /** The linked `transitionControl` tween, or null when no entry has the label. */
-  readonly tween: EmoteTween | null;
+  readonly tween: EmoteSelectorTransition | null;
   readonly offValue: number;
   readonly onValue: number;
 }
 
 /** `EPSelectorControl` (0x58 bytes, loader 0x180017a50): one option on, the others off. */
-export class EmoteSelectorControl {
-  private queue: WalkEntry[] = [];
-  /** +0x30. */
-  selected = 0;
-  private state = 0;
-  private inv = 0;
-  private t = 0;
-
-  constructor(
-    readonly label: string,
-    readonly options: readonly EmoteSelectorOption[],
-  ) {
-    this.select(0, 0, 0);
+export class EmoteSelectorControl extends EmoteSelector {
+  constructor(label: string, options: readonly EmoteSelectorOption[]) {
+    super(
+      {
+        label,
+        optionList: options.map((option, index) => ({
+          label: String(index),
+          offValue: option.offValue,
+          onValue: option.onValue,
+        })),
+        unread: {},
+      },
+      (label) => options[Number(label)]?.tween ?? null,
+      EMOTEDRIVER_X64_SHA256,
+    );
   }
-
-  /** 0x18002bfa0. */
-  private select(index: number, frames: number, power: number): void {
-    this.selected = index;
-    for (let i = 0; i < this.options.length; i++) {
-      const o = this.options[i]!;
-      if (!o.tween) continue;
-      const target = i === index ? o.onValue : o.offValue;
-      const cur = o.tween.step(0)[0]!;
-      if (o.tween.busy || Math.abs(f32(cur - target)) >= FLT_EPSILON) {
-        const span = Math.abs(f32(f32(cur - target) / f32(o.onValue - o.offValue)));
-        o.tween.set([target], f32(span * f32(frames)), power, false);
-      }
-    }
-  }
-
-  get busy(): boolean {
-    return this.state !== 0 || this.queue.length !== 0;
-  }
-
-  /** setVariable kind 8. */
-  set(value: number, frames: number, power: number, queuing: boolean): void {
-    const fr = f32(frames);
-    if (fr <= 0) {
-      this.queue = [];
-      this.state = 0;
-      this.select(Math.trunc(value), 0, 0);
-      return;
-    }
-    if (queuing) {
-      this.queue.push({value: f32(value), frames: fr, power});
-      return;
-    }
-    this.queue = [{value: f32(value), frames: fr, power}];
-    this.state = 0;
-  }
-
-  /** 0x180018450. */
-  skip(): void {
-    const last = this.queue[this.queue.length - 1];
-    if (!last) {
-      if (this.state !== 0) {
-        this.state = 0;
-        this.select(this.selected, 0, 0);
-      }
-      return;
-    }
-    this.state = 0;
-    this.select(Math.trunc(last.value), 0, 0);
-    this.queue = [];
-  }
-
-  /** Returns the selected index as the variable value. */
   step(frames: number): number {
-    const dt = f32(frames);
-    for (;;) {
-      if (this.state !== 0) {
-        if (this.state === 1) {
-          this.t = f32(f32(dt * this.inv) + this.t);
-          if (f32(this.t - 1) < -REACH_EPSILON) break;
-          this.t = 1;
-          this.state = 0;
-        }
-      }
-      const entry = this.queue.shift();
-      if (!entry) break;
-      this.select(Math.trunc(entry.value), entry.frames, entry.power);
-      this.state = 1;
-      this.t = 0;
-      this.inv = f32(1 / entry.frames);
-    }
-    return this.selected;
+    return this.update(frames);
   }
 }
 

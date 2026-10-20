@@ -184,3 +184,10 @@ changes in the current call. Its blink toggle resets the open position and
 interval when disabled. The x86 image keeps its integer frame loading and
 one-phase-per-call behavior. Compatibility names in `controls.ts` delegate
 to these controls, sharing the process random source.
+
+`runtime/controls/selector.ts` drives transitions through the
+`EmoteSelectorTransition` interface. Both builds retain their distance threshold,
+index conversion and queue timing: the x86 image tests the normalized remaining
+distance and starts requests on a later call, while the x64 image tests absolute
+distance and advances queued requests immediately. Its compatibility constructor
+in `controls.ts` delegates to this shared selector.
