@@ -26,6 +26,7 @@ import {
   roundHalfEven,
 } from './interpolate.js';
 import {ClipParameter, EmoteNode} from './node.js';
+import {EmoteClipTime} from './time.js';
 import {clipRectPass, maskPass, meshPass, shapePass} from './vertices.js';
 import {composeEmoteMatrix, multiplyEmoteMatrices as multiply} from './matrix.js';
 
@@ -69,7 +70,7 @@ const UNSUPPORTED_TYPES = new Map([
   [10, 'screenBounds (0x100444b0)'],
 ]);
 
-export class EmoteClip implements EmoteClipDriver, EmoteClipPlayerAccess {
+export class EmoteClip extends EmoteClipTime implements EmoteClipDriver, EmoteClipPlayerAccess {
   readonly kernel: EmoteMeshKernel;
   /** +0x0c referencing clip, +0x08 top clip. */
   readonly parentClip: EmoteClip | null;
@@ -96,22 +97,8 @@ export class EmoteClip implements EmoteClipDriver, EmoteClipPlayerAccess {
   readonly pathVariables = new Map<string, number>();
 
   /** +0x110 playing, +0x111 time set (no step this frame), +0x112, +0x113 start, +0x114 replay events, +0x115 force. */
-  playing = false;
-  jumped = true;
   flag112 = true;
-  starting = false;
-  replay = false;
   force = false;
-  /** +0x1d0 stopped by a `sync` tag, +0x1d1 stopped by an `align` tag. */
-  syncStop = false;
-  alignStop = false;
-  /** +0x118 running time, +0x11c clamped time, +0x120 speed, +0x124 step. */
-  timeRunning = 0;
-  time = 0;
-  speed = 1;
-  step = 0;
-  loopTime = 0;
-  lastTime = 0;
   /** +0x128..+0x130 root velocity, +0x134 decay. */
   readonly rootVelocity = new Float32Array(3);
   decay = 1;
@@ -144,6 +131,7 @@ export class EmoteClip implements EmoteClipDriver, EmoteClipPlayerAccess {
     parent: EmoteClip | null,
     options: EmoteClipOptions = {},
   ) {
+    super();
     this.parentClip = parent;
     this.top = parent?.top ?? this;
     this.kernel = options.kernel ?? parent?.kernel ?? createEmoteMeshKernel();
@@ -403,108 +391,6 @@ export class EmoteClip implements EmoteClipDriver, EmoteClipPlayerAccess {
 
   // ---------------------------------------------------------------------------------------
   // Time
-
-  /** 0x1003aaf0. */
-  advance(frames: number): void {
-    this.alignStop = false;
-    this.step = f(this.speed * frames);
-    if (this.motionParameter) {
-      const t = this.motionParameter.position;
-      if (this.starting) {
-        this.timeRunning = this.time = t;
-        this.starting = false;
-        this.resetFrames();
-      } else if (this.time < t) {
-        this.timeRunning = this.time = t;
-        this.scanForward();
-      } else if (t < this.time) {
-        this.timeRunning = this.time = t;
-        this.scanBackward();
-      } else this.scanParameterNodes();
-      return;
-    }
-    if (!this.starting && !this.playing) {
-      if (this.parameters.length) this.scanParameterNodes();
-      return;
-    }
-    if (this.syncStop || this.alignStop) return;
-    const stopped = () => this.syncStop || this.alignStop;
-    let stepped = false;
-    if (this.starting) {
-      this.starting = false;
-      if (this.step < 0 && this.timeRunning === 0) this.time = this.timeRunning = this.lastTime;
-      if (this.replay) {
-        this.replay = false;
-        if (this.step > 0) {
-          const saved = this.time;
-          this.time = 0;
-          this.resetFrames();
-          if (stopped()) return;
-          this.time = saved;
-          this.scanForward();
-          if (stopped()) return;
-          stepped = true;
-        } else if (this.timeRunning < this.lastTime) {
-          const saved = this.time;
-          this.time = this.lastTime;
-          this.resetFrames();
-          if (stopped()) return;
-          this.time = saved;
-          this.scanBackward();
-          if (stopped()) return;
-          stepped = true;
-        }
-      }
-      if (!stepped) {
-        this.resetFrames();
-        if (stopped()) return;
-      }
-    }
-    const jumped = this.jumped;
-    if (!jumped) {
-      this.timeRunning = f(this.step + this.timeRunning);
-      this.time = this.lastTime <= this.timeRunning ? this.lastTime : this.timeRunning;
-    }
-    if (this.step >= 0) {
-      if (this.lastTime <= this.timeRunning) {
-        this.time = this.lastTime;
-        if (this.loopTime >= 0) {
-          this.scanForward();
-          if (stopped()) return;
-          this.time = this.loopTime;
-          this.resetFrames();
-          if (stopped()) return;
-          while (this.lastTime <= this.timeRunning)
-            this.timeRunning = f(this.timeRunning - this.lastTime + this.loopTime);
-          this.time = this.timeRunning;
-          this.scanForward();
-          return;
-        }
-        this.playing = false;
-      }
-      if (!jumped) this.scanForward();
-    } else {
-      if (this.timeRunning < 0 || this.timeRunning < this.loopTime) {
-        if (this.loopTime >= 0) {
-          this.time = this.loopTime;
-          this.scanBackward();
-          if (stopped()) return;
-          this.time = this.lastTime;
-          this.resetFrames();
-          if (stopped()) return;
-          while (this.timeRunning < this.loopTime)
-            this.timeRunning = f(this.timeRunning - this.loopTime + this.lastTime);
-          this.time = this.timeRunning;
-          this.scanBackward();
-          return;
-        }
-        this.time = 0;
-        this.playing = false;
-        this.timeRunning = 0;
-      }
-      if (!jumped) this.scanBackward();
-    }
-  }
 
   /** Frame index search of the seek (0x1003afd0), including its out-of-range results. */
   private static findFrame(

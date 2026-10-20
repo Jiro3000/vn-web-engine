@@ -16,6 +16,7 @@ import {
 
 import {FrameSlot, loadHeader, loadContent} from '../dist/native/emotedriver/runtime/clip/frame.js';
 import {ClipParameter} from '../dist/native/emotedriver/runtime/clip/node.js';
+import {EmoteClipTime} from '../dist/native/emotedriver/runtime/clip/time.js';
 import {
   composeEmoteMatrix,
   multiplyEmoteMatrices,
@@ -657,4 +658,50 @@ test('x64 mesh backends agree on transformed grids, offset points and double mat
   for (let i = 0; i < grids[0].length; i++)
     assert.deepEqual(new Uint32Array(grids[1][i].buffer), new Uint32Array(grids[0][i].buffer));
   assert.throws(() => createEmoteMeshKernel({driverSha256: '3.9.8'}), /unsupported DLL build/);
+});
+
+test('clip clock keeps zero-delta replay and scan stop order per DLL image', () => {
+  class FrameHost extends EmoteClipTime {
+    constructor(sha, stopOnSeek = false) {
+      super(sha);
+      this.calls = [];
+      this.motionParameter = null;
+      this.parameters = [];
+      this.stopOnSeek = stopOnSeek;
+      this.playing = this.starting = this.replay = true;
+      this.timeRunning = this.time = 5;
+      this.lastTime = 10;
+      this.loopTime = -1;
+    }
+    resetFrames() {
+      this.calls.push(['seek', this.time]);
+      if (this.stopOnSeek) this.alignStop = true;
+    }
+    scanForward() {
+      this.calls.push(['forward', this.time]);
+    }
+    scanBackward() {
+      this.calls.push(['backward', this.time]);
+    }
+    scanParameterNodes() {
+      this.calls.push(['parameters', this.time]);
+    }
+  }
+  const x86 = new FrameHost(),
+    x64 = new FrameHost(EMOTEDRIVER_X64_SHA256);
+  x86.advance(0);
+  x64.advance(0);
+  assert.deepEqual(x86.calls, [
+    ['seek', 10],
+    ['backward', 5],
+  ]);
+  assert.deepEqual(x64.calls, [
+    ['seek', 0],
+    ['forward', 5],
+  ]);
+  const held = new FrameHost(undefined, true);
+  held.advance(0);
+  assert.deepEqual(held.calls, [['seek', 10]]);
+  assert.equal(held.time, 10, 'a held scan retains the tag position');
+  assert.throws(() => new FrameHost('ff'), /unsupported DLL build/);
 });

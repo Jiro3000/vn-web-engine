@@ -340,3 +340,10 @@ chain. Matrix interfaces read the shared transform fields without alias getters.
 components selected by a native inheritance mask. Both clip variants use it for
 partial inheritance. Coordinate projection, matrix composition and native
 opacity arithmetic stay with the layer pass that selects their image behavior.
+
+`runtime/clip/time.ts` owns the running and clamped clip clocks and their scan
+order. Clips supply frame-reset, forward/backward and parameter scan hooks.
+The exact DLL image selects replay at zero delta, tag-stop checkpoints and loop
+rounding: x86 clears alignment at the start and stops after a holding tag; x64
+replays forward at zero delta and keeps two float stores per loop wrap. Each
+clip keeps its native keyframe and event storage behind those hooks.

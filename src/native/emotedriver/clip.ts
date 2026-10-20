@@ -43,6 +43,7 @@ import {EmoteMeshCombinators} from './runtime/clip/combinators.js';
 import type {EmoteCombinatorTarget, EmoteX64MeshKernel} from './runtime/interfaces.js';
 import {createEmoteMeshKernel} from './runtime/mesh/index.js';
 import {ClipParameter, NodeState} from './runtime/clip/node.js';
+import {EmoteClipTime} from './runtime/clip/time.js';
 import {composeEmoteMatrix, multiplyEmoteMatrices} from './runtime/clip/matrix.js';
 
 const f32 = Math.fround;
@@ -666,7 +667,7 @@ export interface EmoteClipEvent {
   readonly action: string;
 }
 
-export class EmoteMotionClip implements EmoteClip {
+export class EmoteMotionClip extends EmoteClipTime implements EmoteClip {
   readonly resource: EmoteResource;
   /** +0x18 top clip, +0x20 parent clip. */
   readonly top: EmoteMotionClip;
@@ -685,20 +686,11 @@ export class EmoteMotionClip implements EmoteClip {
   file: EmoteModel | null = null;
   motion: EmoteMotion | null = null;
   /** +0x188 playing, +0x189 jumped, +0x18a, +0x18b seek pending, +0x18c seek wrap, +0x18d. */
-  playing = false;
-  private jumped = true;
   private f18a = true;
-  private seekPending = false;
-  private seekWrap = false;
   private forceCalc = false;
   /** +0x158/+0x15c. */
   readonly ownRotation = false;
   ownRotationAngle = 0;
-  /** +0x190 time, +0x194 clamped time, +0x198 speed, +0x19c frame delta. */
-  time = 0;
-  clamped = 0;
-  speed = 1;
-  delta = 0;
   /** +0x1a0 root velocity, +0x1ac decay. */
   readonly velocity = new Float32Array(3);
   decay = 1;
@@ -708,28 +700,22 @@ export class EmoteMotionClip implements EmoteClip {
   color = NEUTRAL;
   effectMode = 0;
   effectLevel = 1;
-  /** +0x200/+0x204. */
-  loopTime = 0;
-  lastTime = 0;
   /** +0x208.. priority state; +0x218 order list. */
   private priority: PriorityFrame[] = [];
   private prIndex = 0;
   private order: readonly number[] = [];
   /** +0x250. */
   clipFlags = 0;
-  /** +0x274 sync, +0x275 align (tags only). */
-  private readonly sync = false;
-  private readonly align = false;
   /** +0x2e0. */
   events: EmoteClipEvent[] = [];
   /** +0x410 motion-independent inheritance, +0x411 the parent writes the root matrix. */
   independentInherit = false;
   private readonly rootMatrixFromParent: boolean;
   /** +0x418 parameters, +0x430 the registered parameters by id, +0x440 values. */
-  private params: Param[] = [];
+  protected parameters: Param[] = [];
   private readonly paramIndex = new Map<string, Param[]>();
   readonly values = new Map<string, number>();
-  private parameterized: Param | null = null;
+  protected motionParameter: Param | null = null;
   /** +0x488 (top). */
   meshDivisionRatio = 1;
   /** Device +0x88. */
@@ -750,6 +736,7 @@ export class EmoteMotionClip implements EmoteClip {
   private layerIndexMap: ReadonlyMap<string, number> | null = null;
 
   constructor(resource: EmoteResource, parent: EmoteMotionClip | null = null) {
+    super(EMOTEDRIVER_X64_SHA256);
     this.resource = resource;
     this.parentClip = parent;
     this.top = parent ? parent.top : this;
@@ -921,14 +908,14 @@ export class EmoteMotionClip implements EmoteClip {
     this.loopTime = f32(motion.loopTime);
     this.lastTime = f32(motion.lastTime);
     this.unregisterParams();
-    this.params = motion.parameters.map((d) => {
+    this.parameters = motion.parameters.map((d) => {
       const p = new Param(d);
       p.apply(this.inheritedValue(d.id));
       return p;
     });
     this.registerParams();
-    this.parameterized =
-      motion.parameterize !== null ? (this.params[motion.parameterize] ?? null) : null;
+    this.motionParameter =
+      motion.parameterize !== null ? (this.parameters[motion.parameterize] ?? null) : null;
     this.playing = true;
     this.setup(motion);
     if (!(flags & 2)) this.seekTo(0);
@@ -945,7 +932,7 @@ export class EmoteMotionClip implements EmoteClip {
 
   /** 0x180036840: registers the parameters here and in every ancestor. */
   private registerParams(): void {
-    for (const p of this.params) {
+    for (const p of this.parameters) {
       for (let c: EmoteMotionClip | null = this; c; c = c.parentClip) {
         let list = c.paramIndex.get(p.def.id);
         if (!list) c.paramIndex.set(p.def.id, (list = []));
@@ -956,7 +943,7 @@ export class EmoteMotionClip implements EmoteClip {
 
   /** 0x180036230. */
   private unregisterParams(): void {
-    for (const p of this.params) {
+    for (const p of this.parameters) {
       for (let c: EmoteMotionClip | null = this; c; c = c.parentClip) {
         const list = c.paramIndex.get(p.def.id);
         if (!list) continue;
@@ -965,16 +952,16 @@ export class EmoteMotionClip implements EmoteClip {
         if (list.length === 0) c.paramIndex.delete(p.def.id);
       }
     }
-    this.params = [];
+    this.parameters = [];
   }
 
   /** 0x180039880. */
   seekTo(t: number): void {
     if (!this.file) return;
-    this.time = f32(Math.max(t, 0));
-    this.clamped = Math.min(this.time, this.lastTime);
+    this.timeRunning = f32(Math.max(t, 0));
+    this.time = Math.min(this.timeRunning, this.lastTime);
     this.jumped = true;
-    this.seekPending = true;
+    this.starting = true;
   }
 
   /** 0x18003e530: drops every node but the root and the nested clips. */
@@ -1000,7 +987,7 @@ export class EmoteMotionClip implements EmoteClip {
     const walk = (layers: readonly EmoteLayer[], parent: number) => {
       for (const layer of layers) {
         const param =
-          layer.parameterize !== null ? (this.params[layer.parameterize] ?? null) : null;
+          layer.parameterize !== null ? (this.parameters[layer.parameterize] ?? null) : null;
         const node = new Node(this, layer, this.nodes.length, parent, param);
         this.nodes.push(node);
         this.typeMask |= 1 << node.type;
@@ -1073,101 +1060,8 @@ export class EmoteMotionClip implements EmoteClip {
     this.calc();
   }
 
-  /** 0x18003f7f0. */
-  private advance(frames: number): void {
-    this.delta = f32(frames * this.speed);
-    const pz = this.parameterized;
-    if (pz) {
-      const v = pz.value;
-      if (this.seekPending) {
-        this.time = this.clamped = v;
-        this.seekPending = false;
-        this.seek();
-      } else if (this.clamped < v) {
-        this.time = this.clamped = v;
-        this.stepForward();
-      } else if (v < this.clamped) {
-        this.time = this.clamped = v;
-        this.stepBackward();
-      } else this.stepParams();
-      return;
-    }
-    if (!this.seekPending && !this.playing) {
-      if (this.params.length) this.stepParams();
-      return;
-    }
-    if (this.sync || this.align) return;
-    if (this.seekPending) {
-      this.seekPending = false;
-      if (this.delta < 0 && this.time === 0) this.time = this.clamped = this.lastTime;
-      if (!this.seekWrap) this.seek();
-      else {
-        this.seekWrap = false;
-        const saved = this.clamped;
-        if (this.delta < 0) {
-          if (this.lastTime <= this.time) this.seek();
-          else {
-            this.clamped = this.lastTime;
-            this.seek();
-            this.clamped = saved;
-            this.stepBackward();
-          }
-        } else {
-          this.clamped = 0;
-          this.seek();
-          this.clamped = saved;
-          this.stepForward();
-        }
-      }
-    }
-    const jumped = this.jumped;
-    let t: number;
-    if (!jumped) {
-      t = this.time = f32(this.delta + this.time);
-      this.clamped = t < this.lastTime ? t : this.lastTime;
-    } else t = this.time;
-    if (this.delta >= 0) {
-      if (this.lastTime <= t) {
-        this.clamped = this.lastTime;
-        if (this.loopTime >= 0) {
-          this.stepForward();
-          this.clamped = this.loopTime;
-          this.seek();
-          let u = this.time;
-          const span = this.lastTime - this.loopTime;
-          if (this.lastTime <= u)
-            u = span > 0 ? wrapUp(u, this.loopTime, this.lastTime) : this.loopTime;
-          this.time = this.clamped = u;
-          this.stepForward();
-          return;
-        }
-        this.playing = false;
-      }
-      if (!jumped) this.stepForward();
-      return;
-    }
-    if (t < 0 || t < this.loopTime) {
-      if (this.loopTime >= 0) {
-        this.clamped = this.loopTime;
-        this.stepBackward();
-        this.clamped = this.lastTime;
-        this.seek();
-        let u = this.time;
-        const span = this.lastTime - this.loopTime;
-        if (u < this.loopTime)
-          u = span > 0 ? wrapDown(u, this.loopTime, this.lastTime) : this.lastTime;
-        this.time = this.clamped = u;
-        this.stepBackward();
-        return;
-      }
-      this.time = this.clamped = 0;
-      this.playing = false;
-    }
-    if (!jumped) this.stepBackward();
-  }
-
   private timeOf(node: Node): number {
-    return node.param ? node.param.value : this.clamped;
+    return node.param ? node.param.value : this.time;
   }
 
   private pushAct(node: Node): void {
@@ -1176,16 +1070,16 @@ export class EmoteMotionClip implements EmoteClip {
   }
 
   /** 0x18003fc30. */
-  private seek(): void {
+  protected resetFrames(): void {
     const pr = this.priority;
     if (pr.length) {
       let idx = this.prIndex;
       for (let i = 0; i < pr.length; i++) {
-        if (pr[i]!.time === this.clamped) {
+        if (pr[i]!.time === this.time) {
           idx = i;
           break;
         }
-        if (this.clamped < pr[i]!.time) {
+        if (this.time < pr[i]!.time) {
           idx = Math.max(i - 1, 0);
           break;
         }
@@ -1218,12 +1112,12 @@ export class EmoteMotionClip implements EmoteClip {
   }
 
   /** 0x180040cb0. */
-  private stepForward(): void {
+  protected scanForward(): void {
     const pr = this.priority;
     while (
       pr.length >= 2 &&
       this.prIndex < pr.length - 2 &&
-      this.clamped >= pr[this.prIndex + 1]!.time
+      this.time >= pr[this.prIndex + 1]!.time
     ) {
       this.prIndex++;
       this.order = pr[this.prIndex]!.order;
@@ -1236,7 +1130,7 @@ export class EmoteMotionClip implements EmoteClip {
       }
       let stepped = false;
       while (n.a.index < n.count - 2) {
-        if (this.clamped < n.b.time) break;
+        if (this.time < n.b.time) break;
         const next = n.stateAt(n.b.index + 1);
         n.a = n.b;
         n.b = next;
@@ -1250,9 +1144,9 @@ export class EmoteMotionClip implements EmoteClip {
   }
 
   /** 0x1800415e0. */
-  private stepBackward(): void {
+  protected scanBackward(): void {
     const pr = this.priority;
-    while (pr.length && this.prIndex > 0 && this.clamped < pr[this.prIndex]!.time) {
+    while (pr.length && this.prIndex > 0 && this.time < pr[this.prIndex]!.time) {
       this.prIndex--;
       this.order = pr[this.prIndex]!.order;
     }
@@ -1262,8 +1156,8 @@ export class EmoteMotionClip implements EmoteClip {
         this.stepParamNode(n);
         continue;
       }
-      if (!(this.clamped < n.a.time) || n.a.index === 0) continue;
-      while (this.clamped < n.a.time && n.a.index > 0) {
+      if (!(this.time < n.a.time) || n.a.index === 0) continue;
+      while (this.time < n.a.time && n.a.index > 0) {
         const prev = n.stateAt(n.a.index - 1);
         n.b = n.a;
         n.a = prev;
@@ -1275,7 +1169,7 @@ export class EmoteMotionClip implements EmoteClip {
   }
 
   /** 0x180040a60. */
-  private stepParams(): void {
+  protected scanParameterNodes(): void {
     for (let k = 1; k < this.nodes.length; k++) {
       const n = this.nodes[k]!;
       if (n.param) this.stepParamNode(n);
@@ -1428,7 +1322,7 @@ export class EmoteMotionClip implements EmoteClip {
       root = nodes[0]!;
     for (let i = 0; i < 3; i++) {
       if (this.velocity[i] !== 0) {
-        const v = f32(this.velocity[i]! * this.delta);
+        const v = f32(this.velocity[i]! * this.step);
         if (i === 0) root.adjust.x = f32(v + root.adjust.x);
         else if (i === 1) root.adjust.y = f32(v + root.adjust.y);
         else root.adjust.z = f32(v + root.adjust.z);
@@ -1436,7 +1330,7 @@ export class EmoteMotionClip implements EmoteClip {
       }
     }
     if (this.decay !== 1) {
-      const k = f32(Math.pow(this.decay, this.delta / 60));
+      const k = f32(Math.pow(this.decay, this.step / 60));
       for (let i = 0; i < 3; i++) this.velocity[i] = f32(k * this.velocity[i]!);
     }
     for (const n of nodes) {
@@ -1553,7 +1447,7 @@ export class EmoteMotionClip implements EmoteClip {
       n.dirty = false;
       n.changed = false;
     }
-    for (const p of this.params) p.flags = 0;
+    for (const p of this.parameters) p.flags = 0;
     this.jumped = false;
     this.f18a = false;
   }
@@ -1797,12 +1691,12 @@ export class EmoteMotionClip implements EmoteClip {
 
   /** 0x180045c50: drives the nested clips of type 3 layers. */
   private subclips(): void {
-    const clipFlags = this.parameterized ? this.parameterized.flags : 0;
+    const clipFlags = this.motionParameter ? this.motionParameter.flags : 0;
     for (const n of this.subNodes) {
       const sub = n.sub;
       if (!sub) continue;
-      const tClamped = n.param ? n.param.value : this.clamped;
-      const tTime = n.param ? n.param.value : this.time;
+      const tClamped = n.param ? n.param.value : this.time;
+      const tTime = n.param ? n.param.value : this.timeRunning;
       const flags = n.param ? n.param.flags : clipFlags;
       const A = n.a,
         B = n.b;
@@ -1819,10 +1713,10 @@ export class EmoteMotionClip implements EmoteClip {
           sub.setMotion(A.icon ?? '', flags | A.motion.flags);
           if (sub.playing && sub.jumped) {
             let t = f32(f32(tTime - A.time) + A.motion.timeOffset);
-            if (this.delta < 0 && sub.loopTime >= 0 && sub.lastTime > sub.loopTime)
+            if (this.step < 0 && sub.loopTime >= 0 && sub.lastTime > sub.loopTime)
               while (sub.lastTime <= t) t = f32(f32(t - sub.lastTime) + sub.loopTime);
             sub.seekTo(t);
-            if (!this.jumped) sub.seekWrap = true;
+            if (!this.jumped) sub.replay = true;
           }
         }
         let bAng = false;
@@ -1904,7 +1798,7 @@ export class EmoteMotionClip implements EmoteClip {
       const r = sub.root;
       r.meshParent = n.meshParent;
       r.stencilParent = n.stencilParent;
-      sub.progressSub(this.delta);
+      sub.progressSub(this.step);
       if (sub.events.length) {
         this.events.push(...sub.events);
         sub.events = [];
@@ -2020,16 +1914,6 @@ export class EmoteMotionClip implements EmoteClip {
       }
     }
   }
-}
-
-function wrapUp(t: number, loop: number, last: number): number {
-  while (last <= t) t = f32(f32(t - last) + loop);
-  return t;
-}
-
-function wrapDown(t: number, loop: number, last: number): number {
-  while (t < loop) t = f32(f32(t - loop) + last);
-  return t;
 }
 
 /** Degrees per radian as the clip computes it. */
