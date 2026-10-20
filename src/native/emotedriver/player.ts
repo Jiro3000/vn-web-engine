@@ -54,7 +54,9 @@ export interface EmoteClip {
   /** Any node +0x35 flag. */
   readonly modified: boolean;
   /** 0x18000e6d0 clip part: the layer's world position when it is a plain layer. */
-  layerPosition(name: string): readonly [number, number] | null;
+  layerPosition(
+    name: string,
+  ): readonly [number, number] | {readonly x: number; readonly y: number} | null;
 }
 
 export {compareEmoteUtf8 as compareUtf8};
@@ -62,6 +64,8 @@ export {compareEmoteUtf8 as compareUtf8};
 export interface EmotePlayerOptions {
   /** Process-wide generator shared by blinking and wind. */
   readonly random: {next(): number};
+  /** Runtime-owned clip phases; omitted for legacy diagnostic clip hosts. */
+  readonly clipAccess?: EmotePlayerClip & EmoteX64ClipPlayerAccess;
 }
 
 /** Bridges the legacy combined clip pass until its layer evaluator is shared. */
@@ -131,7 +135,7 @@ function x64ClipAccess(clip: EmoteClip): EmotePlayerClip & EmoteX64ClipPlayerAcc
     },
     layerPosition(label) {
       const point = clip.layerPosition(label);
-      return point ? {x: point[0], y: point[1]} : null;
+      return point === null ? null : 'x' in point ? point : {x: point[0], y: point[1]};
     },
     setRootTransform(value) {
       clip.rootX = value.x;
@@ -154,7 +158,7 @@ export class EmotePlayer {
   ) {
     clip.selectObject(model.metadata.base.chara);
     clip.setMotion(model.metadata.base.motion);
-    const access = x64ClipAccess(clip);
+    const access = options.clipAccess ?? x64ClipAccess(clip);
     this.core = new EmotePlayerCore({
       model,
       driverSha256: EMOTEDRIVER_X64_SHA256,

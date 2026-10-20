@@ -17,6 +17,7 @@ import {
 import {FrameSlot, loadHeader, loadContent} from '../dist/native/emotedriver/runtime/clip/frame.js';
 import {ClipParameter} from '../dist/native/emotedriver/runtime/clip/node.js';
 import {EmoteClipTime} from '../dist/native/emotedriver/runtime/clip/time.js';
+import {EmoteMotionClip, EmoteResource} from '../dist/native/emotedriver/clip.js';
 import {
   composeEmoteMatrix,
   multiplyEmoteMatrices,
@@ -704,4 +705,39 @@ test('clip clock keeps zero-delta replay and scan stop order per DLL image', () 
   assert.deepEqual(held.calls, [['seek', 10]]);
   assert.equal(held.time, 10, 'a held scan retains the tag position');
   assert.throws(() => new FrameHost('ff'), /unsupported DLL build/);
+});
+
+test('x64 clip phases preserve a queued whole-call hold and resume on the next pass', () => {
+  const m = motion([]),
+    n = motion([]),
+    file = model({o: {m, n}});
+  const clip = new EmoteMotionClip(new EmoteResource([file]));
+  clip.selectObject('o');
+  clip.setMotion('m');
+  clip.progress(1);
+  clip.rootX = 42;
+  clip.rootDirty = true;
+  clip.setMotion('n', 0x40);
+  clip.advance(10);
+  clip.evaluate();
+  clip.dispatchEvents({
+    action() {
+      assert.fail('x64 action retired through x86 listener');
+    },
+  });
+  assert.equal(clip.motionName, 'n');
+  assert.equal(clip.timeRunning, 0);
+  assert.equal(clip.rootDirty, true, 'the held pass must not evaluate the root');
+  clip.advance(1);
+  clip.evaluate();
+  clip.dispatchEvents();
+  assert.equal(clip.rootDirty, false);
+  assert.equal(clip.rootX, 42);
+  clip.advance(1);
+  clip.evaluate();
+  assert.equal(clip.timeRunning, 1);
+  assert.equal(clip.isModified(), false);
+  assert.deepEqual(clip.events, []);
+  assert.throws(() => clip.nodes, /x86 node view/);
+  assert.throws(() => clip.nodeIndex('root'), /x86 node lookup/);
 });

@@ -278,13 +278,17 @@ transforms. It preserves x64 orbit/timeline/difference ordering, UTF-8 variable
 order, expression-loader gates, coordinate flags and original-scale behavior.
 X86 retains its own queuing, clamps, rounding and copy behavior.
 
-The x64 `EmotePlayer` binding delegates to this core. Its clip adapter translates
-the combined `progress` call into the core's split clip protocol; that combined
-call already evaluates layers and retires events. X64 physics reads positions
-through `layerPosition`, so x86 node-layout queries are refused. The binding keeps
+The x64 `EmotePlayer` binding delegates to this core. The x64 device factory supplies the
+actual clip through `EmoteClipDriver` and `EmoteX64ClipPlayerAccess`; the core drives
+its advance, evaluation and event-retirement phases directly. A queued flag 0x40
+holds all three phases for that call, and nested clips advance the shared clock
+without the top-level queue/combinator pass. X64 actions retain their existing
+internal retirement rather than reaching the x86 listener interface. Physics
+reads `layerPosition`, so x86 node-layout queries are refused. The binding keeps
 its tuple coordinate return and explicit unsupported stereovision/state-copy
-operations. `library.ts` registers the x86 native export contract; `driver.ts`
-provides the x64 host binding.
+operations. Older diagnostic clip hosts can use the combined-pass adapter.
+`library.ts` registers the x86 native export contract; `driver.ts` provides the
+x64 host binding.
 
 `runtime/clip/interpolate.ts` shares scalar, angle, color, coordinate and patch
 interpolation for both exact DLL images. X64 preserves its rounded residual

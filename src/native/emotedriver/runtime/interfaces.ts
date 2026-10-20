@@ -286,7 +286,7 @@ export interface EmoteClipDriver extends EmoteClipNodes {
   advance(frames: number): void;
   /** Layer pass (0x1003ece0). */
   evaluate(): void;
-  /** Dispatches events queued by `advance` (0x10033fe0). */
+  /** Dispatches queued events (x86 0x10033fe0); the x64 host retires its actions internally. */
   dispatchEvents(listener: EmoteClipListener): void;
   /** Player colour RGBA (`+0x150`, 0x808080ff neutral), set by the `SetColor` tween. */
   color: number;

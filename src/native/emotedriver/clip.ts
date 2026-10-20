@@ -40,7 +40,15 @@ import {EmoteUnsupportedError, type EmoteClip} from './player.js';
 import {EMOTEDRIVER_X64_SHA256} from './build.js';
 import {FrameSlot, loadHeader, loadContent, EMPTY_PATCH} from './runtime/clip/frame.js';
 import {EmoteMeshCombinators} from './runtime/clip/combinators.js';
-import type {EmoteCombinatorTarget, EmoteX64MeshKernel} from './runtime/interfaces.js';
+import type {
+  EmoteCombinatorTarget,
+  EmoteX64MeshKernel,
+  EmoteClipDriver,
+  EmoteX64ClipPlayerAccess,
+  EmoteClipListener,
+  EmoteRootTransform,
+  EmoteClipEvent as DriverClipEvent,
+} from './runtime/interfaces.js';
 import {createEmoteMeshKernel} from './runtime/mesh/index.js';
 import {ClipParameter, NodeState} from './runtime/clip/node.js';
 import {EmoteClipTime} from './runtime/clip/time.js';
@@ -661,13 +669,10 @@ function readPriority(list: readonly PsbValue[]): PriorityFrame[] {
   });
 }
 
-/** Nested-motion event (+0x2e0): an `act` label reached by a keyframe. */
-export interface EmoteClipEvent {
-  readonly layer: string;
-  readonly action: string;
-}
-
-export class EmoteMotionClip extends EmoteClipTime implements EmoteClip {
+export class EmoteMotionClip
+  extends EmoteClipTime
+  implements EmoteClip, EmoteClipDriver, EmoteX64ClipPlayerAccess
+{
   readonly resource: EmoteResource;
   /** +0x18 top clip, +0x20 parent clip. */
   readonly top: EmoteMotionClip;
@@ -707,7 +712,10 @@ export class EmoteMotionClip extends EmoteClipTime implements EmoteClip {
   /** +0x250. */
   clipFlags = 0;
   /** +0x2e0. */
-  events: EmoteClipEvent[] = [];
+  private layerEvents: DriverClipEvent[] = [];
+  get events(): readonly DriverClipEvent[] {
+    return this.layerEvents;
+  }
   /** +0x410 motion-independent inheritance, +0x411 the parent writes the root matrix. */
   independentInherit = false;
   private readonly rootMatrixFromParent: boolean;
@@ -728,7 +736,8 @@ export class EmoteMotionClip extends EmoteClipTime implements EmoteClip {
   private readonly mappedPoint = new Float32Array(2);
   private readonly mappedResult: [number, number] = [0, 0];
   /** +0x1e8 nodes; +0x3c4 type bit set; type lists. */
-  nodes: Node[] = [];
+  private layerNodes: Node[] = [];
+  private advanceHeld = false;
   private typeMask = 0;
   private subNodes: Node[] = [];
   private shapeNodes: Node[] = [];
@@ -741,11 +750,11 @@ export class EmoteMotionClip extends EmoteClipTime implements EmoteClip {
     this.parentClip = parent;
     this.top = parent ? parent.top : this;
     this.rootMatrixFromParent = parent !== null;
-    this.nodes = [new Node(this, null, 0, 0, null)];
+    this.layerNodes = [new Node(this, null, 0, 0, null)];
   }
 
   private get root(): Node {
-    return this.nodes[0]!;
+    return this.layerNodes[0]!;
   }
 
   // EmoteClip --------------------------------------------------------------------------
@@ -805,16 +814,51 @@ export class EmoteMotionClip extends EmoteClipTime implements EmoteClip {
   }
 
   get modified(): boolean {
-    return this.nodes.some((n) => n.modified);
+    return this.layerNodes.some((n) => n.modified);
+  }
+
+  isModified(): boolean {
+    return this.modified;
+  }
+
+  get nodes(): never {
+    throw new EmoteUnsupportedError('x86 node view of x64 clip');
+  }
+  nodeIndex(_label: string): never {
+    throw new EmoteUnsupportedError('x86 node lookup of x64 clip');
+  }
+  assignState(_source: EmoteClipDriver): never {
+    throw new EmoteUnsupportedError('assignState');
+  }
+
+  get rootVisible(): boolean {
+    return this.visible;
+  }
+  set rootVisible(value: boolean) {
+    this.visible = value;
+  }
+
+  setRootTransform(value: EmoteRootTransform): void {
+    const root = this.root.adjust;
+    root.x = f32(value.x);
+    root.y = f32(value.y);
+    root.zoomX = f32(value.scaleX);
+    root.zoomY = f32(value.scaleY);
+    root.angle = f32(value.angle);
+    // X64 mirrors matching variables, not the clip root.
+  }
+
+  applyVariable(label: string, value: number): void {
+    this.setVariable(label, value);
   }
 
   /** 0x18000e6d0 clip part. */
-  layerPosition(name: string): readonly [number, number] | null {
+  layerPosition(name: string): {readonly x: number; readonly y: number} | null {
     const i = this.layerIndexMap?.get(name);
     if (i === undefined) return null;
-    const n = this.nodes[i + 1];
+    const n = this.layerNodes[i + 1];
     if (!n || n.type !== 1 || !n.shapeInfo || n.layer?.shape !== 0) return null;
-    return [n.shapeInfo[1]!, n.shapeInfo[2]!];
+    return {x: n.shapeInfo[1]!, y: n.shapeInfo[2]!};
   }
 
   /** 0x180037330. Labels with a layer path (`a::b`, `a/b`) address nested clips. */
@@ -968,7 +1012,7 @@ export class EmoteMotionClip extends EmoteClipTime implements EmoteClip {
   private reset(): void {
     this.top.combinators?.unregister(this);
     for (const n of this.subNodes) n.sub?.destroy();
-    this.nodes.length = 1;
+    this.layerNodes.length = 1;
     this.subNodes = [];
     this.shapeNodes = [];
     this.stencilNodes = [];
@@ -988,8 +1032,8 @@ export class EmoteMotionClip extends EmoteClipTime implements EmoteClip {
       for (const layer of layers) {
         const param =
           layer.parameterize !== null ? (this.parameters[layer.parameterize] ?? null) : null;
-        const node = new Node(this, layer, this.nodes.length, parent, param);
-        this.nodes.push(node);
+        const node = new Node(this, layer, this.layerNodes.length, parent, param);
+        this.layerNodes.push(node);
         this.typeMask |= 1 << node.type;
         if (node.type === 3) {
           this.subNodes.push(node);
@@ -1000,7 +1044,7 @@ export class EmoteMotionClip extends EmoteClipTime implements EmoteClip {
       }
     };
     walk(motion.layers, 0);
-    for (const node of this.nodes) {
+    for (const node of this.layerNodes) {
       if (node.meshTransform !== 0 && node.hasCombinator) {
         this.top.combinators ??= new EmoteMeshCombinators(this.top, EMOTEDRIVER_X64_SHA256);
         this.top.combinators.register(node, node.layer!.mesh!.combinators!, this);
@@ -1011,7 +1055,7 @@ export class EmoteMotionClip extends EmoteClipTime implements EmoteClip {
       // 0x18003eef0.
       for (const label of node.layer?.stencilCompositeMaskLayerList ?? []) {
         const i = this.layerIndexMap?.get(label);
-        const mask = i !== undefined ? this.nodes[i + 1] : undefined;
+        const mask = i !== undefined ? this.layerNodes[i + 1] : undefined;
         if (mask && (mask.type === 0 || mask.type === 3)) {
           node.masks.push(mask);
           mask.maskLayer = true;
@@ -1037,26 +1081,45 @@ export class EmoteMotionClip extends EmoteClipTime implements EmoteClip {
 
   // Progress ---------------------------------------------------------------------------
 
-  /** 0x18003f720. */
+  /** 0x18003f720: compatibility entry point for the combined native pass. */
   progress(frames: number): void {
+    this.advance(frames);
+    this.evaluate();
+    this.dispatchEvents();
+  }
+
+  /** Queue/combinator phase followed by the shared clip clock. */
+  override advance(frames: number): void {
+    this.advanceHeld = false;
     if (this.queued) {
       const name = this.queued,
         flags = this.queuedFlags;
       this.queued = '';
       this.setMotion(name, flags & ~0x60);
-      if (flags & 0x40) return;
+      if (flags & 0x40) {
+        this.advanceHeld = true;
+        return;
+      }
     }
-    if (this.combinators) this.combinators.update();
-    this.advance(f32(frames));
+    this.combinators?.update();
+    super.advance(f32(frames));
+  }
+
+  evaluate(): void {
+    if (this.advanceHeld) return;
     this.calc();
     this.drawList.length = 0;
     this.buildDrawList(this.color, null);
-    this.events = [];
   }
 
-  /** 0x18003f600: the nested-clip progress. */
+  /** The x64 player retires actions without the x86 listener callback. */
+  dispatchEvents(_listener?: EmoteClipListener): void {
+    if (!this.advanceHeld) this.layerEvents = [];
+  }
+
+  /** 0x18003f600: nested clips skip the top-level queue/combinator phase. */
   private progressSub(frames: number): void {
-    this.advance(frames);
+    super.advance(frames);
     this.calc();
   }
 
@@ -1066,7 +1129,7 @@ export class EmoteMotionClip extends EmoteClipTime implements EmoteClip {
 
   private pushAct(node: Node): void {
     if (node.a.mask & 0x40000 && node.a.act)
-      this.events.push({layer: node.layer?.label ?? '', action: node.a.act});
+      this.layerEvents.push({type: 0, layer: node.layer?.label ?? '', label: node.a.act});
   }
 
   /** 0x18003fc30. */
@@ -1087,8 +1150,8 @@ export class EmoteMotionClip extends EmoteClipTime implements EmoteClip {
       this.prIndex = Math.min(idx, Math.max(pr.length - 2, 0));
       this.order = pr[this.prIndex]!.order;
     }
-    for (let k = 1; k < this.nodes.length; k++) {
-      const n = this.nodes[k]!;
+    for (let k = 1; k < this.layerNodes.length; k++) {
+      const n = this.layerNodes[k]!;
       const t = this.timeOf(n);
       let idx = 0;
       for (let i = 0; i < n.count; i++) {
@@ -1122,8 +1185,8 @@ export class EmoteMotionClip extends EmoteClipTime implements EmoteClip {
       this.prIndex++;
       this.order = pr[this.prIndex]!.order;
     }
-    for (let k = 1; k < this.nodes.length; k++) {
-      const n = this.nodes[k]!;
+    for (let k = 1; k < this.layerNodes.length; k++) {
+      const n = this.layerNodes[k]!;
       if (n.param) {
         this.stepParamNode(n);
         continue;
@@ -1150,8 +1213,8 @@ export class EmoteMotionClip extends EmoteClipTime implements EmoteClip {
       this.prIndex--;
       this.order = pr[this.prIndex]!.order;
     }
-    for (let k = 1; k < this.nodes.length; k++) {
-      const n = this.nodes[k]!;
+    for (let k = 1; k < this.layerNodes.length; k++) {
+      const n = this.layerNodes[k]!;
       if (n.param) {
         this.stepParamNode(n);
         continue;
@@ -1170,8 +1233,8 @@ export class EmoteMotionClip extends EmoteClipTime implements EmoteClip {
 
   /** 0x180040a60. */
   protected scanParameterNodes(): void {
-    for (let k = 1; k < this.nodes.length; k++) {
-      const n = this.nodes[k]!;
+    for (let k = 1; k < this.layerNodes.length; k++) {
+      const n = this.layerNodes[k]!;
       if (n.param) this.stepParamNode(n);
     }
   }
@@ -1318,7 +1381,7 @@ export class EmoteMotionClip extends EmoteClipTime implements EmoteClip {
 
   /** 0x180043010 (CalcLayerFrameInfo). */
   private calc(): void {
-    const nodes = this.nodes,
+    const nodes = this.layerNodes,
       root = nodes[0]!;
     for (let i = 0; i < 3; i++) {
       if (this.velocity[i] !== 0) {
@@ -1454,7 +1517,7 @@ export class EmoteMotionClip extends EmoteClipTime implements EmoteClip {
 
   /** 0x180043e00: anchors, mesh deformers and vertex grids. */
   private vertices(): void {
-    const nodes = this.nodes;
+    const nodes = this.layerNodes;
     for (let k = 1; k < nodes.length; k++) {
       const n = nodes[k]!;
       let D = nodes[n.parent]!;
@@ -1799,9 +1862,9 @@ export class EmoteMotionClip extends EmoteClipTime implements EmoteClip {
       r.meshParent = n.meshParent;
       r.stencilParent = n.stencilParent;
       sub.progressSub(this.step);
-      if (sub.events.length) {
-        this.events.push(...sub.events);
-        sub.events = [];
+      if (sub.layerEvents.length) {
+        this.layerEvents.push(...sub.layerEvents);
+        sub.layerEvents = [];
       }
     }
   }
@@ -1813,7 +1876,7 @@ export class EmoteMotionClip extends EmoteClipTime implements EmoteClip {
     if (this.jumped) return;
     const mod = modulateColor(color, this.color);
     const neutral = mod === NEUTRAL;
-    const nodes = this.nodes;
+    const nodes = this.layerNodes;
     const count = nodes.length - 1;
     for (let k = 0; k < count; k++) {
       const idx = this.order[count - 1 - k];
