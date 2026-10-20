@@ -14,6 +14,8 @@ import {
   lerpPatch,
 } from '../dist/native/emotedriver/runtime/clip/interpolate.js';
 
+import {FrameSlot, loadHeader, loadContent} from '../dist/native/emotedriver/runtime/clip/frame.js';
+
 const f = Math.fround;
 
 test('clip interpolation preserves each image’s angle wrap and near-zero mesh weight', () => {
@@ -513,4 +515,58 @@ test('clip → renderer: evaluated nodes become draw items with grid, rect and c
   assert.deepEqual([...item.colors], [0xff0000ff, 0xff0000ff, 0xff0000ff, 0xff0000ff]);
   // Icon origin (5, 5): the 10×10 quad spans (15, 25)..(25, 35).
   assert.deepEqual([...item.grid.positions], [15, 25, 25, 25, 15, 35, 25, 35]);
+});
+
+test('frame slots retain each image’s mesh lifetime, color presence and end sentinel', () => {
+  const patch = new Float32Array(32).fill(0.25);
+  const frames = [
+    frame(1.1, 3, {
+      mask: 0x2000000 | 0x200,
+      bm: 0,
+      bmParam: 0.3,
+      color: [0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff],
+      colorList: true,
+      colorKey: true,
+      mesh: {cc: null, bp: patch},
+    }),
+    frame(2, 2, {bmParam: 0, colorList: false, colorKey: false}),
+  ];
+  const x86 = new FrameSlot(),
+    x64 = new FrameSlot(EMOTEDRIVER_X64_SHA256);
+  const read = (slot, index) => {
+    loadHeader(slot, frames, index);
+    loadContent(slot, frames, 0, {easing: null});
+  };
+  read(x86, 0);
+  read(x64, 0);
+  assert.equal(x86.singleColor, true);
+  assert.equal(x64.singleColor, false);
+  assert.equal(x86.colors[0], 0xffffffff);
+  assert.equal(x64.colors[0], 0x7f7f7fff);
+  assert.equal(x64.bm, 0x10);
+  assert.equal(x64.time, f(1.1));
+  read(x86, 1);
+  read(x64, 1);
+  assert.equal(x86.meshPatch, patch);
+  assert.equal(x64.meshPatch.length, 0);
+  read(x86, 2);
+  read(x64, 2);
+  assert.equal(x86.time, 2);
+  assert.equal(x64.time, Infinity);
+  assert.equal(x64.empty, true);
+  assert.equal(x64.zx, 1);
+  assert.equal(x64.motion.dt, 1);
+  assert.throws(() => x86.copyFrom(x64), /between DLL builds/);
+  assert.throws(() => new FrameSlot('3.9.8'), /unsupported DLL build/);
+});
+
+test('x64 frame loading retains deferred curves and rejects unsupported native payloads', () => {
+  const slot = new FrameSlot(EMOTEDRIVER_X64_SHA256);
+  const frames = [frame(0, 3, {ccc: 0, bmParam: 0})];
+  loadHeader(slot, frames, 0);
+  loadContent(slot, frames, 0, {easing: null});
+  assert.equal(slot.eased, true);
+  const bad = [frame(0, 2, {unread: {stc: 0}, bmParam: 0})];
+  loadHeader(slot, bad, 0);
+  assert.throws(() => loadContent(slot, bad, 0, {easing: null}), /stencil alpha test/);
 });

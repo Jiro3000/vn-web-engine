@@ -291,3 +291,11 @@ interpolation for both exact DLL images. X64 preserves its rounded residual
 weight, 360-degree wrap, integer color blend and near-zero patch fast path. X86
 keeps its curve cursors and SSE-style patch stores. Coordinates and patches are
 written into caller-owned buffers; the x64 helpers in `mesh.ts` delegate here.
+
+`runtime/clip/frame.ts` loads keyframe slots for both images. X64 resets its
+mesh and nested-motion state for every frame, uses infinite time past the frame
+list and retains the reader's scalar/list color distinction. It normalizes
+full-range RGB channels with the native blend-mode flag and defers curve/path
+errors until interpolation. X86 retains its lazy content loading, curve cursors,
+last-frame reads and stale mesh/motion structs. The x64 draw-list binding reads
+its immutable compatibility view from one shared scratch slot per layer.

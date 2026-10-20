@@ -20,7 +20,6 @@
 
 import type {
   EmoteFrame,
-  EmoteFrameMotion,
   EmoteIcon,
   EmoteLayer,
   EmoteModel,
@@ -41,6 +40,8 @@ import {
   tessellate,
 } from './mesh.js';
 import {EmoteUnsupportedError, type EmoteClip} from './player.js';
+import {EMOTEDRIVER_X64_SHA256} from './build.js';
+import {FrameSlot, loadHeader, loadContent, EMPTY_PATCH} from './runtime/clip/frame.js';
 
 const f32 = Math.fround;
 const NEUTRAL = 0x808080ff;
@@ -204,77 +205,52 @@ function missingState(index: number): FrameState {
   return {...EMPTY_STATE, index, time: Infinity};
 }
 
-function frameMotion(m: EmoteFrameMotion | null): FrameMotion {
-  if (!m) return DEFAULT_MOTION;
-  if (m.dtgt !== null) throw new EmoteUnsupportedError('nested-motion direction target');
-  return Object.freeze({
-    flags: m.flags ?? 0,
-    dt: m.dt ?? 1,
-    dofst: m.dofst ?? 0,
-    docmpl: m.docmpl ?? false,
-    timeOffset: f32(m.timeOffset),
-  });
-}
+const FRAME_EASING = {easing: null};
 
-const halve = (c: number) => (((c >>> 1) & 0x7f7f7f00) | (c & 0xff)) >>> 0;
-
-/**
- * Frame content reader 0x18003b9f0 on top of the model's defaults. The top clip flag +0x18f
- * (always set by the player) rescales full-range colours: when `bm & 0xf0` is zero the
- * colour channels are halved and `bm` gains 0x10.
- */
-function buildState(frame: EmoteFrame, index: number): FrameState {
-  const time = f32(frame.time);
-  if (frame.type === 0 || !frame.content) return {...EMPTY_STATE, index, time};
-  if (frame.type !== 2 && frame.type !== 3)
-    throw new EmoteUnsupportedError(`keyframe type ${frame.type}`);
-  const c = frame.content;
-  if (c.prt || c.camera || c.anchor || c.model || c.feedback)
-    throw new EmoteUnsupportedError('particle, camera, anchor, model or feedback keyframes');
-  if ('stc' in c.unread) throw new EmoteUnsupportedError('stencil alpha test');
-  let bm = c.bm >>> 0;
-  let color = c.color.map((v) => v >>> 0) as unknown as readonly [number, number, number, number];
-  if ((bm & 0xf0) === 0) {
-    bm = (bm & ~0xe0) | 0x10;
-    color = color.map(halve) as unknown as typeof color;
-  }
-  const interp = frame.type === 3;
+/** The legacy draw-list view of the shared x64 keyframe slot. */
+function buildState(frames: readonly EmoteFrame[], index: number, slot: FrameSlot): FrameState {
+  const frame = frames[index]!;
+  loadHeader(slot, frames, index);
+  loadContent(slot, frames, 0, FRAME_EASING);
+  if (slot.empty) return {...EMPTY_STATE, index, time: slot.time};
+  const motion: FrameMotion = frame.content!.motion
+    ? Object.freeze({
+        flags: slot.motion.flags,
+        dt: slot.motion.dt,
+        dofst: slot.motion.dofst,
+        docmpl: slot.motion.docmpl,
+        timeOffset: slot.motion.timeOffset,
+      })
+    : DEFAULT_MOTION;
   return Object.freeze({
     index,
-    time,
-    ti: interp ? c.ti >>> 0 : 0,
-    mask: c.mask,
-    noContent: false,
-    interp,
-    scalarColor: !c.colorList,
-    defaultColor: !c.colorKey,
-    src: c.src,
-    icon: c.icon,
-    act: c.mask & 0x40000 ? c.act : null,
-    bm,
-    bmParam: f32(c.bmParam),
-    ox: f32(c.ox),
-    oy: f32(c.oy),
-    color,
-    opa: c.opa & 0xff,
-    coord: [f32(c.coord[0]), f32(c.coord[1]), f32(c.coord[2])] as const,
-    fx: c.fx,
-    fy: c.fy,
-    angle: f32(c.angle),
-    zx: f32(c.zx),
-    zy: f32(c.zy),
-    sx: f32(c.sx),
-    sy: f32(c.sy),
-    eased:
-      c.ccc !== null ||
-      c.acc !== null ||
-      c.zcc !== null ||
-      c.scc !== null ||
-      c.occ !== null ||
-      c.cp !== null ||
-      (c.mesh?.cc ?? null) !== null,
-    bp: c.mesh?.bp ?? null,
-    motion: frameMotion(c.motion),
+    time: slot.time,
+    ti: slot.ti,
+    mask: slot.mask,
+    noContent: slot.empty,
+    interp: slot.tween,
+    scalarColor: slot.singleColor,
+    defaultColor: slot.colorUnset,
+    src: frame.content!.src,
+    icon: frame.content!.icon,
+    act: slot.act,
+    bm: slot.bm,
+    bmParam: slot.bmParam,
+    ox: slot.ox,
+    oy: slot.oy,
+    color: [...slot.colors] as [number, number, number, number],
+    opa: slot.opa,
+    coord: [...slot.coord] as [number, number, number],
+    fx: slot.fx,
+    fy: slot.fy,
+    angle: slot.angle,
+    zx: slot.zx,
+    zy: slot.zy,
+    sx: slot.sx,
+    sy: slot.sy,
+    eased: slot.eased,
+    bp: slot.meshPatch === EMPTY_PATCH ? null : slot.meshPatch,
+    motion,
   });
 }
 
@@ -282,7 +258,8 @@ const stateCache = new WeakMap<EmoteLayer, readonly FrameState[]>();
 function layerStates(layer: EmoteLayer): readonly FrameState[] {
   let s = stateCache.get(layer);
   if (!s) {
-    s = Object.freeze(layer.frames.map(buildState));
+    const slot = new FrameSlot(EMOTEDRIVER_X64_SHA256);
+    s = Object.freeze(layer.frames.map((_, index) => buildState(layer.frames, index, slot)));
     stateCache.set(layer, s);
   }
   return s;
