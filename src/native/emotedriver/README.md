@@ -299,3 +299,10 @@ full-range RGB channels with the native blend-mode flag and defers curve/path
 errors until interpolation. X86 retains its lazy content loading, curve cursors,
 last-frame reads and stale mesh/motion structs. The x64 draw-list binding reads
 its immutable compatibility view from one shared scratch slot per layer.
+
+`runtime/clip/combinators.ts` owns x64 variable-driven patch combinations. It
+reads `EmoteCombinatorVariables` and writes through `EmoteCombinatorTarget`,
+independent of clip and node classes. Patches passed to the target are borrowed
+for that call. Registrations carry an opaque owner token so unloading one clip
+retains other clips sharing the same variable entry. Float stores, neutral
+patches and sparse updates preserve the exact x64 image's behavior.

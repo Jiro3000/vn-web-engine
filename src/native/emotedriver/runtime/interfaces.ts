@@ -432,3 +432,15 @@ export interface EmoteControlHostRandom {
   /** MSVC CRT `rand()`: 0..0x7fff, process-wide sequence, seed 1. */
   rand(): number;
 }
+
+/** Current variables sampled by the x64 mesh-combinator registry. */
+export interface EmoteCombinatorVariables {
+  getVariable(label: string): number;
+}
+
+/** Mesh output of one layer, independent of the layer's concrete node storage. */
+export interface EmoteCombinatorTarget {
+  readonly meshType: number;
+  /** The patch is borrowed for this synchronous call; null restores the neutral mesh. */
+  applyCombinatorPatch(patch: Float32Array | null): void;
+}
