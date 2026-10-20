@@ -1,6 +1,7 @@
 import type {EmoteEasingCurve, EmoteLayer} from '../../../../formats/kirikiri/emote-model.js';
 import type {EmoteClipNodes, EmoteNodeView, EmoteVertexGrid} from '../interfaces.js';
 import {FrameSlot} from './frame.js';
+import {emoteBuild, EMOTEDRIVER_X86_SHA256, EMOTEDRIVER_X64_SHA256} from '../../build.js';
 
 /**
  * Evaluated node state blocks (`emotedriver.dll` SHA-256 `a3b693b6…5e70b3a86`). A node holds
@@ -112,6 +113,7 @@ export class NodeSource {
 
 /** A clip parameter (motion `parameter`, 0x34 bytes at clip +0x300). */
 export class ClipParameter {
+  private readonly x64: boolean;
   /** +0x2c normalized position; +0x30 change flags (never set by the lifted code paths). */
   position = 0;
   flags = 0;
@@ -121,7 +123,28 @@ export class ClipParameter {
     readonly rangeBegin: number,
     readonly rangeEnd: number,
     readonly division: number,
-  ) {}
+    driverSha256 = EMOTEDRIVER_X86_SHA256,
+  ) {
+    this.x64 = emoteBuild(driverSha256) === EMOTEDRIVER_X64_SHA256;
+  }
+
+  /** 0x10031400 / 0x180036a90: clamp a variable to its parameter's frame range. */
+  apply(value: number): void {
+    this.flags = 0;
+    const b = this.rangeBegin,
+      e = this.rangeEnd,
+      d = this.division;
+    if (b === e || !(0 < d)) {
+      this.position = 0;
+      return;
+    }
+    let v = this.x64 ? value : Math.fround(value);
+    if (this.discretization) v = this.x64 ? Math.trunc(v) : Math.fround(Math.trunc(v));
+    const lo = this.x64 ? Math.min(b, e) : e <= b ? e : b,
+      hi = this.x64 ? Math.max(b, e) : b <= e ? e : b;
+    const c = v <= lo ? lo : v;
+    this.position = Math.fround((((hi <= c ? hi : c) - b) * d) / (e - b));
+  }
 }
 
 /** A layer node (stride 0x2e0). */

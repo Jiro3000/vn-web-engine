@@ -24,7 +24,6 @@ import {
   patchPoint,
   roundHalfAway,
   roundHalfEven,
-  truncate,
 } from './interpolate.js';
 import {ClipParameter, EmoteNode} from './node.js';
 import {clipRectPass, maskPass, meshPass, shapePass} from './vertices.js';
@@ -219,7 +218,7 @@ export class EmoteClip implements EmoteClipDriver, EmoteClipPlayerAccess {
           break;
         }
       }
-      setParameterValue(p, value);
+      p.apply(value);
     }
     for (let c: EmoteClip | null = this; c; c = c.parentClip)
       for (const p of this.parameters) {
@@ -370,7 +369,7 @@ export class EmoteClip implements EmoteClipDriver, EmoteClipPlayerAccess {
   }
 
   private applyParameters(id: string, value: number): void {
-    for (const p of this.parameterMap.get(id) ?? []) setParameterValue(p, value);
+    for (const p of this.parameterMap.get(id) ?? []) p.apply(value);
   }
 
   setRootTransform(t: EmoteRootTransform): void {
@@ -1371,26 +1370,6 @@ function syncToParentMesh(parent: EmoteNode, node: EmoteNode): void {
   s.x = f(w * p[0]! - ox);
   if (node.coordinate === 0) s.y = f(h * p[1]! - oy);
   else s.z = f(h * p[1]! - oy);
-}
-
-function setParameterValue(p: ClipParameter, value: number): void {
-  // 0x10031400 (via 0x10031940): flags cleared, position = clamp(v)·division / range.
-  p.flags = 0;
-  if (p.rangeEnd === p.rangeBegin) {
-    p.position = 0;
-    return;
-  }
-  if (!(0 < p.division)) {
-    p.position = 0;
-    return;
-  }
-  let v = f(value);
-  if (p.discretization) v = f(truncate(v));
-  const lo = p.rangeEnd <= p.rangeBegin ? p.rangeEnd : p.rangeBegin,
-    hi = p.rangeBegin <= p.rangeEnd ? p.rangeEnd : p.rangeBegin;
-  let c = v <= lo ? lo : v;
-  c = hi <= c ? hi : c;
-  p.position = f(((c - p.rangeBegin) * p.division) / (p.rangeEnd - p.rangeBegin));
 }
 
 /** 0x100314c0: "path::name" or "path/name" (the first `::`, else the first `/`). */

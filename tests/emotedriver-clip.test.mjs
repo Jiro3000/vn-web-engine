@@ -15,6 +15,7 @@ import {
 } from '../dist/native/emotedriver/runtime/clip/interpolate.js';
 
 import {FrameSlot, loadHeader, loadContent} from '../dist/native/emotedriver/runtime/clip/frame.js';
+import {ClipParameter} from '../dist/native/emotedriver/runtime/clip/node.js';
 
 const f = Math.fround;
 
@@ -569,4 +570,25 @@ test('x64 frame loading retains deferred curves and rejects unsupported native p
   const bad = [frame(0, 2, {unread: {stc: 0}, bmParam: 0})];
   loadHeader(slot, bad, 0);
   assert.throws(() => loadContent(slot, bad, 0, {easing: null}), /stencil alpha test/);
+});
+
+test('clip parameters preserve each image’s input float store and reversed ranges', () => {
+  const x86 = new ClipParameter('p', false, 0, 1, 3);
+  const x64 = new ClipParameter('p', false, 0, 1, 3, EMOTEDRIVER_X64_SHA256);
+  const value = 1 / 3 + 2 ** -27;
+  x86.apply(value);
+  x64.apply(value);
+  assert.equal(x86.position, f(f(value) * 3));
+  assert.equal(x64.position, f(value * 3));
+  const reverse = new ClipParameter('p', true, 2, -2, 10, EMOTEDRIVER_X64_SHA256);
+  reverse.flags = 7;
+  reverse.apply(-0.75);
+  assert.equal(reverse.position, 5);
+  assert.equal(reverse.flags, 0);
+  reverse.apply(99);
+  assert.equal(reverse.position, -0);
+  const empty = new ClipParameter('p', false, 1, 1, 0);
+  empty.apply(Infinity);
+  assert.equal(empty.position, 0);
+  assert.throws(() => new ClipParameter('p', false, 0, 1, 1, '3.9.8'), /unsupported DLL build/);
 });

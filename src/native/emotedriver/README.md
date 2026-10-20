@@ -306,3 +306,9 @@ independent of clip and node classes. Patches passed to the target are borrowed
 for that call. Registrations carry an opaque owner token so unloading one clip
 retains other clips sharing the same variable entry. Float stores, neutral
 patches and sparse updates preserve the exact x64 image's behavior.
+
+`ClipParameter.apply` shares variable-to-frame mapping for both images. It clears
+parameter flags, applies optional integer discretization, clamps reversed ranges
+and preserves the sign of zero. X86 rounds incoming values to float32 before
+mapping; x64 retains the incoming value until the result store. The clip callers
+keep their own ordinary and scoped variable lookup behavior.

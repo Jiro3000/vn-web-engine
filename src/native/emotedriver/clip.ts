@@ -44,6 +44,7 @@ import {EMOTEDRIVER_X64_SHA256} from './build.js';
 import {FrameSlot, loadHeader, loadContent, EMPTY_PATCH} from './runtime/clip/frame.js';
 import {EmoteMeshCombinators} from './runtime/clip/combinators.js';
 import type {EmoteCombinatorTarget} from './runtime/interfaces.js';
+import {ClipParameter} from './runtime/clip/node.js';
 
 const f32 = Math.fround;
 const NEUTRAL = 0x808080ff;
@@ -385,24 +386,19 @@ function newDrawItem(): EmoteDrawItem {
 }
 
 /** Parameter (0x38 bytes at clip +0x418). */
-class Param {
-  /** +0x30: the parameter-driven time. */
-  value = 0;
-  /** +0x34. */
-  flags = 0;
-  constructor(readonly def: EmoteParameter) {}
-
-  /** 0x180036a90. */
-  apply(v: number): void {
-    const {rangeBegin: b, rangeEnd: e, division: d} = this.def;
-    this.flags = 0;
-    if (b !== e && d > 0) {
-      if (this.def.discretization) v = Math.trunc(v);
-      const lo = Math.min(b, e),
-        hi = Math.max(b, e);
-      const c = v <= lo ? lo : v;
-      this.value = f32((((hi <= c ? hi : c) - b) * d) / (e - b));
-    } else this.value = 0;
+class Param extends ClipParameter {
+  constructor(readonly def: EmoteParameter) {
+    super(
+      def.id,
+      def.discretization,
+      def.rangeBegin,
+      def.rangeEnd,
+      def.division,
+      EMOTEDRIVER_X64_SHA256,
+    );
+  }
+  get value(): number {
+    return this.position;
   }
 }
 
