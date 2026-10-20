@@ -42,7 +42,7 @@ import {FrameSlot, loadHeader, loadContent, EMPTY_PATCH} from './runtime/clip/fr
 import {EmoteMeshCombinators} from './runtime/clip/combinators.js';
 import type {EmoteCombinatorTarget, EmoteX64MeshKernel} from './runtime/interfaces.js';
 import {createEmoteMeshKernel} from './runtime/mesh/index.js';
-import {ClipParameter} from './runtime/clip/node.js';
+import {ClipParameter, NodeState} from './runtime/clip/node.js';
 import {composeEmoteMatrix, multiplyEmoteMatrices} from './runtime/clip/matrix.js';
 
 const f32 = Math.fround;
@@ -407,7 +407,7 @@ class Param extends ClipParameter {
 }
 
 /** Layer node (0x3d0 bytes). */
-class Node implements EmoteCombinatorTarget {
+class Node extends NodeState implements EmoteCombinatorTarget {
   readonly layer: EmoteLayer | null;
   readonly index: number;
   readonly parent: number;
@@ -448,24 +448,6 @@ class Node implements EmoteCombinatorTarget {
     this.m10 = m10;
     this.m11 = m11;
   }
-  get flipX(): boolean {
-    return this.fx;
-  }
-  get flipY(): boolean {
-    return this.fy;
-  }
-  get zoomX(): number {
-    return this.zx;
-  }
-  get zoomY(): number {
-    return this.zy;
-  }
-  get slantX(): number {
-    return this.sx;
-  }
-  get slantY(): number {
-    return this.sy;
-  }
   /** +0x88 previous position / velocity, +0x94 anchor. */
   readonly vel = new Float32Array(3);
   readonly anchor = new Float32Array(3);
@@ -485,36 +467,8 @@ class Node implements EmoteCombinatorTarget {
   source: string | null = null;
   private srcKey: string | null | undefined = undefined;
   private iconKey: string | null | undefined = undefined;
-  /** Info block +0x314..+0x33c. */
-  changed = true;
-  drawVisible = true;
-  visible = true;
-  fx = false;
-  fy = false;
-  x = 0;
-  y = 0;
-  z = 0;
-  angle = 0;
-  zx = 1;
-  zy = 1;
-  sx = 0;
-  sy = 0;
-  opa = 255;
-  /** Overrides +0x340..+0x368. */
-  ovDirty = true;
-  ovDrawVisible = true;
-  ovVisible = true;
-  ovFx = false;
-  ovFy = false;
-  ovX = 0;
-  ovY = 0;
-  ovZ = 0;
-  ovAngle = 0;
-  ovZx = 1;
-  ovZy = 1;
-  ovSx = 0;
-  ovSy = 0;
-  ovOpa = 255;
+  /** Overrides +0x340..+0x368; evaluated fields use the shared state above. */
+  readonly adjust = new NodeState();
   /** +0x388..+0x398. */
   isDeformer = false;
   breaksChain = false;
@@ -541,6 +495,7 @@ class Node implements EmoteCombinatorTarget {
     parent: number,
     param: Param | null,
   ) {
+    super();
     this.layer = layer;
     this.index = index;
     this.parent = parent;
@@ -559,7 +514,7 @@ class Node implements EmoteCombinatorTarget {
       this.hasCombinator = false;
       this.mstate = null;
       this.states = [];
-      this.ovVisible = true;
+      this.adjust.shown = true;
       this.item = null;
       this.shapeInfo = null;
     } else {
@@ -666,20 +621,7 @@ class Node implements EmoteCombinatorTarget {
 
   /** Overrides into the info block (root, 0x180043010 step 3). */
   copyOverridesToInfo(): void {
-    this.changed = this.ovDirty;
-    this.drawVisible = this.ovDrawVisible;
-    this.visible = this.ovVisible;
-    this.fx = this.ovFx;
-    this.fy = this.ovFy;
-    this.x = this.ovX;
-    this.y = this.ovY;
-    this.z = this.ovZ;
-    this.angle = this.ovAngle;
-    this.zx = this.ovZx;
-    this.zy = this.ovZy;
-    this.sx = this.ovSx;
-    this.sy = this.ovSy;
-    this.opa = this.ovOpa;
+    this.copyFrom(this.adjust);
   }
 
   /** 0x180041de0: local matrix in the layer's transform order. */
@@ -822,46 +764,46 @@ export class EmoteMotionClip implements EmoteClip {
   // EmoteClip --------------------------------------------------------------------------
 
   get rootX(): number {
-    return this.root.ovX;
+    return this.root.adjust.x;
   }
   set rootX(v: number) {
-    this.root.ovX = f32(v);
+    this.root.adjust.x = f32(v);
   }
   get rootY(): number {
-    return this.root.ovY;
+    return this.root.adjust.y;
   }
   set rootY(v: number) {
-    this.root.ovY = f32(v);
+    this.root.adjust.y = f32(v);
   }
   get rootZoomX(): number {
-    return this.root.ovZx;
+    return this.root.adjust.zoomX;
   }
   set rootZoomX(v: number) {
-    this.root.ovZx = f32(v);
+    this.root.adjust.zoomX = f32(v);
   }
   get rootZoomY(): number {
-    return this.root.ovZy;
+    return this.root.adjust.zoomY;
   }
   set rootZoomY(v: number) {
-    this.root.ovZy = f32(v);
+    this.root.adjust.zoomY = f32(v);
   }
   get rootAngle(): number {
-    return this.root.ovAngle;
+    return this.root.adjust.angle;
   }
   set rootAngle(v: number) {
-    this.root.ovAngle = f32(v);
+    this.root.adjust.angle = f32(v);
   }
   get rootDirty(): boolean {
-    return this.root.ovDirty;
+    return this.root.adjust.changed;
   }
   set rootDirty(v: boolean) {
-    this.root.ovDirty = v;
+    this.root.adjust.changed = v;
   }
   get visible(): boolean {
-    return this.root.ovVisible;
+    return this.root.adjust.shown;
   }
   set visible(v: boolean) {
-    this.root.ovVisible = v;
+    this.root.adjust.shown = v;
   }
 
   setOwnRotation(_degrees: number): void {
@@ -1095,7 +1037,7 @@ export class EmoteMotionClip implements EmoteClip {
   private createSub(node: Node): EmoteMotionClip {
     const sub = new EmoteMotionClip(this.resource, this);
     sub.independentInherit = node.layer?.motionIndependentLayerInherit ?? false;
-    if (sub.independentInherit) sub.root.ovDirty = true;
+    if (sub.independentInherit) sub.root.adjust.changed = true;
     sub.root.coordinate = node.coordinate;
     sub.root.transformOrder = node.transformOrder;
     sub.file = this.file;
@@ -1379,13 +1321,13 @@ export class EmoteMotionClip implements EmoteClip {
         if (!force && Math.abs(f32(n.prevE - e)) < FLT_EPSILON) return false;
         if (A.eased) throw new EmoteUnsupportedError('easing curves');
         n.prevE = e;
-        n.fx = A.fx;
-        n.fy = A.fy;
+        n.flipX = A.fx;
+        n.flipY = A.fy;
         n.angle = lerpAngle(A.angle, B.angle, e);
-        n.zx = lerpScalar(A.zx, B.zx, e);
-        n.zy = lerpScalar(A.zy, B.zy, e);
-        n.sx = lerpScalar(A.sx, B.sx, e);
-        n.sy = lerpScalar(A.sy, B.sy, e);
+        n.zoomX = lerpScalar(A.zx, B.zx, e);
+        n.zoomY = lerpScalar(A.zy, B.zy, e);
+        n.slantX = lerpScalar(A.sx, B.sx, e);
+        n.slantY = lerpScalar(A.sy, B.sy, e);
         const ie = f32(1 - e);
         if (A.coord[0] === B.coord[0] && A.coord[1] === B.coord[1] && A.coord[2] === B.coord[2]) {
           n.x = A.coord[0];
@@ -1397,7 +1339,7 @@ export class EmoteMotionClip implements EmoteClip {
           n.z = f32(ie * A.coord[2] + e * B.coord[2]);
         }
         const o = f32(f32(A.opa * ie) + f32(B.opa * e));
-        n.opa = Math.trunc(o < 0 ? Math.ceil(o - 0.5) : Math.floor(o + 0.5)) >>> 0;
+        n.opacity = Math.trunc(o < 0 ? Math.ceil(o - 0.5) : Math.floor(o + 0.5)) >>> 0;
         n.scalarColor = A.scalarColor && B.scalarColor;
         n.defaultColor = A.defaultColor && B.defaultColor;
         if (!n.scalarColor)
@@ -1414,18 +1356,18 @@ export class EmoteMotionClip implements EmoteClip {
       if (Math.abs(f32(old - e)) >= FLT_EPSILON) force = true;
     }
     if (!force) return false;
-    n.fx = A.fx;
-    n.fy = A.fy;
+    n.flipX = A.fx;
+    n.flipY = A.fy;
     n.angle = A.angle;
-    n.zx = A.zx;
-    n.zy = A.zy;
-    n.sx = A.sx;
-    n.sy = A.sy;
+    n.zoomX = A.zx;
+    n.zoomY = A.zy;
+    n.slantX = A.sx;
+    n.slantY = A.sy;
     n.x = A.coord[0];
     n.y = A.coord[1];
     n.z = A.coord[2];
     for (let i = 0; i < 4; i++) n.colors[i] = A.color[i]!;
-    n.opa = A.opa;
+    n.opacity = A.opa;
     n.scalarColor = A.scalarColor;
     n.defaultColor = A.defaultColor;
     if (n.meshTransform === 1 && !n.combinatorOwned && n.mstate) n.mstate.bp = A.bp;
@@ -1435,7 +1377,7 @@ export class EmoteMotionClip implements EmoteClip {
   /** 0x180042bb0: a child of a mesh layer follows the patch. */
   private syncToMesh(P: Node, n: Node): void {
     const ms = P.mstate;
-    if (!ms?.bp || !P.drawVisible || !P.found || !(P.syncChildMask & 1) || P.meshTransform !== 1)
+    if (!ms?.bp || !P.visible || !P.found || !(P.syncChildMask & 1) || P.meshTransform !== 1)
       return;
     const f13 = f32(P.a.ox + P.originX),
       f14 = f32(P.a.oy + P.originY);
@@ -1475,8 +1417,8 @@ export class EmoteMotionClip implements EmoteClip {
       const t1 = Math.abs((yv0 - yu0) * dx - (xv0 - xu0) * dy) * 0.5;
       const t2 = Math.abs((yv1 - yu0) * dx - (xv1 - xu0) * dy) * 0.5;
       const s = f32(Math.sqrt(2 * (t1 + t2)) / f32(0.0002));
-      if (n.inherit & 0x20) n.zx = f32(s * n.zx);
-      if (n.inherit & 0x40) n.zy = f32(s * n.zy);
+      if (n.inherit & 0x20) n.zoomX = f32(s * n.zoomX);
+      if (n.inherit & 0x40) n.zoomY = f32(s * n.zoomY);
     }
   }
 
@@ -1487,10 +1429,10 @@ export class EmoteMotionClip implements EmoteClip {
     for (let i = 0; i < 3; i++) {
       if (this.velocity[i] !== 0) {
         const v = f32(this.velocity[i]! * this.delta);
-        if (i === 0) root.ovX = f32(v + root.ovX);
-        else if (i === 1) root.ovY = f32(v + root.ovY);
-        else root.ovZ = f32(v + root.ovZ);
-        root.ovDirty = true;
+        if (i === 0) root.adjust.x = f32(v + root.adjust.x);
+        else if (i === 1) root.adjust.y = f32(v + root.adjust.y);
+        else root.adjust.z = f32(v + root.adjust.z);
+        root.adjust.changed = true;
       }
     }
     if (this.decay !== 1) {
@@ -1503,48 +1445,49 @@ export class EmoteMotionClip implements EmoteClip {
       n.vel[2] = n.z;
     }
     root.copyOverridesToInfo();
-    root.ovDirty = false;
+    root.adjust.changed = false;
     if (!this.rootMatrixFromParent) root.computeMatrix();
     for (let k = 1; k < nodes.length; k++) {
       const n = nodes[k]!;
+      const a = n.adjust;
       const D = nodes[n.parent]!;
       let P = D;
       while (P.inherit & 0x400000) P = nodes[P.parent]!;
-      const force = this.forceCalc || P.changed || D.changed || n.ovDirty;
+      const force = this.forceCalc || P.changed || D.changed || a.changed;
       if (!this.interpolate(n, force)) continue;
-      n.ovDirty = false;
+      a.changed = false;
       if (n.a.noContent) {
         n.changed = P.changed || n.dirty;
-        n.drawVisible = false;
-        n.fx = P.fx;
-        n.fy = P.fy;
+        n.visible = false;
+        n.flipX = P.flipX;
+        n.flipY = P.flipY;
         n.x = P.x;
         n.y = P.y;
         n.z = P.z;
         n.angle = P.angle;
-        n.zx = P.zx;
-        n.zy = P.zy;
-        n.sx = P.sx;
-        n.sy = P.sy;
-        n.opa = P.opa;
-        n.visible = P.visible && n.ovVisible;
+        n.zoomX = P.zoomX;
+        n.zoomY = P.zoomY;
+        n.slantX = P.slantX;
+        n.slantY = P.slantY;
+        n.opacity = P.opacity;
+        n.shown = P.shown && a.shown;
         n.copyMatrix(P);
         continue;
       }
       n.changed = true;
-      n.visible = n.ovVisible && P.visible;
-      n.drawVisible = n.ovDrawVisible && n.visible;
-      n.fx = n.fx !== n.ovFx;
-      n.fy = n.fy !== n.ovFy;
-      n.angle = f32(n.ovAngle + n.angle);
-      n.zx = f32(n.ovZx * n.zx);
-      n.zy = f32(n.ovZy * n.zy);
-      n.sx = f32(n.ovSx + n.sx);
-      n.sy = f32(n.ovSy + n.sy);
-      n.opa = Math.floor(((n.ovOpa * n.opa) >>> 0) / 255);
-      n.x = f32(n.ovX + n.x);
-      n.y = f32(n.ovY + n.y);
-      n.z = f32(n.ovZ + n.z);
+      n.shown = a.shown && P.shown;
+      n.visible = a.visible && n.shown;
+      n.flipX = n.flipX !== a.flipX;
+      n.flipY = n.flipY !== a.flipY;
+      n.angle = f32(a.angle + n.angle);
+      n.zoomX = f32(a.zoomX * n.zoomX);
+      n.zoomY = f32(a.zoomY * n.zoomY);
+      n.slantX = f32(a.slantX + n.slantX);
+      n.slantY = f32(a.slantY + n.slantY);
+      n.opacity = Math.floor(((a.opacity * n.opacity) >>> 0) / 255);
+      n.x = f32(a.x + n.x);
+      n.y = f32(a.y + n.y);
+      n.z = f32(a.z + n.z);
       if (P.meshTransform !== 0) this.syncToMesh(P, n);
       const x = n.x,
         y = n.y,
@@ -1558,43 +1501,44 @@ export class EmoteMotionClip implements EmoteClip {
         n.y = f32(y + P.y);
         n.z = f32(f32(z * P.m11 + x * P.m10) + P.z);
       }
-      if (n.inherit & 0x400) n.opa = Math.floor(((P.opa * n.opa) >>> 0) / 255);
-      else if (!this.independentInherit) n.opa = Math.floor(((root.opa * n.opa) >>> 0) / 255);
+      if (n.inherit & 0x400) n.opacity = Math.floor(((P.opacity * n.opacity) >>> 0) / 255);
+      else if (!this.independentInherit)
+        n.opacity = Math.floor(((root.opacity * n.opacity) >>> 0) / 255);
       if ((n.inherit & 0x1fc) === 0x1fc) {
         n.computeMatrix();
         n.leftMultiply(P);
-        n.fx = n.fx !== P.fx;
-        n.fy = n.fy !== P.fy;
+        n.flipX = n.flipX !== P.flipX;
+        n.flipY = n.flipY !== P.flipY;
         n.angle = f32(P.angle + n.angle);
-        n.zx = f32(P.zx * n.zx);
-        n.zy = f32(P.zy * n.zy);
-        n.sx = f32(P.sx + n.sx);
-        n.sy = f32(P.sy + n.sy);
+        n.zoomX = f32(P.zoomX * n.zoomX);
+        n.zoomY = f32(P.zoomY * n.zoomY);
+        n.slantX = f32(P.slantX + n.slantX);
+        n.slantY = f32(P.slantY + n.slantY);
       } else {
         const m = n.inherit;
-        if (m & 4) n.fx = n.fx !== P.fx;
-        if (m & 8) n.fy = n.fy !== P.fy;
+        if (m & 4) n.flipX = n.flipX !== P.flipX;
+        if (m & 8) n.flipY = n.flipY !== P.flipY;
         if (m & 0x10) n.angle = f32(P.angle + n.angle);
-        if (m & 0x20) n.zx = f32(P.zx * n.zx);
-        if (m & 0x40) n.zy = f32(P.zy * n.zy);
-        if (m & 0x80) n.sx = f32(P.sx + n.sx);
-        if (m & 0x100) n.sy = f32(P.sy + n.sy);
+        if (m & 0x20) n.zoomX = f32(P.zoomX * n.zoomX);
+        if (m & 0x40) n.zoomY = f32(P.zoomY * n.zoomY);
+        if (m & 0x80) n.slantX = f32(P.slantX + n.slantX);
+        if (m & 0x100) n.slantY = f32(P.slantY + n.slantY);
         if (!this.independentInherit) {
-          if (m & 4) n.fx = n.fx !== root.fx;
-          if (m & 8) n.fy = n.fy !== root.fy;
+          if (m & 4) n.flipX = n.flipX !== root.flipX;
+          if (m & 8) n.flipY = n.flipY !== root.flipY;
           if (m & 0x10) n.angle = f32(n.angle - root.angle);
-          if (m & 0x20) n.zx = f32(n.zx / root.zx);
-          if (m & 0x40) n.zy = f32(n.zy / root.zy);
-          if (m & 0x80) n.sx = f32(n.sx - root.sx);
-          if (m & 0x100) n.sy = f32(n.sy - root.sy);
+          if (m & 0x20) n.zoomX = f32(n.zoomX / root.zoomX);
+          if (m & 0x40) n.zoomY = f32(n.zoomY / root.zoomY);
+          if (m & 0x80) n.slantX = f32(n.slantX - root.slantX);
+          if (m & 0x100) n.slantY = f32(n.slantY - root.slantY);
           n.computeMatrix();
-          if (m & 4) n.fx = n.fx !== root.fx;
-          if (m & 8) n.fy = n.fy !== root.fy;
+          if (m & 4) n.flipX = n.flipX !== root.flipX;
+          if (m & 8) n.flipY = n.flipY !== root.flipY;
           if (m & 0x10) n.angle = f32(root.angle + n.angle);
-          if (m & 0x20) n.zx = f32(root.zx * n.zx);
-          if (m & 0x40) n.zy = f32(root.zy * n.zy);
-          if (m & 0x80) n.sx = f32(root.sx + n.sx);
-          if (m & 0x100) n.sy = f32(root.sy + n.sy);
+          if (m & 0x20) n.zoomX = f32(root.zoomX * n.zoomX);
+          if (m & 0x40) n.zoomY = f32(root.zoomY * n.zoomY);
+          if (m & 0x80) n.slantX = f32(root.slantX + n.slantX);
+          if (m & 0x100) n.slantY = f32(root.slantY + n.slantY);
           n.leftMultiply(root);
         } else n.computeMatrix();
       }
@@ -1611,12 +1555,13 @@ export class EmoteMotionClip implements EmoteClip {
     this.vertices();
     for (let k = 1; k < nodes.length; k++) {
       const n = nodes[k]!;
+      const a = n.adjust;
       const D = nodes[n.parent]!;
       n.stencilParent = D.stencilVisible ? D : D.stencilParent;
       n.stencilVisible = !(
         n.a.noContent ||
         n.stencilType === 0 ||
-        !n.drawVisible ||
+        !n.visible ||
         (((0x1801 >> n.type) & 1) !== 0 && !n.found)
       );
     }
@@ -1863,7 +1808,7 @@ export class EmoteMotionClip implements EmoteClip {
       if (shape === 0 || shape === 1) {
         info[1] = n.anchor[0]!;
         info[2] = n.anchor[1]!;
-        if (shape === 1) info[3] = Math.trunc(f32(n.zx * 16 * 0.5));
+        if (shape === 1) info[3] = Math.trunc(f32(n.zoomX * 16 * 0.5));
       } else throw new EmoteUnsupportedError(`shape ${shape}`);
     }
   }
@@ -1929,38 +1874,38 @@ export class EmoteMotionClip implements EmoteClip {
           }
         }
         const r = sub.root;
-        if (r.ovX !== cx || r.ovY !== cy || r.ovZ !== cz) {
-          r.ovDirty = true;
-          r.ovX = cx;
-          r.ovY = cy;
-          r.ovZ = cz;
+        if (r.adjust.x !== cx || r.adjust.y !== cy || r.adjust.z !== cz) {
+          r.adjust.changed = true;
+          r.adjust.x = cx;
+          r.adjust.y = cy;
+          r.adjust.z = cz;
         }
-        if (r.ovFx !== n.fx || r.ovFy !== n.fy) {
-          r.ovDirty = true;
-          r.ovFx = n.fx;
-          r.ovFy = n.fy;
+        if (r.adjust.flipX !== n.flipX || r.adjust.flipY !== n.flipY) {
+          r.adjust.changed = true;
+          r.adjust.flipX = n.flipX;
+          r.adjust.flipY = n.flipY;
         }
-        if (r.ovZx !== n.zx || r.ovZy !== n.zy) {
-          r.ovDirty = true;
-          r.ovZx = n.zx;
-          r.ovZy = n.zy;
+        if (r.adjust.zoomX !== n.zoomX || r.adjust.zoomY !== n.zoomY) {
+          r.adjust.changed = true;
+          r.adjust.zoomX = n.zoomX;
+          r.adjust.zoomY = n.zoomY;
         }
-        if (bAng && r.ovAngle !== angle) {
-          r.ovDirty = true;
-          r.ovAngle = angle;
+        if (bAng && r.adjust.angle !== angle) {
+          r.adjust.changed = true;
+          r.adjust.angle = angle;
         }
-        if (r.ovSx !== n.sx || r.ovSy !== n.sy) {
-          r.ovDirty = true;
-          r.ovSx = n.sx;
-          r.ovSy = n.sy;
+        if (r.adjust.slantX !== n.slantX || r.adjust.slantY !== n.slantY) {
+          r.adjust.changed = true;
+          r.adjust.slantX = n.slantX;
+          r.adjust.slantY = n.slantY;
         }
-        if (r.ovOpa !== n.opa) {
-          r.ovDirty = true;
-          r.ovOpa = n.opa;
+        if (r.adjust.opacity !== n.opacity) {
+          r.adjust.changed = true;
+          r.adjust.opacity = n.opacity;
         }
-        if (r.ovVisible !== n.drawVisible) {
-          r.ovDirty = true;
-          r.ovVisible = n.drawVisible;
+        if (r.adjust.shown !== n.visible) {
+          r.adjust.changed = true;
+          r.adjust.shown = n.visible;
         }
         sub.color = n.colors[0]!;
         if (bAng && angle !== n.angle) {
@@ -1972,7 +1917,7 @@ export class EmoteMotionClip implements EmoteClip {
           r.m10 = f32(c * n.m10 + s * n.m00);
           r.m11 = f32(s * n.m01 + c * n.m11);
         } else r.copyMatrix(n);
-        r.ovDirty = true;
+        r.adjust.changed = true;
       }
       const r = sub.root;
       r.meshParent = n.meshParent;
@@ -1999,7 +1944,7 @@ export class EmoteMotionClip implements EmoteClip {
       const n = idx !== undefined ? nodes[idx + 1] : undefined;
       if (!n) continue;
       n.drawn = false;
-      if (!n.drawVisible) continue;
+      if (!n.visible) continue;
       if (n.type === 3) {
         if (!n.sub) continue;
         const c = n.inherit & 0x200 ? mod : NEUTRAL;
@@ -2043,7 +1988,7 @@ export class EmoteMotionClip implements EmoteClip {
       item.top = n.top;
       item.width = f32(n.w * n.resolution);
       item.height = f32(n.h * n.resolution);
-      item.opa = n.opa;
+      item.opa = n.opacity;
       let c = mod;
       let forced = neutral;
       if (b === 2 || b === 3 || b === 5) {
@@ -2052,7 +1997,9 @@ export class EmoteMotionClip implements EmoteClip {
       }
       if (b !== 0) attr &= ~2;
       const withOpa = (v: number) =>
-        n.opa !== 255 ? (Math.floor(((v & 0xff) * n.opa) / 255) | (v & 0xffffff00)) >>> 0 : v >>> 0;
+        n.opacity !== 255
+          ? (Math.floor(((v & 0xff) * n.opacity) / 255) | (v & 0xffffff00)) >>> 0
+          : v >>> 0;
       if (!n.scalarColor) {
         let all = 0xff;
         for (let i = 0; i < 4; i++) {
@@ -2061,7 +2008,7 @@ export class EmoteMotionClip implements EmoteClip {
           all &= v;
         }
         if ((all & 0xff) !== 0xff) attr &= ~2;
-      } else if (!forced || n.opa !== 255) {
+      } else if (!forced || n.opacity !== 255) {
         const v = modulateColor(withOpa(n.colors[0]!), c);
         item.colors.fill(v);
         if ((v & 0xff) !== 0xff) attr &= ~2;

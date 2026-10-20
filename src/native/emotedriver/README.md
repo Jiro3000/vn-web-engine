@@ -329,3 +329,9 @@ grids and anchor scratch buffers are reused; compatibility helpers in `mesh.ts`
 delegate to the shared kernel. Short patch queries use the TypeScript arithmetic
 to avoid host-copy costs. Factory selection is fixed per image, with the twin
 available on hosts without WebAssembly SIMD.
+
+`NodeState` stores evaluated transforms and adjustment blocks for both images.
+The x64 node extends that state directly and keeps its player/nested-clip
+adjustments in a second shared state; copying overrides uses `copyFrom`.
+`visible` controls drawing and `shown` propagates visibility along the parent
+chain. Matrix interfaces read the shared transform fields without alias getters.
