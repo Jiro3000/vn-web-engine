@@ -237,3 +237,11 @@ each playing timeline with its own elapsed interval. Its fade timing, float
 stores, NaN comparisons, replay reset and loop-step flag remain build-specific.
 The x86 image keeps its original seek/evaluate behavior and carries loop remainder
 into the next playing timeline. The x64 names in `timelines.ts` delegate here.
+
+PSB decoding is shared in `src/formats/kirikiri/psb.ts`. Its exact-x64 options
+enable copied header filtering, version-4 extra chunks, an eagerly validated root
+and shared resource identity; integers outside the safe JavaScript range are
+rejected. The default reader retains lazy roots, independent resource views and
+bigint values. `src/formats/psb/psb.ts` supplies the x64 compatibility constructor.
+Build identities and body keys are shared with the format layer's existing
+`psb-filter.ts` table.

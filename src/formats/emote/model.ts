@@ -1,4 +1,4 @@
-import {PsbFile, type PsbObject, type PsbResource, type PsbValue} from '../psb/psb.js';
+import {PsbFile, type PsbObject, type PsbResource, type PsbValue} from '../kirikiri/psb.js';
 import {
   EmoteDiagnostics,
   EmoteModelError,
