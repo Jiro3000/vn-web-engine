@@ -14,7 +14,9 @@ import type {
   EmotePendulumControl,
   EmoteVec3,
 } from '../../formats/emote/metadata.js';
-import {EmoteRandom, fmodf} from './controls.js';
+import {fmodf} from './controls.js';
+import {EMOTEDRIVER_X64_SHA256} from './build.js';
+import {EmoteWind as SharedWind} from './runtime/controls/wind.js';
 
 const f32 = Math.fround;
 /** Sub-step limit 1.1 (0x181fcd558), `FLT_EPSILON` (0x181fcd510). */
@@ -31,9 +33,6 @@ const BEND_THRESHOLD = f32(28);
 const TWO_PI = f32(6.283185);
 /** Pendulum minimum length for the constraint (0x181fcd524). */
 const MIN_DISTANCE = f32(0.015625);
-/** Wind spawn chance per frame (0x181fcd534), slot count, spawn width factor. */
-const WIND_CHANCE = f32(0.0625);
-const WIND_SLOTS = 0x80;
 /** Gravity (0, 1, 0) and wind direction (1, 0, 0): `.data` 0x181fdda34…0x181fdda44. */
 const GX = 0,
   GY = 1;
@@ -460,75 +459,43 @@ export class EmotePendulum {
  * `EPWindControl` (0x618 bytes, constructor 0x18002cc40, step 0x18002cfa0, `startWind`
  * 0x18001ac70): gusts of random width travel from `start` to `end` at `speed`.
  */
-export class EmoteWind {
-  readonly start: number;
-  readonly end: number;
-  /** +0x14, +0x18: width range. */
-  maxWidth = 1;
-  minWidth = 0;
-  /** +0x1c: signed speed. */
-  speed = 0;
-  /** +0x10. */
-  enabled = false;
-  private timer = 0;
-  private readonly active = new Uint8Array(WIND_SLOTS);
-  private readonly position = new Float32Array(WIND_SLOTS);
-  private readonly width = new Float32Array(WIND_SLOTS);
-
-  constructor(
-    start: number,
-    end: number,
-    private readonly random: EmoteRandom,
-  ) {
-    this.start = f32(start);
-    this.end = f32(end);
+export class EmoteWind extends SharedWind {
+  private readonly nextRandom: () => number;
+  constructor(start: number, end: number, random: {next(): number}) {
+    super(start, end, EMOTEDRIVER_X64_SHA256);
+    this.nextRandom = () => random.next();
   }
-
-  /** The `startWind` tail: enables the field with a new signed speed. */
+  get end(): number {
+    return this.goal;
+  }
+  get maxWidth(): number {
+    return this.powerMin;
+  }
+  set maxWidth(value: number) {
+    this.powerMin = value;
+  }
+  get minWidth(): number {
+    return this.powerMax;
+  }
+  set minWidth(value: number) {
+    this.powerMax = value;
+  }
+  get speed(): number {
+    return this.velocity;
+  }
+  set speed(value: number) {
+    this.velocity = value;
+  }
+  /** `startWind` supplies the already signed speed and preserves existing gusts. */
   restart(speed: number): void {
     this.enabled = true;
-    this.timer = 0;
-    this.speed = f32(speed);
+    this.clock = 0;
+    this.velocity = f32(speed);
   }
-
-  step(dt: number): void {
-    let timer = f32(f32(dt) + this.timer);
-    this.timer = timer;
-    for (;;) {
-      if (timer < 0) {
-        for (let i = 0; i < WIND_SLOTS; i++) {
-          if (!this.active[i]) continue;
-          const p = f32(f32(f32(dt) * this.speed) + this.position[i]!);
-          this.position[i] = p;
-          if (0 < this.speed && this.end <= p && p !== this.end) this.active[i] = 0;
-          if (this.speed < 0 && p < this.end) this.active[i] = 0;
-        }
-        return;
-      }
-      this.timer = f32(timer - 1);
-      if (this.random.next() < WIND_CHANCE) {
-        const i = this.active.indexOf(0);
-        if (i >= 0) {
-          this.active[i] = 1;
-          this.position[i] = this.start;
-          this.width[i] = f32(
-            f32(this.random.next() * f32(this.maxWidth - this.minWidth)) + this.minWidth,
-          );
-        }
-      }
-      timer = this.timer;
-    }
+  step(frames: number): void {
+    this.update(frames, this.nextRandom);
   }
-
-  /** The horizontal force on a mass at `x` (0x18002b380 wind part). */
   forceAt(x: number): number {
-    for (let i = 0; i < WIND_SLOTS; i++) {
-      if (!this.active[i]) continue;
-      const w = this.width[i]!;
-      const half = f32(f32(w * 0.5) * 4);
-      const c = this.position[i]!;
-      if (f32(c - half) < x && x < f32(c + half)) return this.speed < 0 ? f32(-1 * w) : f32(1 * w);
-    }
-    return 0;
+    return this.query(x);
   }
 }

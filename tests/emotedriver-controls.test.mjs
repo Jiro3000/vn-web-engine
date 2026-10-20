@@ -268,6 +268,28 @@ test('wind spawns, moves and retires gusts', () => {
   assert.equal(back.velocity, -5);
 });
 
+test('wind preserves each DLL build’s float stores in gust power', () => {
+  const values = [];
+  for (const build of [undefined, EMOTEDRIVER_X64_SHA256]) {
+    const random = new EmoteXorshift128(1700000000);
+    const wind = new EmoteWind(0, 100, build);
+    wind.set(1.3, 0.1, 0.7);
+    for (let i = 0; i < 7; i++) wind.update(f32(1.1), () => random.next());
+    values.push(wind.query(0));
+  }
+  assert.deepEqual(values, [0.9549545645713806, 0.9549546241760254]);
+  const bounds = [];
+  for (const build of [undefined, EMOTEDRIVER_X64_SHA256]) {
+    const wind = new EmoteWind(0, 100, build);
+    wind.active[0] = 1;
+    wind.position[0] = 100000000;
+    wind.power[0] = 0.1;
+    bounds.push(wind.query(100000000.1));
+  }
+  assert.deepEqual(bounds, [f32(0.1), 0]);
+  assert.throws(() => new EmoteWind(0, 100, 'unknown'), /unsupported DLL build/);
+});
+
 const bustControl = (fields = {}) => ({
   enabled: true,
   param: {op: vec(), p: vec(), pv: vec(), ofs: 0},
@@ -373,6 +395,10 @@ test('pendulum: wind gust pushes both joints', () => {
   assert.equal(out.lrm, emoteSoftAngle(0.5));
   // Joint 1 is also pulled back onto its rod towards the displaced joint 0.
   assert.ok(out.lr > out.lrm);
+  const alternate = new EmotePendulum(hair({gravity: 0}));
+  const alternateOut = {lr: 0, lrm: 0, ud: 0};
+  alternate.update(0, 0, 1, 1, 0, {query: () => 0.5}, alternateOut);
+  assert.deepEqual(alternateOut, out);
 });
 
 test('pendulum bend sways lr against lrm when |ud| exceeds 28', () => {

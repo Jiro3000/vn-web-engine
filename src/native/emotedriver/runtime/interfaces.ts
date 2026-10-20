@@ -64,6 +64,11 @@ export interface EmoteWindState {
   power: number;
 }
 
+/** Wind acceleration sampled by a pendulum joint; independent of gust storage. */
+export interface EmoteWindField {
+  query(x: number): number;
+}
+
 /** Read access to a clip's evaluated layer nodes. */
 export interface EmoteClipNodes {
   /** Node index by layer label (`layerIndexMap`), or -1. */

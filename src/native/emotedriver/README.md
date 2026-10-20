@@ -191,3 +191,9 @@ index conversion and queue timing: the x86 image tests the normalized remaining
 distance and starts requests on a later call, while the x64 image tests absolute
 distance and advances queued requests immediately. Its compatibility constructor
 in `controls.ts` delegates to this shared selector.
+
+`runtime/controls/wind.ts` shares gust storage and queries. The x64 variant keeps
+float stores in power interpolation, position advance and window bounds. The
+pendulum samples wind through `EmoteWindField`, so a different field implementation
+can supply the same acceleration query. The x64 class in `physics.ts` delegates
+to this shared wind and retains its signed-speed restart semantics.

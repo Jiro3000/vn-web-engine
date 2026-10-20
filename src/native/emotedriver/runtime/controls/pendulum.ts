@@ -1,7 +1,7 @@
 import type {EmotePendulumControl} from '../../../../formats/kirikiri/emote-metadata.js';
 import {EMOTE_DOWN, EMOTE_WIND_AXIS, emoteGravity, emoteSoftAngle} from './bust.js';
 import {f32} from './common.js';
-import type {EmoteWind} from './wind.js';
+import type {EmoteWindField} from '../interfaces.js';
 
 /** |var_ud| above which the bend oscillation builds up (double 28.0 at 0x10072818). */
 const BEND_THRESHOLD = 28;
@@ -125,7 +125,7 @@ export class EmotePendulum {
     frames: number,
     scale: number,
     rad: number,
-    wind: EmoteWind | null,
+    wind: EmoteWindField | null,
     out: EmotePendulumOutput,
   ): void {
     const {op} = this;
