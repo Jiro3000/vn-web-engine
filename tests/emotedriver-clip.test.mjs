@@ -741,3 +741,26 @@ test('x64 clip phases preserve a queued whole-call hold and resume on the next p
   assert.throws(() => clip.nodes, /x86 node view/);
   assert.throws(() => clip.nodeIndex('root'), /x86 node lookup/);
 });
+
+test('clip interfaces copy borrowed root transforms before the caller reuses the record', () => {
+  const m = motion([layer('point', [frame(0, 2, {mask: 2})], {type: 1, shape: 0})]);
+  const file = model({o: {m}}),
+    x86 = createEmoteClip(file, m);
+  const x64 = new EmoteMotionClip(new EmoteResource([file]));
+  x64.selectObject('o');
+  x64.setMotion('m');
+  for (const [clip, point] of [
+    [x86, () => x86.shapePoint('point')],
+    [x64, () => x64.layerPosition('point')],
+  ]) {
+    clip.rootVisible = true;
+    const input = {x: 7.5, y: -4.25, angle: 0, scaleX: 1, scaleY: 1, mirror: false};
+    clip.setRootTransform(input);
+    input.x = 900;
+    input.scaleX = 99;
+    input.mirror = true;
+    clip.advance(0);
+    clip.evaluate();
+    assert.deepEqual(point(), {x: 7.5, y: -4.25});
+  }
+});

@@ -200,6 +200,14 @@ export class EmotePlayerCore {
 
   readonly timelines: EmoteTimelineSet;
   private root: RootValues = {x: 0, y: 0, angle: 0, scale: 1};
+  private readonly rootTransformInput = {
+    x: 0,
+    y: 0,
+    angle: 0,
+    scaleX: 1,
+    scaleY: 1,
+    mirror: false,
+  };
 
   /** Host passed to the controls. */
   readonly host: EmoteControlHost & EmoteControlHostRandom;
@@ -672,16 +680,16 @@ export class EmotePlayerCore {
 
   /** Root node +0x283 (mirror) and +0x288..+0x29c; the clip sets its dirty flag on change. */
   private writeRoot(): void {
-    const r = this.root;
+    const r = this.root,
+      input = this.rootTransformInput;
     for (const clip of this.clips) {
-      clip.setRootTransform({
-        x: r.x,
-        y: r.y,
-        angle: r.angle,
-        scaleX: r.scale,
-        scaleY: r.scale,
-        mirror: this.mirror,
-      });
+      input.x = r.x;
+      input.y = r.y;
+      input.angle = r.angle;
+      input.scaleX = r.scale;
+      input.scaleY = r.scale;
+      input.mirror = this.mirror;
+      clip.setRootTransform(input);
     }
   }
 

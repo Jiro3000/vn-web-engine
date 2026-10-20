@@ -290,7 +290,7 @@ export interface EmoteClipDriver extends EmoteClipNodes {
   dispatchEvents(listener: EmoteClipListener): void;
   /** Player colour RGBA (`+0x150`, 0x808080ff neutral), set by the `SetColor` tween. */
   color: number;
-  /** Root tween targets written by the player (root node +0x283, +0x288..+0x2a8). */
+  /** Root tween targets (+0x283, +0x288..+0x2a8). Borrowed for this call; copy values to retain them. */
   setRootTransform(transform: EmoteRootTransform): void;
   /** Copies time and node state from another clip of the same motion (`AssignState`). */
   assignState(source: EmoteClipDriver): void;

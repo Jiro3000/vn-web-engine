@@ -56,7 +56,7 @@ class FakeClip {
     this.log.push('dispatch');
   }
   setRootTransform(t) {
-    this.root = t;
+    this.root = {...t};
     this.log.push('root');
   }
   assignState(source) {

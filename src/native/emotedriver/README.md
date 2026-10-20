@@ -351,3 +351,8 @@ The exact DLL image selects replay at zero delta, tag-stop checkpoints and loop
 rounding: x86 clears alignment at the start and stops after a holding tag; x64
 replays forward at zero delta and keeps two float stores per loop wrap. Each
 clip keeps its native keyframe and event storage behind those hooks.
+
+The player reuses one root-transform input record. `EmoteClipDriver` borrows it
+for the synchronous setter call; clip implementations copy the fields they
+retain. Each clip receives the same per-call field reads and native float stores
+without allocating a message for every transform sub-step.
