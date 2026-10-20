@@ -2,6 +2,7 @@ import type {EmoteModel, EmoteMotion} from '../../../formats/kirikiri/emote-mode
 import type {EmoteVariableFrames} from '../../../formats/kirikiri/emote-metadata.js';
 import {EmoteTween, easingPower} from './controls/transition.js';
 import {EMOTE_TWO_PI, EmoteRotateTween} from './controls/rotate.js';
+import {EmoteVariableClamp} from './player/clamp.js';
 import {EmoteTimelineSet} from './player/timelines.js';
 import type {
   EmoteClipDriver,
@@ -32,7 +33,6 @@ import type {
 const f32 = Math.fround;
 /** Largest Progress sub-step: `float` 1.1 (0x100728b0). */
 const SUB_STEP = f32(1.1);
-const PI_F = f32(Math.PI);
 
 export type EmotePlayerClip = EmoteClipDriver & EmoteClipPlayerAccess;
 
@@ -52,9 +52,7 @@ interface TransitionEntry {
 
 /** `clampControl` entry (`p+0x114`, 0x44 bytes, 0x1001b8c0). */
 interface ClampEntry {
-  readonly type: number;
-  readonly min: number;
-  readonly max: number;
+  readonly kernel: EmoteVariableClamp;
   readonly varLr: string;
   readonly varUd: string;
 }
@@ -300,9 +298,7 @@ export class EmotePlayerCore {
     for (const c of md.clampControl) {
       if (!c.enabled) continue;
       this.clamps.push({
-        type: c.type,
-        min: f32(c.min),
-        max: f32(c.max),
+        kernel: new EmoteVariableClamp(c),
         varLr: c.var_lr,
         varUd: c.var_ud,
       });
@@ -400,33 +396,9 @@ export class EmotePlayerCore {
     for (const c of this.clamps) {
       let lr = this.timelines.blended(c.varLr, this.cells.get(c.varLr)?.value ?? 0);
       let ud = this.timelines.blended(c.varUd, this.cells.get(c.varUd)?.value ?? 0);
-      const range = c.max - c.min;
-      lr = f32(((lr - c.min) / range) * 2 - 1);
-      ud = f32(((ud - c.min) / range) * 2 - 1);
-      if (lr !== 0 && ud !== 0) {
-        if (c.type === 0) {
-          let r = f32(Math.abs(f32(lr / ud)));
-          if (r > 1) r = f32(1 / r);
-          const k = f32(1 / f32(Math.sqrt(f32(r * r + 1))));
-          lr = f32(k * lr);
-          ud = f32(k * ud);
-          const len = f32(Math.sqrt(f32(lr * lr + ud * ud)));
-          const c1 = f32(1 - f32(Math.cos(f32(r * PI_F * 0.5))));
-          const ratio = f32(f32(Math.sin(f32(len * PI_F * 0.5))) / len);
-          const m = f32((ratio - 1) * c1 + 1);
-          lr = f32(m * lr);
-          ud = f32(m * ud);
-        } else if (c.type === 1) {
-          const len = f32(Math.sqrt(f32(lr * lr + ud * ud)));
-          if (len > 1) {
-            const a = f32(Math.atan2(ud, lr));
-            lr = f32(Math.cos(a));
-            ud = f32(Math.sin(a));
-          }
-        }
-      }
-      lr = f32((lr + 1) * 0.5 * range + c.min);
-      ud = f32(range * ((ud + 1) * 0.5) + c.min);
+      const values = c.kernel.apply(lr, ud);
+      lr = values[0]!;
+      ud = values[1]!;
       if (this.mirrorSign(c.varLr)) lr = -lr;
       clip.applyVariable(c.varLr, lr);
       clip.applyVariable(c.varUd, ud);

@@ -6,8 +6,26 @@ import {PEmotePlayer} from '../dist/native/emotedriver/player.js';
 import {EmoteTween, easingPower} from '../dist/native/emotedriver/runtime/controls/transition.js';
 import {EmoteRotateTween, wrapAngle} from '../dist/native/emotedriver/runtime/controls/rotate.js';
 import {EmoteTimelineSet} from '../dist/native/emotedriver/runtime/player/timelines.js';
+import {EmoteVariableClamp} from '../dist/native/emotedriver/runtime/player/clamp.js';
 
 const f32 = Math.fround;
+
+test('variable clamps constrain pairs, retain axis values and expose a borrowed result', () => {
+  for (const sha of [EMOTEDRIVER_X86_SHA256, EMOTEDRIVER_X64_SHA256]) {
+    const clamp = new EmoteVariableClamp({min: -10, max: 10, type: 1}, sha);
+    assert.deepEqual([...clamp.apply(5, 0)], [5, 0]);
+    const diagonal = clamp.apply(10, 10);
+    assert.ok(Math.abs(Math.hypot(...diagonal) - 10) < 0.000002);
+    assert.equal(clamp.apply(0, 0), diagonal);
+    assert.deepEqual([...diagonal], [0, 0]);
+    const unchanged = new EmoteVariableClamp({min: -10, max: 10, type: 2}, sha);
+    assert.deepEqual([...unchanged.apply(20, -20)], [20, -20]);
+  }
+  assert.throws(
+    () => new EmoteVariableClamp({min: 0, max: 1, type: 0}, '3.9.8'),
+    /unsupported DLL build/,
+  );
+});
 
 /** Records what the player core does to its clip. */
 class FakeClip {

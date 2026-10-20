@@ -1,3 +1,5 @@
+import {EMOTEDRIVER_X64_SHA256} from './build.js';
+import {EmoteVariableClamp} from './runtime/player/clamp.js';
 import type {IEmotePlayer} from './contract.js';
 import type {EmotePlayerCore} from './runtime/player-core.js';
 /**
@@ -34,7 +36,6 @@ import {EMOTE_TWO_PI, EmoteRotateTween, EmoteTween, easingPower, wrapAngle} from
 const f32 = Math.fround;
 const SUB_STEP = f32(1.1);
 const FLT_EPSILON = f32(2 ** -23);
-const HALF_PI_UNIT = f32(Math.PI);
 
 /** `getEmoteVersion` text of this driver build. */
 export const EMOTE_DRIVER_VERSION = '3.9.8';
@@ -115,11 +116,9 @@ interface Transition {
 }
 
 interface Clamp {
-  readonly type: number;
+  readonly kernel: EmoteVariableClamp;
   readonly lr: string;
   readonly ud: string;
-  readonly min: number;
-  readonly max: number;
 }
 
 interface VariableDiff {
@@ -342,11 +341,9 @@ export class EmotePlayer implements EmotePhysicsHost {
       for (const c of metadata.clampControl) {
         if (!c.enabled) continue;
         this.clamps.push({
-          type: c.type,
+          kernel: new EmoteVariableClamp(c, EMOTEDRIVER_X64_SHA256),
           lr: c.var_lr,
           ud: c.var_ud,
-          min: f32(c.min),
-          max: f32(c.max),
         });
       }
       for (const label of metadata.instantVariableList ?? []) this.instant.add(label);
@@ -856,35 +853,11 @@ export class EmotePlayer implements EmotePhysicsHost {
   /** 0x18001a660. */
   private applyClamps(): void {
     for (const c of this.clamps) {
-      const range = f32(c.max - c.min);
-      let lr = f32(f32(f32(f32(this.effective(c.lr) - c.min) / range) * 2) - 1);
-      let ud = f32(f32(f32(f32(this.effective(c.ud) - c.min) / range) * 2) - 1);
-      if (lr !== 0 && ud !== 0) {
-        if (c.type === 0) {
-          let r = Math.abs(f32(lr / ud));
-          if (1 < r) r = f32(1 / r);
-          const k = f32(1 / f32(Math.sqrt(f32(f32(r * r) + 1))));
-          lr = f32(lr * k);
-          ud = f32(ud * k);
-          const len = f32(Math.sqrt(f32(f32(ud * ud) + f32(lr * lr))));
-          const a = f32(Math.cos(f32(f32(r * HALF_PI_UNIT) * 0.5)));
-          const b = f32(Math.sin(f32(f32(len * HALF_PI_UNIT) * 0.5)));
-          const m = f32(f32(f32(1 - a) * f32(f32(b / len) - 1)) + 1);
-          ud = f32(m * ud);
-          lr = f32(m * lr);
-        } else if (c.type === 1) {
-          const len = f32(Math.sqrt(f32(f32(ud * ud) + f32(lr * lr))));
-          if (1 < len) {
-            const a = f32(Math.atan2(ud, lr));
-            lr = f32(Math.cos(a));
-            ud = f32(Math.sin(a));
-          }
-        }
-      }
-      let outLr = f32(f32(f32(f32(lr + 1) * 0.5) * range) + c.min);
+      const values = c.kernel.apply(this.effective(c.lr), this.effective(c.ud));
+      let outLr = values[0]!;
       if (this.mirrorMatch(c.lr)) outLr = -outLr;
       this.clip.setVariable(c.lr, outLr);
-      this.clip.setVariable(c.ud, f32(f32(f32(f32(ud + 1) * 0.5) * range) + c.min));
+      this.clip.setVariable(c.ud, values[1]!);
     }
   }
 

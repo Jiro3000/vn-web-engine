@@ -262,3 +262,8 @@ blend parameters and color-presence flags. The x86 result keeps those keys in
 `unread` where appropriate and does not add x64 fields to its object shape.
 `EmoteX64Model` narrows the shared graph interfaces for callers of that image;
 `src/formats/emote/model.ts` supplies the compatibility entry point.
+
+`runtime/player/clamp.ts` shares the two-variable clamp arithmetic. Its exact
+image selector preserves the different float stores in normalization, radial
+limits, easing and reconstruction. The returned pair is borrowed per clamp;
+players apply their own variable blending and mirroring around this calculation.
