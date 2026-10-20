@@ -19,8 +19,8 @@ export function emoteSoftAngle(v: number): number {
   return f32(f32(Math.atan(scaled)) / EMOTE_ANGLE_UNIT);
 }
 
-/** x64 0x180027be0 rounds the mapping products before the CRT atan call. */
-function x64AtanOutput(value: number): number {
+/** Maps an already scaled float through the CRT atan and the stored angle unit. */
+export function emoteAngleFromScaled(value: number): number {
   return f32(f32(Math.atan(f32(value))) / EMOTE_ANGLE_UNIT);
 }
 
@@ -143,14 +143,14 @@ export class EmoteBust {
     if (!this.first) {
       ax = f32(x + this.offset[0]!);
       ay = f32(y + this.offset[1]!);
-      this.op[0]! = ax;
-      this.op[1]! = ay;
+      this.op[0] = ax;
+      this.op[1] = ay;
     } else {
       ax = this.op[0]!;
       ay = this.op[1]!;
       this.first = false;
-      this.offset[0]! = f32(ax - x);
-      this.offset[1]! = f32(ay - y);
+      this.offset[0] = f32(ax - x);
+      this.offset[1] = f32(ay - y);
     }
     const a = f32(-angle);
     const s = f32(Math.sin(a)),
@@ -163,27 +163,27 @@ export class EmoteBust {
       ks = f32(dt * this.spring),
       kf = f32(dt * this.friction);
     let vx = f32(f32(f32(ax - this.p[0]!) * ks) + this.pv[0]!);
-    this.pv[0]! = vx;
+    this.pv[0] = vx;
     vx = f32(f32(f32(gxc - gys) * kg) + vx);
     let vz = f32(f32(f32(f32(this.op[2]! - this.p[2]!) * ks) + this.pv[2]!) + f32(kg * 0));
     let vy = f32(f32(f32(f32(ay - this.p[1]!) * ks) + this.pv[1]!) + f32(f32(gyc + gxs) * kg));
     vx = f32(vx - f32(vx * kf));
     vy = f32(vy - f32(vy * kf));
     vz = f32(vz - f32(vz * kf));
-    this.pv[0]! = vx;
-    this.pv[1]! = vy;
-    this.pv[2]! = vz;
-    this.p[0]! = f32(f32(vx * dt) + this.p[0]!);
-    this.p[1]! = f32(f32(vy * dt) + this.p[1]!);
-    this.p[2]! = f32(f32(vz * dt) + this.p[2]!);
-    const lr = x64AtanOutput(
+    this.pv[0] = vx;
+    this.pv[1] = vy;
+    this.pv[2] = vz;
+    this.p[0] = f32(f32(vx * dt) + this.p[0]!);
+    this.p[1] = f32(f32(vy * dt) + this.p[1]!);
+    this.p[2] = f32(f32(vz * dt) + this.p[2]!);
+    const lr = emoteAngleFromScaled(
       f32(
         f32(
           f32(f32(-f32(f32(this.op[0]! - this.p[0]!) * scale)) * this.scaleX) * EMOTE_ANGLE_GAIN,
         ) * EMOTE_ANGLE_UNIT,
       ),
     );
-    const ud = x64AtanOutput(
+    const ud = emoteAngleFromScaled(
       f32(
         f32(
           f32(f32(f32(-f32(f32(this.op[1]! - this.p[1]!) * scale)) - this.ofs) * this.scaleY) *

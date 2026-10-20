@@ -203,3 +203,8 @@ variant preserves the x64 intermediate float stores, damping and soft-angle
 mapping. The x64 entry driver in `physics.ts` retains its zero-time first anchor
 and interpolated substeps, with accumulated outer forces applied to the base.
 Both pendulum paths sample `EmoteWindField` through its query interface.
+
+`runtime/controls/pendulum.ts` also shares the joint and bend state for both
+builds. The x64 path preserves rounded rod constraints, force/damping stores,
+the one-bit-smaller bend period and zero output for an invalid vertical joint
+index. Its entry driver keeps the native output-label mapping and substeps.

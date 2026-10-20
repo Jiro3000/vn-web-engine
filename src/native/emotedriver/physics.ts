@@ -9,15 +9,14 @@
  * variable values after Progress applied the other variables to the clip.
  */
 
-import type {
-  EmoteBustControl,
-  EmotePendulumControl,
-  EmoteVec3,
-} from '../../formats/emote/metadata.js';
-import {fmodf} from './controls.js';
+import type {EmoteBustControl, EmotePendulumControl} from '../../formats/emote/metadata.js';
 import {EMOTEDRIVER_X64_SHA256} from './build.js';
 import {EmoteWind as SharedWind} from './runtime/controls/wind.js';
 import {EmoteBust as SharedBust} from './runtime/controls/bust.js';
+import {
+  EmotePendulum as SharedPendulum,
+  type EmotePendulumOutput,
+} from './runtime/controls/pendulum.js';
 import type {EmoteWindField} from './runtime/interfaces.js';
 
 const f32 = Math.fround;
@@ -26,19 +25,6 @@ const SUB_STEP = f32(1.1);
 const FLT_EPSILON = f32(2 ** -23);
 /** Outputs at or below 0.01 in magnitude are written as 0 (0x181fcd520). */
 const OUTPUT_EPSILON = f32(0.01);
-/** `atanf(x · 1.15 · π/80) / (π/80)` shapes every output (0x181fcd55c, 0x181fcd52c). */
-const OUTPUT_GAIN = f32(1.15);
-const OUTPUT_UNIT = f32(0.03926991);
-/** Pendulum bend amplitude rate 1/32 (0x181fcd528) and threshold 28 (0x181fcd5a4). */
-const BEND_RATE = f32(0.03125);
-const BEND_THRESHOLD = f32(28);
-const TWO_PI = f32(6.283185);
-/** Pendulum minimum length for the constraint (0x181fcd524). */
-const MIN_DISTANCE = f32(0.015625);
-/** Gravity (0, 1, 0) and wind direction (1, 0, 0): `.data` 0x181fdda34…0x181fdda44. */
-const GX = 0,
-  GY = 1;
-
 /** The player state the controls read. */
 export interface EmotePhysicsHost {
   /**
@@ -54,10 +40,6 @@ export interface EmotePhysicsHost {
   readonly partsScale: number;
   readonly wind: EmoteWindField | null;
   setValue(label: string, value: number): void;
-}
-
-function atanOutput(x: number): number {
-  return f32(f32(Math.atan(f32(x))) / OUTPUT_UNIT);
 }
 
 /** `bustControl` entry (+0xf0, 0xa0 bytes; loader 0x180011690, step 0x180012580). */
@@ -116,194 +98,37 @@ export class EmoteBust {
   }
 }
 
-class Vec {
-  constructor(
-    public x = 0,
-    public y = 0,
-    public z = 0,
-  ) {}
-  set(v: EmoteVec3): void {
-    this.x = f32(v.x);
-    this.y = f32(v.y);
-    this.z = f32(v.z);
-  }
-}
-
-/** `EPPendControl` (0xb8 bytes, constructor 0x180012e30, step 0x18002b380). */
-class Pendulum {
-  /** +0x40. */
-  reset = true;
-  /** +0x44 base (anchor), +0x50 anchor offset. */
-  readonly base = new Vec();
-  ox = 0;
-  oy = 0;
-  /** +0x5c/+0x68 rest joints, +0x74/+0x80 masses, +0x8c/+0x98 velocities. */
-  readonly rest = [new Vec(), new Vec()] as const;
-  readonly mass = [new Vec(), new Vec()] as const;
-  readonly vel = [new Vec(), new Vec()] as const;
-  /** +0xa4 vertical offset, +0xa8 bend phase, +0xac bend amplitude. */
-  ofs = 0;
-  bendPhase = 0;
-  bendAmp = 0;
-  wind: EmoteWindField | null = null;
-
-  constructor(readonly c: EmotePendulumControl) {}
-
-  /** Returns [lr, lrm, ud]. */
-  step(x: number, y: number, dt: number, scale: number, angle: number): [number, number, number] {
-    const c = this.c;
-    if (!this.reset) {
-      this.base.x = f32(x + this.ox);
-      this.base.y = f32(y + this.oy);
-    } else {
-      this.reset = false;
-      this.ox = f32(this.base.x - x);
-      this.oy = f32(this.base.y - y);
-    }
-    const len = [f32(c.length[0]), f32(c.length[1])];
-    // Rest joints hang along gravity from the anchor.
-    this.rest[0].x = f32(f32(len[0]! * GX) + this.base.x);
-    this.rest[0].y = f32(f32(len[0]! * GY) + this.base.y);
-    this.rest[0].z = f32(f32(len[0]! * 0) + this.base.z);
-    this.rest[1].x = f32(f32(len[1]! * GX) + this.rest[0].x);
-    this.rest[1].y = f32(f32(len[1]! * GY) + this.rest[0].y);
-    this.rest[1].z = f32(f32(len[1]! * 0) + this.rest[0].z);
-    const a = f32(-angle);
-    const sn = f32(Math.sin(a)),
-      cs = f32(Math.cos(a));
-    const sx = f32(sn * GX),
-      cx = f32(cs * GX),
-      sy = f32(sn * GY),
-      cy = f32(cs * GY);
-    const out: [number, number, number] = [0, 0, 0];
-    for (let i = 0; i < 2; i++) {
-      const anchor = i === 0 ? this.base : this.mass[0];
-      const m = this.mass[i]!,
-        v = this.vel[i]!;
-      const l = len[i]!;
-      const dx = f32(anchor.x - m.x),
-        dy = f32(anchor.y - m.y),
-        dz = f32(anchor.z - m.z);
-      let d2 = f32(f32(f32(dy * dy) + f32(dx * dx)) + f32(dz * dz));
-      if (f32(l * l) < d2) {
-        const d = f32(Math.sqrt(d2));
-        if (MIN_DISTANCE < d) {
-          const inv = f32(1 / d);
-          const ext = f32(d - l);
-          const nx = f32(inv * dx),
-            nz = f32(inv * dz),
-            ny = f32(inv * dy);
-          if (i === 1) {
-            m.x = f32(f32(nx * ext) + m.x);
-            m.z = f32(f32(nz * ext) + m.z);
-            m.y = f32(f32(ny * ext) + m.y);
-            const k = f32(
-              f32(f32(f32(f32(nx * v.x) + f32(ny * v.y)) + f32(nz * v.z)) * f32(-f32(c.v_bound))) *
-                dt,
-            );
-            v.x = f32(f32(nx * k) + v.x);
-            v.y = f32(f32(k * ny) + v.y);
-            v.z = f32(f32(k * nz) + v.z);
-          } else {
-            const k = f32(f32(ext * f32(c.b_rate)) * dt);
-            v.x = f32(f32(nx * k) + v.x);
-            v.y = f32(f32(k * ny) + v.y);
-            v.z = f32(f32(k * nz) + v.z);
-          }
-        }
-      }
-      d2 = 0;
-      const kg = f32(dt * f32(c.gravity));
-      let vx = f32(f32(f32(cx - sy) * kg) + v.x);
-      let vy = f32(f32(f32(cy + sx) * kg) + v.y);
-      let vz = f32(f32(kg * 0) + v.z);
-      if (this.wind) {
-        const w = this.wind.query(m.x);
-        vx = f32(f32(w * 1) + vx);
-        vy = f32(f32(w * 0) + vy);
-        vz = f32(f32(w * -0) + vz);
-      }
-      vx = f32(vx - f32(f32(vx * f32(c.friction_x)) * dt));
-      m.x = f32(f32(vx * dt) + m.x);
-      vy = f32(vy - f32(f32(vy * f32(c.friction_y)) * dt));
-      m.y = f32(f32(vy * dt) + m.y);
-      m.z = f32(f32(vz * dt) + m.z);
-      v.x = vx;
-      v.y = vy;
-      v.z = vz;
-      const r = this.rest[i]!;
-      const lr = atanOutput(
-        f32(
-          f32(f32(f32(f32(-f32(r.x - m.x)) * f32(c.scale_x[i]!)) * scale) * OUTPUT_GAIN) *
-            OUTPUT_UNIT,
-        ),
-      );
-      out[i] = lr;
-      if (i === Math.trunc(c.ud_eft)) {
-        out[2] = atanOutput(
-          f32(
-            f32(
-              f32(f32(f32(this.ofs - f32(r.y - m.y)) * f32(c.scale_y[i]!)) * scale) * OUTPUT_GAIN,
-            ) * OUTPUT_UNIT,
-          ),
-        );
-      }
-    }
-    return out;
-  }
-}
-
 /** `hairControl`/`partsControl` entry (0x108 bytes; loader 0x180013380, step 0x180014180). */
 export class EmotePendulum {
-  private readonly pend: Pendulum;
+  private readonly pend: SharedPendulum;
+  private readonly out: EmotePendulumOutput = {lr: 0, lrm: 0, ud: 0};
   private first = true;
   private prevX = 0;
   private prevY = 0;
 
   constructor(readonly control: EmotePendulumControl) {
-    this.pend = new Pendulum(control);
-    this.load();
-  }
-
-  private load(): void {
-    const q = this.control.param,
-      p = this.pend;
-    p.base.set(q.op);
-    p.rest[0].set(q.bp[0]);
-    p.rest[1].set(q.bp[1]);
-    p.mass[0].set(q.p[0]);
-    p.mass[1].set(q.p[1]);
-    p.vel[0].set(q.pv[0]);
-    p.vel[1].set(q.pv[1]);
-    p.ofs = f32(q.ofs);
-    p.bendPhase = f32(q.bendR);
-    p.bendAmp = f32(q.bendS);
+    this.pend = new SharedPendulum(control, EMOTEDRIVER_X64_SHA256);
   }
 
   /** 0x180014020 (one entry). */
   reset(host: EmotePhysicsHost): void {
-    this.load();
-    this.pend.reset = true;
+    this.pend.reset();
     host.setValue(this.control.var_lr, 0);
     host.setValue(this.control.var_lrm, 0);
     host.setValue(this.control.var_ud, 0);
     this.first = true;
   }
 
-  private bend(h: number, lr: number, lrm: number, ud: number): [number, number] {
-    const p = this.pend;
-    let amp: number;
-    if (Math.abs(ud) <= BEND_THRESHOLD) {
-      const v = f32(p.bendAmp - f32(h * BEND_RATE));
-      amp = 0 <= v ? v : 0;
-    } else {
-      const v = f32(f32(h * BEND_RATE) + p.bendAmp);
-      amp = v <= 1 ? v : 1;
-    }
-    p.bendAmp = amp;
-    p.bendPhase = fmodf(f32(f32(f32(amp * f32(this.control.bend_spd)) * h) + p.bendPhase), TWO_PI);
-    const d = f32(f32(f32(Math.sin(p.bendPhase)) * amp) * f32(this.control.bend_vol));
-    return [f32(lr - d), f32(lrm + d)];
+  private sample(
+    x: number,
+    y: number,
+    frames: number,
+    scale: number,
+    angle: number,
+    wind: EmoteWindField | null,
+  ): [number, number, number] {
+    this.pend.update(x, y, frames, scale, angle, wind, this.out);
+    return [this.out.lrm, this.out.lr, this.out.ud];
   }
 
   /** 0x180014180 (one entry). */
@@ -311,7 +136,6 @@ export class EmotePendulum {
     const base = host.basePosition(this.control.baseLayer) ?? [0, 0];
     const x = f32(base[0] + fx),
       y = f32(base[1] + fy);
-    this.pend.wind = host.wind;
     let lr = 0,
       lrm = 0,
       ud = 0;
@@ -323,20 +147,19 @@ export class EmotePendulum {
           const h = f32(dt - t) <= SUB_STEP ? f32(dt - t) : SUB_STEP;
           t = f32(t + h);
           const r = f32(t / dt);
-          [lr, lrm, ud] = this.pend.step(
+          [lr, lrm, ud] = this.sample(
             f32(f32(f32(1 - r) * this.prevX) + f32(r * x)),
             f32(f32(f32(1 - r) * this.prevY) + f32(r * y)),
             h,
             f32(scale),
             f32(host.physicsAngle),
+            host.wind,
           );
-          [lr, lrm] = this.bend(h, lr, lrm, ud);
         } while (t < end);
       }
     } else {
       this.first = false;
-      [lr, lrm, ud] = this.pend.step(x, y, 0, f32(scale), f32(host.physicsAngle));
-      [lr, lrm] = this.bend(0, lr, lrm, ud);
+      [lr, lrm, ud] = this.sample(x, y, 0, f32(scale), f32(host.physicsAngle), host.wind);
     }
     this.prevX = x;
     this.prevY = y;

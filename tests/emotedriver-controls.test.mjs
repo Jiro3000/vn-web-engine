@@ -438,6 +438,23 @@ test('pendulum bend sways lr against lrm when |ud| exceeds 28', () => {
   assert.equal(out.lr, f32(0 + sway));
 });
 
+test('pendulum retains each DLL build’s stored bend period', () => {
+  const settings = hair({gravity: 0, bend_spd: 0, bend_vol: 2});
+  settings.param.bendR = f32(2 * Math.PI);
+  settings.param.bendS = 1;
+  const upstream = new EmotePendulum(settings);
+  const x64 = new EmotePendulum(settings, EMOTEDRIVER_X64_SHA256);
+  const oldOut = {lr: 0, lrm: 0, ud: 0},
+    newOut = {...oldOut};
+  upstream.update(0, 0, 0, 1, 0, null, oldOut);
+  x64.update(0, 0, 0, 1, 0, null, newOut);
+  assert.equal(upstream.bendR, 0);
+  assert.equal(x64.bendR, 4.76837158203125e-7);
+  assert.equal(newOut.lr, 9.5367431640625e-7);
+  assert.equal(newOut.lrm, -9.5367431640625e-7);
+  assert.throws(() => new EmotePendulum(settings, 'unknown'), /unsupported DLL build/);
+});
+
 test('skip resets physics to the loaded parameters', () => {
   const controls = createEmoteControls(metadata({bustControl: [bustControl()]}));
   const h = host();
