@@ -492,6 +492,52 @@ test('skip resets physics to the loaded parameters', () => {
   assert.equal(controls.busts[0].first, true);
 });
 
+test('x64 control set composes exact-build controls through the host interface', () => {
+  const md = metadata({
+    bustControl: [bustControl()],
+    mouthControl: [{enabled: true, label: 'm', talkLabel: 't', beginFrame: 2.75, unread: {}}],
+    selectorControl: [{enabled: false, raw: {}}],
+  });
+  const controls = createEmoteControls(md, {driverSha256: EMOTEDRIVER_X64_SHA256});
+  const h = host({
+    shapePoint: () => {
+      throw Error('x86 base-point path');
+    },
+    physicsBasePosition: () => ({x: 0, y: 0}),
+    physicsAngle: 0,
+    outerForces: {bust: {x: 1, y: 2}, hair: {x: 0, y: 0}, parts: {x: 0, y: 0}},
+  });
+  assert.equal(controls.selectors.length, 0);
+  controls.setVariable(6, 0, 't', 1, 4, 1, false);
+  controls.stepMouths(h, 1);
+  assert.equal(h.value('m'), 2);
+  assert.equal(h.value('t'), 0.25);
+  controls.stepPhysics(h, 1);
+  assert.equal(h.value('ud'), 0);
+  controls.stepPhysics(h, 1);
+  assert.ok(h.value('ud') > 0);
+  assert.throws(() => controls.skip(), /requires its control host/);
+  controls.skip(h);
+  assert.equal(h.value('ud'), 0);
+  assert.throws(() => controls.assignState(createEmoteControls(metadata())), /between DLL builds/);
+  assert.throws(() => createEmoteControls(md, {driverSha256: 'unknown'}), /unsupported DLL build/);
+});
+
+test('x86 control set does not query x64 physics host inputs', () => {
+  const controls = createEmoteControls(
+    metadata({bustControl: [bustControl()], hairControl: [hair()]}),
+  );
+  const h = host();
+  for (const key of ['outerForces', 'physicsAngle', 'physicsBasePosition'])
+    Object.defineProperty(h, key, {
+      get: () => {
+        throw Error(`unexpected x64 input ${key}`);
+      },
+    });
+  controls.stepPhysics(h, 1);
+  assert.ok(h.value('ud') > 0);
+});
+
 test('assignState copies eye motion by label', () => {
   const md = metadata({eyeControl: [eyeControl({edge: [[0, 20]]})]});
   const a = createEmoteControls(md, {random: () => 0}),

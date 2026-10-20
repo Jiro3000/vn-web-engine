@@ -51,6 +51,21 @@ export interface EmoteControlHost {
   readonly rootY?: number;
   /** `p+0x20`: 1 / (`SetScale` scale · metadata `scale`) (default 1). */
   readonly inverseScale?: number;
+  /** x64 0x18000e6d0: base point after outer rotation and coordinate-flag scaling. */
+  physicsBasePosition?(label: string): {readonly x: number; readonly y: number} | null;
+  /** x64 clip plus outer rotation in radians (0x180018cb0). */
+  readonly physicsAngle?: number;
+  /** x64 accumulated outer forces, integrated by the player before physics. */
+  readonly outerForces?: {
+    readonly bust: EmotePhysicsForce;
+    readonly hair: EmotePhysicsForce;
+    readonly parts: EmotePhysicsForce;
+  };
+}
+
+export interface EmotePhysicsForce {
+  readonly x: number;
+  readonly y: number;
 }
 
 /** `StartWind` parameters and the wind control's running state (0x1001c340, 0x1000d780). */
@@ -356,8 +371,9 @@ export interface EmoteControlSet {
   /**
    * `Skip` (0x10012190) for these controls, in native order: bust 0x10013b80, hair and parts
    * 0x10015480, eye 0x10017020, eyebrow 0x10018760, mouth 0x10019220, selector 0x1001a680.
+   * The x64 caller supplies its host so the physics outputs are zeroed immediately.
    */
-  skip(): void;
+  skip(host?: EmoteControlHost): void;
   /**
    * `IsAnimating` (0x100108f0) for selectors, eyes, eyebrows and mouths: true when a control's
    * tween is running or queued and its variable is not in `timelineVariables` (the track labels

@@ -42,9 +42,9 @@ export interface EmoteMetadata {
   readonly mouthControl: readonly (EmoteMouthControl | EmoteDisabledControl)[];
   readonly transitionControl: readonly (EmoteTransitionControl | EmoteDisabledControl)[];
   /** Optional. */
-  readonly selectorControl: readonly EmoteSelectorControl[] | null;
+  readonly selectorControl: readonly (EmoteSelectorControl | EmoteDisabledControl)[] | null;
   readonly clampControl: readonly (EmoteClampControl | EmoteDisabledControl)[];
-  readonly loopControl: readonly (EmoteLoopControl | EmoteDisabledControl)[];
+  readonly loopControl?: readonly (EmoteLoopControl | EmoteDisabledControl)[];
   /** `mirrorControl.variableMatchList` (0x1001c4f0): variable-name fragments. */
   readonly mirrorControl: EmoteVariableMatch;
   /** Optional `instantVariableList` (0x10012c20). */

@@ -220,3 +220,12 @@ call selects the first value without consuming elapsed time; later calls emit
 variable requests only when the interval crosses a value boundary. It preserves
 float interval wrapping and tween duration and rejects DLL builds without this
 control.
+
+`createEmoteControls(metadata, {driverSha256})` assembles these controls for a
+validated DLL image; omitting the hash keeps the x86 image. Physics reads the
+`EmoteControlHost` interface. For x64, the host supplies the transformed base
+position, combined rotation and accumulated forces; the driver anchors once at
+zero time and rounds interpolation stores. `skip(host)` also clears physics
+outputs immediately. The x86 driver retains its full-time first update and
+previous-position fallback. X64 selectors can be disabled, and its metadata has
+no loop controls; the x86 reader still requires its original loop-control list.
