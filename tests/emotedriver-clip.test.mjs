@@ -16,6 +16,10 @@ import {
 
 import {FrameSlot, loadHeader, loadContent} from '../dist/native/emotedriver/runtime/clip/frame.js';
 import {ClipParameter} from '../dist/native/emotedriver/runtime/clip/node.js';
+import {
+  composeEmoteMatrix,
+  multiplyEmoteMatrices,
+} from '../dist/native/emotedriver/runtime/clip/matrix.js';
 
 const f = Math.fround;
 
@@ -591,4 +595,43 @@ test('clip parameters preserve each image’s input float store and reversed ran
   empty.apply(Infinity);
   assert.equal(empty.position, 0);
   assert.throws(() => new ClipParameter('p', false, 0, 1, 1, '3.9.8'), /unsupported DLL build/);
+});
+
+test('matrix composition accepts transform views and caller-owned, aliasable output', () => {
+  const state = {
+    flipX: true,
+    flipY: false,
+    angle: 0,
+    zoomX: 2,
+    zoomY: 3,
+    slantX: 0.25,
+    slantY: -0.5,
+  };
+  for (const sha of [undefined, EMOTEDRIVER_X64_SHA256]) {
+    const output = new Float32Array(4);
+    composeEmoteMatrix(state, [0, 3, 2, 1], output, sha);
+    assert.deepEqual([...output], [-2, 0.5, 1.5, 3]);
+    let scalar;
+    const target = {
+      setMatrix: (m00, m01, m10, m11) => {
+        scalar = [m00, m01, m10, m11];
+      },
+    };
+    composeEmoteMatrix(state, [0, 3, 2, 1], target, sha);
+    assert.deepEqual(scalar, [...output]);
+    multiplyEmoteMatrices(
+      {m00: 2, m01: 1, m10: 0, m11: 3},
+      {m00: 1, m01: 2, m10: 3, m11: 4},
+      target,
+      sha,
+    );
+    assert.deepEqual(scalar, [5, 8, 9, 12]);
+    const left = new Float32Array([2, 1, 0, 3]),
+      right = new Float32Array([1, 2, 3, 4]);
+    multiplyEmoteMatrices(left, right, right, sha);
+    assert.deepEqual([...right], [5, 8, 9, 12]);
+  }
+  const output = new Float32Array(4).fill(42);
+  assert.throws(() => composeEmoteMatrix(state, [], output, '3.9.8'), /unsupported DLL build/);
+  assert.deepEqual([...output], [42, 42, 42, 42]);
 });

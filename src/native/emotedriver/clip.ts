@@ -45,6 +45,7 @@ import {FrameSlot, loadHeader, loadContent, EMPTY_PATCH} from './runtime/clip/fr
 import {EmoteMeshCombinators} from './runtime/clip/combinators.js';
 import type {EmoteCombinatorTarget} from './runtime/interfaces.js';
 import {ClipParameter} from './runtime/clip/node.js';
+import {composeEmoteMatrix, multiplyEmoteMatrices} from './runtime/clip/matrix.js';
 
 const f32 = Math.fround;
 const NEUTRAL = 0x808080ff;
@@ -438,6 +439,30 @@ class Node implements EmoteCombinatorTarget {
   m01 = 0;
   m10 = 0;
   m11 = 1;
+  setMatrix(m00: number, m01: number, m10: number, m11: number): void {
+    this.m00 = m00;
+    this.m01 = m01;
+    this.m10 = m10;
+    this.m11 = m11;
+  }
+  get flipX(): boolean {
+    return this.fx;
+  }
+  get flipY(): boolean {
+    return this.fy;
+  }
+  get zoomX(): number {
+    return this.zx;
+  }
+  get zoomY(): number {
+    return this.zy;
+  }
+  get slantX(): number {
+    return this.sx;
+  }
+  get slantY(): number {
+    return this.sy;
+  }
   /** +0x88 previous position / velocity, +0x94 anchor. */
   readonly vel = new Float32Array(3);
   readonly anchor = new Float32Array(3);
@@ -654,78 +679,14 @@ class Node implements EmoteCombinatorTarget {
     this.opa = this.ovOpa;
   }
 
-  /** 0x180041de0: the local matrix from the info block in `transformOrder`. */
+  /** 0x180041de0: local matrix in the layer's transform order. */
   computeMatrix(): void {
-    let m00 = 1,
-      m01 = 0,
-      m10 = 0,
-      m11 = 1;
-    for (const step of this.transformOrder) {
-      switch (step) {
-        case 0:
-          if (this.fx) {
-            m00 = -m00;
-            m01 = -m01;
-          }
-          if (this.fy) {
-            m10 = -m10;
-            m11 = -m11;
-          }
-          break;
-        case 1: {
-          if (this.angle !== 0) {
-            const r = f32(this.angle * DEG);
-            const s = f32(Math.sin(r)),
-              c = f32(Math.cos(r));
-            const a00 = f32(m00 * c - m10 * s),
-              a10 = f32(m00 * s + m10 * c),
-              a01 = f32(m01 * c - m11 * s),
-              a11 = f32(m01 * s + m11 * c);
-            m00 = a00;
-            m10 = a10;
-            m01 = a01;
-            m11 = a11;
-          }
-          break;
-        }
-        case 2:
-          if (this.zx !== 1 || this.zy !== 1) {
-            m00 = f32(m00 * this.zx);
-            m01 = f32(m01 * this.zx);
-            m10 = f32(m10 * this.zy);
-            m11 = f32(m11 * this.zy);
-          }
-          break;
-        case 3:
-          if (this.sx !== 0 || this.sy !== 0) {
-            const a00 = f32(m00 + this.sx * m10),
-              a01 = f32(m01 + this.sx * m11),
-              a10 = f32(m10 + this.sy * m00),
-              a11 = f32(m11 + this.sy * m01);
-            m00 = a00;
-            m01 = a01;
-            m10 = a10;
-            m11 = a11;
-          }
-          break;
-      }
-    }
-    this.m00 = m00;
-    this.m01 = m01;
-    this.m10 = m10;
-    this.m11 = m11;
+    composeEmoteMatrix(this, this.transformOrder, this, EMOTEDRIVER_X64_SHA256);
   }
 
   /** this.M = L·this.M. */
   leftMultiply(l: Node): void {
-    const a = this.m00,
-      b = this.m01,
-      c = this.m10,
-      d = this.m11;
-    this.m00 = f32(a * l.m00 + c * l.m01);
-    this.m01 = f32(l.m00 * b + l.m01 * d);
-    this.m10 = f32(a * l.m10 + c * l.m11);
-    this.m11 = f32(l.m10 * b + l.m11 * d);
+    multiplyEmoteMatrices(l, this, this, EMOTEDRIVER_X64_SHA256);
   }
 
   copyMatrix(src: Node): void {

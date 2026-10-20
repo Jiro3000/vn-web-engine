@@ -27,6 +27,7 @@ import {
 } from './interpolate.js';
 import {ClipParameter, EmoteNode} from './node.js';
 import {clipRectPass, maskPass, meshPass, shapePass} from './vertices.js';
+import {composeEmoteMatrix, multiplyEmoteMatrices as multiply} from './matrix.js';
 
 /**
  * `MMotionPlayer` of `emotedriver.dll` (SHA-256 `a3b693b6…5e70b3a86`): one motion clip with
@@ -1247,73 +1248,9 @@ function evaluateFrame(clip: EmoteClip, node: EmoteNode, force: boolean): boolea
   return true;
 }
 
-/** 0x1003dd30: 2×2 frame from flips, rotation, zoom and slant in `transformOrder`. */
+/** 0x1003dd30: compose the evaluated node's local frame. */
 export function computeMatrix(node: EmoteNode): void {
-  const m: Float32Array = node.matrix,
-    s = node.state;
-  m[0] = 1;
-  m[1] = 0;
-  m[2] = 0;
-  m[3] = 1;
-  for (const op of node.transformOrder) {
-    switch (op) {
-      case 0:
-        if (s.flipX) {
-          m[0] = -m[0]!;
-          m[1] = -m[1]!;
-        }
-        if (s.flipY) {
-          m[2] = -m[2]!;
-          m[3] = -m[3]!;
-        }
-        break;
-      case 1:
-        if (s.angle !== 0) {
-          const rad = f((s.angle * 3.1415927410125732 * 2) / 360);
-          const sn = f(Math.sin(rad)),
-            cs = f(Math.cos(rad));
-          const m0: number = m[0]!,
-            m1: number = m[1]!,
-            m2: number = m[2]!,
-            m3: number = m[3]!;
-          m[0] = m0 * cs - m2 * sn;
-          m[1] = m1 * cs - m3 * sn;
-          m[2] = m0 * sn + m2 * cs;
-          m[3] = m1 * sn + m3 * cs;
-        }
-        break;
-      case 2:
-        if (s.zoomX !== 1 || s.zoomY !== 1) {
-          m[0] = m[0]! * s.zoomX;
-          m[1] = m[1]! * s.zoomX;
-          m[2] = m[2]! * s.zoomY;
-          m[3] = m[3]! * s.zoomY;
-        }
-        break;
-      case 3:
-        if (s.slantX !== 0 || s.slantY !== 0) {
-          const m0: number = m[0]!,
-            m1: number = m[1]!;
-          m[0] = m[2]! * s.slantX + m0;
-          m[1] = m[3]! * s.slantX + m1;
-          m[2] = m0 * s.slantY + m[2]!;
-          m[3] = m1 * s.slantY + m[3]!;
-        }
-        break;
-    }
-  }
-}
-
-/** out = a · b (row-major 2×2), as the layer pass composes parent and node frames. */
-function multiply(a: Float32Array, b: Float32Array, out: Float32Array): void {
-  const r0 = a[1]! * b[2]! + a[0]! * b[0]!,
-    r1 = a[0]! * b[1]! + b[3]! * a[1]!,
-    r2 = a[2]! * b[0]! + a[3]! * b[2]!,
-    r3 = b[1]! * a[2]! + a[3]! * b[3]!;
-  out[0] = r0;
-  out[1] = r1;
-  out[2] = r2;
-  out[3] = r3;
+  composeEmoteMatrix(node.state, node.transformOrder, node.matrix);
 }
 
 /**

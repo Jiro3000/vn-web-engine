@@ -312,3 +312,10 @@ parameter flags, applies optional integer discretization, clamps reversed ranges
 and preserves the sign of zero. X86 rounds incoming values to float32 before
 mapping; x64 retains the incoming value until the result store. The clip callers
 keep their own ordinary and scoped variable lookup behavior.
+
+`runtime/clip/matrix.ts` composes local frames and parent products for both
+images through transform and matrix-storage interfaces. Callers can supply
+Float32Array storage or a scalar `EmoteMatrixTarget`; the latter keeps the x64
+binding's existing node fields without per-call buffers. X86 retains array
+stores and its degree conversion. X64 retains scalar intermediate values, its
+rounded degree factor and operand order before writing the completed frame.
