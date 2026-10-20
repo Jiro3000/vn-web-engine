@@ -1,3 +1,5 @@
+import {emoteBuild, EMOTEDRIVER_X86_SHA256, EMOTEDRIVER_X64_SHA256} from '../../build.js';
+import {EmoteUnsupportedError} from '../errors.js';
 import type {EmoteEasingCurve} from '../../../../formats/kirikiri/emote-model.js';
 
 /**
@@ -7,6 +9,15 @@ import type {EmoteEasingCurve} from '../../../../formats/kirikiri/emote-model.js
  */
 
 const f = Math.fround;
+const EPSILON = f(2 ** -23);
+function x64Image(sha?: string): boolean {
+  if (sha === undefined || sha === EMOTEDRIVER_X86_SHA256) return false;
+  return sha === EMOTEDRIVER_X64_SHA256 || emoteBuild(sha) === EMOTEDRIVER_X64_SHA256;
+}
+function weight(curve: CurveCursor | null, t: number, x64: boolean): number {
+  if (x64 && curve) throw new EmoteUnsupportedError('easing curves');
+  return curve ? curve.evaluate(t) : t;
+}
 
 /** A curve reference with its search cursor (slot +0x64.. 16-byte entries: curve, segment, point). */
 export class CurveCursor {
@@ -45,31 +56,60 @@ export class CurveCursor {
 }
 
 /** 0x1002a990: `curve ? curve(t) : t`, then `t·b + (1-t)·a`; equal endpoints return `a`. */
-export function lerp(curve: CurveCursor | null, a: number, b: number, t: number): number {
+export function lerp(
+  curve: CurveCursor | null,
+  a: number,
+  b: number,
+  t: number,
+  driverSha256?: string,
+): number {
+  const x64 = x64Image(driverSha256);
   if (b === a) return a;
-  const k = curve ? curve.evaluate(t) : t;
-  return f(k * b + (1 - k) * a);
+  const k = weight(curve, t, x64);
+  return x64 ? f(f(1 - k) * a + k * b) : f(k * b + (1 - k) * a);
 }
 
 /** 0x1002a9f0: angle in degrees along the shorter arc, wrapped to [0, 360]. */
-export function lerpAngle(curve: CurveCursor | null, a: number, b: number, t: number): number {
+export function lerpAngle(
+  curve: CurveCursor | null,
+  a: number,
+  b: number,
+  t: number,
+  driverSha256?: string,
+): number {
+  const x64 = x64Image(driverSha256);
   if (b === a) return a;
   if (b <= a) {
     if (a - b > 180) b = f(360 + b);
   } else if (b - a > 180) b = f(b - 360);
-  const r = lerp(curve, a, b, t);
+  const r = lerp(curve, a, b, t, driverSha256);
   if (r < 0) return f(r + 360);
-  return r > 360 ? f(r - 360) : r;
+  return (x64 ? r >= 360 : r > 360) ? f(r - 360) : r;
 }
 
 /**
  * 0x1002aac0: ARGB lerp with an 8-bit weight `trunc(t·256)` (integer arithmetic of the
  * native code, including its 0xffff00ff mask on the high pair).
  */
-export function lerpColor(curve: CurveCursor | null, a: number, b: number, t: number): number {
+export function lerpColor(
+  curve: CurveCursor | null,
+  a: number,
+  b: number,
+  t: number,
+  driverSha256?: string,
+): number {
+  const x64 = x64Image(driverSha256);
   if (a === b) return a;
-  const k = curve ? f(curve.evaluate(t)) : f(t);
-  const w = Math.trunc(k * 256) | 0,
+  const k = weight(curve, t, x64);
+  if (x64) {
+    const w = Math.trunc(f(k * 256)),
+      inv = 256 - w;
+    const lo = (((b & 0xff00ff) >>> 0) * w + ((a & 0xff00ff) >>> 0) * inv) / 256;
+    const hi = ((a >>> 8) & 0xff00ff) * inv + ((b >>> 8) & 0xff00ff) * w;
+    return ((Math.floor(lo) & 0xff00ff) | (hi & 0xff00ff00)) >>> 0;
+  }
+  const rounded = f(k);
+  const w = Math.trunc(rounded * 256) | 0,
     inv = (256 - w) | 0;
   const hi = (Math.imul((a >>> 8) & 0xffff00ff, inv) + Math.imul((b >>> 8) & 0xffff00ff, w)) >>> 0;
   const lo = (Math.imul(a & 0xff00ff, inv) + Math.imul(b & 0xff00ff, w)) >>> 8;
@@ -88,15 +128,17 @@ export function lerpCoord(
   t: number,
   out: Float32Array | number[],
   at: number,
+  driverSha256?: string,
 ): void {
+  const x64 = x64Image(driverSha256);
   if (b[0] === a[0] && b[1] === a[1] && b[2] === a[2]) {
     out[at] = a[0]!;
     out[at + 1] = a[1]!;
     out[at + 2] = a[2]!;
     return;
   }
-  const k = curve ? f(curve.evaluate(t)) : t,
-    s = 1 - k;
+  const k = curve ? f(weight(curve, t, x64)) : t,
+    s = x64 ? f(1 - k) : 1 - k;
   out[at] = f(a[0]! * s + b[0]! * k);
   out[at + 1] = f(a[1]! * s + b[1]! * k);
   out[at + 2] = f(s * a[2]! + b[2]! * k);
@@ -136,9 +178,16 @@ export function lerpPatch(
   b: Float32Array,
   t: number,
   out: Float32Array,
+  driverSha256?: string,
 ): void {
-  const k = f(curve ? curve.evaluate(t) : t),
+  const x64 = x64Image(driverSha256);
+  const k = x64 ? weight(curve, t, true) : f(weight(curve, t, false)),
     s = f(1 - k);
+  if (x64) {
+    if (Math.abs(k) >= EPSILON) for (let i = 0; i < a.length; i++) out[i] = b[i]! * k + s * a[i]!;
+    else out.set(a);
+    return;
+  }
   for (let i = 0; i < a.length; i++) out[i] = f(f(a[i]! * s) + f(b[i]! * k));
 }
 

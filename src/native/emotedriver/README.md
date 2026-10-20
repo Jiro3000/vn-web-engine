@@ -285,3 +285,9 @@ through `layerPosition`, so x86 node-layout queries are refused. The binding kee
 its tuple coordinate return and explicit unsupported stereovision/state-copy
 operations. `library.ts` registers the x86 native export contract; `driver.ts`
 provides the x64 host binding.
+
+`runtime/clip/interpolate.ts` shares scalar, angle, color, coordinate and patch
+interpolation for both exact DLL images. X64 preserves its rounded residual
+weight, 360-degree wrap, integer color blend and near-zero patch fast path. X86
+keeps its curve cursors and SSE-style patch stores. Coordinates and patches are
+written into caller-owned buffers; the x64 helpers in `mesh.ts` delegate here.

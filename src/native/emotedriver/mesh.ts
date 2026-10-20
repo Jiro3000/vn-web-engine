@@ -1,3 +1,10 @@
+import {EMOTEDRIVER_X64_SHA256} from './build.js';
+import {
+  lerp as sharedLerp,
+  lerpAngle as sharedAngle,
+  lerpColor as sharedColor,
+  lerpPatch,
+} from './runtime/clip/interpolate.js';
 /**
  * Bezier-patch and interpolation helpers of the E-mote 3.9.8 clip (`emotedriver.dll` x64,
  * SHA-256 `80d28bd0…1e051`). A patch is 16 control points stored as 32 floats (x, y pairs,
@@ -142,30 +149,17 @@ export function tessellate(
 
 /** 0x180030130: scalar lerp, only when the ends differ. */
 export function lerpScalar(a: number, b: number, e: number): number {
-  return a !== b ? f32(f32(1 - e) * a + e * b) : a;
+  return sharedLerp(null, a, b, e, EMOTEDRIVER_X64_SHA256);
 }
 
 /** 0x180030190: angle lerp in degrees along the short way, wrapped to [0, 360). */
 export function lerpAngle(a: number, b: number, e: number): number {
-  if (a === b) return a;
-  if (b <= a) {
-    if (a - b > 180) b = f32(b + 360);
-  } else if (b - a > 180) b = f32(b - 360);
-  let v = a;
-  if (a !== b) v = f32(f32(1 - e) * a + e * b);
-  if (v < 0) return f32(v + 360);
-  if (v >= 360) v = f32(v - 360);
-  return v;
+  return sharedAngle(null, a, b, e, EMOTEDRIVER_X64_SHA256);
 }
 
 /** 0x180030260: per-channel colour lerp with an 8-bit weight. */
 export function lerpColor(a: number, b: number, e: number): number {
-  if (a === b) return a;
-  const w = Math.trunc(f32(e * 256));
-  const iw = 256 - w;
-  const lo = (((b & 0xff00ff) >>> 0) * w + ((a & 0xff00ff) >>> 0) * iw) / 256;
-  const hi = ((a >>> 8) & 0xff00ff) * iw + ((b >>> 8) & 0xff00ff) * w;
-  return ((Math.floor(lo) & 0xff00ff) | (hi & 0xff00ff00)) >>> 0;
+  return sharedColor(null, a, b, e, EMOTEDRIVER_X64_SHA256);
 }
 
 /**
@@ -188,9 +182,6 @@ export function modulateColor(a: number, b: number): number {
 /** 0x180030670: patch lerp; below epsilon the first patch is copied. */
 export function lerpMesh(a: Float32Array, b: Float32Array, e: number): Float32Array {
   const out = new Float32Array(32);
-  if (Math.abs(e) >= FLT_EPSILON) {
-    const ie = f32(1 - e);
-    for (let i = 0; i < 32; i++) out[i] = b[i]! * e + ie * a[i]!;
-  } else out.set(a);
+  lerpPatch(null, a, b, e, out, EMOTEDRIVER_X64_SHA256);
   return out;
 }

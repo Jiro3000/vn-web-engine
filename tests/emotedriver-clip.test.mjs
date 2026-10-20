@@ -7,8 +7,32 @@ import {
   emoteMeshKernelJs,
 } from '../dist/native/emotedriver/runtime/mesh/index.js';
 import {EmoteMotionRenderer} from '../dist/native/emotedriver/runtime/render/renderer.js';
+import {EMOTEDRIVER_X64_SHA256} from '../dist/native/emotedriver/build.js';
+import {
+  lerpAngle,
+  lerpCoord,
+  lerpPatch,
+} from '../dist/native/emotedriver/runtime/clip/interpolate.js';
 
 const f = Math.fround;
+
+test('clip interpolation preserves each image’s angle wrap and near-zero mesh weight', () => {
+  assert.equal(lerpAngle(null, 350, 10, 0.5), 360);
+  assert.equal(lerpAngle(null, 350, 10, 0.5, EMOTEDRIVER_X64_SHA256), 0);
+  assert.equal(lerpAngle(null, 360, 360, 0.5, EMOTEDRIVER_X64_SHA256), 360);
+  const a = new Float32Array(32).fill(1),
+    b = new Float32Array(32).fill(3);
+  const x86 = new Float32Array(32),
+    x64 = new Float32Array(32);
+  lerpPatch(null, a, b, 2 ** -25, x86);
+  lerpPatch(null, a, b, 2 ** -25, x64, EMOTEDRIVER_X64_SHA256);
+  assert.equal(x86[0], 1.0000001192092896);
+  assert.equal(x64[0], 1);
+  const coordinates = new Float32Array(5).fill(9);
+  lerpCoord(null, [1, 2, 3], [5, 6, 7], 0.25, coordinates, 1, EMOTEDRIVER_X64_SHA256);
+  assert.deepEqual([...coordinates], [9, 2, 3, 4, 9]);
+  assert.throws(() => lerpAngle(null, 0, 0, 0, '3.9.8'), /unsupported DLL build/);
+});
 
 // ---------------------------------------------------------------------------------------
 // Synthetic models (the typed reader's shapes, built directly).
