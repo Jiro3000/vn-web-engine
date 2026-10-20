@@ -5,6 +5,7 @@ import {EmotePlayerCore} from '../dist/native/emotedriver/runtime/player-core.js
 import {PEmotePlayer} from '../dist/native/emotedriver/player.js';
 import {EmoteTween, easingPower} from '../dist/native/emotedriver/runtime/controls/transition.js';
 import {EmoteRotateTween, wrapAngle} from '../dist/native/emotedriver/runtime/controls/rotate.js';
+import {EmoteTimelineSet} from '../dist/native/emotedriver/runtime/player/timelines.js';
 
 const f32 = Math.fround;
 
@@ -377,6 +378,55 @@ test('looping timeline wraps at loopEnd and is not animating', () => {
   assert.equal(p.isAnimating(), false);
   p.stopTimeline('');
   assert.equal(p.isTimelinePlaying(''), false);
+});
+
+test('timeline loop carry is local to each playing timeline on x64', () => {
+  for (const [build, expected] of [
+    [EMOTEDRIVER_X86_SHA256, 1],
+    [EMOTEDRIVER_X64_SHA256, 3],
+  ]) {
+    const set = new EmoteTimelineSet({queuing: false, setVariable() {}}, new Set(), build);
+    set.loadList([
+      timeline('a', [], {loopBegin: 0, loopEnd: 2, lastTime: 2}),
+      timeline('b', [], {loopBegin: 0, loopEnd: 7, lastTime: 7}),
+    ]);
+    set.play('a', 1);
+    set.play('b', 1);
+    set.advance(3);
+    assert.equal(set.states.get('a').time, 1);
+    assert.equal(set.states.get('b').time, expected);
+    if (build === EMOTEDRIVER_X64_SHA256) {
+      set.step();
+      assert.equal(set.states.get('a').time, 1);
+      assert.equal(set.states.get('b').time, 0);
+    }
+  }
+});
+
+test('x64 timeline seeks retain previous content and normalize label lookup', () => {
+  const calls = [];
+  const set = new EmoteTimelineSet(
+    {queuing: false, setVariable: (...args) => calls.push(args)},
+    new Set(),
+    EMOTEDRIVER_X64_SHA256,
+  );
+  set.loadList([
+    timeline('ＦＵＬＬ', [['v', [frame(0, 1), empty(4), frame(8, 2), empty(10)]]], {lastTime: 10}),
+  ]);
+  set.play('FULL', 1);
+  assert.equal(set.isPlaying('ＦＵＬＬ'), true);
+  assert.equal(set.playingLabelAt(0), 'FULL');
+  calls.length = 0;
+  set.seek(set.states.get('FULL'), 5);
+  assert.deepEqual(calls, [['v', 1, 0, 0]]);
+  calls.length = 0;
+  set.evaluate(set.states.get('FULL'), NaN, true);
+  assert.deepEqual(calls, [['v', 2, 0, 0]]);
+  assert.equal(set.isPlaying('😀'), false);
+  assert.throws(
+    () => new EmoteTimelineSet({queuing: false, setVariable() {}}, new Set(), 'unknown'),
+    /unsupported DLL build/,
+  );
 });
 
 test('difference timeline: fade in blends its track into the variable', () => {

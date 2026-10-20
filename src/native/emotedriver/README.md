@@ -229,3 +229,11 @@ zero time and rounds interpolation stores. `skip(host)` also clears physics
 outputs immediately. The x86 driver retains its full-time first update and
 previous-position fallback. X64 selectors can be disabled, and its metadata has
 no loop controls; the x86 reader still requires its original loop-control list.
+
+`runtime/player/timelines.ts` stores timeline and track state for both DLL images
+through `EmoteTimelineHost`. The x64 image normalizes fullwidth ASCII labels,
+retains the last content frame when seeking across an empty segment and advances
+each playing timeline with its own elapsed interval. Its fade timing, float
+stores, NaN comparisons, replay reset and loop-step flag remain build-specific.
+The x86 image keeps its original seek/evaluate behavior and carries loop remainder
+into the next playing timeline. The x64 names in `timelines.ts` delegate here.
