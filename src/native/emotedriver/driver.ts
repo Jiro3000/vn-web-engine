@@ -78,6 +78,6 @@ export class EmoteDevice {
   createPlayer(models: readonly EmoteModel[]): EmotePlayer {
     if (models.length !== 1) throw new EmoteUnsupportedError('E-mote player over several files');
     const clip = new EmoteMotionClip(new EmoteResource(models));
-    return new EmotePlayer(models[0]!.metadata, clip, {random: this.random});
+    return new EmotePlayer(models[0]!, clip, {random: this.random});
   }
 }

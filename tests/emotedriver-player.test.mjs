@@ -7,6 +7,7 @@ import {EmoteTween, easingPower} from '../dist/native/emotedriver/runtime/contro
 import {EmoteRotateTween, wrapAngle} from '../dist/native/emotedriver/runtime/controls/rotate.js';
 import {EmoteTimelineSet} from '../dist/native/emotedriver/runtime/player/timelines.js';
 import {EmoteVariableClamp} from '../dist/native/emotedriver/runtime/player/clamp.js';
+import {createEmoteControls} from '../dist/native/emotedriver/runtime/controls/index.js';
 
 const f32 = Math.fround;
 
@@ -208,6 +209,103 @@ function player(fields) {
 }
 
 const transition = (label) => ({enabled: true, label, unread: {}});
+
+function x64Player(fields = {}, factory = createEmoteControls) {
+  const log = [],
+    clip = new FakeClip(log);
+  Object.assign(clip, {
+    rootDirty: false,
+    smoothing: true,
+    ownRotation: false,
+    ownRotationAngle: 0,
+    grayscaleMode: 0,
+    grayscaleLevel: 0,
+    setOwnRotation(value) {
+      this.ownRotationAngle = value;
+    },
+    setGrayscale(mode, level) {
+      this.grayscaleMode = mode;
+      this.grayscaleLevel = level;
+    },
+    layerPosition: () => ({x: 20, y: 30}),
+  });
+  Object.defineProperty(clip, 'nodes', {
+    get() {
+      throw Error('x86 node layout accessed');
+    },
+  });
+  const core = new EmotePlayerCore({
+    model: model({
+      suitableClearColor: null,
+      immediateControl: [],
+      charaProfile: null,
+      orbitControl: [],
+      ...fields,
+    }),
+    driverSha256: EMOTEDRIVER_X64_SHA256,
+    random: () => 0.5,
+    createClip: () => clip,
+    createControls: factory,
+  });
+  return {core, clip, log};
+}
+
+test('x64 player uses the shared core for transform flags, variable diffs and physics access', () => {
+  const {core, clip} = x64Player({scale: 2});
+  core.flags |= 2;
+  core.setCoord(4, -2, 0, 0);
+  core.setScale(3, 0, 0);
+  core.setAsOriginalScale(true);
+  core.addUserDefinedVariable('custom');
+  core.setVariable('custom', 6, 2, 0);
+  core.setVariableDiff('module', 'custom', 2, 0, 0);
+  core.progress(1);
+  assert.deepEqual(core.getCoord(), {x: 6, y: -3});
+  assert.equal(core.getScale(), 1.5);
+  assert.equal(clip.applied.get('custom'), 5);
+  assert.deepEqual(core.physicsBasePosition('base'), {x: 6.6666669845581055, y: 10});
+  assert.equal(clip.rootDirty, true);
+});
+
+test('x64 player links replaceable control and clip implementations through interfaces', () => {
+  let links,
+    enabled = true;
+  const {core} = x64Player({}, (md, options) => {
+    links = options;
+    const controls = new FakeControls([], md);
+    controls.setBlinkEnabled = (value) => {
+      enabled = value;
+    };
+    controls.getBlinkEnabled = () => enabled;
+    return controls;
+  });
+  assert.equal(links.driverSha256, EMOTEDRIVER_X64_SHA256);
+  assert.equal(links.random(), 0.5);
+  core.setBlinkEnabled(false);
+  assert.equal(core.getBlinkEnabled(), false);
+  core.setGrayscale(0.5, 0, 0);
+  core.progress(0);
+  assert.equal(core.getGrayscale(), f32(127 / 255));
+});
+
+test('player build selection rejects unknown images before constructing dependencies', () => {
+  let created = false;
+  assert.throws(
+    () =>
+      new EmotePlayerCore({
+        model: model(),
+        driverSha256: '3.9.8',
+        createClip() {
+          created = true;
+        },
+        createControls() {
+          created = true;
+        },
+      }),
+    /unsupported DLL build/,
+  );
+  assert.equal(created, false);
+});
 const frame = (time, value, easing = 0) => ({time, type: 2, value, easing});
 const empty = (time) => ({time, type: 0, value: null, easing: null});
 const timeline = (label, variables, extra = {}) => ({

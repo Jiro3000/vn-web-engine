@@ -80,15 +80,16 @@ The engine reads the DLL as data for its hash; it never runs.
 
 ## Layout
 
-| File                        | Native part                                                             |
-| --------------------------- | ----------------------------------------------------------------------- |
-| `driver.ts`                 | The device: driver profile, PSB header key, model cache, `createPlayer` |
-| `player.ts`                 | `MEmotePlayer`: variables, controls, timelines, player transforms       |
-| `clip.ts`                   | `MMotionPlayer`: motion evaluation, nested clips, the draw list         |
-| `controls.ts`, `physics.ts` | Gaze, blink, mouth, selector and orbit controls; bust, pendulum, wind   |
-| `timelines.ts`, `tween.ts`  | Main and difference timelines; value and rotation tweens                |
-| `mesh.ts`                   | Bezier patches and mesh interpolation                                   |
-| `renderer.ts`               | The D3D11 renderer as WebGL draw commands                               |
+| File                        | Native part                                                                     |
+| --------------------------- | ------------------------------------------------------------------------------- |
+| `driver.ts`                 | The device: driver profile, PSB header key, model cache, `createPlayer`         |
+| `runtime/player-core.ts`    | Both exact builds of `MEmotePlayer`: variables, controls, timelines, transforms |
+| `player.ts`                 | Exported x86 player and x64 host calling convention                             |
+| `clip.ts`                   | `MMotionPlayer`: motion evaluation, nested clips, the draw list                 |
+| `controls.ts`, `physics.ts` | Gaze, blink, mouth, selector and orbit controls; bust, pendulum, wind           |
+| `timelines.ts`, `tween.ts`  | Main and difference timelines; value and rotation tweens                        |
+| `mesh.ts`                   | Bezier patches and mesh interpolation                                           |
+| `renderer.ts`               | The D3D11 renderer as WebGL draw commands                                       |
 
 Motion files are read by `src/formats/psb` (PSB containers, filtered headers) and
 `src/formats/emote` (typed model and metadata). Atlas textures decode through
@@ -267,3 +268,20 @@ blend parameters and color-presence flags. The x86 result keeps those keys in
 image selector preserves the different float stores in normalization, radial
 limits, easing and reconstruction. The returned pair is borrowed per clamp;
 players apply their own variable blending and mirroring around this calculation.
+
+`EmotePlayerCore` selects its build through `driverSha256`; omission keeps x86.
+X64 construction requires the device's process RNG and a clip implementing
+`EmoteX64ClipPlayerAccess`. Its control factory receives the same image and RNG
+through `EmoteControlLinks` and provides `EmoteX64ControlSet`'s blink API. The core
+uses these interfaces for physics positions, rotation, forces, grayscale and
+transforms. It preserves x64 orbit/timeline/difference ordering, UTF-8 variable
+order, expression-loader gates, coordinate flags and original-scale behavior.
+X86 retains its own queuing, clamps, rounding and copy behavior.
+
+The x64 `EmotePlayer` binding delegates to this core. Its clip adapter translates
+the combined `progress` call into the core's split clip protocol; that combined
+call already evaluates layers and retires events. X64 physics reads positions
+through `layerPosition`, so x86 node-layout queries are refused. The binding keeps
+its tuple coordinate return and explicit unsupported stereovision/state-copy
+operations. `library.ts` registers the x86 native export contract; `driver.ts`
+provides the x64 host binding.

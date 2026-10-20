@@ -1,7 +1,10 @@
+import {EmoteUnsupportedError} from './errors.js';
+import {emoteBuild, EMOTEDRIVER_X64_SHA256, type EmoteBuild} from '../build.js';
+import {EmoteOrbit} from './controls/orbit.js';
 import type {EmoteModel, EmoteMotion} from '../../../formats/kirikiri/emote-model.js';
 import type {EmoteVariableFrames} from '../../../formats/kirikiri/emote-metadata.js';
 import {EmoteTween, easingPower} from './controls/transition.js';
-import {EMOTE_TWO_PI, EmoteRotateTween} from './controls/rotate.js';
+import {EMOTE_TWO_PI, EmoteRotateTween, wrapAngle} from './controls/rotate.js';
 import {EmoteVariableClamp} from './player/clamp.js';
 import {EmoteTimelineSet} from './player/timelines.js';
 import type {
@@ -9,9 +12,11 @@ import type {
   EmoteClipFactory,
   EmoteClipListener,
   EmoteClipPlayerAccess,
+  EmoteX64ClipPlayerAccess,
   EmoteControlHost,
   EmoteControlHostRandom,
   EmoteControlSet,
+  EmoteX64ControlSet,
   EmoteControlSetFactory,
   EmoteControlVariableType,
   EmoteVariableCell,
@@ -37,6 +42,9 @@ const SUB_STEP = f32(1.1);
 export type EmotePlayerClip = EmoteClipDriver & EmoteClipPlayerAccess;
 
 export interface EmotePlayerCoreOptions {
+  readonly driverSha256?: string;
+  /** Process-wide generator used by the x64 blink and wind controls. */
+  readonly random?: () => number;
   readonly model: EmoteModel;
   readonly createClip: EmoteClipFactory;
   readonly createControls: EmoteControlSetFactory;
@@ -46,6 +54,7 @@ export interface EmotePlayerCoreOptions {
 
 /** `transitionControl` entry (`p+0xe4`, 0x20 bytes): tween and variable label. */
 interface TransitionEntry {
+  readonly enabled?: boolean;
   readonly label: string;
   readonly tween: EmoteTween;
 }
@@ -84,7 +93,46 @@ function compareKeys(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
+interface VariableDiff {
+  readonly module: string;
+  readonly label: string;
+  readonly tween: EmoteTween;
+}
+
+/** UTF-8 key order, including surrogate pairs. */
+export function compareEmoteUtf8(a: string, b: string): number {
+  const n = Math.min(a.length, b.length);
+  for (let i = 0; i < n; i++) {
+    const x = a.charCodeAt(i),
+      y = b.charCodeAt(i);
+    if (x === y) continue;
+    const xs = x >= 0xd800 && x <= 0xdfff,
+      ys = y >= 0xd800 && y <= 0xdfff;
+    if (xs !== ys) return xs ? 1 : -1;
+    return x - y;
+  }
+  return a.length - b.length;
+}
+
 export class EmotePlayerCore {
+  readonly driverSha256: EmoteBuild;
+  private readonly x64: boolean;
+  private readonly random: (() => number) | undefined;
+  private readonly diffs: VariableDiff[] = [];
+  private readonly diffSums = new Map<string, number>();
+  private readonly variableLabels = new Set<string>();
+  private readonly orbits: EmoteOrbit[] = [];
+  private asOriginalScale = false;
+  flags = 0x201;
+  private readonly forceSums = [
+    new Float32Array(2),
+    new Float32Array(2),
+    new Float32Array(2),
+  ] as const;
+  private readonly outerForces = {bust: {x: 0, y: 0}, hair: {x: 0, y: 0}, parts: {x: 0, y: 0}};
+  private readonly grayscaleTween: EmoteTween;
+  private readonly forceTweens: readonly [EmoteTween, EmoteTween, EmoteTween];
+  private readonly outerRotateTween: EmoteRotateTween;
   readonly model: EmoteModel;
   readonly motion: EmoteMotion;
   private readonly createClip: EmoteClipFactory;
@@ -119,7 +167,7 @@ export class EmotePlayerCore {
   /** `p+0x54` binding map: label → control type and index. */
   private readonly bindings = new Map<
     string,
-    {type: EmoteControlVariableType | 7; index: number}
+    {type: EmoteControlVariableType | 0 | 1 | 2 | 7 | 9; index: number}
   >();
   /** `p+0x64` variable map and its key order. */
   private readonly cells = new Map<string, EmoteVariableCell>();
@@ -141,10 +189,10 @@ export class EmotePlayerCore {
   wind: EmoteWindState | null = null;
 
   /** `p+0x13c` coord (2), `p+0x140` scale (1), `p+0x144` colour (4), `p+0x148` rotation. */
-  readonly coordTween = new EmoteTween(2);
-  readonly scaleTween = new EmoteTween(1);
-  readonly colorTween = new EmoteTween(4);
-  readonly rotateTween = new EmoteRotateTween();
+  readonly coordTween: EmoteTween;
+  readonly scaleTween: EmoteTween;
+  readonly colorTween: EmoteTween;
+  readonly rotateTween: EmoteRotateTween;
 
   /** `p+0x14c` effective mirror, `p+0x14d` (never set by this build), `p+0x14e` model mirror. */
   mirror = false;
@@ -162,6 +210,25 @@ export class EmotePlayerCore {
    * assigned from the source after loading.
    */
   constructor(options: EmotePlayerCoreOptions, cloneOf?: EmotePlayerCore) {
+    this.driverSha256 = emoteBuild(options.driverSha256);
+    this.x64 = this.driverSha256 === EMOTEDRIVER_X64_SHA256;
+    if (cloneOf && cloneOf.driverSha256 !== this.driverSha256)
+      throw Error('emotedriver: player DLL build mismatch');
+    if (this.x64 && cloneOf) throw new EmoteUnsupportedError('clone');
+    this.random = options.random;
+    if (this.x64 && !this.random)
+      throw Error('emotedriver: x64 player requires its process random source');
+    this.coordTween = new EmoteTween(2, this.driverSha256);
+    this.scaleTween = new EmoteTween(1, this.driverSha256);
+    this.colorTween = new EmoteTween(4, this.driverSha256);
+    this.rotateTween = new EmoteRotateTween(this.driverSha256);
+    this.grayscaleTween = new EmoteTween(1, this.driverSha256);
+    this.forceTweens = [
+      new EmoteTween(2, this.driverSha256),
+      new EmoteTween(2, this.driverSha256),
+      new EmoteTween(2, this.driverSha256),
+    ];
+    this.outerRotateTween = new EmoteRotateTween(this.driverSha256);
     this.model = options.model;
     this.createClip = options.createClip;
     this.createControls = options.createControls;
@@ -197,8 +264,15 @@ export class EmotePlayerCore {
       get inverseScale() {
         return self.inverseScale;
       },
-      random: () => crtRand() / 0x8000,
+      random: () => (self.x64 ? self.random!() : crtRand() / 0x8000),
       rand: crtRand,
+      physicsBasePosition: (label) => self.physicsBasePosition(label),
+      get physicsAngle() {
+        return self.physicsAngle;
+      },
+      get outerForces() {
+        return self.outerForces;
+      },
       get wind() {
         return self.wind;
       },
@@ -212,6 +286,7 @@ export class EmotePlayerCore {
           self.setVariable(label, value, frames, easing),
       },
       this.instant,
+      this.driverSha256,
     );
 
     const {chara, motion} = this.model.metadata.base;
@@ -231,26 +306,52 @@ export class EmotePlayerCore {
       this.clips = [this.createClip(m)];
     }
 
+    if (this.x64) {
+      const clip = this.mainClip as EmotePlayerClip & Partial<EmoteX64ClipPlayerAccess>;
+      for (const key of ['setOwnRotation', 'setGrayscale', 'layerPosition'] as const)
+        if (typeof clip[key] !== 'function') throw Error(`emotedriver: x64 clip missing ${key}`);
+      if (
+        typeof clip.rootDirty !== 'boolean' ||
+        typeof clip.smoothing !== 'boolean' ||
+        typeof clip.ownRotation !== 'boolean' ||
+        typeof clip.ownRotationAngle !== 'number' ||
+        typeof clip.grayscaleMode !== 'number' ||
+        typeof clip.grayscaleLevel !== 'number'
+      )
+        throw Error('emotedriver: incomplete x64 clip state');
+    }
     // 0x1000e460 defaults and initial tweens.
     this.setCoord(0, 0, 0, 0);
     this.setScale(1, 0, 0);
     this.setRot(0, 0, 0);
     this.setColor(0x808080ff, 0, 0);
+    if (this.x64) this.setGrayscale(0, 0, 0);
     this.load();
     if (cloneOf) this.assignState(cloneOf);
   }
 
   /** Copy constructor (slot 2, 0x10001dc0 → 0x10001bd0 → 0x1000e000). */
   clone(): EmotePlayerCore {
+    if (this.x64) throw new EmoteUnsupportedError('clone');
     return new EmotePlayerCore(
       {
         model: this.model,
+        driverSha256: this.driverSha256,
+        ...(this.random ? {random: this.random} : {}),
         createClip: this.createClip,
         createControls: this.createControls,
         listener: this.listener,
       },
       this,
     );
+  }
+
+  private get x64Clip(): EmotePlayerClip & EmoteX64ClipPlayerAccess {
+    return this.mainClip as EmotePlayerClip & EmoteX64ClipPlayerAccess;
+  }
+
+  private get x64Controls(): EmoteX64ControlSet {
+    return this.controls as EmoteX64ControlSet;
   }
 
   private get mainClip(): EmotePlayerClip {
@@ -272,43 +373,69 @@ export class EmotePlayerCore {
     clip.dispatchEvents(this.listener);
     this.modelScale = f32(md.scale);
     const s = this.scaleTween.step(0)[0]!;
-    this.inverseScale = f32(1 / (this.modelScale * s));
+    if (!this.x64) this.inverseScale = f32(1 / (this.modelScale * s));
 
     // 0x100193d0 runs before the selector loader 0x10019a50, which resolves its options'
     // transitions by label, so the transition tweens exist before the controls are built.
+    const expressions =
+      !this.x64 || !!(md.eyeControl.length || md.eyebrowControl.length || md.mouthControl.length);
     const transitionIndex: number[] = [];
-    md.transitionControl.forEach((entry, index) => {
+    (expressions ? md.transitionControl : []).forEach((entry, index) => {
       if (!entry.enabled) return;
       transitionIndex.push(index);
-      this.transitions.push({label: entry.label, tween: new EmoteTween(1)});
+      this.transitions.push({label: entry.label, tween: new EmoteTween(1, this.driverSha256)});
     });
-    this.controls = this.createControls(md, {
+    this.controls = this.createControls(expressions ? md : {...md, selectorControl: []}, {
+      ...(this.x64 ? {driverSha256: this.driverSha256, random: this.random} : {}),
       transition: (label) => this.transitions.find((t) => t.label === label)?.tween ?? null,
     });
-    const bind = (type: EmoteControlVariableType | 7) => (label: string, index: number) => {
-      if (!this.bindings.has(label)) this.bindings.set(label, {type, index});
-    };
+    const bind =
+      (type: EmoteControlVariableType | 0 | 1 | 2 | 7 | 9) => (label: string, index: number) => {
+        if (!this.bindings.has(label)) this.bindings.set(label, {type, index});
+      };
+    if (this.x64) {
+      const physics = (list: typeof md.bustControl | typeof md.hairControl, type: 0 | 1 | 2) => {
+        let index = 0;
+        for (const c of list) {
+          if (!c.enabled) continue;
+          bind(type)(c.var_lr, index);
+          bind(type)(c.var_ud, index);
+          if ('var_lrm' in c) bind(type)(c.var_lrm, index);
+          index++;
+        }
+      };
+      physics(md.bustControl, 0);
+      physics(md.hairControl, 1);
+      physics(md.partsControl, 2);
+    }
     this.controls.bindVariables(4, bind(4));
     this.controls.bindVariables(5, bind(5));
     this.controls.bindVariables(6, bind(6));
     // The binding index is the position in the PSB list.
     this.transitions.forEach((t, i) => bind(7)(t.label, transitionIndex[i]!));
     this.controls.bindVariables(8, bind(8));
+    if (this.x64 && expressions) for (const label of md.immediateControl ?? []) bind(9)(label, 0);
     // 0x1001b8c0.
     for (const c of md.clampControl) {
       if (!c.enabled) continue;
       this.clamps.push({
-        kernel: new EmoteVariableClamp(c),
+        kernel: new EmoteVariableClamp(c, this.driverSha256),
         varLr: c.var_lr,
         varUd: c.var_ud,
       });
     }
     this.mirrorMatch = md.mirrorControl.variableMatchList;
-    for (const label of md.instantVariableList ?? []) this.instant.add(label);
+    if (!this.x64 || md.clampControl.length)
+      for (const label of md.instantVariableList ?? []) this.instant.add(label);
     this.timelines.loadList(md.timelineControl);
     // `variableList`: frames of a repeated label are inserted before the existing ones.
     for (const v of md.variableList ?? []) {
       const frames = v.frames.map((fr) => ({label: fr.label, frame: f32(fr.frame)}));
+      if (this.x64) {
+        this.variableList.push({label: v.label, frames});
+        this.variableLabels.add(v.label);
+        continue;
+      }
       const i = this.variableList.findIndex((e) => e.label === v.label);
       if (i >= 0) {
         const e = this.variableList[i]!;
@@ -317,6 +444,9 @@ export class EmotePlayerCore {
         this.variableList.push({label: v.label, frames});
       }
     }
+    if (this.x64)
+      for (const orbit of md.orbitControl ?? [])
+        if (orbit.enabled) this.orbits.push(new EmoteOrbit(orbit, this.driverSha256));
   }
 
   // -------------------------------------------------------------------------------------
@@ -332,7 +462,8 @@ export class EmotePlayerCore {
         hi = this.cellOrder.length;
       while (lo < hi) {
         const mid = (lo + hi) >>> 1;
-        if (compareKeys(this.cellOrder[mid]!, label) < 0) lo = mid + 1;
+        if ((this.x64 ? compareEmoteUtf8 : compareKeys)(this.cellOrder[mid]!, label) < 0)
+          lo = mid + 1;
         else hi = mid;
       }
       this.cellOrder.splice(lo, 0, label);
@@ -346,9 +477,9 @@ export class EmotePlayerCore {
    */
   setVariable(label: string, value: number, frames: number, easing: number): void {
     this.forceStep = true;
-    const power = easingPower(easing);
+    const power = easingPower(easing, this.driverSha256);
     const binding = this.bindings.get(label);
-    if (!binding) {
+    if (!binding || binding.type === 9) {
       this.cell(label).value = f32(value);
       return;
     }
@@ -356,6 +487,7 @@ export class EmotePlayerCore {
       this.transitions[binding.index]?.tween.set([f32(value)], f32(frames), power, this.queuing);
       return;
     }
+    if (binding.type === 0 || binding.type === 1 || binding.type === 2) return;
     this.controls.setVariable(
       binding.type,
       binding.index,
@@ -384,6 +516,10 @@ export class EmotePlayerCore {
     const clip = this.mainClip;
     for (const label of this.cellOrder) {
       let v = this.timelines.blended(label, this.cells.get(label)!.value);
+      if (this.x64) {
+        const difference = this.diffSums.get(label);
+        if (difference !== undefined) v = f32(v + difference);
+      }
       if (this.mirrorSign(label)) v = -v;
       clip.applyVariable(label, v);
     }
@@ -396,6 +532,12 @@ export class EmotePlayerCore {
     for (const c of this.clamps) {
       let lr = this.timelines.blended(c.varLr, this.cells.get(c.varLr)?.value ?? 0);
       let ud = this.timelines.blended(c.varUd, this.cells.get(c.varUd)?.value ?? 0);
+      if (this.x64) {
+        const dlr = this.diffSums.get(c.varLr),
+          dud = this.diffSums.get(c.varUd);
+        if (dlr !== undefined) lr = f32(lr + dlr);
+        if (dud !== undefined) ud = f32(ud + dud);
+      }
       const values = c.kernel.apply(lr, ud);
       lr = values[0]!;
       ud = values[1]!;
@@ -418,7 +560,21 @@ export class EmotePlayerCore {
     }
     this.pendingFrames = 0;
     // 0x1001fc00 maintains the stereovision clip pair only.
+    if (this.x64) {
+      for (const orbit of this.orbits) {
+        const call = orbit.step(total);
+        if (call) this.setVariable(orbit.label, call.value, call.frames, 0);
+      }
+    }
     this.timelines.advance(total);
+    if (this.x64) {
+      this.diffSums.clear();
+      for (const d of this.diffs)
+        this.diffSums.set(
+          d.label,
+          f32((this.diffSums.get(d.label) ?? 0) + d.tween.step(total)[0]!),
+        );
+    }
     const host = this.host;
     let rest = total;
     while (rest > 0 || this.forceStep) {
@@ -429,7 +585,7 @@ export class EmotePlayerCore {
       this.controls.stepMouths(host, step);
       this.controls.stepSelectors(host, step);
       this.stepTransitions(step);
-      this.controls.stepLoops(host, step);
+      if (!this.x64) this.controls.stepLoops(host, step);
       this.stepTransforms(step);
       if (this.controls.windActive()) this.controls.stepWind(host, step);
       rest = f32(rest - step);
@@ -440,7 +596,26 @@ export class EmotePlayerCore {
       clip.evaluate();
       clip.dispatchEvents(this.listener);
     }
-    if (total !== 0) this.controls.stepPhysics(host, total);
+    if (total !== 0) {
+      if (this.x64) {
+        this.forceTweens.forEach((t, i) => {
+          const values = t.step(total),
+            sum = this.forceSums[i]!;
+          sum[0] = f32(f32(values[0]! * total) + sum[0]!);
+          sum[1] = f32(f32(values[1]! * total) + sum[1]!);
+        });
+        this.outerRotateTween.step(total);
+        for (const [i, force] of [
+          this.outerForces.bust,
+          this.outerForces.hair,
+          this.outerForces.parts,
+        ].entries()) {
+          force.x = this.forceSums[i]![0]!;
+          force.y = this.forceSums[i]![1]!;
+        }
+      }
+      this.controls.stepPhysics(host, total);
+    }
   }
 
   /** 0x100199c0: transition tweens write their variables. */
@@ -450,6 +625,10 @@ export class EmotePlayerCore {
 
   /** 0x1001b5f0: coord, colour, scale and rotation tweens → every clip. */
   private stepTransforms(frames: number): void {
+    if (this.x64) {
+      this.stepX64Transforms(frames);
+      return;
+    }
     const coord = this.coordTween.step(frames);
     this.root.x = coord[0]!;
     this.root.y = coord[1]!;
@@ -464,6 +643,31 @@ export class EmotePlayerCore {
     const rad = this.rotateTween.step(frames);
     this.root.angle = f32((rad * 360) / EMOTE_TWO_PI);
     this.writeRoot();
+  }
+
+  /** x64 0x180019240: float stores, original scale, coordinate flags and grayscale. */
+  private stepX64Transforms(frames: number): void {
+    const coord = this.coordTween.step(frames),
+      color = this.colorTween.step(frames);
+    let scale = this.scaleTween.step(frames)[0]!;
+    if (this.asOriginalScale) scale = f32(scale / this.modelScale);
+    this.inverseScale = f32(1 / f32(this.modelScale * scale));
+    const rad = this.rotateTween.step(frames);
+    this.root.x = this.flags & 2 ? f32(coord[0]! * scale) : coord[0]!;
+    this.root.y = this.flags & 2 ? f32(coord[1]! * scale) : coord[1]!;
+    this.root.scale = scale;
+    const channel = (i: number) => Math.trunc(color[i]!) | 0;
+    this.mainClip.color =
+      ((((((channel(3) << 8) | channel(2)) << 8) | channel(1)) << 8) | channel(0)) >>> 0;
+    const degrees = f32(f32(rad * 360) / EMOTE_TWO_PI);
+    if (this.x64Clip.ownRotation)
+      this.x64Clip.setOwnRotation(Number.isFinite(degrees) ? wrapAngle(degrees, 360) : degrees);
+    else this.root.angle = degrees;
+    this.writeRoot();
+    this.x64Clip.rootDirty = true;
+    const gray = this.grayscaleTween.step(frames)[0]!;
+    const value = gray <= 1 ? gray : 1;
+    this.x64Clip.setGrayscale(value > 0 ? 5 : 0, Math.trunc(f32(value * 255)));
   }
 
   /** Root node +0x283 (mirror) and +0x288..+0x29c; the clip sets its dirty flag on change. */
@@ -486,18 +690,33 @@ export class EmotePlayerCore {
 
   setCoord(x: number, y: number, frames: number, easing: number): void {
     this.forceStep = true;
-    this.coordTween.set([f32(x), f32(y)], f32(frames), easingPower(easing), this.queuing);
+    this.coordTween.set(
+      [f32(x), f32(y)],
+      f32(frames),
+      easingPower(easing, this.driverSha256),
+      this.queuing,
+    );
   }
 
   setScale(scale: number, frames: number, easing: number): void {
     this.forceStep = true;
-    this.scaleTween.set([f32(scale)], f32(frames), easingPower(easing), this.queuing);
+    this.scaleTween.set(
+      [f32(scale)],
+      f32(frames),
+      easingPower(easing, this.driverSha256),
+      this.queuing,
+    );
   }
 
   /** Radians. */
   setRot(rot: number, frames: number, easing: number): void {
     this.forceStep = true;
-    this.rotateTween.set(f32(rot), f32(frames), easingPower(easing), this.queuing);
+    this.rotateTween.set(
+      f32(rot),
+      f32(frames),
+      easingPower(easing, this.driverSha256),
+      this.queuing,
+    );
   }
 
   setColor(argb: number, frames: number, easing: number): void {
@@ -506,7 +725,7 @@ export class EmotePlayerCore {
     this.colorTween.set(
       [v & 0xff, (v >>> 8) & 0xff, (v >>> 16) & 0xff, v >>> 24],
       f32(frames),
-      easingPower(easing),
+      easingPower(easing, this.driverSha256),
       this.queuing,
     );
   }
@@ -523,7 +742,7 @@ export class EmotePlayerCore {
 
   /** Slot 24 (0x10002070): root +0x294 in radians. */
   getRot(): number {
-    return f32((this.root.angle * EMOTE_TWO_PI) / 360);
+    return this.x64 ? this.clipAngle() : f32((this.root.angle * EMOTE_TWO_PI) / 360);
   }
 
   /** Slot 26 (0x100020e0): main clip +0x150. */
@@ -574,13 +793,33 @@ export class EmotePlayerCore {
   /** 0x10012190 (slot 52). */
   skip(): void {
     this.timelines.skip();
-    // Controls are created by `load` after its own `skip`.
-    this.controls?.skip();
+    this.settle();
+  }
+
+  /** x64 0x18000e210: skip loop timelines while marking them stepped. */
+  step(): void {
+    this.requireX64();
+    this.timelines.step();
+    this.settle();
+  }
+
+  private settle(): void {
+    if (this.x64) {
+      for (const tween of this.forceTweens) tween.skip();
+      for (const sum of this.forceSums) sum.fill(0);
+      for (const force of [this.outerForces.bust, this.outerForces.hair, this.outerForces.parts]) {
+        force.x = 0;
+        force.y = 0;
+      }
+      this.outerRotateTween.skip();
+    }
+    this.controls?.skip(this.x64 ? this.host : undefined);
     for (const t of this.transitions) t.tween.skip();
     this.coordTween.skip();
     this.scaleTween.skip();
     this.rotateTween.skip();
     this.colorTween.skip();
+    if (this.x64) for (const d of this.diffs) d.tween.skip();
   }
 
   /** 0x1001f180 (slot 53). */
@@ -590,7 +829,13 @@ export class EmotePlayerCore {
 
   /** 0x100108f0 (slot 51). The colour tween is not checked. */
   isAnimating(): boolean {
-    if (this.coordTween.busy || this.scaleTween.busy || this.rotateTween.busy) return true;
+    if (
+      this.coordTween.busy ||
+      this.scaleTween.busy ||
+      this.rotateTween.busy ||
+      (this.x64 && this.outerRotateTween.busy)
+    )
+      return true;
     const labels = new Set<string>();
     if (this.timelines.animating(labels)) return true;
     for (const t of this.transitions) if (t.tween.busy && !labels.has(t.label)) return true;
@@ -600,11 +845,13 @@ export class EmotePlayerCore {
   /** 0x10010850 (slot 4). */
   show(): void {
     for (const clip of this.clips) clip.rootVisible = true;
+    if (this.x64) this.x64Clip.rootDirty = true;
   }
 
   /** 0x100108a0 (slot 5). */
   hide(): void {
     for (const clip of this.clips) clip.rootVisible = false;
+    if (this.x64) this.x64Clip.rootDirty = true;
   }
 
   /** Slot 6 (0x10001e70). */
@@ -650,10 +897,257 @@ export class EmotePlayerCore {
     return this.variableList[index]?.frames[frame]?.frame ?? 0;
   }
 
+  // x64 player API and host operations (0x18000e980..0x18001b020).
+
+  private requireX64(): void {
+    if (!this.x64) throw Error(`emotedriver: API unavailable for DLL build ${this.driverSha256}`);
+  }
+
+  addUserDefinedVariable(label: string): void {
+    this.requireX64();
+    if (this.bindings.has(label) || this.variableLabels.has(label)) return;
+    this.bindings.set(label, {type: 7, index: this.transitions.length});
+    this.transitions.push({label, enabled: true, tween: new EmoteTween(1, this.driverSha256)});
+  }
+
+  setVariableDiff(module: string, label: string, value: number, frames = 0, easing = 0): void {
+    this.requireX64();
+    let diff = this.diffs.find((d) => d.module === module && d.label === label);
+    if (!diff) {
+      diff = {module, label, tween: new EmoteTween(1, this.driverSha256)};
+      this.diffs.push(diff);
+      this.diffs.sort(
+        (a, b) => compareEmoteUtf8(a.module, b.module) || compareEmoteUtf8(a.label, b.label),
+      );
+    }
+    this.forceStep = true;
+    diff.tween.set([f32(value)], f32(frames), easingPower(easing, this.driverSha256), this.queuing);
+  }
+
+  getVariableDiff(module: string, label: string): number {
+    this.requireX64();
+    return this.diffs.find((d) => d.module === module && d.label === label)?.tween.current[0] ?? 0;
+  }
+
+  setGrayscale(value: number, frames = 0, easing = 0): void {
+    this.requireX64();
+    this.grayscaleTween.set(
+      [f32(value)],
+      f32(frames),
+      easingPower(easing, this.driverSha256),
+      this.queuing,
+    );
+  }
+
+  getGrayscale(): number {
+    this.requireX64();
+    return this.x64Clip.grayscaleMode === 5 ? f32(this.x64Clip.grayscaleLevel / 255) : 0;
+  }
+
+  setAsOriginalScale(value: boolean): void {
+    this.requireX64();
+    this.asOriginalScale = value;
+  }
+  isAsOriginalScale(): boolean {
+    this.requireX64();
+    return this.asOriginalScale;
+  }
+
+  private forceTween(label: string): EmoteTween | null {
+    return label === 'bust'
+      ? this.forceTweens[0]
+      : label === 'hair'
+        ? this.forceTweens[1]
+        : label === 'parts'
+          ? this.forceTweens[2]
+          : null;
+  }
+
+  setOuterForce(label: string, x: number, y: number, frames = 0, easing = 0): void {
+    this.requireX64();
+    this.forceStep = true;
+    this.forceTween(label)?.set(
+      [f32(x), f32(y)],
+      f32(frames),
+      easingPower(easing, this.driverSha256),
+      this.queuing,
+    );
+  }
+
+  getOuterForce(label: string): [number, number] {
+    this.requireX64();
+    const tween = this.forceTween(label);
+    return tween ? [tween.current[0]!, tween.current[1]!] : [0, 0];
+  }
+
+  setOuterRot(value: number, frames = 0, easing = 0): void {
+    this.requireX64();
+    this.forceStep = true;
+    this.outerRotateTween.set(
+      f32(value),
+      f32(frames),
+      easingPower(easing, this.driverSha256),
+      this.queuing,
+    );
+  }
+  getOuterRot(): number {
+    this.requireX64();
+    return this.outerRotateTween.current;
+  }
+
+  setMirror(value: boolean): void {
+    this.requireX64();
+    this.mirror = this.model.metadata.mirror !== value;
+  }
+
+  setSmoothing(value: boolean): void {
+    this.requireX64();
+    this.x64Clip.smoothing = value;
+  }
+  getSmoothing(): boolean {
+    this.requireX64();
+    return this.x64Clip.smoothing;
+  }
+
+  countMainTimelines(): number {
+    return this.timelines.mainLabels.length;
+  }
+  getMainTimelineLabelAt(index: number): string {
+    return this.timelines.mainLabels[index] ?? '';
+  }
+  countDiffTimelines(): number {
+    return this.timelines.diffLabels.length;
+  }
+  getDiffTimelineLabelAt(index: number): string {
+    return this.timelines.diffLabels[index] ?? '';
+  }
+  countPlayingTimelines(): number {
+    return this.timelines.playing.length;
+  }
+  getPlayingTimelineLabelAt(index: number): string {
+    return this.timelines.playingLabelAt(index);
+  }
+  getPlayingTimelineFlagsAt(index: number): number {
+    return this.timelines.playingFlagsAt(index);
+  }
+  isLoopTimeline(label: string): boolean {
+    return this.timelines.isLoop(label);
+  }
+  getTimelineTotalFrameCount(label: string): number {
+    return this.timelines.totalFrameCount(label);
+  }
+  playTimeline(label: string, flags = 0): void {
+    this.timelines.play(label, flags);
+  }
+  isTimelinePlaying(label: string): boolean {
+    return this.timelines.isPlaying(label);
+  }
+  stopTimeline(label: string): void {
+    this.timelines.stop(label);
+  }
+  setTimelineBlendRatio(
+    label: string,
+    value: number,
+    frames = 0,
+    easing = 0,
+    stopWhenDone = false,
+  ): void {
+    this.timelines.setBlendRatio(label, value, frames, easing, stopWhenDone);
+  }
+  getTimelineBlendRatio(label: string): number {
+    return this.timelines.getBlendRatio(label);
+  }
+  fadeInTimeline(label: string, frames = 0, easing = 0): void {
+    this.timelines.fadeIn(label, frames, easing);
+  }
+  fadeOutTimeline(label: string, frames = 0, easing = 0): void {
+    this.timelines.fadeOut(label, frames, easing);
+  }
+
+  isCharaProfileAvailable(): boolean {
+    this.requireX64();
+    return this.model.metadata.charaProfile !== null;
+  }
+  getCharaHeight(): number {
+    this.requireX64();
+    const value = f32(this.model.metadata.charaProfile?.height ?? 0);
+    return this.asOriginalScale ? f32(value / this.modelScale) : value;
+  }
+  countCharaProfiles(): number {
+    this.requireX64();
+    return this.model.metadata.charaProfile?.markers.length ?? 0;
+  }
+  getCharaProfileLabelAt(index: number): string {
+    this.requireX64();
+    return this.model.metadata.charaProfile?.markers[index]?.label ?? '';
+  }
+  getCharaProfile(label: string): number {
+    this.requireX64();
+    const value = f32(
+      this.model.metadata.charaProfile?.markers.find((m) => m.label === label)?.value ?? 0,
+    );
+    return this.asOriginalScale ? f32(value / this.modelScale) : value;
+  }
+  getSuitableClearColor(): number {
+    this.requireX64();
+    const color = this.model.metadata.suitableClearColor;
+    return color
+      ? ((((((color.r & 255) << 8) | (color.g & 255)) << 8) | (color.b & 255)) * 256) >>> 0
+      : 0;
+  }
+  setBlinkEnabled(value: boolean): void {
+    this.requireX64();
+    this.x64Controls.setBlinkEnabled(value);
+  }
+  getBlinkEnabled(): boolean {
+    this.requireX64();
+    return this.x64Controls.getBlinkEnabled();
+  }
+
+  /** X64 0x18000e6d0; no concrete clip or physics implementation is assumed. */
+  physicsBasePosition(label: string): {readonly x: number; readonly y: number} | null {
+    this.requireX64();
+    const point = this.x64Clip.layerPosition(label);
+    if (!point) return null;
+    let {x, y} = point;
+    const angle = this.outerRotateTween.current;
+    if (f32(2 ** -23) < Math.abs(angle)) {
+      const sin = f32(Math.sin(angle)),
+        cos = f32(Math.cos(angle));
+      const ox = this.root.x,
+        oy = this.root.y,
+        dx = f32(x - ox),
+        dy = f32(y - oy);
+      x = f32(f32(f32(dx * cos) - f32(dy * sin)) + ox);
+      y = f32(f32(f32(dy * cos) + f32(dx * sin)) + oy);
+    }
+    if (this.flags & 0x200) {
+      x = f32(x * this.inverseScale);
+      y = f32(y * this.inverseScale);
+    }
+    if (this.flags & 0x100) {
+      x = f32(f32(f32(x - this.root.x) * this.inverseScale) + this.root.x);
+      y = f32(f32(f32(y - this.root.y) * this.inverseScale) + this.root.y);
+    }
+    return {x, y};
+  }
+
+  private clipAngle(): number {
+    const degrees = this.x64Clip.ownRotation ? this.x64Clip.ownRotationAngle : this.root.angle;
+    return f32(f32(degrees * EMOTE_TWO_PI) / 360);
+  }
+  get physicsAngle(): number {
+    this.requireX64();
+    return f32(this.clipAngle() + this.outerRotateTween.current);
+  }
+
   // -------------------------------------------------------------------------------------
   // AssignState (0x1000f2a0)
 
   assignState(source: EmotePlayerCore): void {
+    if (this.x64) throw new EmoteUnsupportedError('assignState');
+    if (source.driverSha256 !== this.driverSha256)
+      throw Error('emotedriver: player DLL build mismatch');
     if (source === this) return;
     this.bustScale = source.bustScale;
     this.hairScale = source.hairScale;

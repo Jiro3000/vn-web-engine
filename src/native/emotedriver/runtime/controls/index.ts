@@ -122,6 +122,14 @@ export class EmoteControls implements EmoteControlSet {
   /** PSB list index of each enabled entry, per binding type. */
   private readonly bindings: Record<EmoteControlVariableType, {label: string; index: number}[]>;
 
+  setBlinkEnabled(enabled: boolean): void {
+    for (const eye of this.eyes) eye.setBlinkEnabled(enabled);
+  }
+
+  getBlinkEnabled(): boolean {
+    return this.eyes.some((eye) => eye.blinkEnabled !== 0);
+  }
+
   constructor(metadata: EmoteMetadata, options: EmoteControlsOptions = {}) {
     this.driverSha256 = emoteBuild(options.driverSha256);
     this.x64 = this.driverSha256 === EMOTEDRIVER_X64_SHA256;

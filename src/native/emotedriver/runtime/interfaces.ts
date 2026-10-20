@@ -301,6 +301,21 @@ export interface EmoteClipPlayerAccess {
   isModified(): boolean;
 }
 
+/** Additional clip state used by the exact x64 player's transform and physics calls. */
+export interface EmoteX64ClipPlayerAccess extends EmoteClipPlayerAccess {
+  /** Root dirty byte (+0x340); x64 writes it even when the transform is unchanged. */
+  rootDirty: boolean;
+  smoothing: boolean;
+  readonly ownRotation: boolean;
+  readonly ownRotationAngle: number;
+  setOwnRotation(degrees: number): void;
+  setGrayscale(mode: number, level: number): void;
+  readonly grayscaleMode: number;
+  readonly grayscaleLevel: number;
+  /** World position of a plain layer, or null when no such layer exists. */
+  layerPosition(label: string): {readonly x: number; readonly y: number} | null;
+}
+
 /** Creates the clip for a motion (`MEmotePlayer` vtable[1] 0x1000f160). */
 export type EmoteClipFactory = (
   motion: import('../../../formats/kirikiri/emote-model.js').EmoteMotion,
@@ -393,8 +408,18 @@ export type EmoteControlSetFactory = (
   links: EmoteControlLinks,
 ) => EmoteControlSet;
 
+/** Blink API added by the x64 player image. */
+export interface EmoteX64ControlSet extends EmoteControlSet {
+  setBlinkEnabled(enabled: boolean): void;
+  getBlinkEnabled(): boolean;
+}
+
 /** Player-owned objects controls refer to while loading. */
 export interface EmoteControlLinks {
+  /** Exact driver image; absent keeps the x86 control factory behavior. */
+  readonly driverSha256?: string;
+  /** Process-wide blink and wind generator, supplied by the runtime's device. */
+  readonly random?: () => number;
   /** Transition control (`p+0xe4`) by label, for selector options (0x10019a50). */
   transition(label: string): EmoteSelectorTransition | null;
 }
