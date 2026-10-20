@@ -214,6 +214,8 @@ export interface EmoteVertexGrid {
  * Rust/Wasm with a TypeScript twin of identical output.
  */
 export interface EmoteMeshKernel {
+  /** True for the WebAssembly implementation; false for its TypeScript twin. */
+  readonly accelerated?: boolean;
   /**
    * Evaluates a 4×4 bezier patch (`bp`: 16 control points as 32 floats) on a
    * (columns + 1) × (rows + 1) grid into `out` (x, y pairs).
@@ -242,6 +244,30 @@ export interface EmoteMeshKernel {
    * top-left, top-right, bottom-left and bottom-right x, y pairs.
    */
   subdivideQuad(corners: Float32Array, columns: number, rows: number, out: Float32Array): void;
+}
+
+/** X64 mesh operations used by the layer pass and its compatibility binding. */
+export interface EmoteX64MeshKernel extends EmoteMeshKernel {
+  /** Map x/y pairs in place through a patch; offset counts floats, not points. */
+  mapPatchPoints(points: Float32Array, count: number, patch: Float32Array, offset?: number): void;
+  /** Double products/offsets followed by a float32 point store. */
+  affinePoints(
+    points: Float32Array,
+    count: number,
+    matrix: ArrayLike<number>,
+    x: number,
+    y: number,
+  ): void;
+  /** Transform control points, then evaluate a grid into caller-owned output. */
+  evaluateTransformedPatch(
+    patch: Float32Array,
+    columns: number,
+    rows: number,
+    matrix: ArrayLike<number>,
+    x: number,
+    y: number,
+    out: Float32Array,
+  ): void;
 }
 
 /** Events a clip queues during `advance` (`+0x2ec`) and dispatches to its player (0x10033fe0). */

@@ -30,20 +30,18 @@ import type {PsbValue} from '../../formats/psb/psb.js';
 import {
   DEFAULT_MESH,
   FLT_EPSILON,
-  affineMap,
-  bezierMap,
   lerpAngle,
   lerpColor,
   lerpMesh,
   lerpScalar,
   modulateColor,
-  tessellate,
 } from './mesh.js';
 import {EmoteUnsupportedError, type EmoteClip} from './player.js';
 import {EMOTEDRIVER_X64_SHA256} from './build.js';
 import {FrameSlot, loadHeader, loadContent, EMPTY_PATCH} from './runtime/clip/frame.js';
 import {EmoteMeshCombinators} from './runtime/clip/combinators.js';
-import type {EmoteCombinatorTarget} from './runtime/interfaces.js';
+import type {EmoteCombinatorTarget, EmoteX64MeshKernel} from './runtime/interfaces.js';
+import {createEmoteMeshKernel} from './runtime/mesh/index.js';
 import {ClipParameter} from './runtime/clip/node.js';
 import {composeEmoteMatrix, multiplyEmoteMatrices} from './runtime/clip/matrix.js';
 
@@ -74,7 +72,12 @@ export class EmoteResource {
   readonly zFactor: number = 0;
   private nextNodeId = 1;
 
-  constructor(readonly files: readonly EmoteModel[]) {}
+  constructor(
+    readonly files: readonly EmoteModel[],
+    readonly kernel: EmoteX64MeshKernel = createEmoteMeshKernel({
+      driverSha256: EMOTEDRIVER_X64_SHA256,
+    }),
+  ) {}
 
   /** 0x180031530. */
   findMotion(
@@ -793,6 +796,9 @@ export class EmoteMotionClip implements EmoteClip {
   readonly drawList: EmoteDrawItem[] = [];
   /** +0x4d8 (top). */
   private combinators: EmoteMeshCombinators | null = null;
+  private readonly quadCorners = new Float32Array(8);
+  private readonly mappedPoint = new Float32Array(2);
+  private readonly mappedResult: [number, number] = [0, 0];
   /** +0x1e8 nodes; +0x3c4 type bit set; type lists. */
   nodes: Node[] = [];
   private typeMask = 0;
@@ -1437,7 +1443,7 @@ export class EmoteMotionClip implements EmoteClip {
     const u = f32(f32(n.x + f13) / P.w),
       v = f32(f32(yz + f14) / P.h);
     const pt = new Float32Array([u, v]);
-    bezierMap(pt, 1, ms.bp);
+    this.resource.kernel.mapPatchPoints(pt, 1, ms.bp);
     const ny = f32(P.h * pt[1]! - f14);
     if (P.coordinate === 0) n.y = ny;
     else n.z = ny;
@@ -1447,7 +1453,7 @@ export class EmoteMotionClip implements EmoteClip {
     if (!bAng && !bZoom) return;
     const d = f32(0.0001);
     const q = new Float32Array([u - d, v, u + d, v, u, v - d, u, v + d]);
-    bezierMap(q, 4, ms.bp);
+    this.resource.kernel.mapPatchPoints(q, 4, ms.bp);
     const [xu0, yu0, xu1, yu1, xv0, yv0, xv1, yv1] = q as unknown as [
       number,
       number,
@@ -1729,10 +1735,20 @@ export class EmoteMotionClip implements EmoteClip {
           p01y = f32(n.m11 * h + n.m10 * 0 + ty);
         const p11x = f32(w * n.m00 + n.m01 * h + tx),
           p11y = f32(w * n.m10 + n.m11 * h + ty);
+        const corners = this.quadCorners;
+        corners[0] = p00x;
+        corners[1] = p00y;
+        corners[2] = p10x;
+        corners[3] = p10y;
+        corners[4] = p01x;
+        corners[5] = p01y;
+        corners[6] = p11x;
+        corners[7] = p11y;
         if (!n.meshParent) {
           grid.cols = 1;
           grid.rows = 1;
-          grid.points = new Float32Array([p00x, p00y, p10x, p10y, p01x, p01y, p11x, p11y]);
+          if (grid.points.length !== 8) grid.points = new Float32Array(8);
+          grid.points.set(corners);
         } else {
           let N: number;
           const ratio = this.top.meshDivisionRatio;
@@ -1750,26 +1766,24 @@ export class EmoteMotionClip implements EmoteClip {
             rows = r0 + 1;
           grid.cols = cols;
           grid.rows = rows;
-          const pts = new Float32Array((rows + 1) * (cols + 1) * 2);
-          let o = 0;
-          const dv = f32(1 / rows),
-            du = f32(1 / cols);
-          for (let j = 0; j <= rows; j++) {
-            const v = f32(j * dv),
-              iv = f32(1 - v);
-            for (let i = 0; i <= cols; i++) {
-              const u = f32(i * du),
-                iu = f32(1 - u);
-              pts[o++] = iu * (v * p01x + p00x * iv) + u * (p10x * iv + p11x * v);
-              pts[o++] = (p00y * iv + v * p01y) * iu + (p10y * iv + v * p11y) * u;
-            }
-          }
-          grid.points = pts;
+          const size = (rows + 1) * (cols + 1) * 2;
+          if (grid.points.length !== size) grid.points = new Float32Array(size);
+          this.resource.kernel.subdivideQuad(corners, cols, rows, grid.points);
         }
       } else {
         grid.cols = ms.cols;
         grid.rows = ms.rows;
-        grid.points = tessellate(ms.bp!, ms.cols, ms.rows, ms.ms, tx, ty);
+        const size = (ms.rows + 1) * (ms.cols + 1) * 2;
+        if (grid.points.length !== size) grid.points = new Float32Array(size);
+        this.resource.kernel.evaluateTransformedPatch(
+          ms.bp!,
+          ms.cols,
+          ms.rows,
+          ms.ms,
+          tx,
+          ty,
+          grid.points,
+        );
       }
       // Deformation by the mesh-parent chain; the anchor follows the same chain.
       const count = grid.points.length >> 1;
@@ -1783,8 +1797,14 @@ export class EmoteMotionClip implements EmoteClip {
         while (X) {
           if (X.isDeformer) {
             const xm = X.mstate!;
-            affineMap(grid.points, count, xm.inv, xm.negTx, xm.negTy);
-            bezierMap(grid.points, count, xm.world);
+            this.resource.kernel.deformPoints(
+              xm.world,
+              xm.inv,
+              xm.negTx,
+              xm.negTy,
+              grid.points,
+              count,
+            );
             [ax, ay] = this.mapThrough(X, ax, ay);
           }
           stopX = ax;
@@ -1817,12 +1837,13 @@ export class EmoteMotionClip implements EmoteClip {
     const xm = X.mstate!;
     const px = f32(x + xm.negTx),
       py = f32(y + xm.negTy);
-    const p = new Float32Array([
-      f32(py * xm.inv[1]! + px * xm.inv[0]!),
-      f32(py * xm.inv[3]! + px * xm.inv[2]!),
-    ]);
-    bezierMap(p, 1, xm.world);
-    return [p[0]!, p[1]!];
+    const p = this.mappedPoint;
+    p[0] = f32(py * xm.inv[1]! + px * xm.inv[0]!);
+    p[1] = f32(py * xm.inv[3]! + px * xm.inv[2]!);
+    this.resource.kernel.mapPatchPoints(p, 1, xm.world);
+    this.mappedResult[0] = p[0]!;
+    this.mappedResult[1] = p[1]!;
+    return this.mappedResult;
   }
 
   /** The anchor walk of types 1 and 5. */

@@ -635,3 +635,26 @@ test('matrix composition accepts transform views and caller-owned, aliasable out
   assert.throws(() => composeEmoteMatrix(state, [], output, '3.9.8'), /unsupported DLL build/);
   assert.deepEqual([...output], [42, 42, 42, 42]);
 });
+
+test('x64 mesh backends agree on transformed grids, offset points and double matrix inputs', () => {
+  const js = createEmoteMeshKernel({driverSha256: EMOTEDRIVER_X64_SHA256, wasm: false});
+  const wasm = createEmoteMeshKernel({driverSha256: EMOTEDRIVER_X64_SHA256});
+  assert.equal(js.accelerated, false);
+  const patch = Float32Array.from({length: 32}, (_, i) => f(Math.sin(i * 0.31)));
+  const matrix = new Float64Array([1 + 2 ** -30, -0.25, 0.5, 0.75]);
+  const grids = [];
+  for (const kernel of [js, wasm]) {
+    const out = new Float32Array(6 * 5 * 2);
+    kernel.evaluateTransformedPatch(patch, 5, 4, matrix, 0.1, -0.3, out);
+    const points = new Float32Array([17, 18, 0.25, 0.75, 19, 20]);
+    kernel.mapPatchPoints(points, 1, patch, 2);
+    assert.deepEqual([...points.slice(0, 2)], [17, 18]);
+    assert.deepEqual([...points.slice(4)], [19, 20]);
+    const affine = new Float32Array([0.123, -0.34, 0.81, 0.22]);
+    kernel.affinePoints(affine, 2, matrix, 0.1, -0.2);
+    grids.push([out, points, affine]);
+  }
+  for (let i = 0; i < grids[0].length; i++)
+    assert.deepEqual(new Uint32Array(grids[1][i].buffer), new Uint32Array(grids[0][i].buffer));
+  assert.throws(() => createEmoteMeshKernel({driverSha256: '3.9.8'}), /unsupported DLL build/);
+});

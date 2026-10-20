@@ -1,3 +1,5 @@
+import {createEmoteMeshKernel, bernsteinTableX64} from './runtime/mesh/index.js';
+import type {EmoteX64MeshKernel} from './runtime/interfaces.js';
 import {EMOTEDRIVER_X64_SHA256} from './build.js';
 import {
   lerp as sharedLerp,
@@ -26,60 +28,27 @@ export const DEFAULT_MESH: Float32Array = (() => {
   return m;
 })();
 
+let kernel: EmoteX64MeshKernel | undefined;
+function meshKernel(): EmoteX64MeshKernel {
+  return (kernel ??= createEmoteMeshKernel({driverSha256: EMOTEDRIVER_X64_SHA256}));
+}
 const basisCache = new Map<number, Float32Array>();
 
-/**
- * 0x18002df10: `n + 1` samples of the cubic Bernstein basis at t = i/n, four weights each
- * ([(1−t)³, 3(1−t)²t, 3(1−t)t², t³]).
- */
+/** 0x18002df10: cached compatibility view of the shared x64 Bernstein table. */
 export function bezierBasis(n: number): Float32Array {
-  let b = basisCache.get(n);
-  if (b) return b;
-  b = new Float32Array((n + 1) * 4);
-  for (let i = 0; i <= n; i++) {
-    const t = f32(i / n);
-    const s = f32(1 - t);
-    b[i * 4] = s * s * s;
-    b[i * 4 + 1] = 3 * s * s * t;
-    b[i * 4 + 2] = 3 * s * t * t;
-    b[i * 4 + 3] = t * t * t;
+  let table = basisCache.get(n);
+  if (table) return table;
+  table = bernsteinTableX64(n);
+  if (n <= 1024) {
+    if (basisCache.size === 64) basisCache.delete(basisCache.keys().next().value!);
+    basisCache.set(n, table);
   }
-  basisCache.set(n, b);
-  return b;
+  return table;
 }
 
-function bernstein(t: number, out: Float64Array): void {
-  const s = 1 - t;
-  out[0] = s * s * s;
-  out[1] = 3 * s * s * t;
-  out[2] = 3 * s * t * t;
-  out[3] = t * t * t;
-}
-
-const bu = new Float64Array(4);
-const bv = new Float64Array(4);
-
-/**
- * 0x180058320: maps `count` points (x = u, y = v) in place through the patch `cp`
- * (Σ cp[r·4 + c]·B_c(u)·B_r(v)).
- */
+/** 0x180058320: in-place patch mapping through the shared mesh kernel. */
 export function bezierMap(points: Float32Array, count: number, cp: Float32Array, offset = 0): void {
-  for (let k = 0; k < count; k++) {
-    const o = offset + k * 2;
-    bernstein(points[o]!, bu);
-    bernstein(points[o + 1]!, bv);
-    let x = 0,
-      y = 0;
-    for (let r = 0; r < 4; r++) {
-      for (let c = 0; c < 4; c++) {
-        const w = bu[c]! * bv[r]!;
-        x += cp[(r * 4 + c) * 2]! * w;
-        y += cp[(r * 4 + c) * 2 + 1]! * w;
-      }
-    }
-    points[o] = x;
-    points[o + 1] = y;
-  }
+  meshKernel().mapPatchPoints(points, count, cp, offset);
 }
 
 /** 0x180058320 for one point. */
@@ -97,12 +66,7 @@ export function affineMap(
   ox: number,
   oy: number,
 ): void {
-  for (let k = 0; k < count; k++) {
-    const x = points[k * 2]! + ox,
-      y = points[k * 2 + 1]! + oy;
-    points[k * 2] = m[0]! * x + m[1]! * y;
-    points[k * 2 + 1] = m[2]! * x + m[3]! * y;
-  }
+  meshKernel().affinePoints(points, count, m, ox, oy);
 }
 
 /**
@@ -117,33 +81,8 @@ export function tessellate(
   tx: number,
   ty: number,
 ): Float32Array {
-  const px = new Float64Array(16),
-    py = new Float64Array(16);
-  for (let i = 0; i < 16; i++) {
-    const x = cp[i * 2]!,
-      y = cp[i * 2 + 1]!;
-    px[i] = f32(ms[0]! * x + ms[1]! * y + tx);
-    py[i] = f32(ms[2]! * x + ms[3]! * y + ty);
-  }
-  const bc = bezierBasis(cols),
-    br = bezierBasis(rows);
   const out = new Float32Array((rows + 1) * (cols + 1) * 2);
-  let o = 0;
-  for (let j = 0; j <= rows; j++) {
-    for (let i = 0; i <= cols; i++) {
-      let x = 0,
-        y = 0;
-      for (let r = 0; r < 4; r++) {
-        for (let c = 0; c < 4; c++) {
-          const w = bc[i * 4 + c]! * br[j * 4 + r]!;
-          x += px[r * 4 + c]! * w;
-          y += py[r * 4 + c]! * w;
-        }
-      }
-      out[o++] = x;
-      out[o++] = y;
-    }
-  }
+  meshKernel().evaluateTransformedPatch(cp, cols, rows, ms, tx, ty, out);
   return out;
 }
 

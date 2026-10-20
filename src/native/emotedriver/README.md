@@ -319,3 +319,13 @@ Float32Array storage or a scalar `EmoteMatrixTarget`; the latter keeps the x64
 binding's existing node fields without per-call buffers. X86 retains array
 stores and its degree conversion. X64 retains scalar intermediate values, its
 rounded degree factor and operand order before writing the completed frame.
+
+`createEmoteMeshKernel({driverSha256})` selects the existing vertex kernel's exact
+image variant. X64 uses sequential double products and independent SIMD lanes
+for x/y; the TypeScript twin keeps the same stores. It adds transformed-patch,
+affine and offset point operations through `EmoteX64MeshKernel`. Resources take
+that interface, and the x64 device can receive a kernel when constructed. Clip
+grids and anchor scratch buffers are reused; compatibility helpers in `mesh.ts`
+delegate to the shared kernel. Short patch queries use the TypeScript arithmetic
+to avoid host-copy costs. Factory selection is fixed per image, with the twin
+available on hosts without WebAssembly SIMD.

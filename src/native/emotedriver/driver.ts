@@ -4,6 +4,7 @@ import {readEmoteModel, type EmoteModel} from '../../formats/emote/model.js';
 import {EmoteMotionClip, EmoteResource} from './clip.js';
 import {EmoteRandom} from './controls.js';
 import {EmotePlayer, EmoteUnsupportedError} from './player.js';
+import type {EmoteX64MeshKernel} from './runtime/interfaces.js';
 
 /** An exact `emotedriver.dll` build: its SDK strings and the PSB header filter key. */
 export interface EmoteDriverProfile {
@@ -50,6 +51,7 @@ export class EmoteDevice {
     readonly profile: EmoteDriverProfile,
     seconds: number,
     private readonly cacheSize = 16,
+    private readonly kernel?: EmoteX64MeshKernel,
   ) {
     this.random = new EmoteRandom(seconds);
   }
@@ -77,7 +79,7 @@ export class EmoteDevice {
   /** A player over one motion file; the player selects its base object and motion. */
   createPlayer(models: readonly EmoteModel[]): EmotePlayer {
     if (models.length !== 1) throw new EmoteUnsupportedError('E-mote player over several files');
-    const clip = new EmoteMotionClip(new EmoteResource(models));
+    const clip = new EmoteMotionClip(new EmoteResource(models, this.kernel));
     return new EmotePlayer(models[0]!, clip, {random: this.random});
   }
 }
