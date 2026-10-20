@@ -172,7 +172,7 @@ rotation, retarget retention and queue timing. The x64 compatibility constructor
 in `tween.ts` delegate to these shared implementations.
 
 `runtime/controls/graph.ts` shares path search between the two images. The x86
-loader truncates graph frames to integers; the x64 loader preserves float32
+graph constructor truncates frames to integers; the x64 constructor preserves float32
 frames and rounds backtracking differences before updating path cost. The
 shared follower retains each image's queue timing, retarget behavior and
 overshoot accounting. The x64 names in `controls.ts` delegate to it. Both
@@ -245,3 +245,13 @@ rejected. The default reader retains lazy roots, independent resource views and
 bigint values. `src/formats/psb/psb.ts` supplies the x64 compatibility constructor.
 Build identities and body keys are shared with the format layer's existing
 `psb-filter.ts` table.
+
+Metadata decoding is shared in `src/formats/kirikiri/emote-metadata.ts`, selected
+by the exact driver image. The x64 reader nests its presence gates: `eyeControl`
+enables the following expression controls, `clampControl` enables mirror and
+instant-variable settings, and `timelineControl` enables stereovision, character
+profiles and orbits. Disabled selectors remain raw; immediate controls default
+to the three native face labels. The x86 reader retains its required control
+lists and loop controls. Both metadata readers convert graph frame labels and
+edges to integers and nodes to float32. Diagnostics use `EmoteDiagnosticSink`,
+so readers do not require a particular collector implementation.

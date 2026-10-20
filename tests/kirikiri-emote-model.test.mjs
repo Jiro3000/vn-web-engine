@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {PsbResource} from '../dist/formats/kirikiri/psb.js';
+import {PsbFile, PsbResource} from '../dist/formats/kirikiri/psb.js';
 import {decryptPsbBody} from '../dist/formats/kirikiri/psb-filter.js';
 import {
   EMOTE_MOTION_VERSION,
@@ -9,6 +9,96 @@ import {
   walkEmoteLayers,
 } from '../dist/formats/kirikiri/emote-model.js';
 import {buildPsb, emoteWinTree as winModel, f32, resource} from './kirikiri-psb-fixtures.mjs';
+import {readEmoteMetadata} from '../dist/formats/kirikiri/emote-metadata.js';
+import {EMOTE_DRIVER_X64_SHA256} from '../dist/formats/kirikiri/psb-filter.js';
+
+const metadata = (tree, sha = EMOTE_DRIVER_X64_SHA256, diagnostics = {add() {}}) =>
+  readEmoteMetadata(new PsbFile(buildPsb(tree)).root.metadata, diagnostics, sha);
+
+test('E-mote metadata selects the nested x64 loader by exact image identity', () => {
+  const tree = winModel();
+  delete tree.metadata.eyeControl;
+  for (const key of [
+    'eyebrowControl',
+    'mouthControl',
+    'transitionControl',
+    'clampControl',
+    'mirrorControl',
+    'timelineControl',
+  ])
+    tree.metadata[key] = 'not read';
+  tree.metadata.immediateControl = 'not read';
+  tree.metadata.orbitControl = 'not read';
+  const actual = metadata(tree);
+  assert.deepEqual(actual.eyeControl, []);
+  assert.deepEqual(actual.immediateControl, []);
+  assert.deepEqual(actual.timelineControl, []);
+  assert.deepEqual(actual.orbitControl, []);
+  assert.throws(
+    () => readEmoteMetadata(new PsbFile(buildPsb(tree)).root.metadata, {add() {}}),
+    /'eyeControl'/,
+  );
+  assert.throws(() => metadata(tree, '3.9.8'), /unsupported DLL build/);
+});
+
+test('E-mote x64 metadata gates selectors and loads orbit and profile values', () => {
+  const tree = winModel();
+  tree.metadata.selectorControl = [
+    {enabled: 0},
+    {enabled: 1, label: 'style', optionList: [{label: 'a', offValue: 0, onValue: 1}], extra: 7},
+  ];
+  tree.metadata.orbitControl = [
+    {enabled: 0},
+    {enabled: 1, label: 'orbit', interval: 3.5, tween: 1, orbitFrameList: [0, 2.25], extra: 8},
+  ];
+  tree.metadata.charaProfile = {height: 1.75, pixelMarker: {b: 4, a: 2}};
+  tree.metadata.suitableClearColor = {r: 2.75, g: -3.75, b: 260, a: 'not read'};
+  tree.metadata.eyeControl[0].beginFrame = 1.75;
+  tree.metadata.eyeControl[0].edge[0][0] = -2.75;
+  const actual = metadata(tree);
+  assert.equal(actual.selectorControl[0].enabled, false);
+  assert.equal(actual.selectorControl[1].enabled, true);
+  assert.deepEqual(Object.keys(actual.selectorControl[1].unread), ['extra']);
+  assert.deepEqual(actual.immediateControl, ['face_cheek', 'face_tears', 'face_eye_hi']);
+  assert.deepEqual(actual.charaProfile.markers, [
+    {label: 'a', value: 2},
+    {label: 'b', value: 4},
+  ]);
+  assert.equal(actual.orbitControl[1].interval, 3.5);
+  assert.deepEqual(actual.orbitControl[1].orbitFrameList, [0, 2.25]);
+  assert.deepEqual(actual.suitableClearColor, {r: 2, g: -3, b: 260});
+  assert.equal(actual.eyeControl[0].beginFrame, 1);
+  assert.equal(actual.eyeControl[0].edge[0][0], -2);
+  assert.ok('loopControl' in actual.unread);
+  tree.metadata.immediateControl = [{enabled: 0}, {enabled: 1, label: 'custom'}];
+  assert.deepEqual(metadata(tree).immediateControl, ['custom']);
+  delete tree.metadata.clampControl;
+  tree.metadata.mirrorControl = tree.metadata.timelineControl = 'not read';
+  assert.deepEqual(metadata(tree).timelineControl, []);
+  tree.metadata.clampControl = [];
+  tree.metadata.mirrorControl = {variableMatchList: []};
+  delete tree.metadata.timelineControl;
+  tree.metadata.charaProfile = tree.metadata.orbitControl = 'not read';
+  assert.equal(metadata(tree).charaProfile, null);
+});
+
+test('E-mote metadata reports timeline diagnostics through a replaceable sink', () => {
+  const tree = winModel(),
+    diagnostics = [];
+  tree.metadata.timelineControl[0].variableList[0].frameList[0].content.value = 'string';
+  metadata(tree, EMOTE_DRIVER_X64_SHA256, {add: (...args) => diagnostics.push(args)});
+  assert.deepEqual(diagnostics, [
+    [
+      'abort',
+      '$.metadata.timelineControl[0].variableList[0].frameList[0].content.value',
+      "psb: can't convert value to float.",
+    ],
+  ]);
+  const x86 = readEmoteMetadata(new PsbFile(buildPsb(winModel())).root.metadata, {add() {}});
+  assert.equal(x86.selectorControl, null);
+  assert.ok(!('orbitControl' in x86));
+  assert.ok(!('immediateControl' in x86));
+});
 
 test('E-mote model reads the source, layer tree, keyframes and controls of a win file', () => {
   const model = readEmoteModel(buildPsb(winModel()));
