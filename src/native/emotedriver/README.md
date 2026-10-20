@@ -255,3 +255,10 @@ to the three native face labels. The x86 reader retains its required control
 lists and loop controls. Both metadata readers convert graph frame labels and
 edges to integers and nodes to float32. Diagnostics use `EmoteDiagnosticSink`,
 so readers do not require a particular collector implementation.
+
+The typed model graph is also read in `src/formats/kirikiri/emote-model.ts`.
+Selecting the x64 image adds icon resolution, variable-driven mesh combinators,
+blend parameters and color-presence flags. The x86 result keeps those keys in
+`unread` where appropriate and does not add x64 fields to its object shape.
+`EmoteX64Model` narrows the shared graph interfaces for callers of that image;
+`src/formats/emote/model.ts` supplies the compatibility entry point.

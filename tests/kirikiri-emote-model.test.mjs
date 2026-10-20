@@ -100,6 +100,63 @@ test('E-mote metadata reports timeline diagnostics through a replaceable sink', 
   assert.ok(!('immediateControl' in x86));
 });
 
+test('E-mote x64 model reads blend parameters and color presence without changing x86', () => {
+  const tree = winModel();
+  const head = tree.object.all_parts.motion.base.layer[0].children[0];
+  head.frameList[1].content.mask |= 0x40000000;
+  head.frameList[1].content.bp = 3.25;
+  tree.source.tex.icon.eye.resolution = 0.5;
+  const bytes = buildPsb(tree);
+  const x64 = readEmoteModel(bytes, EMOTE_DRIVER_X64_SHA256);
+  const frame = x64.objects.get('all_parts').motions.get('base').layers[0].children[0].frames[1];
+  assert.equal(frame.content.bmParam, 3.25);
+  assert.equal(frame.content.colorList, true);
+  assert.equal(frame.content.colorKey, true);
+  assert.equal(x64.sources.get('tex').icons.get('eye').resolution, 0.5);
+  const x86 = readEmoteModel(bytes);
+  const oldFrame = x86.objects.get('all_parts').motions.get('base').layers[0].children[0].frames[1];
+  assert.ok(!('bmParam' in oldFrame.content));
+  assert.ok(!('colorList' in oldFrame.content));
+  assert.ok(!('resolution' in x86.sources.get('tex').icons.get('eye')));
+  assert.equal(oldFrame.content.unread.bp, 3.25);
+  assert.equal(x86.sources.get('tex').icons.get('eye').unread.resolution, 0.5);
+  head.frameList[1].content = {mask: 0x40000000, src: 'tex', icon: 'eye', bp: 0.75};
+  const parameterOnly = readEmoteModel(buildPsb(tree), EMOTE_DRIVER_X64_SHA256)
+    .objects.get('all_parts')
+    .motions.get('base').layers[0].children[0].frames[1].content;
+  assert.equal(parameterOnly.bmParam, 0.75);
+  assert.equal(parameterOnly.colorKey, false);
+  assert.deepEqual(parameterOnly.color, [0x808080ff, 0x808080ff, 0x808080ff, 0x808080ff]);
+});
+
+test('E-mote x64 model reads variable-driven mesh combinators only for that image', () => {
+  const tree = winModel();
+  const head = tree.object.all_parts.motion.base.layer[0].children[0];
+  const bytes = new Uint8Array(128),
+    view = new DataView(bytes.buffer);
+  for (let i = 0; i < 32; i++) view.setFloat32(i * 4, i / 4, true);
+  head.meshCombinator = {
+    combinatorList: [
+      {
+        rawMeshList: resource(bytes),
+        variable: {key: 'mesh', rangeBegin: -1, rangeEnd: 1, meshCount: 1},
+      },
+    ],
+  };
+  const input = buildPsb(tree);
+  const x64 = readEmoteModel(input, EMOTE_DRIVER_X64_SHA256)
+    .objects.get('all_parts')
+    .motions.get('base').layers[0].children[0];
+  assert.equal(x64.mesh.combinators[0].raw[31], 7.75);
+  assert.equal(x64.mesh.combinators[0].neutralIndex, -1);
+  assert.ok(!('meshCombinator' in x64.unread));
+  const x86 = readEmoteModel(input).objects.get('all_parts').motions.get('base').layers[0]
+    .children[0];
+  assert.ok(!('combinators' in x86.mesh));
+  assert.ok('meshCombinator' in x86.unread);
+  assert.throws(() => readEmoteModel(input, '3.9.8'), /unsupported DLL build/);
+});
+
 test('E-mote model reads the source, layer tree, keyframes and controls of a win file', () => {
   const model = readEmoteModel(buildPsb(winModel()));
   assert.equal(model.spec, 'win');
