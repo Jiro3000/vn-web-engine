@@ -902,15 +902,15 @@ export class EmoteClip implements EmoteClipDriver, EmoteClipPlayerAccess {
       s.slantY = f(p.slantY + s.slantY);
       return;
     }
-    inheritPartial(s, p, mask, 1);
+    s.inheritTransform(p, mask);
     if (this.independent) {
       computeMatrix(node);
       return;
     }
     const r = root.state;
-    inheritPartial(s, r, mask, -1);
+    s.removeTransform(r, mask);
     computeMatrix(node);
-    inheritPartial(s, r, mask, 1);
+    s.inheritTransform(r, mask);
     multiply(root.matrix, node.matrix, node.matrix);
   }
 
@@ -1257,28 +1257,6 @@ export function computeMatrix(node: EmoteNode): void {
  * The partial-inherit bits of the layer pass: 0x4 flipX, 0x8 flipY (xor), 0x10 angle
  * (add), 0x20/0x40 zoom (multiply), 0x80/0x100 slant (add). `sign` -1 removes `p` again.
  */
-function inheritPartial(
-  s: EmoteNode['state'],
-  p: EmoteNode['state'],
-  mask: number,
-  sign: number,
-): void {
-  if (mask & 0x4) s.flipX = s.flipX !== p.flipX;
-  if (mask & 0x8) s.flipY = s.flipY !== p.flipY;
-  if (sign > 0) {
-    if (mask & 0x10) s.angle = f(p.angle + s.angle);
-    if (mask & 0x20) s.zoomX = f(p.zoomX * s.zoomX);
-    if (mask & 0x40) s.zoomY = f(p.zoomY * s.zoomY);
-    if (mask & 0x80) s.slantX = f(p.slantX + s.slantX);
-    if (mask & 0x100) s.slantY = f(p.slantY + s.slantY);
-  } else {
-    if (mask & 0x10) s.angle = f(s.angle - p.angle);
-    if (mask & 0x20) s.zoomX = f(s.zoomX / p.zoomX);
-    if (mask & 0x40) s.zoomY = f(s.zoomY / p.zoomY);
-    if (mask & 0x80) s.slantX = f(s.slantX - p.slantX);
-    if (mask & 0x100) s.slantY = f(s.slantY - p.slantY);
-  }
-}
 
 /**
  * 0x1003e890: a parent mesh with `meshSyncChildMask` bit 1 moves the child's coordinate

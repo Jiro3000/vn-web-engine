@@ -1516,29 +1516,11 @@ export class EmoteMotionClip implements EmoteClip {
         n.slantY = f32(P.slantY + n.slantY);
       } else {
         const m = n.inherit;
-        if (m & 4) n.flipX = n.flipX !== P.flipX;
-        if (m & 8) n.flipY = n.flipY !== P.flipY;
-        if (m & 0x10) n.angle = f32(P.angle + n.angle);
-        if (m & 0x20) n.zoomX = f32(P.zoomX * n.zoomX);
-        if (m & 0x40) n.zoomY = f32(P.zoomY * n.zoomY);
-        if (m & 0x80) n.slantX = f32(P.slantX + n.slantX);
-        if (m & 0x100) n.slantY = f32(P.slantY + n.slantY);
+        n.inheritTransform(P, m);
         if (!this.independentInherit) {
-          if (m & 4) n.flipX = n.flipX !== root.flipX;
-          if (m & 8) n.flipY = n.flipY !== root.flipY;
-          if (m & 0x10) n.angle = f32(n.angle - root.angle);
-          if (m & 0x20) n.zoomX = f32(n.zoomX / root.zoomX);
-          if (m & 0x40) n.zoomY = f32(n.zoomY / root.zoomY);
-          if (m & 0x80) n.slantX = f32(n.slantX - root.slantX);
-          if (m & 0x100) n.slantY = f32(n.slantY - root.slantY);
+          n.removeTransform(root, m);
           n.computeMatrix();
-          if (m & 4) n.flipX = n.flipX !== root.flipX;
-          if (m & 8) n.flipY = n.flipY !== root.flipY;
-          if (m & 0x10) n.angle = f32(root.angle + n.angle);
-          if (m & 0x20) n.zoomX = f32(root.zoomX * n.zoomX);
-          if (m & 0x40) n.zoomY = f32(root.zoomY * n.zoomY);
-          if (m & 0x80) n.slantX = f32(root.slantX + n.slantX);
-          if (m & 0x100) n.slantY = f32(root.slantY + n.slantY);
+          n.inheritTransform(root, m);
           n.leftMultiply(root);
         } else n.computeMatrix();
       }

@@ -335,3 +335,8 @@ The x64 node extends that state directly and keeps its player/nested-clip
 adjustments in a second shared state; copying overrides uses `copyFrom`.
 `visible` controls drawing and `shown` propagates visibility along the parent
 chain. Matrix interfaces read the shared transform fields without alias getters.
+
+`NodeState.inheritTransform` and `removeTransform` compose or remove angle, zoom, slant and flip
+components selected by a native inheritance mask. Both clip variants use it for
+partial inheritance. Coordinate projection, matrix composition and native
+opacity arithmetic stay with the layer pass that selects their image behavior.

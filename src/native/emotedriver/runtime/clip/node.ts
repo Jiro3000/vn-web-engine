@@ -45,6 +45,27 @@ export class NodeState {
     this.slantY = o.slantY;
     this.opacity = o.opacity;
   }
+  /** Compose only the transform components selected by the native inherit mask. */
+  inheritTransform(p: NodeState, mask: number): void {
+    if (mask & 0x4) this.flipX = this.flipX !== p.flipX;
+    if (mask & 0x8) this.flipY = this.flipY !== p.flipY;
+    if (mask & 0x10) this.angle = Math.fround(p.angle + this.angle);
+    if (mask & 0x20) this.zoomX = Math.fround(p.zoomX * this.zoomX);
+    if (mask & 0x40) this.zoomY = Math.fround(p.zoomY * this.zoomY);
+    if (mask & 0x80) this.slantX = Math.fround(p.slantX + this.slantX);
+    if (mask & 0x100) this.slantY = Math.fround(p.slantY + this.slantY);
+  }
+
+  /** Remove selected parent components before evaluating in the root frame. */
+  removeTransform(p: NodeState, mask: number): void {
+    if (mask & 0x4) this.flipX = this.flipX !== p.flipX;
+    if (mask & 0x8) this.flipY = this.flipY !== p.flipY;
+    if (mask & 0x10) this.angle = Math.fround(this.angle - p.angle);
+    if (mask & 0x20) this.zoomX = Math.fround(this.zoomX / p.zoomX);
+    if (mask & 0x40) this.zoomY = Math.fround(this.zoomY / p.zoomY);
+    if (mask & 0x80) this.slantX = Math.fround(this.slantX - p.slantX);
+    if (mask & 0x100) this.slantY = Math.fround(this.slantY - p.slantY);
+  }
 }
 
 /**
