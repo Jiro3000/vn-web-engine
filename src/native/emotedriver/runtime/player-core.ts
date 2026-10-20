@@ -605,14 +605,14 @@ export class EmotePlayerCore {
           sum[1] = f32(f32(values[1]! * total) + sum[1]!);
         });
         this.outerRotateTween.step(total);
-        for (const [i, force] of [
-          this.outerForces.bust,
-          this.outerForces.hair,
-          this.outerForces.parts,
-        ].entries()) {
-          force.x = this.forceSums[i]![0]!;
-          force.y = this.forceSums[i]![1]!;
-        }
+        const forces = this.outerForces,
+          sums = this.forceSums;
+        forces.bust.x = sums[0][0]!;
+        forces.bust.y = sums[0][1]!;
+        forces.hair.x = sums[1][0]!;
+        forces.hair.y = sums[1][1]!;
+        forces.parts.x = sums[2][0]!;
+        forces.parts.y = sums[2][1]!;
       }
       this.controls.stepPhysics(host, total);
     }
