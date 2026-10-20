@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import {
   EmoteBust,
   EmoteMouth,
+  EmoteOrbit,
   EmotePendulum,
   EmoteWind,
   EmoteXorshift128,
@@ -198,6 +199,17 @@ test('loop control cycles its transition list', () => {
     out.push(h.value('L'));
   }
   assert.deepEqual(out, [2.5, 5, 7.5, 10, 5, 0, 2.5]);
+});
+
+test('x64 orbit emits variable requests at value boundaries and wraps its interval', () => {
+  const settings = {label: 'orbit', interval: 8, tween: true, orbitFrameList: [0, 10, 20, 30]};
+  const orbit = new EmoteOrbit(settings, EMOTEDRIVER_X64_SHA256);
+  assert.deepEqual(orbit.step(1), {value: 0, frames: 2});
+  assert.equal(orbit.step(1), null);
+  assert.deepEqual(orbit.step(1), {value: 10, frames: 2});
+  assert.deepEqual(orbit.step(2), {value: 20, frames: 2});
+  assert.deepEqual(orbit.step(4), {value: 0, frames: 2});
+  assert.throws(() => new EmoteOrbit(settings, 'unknown'), /unsupported DLL build/);
 });
 
 test('selector drives transition tweens to on and off values', () => {

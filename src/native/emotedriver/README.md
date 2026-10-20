@@ -214,3 +214,9 @@ semantics behind the same control API. The x64 player sets, steps and skips that
 control instead of accessing its concrete tween. State assignment copies queued
 requests within the same DLL build. The x64 update pair is borrowed to avoid a
 per-substep allocation.
+
+`runtime/controls/orbit.ts` implements the x64 orbit value scheduler. Its first
+call selects the first value without consuming elapsed time; later calls emit
+variable requests only when the interval crosses a value boundary. It preserves
+float interval wrapping and tween duration and rejects DLL builds without this
+control.

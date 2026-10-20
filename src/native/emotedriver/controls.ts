@@ -1,3 +1,4 @@
+import {EmoteOrbit, type EmoteOrbitSettings} from './runtime/controls/orbit.js';
 import {EmoteMouth} from './runtime/controls/mouth.js';
 import {EmoteSelector, type EmoteSelectorTransition} from './runtime/controls/selector.js';
 import {EmoteEye} from './runtime/controls/eye.js';
@@ -13,8 +14,6 @@ import {EmoteXorshift128} from './runtime/controls/random.js';
  * `orbitControl`. Each control is stepped from the Progress sub-step loop (0x18000d3f0) and
  * writes its result into the player's variable values.
  */
-
-const f32 = Math.fround;
 
 /**
  * Process-wide generator of 0x180028950, an xorshift variant whose last word mixes
@@ -156,50 +155,11 @@ export class EmoteSelectorControl extends EmoteSelector {
   }
 }
 
-export interface EmoteOrbitSettings {
-  readonly label: string;
-  readonly interval: number;
-  readonly tween: boolean;
-  readonly orbitFrameList: readonly number[];
-}
+export type {EmoteOrbitSettings} from './runtime/controls/orbit.js';
 
-/** `orbitControl` entry (+0x290, 0x48 bytes, loader 0x18001b190): a cycling value list. */
-export class EmoteOrbitControl {
-  readonly label: string;
-  private reset = true;
-  private time = 0;
-  private readonly interval: number;
-  private readonly tween: boolean;
-  private readonly values: readonly number[];
-
-  constructor(s: EmoteOrbitSettings) {
-    this.label = s.label;
-    this.interval = f32(s.interval);
-    this.tween = s.tween;
-    this.values = s.orbitFrameList.map(f32);
+/** Compatibility constructor for x64 orbit controls. */
+export class EmoteOrbitControl extends EmoteOrbit {
+  constructor(settings: EmoteOrbitSettings) {
+    super(settings, EMOTEDRIVER_X64_SHA256);
   }
-
-  /** Returns the `setVariable` call the step makes, or null. */
-  step(frames: number): {value: number; frames: number} | null {
-    const n = this.values.length;
-    let index: number;
-    if (this.reset) {
-      this.time = 0;
-      this.reset = false;
-      index = 0;
-    } else {
-      const old = this.time;
-      this.time = fmodf(f32(old + f32(frames)), this.interval);
-      index = Math.trunc(f32(f32(this.time * n) / this.interval));
-      if (index === Math.trunc(f32(f32(n * old) / this.interval))) return null;
-    }
-    const value = this.values[index] ?? 0;
-    const fr = this.tween ? f32(f32(f32(this.interval / n) * (index + 1)) - this.time) : 0;
-    return {value, frames: fr};
-  }
-}
-
-/** CRT `fmodf`. */
-export function fmodf(x: number, y: number): number {
-  return f32(f32(x) % f32(y));
 }

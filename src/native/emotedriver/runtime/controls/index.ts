@@ -20,6 +20,7 @@ export {EmoteEyebrow} from './eyebrow.js';
 export {EmoteGraph, EmoteGraphFollower, type EmoteGraphSegment} from './graph.js';
 export {EmoteLoop} from './loop.js';
 export {EmoteMouth} from './mouth.js';
+export {EmoteOrbit, type EmoteOrbitSettings} from './orbit.js';
 export {EmotePendulum, type EmotePendulumOutput} from './pendulum.js';
 export {EmoteXorshift128} from './random.js';
 export {EmoteSelector, type EmoteSelectorTransition} from './selector.js';
