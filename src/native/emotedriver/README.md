@@ -301,8 +301,11 @@ mesh and nested-motion state for every frame, uses infinite time past the frame
 list and retains the reader's scalar/list color distinction. It normalizes
 full-range RGB channels with the native blend-mode flag and defers curve/path
 errors until interpolation. X86 retains its lazy content loading, curve cursors,
-last-frame reads and stale mesh/motion structs. The x64 draw-list binding reads
-its immutable compatibility view from one shared scratch slot per layer.
+last-frame reads and stale mesh/motion structs. X64 clips keep a read-only sequence
+of these same slots per layer, cached by layer identity; scans move references
+without copying frame fields into another representation. Absent x64 source/icon
+keys remain null, distinct from an explicitly empty key. The x86 reader keeps its
+empty-string defaults.
 
 `runtime/clip/combinators.ts` owns x64 variable-driven patch combinations. It
 reads `EmoteCombinatorVariables` and writes through `EmoteCombinatorTarget`,

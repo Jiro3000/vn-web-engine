@@ -764,3 +764,45 @@ test('clip interfaces copy borrowed root transforms before the caller reuses the
     assert.deepEqual(point(), {x: 7.5, y: -4.25});
   }
 });
+
+test('x64 cached keyframes retain source identity across seeks and independent players', () => {
+  const m = motion([
+    layer('image', [
+      frame(0, 2, {src: null, icon: '', bmParam: 0}),
+      frame(5, 2, {src: '', icon: '', bmParam: 0}),
+      frame(10, 2, {src: 'tex', icon: 'i', bmParam: 0}),
+      frame(15, 2, {src: null, icon: '', bmParam: 0}),
+      frame(20, 0),
+    ]),
+  ]);
+  const file = model({o: {m}});
+  const source = file.sources.get('tex');
+  source.icons.get('i').resolution = 1;
+  file.sources.set('', {...source, icons: new Map([['', source.icons.get('i')]])});
+  const resource = new EmoteResource([file]);
+  const players = [new EmoteMotionClip(resource), new EmoteMotionClip(resource)];
+  for (const clip of players) {
+    clip.selectObject('o');
+    clip.setMotion('m');
+    clip.rootVisible = true;
+  }
+  const at = (clip, time) => {
+    clip.seekTo(time);
+    clip.progress(0);
+    return clip.drawList.map((item) => ({
+      source: item.source,
+      width: item.width,
+      height: item.height,
+      colors: [...item.colors],
+    }));
+  };
+  assert.deepEqual(at(players[0], 0), [], 'a missing source must not resolve the empty key');
+  const emptyKey = at(players[0], 5);
+  assert.equal(emptyKey.length, 1);
+  assert.equal(emptyKey[0].source, '');
+  assert.equal(at(players[1], 10)[0].source, 'tex');
+  assert.deepEqual(at(players[0], 5), emptyKey, 'another player must not alter cached frames');
+  assert.equal(at(players[0], 10)[0].source, 'tex');
+  assert.deepEqual(at(players[0], 5), emptyKey, 'backward seeks must retain earlier content');
+  assert.deepEqual(at(players[0], 15), []);
+});

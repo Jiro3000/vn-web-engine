@@ -12,6 +12,8 @@ import {CurveCursor} from './interpolate.js';
  * SHA-256 `a3b693b6…5e70b3a86`). A node holds the current frame and the next one; node
  * +0x250 selects which slot is current. The header (0x10035f50) and the content (0x100362b0)
  * load separately: scans load headers while stepping and contents once at the end.
+ * The x64 image uses the same value storage for its eagerly loaded, read-only per-layer
+ * sequences; x86 keeps two mutable slots whose content can survive header changes.
  */
 export class FrameSlot {
   readonly driverSha256: string;
@@ -32,8 +34,9 @@ export class FrameSlot {
   singleColor = true;
   colorUnset = true;
   /** +0x18/+0x1c `src`, `icon`. */
-  src = '';
-  icon = '';
+  /** X86 normalizes absent keys to empty strings; x64 retains null keys. */
+  src: string | null = '';
+  icon: string | null = '';
   /** +0x20 `bm`, +0x24/+0x28 `ox`/`oy`, +0x2c..+0x38 corner colours, +0x3c `opa`. */
   bm = 0x10;
   bmParam = 0;
@@ -44,7 +47,7 @@ export class FrameSlot {
   readonly colors = new Uint32Array(4);
   opa = 255;
   /** +0x40..+0x48 `coord`, +0x4c/+0x4d `fx`/`fy`, +0x50 `angle`, +0x54.. `zx`,`zy`,`sx`,`sy`. */
-  readonly coord = [0, 0, 0];
+  readonly coord: [number, number, number] = [0, 0, 0];
   fx = false;
   fy = false;
   angle = 0;
@@ -260,7 +263,7 @@ function loadX64Header(slot: FrameSlot, frame: EmoteFrame | undefined, index: nu
   slot.tween = false;
   slot.loaded = false;
   slot.singleColor = slot.colorUnset = true;
-  slot.src = slot.icon = '';
+  slot.src = slot.icon = null;
   slot.act = null;
   slot.bm = 0x10;
   slot.bmParam = slot.ox = slot.oy = 0;
@@ -304,8 +307,8 @@ function loadX64Content(slot: FrameSlot, c: EmoteFrameContent): void {
   }
   slot.singleColor = !c.colorList;
   slot.colorUnset = !c.colorKey;
-  slot.src = c.src ?? '';
-  slot.icon = c.icon ?? '';
+  slot.src = c.src;
+  slot.icon = c.icon;
   slot.bmParam = f(c.bmParam!);
   slot.ox = f(c.ox);
   slot.oy = f(c.oy);

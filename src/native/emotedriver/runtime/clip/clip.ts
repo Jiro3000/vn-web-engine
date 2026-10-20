@@ -627,10 +627,11 @@ export class EmoteClip extends EmoteClipTime implements EmoteClipDriver, EmoteCl
     if (slot.empty) return;
     const r = node.resolved;
     if (r.src === slot.src && r.icon === slot.icon) return;
-    r.src = slot.src;
-    r.icon = slot.icon;
+    // This clip uses the x86 slot loader, which normalizes null keys to strings.
+    r.src = slot.src!;
+    r.icon = slot.icon!;
     if (slot.src === 'blank') {
-      const parts = slot.icon.split(':');
+      const parts = slot.icon!.split(':');
       r.drawable = true;
       r.hidden = true;
       r.attr = 0;
@@ -640,10 +641,10 @@ export class EmoteClip extends EmoteClipTime implements EmoteClipDriver, EmoteCl
       r.originX = f(atof(parts[2]));
       r.originY = f(atof(parts[3]));
     } else {
-      const icon = this.model.sources.get(slot.src)?.icons.get(slot.icon);
+      const icon = this.model.sources.get(slot.src!)?.icons.get(slot.icon!);
       r.hidden = false;
       r.drawable = icon !== undefined;
-      r.texture = this.textureIndexOf(slot.src);
+      r.texture = this.textureIndexOf(slot.src!);
       if (icon) {
         r.attr = icon.attr;
         r.originX = f(icon.originX);
@@ -818,8 +819,8 @@ export class EmoteClip extends EmoteClipTime implements EmoteClipDriver, EmoteCl
           continue;
         }
         if (node.framesDirty || flags & 5) {
-          child.selectObject(cur.src);
-          child.selectMotion(cur.icon, cur.motion.flags);
+          child.selectObject(cur.src!);
+          child.selectMotion(cur.icon!, cur.motion.flags);
           if (child.playing && child.jumped) {
             let t = f(f(time - cur.time) + cur.motion.timeOffset);
             if (this.step < 0 && child.loopTime > 0 && t > child.lastTime)

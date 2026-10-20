@@ -19,7 +19,6 @@
  */
 
 import type {
-  EmoteFrame,
   EmoteIcon,
   EmoteLayer,
   EmoteModel,
@@ -134,151 +133,29 @@ export class EmoteResource {
 // ---------------------------------------------------------------------------------------
 // Keyframe states
 
-interface FrameMotion {
-  readonly flags: number;
-  readonly dt: number;
-  readonly dofst: number;
-  readonly docmpl: boolean;
-  readonly timeOffset: number;
-}
-
-const DEFAULT_MOTION: FrameMotion = Object.freeze({
-  flags: 0,
-  dt: 1,
-  dofst: 0,
-  docmpl: false,
-  timeOffset: 0,
-});
-
-/** The keyframe state (0x118 bytes at node +0xe0 / +0x1f8), derived once per keyframe. */
-interface FrameState {
-  readonly index: number;
-  readonly time: number;
-  readonly ti: number;
-  readonly mask: number;
-  /** +0x10: frame type 0. */
-  readonly noContent: boolean;
-  /** +0x11: frame type 3 interpolates towards the next keyframe. */
-  readonly interp: boolean;
-  /** +0x12: the colour was a scalar. */
-  readonly scalarColor: boolean;
-  /** +0x13: no colour key. */
-  readonly defaultColor: boolean;
-  readonly src: string | null;
-  readonly icon: string | null;
-  readonly act: string | null;
-  readonly bm: number;
-  readonly bmParam: number;
-  readonly ox: number;
-  readonly oy: number;
-  readonly color: readonly [number, number, number, number];
-  readonly opa: number;
-  readonly coord: readonly [number, number, number];
-  readonly fx: boolean;
-  readonly fy: boolean;
-  readonly angle: number;
-  readonly zx: number;
-  readonly zy: number;
-  readonly sx: number;
-  readonly sy: number;
-  /** Any easing index or `cp` path; interpolating such a frame is unsupported. */
-  readonly eased: boolean;
-  readonly bp: Float32Array | null;
-  readonly motion: FrameMotion;
-}
-
-const EMPTY_STATE: Omit<FrameState, 'index' | 'time'> = Object.freeze({
-  ti: 0,
-  mask: 0,
-  noContent: true,
-  interp: false,
-  scalarColor: true,
-  defaultColor: true,
-  src: null,
-  icon: null,
-  act: null,
-  bm: 0x10,
-  bmParam: 0,
-  ox: 0,
-  oy: 0,
-  color: Object.freeze([NEUTRAL, NEUTRAL, NEUTRAL, NEUTRAL] as const),
-  opa: 255,
-  coord: Object.freeze([0, 0, 0] as const),
-  fx: false,
-  fy: false,
-  angle: 0,
-  zx: 1,
-  zy: 1,
-  sx: 0,
-  sy: 0,
-  eased: false,
-  bp: null,
-  motion: DEFAULT_MOTION,
-});
+/** Loaded x64 keyframes use the shared slot storage; scans only change node references. */
+type FrameState = Readonly<FrameSlot>;
 
 /** A keyframe past the end of the list: never reached, never interpolated towards. */
 function missingState(index: number): FrameState {
-  return {...EMPTY_STATE, index, time: Infinity};
-}
-
-const FRAME_EASING = {easing: null};
-
-/** The legacy draw-list view of the shared x64 keyframe slot. */
-function buildState(frames: readonly EmoteFrame[], index: number, slot: FrameSlot): FrameState {
-  const frame = frames[index]!;
-  loadHeader(slot, frames, index);
-  loadContent(slot, frames, 0, FRAME_EASING);
-  if (slot.empty) return {...EMPTY_STATE, index, time: slot.time};
-  const motion: FrameMotion = frame.content!.motion
-    ? Object.freeze({
-        flags: slot.motion.flags,
-        dt: slot.motion.dt,
-        dofst: slot.motion.dofst,
-        docmpl: slot.motion.docmpl,
-        timeOffset: slot.motion.timeOffset,
-      })
-    : DEFAULT_MOTION;
-  return Object.freeze({
-    index,
-    time: slot.time,
-    ti: slot.ti,
-    mask: slot.mask,
-    noContent: slot.empty,
-    interp: slot.tween,
-    scalarColor: slot.singleColor,
-    defaultColor: slot.colorUnset,
-    src: frame.content!.src,
-    icon: frame.content!.icon,
-    act: slot.act,
-    bm: slot.bm,
-    bmParam: slot.bmParam,
-    ox: slot.ox,
-    oy: slot.oy,
-    color: [...slot.colors] as [number, number, number, number],
-    opa: slot.opa,
-    coord: [...slot.coord] as [number, number, number],
-    fx: slot.fx,
-    fy: slot.fy,
-    angle: slot.angle,
-    zx: slot.zx,
-    zy: slot.zy,
-    sx: slot.sx,
-    sy: slot.sy,
-    eased: slot.eased,
-    bp: slot.meshPatch === EMPTY_PATCH ? null : slot.meshPatch,
-    motion,
-  });
+  const slot = new FrameSlot(EMOTEDRIVER_X64_SHA256);
+  loadHeader(slot, [], index);
+  return slot;
 }
 
 const stateCache = new WeakMap<EmoteLayer, readonly FrameState[]>();
 function layerStates(layer: EmoteLayer): readonly FrameState[] {
-  let s = stateCache.get(layer);
-  if (!s) {
-    const slot = new FrameSlot(EMOTEDRIVER_X64_SHA256);
-    s = Object.freeze(layer.frames.map((_, index) => buildState(layer.frames, index, slot)));
-    stateCache.set(layer, s);
+  let states = stateCache.get(layer);
+  if (!states) {
+    states = layer.frames.map((_, index) => {
+      const slot = new FrameSlot(EMOTEDRIVER_X64_SHA256);
+      loadHeader(slot, layer.frames, index);
+      loadContent(slot, layer.frames, layer.type, {easing: null});
+      return slot;
+    });
+    stateCache.set(layer, states);
   }
-  return s;
+  return states;
 }
 
 // ---------------------------------------------------------------------------------------
@@ -583,7 +460,7 @@ class Node extends NodeState implements EmoteCombinatorTarget {
 
   /** 0x18003dc40. */
   resolveSource(clip: EmoteMotionClip, s: FrameState): void {
-    if (s.noContent) return;
+    if (s.empty) return;
     if (this.srcKey === s.src && this.iconKey === s.icon) return;
     this.srcKey = s.src;
     this.iconKey = s.icon;
@@ -1269,8 +1146,8 @@ export class EmoteMotionClip
     force ||= n.dirty;
     const A = n.a,
       B = n.b;
-    if (A.noContent) return force;
-    if (A.interp && !B.noContent) {
+    if (A.empty) return force;
+    if (A.tween && !B.empty) {
       let e = f32(this.timeOf(n) - A.time);
       if (A.ti) e = f32(Math.trunc(f32(e / A.ti)) * A.ti);
       e = f32(e / f32(B.time - A.time));
@@ -1297,14 +1174,19 @@ export class EmoteMotionClip
         }
         const o = f32(f32(A.opa * ie) + f32(B.opa * e));
         n.opacity = Math.trunc(o < 0 ? Math.ceil(o - 0.5) : Math.floor(o + 0.5)) >>> 0;
-        n.scalarColor = A.scalarColor && B.scalarColor;
-        n.defaultColor = A.defaultColor && B.defaultColor;
+        n.scalarColor = A.singleColor && B.singleColor;
+        n.defaultColor = A.colorUnset && B.colorUnset;
         if (!n.scalarColor)
-          for (let i = 0; i < 4; i++) n.colors[i] = lerpColor(A.color[i]!, B.color[i]!, e);
-        else n.colors.fill(lerpColor(A.color[0], B.color[0], e));
+          for (let i = 0; i < 4; i++) n.colors[i] = lerpColor(A.colors[i]!, B.colors[i]!, e);
+        else n.colors.fill(lerpColor(A.colors[0]!, B.colors[0]!, e));
         if (n.meshTransform === 1 && !n.combinatorOwned && n.mstate) {
-          if (!A.bp && !B.bp) n.mstate.bp = null;
-          else n.mstate.bp = lerpMesh(A.bp ?? DEFAULT_MESH, B.bp ?? DEFAULT_MESH, e);
+          if (A.meshPatch === EMPTY_PATCH && B.meshPatch === EMPTY_PATCH) n.mstate.bp = null;
+          else
+            n.mstate.bp = lerpMesh(
+              A.meshPatch === EMPTY_PATCH ? DEFAULT_MESH : A.meshPatch,
+              B.meshPatch === EMPTY_PATCH ? DEFAULT_MESH : B.meshPatch,
+              e,
+            );
         }
         return true;
       }
@@ -1323,11 +1205,12 @@ export class EmoteMotionClip
     n.x = A.coord[0];
     n.y = A.coord[1];
     n.z = A.coord[2];
-    for (let i = 0; i < 4; i++) n.colors[i] = A.color[i]!;
+    for (let i = 0; i < 4; i++) n.colors[i] = A.colors[i]!;
     n.opacity = A.opa;
-    n.scalarColor = A.scalarColor;
-    n.defaultColor = A.defaultColor;
-    if (n.meshTransform === 1 && !n.combinatorOwned && n.mstate) n.mstate.bp = A.bp;
+    n.scalarColor = A.singleColor;
+    n.defaultColor = A.colorUnset;
+    if (n.meshTransform === 1 && !n.combinatorOwned && n.mstate)
+      n.mstate.bp = A.meshPatch === EMPTY_PATCH ? null : A.meshPatch;
     return true;
   }
 
@@ -1413,7 +1296,7 @@ export class EmoteMotionClip
       const force = this.forceCalc || P.changed || D.changed || a.changed;
       if (!this.interpolate(n, force)) continue;
       a.changed = false;
-      if (n.a.noContent) {
+      if (n.a.empty) {
         n.changed = P.changed || n.dirty;
         n.visible = false;
         n.flipX = P.flipX;
@@ -1498,7 +1381,7 @@ export class EmoteMotionClip
       const D = nodes[n.parent]!;
       n.stencilParent = D.stencilVisible ? D : D.stencilParent;
       n.stencilVisible = !(
-        n.a.noContent ||
+        n.a.empty ||
         n.stencilType === 0 ||
         !n.visible ||
         (((0x1801 >> n.type) & 1) !== 0 && !n.found)
@@ -1540,7 +1423,7 @@ export class EmoteMotionClip
       n.modified = true;
       n.breaksChain = mp !== null && (n.inherit & 0x2000000) === 0;
       n.isDeformer =
-        !n.a.noContent &&
+        !n.a.empty &&
         n.meshTransform !== 0 &&
         ms !== null &&
         ms.bp !== null &&
@@ -1557,7 +1440,7 @@ export class EmoteMotionClip
         }
         n.anchor[2] = n.z;
       }
-      if (n.a.noContent || !((0x1c01 >> n.type) & 1) || !n.found) continue;
+      if (n.a.empty || !((0x1c01 >> n.type) & 1) || !n.found) continue;
       let bpSrc: Float32Array | null;
       if (!n.meshCombine) bpSrc = ms?.bp ?? null;
       else if (!n.isDeformer) bpSrc = null;
@@ -1764,7 +1647,7 @@ export class EmoteMotionClip
       const A = n.a,
         B = n.b;
       if (n.changed || flags) {
-        if (A.noContent || !A.src) {
+        if (A.empty || !A.src) {
           sub.playing = false;
           sub.reset();
           sub.motionName = '';
@@ -1787,7 +1670,7 @@ export class EmoteMotionClip
         const dt = A.motion.dt;
         if (dt !== 0) {
           let dofst = A.motion.dofst;
-          if (A.motion.docmpl && A.interp && !B.noContent && B.motion.dt !== 0) {
+          if (A.motion.docmpl && A.tween && !B.empty && B.motion.dt !== 0) {
             const e = f32(f32(tClamped - A.time) / f32(B.time - A.time));
             dofst = lerpAngle(dofst, B.motion.dofst, e);
           }
