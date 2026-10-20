@@ -414,7 +414,7 @@ export class EmotePlayer implements EmotePhysicsHost {
         const m = this.mouths[ref.index];
         if (!m) return;
         if (label === m.label) m.shape = Math.trunc(v);
-        else m.talk.set([v], fr, power, this.queuing);
+        else m.set(v, fr, power, this.queuing);
         return;
       }
       case Kind.Transition: {
@@ -708,7 +708,7 @@ export class EmotePlayer implements EmotePhysicsHost {
     if (this.transitions.some((t) => t.tween.busy && free(t.label))) return true;
     if (this.eyes.some((e) => e.walker.busy && free(e.label))) return true;
     if (this.eyebrows.some((e) => e.walker.busy && free(e.label))) return true;
-    if (this.mouths.some((m) => m.talk.busy && free(m.label) && free(m.talkLabel))) return true;
+    if (this.mouths.some((m) => m.busy && free(m.label) && free(m.talkLabel))) return true;
     return false;
   }
 
@@ -738,7 +738,7 @@ export class EmotePlayer implements EmotePhysicsHost {
     for (const p of this.parts) p.reset(this);
     for (const e of this.eyes) e.walker.skip();
     for (const e of this.eyebrows) e.walker.skip();
-    for (const m of this.mouths) m.talk.skip();
+    for (const m of this.mouths) m.skip();
     for (const s of this.selectors) s.skip();
     for (const t of this.transitions) t.tween.skip();
     this.coord.skip();
@@ -776,8 +776,8 @@ export class EmotePlayer implements EmotePhysicsHost {
       for (const e of this.eyes) this.values.set(e.label, e.step(h));
       for (const e of this.eyebrows) this.values.set(e.label, e.step(h));
       for (const m of this.mouths) {
-        const talk = m.talk.step(h)[0]!;
-        this.values.set(m.label, m.shape);
+        const [shape, talk] = m.update(h);
+        this.values.set(m.label, shape);
         this.values.set(m.talkLabel, talk);
       }
       for (const s of this.selectors) this.values.set(s.label, s.step(h));

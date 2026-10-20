@@ -1,3 +1,4 @@
+import {EmoteMouth} from './runtime/controls/mouth.js';
 import {EmoteSelector, type EmoteSelectorTransition} from './runtime/controls/selector.js';
 import {EmoteEye} from './runtime/controls/eye.js';
 import {EmoteEyebrow} from './runtime/controls/eyebrow.js';
@@ -12,8 +13,6 @@ import {EmoteXorshift128} from './runtime/controls/random.js';
  * `orbitControl`. Each control is stepped from the Progress sub-step loop (0x18000d3f0) and
  * writes its result into the player's variable values.
  */
-
-import {EmoteTween} from './tween.js';
 
 const f32 = Math.fround;
 
@@ -116,15 +115,16 @@ export class EmoteEyebrowControl extends EmoteEyebrow {
  * `mouthControl` entry (+0x168, 0x48 bytes): `label` holds an integer shape index, `talkLabel`
  * a tweened opening.
  */
-export class EmoteMouthControl {
-  /** Object +0x34. */
-  shape = 0;
-  readonly talk = new EmoteTween(1);
-
-  constructor(
-    readonly label: string,
-    readonly talkLabel: string,
-  ) {}
+export class EmoteMouthControl extends EmoteMouth {
+  constructor(label: string, talkLabel: string) {
+    super({enabled: true, label, talkLabel, beginFrame: 0, unread: {}}, EMOTEDRIVER_X64_SHA256);
+  }
+  get shape(): number {
+    return this.frame;
+  }
+  set shape(value: number) {
+    this.frame = value;
+  }
 }
 
 export interface EmoteSelectorOption {

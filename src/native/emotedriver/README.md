@@ -208,3 +208,9 @@ Both pendulum paths sample `EmoteWindField` through its query interface.
 builds. The x64 path preserves rounded rod constraints, force/damping stores,
 the one-bit-smaller bend period and zero output for an invalid vertical joint
 index. Its entry driver keeps the native output-label mapping and substeps.
+
+`runtime/controls/mouth.ts` keeps the x86 lip-sync easing and the x64 value-tween
+semantics behind the same control API. The x64 player sets, steps and skips that
+control instead of accessing its concrete tween. State assignment copies queued
+requests within the same DLL build. The x64 update pair is borrowed to avoid a
+per-substep allocation.

@@ -6,6 +6,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   EmoteBust,
+  EmoteMouth,
   EmotePendulum,
   EmoteWind,
   EmoteXorshift128,
@@ -162,6 +163,21 @@ test('mouth: frame variable and eased talk level', () => {
   controls.skip();
   controls.stepMouths(h, 1);
   assert.equal(h.value('t'), 0.5);
+});
+
+test('x64 mouth uses immediate value-tween progress and copies queued state', () => {
+  const settings = {enabled: true, label: 'shape', talkLabel: 'talk', beginFrame: 2.75, unread: {}};
+  const mouth = new EmoteMouth(settings, EMOTEDRIVER_X64_SHA256);
+  mouth.set(1, 4, 1, false);
+  assert.deepEqual(mouth.update(1), [2, 0.25]);
+  mouth.set(0, 2, 1, true);
+  const copy = new EmoteMouth(settings, EMOTEDRIVER_X64_SHA256);
+  copy.assign(mouth);
+  assert.deepEqual(copy.update(1), mouth.update(1));
+  copy.skip();
+  assert.deepEqual(copy.update(0), [2, 0]);
+  assert.equal(copy.busy, false);
+  assert.throws(() => copy.assign(new EmoteMouth(settings)), /between DLL builds/);
 });
 
 test('loop control cycles its transition list', () => {
