@@ -17,6 +17,8 @@ import type {
 import {fmodf} from './controls.js';
 import {EMOTEDRIVER_X64_SHA256} from './build.js';
 import {EmoteWind as SharedWind} from './runtime/controls/wind.js';
+import {EmoteBust as SharedBust} from './runtime/controls/bust.js';
+import type {EmoteWindField} from './runtime/interfaces.js';
 
 const f32 = Math.fround;
 /** Sub-step limit 1.1 (0x181fcd558), `FLT_EPSILON` (0x181fcd510). */
@@ -50,7 +52,7 @@ export interface EmotePhysicsHost {
   readonly bustScale: number;
   readonly hairScale: number;
   readonly partsScale: number;
-  readonly wind: EmoteWind | null;
+  readonly wind: EmoteWindField | null;
   setValue(label: string, value: number): void;
 }
 
@@ -58,126 +60,21 @@ function atanOutput(x: number): number {
   return f32(f32(Math.atan(f32(x))) / OUTPUT_UNIT);
 }
 
-class BustSpring {
-  /** +0x1c: the next step re-anchors the target offset. */
-  reset = true;
-  /** +0x20 target, +0x2c offset, +0x38 position, +0x44 velocity, +0x50 vertical offset. */
-  tx = 0;
-  ty = 0;
-  tz = 0;
-  ox = 0;
-  oy = 0;
-  px = 0;
-  py = 0;
-  pz = 0;
-  vx = 0;
-  vy = 0;
-  vz = 0;
-  ofs = 0;
-
-  constructor(
-    private readonly gravity: number,
-    private readonly spring: number,
-    private readonly friction: number,
-    private readonly scaleX: number,
-    private readonly scaleY: number,
-  ) {}
-
-  /** 0x180027be0. */
-  step(x: number, y: number, dt: number, scale: number, angle: number): [number, number] {
-    let ax: number, ay: number;
-    if (!this.reset) {
-      ax = f32(x + this.ox);
-      ay = f32(y + this.oy);
-      this.tx = ax;
-      this.ty = ay;
-    } else {
-      ax = this.tx;
-      ay = this.ty;
-      this.reset = false;
-      this.ox = f32(ax - x);
-      this.oy = f32(ay - y);
-    }
-    const a = f32(-angle);
-    const s = f32(Math.sin(a)),
-      c = f32(Math.cos(a));
-    const gyc = f32(c * GY),
-      gxc = f32(c * GX),
-      gys = f32(s * GY),
-      gxs = f32(s * GX);
-    const kg = f32(dt * this.gravity),
-      ks = f32(dt * this.spring),
-      kf = f32(dt * this.friction);
-    let vx = f32(f32(f32(ax - this.px) * ks) + this.vx);
-    this.vx = vx;
-    vx = f32(f32(f32(gxc - gys) * kg) + vx);
-    let vz = f32(f32(f32(f32(this.tz - this.pz) * ks) + this.vz) + f32(kg * 0));
-    let vy = f32(f32(f32(f32(ay - this.py) * ks) + this.vy) + f32(f32(gyc + gxs) * kg));
-    vx = f32(vx - f32(vx * kf));
-    vy = f32(vy - f32(vy * kf));
-    vz = f32(vz - f32(vz * kf));
-    this.vx = vx;
-    this.vy = vy;
-    this.vz = vz;
-    this.px = f32(f32(vx * dt) + this.px);
-    this.py = f32(f32(vy * dt) + this.py);
-    this.pz = f32(f32(vz * dt) + this.pz);
-    const lr = atanOutput(
-      f32(
-        f32(f32(f32(-f32(f32(this.tx - this.px) * scale)) * this.scaleX) * OUTPUT_GAIN) *
-          OUTPUT_UNIT,
-      ),
-    );
-    const ud = atanOutput(
-      f32(
-        f32(
-          f32(f32(f32(-f32(f32(this.ty - this.py) * scale)) - this.ofs) * this.scaleY) *
-            OUTPUT_GAIN,
-        ) * OUTPUT_UNIT,
-      ),
-    );
-    return [lr, ud];
-  }
-}
-
 /** `bustControl` entry (+0xf0, 0xa0 bytes; loader 0x180011690, step 0x180012580). */
 export class EmoteBust {
-  private readonly spring: BustSpring;
+  private readonly spring: SharedBust;
   /** +0x8: the next step is the first after a reset. */
   private first = true;
   private prevX = 0;
   private prevY = 0;
 
   constructor(readonly control: EmoteBustControl) {
-    this.spring = new BustSpring(
-      f32(control.gravity),
-      f32(control.spring),
-      f32(control.friction),
-      f32(control.scale_x),
-      f32(control.scale_y),
-    );
-    this.load();
-  }
-
-  private load(): void {
-    const {op, p, pv, ofs} = this.control.param;
-    const s = this.spring;
-    s.tx = f32(op.x);
-    s.ty = f32(op.y);
-    s.tz = f32(op.z);
-    s.px = f32(p.x);
-    s.py = f32(p.y);
-    s.pz = f32(p.z);
-    s.vx = f32(pv.x);
-    s.vy = f32(pv.y);
-    s.vz = f32(pv.z);
-    s.ofs = f32(ofs);
+    this.spring = new SharedBust(control, EMOTEDRIVER_X64_SHA256);
   }
 
   /** 0x180012490 (one entry): restores the loaded state and zeroes the outputs. */
   reset(host: EmotePhysicsHost): void {
-    this.load();
-    this.spring.reset = true;
+    this.spring.reset();
     this.first = true;
     host.setValue(this.control.var_lr, 0);
     host.setValue(this.control.var_ud, 0);
@@ -197,7 +94,7 @@ export class EmoteBust {
           const h = f32(dt - t) <= SUB_STEP ? f32(dt - t) : SUB_STEP;
           t = f32(t + h);
           const r = f32(t / dt);
-          out = this.spring.step(
+          out = this.spring.update(
             f32(f32(f32(1 - r) * this.prevX) + f32(r * x)),
             f32(f32(f32(1 - r) * this.prevY) + f32(r * y)),
             h,
@@ -208,7 +105,7 @@ export class EmoteBust {
       }
     } else {
       this.first = false;
-      out = this.spring.step(x, y, 0, f32(host.bustScale), f32(host.physicsAngle));
+      out = this.spring.update(x, y, 0, f32(host.bustScale), f32(host.physicsAngle));
     }
     this.prevX = x;
     this.prevY = y;
@@ -248,7 +145,7 @@ class Pendulum {
   ofs = 0;
   bendPhase = 0;
   bendAmp = 0;
-  wind: EmoteWind | null = null;
+  wind: EmoteWindField | null = null;
 
   constructor(readonly c: EmotePendulumControl) {}
 
@@ -321,7 +218,7 @@ class Pendulum {
       let vy = f32(f32(f32(cy + sx) * kg) + v.y);
       let vz = f32(f32(kg * 0) + v.z);
       if (this.wind) {
-        const w = this.wind.forceAt(m.x);
+        const w = this.wind.query(m.x);
         vx = f32(f32(w * 1) + vx);
         vy = f32(f32(w * 0) + vy);
         vz = f32(f32(w * -0) + vz);

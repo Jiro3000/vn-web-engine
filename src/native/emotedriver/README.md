@@ -197,3 +197,9 @@ float stores in power interpolation, position advance and window bounds. The
 pendulum samples wind through `EmoteWindField`, so a different field implementation
 can supply the same acceleration query. The x64 class in `physics.ts` delegates
 to this shared wind and retains its signed-speed restart semantics.
+
+`runtime/controls/bust.ts` shares spring state and reset behavior. Its exact-build
+variant preserves the x64 intermediate float stores, damping and soft-angle
+mapping. The x64 entry driver in `physics.ts` retains its zero-time first anchor
+and interpolated substeps, with accumulated outer forces applied to the base.
+Both pendulum paths sample `EmoteWindField` through its query interface.
