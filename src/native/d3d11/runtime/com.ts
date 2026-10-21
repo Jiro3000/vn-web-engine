@@ -72,6 +72,11 @@ export class D3d11Object implements IUnknown {
     return {hr: 0, value: this};
   }
 
+  /** Internal validity check; released interfaces are never accepted by device factories. */
+  get live(): boolean {
+    return !this.destroyed && !this.lifetime.closed;
+  }
+
   addRef(): number {
     if (this.destroyed || this.lifetime.closed) return 0;
     this.lifetime.acquireExternal();

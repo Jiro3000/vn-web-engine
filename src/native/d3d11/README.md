@@ -40,7 +40,13 @@ The format subset is RGBA8, BGRA8, R8, A8, R8G8, BC1/2/3/7, D32 and D24S8. Compr
 base dimensions are multiples of four; lower mip storage rounds up to whole blocks.
 Typeless formats, multisampling, cube/shared resources and structured/raw buffers are
 rejected. Storage is bounded to256 MiB per resource. Validation-only creation allocates
-no interface. These implementation components do not yet register a rendering device.
+no interface. `runtime/views.ts` provides typed single-texture shader-resource,
+render-target and depth/stencil views. Views hold resources through binding references;
+`getResource` and `getDevice` return owned references. Mip ranges and descriptors are
+copied, and factories reject foreign-device resources and missing bind flags. Array
+views and typeless reinterpretation are outside the declared view subset.
+
+These implementation components do not yet register a rendering device.
 GPU writes and readback must use the same resource storage when that device is wired.
 
 Resource rules follow Microsoft's [Map values](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/ne-d3d11-d3d11_map),

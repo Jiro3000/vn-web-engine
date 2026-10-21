@@ -6,6 +6,11 @@ import {
   createTexture2DStorage,
 } from '../dist/native/d3d11/runtime/resources.js';
 import {gpuTextureByteLength} from '../dist/graphics/block-texture.js';
+import {
+  createShaderResourceViewStorage,
+  createRenderTargetViewStorage,
+  createDepthStencilViewStorage,
+} from '../dist/native/d3d11/runtime/views.js';
 
 const INVALID = 0x80070057 | 0;
 const bufferDesc = (changes = {}) => ({
@@ -30,9 +35,9 @@ const textureDesc = (changes = {}) => ({
   miscFlags: 0,
   ...changes,
 });
-function owner() {
+function owner(disposeBindings = () => {}) {
   const destroyed = [];
-  const lifetime = new D3d11Lifetime(() => {});
+  const lifetime = new D3d11Lifetime(disposeBindings);
   const device = new D3d11Object(lifetime, [], () => destroyed.push('device'), true);
   return {lifetime, device, destroyed, resourceDestroyed: (resource) => destroyed.push(resource)};
 }
@@ -274,4 +279,119 @@ test('D3D11 dynamic texture discard retires all old mip contents without permitt
   assert.ok(texture.storage(1).bytes.every((byte) => byte === 0));
   texture.release();
   host.device.release();
+});
+
+test('D3D11 texture views retain resources, copy descriptors and return independently owned resource handles', () => {
+  const host = owner();
+  const texture = createTexture2DStorage(
+    host,
+    textureDesc({bindFlags: 0x28, mipLevels: 0}),
+    null,
+  ).value;
+  const desc = {
+    format: 61,
+    viewDimension: 4,
+    texture2D: {mostDetailedMip: 1, mipLevels: 0xffffffff},
+  };
+  const srv = createShaderResourceViewStorage(host, texture, desc).value;
+  const rtv = createRenderTargetViewStorage(host, texture, null).value;
+  desc.texture2D.mostDetailedMip = 2;
+  const returned = srv.getDesc();
+  returned.texture2D.mostDetailedMip = 2;
+  assert.deepEqual(srv.getDesc(), {
+    format: 61,
+    viewDimension: 4,
+    texture2D: {mostDetailedMip: 1, mipLevels: 2},
+  });
+  assert.deepEqual(rtv.getDesc(), {format: 61, viewDimension: 4, texture2D: {mipSlice: 0}});
+  assert.equal(srv.queryInterface('dfdba067-0b8d-4865-875b-d7b4516cc164').hr, 0x80004002 | 0);
+  const base = srv.queryInterface('839d1216-bb2e-412b-b7f4-a9dbebe08ed1');
+  assert.equal(base.value, srv);
+  base.value.release();
+  texture.release();
+  host.device.release();
+  const alias = srv.getResource();
+  assert.equal(alias, texture);
+  assert.equal(srv.getDevice(), host.device);
+  host.device.release();
+  srv.release();
+  rtv.release();
+  assert.deepEqual(host.destroyed, []);
+  alias.release();
+  assert.deepEqual(host.destroyed, [texture, 'device']);
+  assert.throws(() => srv.getResource(), /released/);
+});
+
+test('D3D11 final caller release breaks a context/view/resource binding cycle', () => {
+  let binding;
+  const host = owner(() => binding.releaseBinding());
+  const texture = createTexture2DStorage(host, textureDesc(), null).value;
+  const srv = createShaderResourceViewStorage(host, texture, null).value;
+  binding = srv;
+  srv.retainBinding();
+  texture.release();
+  srv.release();
+  assert.deepEqual(host.destroyed, []);
+  host.device.release();
+  assert.deepEqual(host.destroyed, [texture, 'device']);
+  assert.equal(srv.live, false);
+});
+
+test('D3D11 view validation rejects foreign resources, missing bindings and incompatible mip/format descriptions', () => {
+  const host = owner(),
+    foreign = owner();
+  const texture = createTexture2DStorage(host, textureDesc(), null).value;
+  assert.deepEqual(createShaderResourceViewStorage(host, texture, null, true), {
+    hr: 1,
+    value: null,
+  });
+  assert.equal(createShaderResourceViewStorage(foreign, texture, null).hr, INVALID);
+  assert.equal(createRenderTargetViewStorage(host, texture, null).hr, INVALID);
+  assert.equal(createDepthStencilViewStorage(host, texture, null).hr, INVALID);
+  for (const desc of [
+    {format: 65, viewDimension: 4, texture2D: {mostDetailedMip: 0, mipLevels: 1}},
+    {format: 61, viewDimension: 5, texture2D: {mostDetailedMip: 0, mipLevels: 1}},
+    {format: 61, viewDimension: 4, texture2D: {mostDetailedMip: 1, mipLevels: 1}},
+    {format: 61, viewDimension: 4, texture2D: {mostDetailedMip: 0, mipLevels: 0}},
+  ])
+    assert.equal(createShaderResourceViewStorage(host, texture, desc, true).hr, INVALID);
+  const depth = createTexture2DStorage(
+    host,
+    textureDesc({format: 45, bindFlags: 0x40}),
+    null,
+  ).value;
+  const dsv = createDepthStencilViewStorage(host, depth, null).value;
+  assert.deepEqual(dsv.getDesc(), {
+    format: 45,
+    viewDimension: 3,
+    flags: 0,
+    texture2D: {mipSlice: 0},
+  });
+  assert.equal(
+    createDepthStencilViewStorage(host, depth, {...dsv.getDesc(), flags: 4}, true).hr,
+    INVALID,
+  );
+  assert.equal(
+    createDepthStencilViewStorage(host, depth, {...dsv.getDesc(), texture2D: {mipSlice: 1}}, true)
+      .hr,
+    INVALID,
+  );
+  const colors = createTexture2DStorage(host, textureDesc({bindFlags: 0x28}), null).value;
+  assert.equal(
+    createRenderTargetViewStorage(
+      host,
+      colors,
+      {format: 61, viewDimension: 4, texture2D: {mipSlice: 1}},
+      true,
+    ).hr,
+    INVALID,
+  );
+  texture.release();
+  assert.equal(createShaderResourceViewStorage(host, texture, null).hr, INVALID);
+  colors.release();
+  dsv.release();
+  depth.release();
+  host.device.release();
+  foreign.device.release();
+  assert.equal(host.lifetime.closed, true);
 });
