@@ -2,6 +2,7 @@ import type {
   EmoteFrame,
   EmoteFrameContent,
   EmoteModel,
+  EmoteX64Layer,
 } from '../../../../formats/kirikiri/emote-model.js';
 import {emoteBuild, EMOTEDRIVER_X86_SHA256, EMOTEDRIVER_X64_SHA256} from '../../build.js';
 import {EmoteUnsupportedError} from '../errors.js';
@@ -343,4 +344,29 @@ function loadX64Content(slot: FrameSlot, c: EmoteFrameContent): void {
     motion.docmpl = m.docmpl ?? false;
     motion.timeOffset = f(m.timeOffset);
   }
+}
+
+/** Loaded x64 keyframes use the shared slot storage; scans only change node references. */
+export type EmoteScalarFrameState = Readonly<FrameSlot>;
+
+/** A keyframe past the end of the list: never reached, never interpolated towards. */
+export function missingScalarState(index: number): EmoteScalarFrameState {
+  const slot = new FrameSlot(EMOTEDRIVER_X64_SHA256);
+  loadHeader(slot, [], index);
+  return slot;
+}
+
+const stateCache = new WeakMap<EmoteX64Layer, readonly EmoteScalarFrameState[]>();
+export function scalarLayerStates(layer: EmoteX64Layer): readonly EmoteScalarFrameState[] {
+  let states = stateCache.get(layer);
+  if (!states) {
+    states = layer.frames.map((_, index) => {
+      const slot = new FrameSlot(EMOTEDRIVER_X64_SHA256);
+      loadHeader(slot, layer.frames, index);
+      loadContent(slot, layer.frames, layer.type, {easing: null});
+      return slot;
+    });
+    stateCache.set(layer, states);
+  }
+  return states;
 }

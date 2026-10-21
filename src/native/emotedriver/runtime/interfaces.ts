@@ -1,3 +1,5 @@
+import type {EmoteX64Model} from '../../../formats/kirikiri/emote-model.js';
+
 /**
  * Boundaries between the parts of the TypeScript `emotedriver.dll` implementation. They
  * follow the native class split (SHA-256 `a3b693b6…5e70b3a86`):
@@ -9,6 +11,9 @@
  *   bust/hair/parts physics;
  * - mesh kernel (`mesh/`): bezier-patch and mesh vertex evaluation;
  * - renderer (`MMotionRenderer`, `MMotionDevice`, `render/`): draw list and D3D9 calls.
+ *
+ * Scalar record offsets refer to the x64 image SHA-256
+ * `80d28bd088dda8e97c7c47a9c664e55159f70505b0f9fde3158d8ce2a3e1e051`.
  *
  * These interfaces are internal to `src/native/emotedriver/`; the library's public surface
  * is `../contract.ts`. Extend them additively.
@@ -494,4 +499,58 @@ export interface EmoteScalarVertexGrid {
   cols: number;
   rows: number;
   points: Float32Array;
+}
+
+/** Draw item (0xa8 bytes at node +0x3b8), the renderer's input. */
+export interface EmoteScalarDrawItem {
+  /** +4: blank icons are skipped by the renderer. */
+  blank: boolean;
+  /** +8. */
+  nodeId: number;
+  /** +0xc: clip +0x250. */
+  clipFlags: number;
+  /** +0x10/+0x14: blend mode and parameter. */
+  bm: number;
+  bmParam: number;
+  /** +0x18/+0x1c: clip grayscale mode (5 or 0) and level. */
+  grayscaleMode: number;
+  grayscaleLevel: number;
+  /** +0x20/+0x24: clip +0x1d8/+0x1dc. */
+  effectMode: number;
+  effectLevel: number;
+  /** +0x28. */
+  z: number;
+  /** +0x2c: texture (source) index in `file`. */
+  texIndex: number;
+  file: EmoteX64Model | null;
+  source: string | null;
+  /** +0x30: icon attributes; bit 1 opaque, bit 2 uniform per-vertex colour. */
+  attr: number;
+  /** +0x34..+0x40: icon rectangle in texels. */
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  /** +0x44. */
+  opa: number;
+  /** +0x48..+0x54: corner colours (alpha in the low byte, 0x80 = 1.0 for colour bytes). */
+  readonly colors: Uint32Array;
+  /** +0x58. */
+  objTriPriority: number;
+  /** +0x5c. */
+  coordinate: number;
+  /** +0x68: the mesh state when the layer deforms itself. */
+  mesh: EmoteScalarMeshState | null;
+  /** +0x70. */
+  grid: EmoteScalarVertexGrid | null;
+  /** +0x78. */
+  stencilType: number;
+  /** +0x7c..+0x84. */
+  alphaTest: boolean;
+  alphaScale: number;
+  alphaOffset: number;
+  /** +0x88: the stencil parent's item. */
+  stencilParent: EmoteScalarDrawItem | null;
+  /** +0x90: composite list (stencil masks and nested-clip items). */
+  readonly composite: EmoteScalarDrawItem[];
 }

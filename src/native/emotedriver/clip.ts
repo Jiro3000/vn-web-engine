@@ -36,12 +36,12 @@ import {
 } from './mesh.js';
 import {EmoteUnsupportedError, type EmoteClip} from './player.js';
 import {EMOTEDRIVER_X64_SHA256} from './build.js';
-import {FrameSlot, loadHeader, loadContent, EMPTY_PATCH} from './runtime/clip/frame.js';
+import {EMPTY_PATCH} from './runtime/clip/frame.js';
 import {EmoteMeshCombinators} from './runtime/clip/combinators.js';
 import type {
+  EmoteScalarDrawItem,
   EmoteScalarMeshState,
   EmoteScalarVertexGrid,
-  EmoteCombinatorTarget,
   EmoteX64MeshKernel,
   EmoteClipDriver,
   EmoteX64ClipPlayerAccess,
@@ -50,27 +50,21 @@ import type {
   EmoteClipEvent as DriverClipEvent,
 } from './runtime/interfaces.js';
 import {createEmoteMeshKernel} from './runtime/mesh/index.js';
-import {ClipParameter, NodeState} from './runtime/clip/node.js';
+import {ClipParameter, EmoteScalarNode} from './runtime/clip/node.js';
 import {EmoteClipTime} from './runtime/clip/time.js';
-import {EmoteLayerPass, type EmoteScalarLayerTransform} from './runtime/clip/layer.js';
-import {
-  EmoteSourceResolver,
-  type EmoteSourceIcon,
-  type EmoteSourceTarget,
-} from './runtime/clip/source.js';
+import {EmoteLayerPass} from './runtime/clip/layer.js';
+import {EmoteSourceResolver, type EmoteSourceIcon} from './runtime/clip/source.js';
 import {
   meshPassX64,
   shapePassX64,
   syncToParentMeshX64,
   type EmoteScalarVertexHost,
 } from './runtime/clip/vertices.js';
-import {composeEmoteMatrix} from './runtime/clip/matrix.js';
 
 const f32 = Math.fround;
 const NEUTRAL = 0x808080ff;
 const DEG = f32((Math.PI * 2) / 360);
 const RAD_TO_DEG = f32(360 / f32(Math.PI * 2));
-const SUPPORTED_TYPES: ReadonlySet<number> = new Set([0, 1, 2, 3, 12]);
 
 // ---------------------------------------------------------------------------------------
 // Resource
@@ -129,31 +123,6 @@ export class EmoteResource {
 // ---------------------------------------------------------------------------------------
 // Keyframe states
 
-/** Loaded x64 keyframes use the shared slot storage; scans only change node references. */
-type FrameState = Readonly<FrameSlot>;
-
-/** A keyframe past the end of the list: never reached, never interpolated towards. */
-function missingState(index: number): FrameState {
-  const slot = new FrameSlot(EMOTEDRIVER_X64_SHA256);
-  loadHeader(slot, [], index);
-  return slot;
-}
-
-const stateCache = new WeakMap<EmoteLayer, readonly FrameState[]>();
-function layerStates(layer: EmoteLayer): readonly FrameState[] {
-  let states = stateCache.get(layer);
-  if (!states) {
-    states = layer.frames.map((_, index) => {
-      const slot = new FrameSlot(EMOTEDRIVER_X64_SHA256);
-      loadHeader(slot, layer.frames, index);
-      loadContent(slot, layer.frames, layer.type, {easing: null});
-      return slot;
-    });
-    stateCache.set(layer, states);
-  }
-  return states;
-}
-
 // ---------------------------------------------------------------------------------------
 // Nodes
 
@@ -161,94 +130,7 @@ function layerStates(layer: EmoteLayer): readonly FrameState[] {
 export type EmoteMeshState = EmoteScalarMeshState;
 export type EmoteVertexGrid = EmoteScalarVertexGrid;
 
-/** Draw item (0xa8 bytes at node +0x3b8), the renderer's input. */
-export interface EmoteDrawItem {
-  /** +4: blank icons are skipped by the renderer. */
-  blank: boolean;
-  /** +8. */
-  nodeId: number;
-  /** +0xc: clip +0x250. */
-  clipFlags: number;
-  /** +0x10/+0x14: blend mode and parameter. */
-  bm: number;
-  bmParam: number;
-  /** +0x18/+0x1c: clip grayscale mode (5 or 0) and level. */
-  grayscaleMode: number;
-  grayscaleLevel: number;
-  /** +0x20/+0x24: clip +0x1d8/+0x1dc. */
-  effectMode: number;
-  effectLevel: number;
-  /** +0x28. */
-  z: number;
-  /** +0x2c: texture (source) index in `file`. */
-  texIndex: number;
-  file: EmoteModel | null;
-  source: string | null;
-  /** +0x30: icon attributes; bit 1 opaque, bit 2 uniform per-vertex colour. */
-  attr: number;
-  /** +0x34..+0x40: icon rectangle in texels. */
-  left: number;
-  top: number;
-  width: number;
-  height: number;
-  /** +0x44. */
-  opa: number;
-  /** +0x48..+0x54: corner colours (alpha in the low byte, 0x80 = 1.0 for colour bytes). */
-  readonly colors: Uint32Array;
-  /** +0x58. */
-  objTriPriority: number;
-  /** +0x5c. */
-  coordinate: number;
-  /** +0x68: the mesh state when the layer deforms itself. */
-  mesh: EmoteMeshState | null;
-  /** +0x70. */
-  grid: EmoteVertexGrid | null;
-  /** +0x78. */
-  stencilType: number;
-  /** +0x7c..+0x84. */
-  alphaTest: boolean;
-  alphaScale: number;
-  alphaOffset: number;
-  /** +0x88: the stencil parent's item. */
-  stencilParent: EmoteDrawItem | null;
-  /** +0x90: composite list (stencil masks and nested-clip items). */
-  readonly composite: EmoteDrawItem[];
-}
-
-function newDrawItem(): EmoteDrawItem {
-  return {
-    blank: false,
-    nodeId: 0,
-    clipFlags: 0,
-    bm: 0,
-    bmParam: 0,
-    grayscaleMode: 0,
-    grayscaleLevel: 0,
-    effectMode: 0,
-    effectLevel: 1,
-    z: 0,
-    texIndex: 0,
-    file: null,
-    source: null,
-    attr: 0,
-    left: 0,
-    top: 0,
-    width: 0,
-    height: 0,
-    opa: 255,
-    colors: new Uint32Array(4),
-    objTriPriority: 0,
-    coordinate: 0,
-    mesh: null,
-    grid: null,
-    stencilType: 0,
-    alphaTest: false,
-    alphaScale: 1,
-    alphaOffset: 0,
-    stencilParent: null,
-    composite: [],
-  };
-}
+export type EmoteDrawItem = EmoteScalarDrawItem;
 
 /** Parameter (0x38 bytes at clip +0x418). */
 class Param extends ClipParameter {
@@ -267,221 +149,9 @@ class Param extends ClipParameter {
   }
 }
 
-/** Layer node (0x3d0 bytes). */
-class Node
-  extends NodeState
-  implements EmoteCombinatorTarget, EmoteSourceTarget<EmoteModel>, EmoteScalarLayerTransform
-{
-  readonly layer: EmoteLayer | null;
-  readonly index: number;
-  readonly parent: number;
-  readonly id: number;
-  readonly type: number;
-  readonly inheritMask: number;
-  coordinate: number;
-  transformOrder: readonly number[];
-  readonly stencilType: number;
-  readonly meshKind: number;
-  readonly meshCombine: boolean;
-  readonly syncChildMask: number;
-  readonly division: number;
-  readonly hasCombinator: boolean;
-  /** Payload +8: a combinator owns the patch. */
-  combinatorOwned = false;
-  readonly mstate: EmoteMeshState | null;
-  readonly param: Param | null;
-  readonly states: readonly FrameState[];
-  cur: FrameState;
-  next: FrameState;
-  /** +0x34, +0x35, +0x40. */
-  framesDirty = false;
-  modified = false;
-  prevE = 0;
-  /** +0x38/+0x39 colour flags, +0x68 colours. */
-  scalarColor = true;
-  defaultColor = true;
-  readonly colors = new Uint32Array([NEUTRAL, NEUTRAL, NEUTRAL, NEUTRAL]);
-  /** +0x78..+0x84. */
-  m00 = 1;
-  m01 = 0;
-  m10 = 0;
-  m11 = 1;
-  setMatrix(m00: number, m01: number, m10: number, m11: number): void {
-    this.m00 = m00;
-    this.m01 = m01;
-    this.m10 = m10;
-    this.m11 = m11;
-  }
-  /** +0x88 previous position / velocity, +0x94 anchor. */
-  readonly vel = new Float32Array(3);
-  readonly anchor = new Float32Array(3);
-  /** Source block +0xa0..+0xd8 and the resolved keys. */
-  drawable = false;
-  hidden = false;
-  texture = 0;
-  attr = 0;
-  left = 0;
-  top = 0;
-  w = 0;
-  h = 0;
-  originX = 0;
-  originY = 0;
-  resolution = 1;
-  file: EmoteModel | null = null;
-  source: string | null = null;
-  srcKey: string | null | undefined = undefined;
-  iconKey: string | null | undefined = undefined;
-  /** Overrides +0x340..+0x368; evaluated fields use the shared state above. */
-  readonly adjust = new NodeState();
-  /** +0x388..+0x398. */
-  isDeformer = false;
-  breaksChain = false;
-  meshParent: Node | null = null;
-  meshParentId = 0;
-  /** +0x39c..+0x3c0. */
-  maskLayer = false;
-  stencilVisible = false;
-  stencilParent: Node | null = null;
-  drawn = false;
-  readonly item: EmoteDrawItem | null;
-  grid: EmoteVertexGrid | null = null;
-  /** Type 3 payload. */
-  sub: EmoteMotionClip | null = null;
-  /** Type 12 payload: the composite mask nodes. */
-  masks: Node[] = [];
-  /** Type 1 payload (shape info). */
-  readonly shapeInfo: number[] | null;
-
-  constructor(
-    clip: EmoteMotionClip,
-    layer: EmoteLayer | null,
-    index: number,
-    parent: number,
-    param: Param | null,
-  ) {
-    super();
-    this.layer = layer;
-    this.index = index;
-    this.parent = parent;
-    this.id = clip.resource.allocateNodeId();
-    this.param = param;
-    if (!layer) {
-      this.type = 0;
-      this.inheritMask = 0;
-      this.coordinate = 0;
-      this.transformOrder = [0, 3, 2, 1];
-      this.stencilType = 0;
-      this.meshKind = 0;
-      this.meshCombine = false;
-      this.syncChildMask = 0;
-      this.division = 0;
-      this.hasCombinator = false;
-      this.mstate = null;
-      this.states = [];
-      this.adjust.shown = true;
-      this.item = null;
-      this.shapeInfo = null;
-    } else {
-      if (!SUPPORTED_TYPES.has(layer.type))
-        throw new EmoteUnsupportedError(`layer type ${layer.type}`);
-      if (layer.groundCorrection) throw new EmoteUnsupportedError('ground correction');
-      this.type = layer.type;
-      this.inheritMask = layer.inheritMask >>> 0;
-      this.coordinate = layer.coordinate;
-      this.transformOrder = layer.transformOrder;
-      this.stencilType = layer.stencilType;
-      this.meshKind = layer.meshTransform;
-      const mesh = layer.meshTransform !== 0 ? layer.mesh : null;
-      this.meshCombine = mesh?.combine ?? false;
-      this.syncChildMask = mesh?.syncChildMask ?? 0;
-      this.division = mesh?.division ?? 0;
-      this.hasCombinator = mesh?.combinators != null;
-      this.mstate =
-        layer.meshTransform === 1
-          ? {
-              cols: 1,
-              rows: 1,
-              bp: null,
-              ms: new Float32Array(4),
-              world: new Float32Array(32),
-              inv: new Float32Array(4),
-              negTx: 0,
-              negTy: 0,
-            }
-          : null;
-      this.states = layerStates(layer);
-      this.item = (0x1409 >> layer.type) & 1 ? newDrawItem() : null;
-      this.shapeInfo = layer.type === 1 ? [0, 0, 0, 0, 0, 0, 0, 0, 0] : null;
-    }
-    this.cur = this.stateAt(0);
-    this.next = this.stateAt(1);
-  }
-
-  get meshType(): number {
-    return this.meshKind;
-  }
-
-  applyCombinatorPatch(patch: Float32Array | null): void {
-    if (!this.mstate) return;
-    this.framesDirty = true;
-    this.combinatorOwned = true;
-    this.mstate.bp = patch === null ? null : Float32Array.from(patch);
-  }
-
-  stateAt(i: number): FrameState {
-    return i < this.states.length ? this.states[i]! : missingState(i);
-  }
-
-  get count(): number {
-    return this.states.length;
-  }
-
-  /** 0x18003dc40. */
-  resolveSource(clip: EmoteMotionClip, s: FrameState): void {
-    if (s.empty) return;
-    if (this.srcKey === s.src && this.iconKey === s.icon) return;
-    if (!clip.resource.sources.resolve(this, s, clip.file)) return;
-    if (this.meshKind === 1 && this.mstate) {
-      const n = Math.trunc(f32(this.division * clip.top.meshDivisionRatio));
-      const sum = (this.w + this.h) >>> 0;
-      let c0 = sum ? Math.floor(((this.w * n) >>> 0) / sum) : 0;
-      let r0 = (n - c0) >>> 0;
-      if (c0 === 0) c0 = 1;
-      if (r0 === 0) r0 = 1;
-      this.mstate.cols = c0 + 1;
-      this.mstate.rows = r0 + 1;
-    }
-  }
-
-  setSourceSize(width: number, height: number): void {
-    this.w = width;
-    this.h = height;
-  }
-
-  setSourceRect(left: number, top: number, width: number, height: number): void {
-    this.left = left;
-    this.top = top;
-    this.w = width | 0;
-    this.h = height | 0;
-  }
-
-  /** Overrides into the info block (root, 0x180043010 step 3). */
-  copyOverridesToInfo(): void {
-    this.copyFrom(this.adjust);
-  }
-
-  /** 0x180041de0: local matrix in the layer's transform order. */
-  computeMatrix(): void {
-    composeEmoteMatrix(this, this.transformOrder, this, EMOTEDRIVER_X64_SHA256);
-  }
-
-  copyMatrix(src: Node): void {
-    this.m00 = src.m00;
-    this.m01 = src.m01;
-    this.m10 = src.m10;
-    this.m11 = src.m11;
-  }
-}
+/** Native scalar nodes keep their nested clip type without an implementation import. */
+const Node = EmoteScalarNode<EmoteMotionClip>;
+type Node = InstanceType<typeof Node>;
 
 // ---------------------------------------------------------------------------------------
 // Clip

@@ -393,3 +393,12 @@ its functions directly. X86 maps position using the child's projection axis and
 rejects inherited angle/zoom synchronization. X64 uses the parent's axis and maps
 angle/zoom through finite differences of the patch. Narrow parent, target and
 resource interfaces preserve direct fields, native error ordering and float stores.
+
+`EmoteScalarNode` in `runtime/clip/node.ts` owns the x64 record layout alongside the
+x86 node. Its host interface supplies node-id allocation, source resolution, the
+current model and the top clip's subdivision ratio. Nested-clip storage is generic;
+node code imports no concrete clip. The image binding aliases the shared class
+directly. Scalar draw-item records live in `runtime/interfaces.ts` and keep their
+native field order. The frame module's eager layer cache shares loaded slots by
+layer identity and creates a fresh end slot for each out-of-range lookup. Nodes
+retain their original override, matrix, source-cache and combinator-patch stores.
