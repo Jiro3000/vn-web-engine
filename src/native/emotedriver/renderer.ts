@@ -36,8 +36,11 @@ import {
 import type {DrawCommand} from '../../graphics/draw-list.js';
 import {GpuRenderSurface} from '../../graphics/gpu-render-surface.js';
 import type {AdditionalTexture, TriangleDraw, TriangleImage} from '../../graphics/triangle-draw.js';
-import type {EmoteDrawItem, EmoteVertexGrid} from './clip.js';
-import {EmoteUnsupportedError} from './player.js';
+import type {
+  EmoteScalarDrawItem as EmoteDrawItem,
+  EmoteScalarVertexGrid as EmoteVertexGrid,
+} from './runtime/interfaces.js';
+import {EmoteUnsupportedError} from './runtime/errors.js';
 
 const f32 = Math.fround;
 const FLT_MAX = f32(3.4028234663852886e38);

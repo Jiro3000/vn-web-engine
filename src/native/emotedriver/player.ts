@@ -5,7 +5,7 @@ import type {EmoteX64ClipPlayerAccess} from './runtime/interfaces.js';
 import {createEmoteControls} from './runtime/controls/index.js';
 import {EMOTEDRIVER_X64_SHA256} from './build.js';
 import type {EmoteModel} from '../../formats/emote/model.js';
-import type {EmoteDrawItem} from './clip.js';
+import type {EmoteScalarDrawItem as EmoteDrawItem} from './runtime/interfaces.js';
 
 const f32 = Math.fround;
 

@@ -19,35 +19,33 @@
  */
 
 import type {
-  EmoteLayer,
-  EmoteModel,
-  EmoteMotion,
+  EmoteX64Layer as EmoteLayer,
+  EmoteX64Model as EmoteModel,
+  EmoteX64Motion as EmoteMotion,
   EmoteParameter,
-} from '../../formats/emote/model.js';
-import type {PsbValue} from '../../formats/psb/psb.js';
-import {buildScalarDrawList} from './runtime/render/draw-list.js';
-import {EmoteUnsupportedError, type EmoteClip} from './player.js';
-import {EMOTEDRIVER_X64_SHA256} from './build.js';
-import {evaluateScalarFrame} from './runtime/clip/interpolate.js';
-import {EmoteMeshCombinators} from './runtime/clip/combinators.js';
+} from '../../../../formats/kirikiri/emote-model.js';
+import type {PsbValue} from '../../../../formats/kirikiri/psb.js';
+import {buildScalarDrawList} from '../render/draw-list.js';
+import {EmoteUnsupportedError} from '../errors.js';
+import {EMOTEDRIVER_X64_SHA256} from '../../build.js';
+import {evaluateScalarFrame} from './interpolate.js';
+import {EmoteMeshCombinators} from './combinators.js';
 import type {
   EmoteScalarDrawItem,
-  EmoteScalarMeshState,
-  EmoteScalarVertexGrid,
   EmoteX64MeshKernel,
   EmoteClipDriver,
   EmoteX64ClipPlayerAccess,
   EmoteClipListener,
   EmoteRootTransform,
   EmoteClipEvent as DriverClipEvent,
-} from './runtime/interfaces.js';
-import {createEmoteMeshKernel} from './runtime/mesh/index.js';
-import {ClipParameter, EmoteScalarNode} from './runtime/clip/node.js';
-import {EmoteClipTime} from './runtime/clip/time.js';
-import {evaluateScalarMotions} from './runtime/clip/nested.js';
-import {EmoteLayerPass} from './runtime/clip/layer.js';
-import {EmoteSourceResolver, type EmoteSourceIcon} from './runtime/clip/source.js';
-import {syncToParentMeshX64, type EmoteScalarVertexHost} from './runtime/clip/vertices.js';
+} from '../interfaces.js';
+import {createEmoteMeshKernel} from '../mesh/index.js';
+import {ClipParameter, EmoteScalarNode} from './node.js';
+import {EmoteClipTime} from './time.js';
+import {evaluateScalarMotions} from './nested.js';
+import {EmoteLayerPass} from './layer.js';
+import {EmoteSourceResolver, type EmoteSourceIcon} from './source.js';
+import {syncToParentMeshX64, type EmoteScalarVertexHost} from './vertices.js';
 
 const f32 = Math.fround;
 const NEUTRAL = 0x808080ff;
@@ -109,16 +107,9 @@ export class EmoteResource {
 }
 
 // ---------------------------------------------------------------------------------------
-// Keyframe states
+// Scalar draw records
 
-// ---------------------------------------------------------------------------------------
-// Nodes
-
-/** Scalar native storage, also consumed by the renderer. */
-export type EmoteMeshState = EmoteScalarMeshState;
-export type EmoteVertexGrid = EmoteScalarVertexGrid;
-
-export type EmoteDrawItem = EmoteScalarDrawItem;
+type EmoteDrawItem = EmoteScalarDrawItem;
 
 /** Parameter (0x38 bytes at clip +0x418). */
 class Param extends ClipParameter {
@@ -161,7 +152,7 @@ function readPriority(list: readonly PsbValue[]): PriorityFrame[] {
 
 export class EmoteMotionClip
   extends EmoteClipTime
-  implements EmoteClip, EmoteClipDriver, EmoteX64ClipPlayerAccess
+  implements EmoteClipDriver, EmoteX64ClipPlayerAccess
 {
   private readonly layerPass = new EmoteLayerPass(EMOTEDRIVER_X64_SHA256);
   readonly resource: EmoteResource;
@@ -254,7 +245,7 @@ export class EmoteMotionClip
     return this.layerNodes[0]!;
   }
 
-  // EmoteClip --------------------------------------------------------------------------
+  // Scalar player access --------------------------------------------------------------------------
 
   get rootX(): number {
     return this.root.adjust.x;

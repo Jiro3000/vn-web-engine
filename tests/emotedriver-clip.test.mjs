@@ -17,7 +17,7 @@ import {
 import {FrameSlot, loadHeader, loadContent} from '../dist/native/emotedriver/runtime/clip/frame.js';
 import {ClipParameter, NodeState} from '../dist/native/emotedriver/runtime/clip/node.js';
 import {EmoteClipTime} from '../dist/native/emotedriver/runtime/clip/time.js';
-import {EmoteMotionClip, EmoteResource} from '../dist/native/emotedriver/clip.js';
+import {EmoteMotionClip, EmoteResource} from '../dist/native/emotedriver/runtime/clip.js';
 import {
   composeEmoteMatrix,
   multiplyEmoteMatrices,

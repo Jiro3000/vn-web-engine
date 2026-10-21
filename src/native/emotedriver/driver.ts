@@ -1,7 +1,7 @@
 import {EMOTEDRIVER_X64_SHA256} from './build.js';
 import {PsbFile} from '../../formats/psb/psb.js';
 import {readEmoteModel, type EmoteModel} from '../../formats/emote/model.js';
-import {EmoteMotionClip, EmoteResource} from './clip.js';
+import {EmoteMotionClip, EmoteResource} from './runtime/clip/scalar.js';
 import {EmoteRandom} from './controls.js';
 import {EmotePlayer, EmoteUnsupportedError} from './player.js';
 import type {EmoteX64MeshKernel} from './runtime/interfaces.js';

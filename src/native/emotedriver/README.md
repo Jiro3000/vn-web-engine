@@ -85,7 +85,7 @@ The engine reads the DLL as data for its hash; it never runs.
 | `driver.ts`                 | The device: driver profile, PSB header key, model cache, `createPlayer`         |
 | `runtime/player-core.ts`    | Both exact builds of `MEmotePlayer`: variables, controls, timelines, transforms |
 | `player.ts`                 | Exported x86 player and x64 host calling convention                             |
-| `clip.ts`                   | `MMotionPlayer`: motion evaluation, nested clips, the draw list                 |
+| `runtime/clip/scalar.ts`    | Scalar `MMotionPlayer` binding to shared evaluation and draw interfaces         |
 | `controls.ts`, `physics.ts` | Gaze, blink, mouth, selector and orbit controls; bust, pendulum, wind           |
 | `timelines.ts`, `tween.ts`  | Main and difference timelines; value and rotation tweens                        |
 | `mesh.ts`                   | Bezier patches and mesh interpolation                                           |
@@ -437,3 +437,10 @@ replaced stencil child arrays; the scalar path retains its AND of corner alpha,
 blend-specific neutral colors and stable composite arrays. Live parent draw order
 and stencil lists remain visible across child calls. Both paths use the same
 saturated RGBA product in `runtime/render/color.ts`; item layouts remain distinct.
+
+Both clip bindings live under `runtime/clip/`: `clip.ts` retains the block layout
+and `scalar.ts` retains the scalar layout. The scalar binding owns motion selection,
+parameters and resource lookup; clock, frames, node storage, layer evaluation,
+vertices, nested motion and draw construction use the shared runtime interfaces.
+`runtime/clip.ts` exposes both internal bindings. Neither binding depends on a
+concrete exported player or renderer. These runtime bindings are library-internal.
