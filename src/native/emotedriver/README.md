@@ -444,3 +444,10 @@ parameters and resource lookup; clock, frames, node storage, layer evaluation,
 vertices, nested motion and draw construction use the shared runtime interfaces.
 `runtime/clip.ts` exposes both internal bindings. Neither binding depends on a
 concrete exported player or renderer. These runtime bindings are library-internal.
+
+`extractEmoteX64ShaderBlobs` in `runtime/render/shaders.ts` reads the exact x64
+image's native shader pointer/size tables (construction at `0x180062580`). It
+verifies the whole DLL identity before returning borrowed byte views for 12
+vertex shaders, 2,077 pixel shaders and their 12 input layouts. The owner keeps
+the DLL bytes unchanged. The shared DXBC envelope reader validates part ranges
+and preserves native table order; it does not interpret shader instructions.

@@ -1,3 +1,7 @@
+import {ByteView, ascii} from '../../../../core/binary.js';
+import {PeImage} from '../../../../formats/pe/image.js';
+import {parseDxbcContainer} from '../../../../graphics/d3d11-shader/container.js';
+import {EMOTEDRIVER_X64_SHA256} from '../../build.js';
 import {sha256Fallback} from '../../../../core/sha256.js';
 
 /**
@@ -118,4 +122,78 @@ export function extractEmoteShaderBlobs(file: Uint8Array): EmoteShaderBlobs | nu
   if (vertexSm2 === null || pixelSm2 === null || vertexSm3 === null || pixelSm3 === null)
     return null;
   return {vertexSm2, pixelSm2, vertexSm3, pixelSm3};
+}
+
+/** Native input element read from the x64 image's twelve layout descriptions. */
+export interface EmoteX64InputElement {
+  readonly semanticName: string;
+  readonly semanticIndex: number;
+  readonly format: number;
+  readonly inputSlot: number;
+  readonly alignedByteOffset: number;
+  readonly inputSlotClass: number;
+  readonly instanceDataStepRate: number;
+}
+export interface EmoteX64ShaderBlobs {
+  readonly vertex: readonly Uint8Array[];
+  readonly pixel: readonly Uint8Array[];
+  /** Layouts indexed by the native vertex-shader index, not the table's row order. */
+  readonly inputLayouts: readonly (readonly EmoteX64InputElement[])[];
+}
+
+/**
+ * 0x180062580 in image80d28bd0…1e051: twelve VS4.0 and 2,077 PS4.0 containers.
+ * The exact whole-file hash binds their pointer/size tables and layout descriptions.
+ * Returned views borrow `file`; the owner keeps its byte image unchanged.
+ */
+export function extractEmoteX64ShaderBlobs(file: Uint8Array): EmoteX64ShaderBlobs | null {
+  if (hex(sha256Fallback(file)) !== EMOTEDRIVER_X64_SHA256) return null;
+  const image = PeImage.parse(file),
+    base = 0x180000000;
+  const offsetOf = (address: number, size: number) => image.fileOffset(address - base, size);
+  const pointer = (address: number) => Number(image.view.u64(offsetOf(address, 8)));
+  const word = (address: number) => image.view.u32(offsetOf(address, 4));
+  const blobs = (pointers: number, sizes: number, count: number, stage: number) => {
+    const out: Uint8Array[] = [];
+    for (let i = 0; i < count; i++) {
+      const address = pointer(pointers + i * 8),
+        size = pointer(sizes + i * 8),
+        offset = offsetOf(address, size),
+        bytes = file.subarray(offset, offset + size),
+        container = parseDxbcContainer(bytes),
+        code = container.parts.find((part) => part.kind === 'SHDR' || part.kind === 'SHEX');
+      if (!code) throw new Error('E-mote shader lacks code');
+      const view = new ByteView(code.data, {littleEndian: true});
+      if (view.u32(0) !== ((stage << 16) | 0x40) || view.u32(4) * 4 !== code.data.length)
+        throw new Error('Unexpected E-mote shader profile');
+      out.push(bytes);
+    }
+    return out;
+  };
+  const vertex = blobs(0x18070d2c0, 0x1819990c0, 12, 1),
+    pixel = blobs(0x180d3f690, 0x180143060, 2077, 0),
+    inputLayouts: (readonly EmoteX64InputElement[])[] = [];
+  for (let i = 0; i < 12; i++) {
+    const row = 0x180091710 + i * 32,
+      index = (word(row + 4) + word(row) * 2) * 3 + word(row + 8),
+      elements = pointer(row + 16),
+      count = pointer(row + 24);
+    if (index >= 12 || inputLayouts[index] !== undefined || count > 16)
+      throw new Error('Invalid E-mote input layout');
+    const layout: EmoteX64InputElement[] = [];
+    for (let j = 0; j < count; j++) {
+      const address = elements + j * 32;
+      layout.push({
+        semanticName: ascii(image.cString(pointer(address))),
+        semanticIndex: word(address + 8),
+        format: word(address + 12),
+        inputSlot: word(address + 16),
+        alignedByteOffset: word(address + 20),
+        inputSlotClass: word(address + 24),
+        instanceDataStepRate: word(address + 28),
+      });
+    }
+    inputLayouts[index] = layout;
+  }
+  return {vertex, pixel, inputLayouts};
 }
