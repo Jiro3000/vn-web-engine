@@ -815,6 +815,8 @@ test('source transitions preserve blank sizes, stale rectangles and current-file
       frame(10, 2, {src: 'missing', icon: 'i', bmParam: 0}),
       frame(15, 2, {src: 'tex', icon: 'i', bmParam: 0}),
       frame(20, 0),
+      frame(25, 2, {src: 'tex', icon: 'i', bmParam: 0}),
+      frame(30, 0),
     ]),
   ]);
   const file = model({o: {m}});
@@ -837,6 +839,9 @@ test('source transitions preserve blank sizes, stale rectangles and current-file
   assert.equal(at86(10).drawable, false);
   assert.deepEqual(at86(10).sourceRect, [16, 8, 7, 17], 'a miss retains the old rectangle');
   assert.deepEqual(at86(15).sourceRect, [16, 8, 10, 10]);
+  assert.equal(at86(20).visible, false, 'an empty frame hides the x86 layer');
+  assert.deepEqual(at86(0).sourceRect, [16, 8, 10, 10]);
+  assert.equal(at86(30).visible, true, 'the terminal sentinel retains the last content');
 
   const other = model({});
   other.sources.get('tex').icons.get('i').width = 99;
@@ -861,4 +866,32 @@ test('source transitions preserve blank sizes, stale rectangles and current-file
   assert.deepEqual(at64(10), []);
   assert.equal(at64(15)[0].file, file);
   assert.equal(at64(15)[0].width, 10);
+  assert.deepEqual(at64(20), [], 'an empty frame hides the x64 layer');
+  assert.equal(at64(0)[0].width, 10);
+  assert.equal(at64(30)[0].width, 10, 'the terminal sentinel retains the last content');
+});
+
+test('layer projection retains the native intermediate float store for each image', () => {
+  const point = layer('point', [frame(0, 2, {mask: 2, coord: [1, 1, 0]})], {
+    type: 1,
+    shape: 0,
+  });
+  const m = motion([
+    layer('parent', [frame(0, 2, {mask: 2, coord: [-1, 0, 0], sx: 2 ** -24})], {
+      type: 2,
+      children: [point],
+    }),
+  ]);
+  const file = model({o: {m}});
+  const x86 = createEmoteClip(file, m);
+  x86.rootVisible = true;
+  x86.advance(0);
+  x86.evaluate();
+  assert.equal(x86.findNode('point').x, 0);
+  const x64 = new EmoteMotionClip(new EmoteResource([file]));
+  x64.selectObject('o');
+  x64.setMotion('m');
+  x64.rootVisible = true;
+  x64.progress(0);
+  assert.equal(x64.layerPosition('point').x, 2 ** -24);
 });

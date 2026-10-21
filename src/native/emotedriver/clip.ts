@@ -50,12 +50,13 @@ import type {
 import {createEmoteMeshKernel} from './runtime/mesh/index.js';
 import {ClipParameter, NodeState} from './runtime/clip/node.js';
 import {EmoteClipTime} from './runtime/clip/time.js';
+import {EmoteLayerPass, type EmoteScalarLayerTransform} from './runtime/clip/layer.js';
 import {
   EmoteSourceResolver,
   type EmoteSourceIcon,
   type EmoteSourceTarget,
 } from './runtime/clip/source.js';
-import {composeEmoteMatrix, multiplyEmoteMatrices} from './runtime/clip/matrix.js';
+import {composeEmoteMatrix} from './runtime/clip/matrix.js';
 
 const f32 = Math.fround;
 const NEUTRAL = 0x808080ff;
@@ -280,17 +281,20 @@ class Param extends ClipParameter {
 }
 
 /** Layer node (0x3d0 bytes). */
-class Node extends NodeState implements EmoteCombinatorTarget, EmoteSourceTarget<EmoteModel> {
+class Node
+  extends NodeState
+  implements EmoteCombinatorTarget, EmoteSourceTarget<EmoteModel>, EmoteScalarLayerTransform
+{
   readonly layer: EmoteLayer | null;
   readonly index: number;
   readonly parent: number;
   readonly id: number;
   readonly type: number;
-  readonly inherit: number;
+  readonly inheritMask: number;
   coordinate: number;
   transformOrder: readonly number[];
   readonly stencilType: number;
-  readonly meshTransform: number;
+  readonly meshKind: number;
   readonly meshCombine: boolean;
   readonly syncChildMask: number;
   readonly division: number;
@@ -300,10 +304,10 @@ class Node extends NodeState implements EmoteCombinatorTarget, EmoteSourceTarget
   readonly mstate: EmoteMeshState | null;
   readonly param: Param | null;
   readonly states: readonly FrameState[];
-  a: FrameState;
-  b: FrameState;
+  cur: FrameState;
+  next: FrameState;
   /** +0x34, +0x35, +0x40. */
-  dirty = false;
+  framesDirty = false;
   modified = false;
   prevE = 0;
   /** +0x38/+0x39 colour flags, +0x68 colours. */
@@ -376,11 +380,11 @@ class Node extends NodeState implements EmoteCombinatorTarget, EmoteSourceTarget
     this.param = param;
     if (!layer) {
       this.type = 0;
-      this.inherit = 0;
+      this.inheritMask = 0;
       this.coordinate = 0;
       this.transformOrder = [0, 3, 2, 1];
       this.stencilType = 0;
-      this.meshTransform = 0;
+      this.meshKind = 0;
       this.meshCombine = false;
       this.syncChildMask = 0;
       this.division = 0;
@@ -395,11 +399,11 @@ class Node extends NodeState implements EmoteCombinatorTarget, EmoteSourceTarget
         throw new EmoteUnsupportedError(`layer type ${layer.type}`);
       if (layer.groundCorrection) throw new EmoteUnsupportedError('ground correction');
       this.type = layer.type;
-      this.inherit = layer.inheritMask >>> 0;
+      this.inheritMask = layer.inheritMask >>> 0;
       this.coordinate = layer.coordinate;
       this.transformOrder = layer.transformOrder;
       this.stencilType = layer.stencilType;
-      this.meshTransform = layer.meshTransform;
+      this.meshKind = layer.meshTransform;
       const mesh = layer.meshTransform !== 0 ? layer.mesh : null;
       this.meshCombine = mesh?.combine ?? false;
       this.syncChildMask = mesh?.syncChildMask ?? 0;
@@ -422,17 +426,17 @@ class Node extends NodeState implements EmoteCombinatorTarget, EmoteSourceTarget
       this.item = (0x1409 >> layer.type) & 1 ? newDrawItem() : null;
       this.shapeInfo = layer.type === 1 ? [0, 0, 0, 0, 0, 0, 0, 0, 0] : null;
     }
-    this.a = this.stateAt(0);
-    this.b = this.stateAt(1);
+    this.cur = this.stateAt(0);
+    this.next = this.stateAt(1);
   }
 
   get meshType(): number {
-    return this.meshTransform;
+    return this.meshKind;
   }
 
   applyCombinatorPatch(patch: Float32Array | null): void {
     if (!this.mstate) return;
-    this.dirty = true;
+    this.framesDirty = true;
     this.combinatorOwned = true;
     this.mstate.bp = patch === null ? null : Float32Array.from(patch);
   }
@@ -450,7 +454,7 @@ class Node extends NodeState implements EmoteCombinatorTarget, EmoteSourceTarget
     if (s.empty) return;
     if (this.srcKey === s.src && this.iconKey === s.icon) return;
     if (!clip.resource.sources.resolve(this, s, clip.file)) return;
-    if (this.meshTransform === 1 && this.mstate) {
+    if (this.meshKind === 1 && this.mstate) {
       const n = Math.trunc(f32(this.division * clip.top.meshDivisionRatio));
       const sum = (this.w + this.h) >>> 0;
       let c0 = sum ? Math.floor(((this.w * n) >>> 0) / sum) : 0;
@@ -484,11 +488,6 @@ class Node extends NodeState implements EmoteCombinatorTarget, EmoteSourceTarget
     composeEmoteMatrix(this, this.transformOrder, this, EMOTEDRIVER_X64_SHA256);
   }
 
-  /** this.M = L·this.M. */
-  leftMultiply(l: Node): void {
-    multiplyEmoteMatrices(l, this, this, EMOTEDRIVER_X64_SHA256);
-  }
-
   copyMatrix(src: Node): void {
     this.m00 = src.m00;
     this.m01 = src.m01;
@@ -519,6 +518,7 @@ export class EmoteMotionClip
   extends EmoteClipTime
   implements EmoteClip, EmoteClipDriver, EmoteX64ClipPlayerAccess
 {
+  private readonly layerPass = new EmoteLayerPass(EMOTEDRIVER_X64_SHA256);
   readonly resource: EmoteResource;
   /** +0x18 top clip, +0x20 parent clip. */
   readonly top: EmoteMotionClip;
@@ -891,7 +891,7 @@ export class EmoteMotionClip
     };
     walk(motion.layers, 0);
     for (const node of this.layerNodes) {
-      if (node.meshTransform !== 0 && node.hasCombinator) {
+      if (node.meshKind !== 0 && node.hasCombinator) {
         this.top.combinators ??= new EmoteMeshCombinators(this.top, EMOTEDRIVER_X64_SHA256);
         this.top.combinators.register(node, node.layer!.mesh!.combinators!, this);
       }
@@ -974,8 +974,8 @@ export class EmoteMotionClip
   }
 
   private pushAct(node: Node): void {
-    if (node.a.mask & 0x40000 && node.a.act)
-      this.layerEvents.push({type: 0, layer: node.layer?.label ?? '', label: node.a.act});
+    if (node.cur.mask & 0x40000 && node.cur.act)
+      this.layerEvents.push({type: 0, layer: node.layer?.label ?? '', label: node.cur.act});
   }
 
   /** 0x18003fc30. */
@@ -1012,11 +1012,11 @@ export class EmoteMotionClip
         }
       }
       idx = Math.min(idx, Math.max(n.count - 2, 0));
-      n.a = n.stateAt(idx);
-      n.b = n.stateAt(idx + 1);
-      n.dirty = true;
-      if ((0x1801 >> n.type) & 1) n.resolveSource(this, n.a);
-      if (n.a.time === t) this.pushAct(n);
+      n.cur = n.stateAt(idx);
+      n.next = n.stateAt(idx + 1);
+      n.framesDirty = true;
+      if ((0x1801 >> n.type) & 1) n.resolveSource(this, n.cur);
+      if (n.cur.time === t) this.pushAct(n);
     }
   }
 
@@ -1038,17 +1038,17 @@ export class EmoteMotionClip
         continue;
       }
       let stepped = false;
-      while (n.a.index < n.count - 2) {
-        if (this.time < n.b.time) break;
-        const next = n.stateAt(n.b.index + 1);
-        n.a = n.b;
-        n.b = next;
+      while (n.cur.index < n.count - 2) {
+        if (this.time < n.next.time) break;
+        const next = n.stateAt(n.next.index + 1);
+        n.cur = n.next;
+        n.next = next;
         stepped = true;
         this.pushAct(n);
       }
       if (!stepped) continue;
-      n.dirty = true;
-      if ((0x1801 >> n.type) & 1) n.resolveSource(this, n.a);
+      n.framesDirty = true;
+      if ((0x1801 >> n.type) & 1) n.resolveSource(this, n.cur);
     }
   }
 
@@ -1065,15 +1065,15 @@ export class EmoteMotionClip
         this.stepParamNode(n);
         continue;
       }
-      if (!(this.time < n.a.time) || n.a.index === 0) continue;
-      while (this.time < n.a.time && n.a.index > 0) {
-        const prev = n.stateAt(n.a.index - 1);
-        n.b = n.a;
-        n.a = prev;
+      if (!(this.time < n.cur.time) || n.cur.index === 0) continue;
+      while (this.time < n.cur.time && n.cur.index > 0) {
+        const prev = n.stateAt(n.cur.index - 1);
+        n.next = n.cur;
+        n.cur = prev;
         this.pushAct(n);
       }
-      n.dirty = true;
-      if ((0x1801 >> n.type) & 1) n.resolveSource(this, n.a);
+      n.framesDirty = true;
+      if ((0x1801 >> n.type) & 1) n.resolveSource(this, n.cur);
     }
   }
 
@@ -1089,32 +1089,32 @@ export class EmoteMotionClip
   private stepParamNode(n: Node): void {
     const v = n.param!.value;
     let stepped = false;
-    while (n.a.index < n.count - 2 && n.b.time <= v) {
-      const next = n.stateAt(n.b.index + 1);
-      n.a = n.b;
-      n.b = next;
+    while (n.cur.index < n.count - 2 && n.next.time <= v) {
+      const next = n.stateAt(n.next.index + 1);
+      n.cur = n.next;
+      n.next = next;
       stepped = true;
     }
-    if (n.a.time <= v) {
+    if (n.cur.time <= v) {
       if (!stepped) return;
     } else {
-      while (v < n.a.time && n.a.index > 0) {
-        const prev = n.stateAt(n.a.index - 1);
-        n.b = n.a;
-        n.a = prev;
+      while (v < n.cur.time && n.cur.index > 0) {
+        const prev = n.stateAt(n.cur.index - 1);
+        n.next = n.cur;
+        n.cur = prev;
       }
     }
-    n.dirty = true;
-    if ((0x1801 >> n.type) & 1) n.resolveSource(this, n.a);
+    n.framesDirty = true;
+    if ((0x1801 >> n.type) & 1) n.resolveSource(this, n.cur);
   }
 
   // Evaluation -------------------------------------------------------------------------
 
   /** 0x1800422f0: the info block from the two keyframes; true when it changed. */
-  private interpolate(n: Node, force: boolean): boolean {
-    force ||= n.dirty;
-    const A = n.a,
-      B = n.b;
+  evaluateFrame(n: Node, force: boolean): boolean {
+    force ||= n.framesDirty;
+    const A = n.cur,
+      B = n.next;
     if (A.empty) return force;
     if (A.tween && !B.empty) {
       let e = f32(this.timeOf(n) - A.time);
@@ -1148,7 +1148,7 @@ export class EmoteMotionClip
         if (!n.scalarColor)
           for (let i = 0; i < 4; i++) n.colors[i] = lerpColor(A.colors[i]!, B.colors[i]!, e);
         else n.colors.fill(lerpColor(A.colors[0]!, B.colors[0]!, e));
-        if (n.meshTransform === 1 && !n.combinatorOwned && n.mstate) {
+        if (n.meshKind === 1 && !n.combinatorOwned && n.mstate) {
           if (A.meshPatch === EMPTY_PATCH && B.meshPatch === EMPTY_PATCH) n.mstate.bp = null;
           else
             n.mstate.bp = lerpMesh(
@@ -1178,18 +1178,17 @@ export class EmoteMotionClip
     n.opacity = A.opa;
     n.scalarColor = A.singleColor;
     n.defaultColor = A.colorUnset;
-    if (n.meshTransform === 1 && !n.combinatorOwned && n.mstate)
+    if (n.meshKind === 1 && !n.combinatorOwned && n.mstate)
       n.mstate.bp = A.meshPatch === EMPTY_PATCH ? null : A.meshPatch;
     return true;
   }
 
   /** 0x180042bb0: a child of a mesh layer follows the patch. */
-  private syncToMesh(P: Node, n: Node): void {
+  syncToParentMesh(P: Node, n: Node): void {
     const ms = P.mstate;
-    if (!ms?.bp || !P.visible || !P.drawable || !(P.syncChildMask & 1) || P.meshTransform !== 1)
-      return;
-    const f13 = f32(P.a.ox + P.originX),
-      f14 = f32(P.a.oy + P.originY);
+    if (!ms?.bp || !P.visible || !P.drawable || !(P.syncChildMask & 1) || P.meshKind !== 1) return;
+    const f13 = f32(P.cur.ox + P.originX),
+      f14 = f32(P.cur.oy + P.originY);
     const yz = P.coordinate === 0 ? n.y : n.z;
     const u = f32(f32(n.x + f13) / P.w),
       v = f32(f32(yz + f14) / P.h);
@@ -1199,8 +1198,8 @@ export class EmoteMotionClip
     if (P.coordinate === 0) n.y = ny;
     else n.z = ny;
     n.x = f32(P.w * pt[0]! - f13);
-    const bAng = (P.syncChildMask & 2) !== 0 && (n.inherit & 0x10) !== 0;
-    const bZoom = (P.syncChildMask & 4) !== 0 && (n.inherit & 0x60) !== 0;
+    const bAng = (P.syncChildMask & 2) !== 0 && (n.inheritMask & 0x10) !== 0;
+    const bZoom = (P.syncChildMask & 4) !== 0 && (n.inheritMask & 0x60) !== 0;
     if (!bAng && !bZoom) return;
     const d = f32(0.0001);
     const q = new Float32Array([u - d, v, u + d, v, u, v - d, u, v + d]);
@@ -1226,8 +1225,8 @@ export class EmoteMotionClip
       const t1 = Math.abs((yv0 - yu0) * dx - (xv0 - xu0) * dy) * 0.5;
       const t2 = Math.abs((yv1 - yu0) * dx - (xv1 - xu0) * dy) * 0.5;
       const s = f32(Math.sqrt(2 * (t1 + t2)) / f32(0.0002));
-      if (n.inherit & 0x20) n.zoomX = f32(s * n.zoomX);
-      if (n.inherit & 0x40) n.zoomY = f32(s * n.zoomY);
+      if (n.inheritMask & 0x20) n.zoomX = f32(s * n.zoomX);
+      if (n.inheritMask & 0x40) n.zoomY = f32(s * n.zoomY);
     }
   }
 
@@ -1256,84 +1255,8 @@ export class EmoteMotionClip
     root.copyOverridesToInfo();
     root.adjust.changed = false;
     if (!this.rootMatrixFromParent) root.computeMatrix();
-    for (let k = 1; k < nodes.length; k++) {
-      const n = nodes[k]!;
-      const a = n.adjust;
-      const D = nodes[n.parent]!;
-      let P = D;
-      while (P.inherit & 0x400000) P = nodes[P.parent]!;
-      const force = this.forceCalc || P.changed || D.changed || a.changed;
-      if (!this.interpolate(n, force)) continue;
-      a.changed = false;
-      if (n.a.empty) {
-        n.changed = P.changed || n.dirty;
-        n.visible = false;
-        n.flipX = P.flipX;
-        n.flipY = P.flipY;
-        n.x = P.x;
-        n.y = P.y;
-        n.z = P.z;
-        n.angle = P.angle;
-        n.zoomX = P.zoomX;
-        n.zoomY = P.zoomY;
-        n.slantX = P.slantX;
-        n.slantY = P.slantY;
-        n.opacity = P.opacity;
-        n.shown = P.shown && a.shown;
-        n.copyMatrix(P);
-        continue;
-      }
-      n.changed = true;
-      n.shown = a.shown && P.shown;
-      n.visible = a.visible && n.shown;
-      n.flipX = n.flipX !== a.flipX;
-      n.flipY = n.flipY !== a.flipY;
-      n.angle = f32(a.angle + n.angle);
-      n.zoomX = f32(a.zoomX * n.zoomX);
-      n.zoomY = f32(a.zoomY * n.zoomY);
-      n.slantX = f32(a.slantX + n.slantX);
-      n.slantY = f32(a.slantY + n.slantY);
-      n.opacity = Math.floor(((a.opacity * n.opacity) >>> 0) / 255);
-      n.x = f32(a.x + n.x);
-      n.y = f32(a.y + n.y);
-      n.z = f32(a.z + n.z);
-      if (P.meshTransform !== 0) this.syncToMesh(P, n);
-      const x = n.x,
-        y = n.y,
-        z = n.z;
-      if (P.coordinate === 0) {
-        n.x = f32(y * P.m01 + x * P.m00 + P.x);
-        n.y = f32(f32(x * P.m10 + y * P.m11) + P.y);
-        n.z = f32(z + P.z);
-      } else {
-        n.x = f32(z * P.m01 + x * P.m00 + P.x);
-        n.y = f32(y + P.y);
-        n.z = f32(f32(z * P.m11 + x * P.m10) + P.z);
-      }
-      if (n.inherit & 0x400) n.opacity = Math.floor(((P.opacity * n.opacity) >>> 0) / 255);
-      else if (!this.independentInherit)
-        n.opacity = Math.floor(((root.opacity * n.opacity) >>> 0) / 255);
-      if ((n.inherit & 0x1fc) === 0x1fc) {
-        n.computeMatrix();
-        n.leftMultiply(P);
-        n.flipX = n.flipX !== P.flipX;
-        n.flipY = n.flipY !== P.flipY;
-        n.angle = f32(P.angle + n.angle);
-        n.zoomX = f32(P.zoomX * n.zoomX);
-        n.zoomY = f32(P.zoomY * n.zoomY);
-        n.slantX = f32(P.slantX + n.slantX);
-        n.slantY = f32(P.slantY + n.slantY);
-      } else {
-        const m = n.inherit;
-        n.inheritTransform(P, m);
-        if (!this.independentInherit) {
-          n.removeTransform(root, m);
-          n.computeMatrix();
-          n.inheritTransform(root, m);
-          n.leftMultiply(root);
-        } else n.computeMatrix();
-      }
-    }
+    if (nodes.length > 1)
+      this.layerPass.evaluate(this, nodes, this.forceCalc, this.independentInherit);
     for (const n of nodes) {
       if (this.jumped) n.vel.fill(0);
       else {
@@ -1350,7 +1273,7 @@ export class EmoteMotionClip
       const D = nodes[n.parent]!;
       n.stencilParent = D.stencilVisible ? D : D.stencilParent;
       n.stencilVisible = !(
-        n.a.empty ||
+        n.cur.empty ||
         n.stencilType === 0 ||
         !n.visible ||
         (((0x1801 >> n.type) & 1) !== 0 && !n.drawable)
@@ -1359,7 +1282,7 @@ export class EmoteMotionClip
     if (this.typeMask & 2) this.shapes();
     if (this.typeMask & 8) this.subclips();
     for (const n of nodes) {
-      n.dirty = false;
+      n.framesDirty = false;
       n.changed = false;
     }
     for (const p of this.parameters) p.flags = 0;
@@ -1390,10 +1313,10 @@ export class EmoteMotionClip
         continue;
       }
       n.modified = true;
-      n.breaksChain = mp !== null && (n.inherit & 0x2000000) === 0;
+      n.breaksChain = mp !== null && (n.inheritMask & 0x2000000) === 0;
       n.isDeformer =
-        !n.a.empty &&
-        n.meshTransform !== 0 &&
+        !n.cur.empty &&
+        n.meshKind !== 0 &&
         ms !== null &&
         ms.bp !== null &&
         n.drawable &&
@@ -1409,7 +1332,7 @@ export class EmoteMotionClip
         }
         n.anchor[2] = n.z;
       }
-      if (n.a.empty || !((0x1c01 >> n.type) & 1) || !n.drawable) continue;
+      if (n.cur.empty || !((0x1c01 >> n.type) & 1) || !n.drawable) continue;
       let bpSrc: Float32Array | null;
       if (!n.meshCombine) bpSrc = ms?.bp ?? null;
       else if (!n.isDeformer) bpSrc = null;
@@ -1428,11 +1351,11 @@ export class EmoteMotionClip
       }
       const yy = f32(this.resource.zFactor * n.z + n.y);
       const xx = n.x;
-      const oy = f32(n.a.oy + n.originY),
-        ox = f32(n.a.ox + n.originX);
+      const oy = f32(n.cur.oy + n.originY),
+        ox = f32(n.cur.ox + n.originX);
       const ty = f32(-f32(ox * n.m10 + oy * n.m11) + yy);
       const tx = f32(xx - f32(oy * n.m01 + n.m00 * ox));
-      if (n.meshTransform === 1 && ms) {
+      if (n.meshKind === 1 && ms) {
         const a = f32(n.w * n.m00),
           b = f32(n.h * n.m01),
           c = f32(n.w * n.m10),
@@ -1488,7 +1411,7 @@ export class EmoteMotionClip
         } else {
           let N: number;
           const ratio = this.top.meshDivisionRatio;
-          if (n.meshTransform === 0) {
+          if (n.meshKind === 0) {
             let anc: Node = n.meshParent;
             while (!anc.isDeformer && anc.meshParent) anc = anc.meshParent;
             const div = Math.trunc(f32(anc.division * ratio));
@@ -1613,8 +1536,8 @@ export class EmoteMotionClip
       const tClamped = n.param ? n.param.value : this.time;
       const tTime = n.param ? n.param.value : this.timeRunning;
       const flags = n.param ? n.param.flags : clipFlags;
-      const A = n.a,
-        B = n.b;
+      const A = n.cur,
+        B = n.next;
       if (n.changed || flags) {
         if (A.empty || !A.src) {
           sub.playing = false;
@@ -1623,7 +1546,7 @@ export class EmoteMotionClip
           sub.playingName = '';
           continue;
         }
-        if (n.dirty || flags & 5) {
+        if (n.framesDirty || flags & 5) {
           sub.selectObject(A.src);
           sub.setMotion(A.icon ?? '', flags | A.motion.flags);
           if (sub.playing && sub.jumped) {
@@ -1738,7 +1661,7 @@ export class EmoteMotionClip
       if (!n.visible) continue;
       if (n.type === 3) {
         if (!n.sub) continue;
-        const c = n.inherit & 0x200 ? mod : NEUTRAL;
+        const c = n.inheritMask & 0x200 ? mod : NEUTRAL;
         if (!n.stencilVisible && !n.maskLayer) n.sub.buildDrawList(c, collector);
         else {
           const item = n.item!;
@@ -1762,7 +1685,7 @@ export class EmoteMotionClip
       item.coordinate = n.coordinate;
       item.objTriPriority = n.layer?.objTriPriority ?? 0;
       item.clipFlags = this.clipFlags;
-      const A = n.a;
+      const A = n.cur;
       item.bm = A.bm;
       const b = A.bm & 0xff0f;
       item.bmParam = A.bmParam;
@@ -1807,7 +1730,7 @@ export class EmoteMotionClip
         item.colors.set(n.colors);
         if (n.defaultColor) attr |= 4;
       }
-      item.mesh = n.meshTransform === 1 && n.mstate?.bp ? n.mstate : null;
+      item.mesh = n.meshKind === 1 && n.mstate?.bp ? n.mstate : null;
       item.grid = n.grid;
       item.stencilType = n.stencilType;
       item.stencilParent = n.stencilParent?.item ?? null;

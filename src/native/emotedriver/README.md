@@ -368,3 +368,12 @@ missing-source field retention and resolution stores. A shared resolver searches
 the current motion file first and then the resource files in load order. Cached
 keys, including null versus empty x64 keys, belong to each layer. No source
 adapter or proxy is allocated during layer evaluation.
+
+`runtime/clip/layer.ts` runs layer evaluation through `EmoteLayerEvaluation` and
+image-specific storage interfaces. X86 supplies evaluated state blocks and array
+matrices; x64 supplies direct scalar fields. The exact image selects its loop once
+at clip creation, avoiding layout checks on every node. Both paths retain native
+parent bypass, empty-state copying, opacity, projection axes and float stores.
+Frame interpolation and mesh synchronization run through clip methods; root
+velocity, vertices and nested motions keep their clip phases. The pass allocates
+no layer adapters or per-call closures.

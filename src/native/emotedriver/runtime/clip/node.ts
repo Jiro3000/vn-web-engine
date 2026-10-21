@@ -2,6 +2,7 @@ import type {EmoteEasingCurve, EmoteLayer} from '../../../../formats/kirikiri/em
 import type {EmoteClipNodes, EmoteNodeView, EmoteVertexGrid} from '../interfaces.js';
 import {FrameSlot} from './frame.js';
 import type {EmoteSourceTarget} from './source.js';
+import type {EmoteBlockLayerTransform, EmoteLayerState, EmoteTransformState} from './layer.js';
 import {emoteBuild, EMOTEDRIVER_X86_SHA256, EMOTEDRIVER_X64_SHA256} from '../../build.js';
 
 /**
@@ -9,7 +10,7 @@ import {emoteBuild, EMOTEDRIVER_X86_SHA256, EMOTEDRIVER_X64_SHA256} from '../../
  * two of them: +0x254 is the result of the layer pass, +0x280 the adjustment block (on the root
  * the player's transform tweens, on a nested clip's root the referencing layer's state).
  */
-export class NodeState {
+export class NodeState implements EmoteLayerState {
   /** +0x254 changed this pass / +0x280 dirty. */
   changed = true;
   /** +0x255 visible / +0x281. */
@@ -30,7 +31,7 @@ export class NodeState {
   /** 0..255. */
   opacity = 255;
 
-  copyFrom(o: NodeState): void {
+  copyFrom(o: EmoteTransformState): void {
     this.changed = o.changed;
     this.visible = o.visible;
     this.shown = o.shown;
@@ -47,7 +48,7 @@ export class NodeState {
     this.opacity = o.opacity;
   }
   /** Compose only the transform components selected by the native inherit mask. */
-  inheritTransform(p: NodeState, mask: number): void {
+  inheritTransform(p: EmoteTransformState, mask: number): void {
     if (mask & 0x4) this.flipX = this.flipX !== p.flipX;
     if (mask & 0x8) this.flipY = this.flipY !== p.flipY;
     if (mask & 0x10) this.angle = Math.fround(p.angle + this.angle);
@@ -58,7 +59,7 @@ export class NodeState {
   }
 
   /** Remove selected parent components before evaluating in the root frame. */
-  removeTransform(p: NodeState, mask: number): void {
+  removeTransform(p: EmoteTransformState, mask: number): void {
     if (mask & 0x4) this.flipX = this.flipX !== p.flipX;
     if (mask & 0x8) this.flipY = this.flipY !== p.flipY;
     if (mask & 0x10) this.angle = Math.fround(this.angle - p.angle);
@@ -180,7 +181,7 @@ export class ClipParameter {
 }
 
 /** A layer node (stride 0x2e0). */
-export class EmoteNode implements EmoteNodeView {
+export class EmoteNode implements EmoteNodeView, EmoteBlockLayerTransform {
   readonly label: string;
   readonly type: number;
   readonly parent: number;

@@ -28,6 +28,7 @@ import {
 import {ClipParameter, EmoteNode} from './node.js';
 import {EmoteClipTime} from './time.js';
 import {EmoteSourceResolver} from './source.js';
+import {EmoteLayerPass} from './layer.js';
 import {clipRectPass, maskPass, meshPass, shapePass} from './vertices.js';
 import {composeEmoteMatrix, multiplyEmoteMatrices as multiply} from './matrix.js';
 
@@ -80,6 +81,7 @@ export class EmoteClip extends EmoteClipTime implements EmoteClipDriver, EmoteCl
   readonly textureIndexOf: (source: string) => number;
   private ratio: number;
   private readonly sources: EmoteSourceResolver;
+  private readonly layerPass = new EmoteLayerPass();
   /** +0x1b4: secondary draw sort key, inherited by nested clips (0x10033c60). */
   drawPriority = 0;
 
@@ -676,7 +678,7 @@ export class EmoteClip extends EmoteClipTime implements EmoteClipDriver, EmoteCl
     root.state.copyFrom(a);
     a.changed = false;
     if (!this.nested) computeMatrix(root);
-    for (let i = 1; i < nodes.length; i++) this.evaluateNode(nodes[i]!, root);
+    if (nodes.length > 1) this.layerPass.evaluate(this, nodes, this.force, this.independent);
     for (const n of nodes) {
       const s = n.state;
       if (this.jumped) n.velocity.fill(0);
@@ -701,80 +703,12 @@ export class EmoteClip extends EmoteClipTime implements EmoteClipDriver, EmoteCl
     this.flag112 = false;
   }
 
-  private evaluateNode(node: EmoteNode, root: EmoteNode): void {
-    let parent = this.nodes[node.parent]!;
-    while (parent.inheritMask & 0x400000) parent = this.nodes[parent.parent]!;
-    const curIndex = node.current;
-    const force = this.force || parent.state.changed || node.adjust.changed;
-    if (!evaluateFrame(this, node, force)) return;
-    node.adjust.changed = false;
-    const s = node.state,
-      p = parent.state;
-    if (node.slots[curIndex]!.empty) {
-      const changed = p.changed || node.framesDirty;
-      s.copyFrom(p);
-      s.changed = changed;
-      s.visible = false;
-      s.shown = p.shown && node.adjust.shown;
-      node.matrix.set(parent.matrix);
-      return;
-    }
-    const a = node.adjust;
-    s.changed = true;
-    s.shown = a.shown && p.shown;
-    s.visible = a.visible && s.shown;
-    s.flipX = s.flipX !== a.flipX;
-    s.flipY = s.flipY !== a.flipY;
-    s.angle = f(a.angle + s.angle);
-    s.zoomX = f(a.zoomX * s.zoomX);
-    s.zoomY = f(a.zoomY * s.zoomY);
-    s.slantX = f(a.slantX + s.slantX);
-    s.slantY = f(a.slantY + s.slantY);
-    s.opacity = Math.trunc(Math.imul(a.opacity, s.opacity) / 255) >>> 0;
-    s.x = f(a.x + s.x);
-    s.y = f(a.y + s.y);
-    s.z = f(a.z + s.z);
-    if (parent.meshKind !== 0) syncToParentMesh(parent, node);
-    const m = parent.matrix;
-    let lx: number, ly: number, lz: number;
-    if (node.coordinate === 0) {
-      lx = f(m[1]! * s.y + m[0]! * s.x);
-      ly = f(m[2]! * s.x + m[3]! * s.y);
-      lz = s.z;
-    } else {
-      lx = f(m[0]! * s.x + s.z * m[1]!);
-      lz = f(m[2]! * s.x + m[3]! * s.z);
-      ly = s.y;
-    }
-    s.x = f(p.x + lx);
-    s.y = f(p.y + ly);
-    s.z = f(p.z + lz);
-    const mask = node.inheritMask;
-    if (mask & 0x400) s.opacity = Math.trunc(Math.imul(p.opacity, s.opacity) / 255) >>> 0;
-    else if (!this.independent)
-      s.opacity = Math.trunc(Math.imul(root.state.opacity, s.opacity) / 255) >>> 0;
-    if ((mask & 0x1fc) === 0x1fc) {
-      computeMatrix(node);
-      multiply(m, node.matrix, node.matrix);
-      s.flipX = s.flipX !== p.flipX;
-      s.flipY = s.flipY !== p.flipY;
-      s.angle = f(p.angle + s.angle);
-      s.zoomX = f(p.zoomX * s.zoomX);
-      s.zoomY = f(p.zoomY * s.zoomY);
-      s.slantX = f(p.slantX + s.slantX);
-      s.slantY = f(p.slantY + s.slantY);
-      return;
-    }
-    s.inheritTransform(p, mask);
-    if (this.independent) {
-      computeMatrix(node);
-      return;
-    }
-    const r = root.state;
-    s.removeTransform(r, mask);
-    computeMatrix(node);
-    s.inheritTransform(r, mask);
-    multiply(root.matrix, node.matrix, node.matrix);
+  evaluateFrame(node: EmoteNode, force: boolean): boolean {
+    return evaluateFrame(this, node, force);
+  }
+
+  syncToParentMesh(parent: EmoteNode, node: EmoteNode): void {
+    syncToParentMesh(parent, node);
   }
 
   /** 0x10041510: nested motion layers (type 3). */
