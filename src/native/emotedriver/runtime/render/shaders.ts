@@ -1,3 +1,4 @@
+import type {D3d11InputElementDesc} from '../../../d3d11/contract.js';
 import {ByteView, ascii} from '../../../../core/binary.js';
 import {PeImage} from '../../../../formats/pe/image.js';
 import {parseDxbcContainer} from '../../../../graphics/d3d11-shader/container.js';
@@ -125,15 +126,8 @@ export function extractEmoteShaderBlobs(file: Uint8Array): EmoteShaderBlobs | nu
 }
 
 /** Native input element read from the x64 image's twelve layout descriptions. */
-export interface EmoteX64InputElement {
-  readonly semanticName: string;
-  readonly semanticIndex: number;
-  readonly format: number;
-  readonly inputSlot: number;
-  readonly alignedByteOffset: number;
-  readonly inputSlotClass: number;
-  readonly instanceDataStepRate: number;
-}
+export type EmoteX64InputElement = D3d11InputElementDesc;
+
 export interface EmoteX64ShaderBlobs {
   readonly vertex: readonly Uint8Array[];
   readonly pixel: readonly Uint8Array[];
