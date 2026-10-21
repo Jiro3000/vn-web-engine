@@ -27,6 +27,7 @@ import {
 } from './interpolate.js';
 import {ClipParameter, EmoteNode} from './node.js';
 import {EmoteClipTime} from './time.js';
+import {EmoteSourceResolver} from './source.js';
 import {clipRectPass, maskPass, meshPass, shapePass} from './vertices.js';
 import {composeEmoteMatrix, multiplyEmoteMatrices as multiply} from './matrix.js';
 
@@ -78,6 +79,7 @@ export class EmoteClip extends EmoteClipTime implements EmoteClipDriver, EmoteCl
   readonly zProjection: number;
   readonly textureIndexOf: (source: string) => number;
   private ratio: number;
+  private readonly sources: EmoteSourceResolver;
   /** +0x1b4: secondary draw sort key, inherited by nested clips (0x10033c60). */
   drawPriority = 0;
 
@@ -137,6 +139,7 @@ export class EmoteClip extends EmoteClipTime implements EmoteClipDriver, EmoteCl
     this.kernel = options.kernel ?? parent?.kernel ?? createEmoteMeshKernel();
     this.zProjection = options.zProjection ?? parent?.zProjection ?? 0;
     this.textureIndexOf = options.textureIndexOf ?? parent?.textureIndexOf ?? (() => -1);
+    this.sources = new EmoteSourceResolver([model], undefined, this);
     this.drawPriority = parent?.drawPriority ?? 0;
     this.ratio = f(options.meshDivisionRatio ?? 1);
     // 0x1002eab0: the root node; its adjustment block is hidden (+0x282 = 0) until `Show`.
@@ -626,35 +629,8 @@ export class EmoteClip extends EmoteClipTime implements EmoteClipDriver, EmoteCl
   private resolveSource(node: EmoteNode, slot: FrameSlot): void {
     if (slot.empty) return;
     const r = node.resolved;
-    if (r.src === slot.src && r.icon === slot.icon) return;
-    // This clip uses the x86 slot loader, which normalizes null keys to strings.
-    r.src = slot.src!;
-    r.icon = slot.icon!;
-    if (slot.src === 'blank') {
-      const parts = slot.icon!.split(':');
-      r.drawable = true;
-      r.hidden = true;
-      r.attr = 0;
-      r.texture = -1;
-      r.rect[2] = atoi(parts[0]);
-      r.rect[3] = atoi(parts[1]);
-      r.originX = f(atof(parts[2]));
-      r.originY = f(atof(parts[3]));
-    } else {
-      const icon = this.model.sources.get(slot.src!)?.icons.get(slot.icon!);
-      r.hidden = false;
-      r.drawable = icon !== undefined;
-      r.texture = this.textureIndexOf(slot.src!);
-      if (icon) {
-        r.attr = icon.attr;
-        r.originX = f(icon.originX);
-        r.originY = f(icon.originY);
-        r.rect[0] = icon.left ?? 0;
-        r.rect[1] = icon.top ?? 0;
-        r.rect[2] = icon.width;
-        r.rect[3] = icon.height;
-      }
-    }
+    if (r.srcKey === slot.src && r.iconKey === slot.icon) return;
+    if (!this.sources.resolve(r, slot, this.model)) return;
     if (node.mesh) {
       const w = r.rect[2]!,
         h = r.rect[3]!;
@@ -1191,16 +1167,6 @@ function psbObject(v: PsbValue | undefined): PsbObject | null {
 
 function psbTime(v: PsbValue | undefined): number {
   return f(Number(psbObject(v)?.time ?? 0));
-}
-
-function atoi(s: string | undefined): number {
-  const m = /^\s*[+-]?\d+/.exec(s ?? '');
-  return m ? parseInt(m[0], 10) | 0 : 0;
-}
-
-function atof(s: string | undefined): number {
-  const v = parseFloat(s ?? '');
-  return Number.isNaN(v) ? 0 : v;
 }
 
 /** Creates the clip for `motion` and loads it (0x1002eab0, 0x10033810). */

@@ -806,3 +806,59 @@ test('x64 cached keyframes retain source identity across seeks and independent p
   assert.deepEqual(at(players[0], 5), emptyKey, 'backward seeks must retain earlier content');
   assert.deepEqual(at(players[0], 15), []);
 });
+
+test('source transitions preserve blank sizes, stale rectangles and current-file lookup', () => {
+  const m = motion([
+    layer('image', [
+      frame(0, 2, {src: 'tex', icon: 'i', bmParam: 0}),
+      frame(5, 2, {src: 'blank', icon: '4294967303:17:-0:-0', bmParam: 0}),
+      frame(10, 2, {src: 'missing', icon: 'i', bmParam: 0}),
+      frame(15, 2, {src: 'tex', icon: 'i', bmParam: 0}),
+      frame(20, 0),
+    ]),
+  ]);
+  const file = model({o: {m}});
+  file.sources.get('tex').icons.get('i').resolution = 1;
+  const x86 = createEmoteClip(file, m, {textureIndexOf: () => 7});
+  x86.rootVisible = true;
+  const at86 = (time) => {
+    x86.seek(time);
+    x86.advance(0);
+    x86.evaluate();
+    return x86.nodes[1];
+  };
+  assert.deepEqual(at86(0).sourceRect, [16, 8, 10, 10]);
+  assert.equal(at86(0).textureIndex, 7);
+  const blank = at86(5);
+  assert.equal(blank.drawable, true);
+  assert.equal(blank.hidden, true);
+  assert.deepEqual(blank.sourceRect, [16, 8, 7, 17], 'x86 blank size uses signed integer stores');
+  assert.equal(Object.is(blank.resolved.originX, -0), true);
+  assert.equal(at86(10).drawable, false);
+  assert.deepEqual(at86(10).sourceRect, [16, 8, 7, 17], 'a miss retains the old rectangle');
+  assert.deepEqual(at86(15).sourceRect, [16, 8, 10, 10]);
+
+  const other = model({});
+  other.sources.get('tex').icons.get('i').width = 99;
+  file.sources = new Map([['unused', {icons: new Map()}], ...file.sources]);
+  const x64 = new EmoteMotionClip(new EmoteResource([other, file]));
+  x64.selectObject('o');
+  x64.setMotion('m');
+  x64.rootVisible = true;
+  const at64 = (time) => {
+    x64.seekTo(time);
+    x64.progress(0);
+    return x64.drawList;
+  };
+  const selected = at64(0)[0];
+  assert.equal(selected.file, file, 'the current motion file wins a duplicate source');
+  assert.equal(selected.texIndex, 1, 'the texture index belongs to the selected file');
+  assert.equal(selected.width, 10);
+  const blank64 = at64(5)[0];
+  assert.equal(blank64.blank, true);
+  assert.equal(blank64.width, f(4294967303), 'x64 blank size is not truncated to signed32');
+  assert.equal(blank64.left, 16);
+  assert.deepEqual(at64(10), []);
+  assert.equal(at64(15)[0].file, file);
+  assert.equal(at64(15)[0].width, 10);
+});

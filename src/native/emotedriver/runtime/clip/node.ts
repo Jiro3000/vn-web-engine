@@ -1,6 +1,7 @@
 import type {EmoteEasingCurve, EmoteLayer} from '../../../../formats/kirikiri/emote-model.js';
 import type {EmoteClipNodes, EmoteNodeView, EmoteVertexGrid} from '../interfaces.js';
 import {FrameSlot} from './frame.js';
+import type {EmoteSourceTarget} from './source.js';
 import {emoteBuild, EMOTEDRIVER_X86_SHA256, EMOTEDRIVER_X64_SHA256} from '../../build.js';
 
 /**
@@ -109,21 +110,31 @@ export class VertexGrid implements EmoteVertexGrid {
 }
 
 /** Source of the current frame (node +0x84..+0xac, 0x10038a30). */
-export class NodeSource {
+export class NodeSource implements EmoteSourceTarget {
   drawable = false;
   hidden = false;
-  src = '';
-  icon = '';
+  srcKey = '';
+  iconKey = '';
   attr = 0;
   texture = -1;
   readonly rect = new Int32Array(4);
   originX = 0;
   originY = 0;
+  setSourceSize(width: number, height: number): void {
+    this.rect[2] = width;
+    this.rect[3] = height;
+  }
+  setSourceRect(left: number, top: number, width: number, height: number): void {
+    this.rect[0] = left;
+    this.rect[1] = top;
+    this.rect[2] = width;
+    this.rect[3] = height;
+  }
   copyFrom(o: NodeSource): void {
     this.drawable = o.drawable;
     this.hidden = o.hidden;
-    this.src = o.src;
-    this.icon = o.icon;
+    this.srcKey = o.srcKey;
+    this.iconKey = o.iconKey;
     this.attr = o.attr;
     this.texture = o.texture;
     this.rect.set(o.rect);
@@ -354,10 +365,10 @@ export class EmoteNode implements EmoteNodeView {
     return this.cur.bm;
   }
   get source(): string | null {
-    return this.resolved.src === '' ? null : this.resolved.src;
+    return this.resolved.srcKey === '' ? null : this.resolved.srcKey;
   }
   get icon(): string | null {
-    return this.resolved.icon === '' ? null : this.resolved.icon;
+    return this.resolved.iconKey === '' ? null : this.resolved.iconKey;
   }
   get grid(): EmoteVertexGrid | null {
     return this.gridData;

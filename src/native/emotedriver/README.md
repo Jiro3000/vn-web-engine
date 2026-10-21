@@ -359,3 +359,12 @@ The player reuses one root-transform input record. `EmoteClipDriver` borrows it
 for the synchronous setter call; clip implementations copy the fields they
 retain. Each clip receives the same per-call field reads and native float stores
 without allocating a message for every transform sub-step.
+
+`runtime/clip/source.ts` resolves frame source keys for both images. Its
+`EmoteSourceTarget` interface writes the layer's existing storage: x86 uses an
+integer rectangle and renderer atlas indices; x64 keeps scalar rectangles and
+indices in the resolved file. The exact image selects blank-number parsing,
+missing-source field retention and resolution stores. A shared resolver searches
+the current motion file first and then the resource files in load order. Cached
+keys, including null versus empty x64 keys, belong to each layer. No source
+adapter or proxy is allocated during layer evaluation.

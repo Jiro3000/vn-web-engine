@@ -19,7 +19,6 @@
  */
 
 import type {
-  EmoteIcon,
   EmoteLayer,
   EmoteModel,
   EmoteMotion,
@@ -51,6 +50,11 @@ import type {
 import {createEmoteMeshKernel} from './runtime/mesh/index.js';
 import {ClipParameter, NodeState} from './runtime/clip/node.js';
 import {EmoteClipTime} from './runtime/clip/time.js';
+import {
+  EmoteSourceResolver,
+  type EmoteSourceIcon,
+  type EmoteSourceTarget,
+} from './runtime/clip/source.js';
 import {composeEmoteMatrix, multiplyEmoteMatrices} from './runtime/clip/matrix.js';
 
 const f32 = Math.fround;
@@ -63,13 +67,7 @@ const SUPPORTED_TYPES: ReadonlySet<number> = new Set([0, 1, 2, 3, 12]);
 // Resource
 
 /** Icon lookup result (0x180031810). */
-export interface EmoteIconRef {
-  readonly file: EmoteModel;
-  readonly source: string;
-  /** Index of the source in its file: the device texture index. */
-  readonly sourceIndex: number;
-  readonly icon: EmoteIcon;
-}
+export type EmoteIconRef = EmoteSourceIcon<EmoteModel>;
 
 /**
  * The motion files of one player (`MEmoteResource`). Motions and icons are searched in the
@@ -79,13 +77,16 @@ export class EmoteResource {
   /** +0x48: the coordinate-system depth factor applied to y; 0 for the D3D device. */
   readonly zFactor: number = 0;
   private nextNodeId = 1;
+  readonly sources: EmoteSourceResolver<EmoteModel>;
 
   constructor(
     readonly files: readonly EmoteModel[],
     readonly kernel: EmoteX64MeshKernel = createEmoteMeshKernel({
       driverSha256: EMOTEDRIVER_X64_SHA256,
     }),
-  ) {}
+  ) {
+    this.sources = new EmoteSourceResolver(files, EMOTEDRIVER_X64_SHA256);
+  }
 
   /** 0x180031530. */
   findMotion(
@@ -107,21 +108,7 @@ export class EmoteResource {
     icon: string | null,
     current: EmoteModel | null,
   ): EmoteIconRef | null {
-    if (src === null || icon === null) return null;
-    const order = current ? [current, ...this.files.filter((f) => f !== current)] : this.files;
-    for (const file of order) {
-      const source = file.sources.get(src);
-      const found = source?.icons.get(icon);
-      if (found) {
-        let sourceIndex = 0;
-        for (const name of file.sources.keys()) {
-          if (name === src) break;
-          sourceIndex++;
-        }
-        return {file, source: src, sourceIndex, icon: found};
-      }
-    }
-    return null;
+    return this.sources.findIcon(src, icon, current);
   }
 
   /** The device node-id allocator (node +0x20). */
@@ -293,7 +280,7 @@ class Param extends ClipParameter {
 }
 
 /** Layer node (0x3d0 bytes). */
-class Node extends NodeState implements EmoteCombinatorTarget {
+class Node extends NodeState implements EmoteCombinatorTarget, EmoteSourceTarget<EmoteModel> {
   readonly layer: EmoteLayer | null;
   readonly index: number;
   readonly parent: number;
@@ -338,9 +325,9 @@ class Node extends NodeState implements EmoteCombinatorTarget {
   readonly vel = new Float32Array(3);
   readonly anchor = new Float32Array(3);
   /** Source block +0xa0..+0xd8 and the resolved keys. */
-  found = false;
-  blank = false;
-  texIndex = 0;
+  drawable = false;
+  hidden = false;
+  texture = 0;
   attr = 0;
   left = 0;
   top = 0;
@@ -351,8 +338,8 @@ class Node extends NodeState implements EmoteCombinatorTarget {
   resolution = 1;
   file: EmoteModel | null = null;
   source: string | null = null;
-  private srcKey: string | null | undefined = undefined;
-  private iconKey: string | null | undefined = undefined;
+  srcKey: string | null | undefined = undefined;
+  iconKey: string | null | undefined = undefined;
   /** Overrides +0x340..+0x368; evaluated fields use the shared state above. */
   readonly adjust = new NodeState();
   /** +0x388..+0x398. */
@@ -462,37 +449,7 @@ class Node extends NodeState implements EmoteCombinatorTarget {
   resolveSource(clip: EmoteMotionClip, s: FrameState): void {
     if (s.empty) return;
     if (this.srcKey === s.src && this.iconKey === s.icon) return;
-    this.srcKey = s.src;
-    this.iconKey = s.icon;
-    if (s.src === 'blank') {
-      this.found = true;
-      this.blank = true;
-      this.attr = 0;
-      const p = (s.icon ?? '').split(':');
-      this.w = Number.parseInt(p[0] ?? '', 10) || 0;
-      this.h = Number.parseInt(p[1] ?? '', 10) || 0;
-      this.originX = f32(Number.parseFloat(p[2] ?? '') || 0);
-      this.originY = f32(Number.parseFloat(p[3] ?? '') || 0);
-      this.resolution = 1;
-    } else {
-      const r = clip.resource.findIcon(s.src, s.icon, clip.file);
-      this.found = r !== null;
-      this.blank = false;
-      if (r) {
-        const ic = r.icon;
-        this.file = r.file;
-        this.source = r.source;
-        this.texIndex = r.sourceIndex;
-        this.attr = ic.attr;
-        this.left = ic.left ?? 0;
-        this.top = ic.top ?? 0;
-        this.w = ic.width | 0;
-        this.h = ic.height | 0;
-        this.originX = f32(ic.originX);
-        this.originY = f32(ic.originY);
-        this.resolution = f32(ic.resolution);
-      }
-    }
+    if (!clip.resource.sources.resolve(this, s, clip.file)) return;
     if (this.meshTransform === 1 && this.mstate) {
       const n = Math.trunc(f32(this.division * clip.top.meshDivisionRatio));
       const sum = (this.w + this.h) >>> 0;
@@ -503,6 +460,18 @@ class Node extends NodeState implements EmoteCombinatorTarget {
       this.mstate.cols = c0 + 1;
       this.mstate.rows = r0 + 1;
     }
+  }
+
+  setSourceSize(width: number, height: number): void {
+    this.w = width;
+    this.h = height;
+  }
+
+  setSourceRect(left: number, top: number, width: number, height: number): void {
+    this.left = left;
+    this.top = top;
+    this.w = width | 0;
+    this.h = height | 0;
   }
 
   /** Overrides into the info block (root, 0x180043010 step 3). */
@@ -1217,7 +1186,7 @@ export class EmoteMotionClip
   /** 0x180042bb0: a child of a mesh layer follows the patch. */
   private syncToMesh(P: Node, n: Node): void {
     const ms = P.mstate;
-    if (!ms?.bp || !P.visible || !P.found || !(P.syncChildMask & 1) || P.meshTransform !== 1)
+    if (!ms?.bp || !P.visible || !P.drawable || !(P.syncChildMask & 1) || P.meshTransform !== 1)
       return;
     const f13 = f32(P.a.ox + P.originX),
       f14 = f32(P.a.oy + P.originY);
@@ -1384,7 +1353,7 @@ export class EmoteMotionClip
         n.a.empty ||
         n.stencilType === 0 ||
         !n.visible ||
-        (((0x1801 >> n.type) & 1) !== 0 && !n.found)
+        (((0x1801 >> n.type) & 1) !== 0 && !n.drawable)
       );
     }
     if (this.typeMask & 2) this.shapes();
@@ -1427,7 +1396,7 @@ export class EmoteMotionClip
         n.meshTransform !== 0 &&
         ms !== null &&
         ms.bp !== null &&
-        n.found &&
+        n.drawable &&
         (n.syncChildMask & 8) !== 0;
       if ((0x22 >> n.type) & 1) {
         if (!n.meshParent) {
@@ -1440,7 +1409,7 @@ export class EmoteMotionClip
         }
         n.anchor[2] = n.z;
       }
-      if (n.a.empty || !((0x1c01 >> n.type) & 1) || !n.found) continue;
+      if (n.a.empty || !((0x1c01 >> n.type) & 1) || !n.drawable) continue;
       let bpSrc: Float32Array | null;
       if (!n.meshCombine) bpSrc = ms?.bp ?? null;
       else if (!n.isDeformer) bpSrc = null;
@@ -1489,7 +1458,7 @@ export class EmoteMotionClip
           }
         }
       }
-      if (!((0x1401 >> n.type) & 1) || n.blank) continue;
+      if (!((0x1401 >> n.type) & 1) || n.hidden) continue;
       const grid = (n.grid ??= {cols: 1, rows: 1, points: new Float32Array(8)});
       if (!ms || !bpSrc) {
         const w = n.w,
@@ -1785,10 +1754,10 @@ export class EmoteMotionClip
         }
         continue;
       }
-      if (!((0x1401 >> n.type) & 1) || !n.found) continue;
+      if (!((0x1401 >> n.type) & 1) || !n.drawable) continue;
       const item = n.item!;
       n.drawn = true;
-      item.blank = n.blank;
+      item.blank = n.hidden;
       item.nodeId = n.id;
       item.coordinate = n.coordinate;
       item.objTriPriority = n.layer?.objTriPriority ?? 0;
@@ -1802,7 +1771,7 @@ export class EmoteMotionClip
       item.effectMode = this.effectMode;
       item.effectLevel = this.effectLevel;
       item.z = n.z;
-      item.texIndex = n.texIndex;
+      item.texIndex = n.texture;
       item.file = n.file;
       item.source = n.source;
       let attr = n.attr >>> 0;
