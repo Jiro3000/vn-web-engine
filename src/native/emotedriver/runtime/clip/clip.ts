@@ -21,7 +21,6 @@ import {
   lerpColor,
   lerpCoord,
   lerpPatch,
-  patchPoint,
   roundHalfAway,
   roundHalfEven,
 } from './interpolate.js';
@@ -29,7 +28,7 @@ import {ClipParameter, EmoteNode} from './node.js';
 import {EmoteClipTime} from './time.js';
 import {EmoteSourceResolver} from './source.js';
 import {EmoteLayerPass} from './layer.js';
-import {clipRectPass, maskPass, meshPass, shapePass} from './vertices.js';
+import {clipRectPass, maskPass, meshPass, shapePass, syncToParentMeshX86} from './vertices.js';
 import {composeEmoteMatrix, multiplyEmoteMatrices as multiply} from './matrix.js';
 
 /**
@@ -678,7 +677,8 @@ export class EmoteClip extends EmoteClipTime implements EmoteClipDriver, EmoteCl
     root.state.copyFrom(a);
     a.changed = false;
     if (!this.nested) computeMatrix(root);
-    if (nodes.length > 1) this.layerPass.evaluate(this, nodes, this.force, this.independent);
+    if (nodes.length > 1)
+      this.layerPass.evaluate<EmoteNode>(this, nodes, this.force, this.independent);
     for (const n of nodes) {
       const s = n.state;
       if (this.jumped) n.velocity.fill(0);
@@ -707,9 +707,7 @@ export class EmoteClip extends EmoteClipTime implements EmoteClipDriver, EmoteCl
     return evaluateFrame(this, node, force);
   }
 
-  syncToParentMesh(parent: EmoteNode, node: EmoteNode): void {
-    syncToParentMesh(parent, node);
-  }
+  readonly syncToParentMesh = syncToParentMeshX86;
 
   /** 0x10041510: nested motion layers (type 3). */
   private motionPass(): void {
@@ -1060,30 +1058,6 @@ export function computeMatrix(node: EmoteNode): void {
  * through its patch. Bits 2 (angle) and 4 (zoom) are not used by NEKOPARA (census: masks 0
  * and 8 only) and are rejected.
  */
-function syncToParentMesh(parent: EmoteNode, node: EmoteNode): void {
-  const mesh = parent.mesh;
-  if (!mesh || mesh.local.length === 0 || !parent.state.visible || !parent.resolved.drawable)
-    return;
-  if (!(parent.meshSync & 1) || parent.meshKind !== 1) return;
-  if (
-    (parent.meshSync & 2 && node.inheritMask & 0x10) ||
-    (parent.meshSync & 4 && node.inheritMask & 0x60)
-  )
-    throw new EmoteClipUnsupportedError('meshSyncChildMask angle/zoom (0x1003e890)');
-  const cur = parent.cur,
-    w = parent.resolved.rect[2]!,
-    h = parent.resolved.rect[3]!;
-  const ox = f(cur.ox + parent.resolved.originX),
-    oy = f(cur.oy + parent.resolved.originY);
-  const s = node.state,
-    b = node.coordinate === 0 ? s.y : s.z;
-  const p = [0, 0];
-  patchPoint(mesh.local, f(f(ox + s.x) / w), f(f(oy + b) / h), p);
-  s.x = f(w * p[0]! - ox);
-  if (node.coordinate === 0) s.y = f(h * p[1]! - oy);
-  else s.z = f(h * p[1]! - oy);
-}
-
 /** 0x100314c0: "path::name" or "path/name" (the first `::`, else the first `/`). */
 function splitVariable(label: string): [string, string] | null {
   let i = label.indexOf('::');

@@ -931,3 +931,53 @@ test('mesh subdivision retains the native minimum axes for each image', () => {
   assert.equal(x64.progress(0), undefined);
   assert.equal(x64.drawList.find((item) => !item.blank).grid, grid64, 'the clip retains its grid');
 });
+
+test('mesh synchronization keeps child versus parent projection axes and native errors', async () => {
+  const {syncToParentMeshX86, syncToParentMeshX64} =
+    await import('../dist/native/emotedriver/runtime/clip/vertices.js');
+  const bp = new Float32Array(32);
+  for (let i = 0; i < 16; i++) {
+    bp[i * 2] = f(((i & 3) / 3) * 2);
+    bp[i * 2 + 1] = f(i >> 2);
+  }
+  const cur = {ox: 0, oy: 0};
+  const x86 = {coordinate: 0, inheritMask: 0, state: {x: 16, y: 32, z: 16}};
+  const parent86 = {
+    mesh: {local: bp},
+    state: {visible: true},
+    resolved: {drawable: true, rect: Int32Array.of(0, 0, 64, 64), originX: 0, originY: 0},
+    meshSync: 1,
+    meshKind: 1,
+    cur,
+  };
+  syncToParentMeshX86(parent86, x86);
+  assert.ok(Math.abs(x86.state.x - 32) < 1e-5);
+  assert.ok(Math.abs(x86.state.y - 96) < 1e-5);
+  assert.equal(x86.state.z, 16);
+  parent86.meshSync = 3;
+  x86.inheritMask = 0x10;
+  assert.throws(() => syncToParentMeshX86(parent86, x86), /meshSyncChildMask angle\/zoom/);
+  const parent64 = {
+    mstate: {bp},
+    visible: true,
+    drawable: true,
+    syncChildMask: 7,
+    meshKind: 1,
+    coordinate: 1,
+    cur,
+    originX: 0,
+    originY: 0,
+    w: 64,
+    h: 64,
+  };
+  for (const wasm of [false, true]) {
+    const kernel = createEmoteMeshKernel({driverSha256: EMOTEDRIVER_X64_SHA256, wasm});
+    const x64 = {inheritMask: 0x70, x: 16, y: 32, z: 16, angle: 0, zoomX: 1, zoomY: 1};
+    syncToParentMeshX64.call({resource: {kernel}}, parent64, x64);
+    assert.ok(Math.abs(x64.x - 32) < 1e-5);
+    assert.equal(x64.y, 32);
+    assert.ok(Math.abs(x64.z - 48) < 1e-5);
+    assert.ok(Math.abs(x64.angle) < 1e-3);
+    assert.ok(x64.zoomX > 2 && x64.zoomY > 2, 'the x64 finite-difference zoom path runs');
+  }
+});

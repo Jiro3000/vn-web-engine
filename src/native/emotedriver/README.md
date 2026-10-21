@@ -374,7 +374,7 @@ image-specific storage interfaces. X86 supplies evaluated state blocks and array
 matrices; x64 supplies direct scalar fields. The exact image selects its loop once
 at clip creation, avoiding layout checks on every node. Both paths retain native
 parent bypass, empty-state copying, opacity, projection axes and float stores.
-Frame interpolation and mesh synchronization run through clip methods; root
+Frame interpolation and mesh synchronization run through typed clip hooks; root
 velocity and nested motions keep their clip phases. The pass allocates
 no layer adapters or per-call closures.
 
@@ -387,3 +387,9 @@ The scalar pass borrows the resource's `EmoteX64MeshKernel` and one clip's reuse
 corner and point buffers. Grids remain owned by their nodes. Shape evaluation
 retains each image's radius arithmetic and supported shape kinds. Motions without
 child nodes skip the scalar vertex call, whose loop would have no iterations.
+
+Mesh synchronization also lives in `runtime/clip/vertices.ts`. Clip hooks reference
+its functions directly. X86 maps position using the child's projection axis and
+rejects inherited angle/zoom synchronization. X64 uses the parent's axis and maps
+angle/zoom through finite differences of the patch. Narrow parent, target and
+resource interfaces preserve direct fields, native error ordering and float stores.

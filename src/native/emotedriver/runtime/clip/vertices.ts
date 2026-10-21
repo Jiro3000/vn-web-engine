@@ -5,6 +5,7 @@ import type {
   EmoteScalarVertexGrid,
 } from '../interfaces.js';
 import {EmoteUnsupportedError} from '../errors.js';
+import {EmoteClipUnsupportedError} from './frame.js';
 
 import {IDENTITY_PATCH, patchPoint, roundHalfEven} from './interpolate.js';
 import {VertexGrid} from './node.js';
@@ -699,5 +700,113 @@ export function shapePassX64(nodes: readonly EmoteScalarVertexNode[]): void {
       info[2] = n.anchor[1]!;
       if (shape === 1) info[3] = Math.trunc(f32(n.zoomX * 16 * 0.5));
     } else throw new EmoteUnsupportedError(`shape ${shape}`);
+  }
+}
+
+/** Only the frame, source and state read from an x86 mesh parent. */
+export interface EmoteBlockMeshSyncParent extends Pick<
+  EmoteBlockVertexNode,
+  'mesh' | 'state' | 'resolved' | 'meshSync' | 'meshKind' | 'cur'
+> {}
+export interface EmoteBlockMeshSyncTarget {
+  readonly coordinate: number;
+  readonly inheritMask: number;
+  readonly state: Pick<EmoteTransformState, 'x' | 'y' | 'z'>;
+}
+/** X64 projection uses the parent's coordinate flag. */
+export interface EmoteScalarMeshSyncParent extends Pick<
+  EmoteScalarVertexNode,
+  'mstate' | 'drawable' | 'syncChildMask' | 'meshKind' | 'cur' | 'originX' | 'originY' | 'w' | 'h'
+> {
+  readonly visible: boolean;
+  readonly coordinate: number;
+}
+export interface EmoteScalarMeshSyncTarget extends Pick<
+  EmoteTransformState,
+  'x' | 'y' | 'z' | 'angle' | 'zoomX' | 'zoomY'
+> {
+  readonly inheritMask: number;
+}
+/** The layer evaluator borrows the clip's kernel through its resource interface. */
+export interface EmoteScalarMeshSyncHost {
+  readonly resource: {readonly kernel: EmoteX64MeshKernel};
+}
+
+/** 0x1003e890: x86 position mapping and native unsupported angle/zoom error. */
+export function syncToParentMeshX86(
+  parent: EmoteBlockMeshSyncParent,
+  node: EmoteBlockMeshSyncTarget,
+): void {
+  const mesh = parent.mesh;
+  if (!mesh || mesh.local.length === 0 || !parent.state.visible || !parent.resolved.drawable)
+    return;
+  if (!(parent.meshSync & 1) || parent.meshKind !== 1) return;
+  if (
+    (parent.meshSync & 2 && node.inheritMask & 0x10) ||
+    (parent.meshSync & 4 && node.inheritMask & 0x60)
+  )
+    throw new EmoteClipUnsupportedError('meshSyncChildMask angle/zoom (0x1003e890)');
+  const cur = parent.cur,
+    w = parent.resolved.rect[2]!,
+    h = parent.resolved.rect[3]!;
+  const ox = f(cur.ox + parent.resolved.originX),
+    oy = f(cur.oy + parent.resolved.originY);
+  const s = node.state,
+    b = node.coordinate === 0 ? s.y : s.z;
+  const p = [0, 0];
+  patchPoint(mesh.local, f(f(ox + s.x) / w), f(f(oy + b) / h), p);
+  s.x = f(w * p[0]! - ox);
+  if (node.coordinate === 0) s.y = f(h * p[1]! - oy);
+  else s.z = f(h * p[1]! - oy);
+}
+
+/** 0x180042bb0: x64 position and finite-difference angle/zoom mapping. */
+export function syncToParentMeshX64(
+  this: EmoteScalarMeshSyncHost,
+  P: EmoteScalarMeshSyncParent,
+  n: EmoteScalarMeshSyncTarget,
+): void {
+  const ms = P.mstate;
+  if (!ms?.bp || !P.visible || !P.drawable || !(P.syncChildMask & 1) || P.meshKind !== 1) return;
+  const f13 = f32(P.cur.ox + P.originX),
+    f14 = f32(P.cur.oy + P.originY);
+  const yz = P.coordinate === 0 ? n.y : n.z;
+  const u = f32(f32(n.x + f13) / P.w),
+    v = f32(f32(yz + f14) / P.h);
+  const pt = new Float32Array([u, v]);
+  this.resource.kernel.mapPatchPoints(pt, 1, ms.bp);
+  const ny = f32(P.h * pt[1]! - f14);
+  if (P.coordinate === 0) n.y = ny;
+  else n.z = ny;
+  n.x = f32(P.w * pt[0]! - f13);
+  const bAng = (P.syncChildMask & 2) !== 0 && (n.inheritMask & 0x10) !== 0;
+  const bZoom = (P.syncChildMask & 4) !== 0 && (n.inheritMask & 0x60) !== 0;
+  if (!bAng && !bZoom) return;
+  const d = f32(0.0001);
+  const q = new Float32Array([u - d, v, u + d, v, u, v - d, u, v + d]);
+  this.resource.kernel.mapPatchPoints(q, 4, ms.bp);
+  const [xu0, yu0, xu1, yu1, xv0, yv0, xv1, yv1] = q as unknown as [
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+  ];
+  if (bAng) {
+    const a1 = Math.atan2(-(xv1 - xv0), yv1 - yv0);
+    const a2 = Math.atan2(yu1 - yu0, xu1 - xu0);
+    n.angle = f32(f32(((a1 + a2) * 0.5 * 360) / f32(Math.PI * 2)) + n.angle);
+  }
+  if (bZoom) {
+    const dx = xu1 - xu0,
+      dy = yu1 - yu0;
+    const t1 = Math.abs((yv0 - yu0) * dx - (xv0 - xu0) * dy) * 0.5;
+    const t2 = Math.abs((yv1 - yu0) * dx - (xv1 - xu0) * dy) * 0.5;
+    const s = f32(Math.sqrt(2 * (t1 + t2)) / f32(0.0002));
+    if (n.inheritMask & 0x20) n.zoomX = f32(s * n.zoomX);
+    if (n.inheritMask & 0x40) n.zoomY = f32(s * n.zoomY);
   }
 }

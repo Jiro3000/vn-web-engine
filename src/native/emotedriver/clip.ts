@@ -58,7 +58,12 @@ import {
   type EmoteSourceIcon,
   type EmoteSourceTarget,
 } from './runtime/clip/source.js';
-import {meshPassX64, shapePassX64, type EmoteScalarVertexHost} from './runtime/clip/vertices.js';
+import {
+  meshPassX64,
+  shapePassX64,
+  syncToParentMeshX64,
+  type EmoteScalarVertexHost,
+} from './runtime/clip/vertices.js';
 import {composeEmoteMatrix} from './runtime/clip/matrix.js';
 
 const f32 = Math.fround;
@@ -1171,52 +1176,8 @@ export class EmoteMotionClip
     return true;
   }
 
-  /** 0x180042bb0: a child of a mesh layer follows the patch. */
-  syncToParentMesh(P: Node, n: Node): void {
-    const ms = P.mstate;
-    if (!ms?.bp || !P.visible || !P.drawable || !(P.syncChildMask & 1) || P.meshKind !== 1) return;
-    const f13 = f32(P.cur.ox + P.originX),
-      f14 = f32(P.cur.oy + P.originY);
-    const yz = P.coordinate === 0 ? n.y : n.z;
-    const u = f32(f32(n.x + f13) / P.w),
-      v = f32(f32(yz + f14) / P.h);
-    const pt = new Float32Array([u, v]);
-    this.resource.kernel.mapPatchPoints(pt, 1, ms.bp);
-    const ny = f32(P.h * pt[1]! - f14);
-    if (P.coordinate === 0) n.y = ny;
-    else n.z = ny;
-    n.x = f32(P.w * pt[0]! - f13);
-    const bAng = (P.syncChildMask & 2) !== 0 && (n.inheritMask & 0x10) !== 0;
-    const bZoom = (P.syncChildMask & 4) !== 0 && (n.inheritMask & 0x60) !== 0;
-    if (!bAng && !bZoom) return;
-    const d = f32(0.0001);
-    const q = new Float32Array([u - d, v, u + d, v, u, v - d, u, v + d]);
-    this.resource.kernel.mapPatchPoints(q, 4, ms.bp);
-    const [xu0, yu0, xu1, yu1, xv0, yv0, xv1, yv1] = q as unknown as [
-      number,
-      number,
-      number,
-      number,
-      number,
-      number,
-      number,
-      number,
-    ];
-    if (bAng) {
-      const a1 = Math.atan2(-(xv1 - xv0), yv1 - yv0);
-      const a2 = Math.atan2(yu1 - yu0, xu1 - xu0);
-      n.angle = f32(f32(((a1 + a2) * 0.5 * 360) / f32(Math.PI * 2)) + n.angle);
-    }
-    if (bZoom) {
-      const dx = xu1 - xu0,
-        dy = yu1 - yu0;
-      const t1 = Math.abs((yv0 - yu0) * dx - (xv0 - xu0) * dy) * 0.5;
-      const t2 = Math.abs((yv1 - yu0) * dx - (xv1 - xu0) * dy) * 0.5;
-      const s = f32(Math.sqrt(2 * (t1 + t2)) / f32(0.0002));
-      if (n.inheritMask & 0x20) n.zoomX = f32(s * n.zoomX);
-      if (n.inheritMask & 0x40) n.zoomY = f32(s * n.zoomY);
-    }
-  }
+  /** Native x64 mesh synchronization, supplied through the layer-pass interface. */
+  readonly syncToParentMesh = syncToParentMeshX64;
 
   /** 0x180043010 (CalcLayerFrameInfo). */
   private calc(): void {
@@ -1244,7 +1205,7 @@ export class EmoteMotionClip
     root.adjust.changed = false;
     if (!this.rootMatrixFromParent) root.computeMatrix();
     if (nodes.length > 1)
-      this.layerPass.evaluate(this, nodes, this.forceCalc, this.independentInherit);
+      this.layerPass.evaluate<Node>(this, nodes, this.forceCalc, this.independentInherit);
     for (const n of nodes) {
       if (this.jumped) n.vel.fill(0);
       else {
