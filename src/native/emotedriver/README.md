@@ -429,3 +429,11 @@ Child event queues are read after child progress and replaced only when retired;
 reentrant callbacks therefore see the same live parent queue and clock state.
 The clip bindings select the pass and supply their native lifecycle operations.
 These interfaces are internal; the public DLL surface remains in `contract.ts`.
+
+`runtime/render/draw-list.ts` constructs both native draw lists through plain
+clip/node records and item-pool interfaces. Child clips supply their recursive
+draw operation. The block path retains its pooled items, OR of corner alpha and
+replaced stencil child arrays; the scalar path retains its AND of corner alpha,
+blend-specific neutral colors and stable composite arrays. Live parent draw order
+and stencil lists remain visible across child calls. Both paths use the same
+saturated RGBA product in `runtime/render/color.ts`; item layouts remain distinct.

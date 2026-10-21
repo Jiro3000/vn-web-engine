@@ -105,18 +105,7 @@ export function lerpColor(a: number, b: number, e: number): number {
  * 0x180030810: colour modulation. 0x808080ff is neutral; colour channels (bytes 1–3)
  * multiply as x·y/128 clamped to 255, alpha (byte 0) as x·y/255.
  */
-export function modulateColor(a: number, b: number): number {
-  a >>>= 0;
-  b >>>= 0;
-  if (b === 0x808080ff) return a;
-  if (a === 0x808080ff) return b;
-  let out = Math.trunc(((a & 0xff) * (b & 0xff)) / 255);
-  for (let s = 8; s < 32; s += 8) {
-    const v = (((a >>> s) & 0xff) * ((b >>> s) & 0xff)) >> 7;
-    out |= Math.min(255, v) << s;
-  }
-  return out >>> 0;
-}
+export {modulateColor} from './runtime/render/color.js';
 
 /** 0x180030670: patch lerp; below epsilon the first patch is copied. */
 export function lerpMesh(a: Float32Array, b: Float32Array, e: number): Float32Array {

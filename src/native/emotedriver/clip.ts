@@ -25,7 +25,7 @@ import type {
   EmoteParameter,
 } from '../../formats/emote/model.js';
 import type {PsbValue} from '../../formats/psb/psb.js';
-import {modulateColor} from './mesh.js';
+import {buildScalarDrawList} from './runtime/render/draw-list.js';
 import {EmoteUnsupportedError, type EmoteClip} from './player.js';
 import {EMOTEDRIVER_X64_SHA256} from './build.js';
 import {evaluateScalarFrame} from './runtime/clip/interpolate.js';
@@ -199,7 +199,7 @@ export class EmoteMotionClip
   /** +0x208.. priority state; +0x218 order list. */
   private priority: PriorityFrame[] = [];
   private prIndex = 0;
-  private order: readonly number[] = [];
+  order: readonly number[] = [];
   /** +0x250. */
   clipFlags = 0;
   /** +0x2e0. */
@@ -230,7 +230,7 @@ export class EmoteMotionClip
   typeMask = 0;
   private subNodes: Node[] = [];
   shapeNodes: Node[] = [];
-  private stencilNodes: Node[] = [];
+  stencilNodes: Node[] = [];
   private layerIndexMap: ReadonlyMap<string, number> | null = null;
 
   constructor(resource: EmoteResource, parent: EmoteMotionClip | null = null) {
@@ -782,111 +782,9 @@ export class EmoteMotionClip
 
   // Draw list --------------------------------------------------------------------------
 
-  /** 0x180048c70. */
-  private buildDrawList(color: number, collector: EmoteDrawItem[] | null): void {
-    if (this.jumped) return;
-    const mod = modulateColor(color, this.color);
-    const neutral = mod === NEUTRAL;
-    const nodes = this.layerNodes;
-    const count = nodes.length - 1;
-    for (let k = 0; k < count; k++) {
-      const idx = this.order[count - 1 - k];
-      const n = idx !== undefined ? nodes[idx + 1] : undefined;
-      if (!n) continue;
-      n.drawn = false;
-      if (!n.visible) continue;
-      if (n.type === 3) {
-        if (!n.sub) continue;
-        const c = n.inheritMask & 0x200 ? mod : NEUTRAL;
-        if (!n.stencilVisible && !n.maskLayer) n.sub.buildDrawList(c, collector);
-        else {
-          const item = n.item!;
-          n.drawn = true;
-          item.stencilType = n.stencilType;
-          item.stencilParent = n.stencilParent?.item ?? null;
-          item.alphaTest = false;
-          item.alphaScale = 1;
-          item.alphaOffset = 0;
-          item.composite.length = 0;
-          n.sub.buildDrawList(c, item.composite);
-          if (collector) collector.push(...item.composite);
-        }
-        continue;
-      }
-      if (!((0x1401 >> n.type) & 1) || !n.drawable) continue;
-      const item = n.item!;
-      n.drawn = true;
-      item.blank = n.hidden;
-      item.nodeId = n.id;
-      item.coordinate = n.coordinate;
-      item.objTriPriority = n.layer?.objTriPriority ?? 0;
-      item.clipFlags = this.clipFlags;
-      const A = n.cur;
-      item.bm = A.bm;
-      const b = A.bm & 0xff0f;
-      item.bmParam = A.bmParam;
-      item.grayscaleMode = this.grayscaleMode;
-      item.grayscaleLevel = this.grayscaleLevel;
-      item.effectMode = this.effectMode;
-      item.effectLevel = this.effectLevel;
-      item.z = n.z;
-      item.texIndex = n.texture;
-      item.file = n.file;
-      item.source = n.source;
-      let attr = n.attr >>> 0;
-      item.left = n.left;
-      item.top = n.top;
-      item.width = f32(n.w * n.resolution);
-      item.height = f32(n.h * n.resolution);
-      item.opa = n.opacity;
-      let c = mod;
-      let forced = neutral;
-      if (b === 2 || b === 3 || b === 5) {
-        c = NEUTRAL;
-        forced = true;
-      }
-      if (b !== 0) attr &= ~2;
-      const withOpa = (v: number) =>
-        n.opacity !== 255
-          ? (Math.floor(((v & 0xff) * n.opacity) / 255) | (v & 0xffffff00)) >>> 0
-          : v >>> 0;
-      if (!n.scalarColor) {
-        let all = 0xff;
-        for (let i = 0; i < 4; i++) {
-          const v = modulateColor(withOpa(n.colors[i]!), c);
-          item.colors[i] = v;
-          all &= v;
-        }
-        if ((all & 0xff) !== 0xff) attr &= ~2;
-      } else if (!forced || n.opacity !== 255) {
-        const v = modulateColor(withOpa(n.colors[0]!), c);
-        item.colors.fill(v);
-        if ((v & 0xff) !== 0xff) attr &= ~2;
-      } else {
-        item.colors.set(n.colors);
-        if (n.defaultColor) attr |= 4;
-      }
-      item.mesh = n.meshKind === 1 && n.mstate?.bp ? n.mstate : null;
-      item.grid = n.grid;
-      item.stencilType = n.stencilType;
-      item.stencilParent = n.stencilParent?.item ?? null;
-      if (n.stencilParent) attr &= ~2;
-      item.attr = attr;
-      if ((0x401 >> n.type) & 1) this.top.drawList.push(item);
-      if (collector) collector.push(item);
-      item.alphaTest = false;
-    }
-    for (const n of this.stencilNodes) {
-      if (!(n.stencilType & 4) || !n.drawn) continue;
-      const item = n.item!;
-      item.composite.length = 0;
-      item.composite.push(item);
-      for (const m of n.masks) {
-        if (!m.drawn || !m.item) continue;
-        if (m.type === 0) item.composite.push(m.item);
-        else if (m.type === 3) item.composite.push(...m.item.composite);
-      }
-    }
+  /** 0x180048c70: native draw construction through its runtime interface. */
+  buildDrawList(color: number, collector: EmoteDrawItem[] | null): void {
+    buildScalarDrawList(this, color, collector);
   }
 }
 
