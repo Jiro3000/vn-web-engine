@@ -39,6 +39,8 @@ import {EMOTEDRIVER_X64_SHA256} from './build.js';
 import {FrameSlot, loadHeader, loadContent, EMPTY_PATCH} from './runtime/clip/frame.js';
 import {EmoteMeshCombinators} from './runtime/clip/combinators.js';
 import type {
+  EmoteScalarMeshState,
+  EmoteScalarVertexGrid,
   EmoteCombinatorTarget,
   EmoteX64MeshKernel,
   EmoteClipDriver,
@@ -56,6 +58,7 @@ import {
   type EmoteSourceIcon,
   type EmoteSourceTarget,
 } from './runtime/clip/source.js';
+import {meshPassX64, shapePassX64, type EmoteScalarVertexHost} from './runtime/clip/vertices.js';
 import {composeEmoteMatrix} from './runtime/clip/matrix.js';
 
 const f32 = Math.fround;
@@ -149,30 +152,9 @@ function layerStates(layer: EmoteLayer): readonly FrameState[] {
 // ---------------------------------------------------------------------------------------
 // Nodes
 
-/** Mesh state of a `meshTransform` 1 layer (0x88 bytes at payload +0x10). */
-export interface EmoteMeshState {
-  /** +0x20/+0x24: tessellation segments. */
-  cols: number;
-  rows: number;
-  /** +0x30: the current patch (16 points), or null when the layer does not deform. */
-  bp: Float32Array | null;
-  /** +0x48: [w·m00, h·m01, w·m10, h·m11]. */
-  readonly ms: Float32Array;
-  /** +0x58: the patch in world coordinates (deformers only). */
-  readonly world: Float32Array;
-  /** +0x70: inverse of `ms`. */
-  readonly inv: Float32Array;
-  /** +0x80/+0x84: the negated translation. */
-  negTx: number;
-  negTy: number;
-}
-
-/** Vertex grid (node +0x3c0): (rows + 1)·(cols + 1) world points, rows outer. */
-export interface EmoteVertexGrid {
-  cols: number;
-  rows: number;
-  points: Float32Array;
-}
+/** Scalar native storage, also consumed by the renderer. */
+export type EmoteMeshState = EmoteScalarMeshState;
+export type EmoteVertexGrid = EmoteScalarVertexGrid;
 
 /** Draw item (0xa8 bytes at node +0x3b8), the renderer's input. */
 export interface EmoteDrawItem {
@@ -578,9 +560,7 @@ export class EmoteMotionClip
   readonly drawList: EmoteDrawItem[] = [];
   /** +0x4d8 (top). */
   private combinators: EmoteMeshCombinators | null = null;
-  private readonly quadCorners = new Float32Array(8);
-  private readonly mappedPoint = new Float32Array(2);
-  private readonly mappedResult: [number, number] = [0, 0];
+  private readonly vertexHost: EmoteScalarVertexHost;
   /** +0x1e8 nodes; +0x3c4 type bit set; type lists. */
   private layerNodes: Node[] = [];
   private advanceHeld = false;
@@ -597,6 +577,14 @@ export class EmoteMotionClip
     this.top = parent ? parent.top : this;
     this.rootMatrixFromParent = parent !== null;
     this.layerNodes = [new Node(this, null, 0, 0, null)];
+    this.vertexHost = {
+      nodes: this.layerNodes,
+      resource,
+      top: this.top,
+      quadCorners: new Float32Array(8),
+      mappedPoint: new Float32Array(2),
+      mappedResult: [0, 0],
+    };
   }
 
   private get root(): Node {
@@ -1266,7 +1254,7 @@ export class EmoteMotionClip
       }
     }
     this.forceCalc = false;
-    this.vertices();
+    if (nodes.length > 1) meshPassX64(this.vertexHost);
     for (let k = 1; k < nodes.length; k++) {
       const n = nodes[k]!;
       const a = n.adjust;
@@ -1279,7 +1267,7 @@ export class EmoteMotionClip
         (((0x1801 >> n.type) & 1) !== 0 && !n.drawable)
       );
     }
-    if (this.typeMask & 2) this.shapes();
+    if (this.typeMask & 2) shapePassX64(this.shapeNodes);
     if (this.typeMask & 8) this.subclips();
     for (const n of nodes) {
       n.framesDirty = false;
@@ -1288,243 +1276,6 @@ export class EmoteMotionClip
     for (const p of this.parameters) p.flags = 0;
     this.jumped = false;
     this.f18a = false;
-  }
-
-  /** 0x180043e00: anchors, mesh deformers and vertex grids. */
-  private vertices(): void {
-    const nodes = this.layerNodes;
-    for (let k = 1; k < nodes.length; k++) {
-      const n = nodes[k]!;
-      let D = nodes[n.parent]!;
-      const ms = n.mstate;
-      const oldId = n.meshParentId;
-      const mp = D.isDeformer || D.breaksChain ? D : D.meshParent;
-      n.meshParent = mp;
-      n.meshParentId = mp ? mp.id : 0;
-      if (n.meshParentId === oldId && !n.changed && (!mp || !mp.modified)) {
-        n.modified = false;
-        if (n.meshCombine && n.isDeformer) {
-          for (;;) {
-            if (D.isDeformer && D === n.meshParent) n.meshParent = D.meshParent;
-            if (!D.meshCombine) break;
-            D = nodes[D.parent]!;
-          }
-        }
-        continue;
-      }
-      n.modified = true;
-      n.breaksChain = mp !== null && (n.inheritMask & 0x2000000) === 0;
-      n.isDeformer =
-        !n.cur.empty &&
-        n.meshKind !== 0 &&
-        ms !== null &&
-        ms.bp !== null &&
-        n.drawable &&
-        (n.syncChildMask & 8) !== 0;
-      if ((0x22 >> n.type) & 1) {
-        if (!n.meshParent) {
-          n.anchor[0] = n.x;
-          n.anchor[1] = n.y;
-        } else {
-          const p = this.mapAnchor(n.meshParent, n.x, n.y, false);
-          n.anchor[0] = p[0];
-          n.anchor[1] = p[1];
-        }
-        n.anchor[2] = n.z;
-      }
-      if (n.cur.empty || !((0x1c01 >> n.type) & 1) || !n.drawable) continue;
-      let bpSrc: Float32Array | null;
-      if (!n.meshCombine) bpSrc = ms?.bp ?? null;
-      else if (!n.isDeformer) bpSrc = null;
-      else {
-        const temp = Float32Array.from(ms!.bp!);
-        for (;;) {
-          if (D.isDeformer) {
-            if (D === n.meshParent) n.meshParent = D.meshParent;
-            const dbp = D.mstate!.bp!;
-            for (let i = 0; i < 32; i++) temp[i] = temp[i]! + dbp[i]! - DEFAULT_MESH[i]!;
-          }
-          if (!D.meshCombine) break;
-          D = nodes[D.parent]!;
-        }
-        bpSrc = temp;
-      }
-      const yy = f32(this.resource.zFactor * n.z + n.y);
-      const xx = n.x;
-      const oy = f32(n.cur.oy + n.originY),
-        ox = f32(n.cur.ox + n.originX);
-      const ty = f32(-f32(ox * n.m10 + oy * n.m11) + yy);
-      const tx = f32(xx - f32(oy * n.m01 + n.m00 * ox));
-      if (n.meshKind === 1 && ms) {
-        const a = f32(n.w * n.m00),
-          b = f32(n.h * n.m01),
-          c = f32(n.w * n.m10),
-          d = f32(n.h * n.m11);
-        ms.ms[0] = a;
-        ms.ms[1] = b;
-        ms.ms[2] = c;
-        ms.ms[3] = d;
-        if (n.isDeformer) {
-          const det = f32(d * a - c * b);
-          ms.inv[0] = d / det;
-          ms.inv[1] = -b / det;
-          ms.inv[2] = -c / det;
-          ms.inv[3] = a / det;
-          ms.negTx = -tx;
-          ms.negTy = -ty;
-          const src = bpSrc!;
-          for (let i = 0; i < 16; i++) {
-            const px = src[i * 2]!,
-              py = src[i * 2 + 1]!;
-            ms.world[i * 2] = px * a + py * b + tx;
-            ms.world[i * 2 + 1] = c * px + d * py + ty;
-          }
-        }
-      }
-      if (!((0x1401 >> n.type) & 1) || n.hidden) continue;
-      const grid = (n.grid ??= {cols: 1, rows: 1, points: new Float32Array(8)});
-      if (!ms || !bpSrc) {
-        const w = n.w,
-          h = n.h;
-        const p00x = f32(n.m00 * 0 + n.m01 * 0 + tx),
-          p00y = f32(n.m10 * 0 + n.m11 * 0 + ty);
-        const p10x = f32(w * n.m00 + n.m01 * 0 + tx),
-          p10y = f32(w * n.m10 + n.m11 * 0 + ty);
-        const p01x = f32(n.m01 * h + n.m00 * 0 + tx),
-          p01y = f32(n.m11 * h + n.m10 * 0 + ty);
-        const p11x = f32(w * n.m00 + n.m01 * h + tx),
-          p11y = f32(w * n.m10 + n.m11 * h + ty);
-        const corners = this.quadCorners;
-        corners[0] = p00x;
-        corners[1] = p00y;
-        corners[2] = p10x;
-        corners[3] = p10y;
-        corners[4] = p01x;
-        corners[5] = p01y;
-        corners[6] = p11x;
-        corners[7] = p11y;
-        if (!n.meshParent) {
-          grid.cols = 1;
-          grid.rows = 1;
-          if (grid.points.length !== 8) grid.points = new Float32Array(8);
-          grid.points.set(corners);
-        } else {
-          let N: number;
-          const ratio = this.top.meshDivisionRatio;
-          if (n.meshKind === 0) {
-            let anc: Node = n.meshParent;
-            while (!anc.isDeformer && anc.meshParent) anc = anc.meshParent;
-            const div = Math.trunc(f32(anc.division * ratio));
-            N = Math.floor(((div * (w + h)) >>> 0) / ((anc.w + anc.h) >>> 0 || 1));
-          } else N = Math.trunc(f32(n.division * ratio)) >>> 0;
-          let c0 = Math.floor(((w * N) >>> 0) / ((w + h) >>> 0 || 1));
-          let r0 = (N - c0) >>> 0;
-          if (c0 === 0) c0 = 1;
-          if (r0 === 0) r0 = 1;
-          const cols = c0 + 1,
-            rows = r0 + 1;
-          grid.cols = cols;
-          grid.rows = rows;
-          const size = (rows + 1) * (cols + 1) * 2;
-          if (grid.points.length !== size) grid.points = new Float32Array(size);
-          this.resource.kernel.subdivideQuad(corners, cols, rows, grid.points);
-        }
-      } else {
-        grid.cols = ms.cols;
-        grid.rows = ms.rows;
-        const size = (ms.rows + 1) * (ms.cols + 1) * 2;
-        if (grid.points.length !== size) grid.points = new Float32Array(size);
-        this.resource.kernel.evaluateTransformedPatch(
-          ms.bp!,
-          ms.cols,
-          ms.rows,
-          ms.ms,
-          tx,
-          ty,
-          grid.points,
-        );
-      }
-      // Deformation by the mesh-parent chain; the anchor follows the same chain.
-      const count = grid.points.length >> 1;
-      let ax = xx,
-        ay = yy;
-      let X = n.meshParent;
-      let stopX = ax,
-        stopY = ay;
-      if (!n.breaksChain && X) {
-        let broke = false;
-        while (X) {
-          if (X.isDeformer) {
-            const xm = X.mstate!;
-            this.resource.kernel.deformPoints(
-              xm.world,
-              xm.inv,
-              xm.negTx,
-              xm.negTy,
-              grid.points,
-              count,
-            );
-            [ax, ay] = this.mapThrough(X, ax, ay);
-          }
-          stopX = ax;
-          stopY = ay;
-          const next: Node | null = X.meshParent;
-          if (X.breaksChain) {
-            X = next;
-            broke = true;
-            break;
-          }
-          X = next;
-        }
-        if (broke)
-          for (; X; X = X.meshParent) if (X.isDeformer) [ax, ay] = this.mapThrough(X, ax, ay);
-      } else {
-        for (; X; X = X.meshParent) if (X.isDeformer) [ax, ay] = this.mapThrough(X, ax, ay);
-      }
-      if (ax !== stopX || ay !== stopY) {
-        const dx = f32(ax - stopX),
-          dy = f32(ay - stopY);
-        for (let i = 0; i < count; i++) {
-          grid.points[i * 2]! += dx;
-          grid.points[i * 2 + 1]! += dy;
-        }
-      }
-    }
-  }
-
-  private mapThrough(X: Node, x: number, y: number): [number, number] {
-    const xm = X.mstate!;
-    const px = f32(x + xm.negTx),
-      py = f32(y + xm.negTy);
-    const p = this.mappedPoint;
-    p[0] = f32(py * xm.inv[1]! + px * xm.inv[0]!);
-    p[1] = f32(py * xm.inv[3]! + px * xm.inv[2]!);
-    this.resource.kernel.mapPatchPoints(p, 1, xm.world);
-    this.mappedResult[0] = p[0]!;
-    this.mappedResult[1] = p[1]!;
-    return this.mappedResult;
-  }
-
-  /** The anchor walk of types 1 and 5. */
-  private mapAnchor(start: Node, x: number, y: number, _unused: boolean): [number, number] {
-    for (let X: Node | null = start; X; X = X.meshParent)
-      if (X.isDeformer) [x, y] = this.mapThrough(X, x, y);
-    return [x, y];
-  }
-
-  /** 0x180045900: shape layers. */
-  private shapes(): void {
-    for (const n of this.shapeNodes) {
-      if (!n.modified || !n.shapeInfo) continue;
-      const info = n.shapeInfo;
-      const shape = n.layer?.shape ?? 0;
-      info[0] = shape;
-      if (shape === 0 || shape === 1) {
-        info[1] = n.anchor[0]!;
-        info[2] = n.anchor[1]!;
-        if (shape === 1) info[3] = Math.trunc(f32(n.zoomX * 16 * 0.5));
-      } else throw new EmoteUnsupportedError(`shape ${shape}`);
-    }
   }
 
   /** 0x180045c50: drives the nested clips of type 3 layers. */

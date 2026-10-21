@@ -470,3 +470,28 @@ export interface EmoteCombinatorTarget {
   /** The patch is borrowed for this synchronous call; null restores the neutral mesh. */
   applyCombinatorPatch(patch: Float32Array | null): void;
 }
+
+/** Mesh state of a `meshTransform` 1 layer (0x88 bytes at payload +0x10). */
+export interface EmoteScalarMeshState {
+  /** +0x20/+0x24: tessellation segments. */
+  cols: number;
+  rows: number;
+  /** +0x30: the current patch (16 points), or null when the layer does not deform. */
+  bp: Float32Array | null;
+  /** +0x48: [w·m00, h·m01, w·m10, h·m11]. */
+  readonly ms: Float32Array;
+  /** +0x58: the patch in world coordinates (deformers only). */
+  readonly world: Float32Array;
+  /** +0x70: inverse of `ms`. */
+  readonly inv: Float32Array;
+  /** +0x80/+0x84: the negated translation. */
+  negTx: number;
+  negTy: number;
+}
+
+/** Vertex grid (node +0x3c0): (rows + 1)·(cols + 1) world points, rows outer. */
+export interface EmoteScalarVertexGrid {
+  cols: number;
+  rows: number;
+  points: Float32Array;
+}

@@ -895,3 +895,39 @@ test('layer projection retains the native intermediate float store for each imag
   x64.progress(0);
   assert.equal(x64.layerPosition('point').x, 2 ** -24);
 });
+
+test('mesh subdivision retains the native minimum axes for each image', () => {
+  const bp = new Float32Array(32);
+  for (let i = 0; i < 16; i++) {
+    bp[i * 2] = f((i & 3) / 3);
+    bp[i * 2 + 1] = f((i >> 2) / 3);
+  }
+  const m = motion([
+    layer(
+      'mesh',
+      [frame(0, 2, {mask: 0x2000000, src: 'blank', icon: '100:50:0:0', mesh: {bp, cc: null}})],
+      {
+        meshTransform: 1,
+        mesh: {syncChildMask: 8, division: 6, combine: false},
+        children: [
+          layer('img', [frame(0, 2, {mask: 3, src: 'tex', icon: 'i'})], {meshTransform: 0}),
+        ],
+      },
+    ),
+  ]);
+  const file = model({o: {m}});
+  const x86 = createEmoteClip(file, m);
+  x86.rootVisible = true;
+  run(x86, 1);
+  const grid86 = x86.findNode('img').grid;
+  assert.deepEqual([grid86.columns, grid86.rows, grid86.positions.length], [1, 1, 8]);
+  const x64 = new EmoteMotionClip(new EmoteResource([file]));
+  x64.selectObject('o');
+  x64.setMotion('m');
+  x64.rootVisible = true;
+  x64.progress(0);
+  const grid64 = x64.drawList.find((item) => !item.blank).grid;
+  assert.deepEqual([grid64.cols, grid64.rows, grid64.points.length], [2, 2, 18]);
+  assert.equal(x64.progress(0), undefined);
+  assert.equal(x64.drawList.find((item) => !item.blank).grid, grid64, 'the clip retains its grid');
+});
