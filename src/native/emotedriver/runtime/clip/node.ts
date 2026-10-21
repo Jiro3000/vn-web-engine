@@ -1,3 +1,4 @@
+import type {EmoteBlockNestedClip} from './nested.js';
 import {EmoteUnsupportedError} from '../errors.js';
 import {composeEmoteMatrix, type EmoteMatrixValues} from './matrix.js';
 import type {
@@ -7,7 +8,6 @@ import type {
   EmoteX64Model,
 } from '../../../../formats/kirikiri/emote-model.js';
 import type {
-  EmoteClipNodes,
   EmoteNodeView,
   EmoteVertexGrid,
   EmoteScalarMeshState,
@@ -263,7 +263,7 @@ export class EmoteNode implements EmoteNodeView, EmoteBlockLayerTransform {
   /** +0x2d8 vertex grid. */
   gridData: VertexGrid | null = null;
   /** +0x2dc: nested clip (type 3); shape points (type 1). */
-  child: EmoteClipNodes | null = null;
+  child: EmoteBlockNestedClip<EmoteNode> | null = null;
   readonly shape: Float32Array | null;
   readonly stencilCompositeMaskLayers: readonly string[] | null;
   /** +0x2dc of type 12: nodes named by `stencilCompositeMaskLayerList` (0x1003a1d0). */

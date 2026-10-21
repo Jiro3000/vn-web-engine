@@ -420,3 +420,12 @@ interfaces; the public DLL contract is unchanged. Scalar integration keeps its
 intermediate product store and wide decay exponent; the block phase keeps its
 wide translation product and rounded exponent. No phase adapter or closure is
 allocated per call.
+
+`runtime/clip/nested.ts` drives motion-reference layers through explicit parent,
+child-clip and node interfaces. It shares no concrete clip or node types. The
+block and scalar passes retain their native flag contributions, reverse-loop
+boundaries, coordinate projection, directional matrix arithmetic and mask links.
+Child event queues are read after child progress and replaced only when retired;
+reentrant callbacks therefore see the same live parent queue and clock state.
+The clip bindings select the pass and supply their native lifecycle operations.
+These interfaces are internal; the public DLL surface remains in `contract.ts`.

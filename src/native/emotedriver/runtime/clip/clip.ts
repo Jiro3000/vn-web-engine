@@ -14,7 +14,8 @@ import type {
 } from '../interfaces.js';
 import {createEmoteMeshKernel} from '../mesh/index.js';
 import {EmoteClipUnsupportedError, loadContent, loadHeader, type FrameSlot} from './frame.js';
-import {evaluateBlockFrame, lerpAngle, roundHalfEven} from './interpolate.js';
+import {evaluateBlockFrame, roundHalfEven} from './interpolate.js';
+import {evaluateBlockMotions} from './nested.js';
 import {ClipParameter, EmoteNode} from './node.js';
 import {EmoteClipTime} from './time.js';
 import {EmoteSourceResolver} from './source.js';
@@ -253,7 +254,7 @@ export class EmoteClip extends EmoteClipTime implements EmoteClipDriver, EmoteCl
   }
 
   /** 0x10039620: drops the layer nodes (the root stays). */
-  private unload(): void {
+  unload(): void {
     this.unregisterParameters();
     this.nodes = [this.root];
     this.shapeNodes = [];
@@ -646,136 +647,14 @@ export class EmoteClip extends EmoteClipTime implements EmoteClipDriver, EmoteCl
 
   readonly syncToParentMesh = syncToParentMeshX86;
 
-  /** 0x10041510: nested motion layers (type 3). */
+  /** 0x10041510: nested motion through its shared runtime interface. */
   evaluateMotions(): void {
-    const clipFlags = this.motionParameter?.flags ?? 0;
-    for (const node of this.motionNodes) {
-      const child = node.child as EmoteClip;
-      const cur = node.cur,
-        other = node.next;
-      const time = node.parameter ? node.parameter.position : this.timeRunning;
-      const stepRef = node.parameter ? node.parameter.position : this.step;
-      const flags = node.parameter ? node.parameter.flags : clipFlags;
-      if (node.state.changed || flags !== 0) {
-        if (cur.empty || cur.src === '') {
-          child.playing = false;
-          child.unload();
-          child.objectName = child.motionName = '';
-          continue;
-        }
-        if (node.framesDirty || flags & 5) {
-          child.selectObject(cur.src!);
-          child.selectMotion(cur.icon!, cur.motion.flags);
-          if (child.playing && child.jumped) {
-            let t = f(f(time - cur.time) + cur.motion.timeOffset);
-            if (this.step < 0 && child.loopTime > 0 && t > child.lastTime)
-              do t = f(t - child.lastTime + child.loopTime);
-              while (t > child.lastTime);
-            child.seek(t);
-            if (!this.jumped) child.replay = true;
-          }
-        }
-        let dofst = cur.motion.dofst,
-          angle = 0,
-          apply = false;
-        if (cur.motion.dt !== 0) {
-          if (cur.motion.docmpl && cur.tween && !other.empty && other.motion.dt !== 0)
-            dofst = lerpAngle(
-              cur.angleCurve,
-              dofst,
-              other.motion.dofst,
-              f((stepRef - cur.time) / (other.time - cur.time)),
-            );
-          if (cur.motion.dt !== 1)
-            throw new EmoteClipUnsupportedError(`nested motion direction type ${cur.motion.dt}`);
-          angle = f(node.state.angle + dofst);
-          apply = true;
-        }
-        const s = node.state,
-          m = node.matrix;
-        let x = s.x,
-          y = s.y,
-          z = s.z;
-        if (cur.ox !== 0 || cur.oy !== 0) {
-          const ox = -cur.ox,
-            oy = -cur.oy;
-          const dx = f(ox * m[0]! + oy * m[1]!),
-            dy = f(oy * m[3]! + m[2]! * ox);
-          if (node.coordinate === 0) {
-            x = f(x + dx);
-            y = f(y + dy);
-          } else if (node.coordinate === 1) {
-            x = f(x + dx);
-            z = f(z + dy);
-          }
-        }
-        const ra = child.root.adjust;
-        const set = <K extends keyof typeof ra>(key: K, value: (typeof ra)[K]) => {
-          if (ra[key] !== value) {
-            ra.changed = true;
-            ra[key] = value;
-          }
-        };
-        if (ra.x !== x || ra.y !== y || ra.z !== z) {
-          ra.changed = true;
-          ra.x = x;
-          ra.y = y;
-          ra.z = z;
-        }
-        if (ra.flipX !== s.flipX || ra.flipY !== s.flipY) {
-          ra.changed = true;
-          ra.flipX = s.flipX;
-          ra.flipY = s.flipY;
-        }
-        if (ra.zoomX !== s.zoomX || ra.zoomY !== s.zoomY) {
-          ra.changed = true;
-          ra.zoomX = s.zoomX;
-          ra.zoomY = s.zoomY;
-        }
-        if (apply) set('angle', angle);
-        if (ra.slantX !== s.slantX || ra.slantY !== s.slantY) {
-          ra.changed = true;
-          ra.slantX = s.slantX;
-          ra.slantY = s.slantY;
-        }
-        set('opacity', s.opacity);
-        set('shown', s.visible);
-        child.color = node.colors[0]!;
-        const cm = child.root.matrix;
-        if (!apply || s.angle === angle) cm.set(m);
-        else {
-          let rad = f(f((angle - s.angle) * 3.1415927410125732 * 2) / 360);
-          if (s.flipY !== s.flipX) rad = -rad;
-          const sn = f(Math.sin(rad)),
-            cs = f(Math.cos(rad)),
-            ns = -sn;
-          const m0 = m[0]!,
-            m1 = m[1]!,
-            m2 = m[2]!,
-            m3 = m[3]!;
-          cm[0] = m1 * sn + cs * m0;
-          cm[1] = m1 * cs + ns * m0;
-          cm[2] = m2 * cs + m3 * sn;
-          cm[3] = cs * m3 + m2 * ns;
-        }
-        ra.changed = true;
-      }
-      // LAB_10041f72: links, then the child steps with this clip and evaluates.
-      const cr = child.root;
-      cr.meshParent = node.meshParent;
-      cr.maskNode = node.maskNode;
-      cr.clipRect = node.clipRect;
-      child.advance(this.step);
-      child.evaluate();
-      if (child.events.length) {
-        this.events.push(...child.events);
-        child.events = [];
-      }
-    }
+    const flags = this.motionParameter?.flags ?? 0;
+    evaluateBlockMotions<EmoteNode>(this, this.motionNodes, flags);
   }
 
   /** 0x10032c70 / 0x10032d70: a different object name stops the clip and clears its motion. */
-  private selectObject(name: string): void {
+  selectObject(name: string): void {
     if (name === this.objectName) return;
     this.objectName = name;
     this.motionName = '';
@@ -783,7 +662,7 @@ export class EmoteClip extends EmoteClipTime implements EmoteClipDriver, EmoteCl
   }
 
   /** 0x10032fa0 / 0x10033020: (re)loads the named motion of the object. */
-  private selectMotion(name: string, flags: number): void {
+  selectMotion(name: string, flags: number): void {
     if (flags & 0x10 && this.motionName === '') {
       this.motionName = name;
       return;

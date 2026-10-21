@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createEmoteClip} from '../dist/native/emotedriver/runtime/clip.js';
+import {createEmoteClip, EmoteClip} from '../dist/native/emotedriver/runtime/clip.js';
 import {
   bernsteinTable,
   createEmoteMeshKernel,
@@ -15,7 +15,7 @@ import {
 } from '../dist/native/emotedriver/runtime/clip/interpolate.js';
 
 import {FrameSlot, loadHeader, loadContent} from '../dist/native/emotedriver/runtime/clip/frame.js';
-import {ClipParameter} from '../dist/native/emotedriver/runtime/clip/node.js';
+import {ClipParameter, NodeState} from '../dist/native/emotedriver/runtime/clip/node.js';
 import {EmoteClipTime} from '../dist/native/emotedriver/runtime/clip/time.js';
 import {EmoteMotionClip, EmoteResource} from '../dist/native/emotedriver/clip.js';
 import {
@@ -1027,4 +1027,127 @@ test('frame evaluation retains each image’s epsilon boundary', () => {
   x64.progress(0);
   x64.progress(epsilon);
   assert.equal(x64.layerPosition('point').x, f(8 * epsilon));
+});
+
+test('nested child interfaces retain native flags, reverse loop endpoints and event retirement', () => {
+  for (const scalar of [false, true]) {
+    const calls = [];
+    const current = new FrameSlot(scalar ? EMOTEDRIVER_X64_SHA256 : undefined);
+    Object.assign(current, {empty: false, src: 'object', icon: 'motion'});
+    current.motion.flags = 1;
+    const state = new NodeState();
+    const meshParent = {id: 7},
+      maskParent = {id: 8};
+    const node = {
+      ...state,
+      state,
+      matrix: new Float32Array([1, 0, 0, 1]),
+      m00: 1,
+      m01: 0,
+      m10: 0,
+      m11: 1,
+      cur: current,
+      next: new FrameSlot(),
+      param: null,
+      parameter: null,
+      framesDirty: true,
+      coordinate: 0,
+      colors: new Uint32Array([0x808080ff, 0x808080ff, 0x808080ff, 0x808080ff]),
+      meshParent,
+      maskNode: maskParent,
+      stencilParent: maskParent,
+      clipRect: new Float32Array([0, 0, 100, 100]),
+    };
+    const childRoot = {
+      adjust: new NodeState(),
+      matrix: new Float32Array(4),
+      m00: 0,
+      m01: 0,
+      m10: 0,
+      m11: 0,
+      meshParent: null,
+      maskNode: null,
+      stencilParent: null,
+      clipRect: null,
+      copyMatrix(source) {
+        for (const key of ['m00', 'm01', 'm10', 'm11']) this[key] = source[key];
+      },
+    };
+    const event = {type: 0, layer: 'nested', label: 'action'};
+    const child = {
+      root: childRoot,
+      playing: true,
+      jumped: true,
+      replay: false,
+      loopTime: 0,
+      lastTime: 6,
+      motionName: '',
+      objectName: '',
+      playingName: '',
+      color: 0,
+      events: [],
+      layerEvents: [],
+      selectObject(name) {
+        calls.push(['object', name]);
+      },
+      selectMotion(name, flags) {
+        calls.push(['motion', name, flags]);
+      },
+      setMotion(name, flags) {
+        calls.push(['motion', name, flags]);
+      },
+      seek(time) {
+        calls.push(['seek', time]);
+      },
+      seekTo(time) {
+        calls.push(['seek', time]);
+      },
+      advance(step) {
+        calls.push(['advance', step]);
+        this.events.push(event);
+      },
+      evaluate() {
+        calls.push(['evaluate']);
+      },
+      progressSub(step) {
+        calls.push(['progress', step]);
+        this.layerEvents.push(event);
+      },
+      unload() {
+        assert.fail('valid child must not unload');
+      },
+      reset() {
+        assert.fail('valid child must not reset');
+      },
+    };
+    node.child = child;
+    node.sub = child;
+    const parent = {
+      time: 6,
+      timeRunning: 6,
+      step: -1,
+      jumped: false,
+      motionParameter: {flags: 2},
+      motionNodes: [node],
+      subNodes: [node],
+      events: [],
+      layerEvents: [],
+    };
+    const queue = scalar ? child.layerEvents : child.events;
+    if (scalar) EmoteMotionClip.prototype.evaluateSubclips.call(parent);
+    else EmoteClip.prototype.evaluateMotions.call(parent);
+    assert.deepEqual(calls, [
+      ['object', 'object'],
+      ['motion', 'motion', scalar ? 3 : 1],
+      ['seek', scalar ? 0 : 6],
+      ...(scalar ? [['progress', -1]] : [['advance', -1], ['evaluate']]),
+    ]);
+    assert.equal(child.replay, true);
+    assert.equal(childRoot.meshParent, meshParent);
+    assert.equal(scalar ? childRoot.stencilParent : childRoot.maskNode, maskParent);
+    if (!scalar) assert.equal(childRoot.clipRect, node.clipRect);
+    assert.deepEqual(scalar ? parent.layerEvents : parent.events, [event]);
+    assert.deepEqual(scalar ? child.layerEvents : child.events, []);
+    assert.notEqual(scalar ? child.layerEvents : child.events, queue);
+  }
 });

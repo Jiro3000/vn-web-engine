@@ -25,7 +25,7 @@ import type {
   EmoteParameter,
 } from '../../formats/emote/model.js';
 import type {PsbValue} from '../../formats/psb/psb.js';
-import {lerpAngle, modulateColor} from './mesh.js';
+import {modulateColor} from './mesh.js';
 import {EmoteUnsupportedError, type EmoteClip} from './player.js';
 import {EMOTEDRIVER_X64_SHA256} from './build.js';
 import {evaluateScalarFrame} from './runtime/clip/interpolate.js';
@@ -44,6 +44,7 @@ import type {
 import {createEmoteMeshKernel} from './runtime/mesh/index.js';
 import {ClipParameter, EmoteScalarNode} from './runtime/clip/node.js';
 import {EmoteClipTime} from './runtime/clip/time.js';
+import {evaluateScalarMotions} from './runtime/clip/nested.js';
 import {EmoteLayerPass} from './runtime/clip/layer.js';
 import {EmoteSourceResolver, type EmoteSourceIcon} from './runtime/clip/source.js';
 import {syncToParentMeshX64, type EmoteScalarVertexHost} from './runtime/clip/vertices.js';
@@ -202,7 +203,7 @@ export class EmoteMotionClip
   /** +0x250. */
   clipFlags = 0;
   /** +0x2e0. */
-  private layerEvents: DriverClipEvent[] = [];
+  layerEvents: DriverClipEvent[] = [];
   get events(): readonly DriverClipEvent[] {
     return this.layerEvents;
   }
@@ -249,7 +250,7 @@ export class EmoteMotionClip
     };
   }
 
-  private get root(): Node {
+  get root(): Node {
     return this.layerNodes[0]!;
   }
 
@@ -505,7 +506,7 @@ export class EmoteMotionClip
   }
 
   /** 0x18003e530: drops every node but the root and the nested clips. */
-  private reset(): void {
+  reset(): void {
     this.top.combinators?.unregister(this);
     for (const n of this.subNodes) n.sub?.destroy();
     this.layerNodes.length = 1;
@@ -614,7 +615,7 @@ export class EmoteMotionClip
   }
 
   /** 0x18003f600: nested clips skip the top-level queue/combinator phase. */
-  private progressSub(frames: number): void {
+  progressSub(frames: number): void {
     super.advance(frames);
     this.calc();
   }
@@ -773,121 +774,10 @@ export class EmoteMotionClip
     this.layerPass.evaluateScalarClip<Node>(this);
   }
 
-  /** 0x180045c50: drives the nested clips of type 3 layers. */
+  /** 0x180045c50: nested motion through its shared runtime interface. */
   evaluateSubclips(): void {
-    const clipFlags = this.motionParameter ? this.motionParameter.flags : 0;
-    for (const n of this.subNodes) {
-      const sub = n.sub;
-      if (!sub) continue;
-      const tClamped = n.param ? n.param.value : this.time;
-      const tTime = n.param ? n.param.value : this.timeRunning;
-      const flags = n.param ? n.param.flags : clipFlags;
-      const A = n.cur,
-        B = n.next;
-      if (n.changed || flags) {
-        if (A.empty || !A.src) {
-          sub.playing = false;
-          sub.reset();
-          sub.motionName = '';
-          sub.playingName = '';
-          continue;
-        }
-        if (n.framesDirty || flags & 5) {
-          sub.selectObject(A.src);
-          sub.setMotion(A.icon ?? '', flags | A.motion.flags);
-          if (sub.playing && sub.jumped) {
-            let t = f32(f32(tTime - A.time) + A.motion.timeOffset);
-            if (this.step < 0 && sub.loopTime >= 0 && sub.lastTime > sub.loopTime)
-              while (sub.lastTime <= t) t = f32(f32(t - sub.lastTime) + sub.loopTime);
-            sub.seekTo(t);
-            if (!this.jumped) sub.replay = true;
-          }
-        }
-        let bAng = false;
-        let angle = 0;
-        const dt = A.motion.dt;
-        if (dt !== 0) {
-          let dofst = A.motion.dofst;
-          if (A.motion.docmpl && A.tween && !B.empty && B.motion.dt !== 0) {
-            const e = f32(f32(tClamped - A.time) / f32(B.time - A.time));
-            dofst = lerpAngle(dofst, B.motion.dofst, e);
-          }
-          if (dt === 1) {
-            angle = f32(dofst + n.angle);
-            bAng = true;
-          } else throw new EmoteUnsupportedError(`nested-motion direction mode ${dt}`);
-        }
-        let cx = n.x,
-          cy = n.y,
-          cz = n.z;
-        if (A.ox !== 0 || A.oy !== 0) {
-          const ox = -A.ox,
-            oy = -A.oy;
-          const rx = f32(oy * n.m01 + ox * n.m00),
-            ry = f32(oy * n.m11 + ox * n.m10);
-          if (n.coordinate === 0) {
-            cx = f32(cx + rx);
-            cy = f32(cy + ry);
-          } else if (n.coordinate === 1) {
-            cx = f32(rx + cx);
-            cz = f32(ry + cz);
-          }
-        }
-        const r = sub.root;
-        if (r.adjust.x !== cx || r.adjust.y !== cy || r.adjust.z !== cz) {
-          r.adjust.changed = true;
-          r.adjust.x = cx;
-          r.adjust.y = cy;
-          r.adjust.z = cz;
-        }
-        if (r.adjust.flipX !== n.flipX || r.adjust.flipY !== n.flipY) {
-          r.adjust.changed = true;
-          r.adjust.flipX = n.flipX;
-          r.adjust.flipY = n.flipY;
-        }
-        if (r.adjust.zoomX !== n.zoomX || r.adjust.zoomY !== n.zoomY) {
-          r.adjust.changed = true;
-          r.adjust.zoomX = n.zoomX;
-          r.adjust.zoomY = n.zoomY;
-        }
-        if (bAng && r.adjust.angle !== angle) {
-          r.adjust.changed = true;
-          r.adjust.angle = angle;
-        }
-        if (r.adjust.slantX !== n.slantX || r.adjust.slantY !== n.slantY) {
-          r.adjust.changed = true;
-          r.adjust.slantX = n.slantX;
-          r.adjust.slantY = n.slantY;
-        }
-        if (r.adjust.opacity !== n.opacity) {
-          r.adjust.changed = true;
-          r.adjust.opacity = n.opacity;
-        }
-        if (r.adjust.shown !== n.visible) {
-          r.adjust.changed = true;
-          r.adjust.shown = n.visible;
-        }
-        sub.color = n.colors[0]!;
-        if (bAng && angle !== n.angle) {
-          const d = f32(f32(f32(f32(angle - n.angle) * f32(Math.PI)) * 2) / 360);
-          const s = f32(Math.sin(d)),
-            c = f32(Math.cos(d));
-          r.m00 = f32(-s * n.m10 + c * n.m00);
-          r.m01 = f32(c * n.m01 + -s * n.m11);
-          r.m10 = f32(c * n.m10 + s * n.m00);
-          r.m11 = f32(s * n.m01 + c * n.m11);
-        } else r.copyMatrix(n);
-        r.adjust.changed = true;
-      }
-      const r = sub.root;
-      r.meshParent = n.meshParent;
-      r.stencilParent = n.stencilParent;
-      sub.progressSub(this.step);
-      if (sub.layerEvents.length) {
-        this.layerEvents.push(...sub.layerEvents);
-        sub.layerEvents = [];
-      }
-    }
+    const flags = this.motionParameter ? this.motionParameter.flags : 0;
+    evaluateScalarMotions<Node>(this, this.subNodes, flags);
   }
 
   // Draw list --------------------------------------------------------------------------
