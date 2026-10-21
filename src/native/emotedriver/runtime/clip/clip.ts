@@ -14,16 +14,7 @@ import type {
 } from '../interfaces.js';
 import {createEmoteMeshKernel} from '../mesh/index.js';
 import {EmoteClipUnsupportedError, loadContent, loadHeader, type FrameSlot} from './frame.js';
-import {
-  IDENTITY_PATCH,
-  lerp,
-  lerpAngle,
-  lerpColor,
-  lerpCoord,
-  lerpPatch,
-  roundHalfAway,
-  roundHalfEven,
-} from './interpolate.js';
+import {evaluateBlockFrame, lerpAngle, roundHalfEven} from './interpolate.js';
 import {ClipParameter, EmoteNode} from './node.js';
 import {EmoteClipTime} from './time.js';
 import {EmoteSourceResolver} from './source.js';
@@ -43,7 +34,6 @@ import {composeEmoteMatrix, multiplyEmoteMatrices as multiply} from './matrix.js
  */
 
 const f = Math.fround;
-const EPSILON = 1.1920929e-7;
 let nodeIds = 0;
 
 export interface EmoteClipOptions {
@@ -651,7 +641,7 @@ export class EmoteClip extends EmoteClipTime implements EmoteClipDriver, EmoteCl
   }
 
   evaluateFrame(node: EmoteNode, force: boolean): boolean {
-    return evaluateFrame(this, node, force);
+    return evaluateBlockFrame(this, node, force);
   }
 
   readonly syncToParentMesh = syncToParentMeshX86;
@@ -912,83 +902,6 @@ const SCALAR_FIELDS = [
 ] as const;
 
 // -----------------------------------------------------------------------------------------
-
-/**
- * 0x1003e1a0: evaluates the node's current frame into its state. Returns whether the node
- * changed (always when `force` or the frames were reloaded).
- */
-function evaluateFrame(clip: EmoteClip, node: EmoteNode, force: boolean): boolean {
-  const cur = node.cur,
-    next = node.next,
-    s = node.state;
-  let changed = force || node.framesDirty;
-  if (cur.empty) return changed;
-  if (cur.tween && !next.empty) {
-    const now = node.parameter ? node.parameter.position : clip.time;
-    let d = f(now - cur.time);
-    if (cur.ti !== 0) {
-      const ti = cur.ti >>> 0;
-      d = f((Math.imul(roundHalfEven(d / f(ti)), ti) >>> 0) as number);
-    }
-    const t = f(d / f(next.time - cur.time));
-    if (Math.abs(t) >= EPSILON) {
-      if (!changed && Math.abs(f(node.lastT - t)) < EPSILON) return false;
-      node.lastT = t;
-      s.flipX = cur.fx;
-      s.flipY = cur.fy;
-      s.angle = lerpAngle(cur.angleCurve, cur.angle, next.angle, t);
-      s.zoomX = lerp(cur.zoomCurve, cur.zx, next.zx, t);
-      s.zoomY = lerp(cur.zoomCurve, cur.zy, next.zy, t);
-      s.slantX = lerp(cur.slantCurve, cur.sx, next.sx, t);
-      s.slantY = lerp(cur.slantCurve, cur.sy, next.sy, t);
-      const xyz = [0, 0, 0];
-      lerpCoord(cur.coordCurve, cur.coord, next.coord, t, xyz, 0);
-      s.x = xyz[0]!;
-      s.y = xyz[1]!;
-      s.z = xyz[2]!;
-      const u = f(1 - t);
-      s.opacity = roundHalfAway(f((cur.opa >>> 0) * u + (next.opa >>> 0) * t));
-      node.singleColor = cur.singleColor && next.singleColor;
-      node.colorUnset = cur.colorUnset && next.colorUnset;
-      if (!node.singleColor)
-        for (let k = 0; k < 4; k++)
-          node.colors[k] = lerpColor(cur.colorCurve, cur.colors[k]!, next.colors[k]!, t);
-      else node.colors.fill(lerpColor(cur.colorCurve, cur.colors[0]!, next.colors[0]!, t));
-      if (node.mesh) {
-        const a = cur.meshPatch,
-          b = next.meshPatch;
-        if (a.length === 0 && b.length === 0) node.mesh.local = new Float32Array(0);
-        else {
-          const from = a.length ? a : IDENTITY_PATCH,
-            to = b.length ? b : IDENTITY_PATCH;
-          if (node.mesh.local.length !== from.length)
-            node.mesh.local = new Float32Array(from.length);
-          lerpPatch(cur.meshCurve, from, to, t, node.mesh.local);
-        }
-      }
-      return true;
-    }
-    if (Math.abs(f(node.lastT - t)) >= EPSILON) changed = true;
-    node.lastT = t;
-  }
-  if (!changed) return false;
-  s.flipX = cur.fx;
-  s.flipY = cur.fy;
-  s.angle = f(cur.angle);
-  s.zoomX = f(cur.zx);
-  s.zoomY = f(cur.zy);
-  s.slantX = f(cur.sx);
-  s.slantY = f(cur.sy);
-  s.x = f(cur.coord[0]!);
-  s.y = f(cur.coord[1]!);
-  s.z = f(cur.coord[2]!);
-  node.colors.set(cur.colors);
-  s.opacity = cur.opa >>> 0;
-  node.singleColor = cur.singleColor;
-  node.colorUnset = cur.colorUnset;
-  if (node.mesh) node.mesh.local = cur.meshPatch.slice();
-  return true;
-}
 
 /** 0x1003dd30: compose the evaluated node's local frame. */
 export function computeMatrix(node: EmoteNode): void {

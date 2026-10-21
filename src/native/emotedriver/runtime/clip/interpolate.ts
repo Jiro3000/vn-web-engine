@@ -1,6 +1,8 @@
 import {emoteBuild, EMOTEDRIVER_X86_SHA256, EMOTEDRIVER_X64_SHA256} from '../../build.js';
 import {EmoteUnsupportedError} from '../errors.js';
 import type {EmoteEasingCurve} from '../../../../formats/kirikiri/emote-model.js';
+import type {FrameSlot} from './frame.js';
+import type {EmoteTransformState} from './layer.js';
 
 /**
  * Keyframe interpolation and easing of `MMotionPlayer` (`emotedriver.dll`, SHA-256
@@ -238,4 +240,252 @@ export function patchPoint(
   }
   out[at] = f(x1 + x0);
   out[at + 1] = f(y1 + y0);
+}
+
+/** Empty native patch pointer; frame slots and scalar evaluation share this identity. */
+export const EMPTY_PATCH = new Float32Array(0);
+
+/** Only slot values consumed by interpolation, independent of slot allocation/loading. */
+type EmoteInterpolationFrame = Pick<
+  FrameSlot,
+  | 'empty'
+  | 'tween'
+  | 'time'
+  | 'ti'
+  | 'fx'
+  | 'fy'
+  | 'angle'
+  | 'zx'
+  | 'zy'
+  | 'sx'
+  | 'sy'
+  | 'coord'
+  | 'opa'
+  | 'singleColor'
+  | 'colorUnset'
+  | 'colors'
+  | 'meshPatch'
+  | 'eased'
+  | 'coordCurve'
+  | 'colorCurve'
+  | 'angleCurve'
+  | 'zoomCurve'
+  | 'slantCurve'
+  | 'meshCurve'
+>;
+
+type EmoteFrameTransform = Pick<
+  EmoteTransformState,
+  | 'flipX'
+  | 'flipY'
+  | 'angle'
+  | 'zoomX'
+  | 'zoomY'
+  | 'slantX'
+  | 'slantY'
+  | 'x'
+  | 'y'
+  | 'z'
+  | 'opacity'
+>;
+
+export interface EmoteFrameClock {
+  readonly time: number;
+}
+
+/** State-block storage of the a3b693b6…5e70b3a86 image. */
+export interface EmoteBlockFrameNode {
+  readonly cur: EmoteInterpolationFrame;
+  readonly next: EmoteInterpolationFrame;
+  readonly framesDirty: boolean;
+  readonly parameter: {readonly position: number} | null;
+  readonly state: EmoteFrameTransform;
+  lastT: number;
+  singleColor: boolean;
+  colorUnset: boolean;
+  readonly colors: Uint32Array;
+  readonly mesh: {local: Float32Array} | null;
+}
+
+/** Scalar storage of the 80d28bd0…1e051 image; no per-node layout adapter. */
+export interface EmoteScalarFrameNode extends EmoteFrameTransform {
+  readonly cur: EmoteInterpolationFrame;
+  readonly next: EmoteInterpolationFrame;
+  readonly framesDirty: boolean;
+  readonly param: {readonly value: number} | null;
+  prevE: number;
+  scalarColor: boolean;
+  defaultColor: boolean;
+  readonly colors: Uint32Array;
+  readonly meshKind: number;
+  readonly combinatorOwned: boolean;
+  readonly mstate: {bp: Float32Array | null} | null;
+}
+
+// Preserve the x86 literal comparison, which differs from a rounded float epsilon.
+const BLOCK_EPSILON = 1.1920929e-7;
+
+/**
+ * 0x1003e1a0: evaluates the node's current frame into its state. Returns whether the node
+ * changed (always when `force` or the frames were reloaded).
+ */
+export function evaluateBlockFrame(
+  clip: EmoteFrameClock,
+  node: EmoteBlockFrameNode,
+  force: boolean,
+): boolean {
+  const cur = node.cur,
+    next = node.next,
+    s = node.state;
+  let changed = force || node.framesDirty;
+  if (cur.empty) return changed;
+  if (cur.tween && !next.empty) {
+    const now = node.parameter ? node.parameter.position : clip.time;
+    let d = f(now - cur.time);
+    if (cur.ti !== 0) {
+      const ti = cur.ti >>> 0;
+      d = f((Math.imul(roundHalfEven(d / f(ti)), ti) >>> 0) as number);
+    }
+    const t = f(d / f(next.time - cur.time));
+    if (Math.abs(t) >= BLOCK_EPSILON) {
+      if (!changed && Math.abs(f(node.lastT - t)) < BLOCK_EPSILON) return false;
+      node.lastT = t;
+      s.flipX = cur.fx;
+      s.flipY = cur.fy;
+      s.angle = lerpAngle(cur.angleCurve, cur.angle, next.angle, t);
+      s.zoomX = lerp(cur.zoomCurve, cur.zx, next.zx, t);
+      s.zoomY = lerp(cur.zoomCurve, cur.zy, next.zy, t);
+      s.slantX = lerp(cur.slantCurve, cur.sx, next.sx, t);
+      s.slantY = lerp(cur.slantCurve, cur.sy, next.sy, t);
+      const xyz = [0, 0, 0];
+      lerpCoord(cur.coordCurve, cur.coord, next.coord, t, xyz, 0);
+      s.x = xyz[0]!;
+      s.y = xyz[1]!;
+      s.z = xyz[2]!;
+      const u = f(1 - t);
+      s.opacity = roundHalfAway(f((cur.opa >>> 0) * u + (next.opa >>> 0) * t));
+      node.singleColor = cur.singleColor && next.singleColor;
+      node.colorUnset = cur.colorUnset && next.colorUnset;
+      if (!node.singleColor)
+        for (let k = 0; k < 4; k++)
+          node.colors[k] = lerpColor(cur.colorCurve, cur.colors[k]!, next.colors[k]!, t);
+      else node.colors.fill(lerpColor(cur.colorCurve, cur.colors[0]!, next.colors[0]!, t));
+      if (node.mesh) {
+        const a = cur.meshPatch,
+          b = next.meshPatch;
+        if (a.length === 0 && b.length === 0) node.mesh.local = new Float32Array(0);
+        else {
+          const from = a.length ? a : IDENTITY_PATCH,
+            to = b.length ? b : IDENTITY_PATCH;
+          if (node.mesh.local.length !== from.length)
+            node.mesh.local = new Float32Array(from.length);
+          lerpPatch(cur.meshCurve, from, to, t, node.mesh.local);
+        }
+      }
+      return true;
+    }
+    if (Math.abs(f(node.lastT - t)) >= BLOCK_EPSILON) changed = true;
+    node.lastT = t;
+  }
+  if (!changed) return false;
+  s.flipX = cur.fx;
+  s.flipY = cur.fy;
+  s.angle = f(cur.angle);
+  s.zoomX = f(cur.zx);
+  s.zoomY = f(cur.zy);
+  s.slantX = f(cur.sx);
+  s.slantY = f(cur.sy);
+  s.x = f(cur.coord[0]!);
+  s.y = f(cur.coord[1]!);
+  s.z = f(cur.coord[2]!);
+  node.colors.set(cur.colors);
+  s.opacity = cur.opa >>> 0;
+  node.singleColor = cur.singleColor;
+  node.colorUnset = cur.colorUnset;
+  if (node.mesh) node.mesh.local = cur.meshPatch.slice();
+  return true;
+}
+
+/** 0x1800422f0 (80d28bd0…1e051): scalar frame evaluation, including native patch ownership. */
+export function evaluateScalarFrame(
+  clip: EmoteFrameClock,
+  n: EmoteScalarFrameNode,
+  force: boolean,
+): boolean {
+  force ||= n.framesDirty;
+  const A = n.cur,
+    B = n.next;
+  if (A.empty) return force;
+  if (A.tween && !B.empty) {
+    let e = f((n.param ? n.param.value : clip.time) - A.time);
+    if (A.ti) e = f(Math.trunc(f(e / A.ti)) * A.ti);
+    e = f(e / f(B.time - A.time));
+    if (Math.abs(e) >= EPSILON) {
+      if (!force && Math.abs(f(n.prevE - e)) < EPSILON) return false;
+      if (A.eased) throw new EmoteUnsupportedError('easing curves');
+      n.prevE = e;
+      n.flipX = A.fx;
+      n.flipY = A.fy;
+      n.angle = lerpAngle(null, A.angle, B.angle, e, EMOTEDRIVER_X64_SHA256);
+      n.zoomX = lerp(null, A.zx, B.zx, e, EMOTEDRIVER_X64_SHA256);
+      n.zoomY = lerp(null, A.zy, B.zy, e, EMOTEDRIVER_X64_SHA256);
+      n.slantX = lerp(null, A.sx, B.sx, e, EMOTEDRIVER_X64_SHA256);
+      n.slantY = lerp(null, A.sy, B.sy, e, EMOTEDRIVER_X64_SHA256);
+      const ie = f(1 - e);
+      if (A.coord[0] === B.coord[0] && A.coord[1] === B.coord[1] && A.coord[2] === B.coord[2]) {
+        n.x = A.coord[0];
+        n.y = A.coord[1];
+        n.z = A.coord[2];
+      } else {
+        n.x = f(ie * A.coord[0] + e * B.coord[0]);
+        n.y = f(ie * A.coord[1] + e * B.coord[1]);
+        n.z = f(ie * A.coord[2] + e * B.coord[2]);
+      }
+      const o = f(f(A.opa * ie) + f(B.opa * e));
+      n.opacity = Math.trunc(o < 0 ? Math.ceil(o - 0.5) : Math.floor(o + 0.5)) >>> 0;
+      n.scalarColor = A.singleColor && B.singleColor;
+      n.defaultColor = A.colorUnset && B.colorUnset;
+      if (!n.scalarColor)
+        for (let i = 0; i < 4; i++)
+          n.colors[i] = lerpColor(null, A.colors[i]!, B.colors[i]!, e, EMOTEDRIVER_X64_SHA256);
+      else n.colors.fill(lerpColor(null, A.colors[0]!, B.colors[0]!, e, EMOTEDRIVER_X64_SHA256));
+      if (n.meshKind === 1 && !n.combinatorOwned && n.mstate) {
+        if (A.meshPatch === EMPTY_PATCH && B.meshPatch === EMPTY_PATCH) n.mstate.bp = null;
+        else {
+          const patch = new Float32Array(32);
+          lerpPatch(
+            null,
+            A.meshPatch === EMPTY_PATCH ? IDENTITY_PATCH : A.meshPatch,
+            B.meshPatch === EMPTY_PATCH ? IDENTITY_PATCH : B.meshPatch,
+            e,
+            patch,
+            EMOTEDRIVER_X64_SHA256,
+          );
+          n.mstate.bp = patch;
+        }
+      }
+      return true;
+    }
+    const old = n.prevE;
+    n.prevE = e;
+    if (Math.abs(f(old - e)) >= EPSILON) force = true;
+  }
+  if (!force) return false;
+  n.flipX = A.fx;
+  n.flipY = A.fy;
+  n.angle = A.angle;
+  n.zoomX = A.zx;
+  n.zoomY = A.zy;
+  n.slantX = A.sx;
+  n.slantY = A.sy;
+  n.x = A.coord[0];
+  n.y = A.coord[1];
+  n.z = A.coord[2];
+  for (let i = 0; i < 4; i++) n.colors[i] = A.colors[i]!;
+  n.opacity = A.opa;
+  n.scalarColor = A.singleColor;
+  n.defaultColor = A.colorUnset;
+  if (n.meshKind === 1 && !n.combinatorOwned && n.mstate)
+    n.mstate.bp = A.meshPatch === EMPTY_PATCH ? null : A.meshPatch;
+  return true;
 }

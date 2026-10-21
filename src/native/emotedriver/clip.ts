@@ -25,18 +25,10 @@ import type {
   EmoteParameter,
 } from '../../formats/emote/model.js';
 import type {PsbValue} from '../../formats/psb/psb.js';
-import {
-  DEFAULT_MESH,
-  FLT_EPSILON,
-  lerpAngle,
-  lerpColor,
-  lerpMesh,
-  lerpScalar,
-  modulateColor,
-} from './mesh.js';
+import {lerpAngle, modulateColor} from './mesh.js';
 import {EmoteUnsupportedError, type EmoteClip} from './player.js';
 import {EMOTEDRIVER_X64_SHA256} from './build.js';
-import {EMPTY_PATCH} from './runtime/clip/frame.js';
+import {evaluateScalarFrame} from './runtime/clip/interpolate.js';
 import {EmoteMeshCombinators} from './runtime/clip/combinators.js';
 import type {
   EmoteScalarDrawItem,
@@ -768,77 +760,9 @@ export class EmoteMotionClip
 
   // Evaluation -------------------------------------------------------------------------
 
-  /** 0x1800422f0: the info block from the two keyframes; true when it changed. */
+  /** 0x1800422f0: native scalar slot evaluation through the shared frame interface. */
   evaluateFrame(n: Node, force: boolean): boolean {
-    force ||= n.framesDirty;
-    const A = n.cur,
-      B = n.next;
-    if (A.empty) return force;
-    if (A.tween && !B.empty) {
-      let e = f32(this.timeOf(n) - A.time);
-      if (A.ti) e = f32(Math.trunc(f32(e / A.ti)) * A.ti);
-      e = f32(e / f32(B.time - A.time));
-      if (Math.abs(e) >= FLT_EPSILON) {
-        if (!force && Math.abs(f32(n.prevE - e)) < FLT_EPSILON) return false;
-        if (A.eased) throw new EmoteUnsupportedError('easing curves');
-        n.prevE = e;
-        n.flipX = A.fx;
-        n.flipY = A.fy;
-        n.angle = lerpAngle(A.angle, B.angle, e);
-        n.zoomX = lerpScalar(A.zx, B.zx, e);
-        n.zoomY = lerpScalar(A.zy, B.zy, e);
-        n.slantX = lerpScalar(A.sx, B.sx, e);
-        n.slantY = lerpScalar(A.sy, B.sy, e);
-        const ie = f32(1 - e);
-        if (A.coord[0] === B.coord[0] && A.coord[1] === B.coord[1] && A.coord[2] === B.coord[2]) {
-          n.x = A.coord[0];
-          n.y = A.coord[1];
-          n.z = A.coord[2];
-        } else {
-          n.x = f32(ie * A.coord[0] + e * B.coord[0]);
-          n.y = f32(ie * A.coord[1] + e * B.coord[1]);
-          n.z = f32(ie * A.coord[2] + e * B.coord[2]);
-        }
-        const o = f32(f32(A.opa * ie) + f32(B.opa * e));
-        n.opacity = Math.trunc(o < 0 ? Math.ceil(o - 0.5) : Math.floor(o + 0.5)) >>> 0;
-        n.scalarColor = A.singleColor && B.singleColor;
-        n.defaultColor = A.colorUnset && B.colorUnset;
-        if (!n.scalarColor)
-          for (let i = 0; i < 4; i++) n.colors[i] = lerpColor(A.colors[i]!, B.colors[i]!, e);
-        else n.colors.fill(lerpColor(A.colors[0]!, B.colors[0]!, e));
-        if (n.meshKind === 1 && !n.combinatorOwned && n.mstate) {
-          if (A.meshPatch === EMPTY_PATCH && B.meshPatch === EMPTY_PATCH) n.mstate.bp = null;
-          else
-            n.mstate.bp = lerpMesh(
-              A.meshPatch === EMPTY_PATCH ? DEFAULT_MESH : A.meshPatch,
-              B.meshPatch === EMPTY_PATCH ? DEFAULT_MESH : B.meshPatch,
-              e,
-            );
-        }
-        return true;
-      }
-      const old = n.prevE;
-      n.prevE = e;
-      if (Math.abs(f32(old - e)) >= FLT_EPSILON) force = true;
-    }
-    if (!force) return false;
-    n.flipX = A.fx;
-    n.flipY = A.fy;
-    n.angle = A.angle;
-    n.zoomX = A.zx;
-    n.zoomY = A.zy;
-    n.slantX = A.sx;
-    n.slantY = A.sy;
-    n.x = A.coord[0];
-    n.y = A.coord[1];
-    n.z = A.coord[2];
-    for (let i = 0; i < 4; i++) n.colors[i] = A.colors[i]!;
-    n.opacity = A.opa;
-    n.scalarColor = A.singleColor;
-    n.defaultColor = A.colorUnset;
-    if (n.meshKind === 1 && !n.combinatorOwned && n.mstate)
-      n.mstate.bp = A.meshPatch === EMPTY_PATCH ? null : A.meshPatch;
-    return true;
+    return evaluateScalarFrame(this, n, force);
   }
 
   /** Native x64 mesh synchronization, supplied through the layer-pass interface. */

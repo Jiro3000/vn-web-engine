@@ -1001,3 +1001,30 @@ test('root velocity retains each image’s product store before translation', ()
   x64.progress(step);
   assert.equal(x64.rootX, 0);
 });
+
+test('frame evaluation retains each image’s epsilon boundary', () => {
+  const m = motion([
+    layer(
+      'point',
+      [frame(0, 3, {mask: 2, coord: [0, 0, 0]}), frame(1, 2, {mask: 2, coord: [8, 0, 0]})],
+      {
+        type: 1,
+        shape: 0,
+      },
+    ),
+  ]);
+  const file = model({o: {m}}),
+    epsilon = 2 ** -23;
+  const x86 = createEmoteClip(file, m);
+  x86.advance(0);
+  x86.evaluate();
+  x86.advance(epsilon);
+  x86.evaluate();
+  assert.equal(x86.shapePoint('point').x, 0);
+  const x64 = new EmoteMotionClip(new EmoteResource([file]));
+  x64.selectObject('o');
+  x64.setMotion('m');
+  x64.progress(0);
+  x64.progress(epsilon);
+  assert.equal(x64.layerPosition('point').x, f(8 * epsilon));
+});

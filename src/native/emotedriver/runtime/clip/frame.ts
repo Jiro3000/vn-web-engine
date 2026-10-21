@@ -6,7 +6,8 @@ import type {
 } from '../../../../formats/kirikiri/emote-model.js';
 import {emoteBuild, EMOTEDRIVER_X86_SHA256, EMOTEDRIVER_X64_SHA256} from '../../build.js';
 import {EmoteUnsupportedError} from '../errors.js';
-import {CurveCursor} from './interpolate.js';
+import {CurveCursor, EMPTY_PATCH} from './interpolate.js';
+export {EMPTY_PATCH} from './interpolate.js';
 
 /**
  * Keyframe slot of a layer node (0xd0 bytes at node +0xb0 and +0x180; `emotedriver.dll`
@@ -106,8 +107,6 @@ export interface SlotMotion {
   dtgt: string;
   timeOffset: number;
 }
-
-export const EMPTY_PATCH = new Float32Array(0);
 
 /** Raised for model features NEKOPARA does not use and the runtime does not reproduce. */
 export class EmoteClipUnsupportedError extends Error {

@@ -295,6 +295,14 @@ interpolation for both exact DLL images. X64 preserves its rounded residual
 weight, 360-degree wrap, integer color blend and near-zero patch fast path. X86
 keeps its curve cursors and SSE-style patch stores. Coordinates and patches are
 written into caller-owned buffers; the x64 helpers in `mesh.ts` delegate here.
+Whole-frame evaluation also lives here, through `EmoteFrameClock` and the block
+or scalar node interfaces. The clip binding selects its storage layout. X86 keeps
+half-even time quantization and its literal epsilon comparison; x64 truncates
+quantized time and compares against a float epsilon. Native empty-slot behavior,
+curve errors, unchanged-weight skipping and patch ownership remain image-specific.
+The empty-patch sentinel is shared with the slot loader. Scalar non-tween frames
+retain cached patch references; block frames copy or interpolate into their own
+storage.
 
 `runtime/clip/frame.ts` loads keyframe slots for both images. X64 resets its
 mesh and nested-motion state for every frame, uses infinite time past the frame
