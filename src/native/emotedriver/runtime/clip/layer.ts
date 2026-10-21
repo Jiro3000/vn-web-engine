@@ -1,3 +1,15 @@
+import {
+  meshPass,
+  maskPass,
+  clipRectPass,
+  shapePass,
+  meshPassX64,
+  shapePassX64,
+  type EmoteVertexHost,
+  type EmoteBlockVertexNode,
+  type EmoteScalarVertexNode,
+  type EmoteScalarVertexHost,
+} from './vertices.js';
 import {emoteBuild, EMOTEDRIVER_X86_SHA256, EMOTEDRIVER_X64_SHA256} from '../../build.js';
 import {
   composeEmoteMatrix,
@@ -54,15 +66,138 @@ export interface EmoteBlockLayerTransform extends EmoteLayerTransform {
 export interface EmoteScalarLayerTransform
   extends EmoteLayerTransform, EmoteLayerState, EmoteMatrixValues, EmoteMatrixTarget {}
 /** Layer evaluation selected once by exact image, retaining native storage and float stores. */
-export class EmoteLayerPass {
+export interface EmoteLayerEvaluator {
   readonly evaluate: <Node extends EmoteLayerTransform>(
     host: EmoteLayerEvaluation<Node>,
     nodes: readonly Node[],
     force: boolean,
     independent: boolean,
   ) => void;
+  evaluateBlockClip<Node extends EmoteBlockClipNode>(host: EmoteBlockClipEvaluation<Node>): void;
+  evaluateScalarClip<Node extends EmoteScalarClipNode>(host: EmoteScalarClipEvaluation<Node>): void;
+}
+export class EmoteLayerPass implements EmoteLayerEvaluator {
+  readonly evaluate: EmoteLayerEvaluator['evaluate'];
   constructor(driverSha256 = EMOTEDRIVER_X86_SHA256) {
     this.evaluate = emoteBuild(driverSha256) === EMOTEDRIVER_X64_SHA256 ? evaluateX64 : evaluateX86;
+  }
+
+  /** 0x1003ece0: x86 root, layer, geometry, nested motion and flag retirement order. */
+  evaluateBlockClip<Node extends EmoteBlockClipNode>(host: EmoteBlockClipEvaluation<Node>): void {
+    const nodes = host.nodes,
+      root = nodes[0]!;
+    const v = host.rootVelocity,
+      a = root.adjust;
+    if (v[0] !== 0) {
+      a.x = f(host.step * v[0]! + a.x);
+      a.changed = true;
+    }
+    if (v[1] !== 0) {
+      a.y = f(host.step * v[1]! + a.y);
+      a.changed = true;
+    }
+    if (v[2] !== 0) {
+      a.z = f(host.step * v[2]! + a.z);
+      a.changed = true;
+    }
+    if (host.decay !== 1) {
+      const k = f(Math.pow(host.decay, f(host.step / 60)));
+      v[0] = f(k * v[0]!);
+      v[1] = f(k * v[1]!);
+      v[2] = f(k * v[2]!);
+    }
+    for (const n of nodes) {
+      n.velocity[0] = n.state.x;
+      n.velocity[1] = n.state.y;
+      n.velocity[2] = n.state.z;
+    }
+    root.state.copyFrom(a);
+    a.changed = false;
+    if (!host.nested) composeEmoteMatrix(root.state, root.transformOrder, root.matrix);
+    if (nodes.length > 1) this.evaluate<Node>(host, nodes, host.force, host.independent);
+    for (const n of nodes) {
+      const s = n.state;
+      if (host.jumped) n.velocity.fill(0);
+      else {
+        n.velocity[0] = f(s.x - n.velocity[0]!);
+        n.velocity[1] = f(s.y - n.velocity[1]!);
+        n.velocity[2] = f(s.z - n.velocity[2]!);
+      }
+    }
+    host.force = false;
+    meshPass(host);
+    maskPass(host);
+    clipRectPass(host);
+    if (host.features & 0x2) shapePass(host);
+    if (host.features & 0x8) host.evaluateMotions();
+    for (const n of nodes) {
+      n.framesDirty = false;
+      n.state.changed = false;
+    }
+    for (const p of host.parameters) p.flags = 0;
+    host.jumped = false;
+    host.flag112 = false;
+  }
+
+  /** 0x180043010: x64 root, layer, geometry, nested motion and flag retirement order. */
+  evaluateScalarClip<Node extends EmoteScalarClipNode>(
+    host: EmoteScalarClipEvaluation<Node>,
+  ): void {
+    const nodes = host.layerNodes,
+      root = nodes[0]!;
+    for (let i = 0; i < 3; i++) {
+      if (host.velocity[i] !== 0) {
+        const v = f32(host.velocity[i]! * host.step);
+        if (i === 0) root.adjust.x = f32(v + root.adjust.x);
+        else if (i === 1) root.adjust.y = f32(v + root.adjust.y);
+        else root.adjust.z = f32(v + root.adjust.z);
+        root.adjust.changed = true;
+      }
+    }
+    if (host.decay !== 1) {
+      const k = f32(Math.pow(host.decay, host.step / 60));
+      for (let i = 0; i < 3; i++) host.velocity[i] = f32(k * host.velocity[i]!);
+    }
+    for (const n of nodes) {
+      n.vel[0] = n.x;
+      n.vel[1] = n.y;
+      n.vel[2] = n.z;
+    }
+    root.copyOverridesToInfo();
+    root.adjust.changed = false;
+    if (!host.rootMatrixFromParent) root.computeMatrix();
+    if (nodes.length > 1) this.evaluate<Node>(host, nodes, host.forceCalc, host.independentInherit);
+    for (const n of nodes) {
+      if (host.jumped) n.vel.fill(0);
+      else {
+        n.vel[0] = f32(n.x - n.vel[0]!);
+        n.vel[1] = f32(n.y - n.vel[1]!);
+        n.vel[2] = f32(n.z - n.vel[2]!);
+      }
+    }
+    host.forceCalc = false;
+    if (nodes.length > 1) meshPassX64(host.vertexHost);
+    for (let k = 1; k < nodes.length; k++) {
+      const n = nodes[k]!;
+      const a = n.adjust;
+      const D = nodes[n.parent]!;
+      n.stencilParent = D.stencilVisible ? D : D.stencilParent;
+      n.stencilVisible = !(
+        n.cur.empty ||
+        n.stencilType === 0 ||
+        !n.visible ||
+        (((0x1801 >> n.type) & 1) !== 0 && !n.drawable)
+      );
+    }
+    if (host.typeMask & 2) shapePassX64(host.shapeNodes);
+    if (host.typeMask & 8) host.evaluateSubclips();
+    for (const n of nodes) {
+      n.framesDirty = false;
+      n.changed = false;
+    }
+    for (const p of host.parameters) p.flags = 0;
+    host.jumped = false;
+    host.f18a = false;
   }
 }
 const f = Math.fround,
@@ -239,4 +374,57 @@ function evaluateX64<Node extends EmoteLayerTransform>(
       } else composeEmoteMatrix(n, n.transformOrder, n, EMOTEDRIVER_X64_SHA256);
     }
   }
+}
+
+/** Native per-node state consumed by the complete array/block phase. */
+export type EmoteBlockClipNode = EmoteBlockVertexNode &
+  EmoteBlockLayerTransform & {
+    readonly velocity: Float32Array;
+    framesDirty: boolean;
+  };
+/** Library-internal clip state and nested-motion hook; no concrete clip dependency. */
+export interface EmoteBlockClipEvaluation<Node extends EmoteBlockClipNode>
+  extends EmoteVertexHost, EmoteLayerEvaluation<Node> {
+  readonly nodes: readonly Node[];
+  readonly rootVelocity: Float32Array;
+  readonly step: number;
+  readonly decay: number;
+  readonly nested: boolean;
+  readonly independent: boolean;
+  readonly features: number;
+  readonly parameters: readonly {flags: number}[];
+  force: boolean;
+  jumped: boolean;
+  flag112: boolean;
+  evaluateMotions(): void;
+}
+/** Native scalar state consumed by root integration, velocity and stencil evaluation. */
+export interface EmoteScalarClipNode extends EmoteScalarLayerTransform {
+  readonly type: number;
+  readonly vel: Float32Array;
+  readonly drawable: boolean;
+  readonly stencilType: number;
+  framesDirty: boolean;
+  stencilVisible: boolean;
+  stencilParent: EmoteScalarClipNode | null;
+  copyOverridesToInfo(): void;
+  computeMatrix(): void;
+}
+export interface EmoteScalarClipEvaluation<
+  Node extends EmoteScalarClipNode,
+> extends EmoteLayerEvaluation<Node> {
+  readonly layerNodes: readonly Node[];
+  readonly velocity: Float32Array;
+  readonly step: number;
+  readonly decay: number;
+  readonly rootMatrixFromParent: boolean;
+  readonly independentInherit: boolean;
+  readonly vertexHost: EmoteScalarVertexHost;
+  readonly shapeNodes: readonly EmoteScalarVertexNode[];
+  readonly typeMask: number;
+  readonly parameters: readonly {flags: number}[];
+  forceCalc: boolean;
+  jumped: boolean;
+  f18a: boolean;
+  evaluateSubclips(): void;
 }

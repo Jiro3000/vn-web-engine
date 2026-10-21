@@ -54,12 +54,7 @@ import {ClipParameter, EmoteScalarNode} from './runtime/clip/node.js';
 import {EmoteClipTime} from './runtime/clip/time.js';
 import {EmoteLayerPass} from './runtime/clip/layer.js';
 import {EmoteSourceResolver, type EmoteSourceIcon} from './runtime/clip/source.js';
-import {
-  meshPassX64,
-  shapePassX64,
-  syncToParentMeshX64,
-  type EmoteScalarVertexHost,
-} from './runtime/clip/vertices.js';
+import {syncToParentMeshX64, type EmoteScalarVertexHost} from './runtime/clip/vertices.js';
 
 const f32 = Math.fround;
 const NEUTRAL = 0x808080ff;
@@ -194,8 +189,8 @@ export class EmoteMotionClip
   file: EmoteModel | null = null;
   motion: EmoteMotion | null = null;
   /** +0x188 playing, +0x189 jumped, +0x18a, +0x18b seek pending, +0x18c seek wrap, +0x18d. */
-  private f18a = true;
-  private forceCalc = false;
+  f18a = true;
+  forceCalc = false;
   /** +0x158/+0x15c. */
   readonly ownRotation = false;
   ownRotationAngle = 0;
@@ -221,9 +216,9 @@ export class EmoteMotionClip
   }
   /** +0x410 motion-independent inheritance, +0x411 the parent writes the root matrix. */
   independentInherit = false;
-  private readonly rootMatrixFromParent: boolean;
+  readonly rootMatrixFromParent: boolean;
   /** +0x418 parameters, +0x430 the registered parameters by id, +0x440 values. */
-  protected parameters: Param[] = [];
+  parameters: Param[] = [];
   private readonly paramIndex = new Map<string, Param[]>();
   readonly values = new Map<string, number>();
   protected motionParameter: Param | null = null;
@@ -235,13 +230,13 @@ export class EmoteMotionClip
   readonly drawList: EmoteDrawItem[] = [];
   /** +0x4d8 (top). */
   private combinators: EmoteMeshCombinators | null = null;
-  private readonly vertexHost: EmoteScalarVertexHost;
+  readonly vertexHost: EmoteScalarVertexHost;
   /** +0x1e8 nodes; +0x3c4 type bit set; type lists. */
-  private layerNodes: Node[] = [];
+  layerNodes: Node[] = [];
   private advanceHeld = false;
-  private typeMask = 0;
+  typeMask = 0;
   private subNodes: Node[] = [];
-  private shapeNodes: Node[] = [];
+  shapeNodes: Node[] = [];
   private stencilNodes: Node[] = [];
   private layerIndexMap: ReadonlyMap<string, number> | null = null;
 
@@ -849,68 +844,13 @@ export class EmoteMotionClip
   /** Native x64 mesh synchronization, supplied through the layer-pass interface. */
   readonly syncToParentMesh = syncToParentMeshX64;
 
-  /** 0x180043010 (CalcLayerFrameInfo). */
+  /** Complete native scalar evaluation through its typed receiver. */
   private calc(): void {
-    const nodes = this.layerNodes,
-      root = nodes[0]!;
-    for (let i = 0; i < 3; i++) {
-      if (this.velocity[i] !== 0) {
-        const v = f32(this.velocity[i]! * this.step);
-        if (i === 0) root.adjust.x = f32(v + root.adjust.x);
-        else if (i === 1) root.adjust.y = f32(v + root.adjust.y);
-        else root.adjust.z = f32(v + root.adjust.z);
-        root.adjust.changed = true;
-      }
-    }
-    if (this.decay !== 1) {
-      const k = f32(Math.pow(this.decay, this.step / 60));
-      for (let i = 0; i < 3; i++) this.velocity[i] = f32(k * this.velocity[i]!);
-    }
-    for (const n of nodes) {
-      n.vel[0] = n.x;
-      n.vel[1] = n.y;
-      n.vel[2] = n.z;
-    }
-    root.copyOverridesToInfo();
-    root.adjust.changed = false;
-    if (!this.rootMatrixFromParent) root.computeMatrix();
-    if (nodes.length > 1)
-      this.layerPass.evaluate<Node>(this, nodes, this.forceCalc, this.independentInherit);
-    for (const n of nodes) {
-      if (this.jumped) n.vel.fill(0);
-      else {
-        n.vel[0] = f32(n.x - n.vel[0]!);
-        n.vel[1] = f32(n.y - n.vel[1]!);
-        n.vel[2] = f32(n.z - n.vel[2]!);
-      }
-    }
-    this.forceCalc = false;
-    if (nodes.length > 1) meshPassX64(this.vertexHost);
-    for (let k = 1; k < nodes.length; k++) {
-      const n = nodes[k]!;
-      const a = n.adjust;
-      const D = nodes[n.parent]!;
-      n.stencilParent = D.stencilVisible ? D : D.stencilParent;
-      n.stencilVisible = !(
-        n.cur.empty ||
-        n.stencilType === 0 ||
-        !n.visible ||
-        (((0x1801 >> n.type) & 1) !== 0 && !n.drawable)
-      );
-    }
-    if (this.typeMask & 2) shapePassX64(this.shapeNodes);
-    if (this.typeMask & 8) this.subclips();
-    for (const n of nodes) {
-      n.framesDirty = false;
-      n.changed = false;
-    }
-    for (const p of this.parameters) p.flags = 0;
-    this.jumped = false;
-    this.f18a = false;
+    this.layerPass.evaluateScalarClip<Node>(this);
   }
 
   /** 0x180045c50: drives the nested clips of type 3 layers. */
-  private subclips(): void {
+  evaluateSubclips(): void {
     const clipFlags = this.motionParameter ? this.motionParameter.flags : 0;
     for (const n of this.subNodes) {
       const sub = n.sub;

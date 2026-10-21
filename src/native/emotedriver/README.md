@@ -374,9 +374,8 @@ image-specific storage interfaces. X86 supplies evaluated state blocks and array
 matrices; x64 supplies direct scalar fields. The exact image selects its loop once
 at clip creation, avoiding layout checks on every node. Both paths retain native
 parent bypass, empty-state copying, opacity, projection axes and float stores.
-Frame interpolation and mesh synchronization run through typed clip hooks; root
-velocity and nested motions keep their clip phases. The pass allocates
-no layer adapters or per-call closures.
+Frame interpolation and mesh synchronization run through typed clip hooks. The
+pass allocates no layer adapters or per-call closures.
 
 `runtime/clip/vertices.ts` evaluates both native vertex layouts through plain node,
 resource and scratch interfaces. The image binding chooses the array or scalar
@@ -402,3 +401,14 @@ directly. Scalar draw-item records live in `runtime/interfaces.ts` and keep thei
 native field order. The frame module's eager layer cache shares loaded slots by
 layer identity and creates a fresh end slot for each out-of-range lookup. Nodes
 retain their original override, matrix, source-cache and combinator-patch stores.
+
+The complete evaluation phases also live in `runtime/clip/layer.ts`. The native
+image binding calls the scalar or block phase on its layer evaluator through a
+typed host interface. `EmoteLayerEvaluator` separates the evaluator implementation
+from state and nested-motion hooks. Root integration and decay, velocity snapshots and deltas, root matrix
+copying, child evaluation, geometry, masks, shapes, nested-motion hooks and final
+flag retirement retain native order. Host state belongs to this library's internal
+interfaces; the public DLL contract is unchanged. Scalar integration keeps its
+intermediate product store and wide decay exponent; the block phase keeps its
+wide translation product and rounded exponent. No phase adapter or closure is
+allocated per call.

@@ -28,7 +28,7 @@ import {ClipParameter, EmoteNode} from './node.js';
 import {EmoteClipTime} from './time.js';
 import {EmoteSourceResolver} from './source.js';
 import {EmoteLayerPass} from './layer.js';
-import {clipRectPass, maskPass, meshPass, shapePass, syncToParentMeshX86} from './vertices.js';
+import {syncToParentMeshX86} from './vertices.js';
 import {composeEmoteMatrix, multiplyEmoteMatrices as multiply} from './matrix.js';
 
 /**
@@ -645,62 +645,9 @@ export class EmoteClip extends EmoteClipTime implements EmoteClipDriver, EmoteCl
   // ---------------------------------------------------------------------------------------
   // Layer pass
 
-  /** 0x1003ece0. */
+  /** Complete native array/block evaluation through its typed receiver. */
   evaluate(): void {
-    const nodes = this.nodes,
-      root = nodes[0]!;
-    const v = this.rootVelocity,
-      a = root.adjust;
-    if (v[0] !== 0) {
-      a.x = f(this.step * v[0]! + a.x);
-      a.changed = true;
-    }
-    if (v[1] !== 0) {
-      a.y = f(this.step * v[1]! + a.y);
-      a.changed = true;
-    }
-    if (v[2] !== 0) {
-      a.z = f(this.step * v[2]! + a.z);
-      a.changed = true;
-    }
-    if (this.decay !== 1) {
-      const k = f(Math.pow(this.decay, f(this.step / 60)));
-      v[0] = f(k * v[0]!);
-      v[1] = f(k * v[1]!);
-      v[2] = f(k * v[2]!);
-    }
-    for (const n of nodes) {
-      n.velocity[0] = n.state.x;
-      n.velocity[1] = n.state.y;
-      n.velocity[2] = n.state.z;
-    }
-    root.state.copyFrom(a);
-    a.changed = false;
-    if (!this.nested) computeMatrix(root);
-    if (nodes.length > 1)
-      this.layerPass.evaluate<EmoteNode>(this, nodes, this.force, this.independent);
-    for (const n of nodes) {
-      const s = n.state;
-      if (this.jumped) n.velocity.fill(0);
-      else {
-        n.velocity[0] = f(s.x - n.velocity[0]!);
-        n.velocity[1] = f(s.y - n.velocity[1]!);
-        n.velocity[2] = f(s.z - n.velocity[2]!);
-      }
-    }
-    this.force = false;
-    meshPass(this);
-    maskPass(this);
-    clipRectPass(this);
-    if (this.features & 0x2) shapePass(this);
-    if (this.features & 0x8) this.motionPass();
-    for (const n of nodes) {
-      n.framesDirty = false;
-      n.state.changed = false;
-    }
-    for (const p of this.parameters) p.flags = 0;
-    this.jumped = false;
-    this.flag112 = false;
+    this.layerPass.evaluateBlockClip<EmoteNode>(this);
   }
 
   evaluateFrame(node: EmoteNode, force: boolean): boolean {
@@ -710,7 +657,7 @@ export class EmoteClip extends EmoteClipTime implements EmoteClipDriver, EmoteCl
   readonly syncToParentMesh = syncToParentMeshX86;
 
   /** 0x10041510: nested motion layers (type 3). */
-  private motionPass(): void {
+  evaluateMotions(): void {
     const clipFlags = this.motionParameter?.flags ?? 0;
     for (const node of this.motionNodes) {
       const child = node.child as EmoteClip;

@@ -981,3 +981,23 @@ test('mesh synchronization keeps child versus parent projection axes and native 
     assert.ok(x64.zoomX > 2 && x64.zoomY > 2, 'the x64 finite-difference zoom path runs');
   }
 });
+
+test('root velocity retains each image’s product store before translation', () => {
+  const m = motion([]),
+    file = model({o: {m}}),
+    step = 1 - 2 ** -23,
+    velocity = 1 + 2 ** -23;
+  const x86 = createEmoteClip(file, m);
+  x86.root.adjust.x = -1;
+  x86.rootVelocity[0] = velocity;
+  x86.advance(step);
+  x86.evaluate();
+  assert.equal(x86.root.state.x, -(2 ** -46));
+  const x64 = new EmoteMotionClip(new EmoteResource([file]));
+  x64.selectObject('o');
+  x64.setMotion('m');
+  x64.rootX = -1;
+  x64.velocity[0] = velocity;
+  x64.progress(step);
+  assert.equal(x64.rootX, 0);
+});
