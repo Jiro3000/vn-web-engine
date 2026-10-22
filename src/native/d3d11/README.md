@@ -79,6 +79,18 @@ Binding ownership and hazards follow [PSSetShaderResources](https://learn.micros
 [OMSetRenderTargets](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/nf-d3d11-id3d11devicecontext-omsetrendertargets)
 and [ClearState](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/nf-d3d11-id3d11devicecontext-clearstate).
 
+`runtime/input-layout.ts` creates owned input-layout metadata from SM4 signatures.
+It copies semantic records and resolves APPEND offsets independently for each stream.
+The current float-input subset covers R32G32_FLOAT, R32G32B32_FLOAT and
+B8G8R8A8_UNORM; unsupported types and element spans beyond2,048bytes return E_NOTIMPL.
+Unused declared elements are retained, and missing/duplicate semantics are rejected.
+Validation-only calls create no interface. Shared `graphics/dxgi-vertex.ts` reads these
+in-bounds element formats into caller-owned float4 storage, preserving packed color
+normalization and the missing-component defaults0,0,0,1.
+
+Layout ownership and signature matching follow [CreateInputLayout](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/nf-d3d11-id3d11device-createinputlayout).
+Missing-component defaults follow section19.1.3.3 of the [Direct3D functional specification](https://microsoft.github.io/DirectX-Specs/d3d/archive/D3D11_3_FunctionalSpec.htm).
+
 Resource rules follow Microsoft's [Map values](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/ne-d3d11-d3d11_map),
 [UpdateSubresource](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/nf-d3d11-id3d11devicecontext-updatesubresource)
 and [block compression](https://learn.microsoft.com/en-us/windows/uwp/graphics-concepts/block-compression)

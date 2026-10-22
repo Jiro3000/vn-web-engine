@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import {D3d11ChildObject, D3d11Lifetime, D3d11Object} from '../dist/native/d3d11/runtime/com.js';
 import {D3d11StateCache} from '../dist/native/d3d11/runtime/states.js';
 import {D3d11ContextState} from '../dist/native/d3d11/runtime/context-state.js';
+import {createInputLayoutStorage} from '../dist/native/d3d11/runtime/input-layout.js';
+import {readDxgiVertexElement} from '../dist/graphics/dxgi-vertex.js';
 import {
   createBufferStorage,
   createTexture2DStorage,
@@ -502,4 +504,149 @@ test('last device/context release retires bound buffers, views and states withou
   assert.equal(view.live, false);
   assert.equal(state.live, false);
   assert.throws(() => ctx.psGetShaderResources(0, 1), /released/);
+});
+
+function inputSignature(parameters) {
+  const names = parameters.map((p) => new TextEncoder().encode(p.name + '\0'));
+  const bodyLength = 8 + parameters.length * 24 + names.reduce((n, b) => n + b.length, 0),
+    bytes = new Uint8Array(44 + bodyLength),
+    view = new DataView(bytes.buffer);
+  bytes.set(new TextEncoder().encode('DXBC'));
+  view.setUint16(20, 1, true);
+  view.setUint32(24, bytes.length, true);
+  view.setUint32(28, 1, true);
+  view.setUint32(32, 36, true);
+  bytes.set(new TextEncoder().encode('ISGN'), 36);
+  view.setUint32(40, bodyLength, true);
+  view.setUint32(44, parameters.length, true);
+  view.setUint32(48, 8, true);
+  let name = 8 + parameters.length * 24;
+  parameters.forEach((p, i) => {
+    const at = 52 + i * 24;
+    view.setUint32(at, name, true);
+    view.setUint32(at + 4, p.index ?? 0, true);
+    view.setUint32(at + 8, p.system ?? 0, true);
+    view.setUint32(at + 12, p.type ?? 3, true);
+    view.setUint32(at + 16, p.register, true);
+    view.setUint8(at + 20, p.mask ?? 15);
+    view.setUint8(at + 21, p.mask ?? 15);
+    bytes.set(names[i], 44 + name);
+    name += names[i].length;
+  });
+  return bytes;
+}
+const element = (semanticName, format, inputSlot = 0, alignedByteOffset = 0xffffffff) => ({
+  semanticName,
+  semanticIndex: 0,
+  format,
+  inputSlot,
+  alignedByteOffset,
+  inputSlotClass: 0,
+  instanceDataStepRate: 0,
+});
+
+test('D3D11 input layout creation resolves each stream independently and owns its signature metadata', () => {
+  const {host, ctx} = context();
+  const bytes = inputSignature([
+    {name: 'POSITION', register: 0, mask: 3},
+    {name: 'COLOR', register: 1},
+    {name: 'TEXCOORD', register: 2, mask: 3},
+  ]);
+  const desc = [element('position', 16, 2), element('COLOR', 87, 0, 1), element('TEXCOORD', 16, 2)];
+  const result = createInputLayoutStorage(host, desc, bytes);
+  assert.equal(result.hr, 0);
+  const layout = result.value;
+  assert.deepEqual(
+    layout.elements.map((e) => [e.inputSlot, e.offset, e.register]),
+    [
+      [2, 0, 0],
+      [0, 1, 1],
+      [2, 8, 2],
+    ],
+  );
+  desc[0].semanticName = 'changed';
+  bytes.fill(0);
+  assert.equal(layout.signature[0].semanticName, 'POSITION');
+  assert.equal(layout.elements[0].semanticName, 'position');
+  assert.ok(Object.isFrozen(layout.elements[0]));
+  ctx.iaSetInputLayout(layout);
+  layout.release();
+  const alias = ctx.iaGetInputLayout();
+  ctx.clearState();
+  assert.equal(alias.live, true);
+  alias.release();
+  assert.equal(layout.live, false);
+  ctx.release();
+  host.device.release();
+});
+
+test('D3D11 input layout validation rejects missing/duplicate semantics while validation-only creation owns no interface', () => {
+  const {host, ctx} = context(),
+    bytes = inputSignature([{name: 'POSITION', register: 0, mask: 3}]);
+  assert.deepEqual(createInputLayoutStorage(host, [element('POSITION', 16)], bytes, true), {
+    hr: 1,
+    value: null,
+  });
+  assert.equal(createInputLayoutStorage(host, [element('COLOR', 87)], bytes).hr, INVALID);
+  assert.equal(
+    createInputLayoutStorage(host, [element('POSITION', 16), element('position', 16)], bytes).hr,
+    INVALID,
+  );
+  assert.equal(createInputLayoutStorage(host, [element('POSITION', 16, 0, 1)], bytes).hr, INVALID);
+  assert.equal(
+    createInputLayoutStorage(host, [{...element('POSITION', 16), instanceDataStepRate: 1}], bytes)
+      .hr,
+    INVALID,
+  );
+  assert.equal(createInputLayoutStorage(host, [element('POSITION', 16, 32)], bytes).hr, INVALID);
+  assert.equal(
+    createInputLayoutStorage(host, [element('POSITION', 999)], bytes).hr,
+    0x80004001 | 0,
+  );
+  assert.equal(
+    createInputLayoutStorage(host, [element('POSITION', 16)], new Uint8Array()).hr,
+    INVALID,
+  );
+  const extra = createInputLayoutStorage(
+    host,
+    [element('POSITION', 6), element('EXTRA', 87)],
+    bytes,
+  ).value;
+  assert.deepEqual(
+    extra.elements.map((e) => e.register),
+    [0, null],
+  );
+  extra.release();
+  ctx.release();
+  host.device.release();
+  assert.equal(host.lifetime.closed, true);
+});
+
+test('DXGI input fetch keeps packed color expansion and float components exact across unaligned backing views', () => {
+  const backing = new Uint8Array(32),
+    data = new DataView(backing.buffer, 3, 24),
+    out = new Float32Array(12).fill(42);
+  data.setFloat32(0, -0, true);
+  data.setFloat32(4, 1.25, true);
+  data.setFloat32(8, -32768.5, true);
+  readDxgiVertexElement(16, data, 0, out, 0);
+  assert.ok(Object.is(out[0], -0));
+  assert.deepEqual([...out.subarray(1, 4)], [1.25, 0, 1]);
+  readDxgiVertexElement(6, data, 0, out, 4);
+  assert.deepEqual([...out.subarray(5, 8)], [1.25, -32768.5, 1]);
+  for (let value = 0; value < 256; value++) {
+    const color =
+      ((value << 24) | ((255 - value) << 16) | ((value ^ 85) << 8) | (value ^ 170)) >>> 0;
+    data.setUint32(13, color, true);
+    readDxgiVertexElement(87, data, 13, out, 8);
+    assert.deepEqual(
+      [...out.subarray(8, 12)],
+      [(color >>> 16) & 255, (color >>> 8) & 255, color & 255, color >>> 24].map((v) =>
+        Math.fround(v / 255),
+      ),
+    );
+  }
+  assert.throws(() => readDxgiVertexElement(6, data, 20, out, 0), /range/);
+  assert.throws(() => readDxgiVertexElement(87, data, 13, out, 10), /range/);
+  assert.throws(() => readDxgiVertexElement(0, data, 0, out, 0), /Unsupported/);
 });
