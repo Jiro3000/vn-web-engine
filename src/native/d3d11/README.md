@@ -84,9 +84,27 @@ It copies semantic records and resolves APPEND offsets independently for each st
 The current float-input subset covers R32G32_FLOAT, R32G32B32_FLOAT and
 B8G8R8A8_UNORM; unsupported types and element spans beyond2,048bytes return E_NOTIMPL.
 Unused declared elements are retained, and missing/duplicate semantics are rejected.
+Elements sharing an input slot must agree on instance class and step rate. The input
+subset uses one semantic per register; packed IA signatures return E_NOTIMPL.
 Validation-only calls create no interface. Shared `graphics/dxgi-vertex.ts` reads these
 in-bounds element formats into caller-owned float4 storage, preserving packed color
 normalization and the missing-component defaults0,0,0,1.
+
+`runtime/input-assembly.ts` provides borrowed vertex/index readers for one synchronous
+draw while context bindings retain the resources. Vertex reads combine streams in the
+requested register order and preserve each element's float4 format expansion. Address
+multiplication and addition wrap to32bits. Wrapped addresses below the bound buffer
+offset and elements extending beyond storage return zero for present format components
+and native defaults for missing components. Zero stride repeats an element; ordinary
+Draw/DrawIndexed use instance0 for instance-class elements. Used streams must be bound
+in this subset. Mapped, foreign and released buffers fail explicitly.
+
+Index reads accept R16_UINT/R32_UINT, apply the same wrapping and lower bound, return
+zero outside storage and retain strip-cut words. The draw operation consumes strip cuts
+before adding BaseVertexLocation. Readers allocate no objects per vertex or index.
+The shared DXGI helper still exposes strict in-bounds reads for other callers.
+
+Addressing follows sections8.3/8.5/8.19 of the [Direct3D functional specification](https://microsoft.github.io/DirectX-Specs/d3d/archive/D3D11_3_FunctionalSpec.htm).
 
 Layout ownership and signature matching follow [CreateInputLayout](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/nf-d3d11-id3d11device-createinputlayout).
 Missing-component defaults follow section19.1.3.3 of the [Direct3D functional specification](https://microsoft.github.io/DirectX-Specs/d3d/archive/D3D11_3_FunctionalSpec.htm).

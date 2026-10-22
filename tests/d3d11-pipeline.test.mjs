@@ -5,6 +5,8 @@ import {D3d11StateCache} from '../dist/native/d3d11/runtime/states.js';
 import {D3d11ContextState} from '../dist/native/d3d11/runtime/context-state.js';
 import {createInputLayoutStorage} from '../dist/native/d3d11/runtime/input-layout.js';
 import {readDxgiVertexElement} from '../dist/graphics/dxgi-vertex.js';
+import {dxgiVertexByteAddress, fetchDxgiVertexElement} from '../dist/graphics/dxgi-vertex.js';
+import {D3d11VertexReader, D3d11IndexReader} from '../dist/native/d3d11/runtime/input-assembly.js';
 import {createShaderStorage} from '../dist/native/d3d11/runtime/shaders.js';
 import {sm4SyntheticPipeline} from '../tools/lib/sm4-synthetic-fixtures.mjs';
 import {
@@ -697,4 +699,154 @@ test('DXGI input fetch keeps packed color expansion and float components exact a
   assert.throws(() => readDxgiVertexElement(6, data, 20, out, 0), /range/);
   assert.throws(() => readDxgiVertexElement(87, data, 13, out, 10), /range/);
   assert.throws(() => readDxgiVertexElement(0, data, 0, out, 0), /Unsupported/);
+});
+
+test('DXGI IA addressing agrees with independent full-width integer arithmetic and preserves native OOB defaults', () => {
+  let random = 0x12345678;
+  const next = () => (random = (Math.imul(random, 1664525) + 1013904223) >>> 0);
+  const cases = [
+    [0, 0xffffffff, 0xffffffff, 0],
+    [16, 16, 0xffffffff, 0],
+    [16, 16, 0x10000000, 0],
+  ];
+  for (let i = 0; i < 10000; i++) cases.push([next(), next(), next(), next()]);
+  for (const [offset, stride, vertex, element] of cases) {
+    const expected = Number(
+      (BigInt(offset) + BigInt(stride) * BigInt(vertex) + BigInt(element)) & 0xffffffffn,
+    );
+    assert.equal(dxgiVertexByteAddress(offset, stride, vertex, element), expected);
+  }
+  const bytes = new Uint8Array(new Float32Array([1, 2, 3, 4]).buffer),
+    data = new DataView(bytes.buffer);
+  const out = new Float32Array(4).fill(99);
+  for (const [format, missingAlpha] of [
+    [16, 1],
+    [6, 1],
+    [87, 0],
+  ]) {
+    fetchDxgiVertexElement(format, data, 0, 4, out, 0);
+    assert.deepEqual([...out], [0, 0, 0, missingAlpha]);
+    fetchDxgiVertexElement(format, data, 16, 0, out, 0);
+    assert.deepEqual([...out], [0, 0, 0, missingAlpha]);
+  }
+  fetchDxgiVertexElement(6, data, 8, 0, out, 0); // A partly readable element is still out of bounds.
+  assert.deepEqual([...out], [0, 0, 0, 1]);
+  assert.throws(() => fetchDxgiVertexElement(16, data, 0, 0, out, 1), /destination/);
+});
+
+const stream = (host, bytes, flags = 1) =>
+  createBufferStorage(
+    host,
+    {
+      byteWidth: bytes.byteLength,
+      usage: 0,
+      bindFlags: flags,
+      cpuAccessFlags: 0,
+      miscFlags: 0,
+      structureByteStride: 0,
+    },
+    {data: bytes, rowPitch: 0, slicePitch: 0},
+  ).value;
+test('D3D11 vertex reads combine multiple streams and requested register order with unsigned address wrapping', () => {
+  const {host, ctx} = context();
+  const signature = inputSignature([
+    {name: 'POSITION', register: 0},
+    {name: 'TEXCOORD', index: 0, register: 1, mask: 3},
+    {name: 'TEXCOORD', index: 1, register: 2, mask: 3},
+  ]);
+  const layout = createInputLayoutStorage(
+    host,
+    [
+      element('POSITION', 6),
+      element('TEXCOORD', 16, 1, 0),
+      {...element('TEXCOORD', 16, 1, 8), semanticIndex: 1},
+    ],
+    signature,
+  ).value;
+  const positions = stream(host, new Uint8Array(new Float32Array([-1, -2, -3, 1, 2, 3]).buffer));
+  const coords = stream(host, new Uint8Array(new Float32Array([0.125, 0.25, 0.5, 0.75]).buffer));
+  const reader = new D3d11VertexReader(
+    host,
+    layout,
+    [2, 0, 1],
+    [positions, coords],
+    [12, 0],
+    [12, 0],
+  );
+  const out = new Float32Array(14).fill(99);
+  reader.read(0, out, 1);
+  assert.deepEqual([...out], [99, 0.5, 0.75, 0, 1, 1, 2, 3, 1, 0.125, 0.25, 0, 1, 99]);
+  reader.read(0x40000000, out, 1);
+  assert.deepEqual([...out.subarray(1, 13)], [0.5, 0.75, 0, 1, 1, 2, 3, 1, 0.125, 0.25, 0, 1]);
+  reader.read(0xffffffff, out, 1); // Wrapped address0 lies below the bound offset12.
+  assert.deepEqual([...out.subarray(1, 13)], [0.5, 0.75, 0, 1, 0, 0, 0, 1, 0.125, 0.25, 0, 1]);
+  assert.throws(() => reader.read(0, new Float32Array(7)), /read/);
+  assert.throws(() => new D3d11VertexReader(host, layout, [0], [null], [12], [0]), /Unbound/);
+  layout.release();
+  positions.release();
+  coords.release();
+  ctx.release();
+  host.device.release();
+});
+
+test('D3D11 non-instanced draws use the first instance element and layouts require consistent stream classes', () => {
+  const {host, ctx} = context();
+  const signature = inputSignature([
+    {name: 'COLOR', register: 0},
+    {name: 'OTHER', register: 1},
+  ]);
+  assert.equal(
+    createInputLayoutStorage(
+      host,
+      [element('COLOR', 16), element('OTHER', 16)],
+      inputSignature([
+        {name: 'COLOR', register: 0, mask: 3},
+        {name: 'OTHER', register: 0, mask: 12},
+      ]),
+    ).hr,
+    0x80004001 | 0,
+  );
+  const instance = {...element('COLOR', 87, 0, 1), inputSlotClass: 1, instanceDataStepRate: 3};
+  for (const other of [
+    element('OTHER', 87, 0, 5),
+    {...element('OTHER', 87, 0, 5), inputSlotClass: 1, instanceDataStepRate: 2},
+  ])
+    assert.equal(createInputLayoutStorage(host, [instance, other], signature).hr, INVALID);
+  const layout = createInputLayoutStorage(
+    host,
+    [instance],
+    inputSignature([{name: 'COLOR', register: 0}]),
+  ).value;
+  const data = stream(host, new Uint8Array([9, 1, 2, 3, 4, 8, 7, 6, 5]));
+  const reader = new D3d11VertexReader(host, layout, [0], [data], [4], [0]),
+    out = new Float32Array(4);
+  reader.read(0xffffffff, out);
+  assert.deepEqual(
+    [...out],
+    [3, 2, 1, 4].map((n) => Math.fround(n / 255)),
+  );
+  layout.release();
+  data.release();
+  ctx.release();
+  host.device.release();
+});
+
+test('D3D11 index reads retain strip-cut words and handle offsets, wraparound and out-of-bounds zero', () => {
+  const {host, ctx} = context();
+  for (const [format, values] of [
+    [57, new Uint16Array([123, 7, 0xffff, 9])],
+    [42, new Uint32Array([123, 7, 0xffffffff, 9])],
+  ]) {
+    const width = values.BYTES_PER_ELEMENT,
+      buffer = stream(host, new Uint8Array(values.buffer), 2);
+    const reader = new D3d11IndexReader(host, buffer, format, width);
+    assert.equal(reader.read(0), 7);
+    assert.equal(reader.read(1), format === 57 ? 0xffff : 0xffffffff);
+    assert.equal(reader.read(3), 0);
+    assert.equal(reader.read(0xffffffff), 0);
+    assert.equal(reader.read(format === 57 ? 0x80000000 : 0x40000000), 7);
+    buffer.release();
+  }
+  ctx.release();
+  host.device.release();
 });

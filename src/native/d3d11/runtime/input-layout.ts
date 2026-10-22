@@ -46,7 +46,10 @@ export function createInputLayoutStorage(
   }
   if (signature.some((p) => p.systemValue !== 0 || p.componentType !== 3 || p.register >= 32))
     return {hr: NOT_IMPLEMENTED, value: null};
+  if (new Set(signature.map((p) => p.register)).size !== signature.length)
+    return {hr: NOT_IMPLEMENTED, value: null};
   const nextOffset = Array<number>(32).fill(0),
+    slotClasses = new Map<number, {inputSlotClass: number; instanceDataStepRate: number}>(),
     names = new Set<string>(),
     resolved: D3d11ResolvedInputElement[] = [];
   const semantic = (name: string, index: number) =>
@@ -69,6 +72,14 @@ export function createInputLayoutStorage(
     const name = semantic(element.semanticName, element.semanticIndex);
     if (names.has(name)) return {hr: INVALID, value: null};
     names.add(name);
+    const slot = slotClasses.get(element.inputSlot);
+    if (
+      slot &&
+      (slot.inputSlotClass !== element.inputSlotClass ||
+        slot.instanceDataStepRate !== element.instanceDataStepRate)
+    )
+      return {hr: INVALID, value: null};
+    slotClasses.set(element.inputSlot, element);
     const format = dxgiVertexFormat(element.format);
     if (!format) return {hr: NOT_IMPLEMENTED, value: null};
     const offset =

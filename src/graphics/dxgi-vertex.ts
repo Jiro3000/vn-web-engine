@@ -12,6 +12,37 @@ export function dxgiVertexFormat(format: number): DxgiVertexFormat | null {
   return format === 16 ? float2 : format === 6 ? float3 : format === 87 ? bgra8 : null;
 }
 
+/** Native UINT IA arithmetic; arguments have already been validated as32-bit values. */
+export function dxgiVertexByteAddress(
+  bufferOffset: number,
+  stride: number,
+  vertex: number,
+  elementOffset: number,
+): number {
+  return (bufferOffset + Math.imul(stride, vertex) + elementOffset) >>> 0;
+}
+
+/** Read an addressed element; out-of-bounds elements return zero plus missing-component defaults. */
+export function fetchDxgiVertexElement(
+  format: number,
+  data: DataView,
+  address: number,
+  minimumOffset: number,
+  output: Float32Array,
+  destination: number,
+): void {
+  const spec = dxgiVertexFormat(format);
+  if (!spec) throw new Error(`Unsupported DXGI vertex format ${format}`);
+  if (!Number.isSafeInteger(destination) || destination < 0 || destination > output.length - 4)
+    throw new RangeError('Invalid DXGI vertex destination');
+  if (address < minimumOffset || address > data.byteLength - spec.bytes) {
+    output[destination] = output[destination + 1] = output[destination + 2] = 0;
+    output[destination + 3] = spec.components < 4 ? 1 : 0;
+    return;
+  }
+  readDxgiVertexElement(format, data, address, output, destination);
+}
+
 /** Read one in-bounds element into a caller-owned float4. Missing components are0,0,0,1. */
 export function readDxgiVertexElement(
   format: number,
