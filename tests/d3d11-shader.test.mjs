@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {parseSm4Program} from '../dist/graphics/d3d11-shader/bytecode.js';
+import {parseSm4Signature} from '../dist/graphics/d3d11-shader/signature.js';
 import {parseDxbcContainer} from '../dist/graphics/d3d11-shader/container.js';
 import {extractEmoteX64ShaderBlobs} from '../dist/native/emotedriver/runtime/render/shaders.js';
 
@@ -170,4 +171,78 @@ test('SM4 rejects malformed instructions before crossing their operand boundarie
   const badLength = program([0x0100003e]);
   new DataView(badLength.buffer, badLength.byteOffset).setUint32(4, 99, true);
   assert.throws(() => parseSm4Program(badLength), /length/);
+});
+
+function signature() {
+  const backing = new Uint8Array(3 + 76),
+    bytes = backing.subarray(3),
+    view = new DataView(backing.buffer, 3);
+  view.setUint32(0, 2, true);
+  view.setUint32(4, 16, true);
+  for (const [offset, index, mask, readWrite] of [
+    [16, 0, 3, 3],
+    [40, 1, 12, 4],
+  ]) {
+    view.setUint32(offset, 64, true);
+    view.setUint32(offset + 4, index, true);
+    view.setUint32(offset + 12, 3, true);
+    view.setUint32(offset + 16, 1, true);
+    view.setUint8(offset + 20, mask);
+    view.setUint8(offset + 21, readWrite);
+  }
+  bytes.set(new TextEncoder().encode('TeXcOoRd\0'), 64);
+  return bytes;
+}
+
+test('SM4 signatures retain shared names, register masks and serialized semantic indices', () => {
+  const bytes = signature(),
+    p = parseSm4Signature(bytes);
+  assert.deepEqual(p, [
+    {
+      semanticName: 'TeXcOoRd',
+      semanticIndex: 0,
+      systemValue: 0,
+      componentType: 3,
+      register: 1,
+      mask: 3,
+      readWriteMask: 3,
+    },
+    {
+      semanticName: 'TeXcOoRd',
+      semanticIndex: 1,
+      systemValue: 0,
+      componentType: 3,
+      register: 1,
+      mask: 12,
+      readWriteMask: 4,
+    },
+  ]);
+  bytes.fill(0);
+  assert.equal(p[0].semanticName, 'TeXcOoRd');
+  assert.deepEqual(parseSm4Signature(new Uint8Array(8)), []);
+});
+
+test('SM4 signatures reject truncated tables, invalid names, unordered registers and non-component mask bits', () => {
+  assert.throws(() => parseSm4Signature(new Uint8Array(7)));
+  for (const mutate of [
+    (v) => v.setUint32(0, 4097, true),
+    (v) => v.setUint32(4, 0, true),
+    (v) => v.setUint32(4, 40, true),
+    (v) => v.setUint32(16, 99, true),
+    (v, b) => b.fill(65, 64),
+    (v) => v.setUint32(56, 0, true),
+    (v) => v.setUint8(36, 0x80),
+    (v) => v.setUint8(37, 0x80),
+  ]) {
+    const bytes = signature();
+    mutate(new DataView(bytes.buffer, bytes.byteOffset), bytes);
+    assert.throws(() => parseSm4Signature(bytes));
+  }
+  const oversized = new Uint8Array(64 + 4098);
+  oversized.set(signature().subarray(0, 64));
+  oversized.fill(65, 64);
+  oversized[oversized.length - 1] = 0;
+  assert.throws(() => parseSm4Signature(oversized), /oversized/);
+  oversized[64 + 4096] = 0;
+  assert.equal(parseSm4Signature(oversized)[0].semanticName.length, 4096);
 });

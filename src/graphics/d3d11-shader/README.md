@@ -22,3 +22,12 @@ Token syntax follows Microsoft's [token-format definitions](https://github.com/m
 Decoding does not validate shader semantics, register declarations or executable
 compatibility, and does not translate or run shaders. A shader backend must validate
 those separately before accepting a program for rendering.
+
+`parseSm4Signature` reads the serialized24-byte parameter records in ISGN/OSGN
+payloads. It retains semantic spelling/index, serialized system values, component
+types, register masks and the input always-reads/output never-writes mask. Registers
+must be ordered; parameter tables and NUL-terminated strings are checked within the
+payload. Parameter count and individual name length are limited to4,096. Newer
+signature record layouts are outside this reader's scope.
+
+The layout and mask meanings follow Microsoft's [SM4 signature reader](https://github.com/microsoft/D3D12TranslationLayer/blob/master/DxbcParser/src/DXBCUtils.cpp).
