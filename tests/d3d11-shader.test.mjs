@@ -2,6 +2,16 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {parseSm4Program} from '../dist/graphics/d3d11-shader/bytecode.js';
 import {parseSm4Signature} from '../dist/graphics/d3d11-shader/signature.js';
+import {translateSm4ToGlsl} from '../dist/graphics/d3d11-shader/glsl.js';
+import {
+  sm4SyntheticFixtures,
+  shaderWords,
+  instruction,
+  destination,
+  source,
+  sampleResource,
+  samplerOperand,
+} from '../tools/lib/sm4-synthetic-fixtures.mjs';
 import {parseDxbcContainer} from '../dist/graphics/d3d11-shader/container.js';
 import {extractEmoteX64ShaderBlobs} from '../dist/native/emotedriver/runtime/render/shaders.js';
 
@@ -245,4 +255,93 @@ test('SM4 signatures reject truncated tables, invalid names, unordered registers
   assert.throws(() => parseSm4Signature(oversized), /oversized/);
   oversized[64 + 4096] = 0;
   assert.equal(parseSm4Signature(oversized)[0].semanticName.length, 4096);
+});
+
+const decodeWords = (words) => {
+  const bytes = new Uint8Array(words.length * 4),
+    view = new DataView(bytes.buffer);
+  words.forEach((word, i) => view.setUint32(i * 4, word, true));
+  return parseSm4Program(bytes);
+};
+
+test('SM4 GLSL plans separate resource/sampler pairs and preserve raw constant-buffer ownership metadata', () => {
+  const fixtures = sm4SyntheticFixtures();
+  for (const test of fixtures) {
+    const parsed = decodeWords(test.words),
+      compiled = translateSm4ToGlsl(parsed);
+    assert.deepEqual(compiled, translateSm4ToGlsl(decodeWords(test.words.slice())));
+    assert.equal(compiled.stage, 'pixel');
+    assert.equal(compiled.entry, 'sm4_ps');
+  }
+  const sampling = translateSm4ToGlsl(
+    decodeWords(fixtures.find((c) => c.name === 'independent-sampler-pairs').words),
+  );
+  assert.deepEqual(sampling.samples, [
+    {resource: 0, sampler: 0, uniform: 'sm4_ps_t0_s0'},
+    {resource: 0, sampler: 1, uniform: 'sm4_ps_t0_s1'},
+  ]);
+  const constants = translateSm4ToGlsl(
+    decodeWords(fixtures.find((c) => c.name === 'constant-buffer-zero-fill').words),
+  );
+  assert.deepEqual(constants.constantBuffers, [{slot: 0, vectors: 2, uniform: 'sm4_ps_cb0'}]);
+});
+
+test('SM4 GLSL supports disjoint packed declarations without allowing overlapping register components', () => {
+  const words = shaderWords({body: [instruction(54, [destination(2, 0), source(1, 0)])]}),
+    parsed = decodeWords(words);
+  const input = parsed.instructions.find((i) => i.opcode === 98),
+    output = parsed.instructions.find((i) => i.opcode === 101);
+  const split = (entry, bits) => ({...entry, operands: [{...entry.operands[0], components: bits}]});
+  parsed.instructions.splice(
+    parsed.instructions.indexOf(input),
+    1,
+    split(input, [0, 1]),
+    split(input, [2, 3]),
+  );
+  parsed.instructions.splice(
+    parsed.instructions.indexOf(output),
+    1,
+    split(output, [0, 1]),
+    split(output, [2, 3]),
+  );
+  const compiled = translateSm4ToGlsl(parsed);
+  assert.deepEqual(
+    compiled.inputs.map((i) => [i.register, i.mask]),
+    [
+      [0, 3],
+      [0, 12],
+    ],
+  );
+  assert.deepEqual(
+    compiled.outputs.map((i) => [i.register, i.mask]),
+    [
+      [0, 3],
+      [0, 12],
+    ],
+  );
+  parsed.instructions.unshift(split(input, [0]));
+  assert.throws(() => translateSm4ToGlsl(parsed), /overlapping/);
+});
+
+test('SM4 GLSL refuses unsupported shader effects before producing an executable plan', () => {
+  const sample = decodeWords(
+    shaderWords({
+      stage: 'vertex',
+      resources: [0],
+      samplers: [0],
+      body: [
+        instruction(69, [destination(2, 0), source(1, 0), sampleResource(0), samplerOperand(0)]),
+      ],
+    }),
+  );
+  assert.throws(() => translateSm4ToGlsl(sample), /sample outside pixel/);
+  const parsed = decodeWords(
+    shaderWords({body: [instruction(54, [destination(2, 0), source(1, 0)])]}),
+  );
+  parsed.instructions.find((i) => i.opcode === 54).controls = 2;
+  assert.throws(() => translateSm4ToGlsl(parsed), /controls/);
+  const missing = decodeWords(
+    shaderWords({body: [instruction(54, [destination(2, 0), source(1, 1)])]}),
+  );
+  assert.throws(() => translateSm4ToGlsl(missing), /undeclared input/);
 });
