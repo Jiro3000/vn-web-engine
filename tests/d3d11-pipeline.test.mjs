@@ -5,6 +5,8 @@ import {D3d11StateCache} from '../dist/native/d3d11/runtime/states.js';
 import {D3d11ContextState} from '../dist/native/d3d11/runtime/context-state.js';
 import {createInputLayoutStorage} from '../dist/native/d3d11/runtime/input-layout.js';
 import {readDxgiVertexElement} from '../dist/graphics/dxgi-vertex.js';
+import {createShaderStorage} from '../dist/native/d3d11/runtime/shaders.js';
+import {sm4SyntheticPipeline} from '../tools/lib/sm4-synthetic-fixtures.mjs';
 import {
   createBufferStorage,
   createTexture2DStorage,
@@ -22,6 +24,52 @@ function owner(disposeBindings = () => {}) {
   const device = new D3d11Object(lifetime, [], () => events.push('device'), true);
   return {lifetime, device, events};
 }
+
+test('D3D11 shader creation owns compiled interfaces through binding, getter and device reference lifetimes', () => {
+  let context;
+  const host = owner(() => context.disposeBindings());
+  context = new D3d11ContextState(host);
+  const fixture = sm4SyntheticPipeline();
+  assert.deepEqual(createShaderStorage(host, 'vertex', fixture.vertex, null, true), {
+    hr: 1,
+    value: null,
+  });
+  const vertex = createShaderStorage(host, 'vertex', fixture.vertex, null).value;
+  const pixel = createShaderStorage(host, 'pixel', fixture.pixel, null).value;
+  assert.ok(vertex && pixel);
+  const original = pixel.shader.code.source;
+  fixture.pixel.fill(0);
+  assert.equal(pixel.shader.code.source, original);
+  assert.equal(vertex.queryInterface('ea82e40d-51dc-4f33-93d4-db7c9125ae8c').value, null);
+  const alias = pixel.queryInterface('EA82E40D-51DC-4F33-93D4-DB7C9125AE8C').value;
+  assert.equal(alias, pixel);
+  alias.release();
+  context.vsSetShader(vertex, []);
+  context.psSetShader(pixel, []);
+  vertex.release();
+  pixel.release();
+  const borrowed = context.psGetShader().shader;
+  context.clearState();
+  host.device.release();
+  context.release();
+  assert.equal(host.lifetime.closed, false);
+  assert.equal(borrowed.getDevice(), host.device);
+  host.device.release();
+  borrowed.release();
+  assert.equal(host.lifetime.closed, true);
+  assert.equal(vertex.live, false);
+  assert.equal(pixel.live, false);
+});
+
+test('D3D11 shader validation allocates no interface and refuses malformed or unsupported creation', () => {
+  const host = owner(),
+    fixture = sm4SyntheticPipeline();
+  assert.equal(createShaderStorage(host, 'pixel', fixture.vertex, null).hr, INVALID);
+  assert.equal(createShaderStorage(host, 'vertex', new Uint8Array(12), null).hr, INVALID);
+  assert.equal(createShaderStorage(host, 'vertex', fixture.vertex, host.device).hr, 0x80004001 | 0);
+  host.device.release();
+  assert.equal(createShaderStorage(host, 'vertex', fixture.vertex, null, true).hr, INVALID);
+});
 const target = () => ({
   blendEnable: false,
   srcBlend: 0,

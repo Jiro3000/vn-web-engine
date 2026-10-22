@@ -91,6 +91,18 @@ normalization and the missing-component defaults0,0,0,1.
 Layout ownership and signature matching follow [CreateInputLayout](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/nf-d3d11-id3d11device-createinputlayout).
 Missing-component defaults follow section19.1.3.3 of the [Direct3D functional specification](https://microsoft.github.io/DirectX-Specs/d3d/archive/D3D11_3_FunctionalSpec.htm).
 
+`runtime/shaders.ts` creates owned vertex/pixel device children from DXBC bytes.
+The shared SM4 compiler owns immutable interface and executable records, so releasing
+or changing caller bytecode cannot change a created shader. Stage mismatches and
+malformed interfaces fail before allocation; validation-only calls return S_FALSE.
+The supported shader model uses float registers and no dynamic class linkage.
+Shaders participate in the same binding/getter/device reference lifetime as other
+children. Compiling linked GPU programs and managing their cache belongs to the
+concrete backend; these shader objects do not register a rendering device.
+
+Creation and bytecode lifetime follow [CreateVertexShader](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/nf-d3d11-id3d11device-createvertexshader)
+and [CreatePixelShader](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/nf-d3d11-id3d11device-createpixelshader).
+
 Resource rules follow Microsoft's [Map values](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/ne-d3d11-d3d11_map),
 [UpdateSubresource](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/nf-d3d11-id3d11devicecontext-updatesubresource)
 and [block compression](https://learn.microsoft.com/en-us/windows/uwp/graphics-concepts/block-compression)

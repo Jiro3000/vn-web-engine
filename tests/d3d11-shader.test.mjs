@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {parseSm4Program} from '../dist/graphics/d3d11-shader/bytecode.js';
 import {parseSm4Signature} from '../dist/graphics/d3d11-shader/signature.js';
 import {translateSm4ToGlsl} from '../dist/graphics/d3d11-shader/glsl.js';
+import {parseSm4GlslShader, linkSm4GlslPrograms} from '../dist/graphics/d3d11-shader/program.js';
 import {
   sm4SyntheticFixtures,
   shaderWords,
@@ -11,6 +12,7 @@ import {
   source,
   sampleResource,
   samplerOperand,
+  sm4SyntheticPipeline,
 } from '../tools/lib/sm4-synthetic-fixtures.mjs';
 import {parseDxbcContainer} from '../dist/graphics/d3d11-shader/container.js';
 import {extractEmoteX64ShaderBlobs} from '../dist/native/emotedriver/runtime/render/shaders.js';
@@ -344,4 +346,48 @@ test('SM4 GLSL refuses unsupported shader effects before producing an executable
     shaderWords({body: [instruction(54, [destination(2, 0), source(1, 1)])]}),
   );
   assert.throws(() => translateSm4ToGlsl(missing), /undeclared input/);
+});
+
+test('SM4 stage interfaces own input bytes and link packed components at their native register locations', () => {
+  const fixture = sm4SyntheticPipeline(true);
+  const vertex = parseSm4GlslShader(fixture.vertex, 'vertex');
+  const pixel = parseSm4GlslShader(fixture.pixel, 'pixel');
+  const linked = linkSm4GlslPrograms(vertex, pixel);
+  fixture.vertex.fill(0);
+  fixture.pixel.fill(0);
+  assert.deepEqual(linkSm4GlslPrograms(vertex, pixel), linked);
+  assert.deepEqual(linked.attributes, [
+    {name: 'sm4_a0', register: 0, location: 0},
+    {name: 'sm4_a1', register: 1, location: 1},
+  ]);
+  assert.ok(Object.isFrozen(vertex.code.inputs[0]));
+  assert.ok(Object.isFrozen(pixel.inputs));
+  const mismatched = {
+    ...pixel,
+    inputs: pixel.inputs.map((p) => (p.semanticIndex === 1 ? {...p, register: 2} : p)),
+  };
+  assert.throws(() => linkSm4GlslPrograms(vertex, mismatched), /incompatible/);
+  assert.throws(() => linkSm4GlslPrograms(pixel, vertex), /pipeline stages/);
+});
+
+test('SM4 executable creation rejects wrong stages, duplicate interface parts and signature/declaration disagreement', () => {
+  const fixture = sm4SyntheticPipeline();
+  assert.throws(() => parseSm4GlslShader(fixture.vertex, 'pixel'), /stage mismatch/);
+  const mutatePart = (change) => {
+    const bytes = fixture.vertex.slice();
+    const container = parseDxbcContainer(bytes);
+    change(container, bytes);
+    assert.throws(() => parseSm4GlslShader(bytes, 'vertex'));
+  };
+  mutatePart((c) => {
+    const p = c.parts.find((p) => p.kind === 'ISGN');
+    new DataView(p.data.buffer, p.data.byteOffset).setUint32(8 + 16, 2, true);
+  });
+  mutatePart((c, b) =>
+    b.set(new TextEncoder().encode('OSGN'), c.parts.find((p) => p.kind === 'ISGN').offset),
+  );
+  mutatePart((c) => {
+    const p = c.parts.find((p) => p.kind === 'OSGN');
+    p.data[8 + 20] = 3;
+  });
 });

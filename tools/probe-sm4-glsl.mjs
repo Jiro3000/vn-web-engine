@@ -3,12 +3,14 @@ import {
   parseSyntheticBrowserOptions,
   runSyntheticBrowserProbe,
 } from './lib/synthetic-browser-probe.mjs';
-import {sm4SyntheticFixtures} from './lib/sm4-synthetic-fixtures.mjs';
+import {sm4SyntheticFixtures, sm4SyntheticPipeline} from './lib/sm4-synthetic-fixtures.mjs';
 
 /** Execute generated SM4 instruction cases on synthetic data; no assets or screenshots. */
 async function pageMain(fixture) {
   const {parseSm4Program} = await import('/runtime/graphics/d3d11-shader/bytecode.js');
   const {translateSm4ToGlsl} = await import('/runtime/graphics/d3d11-shader/glsl.js');
+  const {parseSm4GlslShader, linkSm4GlslPrograms} =
+    await import('/runtime/graphics/d3d11-shader/program.js');
   const canvas = document.createElement('canvas');
   canvas.width = canvas.height = 1;
   const gl = canvas.getContext('webgl2', {antialias: false, depth: false, stencil: false});
@@ -179,6 +181,79 @@ async function pageMain(fixture) {
       if (ps) gl.deleteShader(ps);
     }
   }
+  for (const test of fixture.pipelines) {
+    let vertex = null,
+      fragment = null,
+      program = null,
+      buffer = null;
+    try {
+      if (!gl.getExtension('EXT_color_buffer_float')) throw Error('Float framebuffer unavailable');
+      const linked = linkSm4GlslPrograms(
+        parseSm4GlslShader(new Uint8Array(test.vertex), 'vertex'),
+        parseSm4GlslShader(new Uint8Array(test.pixel), 'pixel'),
+      );
+      vertex = compile(gl.VERTEX_SHADER, linked.vertex);
+      fragment = compile(gl.FRAGMENT_SHADER, linked.fragment);
+      program = gl.createProgram();
+      gl.attachShader(program, vertex);
+      gl.attachShader(program, fragment);
+      gl.linkProgram(program);
+      if (!gl.getProgramParameter(program, gl.LINK_STATUS))
+        throw Error(gl.getProgramInfoLog(program));
+      gl.useProgram(program);
+      buffer = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(test.attributes), gl.STATIC_DRAW);
+      for (const a of linked.attributes) {
+        gl.enableVertexAttribArray(a.location);
+        gl.vertexAttribPointer(a.location, 4, gl.FLOAT, false, 32, a.register * 16);
+      }
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, attachment);
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        0,
+        gl.RGBA32F,
+        test.width,
+        test.height,
+        0,
+        gl.RGBA,
+        gl.FLOAT,
+        null,
+      );
+      if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE)
+        throw Error('Incomplete float target');
+      gl.viewport(0, 0, test.width, test.height);
+      gl.clearBufferfv(gl.COLOR, 0, new Float32Array(4).fill(-9));
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      const pixels = new Float32Array(test.width * test.height * 4);
+      gl.readPixels(0, 0, test.width, test.height, gl.RGBA, gl.FLOAT, pixels);
+      const error = gl.getError();
+      if (error !== gl.NO_ERROR) throw Error('WebGL error ' + error);
+      const expected = new Float32Array(test.expected),
+        actual = new Uint32Array(pixels.buffer),
+        words = new Uint32Array(expected.buffer);
+      const mismatches = [...actual].flatMap((value, i) =>
+        value === words[i] ? [] : [{index: i, actual: value, expected: words[i]}],
+      );
+      rows.push({
+        name: test.name,
+        passed: mismatches.length === 0,
+        values: actual.length,
+        mismatches,
+        actual: [...actual],
+        expected: [...words],
+      });
+    } catch (error) {
+      rows.push({name: test.name, passed: false, error: error.message});
+    } finally {
+      for (let i = 0; i < 2; i++) gl.disableVertexAttribArray(i);
+      if (buffer) gl.deleteBuffer(buffer);
+      if (program) gl.deleteProgram(program);
+      if (vertex) gl.deleteShader(vertex);
+      if (fragment) gl.deleteShader(fragment);
+    }
+  }
   gl.deleteShader(vs);
   gl.deleteTexture(attachment);
   gl.deleteFramebuffer(framebuffer);
@@ -202,7 +277,18 @@ else
   try {
     const result = await runSyntheticBrowserProbe({
       options: parseSyntheticBrowserOptions(process.argv.slice(2)),
-      fixture: {cases: sm4SyntheticFixtures()},
+      fixture: {
+        cases: sm4SyntheticFixtures(),
+        pipelines: [false, true].map((centroid) => {
+          const pipeline = sm4SyntheticPipeline(centroid);
+          return {
+            ...pipeline,
+            vertex: [...pipeline.vertex],
+            pixel: [...pipeline.pixel],
+            name: centroid ? 'packed-centroid-pipeline' : 'packed-linear-pipeline',
+          };
+        }),
+      },
       pageMain,
       runtimeRoot: fileURLToPath(new URL('../dist/', import.meta.url)),
       name: 'vn-sm4-glsl',

@@ -56,6 +56,24 @@ independent samplers. It serves synthetic data and compiled modules only and cap
 no screenshots. This instruction probe does not verify a complete D3D11 rendering
 pipeline.
 
+`parseSm4GlslShader` combines the executable plan with owned, immutable ISGN/OSGN
+records. Used signature components must have matching declarations, and overlapping
+components or duplicate semantics are rejected. The current executable interface
+subset uses float registers. `linkSm4GlslPrograms` checks adjacent stages at their
+native register locations; semantic names validate compatibility without relocating
+compiled registers. It supplies vertex attributes, packed float varyings, pixel
+position inputs and render-target outputs. Ordinary linear and centroid inputs are
+supported; other generic interpolation modes and extra system values fail explicitly.
+
+The wrapper flips clip Y and maps native depth0..1 to GL clip depth-1..1. GL framebuffer
+row0 represents native row0, so texture uploads, render targets, sampling and readback
+share the same row order. Presentation outside this backend must honor that convention.
+Pixel position comes directly from `gl_FragCoord`, including depth and reciprocal W.
+The synthetic probe also checks full packed vertex/pixel linkage and raw float readback.
+
+Stage compatibility follows Microsoft's [signature rules](https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-signatures)
+and [system-value semantics](https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-semantics).
+
 Instruction behavior follows Microsoft's [floating-point rules](https://learn.microsoft.com/en-us/windows/win32/direct3d11/floating-point-rules),
 [conditional moves](https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/movc--sm4---asm-)
 and [discard](https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/discard--sm4---asm-).

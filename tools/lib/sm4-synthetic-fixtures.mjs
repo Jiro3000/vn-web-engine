@@ -243,3 +243,112 @@ export function sm4SyntheticFixtures() {
   );
   return cases;
 }
+
+/** Minimal generated DXBC envelope for exercising complete shader interfaces. */
+export function sm4SyntheticContainer(words, inputs, outputs) {
+  const signature = (parameters) => {
+    const names = parameters.map((p) => new TextEncoder().encode(p.semanticName + '\0'));
+    const bytes = new Uint8Array(
+      8 + parameters.length * 24 + names.reduce((n, a) => n + a.length, 0),
+    );
+    const view = new DataView(bytes.buffer);
+    view.setUint32(0, parameters.length, true);
+    view.setUint32(4, 8, true);
+    let next = 8 + parameters.length * 24;
+    parameters.forEach((p, i) => {
+      const offset = 8 + i * 24;
+      [next, p.semanticIndex ?? 0, p.systemValue ?? 0, p.componentType ?? 3, p.register].forEach(
+        (word, j) => view.setUint32(offset + j * 4, word, true),
+      );
+      bytes[offset + 20] = p.mask;
+      bytes[offset + 21] = p.readWriteMask ?? p.mask;
+      bytes.set(names[i], next);
+      next += names[i].length;
+    });
+    return bytes;
+  };
+  const code = new Uint8Array(words.length * 4),
+    codeView = new DataView(code.buffer);
+  words.forEach((word, i) => codeView.setUint32(i * 4, word, true));
+  const parts = [
+    ['SHDR', code],
+    ['ISGN', signature(inputs)],
+    ['OSGN', signature(outputs)],
+  ];
+  const bytes = new Uint8Array(
+    44 + parts.reduce((n, [, part]) => n + 8 + Math.ceil(part.length / 4) * 4, 0),
+  );
+  const view = new DataView(bytes.buffer);
+  bytes.set(new TextEncoder().encode('DXBC'));
+  view.setUint32(20, 1, true);
+  view.setUint32(24, bytes.length, true);
+  view.setUint32(28, parts.length, true);
+  let next = 44;
+  parts.forEach(([name, part], i) => {
+    view.setUint32(32 + i * 4, next, true);
+    bytes.set(new TextEncoder().encode(name), next);
+    view.setUint32(next + 4, part.length, true);
+    bytes.set(part, next + 8);
+    next += 8 + Math.ceil(part.length / 4) * 4;
+  });
+  return bytes;
+}
+
+/** A generated four-by-four draw with packed float varyings and SV_Position. */
+export function sm4SyntheticPipeline(centroid = false) {
+  const position = {semanticName: 'SV_Position', systemValue: 1, register: 0, mask: 15};
+  const packed = [
+    {semanticName: 'TEXCOORD', semanticIndex: 0, register: 1, mask: 3},
+    {semanticName: 'TEXCOORD', semanticIndex: 1, register: 1, mask: 12},
+  ];
+  const compile = (stage, instructions, inputs, outputs) => {
+    const words = instructions.flat();
+    return sm4SyntheticContainer(
+      [stage === 'vertex' ? 0x10040 : 0x40, words.length + 2, ...words],
+      inputs,
+      outputs,
+    );
+  };
+  const vertex = compile(
+    'vertex',
+    [
+      instruction(95, [destination(1, 0)]),
+      instruction(95, [destination(1, 1)]),
+      instruction(103, [destination(2, 0), [1]]),
+      instruction(101, [destination(2, 1, 3)]),
+      instruction(101, [destination(2, 1, 12)]),
+      instruction(54, [destination(2, 0), source(1, 0)]),
+      instruction(54, [destination(2, 1), source(1, 1)]),
+      instruction(62),
+    ],
+    [
+      {semanticName: 'POSITION', register: 0, mask: 15},
+      {semanticName: 'COLOR', register: 1, mask: 15},
+    ],
+    [position, ...packed].map((p) => ({...p, readWriteMask: 0})),
+  );
+  const pixel = compile(
+    'pixel',
+    [
+      instruction(100, [destination(1, 0), [1]], 4),
+      instruction(98, [destination(1, 1, 3)], centroid ? 3 : 2),
+      instruction(98, [destination(1, 1, 12)], 2),
+      instruction(101, [destination(2, 0)]),
+      instruction(104, [[1]]),
+      instruction(56, [destination(0, 0), source(1, 0), literal([0.125, 0.125, 1, 0.5])]),
+      instruction(0, [destination(2, 0), source(0, 0), source(1, 1)]),
+      instruction(62),
+    ],
+    [position, ...packed],
+    [{semanticName: 'SV_Target', register: 0, mask: 15, readWriteMask: 0}],
+  );
+  const attributes = [
+    [-1, 1, 0.25, 1, 0, 0, 0.25, 0.5],
+    [3, 1, 0.25, 1, 2, 0, 0.25, 0.5],
+    [-1, -3, 0.25, 1, 0, 2, 0.25, 0.5],
+  ].flat();
+  const expected = [];
+  for (let y = 0; y < 4; y++)
+    for (let x = 0; x < 4; x++) expected.push((x + 0.5) * 0.375, (y + 0.5) * 0.375, 0.5, 1);
+  return {vertex, pixel, attributes, expected, width: 4, height: 4};
+}
