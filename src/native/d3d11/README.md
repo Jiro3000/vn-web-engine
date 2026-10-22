@@ -48,6 +48,11 @@ views and typeless reinterpretation are outside the declared view subset.
 
 These implementation components do not yet register a rendering device.
 GPU writes and readback must use the same resource storage when that device is wired.
+The internal resource owner can synchronize deferred GPU writes before borrowed-byte
+reads, preserving maps, partial updates and copies. Validation precedes synchronization.
+Whole-resource copies synchronize their source; their destination is replaced in full.
+WRITE_DISCARD skips synchronization because it replaces the relevant storage. Resource
+revisions distinguish those CPU replacements from pending device writes.
 
 `runtime/states.ts` owns blend, depth/stencil, rasterizer and sampler descriptions.
 Creation copies nested records, converts native float fields to float32, and interns

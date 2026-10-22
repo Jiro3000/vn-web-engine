@@ -25,6 +25,8 @@ export interface D3d11ResourceOwner {
   readonly lifetime: D3d11Lifetime;
   readonly device: ID3D11Device;
   resourceDestroyed(resource: D3d11ResourceStorage): void;
+  /** Commit pending GPU writes to canonical bytes before a preserving CPU operation. */
+  synchronizeResource?(resource: D3d11ResourceStorage): void;
 }
 
 interface Level {
@@ -110,6 +112,12 @@ export abstract class D3d11ResourceStorage extends D3d11Object implements ID3D11
 
   /** Borrowed implementation storage; a mapped subresource cannot be consumed by the GPU. */
   storage(subresource: number): Level {
+    const level = this.level(subresource);
+    this.owner.synchronizeResource?.(this);
+    return level;
+  }
+
+  private level(subresource: number): Level {
     this.ensureAlive();
     const level = uint(subresource) ? this.levels[subresource] : undefined;
     if (!level || level.mapped) throw new Error('Invalid or mapped D3D11 subresource');
@@ -137,6 +145,7 @@ export abstract class D3d11ResourceStorage extends D3d11Object implements ID3D11
       return {hr: INVALID, value: null};
     if (type === 4 && this.dimension === 3 && this.levels.some((entry) => entry.mapped))
       return {hr: INVALID, value: null};
+    if (type !== 4) this.owner.synchronizeResource?.(this);
     try {
       // Allocate all replacement storage before modifying any level. WRITE_DISCARD
       // on the top texture mip discards the complete chain; lower mips are undefined.
@@ -171,7 +180,7 @@ export abstract class D3d11ResourceStorage extends D3d11Object implements ID3D11
   }
 
   update(subresource: number, box: D3d11Box | null, data: Uint8Array, rowPitch: number): void {
-    const level = this.storage(subresource);
+    const level = this.level(subresource);
     if (empty(box)) return;
     if (
       this.access.usage !== 0 ||
@@ -187,6 +196,7 @@ export abstract class D3d11ResourceStorage extends D3d11Object implements ID3D11
       data.byteLength < (region.rows - 1) * pitch + region.rowBytes
     )
       throw new Error('Truncated D3D11 subresource data');
+    this.owner.synchronizeResource?.(this);
     for (let row = 0; row < region.rows; row++)
       level.bytes.set(
         data.subarray(row * pitch, row * pitch + region.rowBytes),
@@ -204,8 +214,8 @@ export abstract class D3d11ResourceStorage extends D3d11Object implements ID3D11
     sourceSubresource: number,
     box: D3d11Box | null,
   ): void {
-    const destination = this.storage(subresource),
-      input = source.storage(sourceSubresource);
+    const destination = this.level(subresource),
+      input = source.level(sourceSubresource);
     if (empty(box)) return;
     if (this === source && subresource === sourceSubresource)
       throw new Error('Copying a D3D11 subresource onto itself');
@@ -237,6 +247,8 @@ export abstract class D3d11ResourceStorage extends D3d11Object implements ID3D11
         destination.height !== input.height)
     )
       throw new Error('D3D11 depth copies require a complete subresource');
+    source.owner.synchronizeResource?.(source);
+    this.owner.synchronizeResource?.(this);
     for (let row = 0; row < from.rows; row++)
       destination.bytes.set(
         input.bytes.subarray(
@@ -267,6 +279,7 @@ export abstract class D3d11ResourceStorage extends D3d11Object implements ID3D11
       )
     )
       throw new Error('Incompatible D3D11 whole-resource copy');
+    source.owner.synchronizeResource?.(source);
     for (let i = 0; i < this.levels.length; i++) this.levels[i]!.bytes.set(source.levels[i]!.bytes);
     this.revision++;
   }

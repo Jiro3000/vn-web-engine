@@ -47,6 +47,100 @@ const initial = (bytes, pitch = 0) => ({
   slicePitch: 0,
 });
 
+function deferredOwner() {
+  const host = owner(),
+    pending = new Map(),
+    synchronized = [];
+  host.defer = (resource, value) => {
+    resource.revision++;
+    pending.set(resource, {revision: resource.revision, value});
+  };
+  host.synchronizeResource = (resource) => {
+    synchronized.push(resource);
+    const write = pending.get(resource);
+    if (write && write.revision === resource.revision)
+      for (const level of resource.levels) level.bytes.fill(write.value);
+    pending.delete(resource);
+  };
+  return {...host, synchronized};
+}
+
+test('native resource CPU reads and preserving maps observe deferred device writes', () => {
+  const host = deferredOwner();
+  const texture = createTexture2DStorage(
+    host,
+    textureDesc({usage: 3, bindFlags: 0, cpuAccessFlags: 0x30000}),
+    null,
+  ).value;
+  host.defer(texture, 17);
+  const read = texture.map(0, 1, 0);
+  assert.equal(read.hr, 0);
+  assert.ok(read.value.data.every((n) => n === 17));
+  texture.unmap(0);
+  host.defer(texture, 42);
+  const write = texture.map(0, 3, 0);
+  assert.ok(write.value.data.every((n) => n === 42));
+  write.value.data[5] = 9;
+  texture.unmap(0);
+  assert.deepEqual(
+    [...texture.storage(0).bytes],
+    [42, 42, 42, 42, 42, 9, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42],
+  );
+  texture.release();
+  host.device.release();
+});
+
+test('native partial updates and copies preserve deferred data while whole copies replace the destination', () => {
+  const host = deferredOwner();
+  const source = createTexture2DStorage(host, textureDesc(), null).value;
+  const target = createTexture2DStorage(host, textureDesc(), null).value;
+  host.defer(source, 7);
+  source.update(
+    0,
+    {left: 1, top: 1, front: 0, right: 3, bottom: 2, back: 1},
+    new Uint8Array([9, 10]),
+    2,
+  );
+  assert.equal(source.storage(0).bytes[0], 7);
+  assert.deepEqual([...source.storage(0).bytes.subarray(5, 7)], [9, 10]);
+  host.defer(target, 3);
+  target.copyFrom(0, 0, 0, 0, source, 0, {left: 1, top: 1, front: 0, right: 3, bottom: 2, back: 1});
+  assert.deepEqual([...target.storage(0).bytes.subarray(0, 4)], [9, 10, 3, 3]);
+  host.defer(source, 21);
+  host.defer(target, 31);
+  host.synchronized.length = 0;
+  target.copyAllFrom(source);
+  assert.deepEqual(host.synchronized, [source]);
+  assert.ok(target.storage(0).bytes.every((n) => n === 21));
+  source.release();
+  target.release();
+  host.device.release();
+});
+
+test('native invalid operations and WRITE_DISCARD do not synchronize bytes that will not be preserved', () => {
+  const host = deferredOwner();
+  const texture = createTexture2DStorage(host, textureDesc(), null).value;
+  assert.throws(() => texture.update(0, null, new Uint8Array(1), 4), /Truncated/);
+  assert.equal(texture.map(0, 1, 0).hr, INVALID);
+  assert.deepEqual(host.synchronized, []);
+  const dynamic = createTexture2DStorage(
+    host,
+    textureDesc({usage: 2, cpuAccessFlags: 0x10000, mipLevels: 2}),
+    null,
+  ).value;
+  host.defer(dynamic, 77);
+  const mapped = dynamic.map(0, 4, 0);
+  assert.equal(mapped.hr, 0);
+  assert.deepEqual(host.synchronized, []);
+  mapped.value.data.fill(5);
+  dynamic.unmap(0);
+  assert.ok(dynamic.storage(0).bytes.every((n) => n === 5));
+  assert.ok(dynamic.storage(1).bytes.every((n) => n === 0));
+  texture.release();
+  dynamic.release();
+  host.device.release();
+});
+
 test('D3D11 resource creation owns descriptors/data and a child can reacquire its device', () => {
   const host = owner(),
     desc = textureDesc({width: 3, height: 2});
