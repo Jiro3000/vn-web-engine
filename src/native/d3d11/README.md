@@ -49,6 +49,18 @@ views and typeless reinterpretation are outside the declared view subset.
 These implementation components do not yet register a rendering device.
 GPU writes and readback must use the same resource storage when that device is wired.
 
+`runtime/states.ts` owns blend, depth/stencil, rasterizer and sampler descriptions.
+Creation copies nested records, converts native float fields to float32, and interns
+identical descriptions with an additional caller reference. Each kind is limited to
+4,096 live unique states; final release removes its cache entry. Getters return copies,
+and binding references keep a state alive independently of its creating caller. Fields
+ignored by disabled blend/depth/stencil/sampler features retain their supplied values.
+Sampler descriptors cover ordinary and comparison filters; minimum/maximum reduction
+filters require a newer feature subset.
+
+Interning and limits follow [CreateBlendState](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/nf-d3d11-id3d11device-createblendstate)
+and the [native return codes](https://learn.microsoft.com/en-us/windows/win32/direct3d11/d3d11-graphics-reference-returnvalues).
+
 Resource rules follow Microsoft's [Map values](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/ne-d3d11-d3d11_map),
 [UpdateSubresource](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/nf-d3d11-id3d11devicecontext-updatesubresource)
 and [block compression](https://learn.microsoft.com/en-us/windows/uwp/graphics-concepts/block-compression)
