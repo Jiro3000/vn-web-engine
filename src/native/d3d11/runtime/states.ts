@@ -8,7 +8,7 @@ import type {
   ID3D11Device,
   ID3D11DeviceChild,
 } from '../contract.js';
-import {D3d11Object, type D3d11Lifetime} from './com.js';
+import {D3d11ChildObject, type D3d11Lifetime} from './com.js';
 
 const INVALID = 0x80070057 | 0;
 const TOO_MANY_STATES = 0x887c0001 | 0;
@@ -45,21 +45,16 @@ const copySampler = (d: D3d11SamplerDesc): D3d11SamplerDesc => ({
 });
 
 /** Immutable device state, held by both public callers and pipeline bindings. */
-export class D3d11State<T> extends D3d11Object implements ID3D11DeviceChild {
+export class D3d11State<T> extends D3d11ChildObject implements ID3D11DeviceChild {
   constructor(
-    private readonly owner: Owner,
+    owner: Owner,
     readonly kind: Kind,
     readonly description: T,
     private readonly copy: (value: T) => T,
     iid: string,
     dispose: () => void,
   ) {
-    super(owner.lifetime, ['1841e5c8-16b0-489b-bcc8-44cfb0d5deae', iid], dispose);
-  }
-  getDevice(): ID3D11Device {
-    if (!this.live) throw new Error('Using a released D3D11 state');
-    this.owner.device.addRef();
-    return this.owner.device;
+    super(owner, [iid], dispose);
   }
   getDesc(): T {
     return this.copy(this.description);

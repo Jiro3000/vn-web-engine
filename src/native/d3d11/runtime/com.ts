@@ -1,4 +1,4 @@
-import type {D3d11Result, IUnknown} from '../contract.js';
+import type {D3d11Result, ID3D11Device, ID3D11DeviceChild, IUnknown} from '../contract.js';
 
 const IID_IUNKNOWN = '00000000-0000-0000-c000-000000000046';
 const E_NOINTERFACE = 0x80004002 | 0;
@@ -66,10 +66,14 @@ export class D3d11Object implements IUnknown {
   }
 
   queryInterface(iid: string): D3d11Result<IUnknown> {
-    if (this.destroyed || this.lifetime.closed || !this.interfaces.has(iid.toLowerCase()))
-      return {hr: E_NOINTERFACE, value: null};
+    if (!this.supportsInterface(iid)) return {hr: E_NOINTERFACE, value: null};
     this.addRef();
     return {hr: 0, value: this};
+  }
+
+  /** Internal identity check without borrowing an extra public reference. */
+  supportsInterface(iid: string): boolean {
+    return this.live && this.interfaces.has(iid.toLowerCase());
   }
 
   /** Internal validity check; released interfaces are never accepted by device factories. */
@@ -114,5 +118,32 @@ export class D3d11Object implements IUnknown {
     if (this.destroyed) return;
     this.destroyed = true;
     this.dispose();
+  }
+}
+
+export interface D3d11DeviceOwner {
+  readonly lifetime: D3d11Lifetime;
+  readonly device: ID3D11Device;
+}
+
+/** Shared implementation of the inherited native device-child interface. */
+export class D3d11ChildObject extends D3d11Object implements ID3D11DeviceChild {
+  constructor(
+    private readonly deviceOwner: D3d11DeviceOwner,
+    interfaces: readonly string[],
+    dispose: () => void,
+    root = false,
+  ) {
+    super(
+      deviceOwner.lifetime,
+      ['1841e5c8-16b0-489b-bcc8-44cfb0d5deae', ...interfaces],
+      dispose,
+      root,
+    );
+  }
+  getDevice(): ID3D11Device {
+    if (!this.live) throw new Error('Using a released D3D11 device child');
+    this.deviceOwner.device.addRef();
+    return this.deviceOwner.device;
   }
 }

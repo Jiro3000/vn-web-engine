@@ -61,6 +61,24 @@ filters require a newer feature subset.
 Interning and limits follow [CreateBlendState](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/nf-d3d11-id3d11device-createblendstate)
 and the [native return codes](https://learn.microsoft.com/en-us/windows/win32/direct3d11/d3d11-graphics-reference-returnvalues).
 
+`runtime/context-state.ts` provides the immediate context's VS/PS constant buffers,
+PS resource/sampler/shader slots, input assembler and output/rasterizer bindings.
+Its implemented methods are checked against the native context contract. Updates
+validate all incoming handles before replacing bindings, and getters return owned
+interface references or copied scalar records. Shader-resource/render-target overlap
+is resolved per mip range. Output views must have compatible dimensions and cannot
+bind one subresource twice. Setting outputs preserves viewport/scissor state.
+
+`clearState` resets all covered bindings and defaults. Final device lifetime teardown
+uses the same cleanup without reacquiring a caller reference, attempts every release,
+and retires state even if host disposal fails. Drawing, resource transfers and flushing
+belong to the concrete rendering backend; this binding component does not register one.
+It accepts SM4 shaders, whose class-instance arrays are empty.
+
+Binding ownership and hazards follow [PSSetShaderResources](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/nf-d3d11-id3d11devicecontext-pssetshaderresources),
+[OMSetRenderTargets](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/nf-d3d11-id3d11devicecontext-omsetrendertargets)
+and [ClearState](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/nf-d3d11-id3d11devicecontext-clearstate).
+
 Resource rules follow Microsoft's [Map values](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/ne-d3d11-d3d11_map),
 [UpdateSubresource](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/nf-d3d11-id3d11devicecontext-updatesubresource)
 and [block compression](https://learn.microsoft.com/en-us/windows/uwp/graphics-concepts/block-compression)
