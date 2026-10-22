@@ -9,8 +9,10 @@ import {sm4SyntheticFixtures, sm4SyntheticPipeline} from './lib/sm4-synthetic-fi
 async function pageMain(fixture) {
   const {parseSm4Program} = await import('/runtime/graphics/d3d11-shader/bytecode.js');
   const {translateSm4ToGlsl} = await import('/runtime/graphics/d3d11-shader/glsl.js');
-  const {parseSm4GlslShader, linkSm4GlslPrograms} =
-    await import('/runtime/graphics/d3d11-shader/program.js');
+  const {D3d11ProgramCache} = await import('/runtime/native/d3d11/webgl2/shaders.js');
+  const {createShaderStorage} = await import('/runtime/native/d3d11/runtime/shaders.js');
+  const {createBufferStorage} = await import('/runtime/native/d3d11/runtime/resources.js');
+  const {D3d11Lifetime, D3d11Object} = await import('/runtime/native/d3d11/runtime/com.js');
   const canvas = document.createElement('canvas');
   canvas.width = canvas.height = 1;
   const gl = canvas.getContext('webgl2', {antialias: false, depth: false, stencil: false});
@@ -182,25 +184,47 @@ async function pageMain(fixture) {
     }
   }
   for (const test of fixture.pipelines) {
-    let vertex = null,
-      fragment = null,
-      program = null,
+    let cache = null,
+      device = null,
+      vertex = null,
+      pixel = null,
+      alternative = null,
       buffer = null;
+    const nativeBuffers = [];
     try {
       if (!gl.getExtension('EXT_color_buffer_float')) throw Error('Float framebuffer unavailable');
-      const linked = linkSm4GlslPrograms(
-        parseSm4GlslShader(new Uint8Array(test.vertex), 'vertex'),
-        parseSm4GlslShader(new Uint8Array(test.pixel), 'pixel'),
-      );
-      vertex = compile(gl.VERTEX_SHADER, linked.vertex);
-      fragment = compile(gl.FRAGMENT_SHADER, linked.fragment);
-      program = gl.createProgram();
-      gl.attachShader(program, vertex);
-      gl.attachShader(program, fragment);
-      gl.linkProgram(program);
-      if (!gl.getProgramParameter(program, gl.LINK_STATUS))
-        throw Error(gl.getProgramInfoLog(program));
-      gl.useProgram(program);
+      const lifetime = new D3d11Lifetime(() => cache?.dispose());
+      device = new D3d11Object(lifetime, [], () => {}, true);
+      const owner = {lifetime, device, resourceDestroyed() {}};
+      cache = new D3d11ProgramCache(owner, gl, 1);
+      vertex = createShaderStorage(owner, 'vertex', new Uint8Array(test.vertex), null).value;
+      pixel = createShaderStorage(owner, 'pixel', new Uint8Array(test.pixel), null).value;
+      if (!vertex || !pixel) throw Error('Native synthetic shader creation failed');
+      const linked = cache.use(vertex, pixel),
+        original = linked.program;
+      if (cache.use(vertex, pixel) !== linked) throw Error('Native program reuse failed');
+      vertex.release();
+      pixel.release();
+      function constants(values) {
+        const bytes = new Uint8Array(new Float32Array(values).buffer);
+        const resource = createBufferStorage(
+          owner,
+          {
+            byteWidth: bytes.length,
+            usage: 0,
+            bindFlags: 4,
+            cpuAccessFlags: 0,
+            miscFlags: 0,
+            structureByteStride: 0,
+          },
+          {data: bytes, rowPitch: 0, slicePitch: 0},
+        ).value;
+        if (!resource) throw Error('Native synthetic constant buffer creation failed');
+        nativeBuffers.push(resource);
+        return resource;
+      }
+      const vertexConstants = test.constantBuffers ? [constants([10, 20, 30, 40])] : [];
+      const pixelConstants = test.constantBuffers ? [constants([0.125, 0.25, 0, 0])] : [];
       buffer = gl.createBuffer();
       gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
       gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(test.attributes), gl.STATIC_DRAW);
@@ -224,34 +248,78 @@ async function pageMain(fixture) {
       if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE)
         throw Error('Incomplete float target');
       gl.viewport(0, 0, test.width, test.height);
-      gl.clearBufferfv(gl.COLOR, 0, new Float32Array(4).fill(-9));
-      gl.drawArrays(gl.TRIANGLES, 0, 3);
-      const pixels = new Float32Array(test.width * test.height * 4);
-      gl.readPixels(0, 0, test.width, test.height, gl.RGBA, gl.FLOAT, pixels);
-      const error = gl.getError();
-      if (error !== gl.NO_ERROR) throw Error('WebGL error ' + error);
-      const expected = new Float32Array(test.expected),
-        actual = new Uint32Array(pixels.buffer),
-        words = new Uint32Array(expected.buffer);
-      const mismatches = [...actual].flatMap((value, i) =>
-        value === words[i] ? [] : [{index: i, actual: value, expected: words[i]}],
+      function draw(name, vsBuffers, psBuffers, delta) {
+        cache.uploadConstants(linked, vsBuffers, psBuffers);
+        gl.clearBufferfv(gl.COLOR, 0, new Float32Array(4).fill(-9));
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+        const pixels = new Float32Array(test.width * test.height * 4);
+        gl.readPixels(0, 0, test.width, test.height, gl.RGBA, gl.FLOAT, pixels);
+        const error = gl.getError();
+        if (error !== gl.NO_ERROR) throw Error('WebGL error ' + error);
+        const expected = new Float32Array(test.expected.map((n, i) => n + delta[i % 4]));
+        const actual = new Uint32Array(pixels.buffer),
+          words = new Uint32Array(expected.buffer);
+        const mismatches = [...actual].flatMap((value, i) =>
+          value === words[i] ? [] : [{index: i, actual: value, expected: words[i]}],
+        );
+        rows.push({
+          name,
+          passed: mismatches.length === 0,
+          values: actual.length,
+          mismatches,
+          actual: [...actual],
+          expected: [...words],
+        });
+      }
+      draw(
+        test.name,
+        vertexConstants,
+        pixelConstants,
+        test.constantBuffers ? [0.125, 0.25, 0, 0] : [0, 0, 0, 0],
       );
+      if (test.constantBuffers) {
+        pixelConstants[0].update(
+          0,
+          null,
+          new Uint8Array(new Float32Array([0.25, 0.5, 0.25, 0]).buffer),
+          0,
+        );
+        draw(test.name + '-updated', vertexConstants, pixelConstants, [0.25, 0.5, 0.25, 0]);
+        draw(test.name + '-unbound', [], [], [0, 0, 0, 0]);
+      }
+      alternative = createShaderStorage(owner, 'pixel', new Uint8Array(test.pixel), null).value;
+      const replaced = cache.use(vertex, alternative);
+      alternative.release();
+      if (gl.isProgram(original) || pixel.live || !vertex.live)
+        throw Error('Native cache eviction ownership failed');
+      let retiredRejected = false;
+      try {
+        cache.uploadConstants(linked, [], []);
+      } catch {
+        retiredRejected = true;
+      }
+      cache.dispose();
+      if (gl.isProgram(replaced.program) || vertex.live || alternative.live || !retiredRejected)
+        throw Error('Native cache disposal ownership failed');
       rows.push({
-        name: test.name,
-        passed: mismatches.length === 0,
-        values: actual.length,
-        mismatches,
-        actual: [...actual],
-        expected: [...words],
+        name: test.name + '-ownership',
+        passed: true,
+        reused: true,
+        evicted: true,
+        retiredRejected,
+        disposed: true,
       });
     } catch (error) {
       rows.push({name: test.name, passed: false, error: error.message});
     } finally {
       for (let i = 0; i < 2; i++) gl.disableVertexAttribArray(i);
       if (buffer) gl.deleteBuffer(buffer);
-      if (program) gl.deleteProgram(program);
-      if (vertex) gl.deleteShader(vertex);
-      if (fragment) gl.deleteShader(fragment);
+      cache?.dispose();
+      vertex?.release();
+      pixel?.release();
+      alternative?.release();
+      for (const resource of nativeBuffers) resource.release();
+      device?.release();
     }
   }
   gl.deleteShader(vs);
@@ -279,13 +347,21 @@ else
       options: parseSyntheticBrowserOptions(process.argv.slice(2)),
       fixture: {
         cases: sm4SyntheticFixtures(),
-        pipelines: [false, true].map((centroid) => {
-          const pipeline = sm4SyntheticPipeline(centroid);
+        pipelines: [
+          [false, false],
+          [true, false],
+          [false, true],
+        ].map(([centroid, constantBuffers]) => {
+          const pipeline = sm4SyntheticPipeline(centroid, constantBuffers);
           return {
             ...pipeline,
             vertex: [...pipeline.vertex],
             pixel: [...pipeline.pixel],
-            name: centroid ? 'packed-centroid-pipeline' : 'packed-linear-pipeline',
+            name: constantBuffers
+              ? 'native-constant-buffers'
+              : centroid
+                ? 'packed-centroid-pipeline'
+                : 'packed-linear-pipeline',
           };
         }),
       },

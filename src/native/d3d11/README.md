@@ -103,6 +103,19 @@ concrete backend; these shader objects do not register a rendering device.
 Creation and bytecode lifetime follow [CreateVertexShader](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/nf-d3d11-id3d11device-createvertexshader)
 and [CreatePixelShader](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/nf-d3d11-id3d11device-createpixelshader).
 
+`webgl2/shaders.ts` compiles and links these native shader pairs on WebGL2. Its
+device-owned cache retains the shader children and bounds programs with LRU eviction.
+Eviction and disposal delete GPU programs and release both children. Pair lookup uses
+weak identity maps; successful selection makes the corresponding program current.
+Failed compilation or linkage releases every partially created GPU object.
+
+Active uniform reflection bounds raw constant uploads to the array size retained by
+the driver. Short and unbound buffers are zero-filled; unchanged buffer identities
+and revisions avoid repeated uploads. Texture/sampler pairs receive independent units.
+The synthetic shader probe exercises this cache, native buffer updates, unbinding,
+eviction and disposal with raw float readback. A rendering device still needs to bind
+textures, input assembly, targets and raster/output state through this implementation.
+
 Resource rules follow Microsoft's [Map values](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/ne-d3d11-d3d11_map),
 [UpdateSubresource](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/nf-d3d11-id3d11devicecontext-updatesubresource)
 and [block compression](https://learn.microsoft.com/en-us/windows/uwp/graphics-concepts/block-compression)
