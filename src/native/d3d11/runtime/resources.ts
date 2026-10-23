@@ -27,6 +27,8 @@ export interface D3d11ResourceOwner {
   resourceDestroyed(resource: D3d11ResourceStorage): void;
   /** Commit pending GPU writes to canonical bytes before a preserving CPU operation. */
   synchronizeResource?(resource: D3d11ResourceStorage): void;
+  /** Non-blocking readiness query for Map(DO_NOT_WAIT); absent means canonical bytes are ready. */
+  resourceReady?(resource: D3d11ResourceStorage): boolean;
 }
 
 interface Level {
@@ -145,6 +147,8 @@ export abstract class D3d11ResourceStorage extends D3d11Object implements ID3D11
       return {hr: INVALID, value: null};
     if (type === 4 && this.dimension === 3 && this.levels.some((entry) => entry.mapped))
       return {hr: INVALID, value: null};
+    if (flags === 0x100000 && this.owner.resourceReady?.(this) === false)
+      return {hr: 0x887a000a | 0, value: null};
     if (type !== 4) this.owner.synchronizeResource?.(this);
     try {
       // Allocate all replacement storage before modifying any level. WRITE_DISCARD

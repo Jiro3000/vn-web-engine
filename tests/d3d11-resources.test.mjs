@@ -141,6 +141,27 @@ test('native invalid operations and WRITE_DISCARD do not synchronize bytes that 
   host.device.release();
 });
 
+test('native Map(DO_NOT_WAIT) returns still-drawing before synchronization when the device is not ready', () => {
+  const host = deferredOwner();
+  const texture = createTexture2DStorage(
+    host,
+    textureDesc({usage: 3, bindFlags: 0, cpuAccessFlags: 0x20000}),
+    null,
+  ).value;
+  host.defer(texture, 19);
+  host.resourceReady = () => false;
+  assert.deepEqual(texture.map(0, 1, 0x100000), {hr: 0x887a000a | 0, value: null});
+  assert.deepEqual(host.synchronized, []);
+  assert.equal(texture.levels[0].mapped, null);
+  host.resourceReady = () => true;
+  const mapped = texture.map(0, 1, 0x100000);
+  assert.equal(mapped.hr, 0);
+  assert.ok(mapped.value.data.every((n) => n === 19));
+  texture.unmap(0);
+  texture.release();
+  host.device.release();
+});
+
 test('D3D11 resource creation owns descriptors/data and a child can reacquire its device', () => {
   const host = owner(),
     desc = textureDesc({width: 3, height: 2});

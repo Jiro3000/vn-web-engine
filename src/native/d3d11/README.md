@@ -53,6 +53,8 @@ reads, preserving maps, partial updates and copies. Validation precedes synchron
 Whole-resource copies synchronize their source; their destination is replaced in full.
 WRITE_DISCARD skips synchronization because it replaces the relevant storage. Resource
 revisions distinguish those CPU replacements from pending device writes.
+An optional readiness query lets Map(DO_NOT_WAIT) return
+DXGI_ERROR_WAS_STILL_DRAWING before synchronizing or allocating mapped storage.
 
 `runtime/states.ts` owns blend, depth/stencil, rasterizer and sampler descriptions.
 Creation copies nested records, converts native float fields to float32, and interns
