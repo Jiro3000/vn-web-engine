@@ -541,3 +541,9 @@ The scalar player's `getState` query follows x64 entry `0x180002b80`: `coordX`,
 its packed color's high two bytes. Names are case-sensitive C strings. The native
 blue/alpha branches repeat the `colorG`/`colorR` comparisons and are unreachable;
 `colorB`, `colorA` and other unknown names therefore return zero.
+
+`runtime/render/d3d11-target.ts` owns the native views and underlying Texture2D
+references of an external render target (`0x18005b2e0`, `0x18005ec10`). Installing
+it leaves the compositor's context bindings and pixels alone. The wrapper retains
+the native base-resource dimensions and copy subresource zero, including for a view
+of another mip. Context bindings keep their own references after wrapper disposal.

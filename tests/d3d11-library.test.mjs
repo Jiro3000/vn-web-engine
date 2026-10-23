@@ -892,3 +892,90 @@ test('E-mote native draw states use complete native descriptors and retire parti
   device.release();
   loaded.loader.dispose();
 });
+
+test('E-mote external targets retain native views/resources without rebinding the compositor', async () => {
+  const {EmoteD3d11Target} =
+    await import('../dist/native/emotedriver/runtime/render/d3d11-target.js');
+  const loaded = exportsFor(() => capabilityContext().gl);
+  const {device, immediateContext: ctx} = loaded.exports.d3d11CreateDevice(null, 1, 0, 0, null, 7);
+  const color = device.createTexture2D(
+    textureDesc({format: 28, width: 8, height: 4, mipLevels: 2}),
+    null,
+  ).value;
+  const view = device.createRenderTargetView(color, {
+    format: 28,
+    viewDimension: 4,
+    texture2D: {mipSlice: 1},
+  }).value;
+  const depth = device.createTexture2D(
+    textureDesc({format: 45, width: 8, height: 4, mipLevels: 2, bindFlags: 0x40}),
+    null,
+  ).value;
+  const depthView = device.createDepthStencilView(depth, {
+    format: 45,
+    viewDimension: 3,
+    flags: 0,
+    texture2D: {mipSlice: 1},
+  }).value;
+  const holder = new EmoteD3d11Target(view, depthView);
+  assert.deepEqual(ctx.omGetRenderTargets(1), {views: [null], depthStencilView: null});
+  assert.equal(holder.binding.view, view);
+  assert.equal(holder.binding.depth, depthView);
+  assert.equal(holder.binding.texture, color);
+  assert.equal(holder.binding.width, 8);
+  assert.equal(holder.binding.height, 4);
+  assert.equal(holder.binding.subresource, 0);
+  color.release();
+  view.release();
+  depth.release();
+  depthView.release();
+  assert.equal(holder.binding.texture.getDesc().width, 8);
+  // Context bindings retain their own references, independently of this owner.
+  ctx.omSetRenderTargets([view], depthView);
+  holder.dispose();
+  holder.dispose();
+  assert.throws(() => holder.binding, /released/);
+  const retained = ctx.omGetRenderTargets(1);
+  assert.equal(retained.views[0], view);
+  assert.equal(retained.depthStencilView, depthView);
+  retained.views[0].release();
+  retained.depthStencilView.release();
+  ctx.omSetRenderTargets([], null);
+  for (const resource of [color, view, depth, depthView])
+    assert.equal(
+      resource.queryInterface('00000000-0000-0000-c000-000000000046').hr,
+      0x80004002 | 0,
+    );
+  ctx.release();
+  device.release();
+  loaded.loader.dispose();
+});
+
+test('E-mote target construction unwinds native references when a later resource query fails', async () => {
+  const {EmoteD3d11Target} =
+    await import('../dist/native/emotedriver/runtime/render/d3d11-target.js');
+  const loaded = exportsFor(() => capabilityContext().gl);
+  const {device, immediateContext: ctx} = loaded.exports.d3d11CreateDevice(null, 1, 0, 0, null, 7);
+  const color = device.createTexture2D(textureDesc({format: 28}), null).value;
+  const view = device.createRenderTargetView(color, null).value;
+  // The borrowed depth contract fails before it transfers a resource reference.
+  assert.throws(
+    () =>
+      new EmoteD3d11Target(view, {
+        getResource() {
+          throw Error('resource query failed');
+        },
+      }),
+    /resource query failed/,
+  );
+  view.release();
+  color.release();
+  for (const resource of [color, view])
+    assert.equal(
+      resource.queryInterface('00000000-0000-0000-c000-000000000046').hr,
+      0x80004002 | 0,
+    );
+  ctx.release();
+  device.release();
+  loaded.loader.dispose();
+});

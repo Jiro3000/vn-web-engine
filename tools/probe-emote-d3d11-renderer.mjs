@@ -36,6 +36,8 @@ async function pageMain(fixture) {
     await import('/runtime/native/emotedriver/runtime/render/d3d11-textures.js');
   const {EmoteD3d11Renderer} =
     await import('/runtime/native/emotedriver/runtime/render/renderer-d3d11.js');
+  const {EmoteD3d11Target} =
+    await import('/runtime/native/emotedriver/runtime/render/d3d11-target.js');
   const {EmoteRenderer, EmoteTextureCache} =
     await import('/runtime/native/emotedriver/renderer.js');
   const {WebGLDrawTarget} = await import('/runtime/graphics/webgl-draw.js');
@@ -157,6 +159,7 @@ async function pageMain(fixture) {
   const bank = new EmoteD3d11Shaders(observedDevice, {...fixture, ...shaderInputs});
   const textures = new EmoteD3d11Textures(observedDevice);
   const native = new EmoteD3d11Renderer(observedDevice, observedContext, bank, textures);
+  const nativeOutput = new EmoteD3d11Target(view, null);
   const target = new WebGLDrawTarget(document.createElement('canvas'), width, height);
   const images = new Map();
   let nextId = 1;
@@ -381,12 +384,7 @@ async function pageMain(fixture) {
         recording = true;
         calls = [];
         meshBuffers = [];
-        native.render(
-          test.items,
-          {texture: output, view, depth: null, width, height, subresource: 0},
-          matrix,
-          test.smoothing,
-        );
+        native.render(test.items, nativeOutput.binding, matrix, test.smoothing);
         recording = false;
         const legacyMeshes = commands.filter(
           (command) => command.kind === 'triangles' && command.depthClip === false,
@@ -709,6 +707,7 @@ async function pageMain(fixture) {
     cache.close();
     target.dispose();
     native.dispose();
+    nativeOutput.dispose();
     bank.dispose();
     textures.dispose();
     for (const object of objects.reverse()) object.release();
@@ -756,6 +755,7 @@ else
         'tools/probe-emote-d3d11-renderer.mjs',
         'tools/lib/synthetic-browser-probe.mjs',
         'src/native/emotedriver/runtime/render/renderer-d3d11.ts',
+        'src/native/emotedriver/runtime/render/d3d11-target.ts',
         'src/native/emotedriver/renderer.ts',
         'src/graphics/webgl-draw.ts',
         'tests/d3d11-library.test.mjs',
