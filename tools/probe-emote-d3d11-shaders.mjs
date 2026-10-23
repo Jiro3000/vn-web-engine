@@ -35,6 +35,8 @@ async function pageMain(fixture) {
     emoteD3d11MaskShader,
     emoteD3d11AlphaShader,
   } = await import('/runtime/native/emotedriver/runtime/render/d3d11-shaders.js');
+  const {packEmoteD3d11Mesh, drawEmoteD3d11Mesh} =
+    await import('/runtime/native/emotedriver/runtime/render/d3d11-mesh.js');
   const canvas = document.createElement('canvas'),
     gl = canvas.getContext('webgl2', {antialias: false});
   if (!gl) return {available: false, reason: 'WebGL2 unavailable'};
@@ -226,6 +228,78 @@ async function pageMain(fixture) {
       color: [170, 85, 0, 128],
       constants: {alphaRef: [Math.fround(128 / 255)]},
     });
+    for (const [cols, meshRows] of [
+      [1, 1],
+      [2, 3],
+      [17, 5],
+      [1, 7],
+      [7, 1],
+    ]) {
+      const points = new Float32Array((cols + 1) * (meshRows + 1) * 2);
+      for (let j = 0; j <= meshRows; j++)
+        for (let i = 0; i <= cols; i++) {
+          const p = (j * (cols + 1) + i) * 2;
+          points[p] = -1 + (2 * i) / cols;
+          points[p + 1] = 1 - (2 * j) / meshRows;
+        }
+      const mesh = packEmoteD3d11Mesh(
+        {cols, rows: meshRows, points},
+        Uint32Array.of(0xffaa5500, 0xffaa5500, 0xffaa5500, 0xffaa5500),
+        0,
+        0,
+        1,
+        1,
+        1,
+        1,
+      );
+      ctx.omSetRenderTargets([rtv], null);
+      ctx.clearRenderTargetView(rtv, [0, 0, 0, 0]);
+      vertex.bind(ctx);
+      bank.pixel(emoteD3d11BasicShader(0, 0, 0, 0, 0)).bind(ctx);
+      drawEmoteD3d11Mesh(device, ctx, mesh);
+      ctx.copyResource(staging, target);
+      const mapped = ctx.map(staging, 0, 1, 0);
+      if (mapped.hr !== 0) throw Error('Mesh Map ' + mapped.hr);
+      const actual = [...mapped.value.data],
+        expected = Array.from({length: 16}, () => [170, 85, 0, 255]).flat();
+      ctx.unmap(staging, 0);
+      compared += actual.length;
+      rows.push({
+        name: `native-packed-mesh-${cols}x${meshRows}`,
+        vertexCount: mesh.vertexCount,
+        topology: mesh.topology,
+        passed: actual.length === expected.length && actual.every((b, i) => b === expected[i]),
+        actual,
+        expected,
+      });
+    }
+    const gradientMesh = packEmoteD3d11Mesh(
+      {cols: 1, rows: 1, points: Float32Array.of(-1, 1, 1, 1, -1, -1, 1, -1)},
+      Uint32Array.of(0xff000000, 0xffff0000, 0xff00ff00, 0xffffff00),
+      0,
+      0,
+      1,
+      1,
+      1,
+      1,
+    );
+    ctx.clearRenderTargetView(rtv, [0, 0, 0, 0]);
+    drawEmoteD3d11Mesh(device, ctx, gradientMesh);
+    ctx.copyResource(staging, target);
+    const mapped = ctx.map(staging, 0, 1, 0);
+    if (mapped.hr !== 0) throw Error('Gradient mesh Map ' + mapped.hr);
+    const actual = [...mapped.value.data],
+      expected = [];
+    for (const g of [32, 96, 159, 223])
+      for (const r of [32, 96, 159, 223]) expected.push(r, g, 0, 255);
+    ctx.unmap(staging, 0);
+    compared += actual.length;
+    rows.push({
+      name: 'native-packed-mesh-BGRA-corner-gradient',
+      passed: actual.length === expected.length && actual.every((b, i) => b === expected[i]),
+      actual,
+      expected,
+    });
   } finally {
     bank.dispose();
     for (const object of objects) object.release();
@@ -275,6 +349,8 @@ else
         'src/native/emotedriver/runtime/render/shaders.ts',
         'src/native/emotedriver/runtime/render/d3d11-program.ts',
         'src/native/emotedriver/runtime/render/d3d11-shaders.ts',
+        'src/native/emotedriver/runtime/render/d3d11-mesh.ts',
+        'src/native/emotedriver/runtime/render/vertex-colors.ts',
         'src/platform/native-libraries.ts',
       ];
     async function distFiles() {

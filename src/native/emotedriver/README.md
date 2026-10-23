@@ -103,11 +103,22 @@ implementation dependency.
 and alpha-reference table coordinates; the two separate transition entries remain
 addressable by index. Late initialization failure releases all earlier stages.
 
+`runtime/render/d3d11-mesh.ts` packs the native non-indexed 2D allocation mode into
+20-byte XY/BGRA/UV vertices for input-layout row 4 (vertex shader 1). Quads keep
+their four-vertex strip order; subdivided grids expand six vertices per cell.
+Position words retain their original bits. UV construction preserves the native
+float stores and the quad division versus grid reciprocal-multiply distinction.
+Corner colors use the shared fixed-point interpolation. A mesh's output and scratch
+allocations are bounded to 64 MiB. Submission creates a native default vertex buffer
+through the D3D11 contract and releases its reference after Draw, including failures;
+the context owns any retained binding. Shader and output state belong to the caller.
+
 `tools/probe-emote-d3d11-shaders.mjs --driver <exact-driver.dll> --output <new.json>`
 reads that image as data and exercises the bank through the D3D11 system library on
 an isolated WebGL2 context. Geometry and textures are generated; assertions compare
 numeric framebuffer bytes. It covers color modulation, filtering constants, screen
 masks, buffered addition, A8 mask construction and alpha-reference boundary/discard.
+Packed-mesh draws cover quads, subdivided grids and a numeric BGRA corner gradient.
 It never executes PE functions, presents game pixels or takes screenshots. Full player,
 compositor and model verification are separate gates.
 

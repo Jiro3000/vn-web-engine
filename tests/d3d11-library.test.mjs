@@ -534,3 +534,126 @@ test('E-mote native shader bank selects disjoint native tables and unwinds every
   assert.equal(created.length, 2100);
   assert.ok(created.every((r) => r.references === 0));
 });
+
+test('E-mote packed meshes retain raw position bits and reject invalid or oversized grids before allocation', async () => {
+  const {packEmoteD3d11Mesh, drawEmoteD3d11Mesh} =
+    await import('../dist/native/emotedriver/runtime/render/d3d11-mesh.js');
+  const storage = Uint32Array.of(
+    0,
+    0,
+    0x80000000,
+    0x7fa12345,
+    0x3f800000,
+    0,
+    0x7fc54321,
+    0xff800000,
+    0xbf800000,
+    0x3f000000,
+    0,
+    0,
+  );
+  const points = new Float32Array(storage.buffer, 8, 8),
+    corners = Uint32Array.of(0x12345678, 0x9abcdef0, 0x11223344, 0x55667788),
+    grid = {cols: 1, rows: 1, points},
+    mesh = packEmoteD3d11Mesh(grid, corners, -2, 3, 5, 7, 8, 16),
+    view = new DataView(mesh.vertices.buffer);
+  assert.equal(mesh.vertexCount, 4);
+  assert.equal(mesh.topology, 5);
+  assert.equal(mesh.vertices.length, 80);
+  for (const [i, p] of [0, 2, 1, 3].entries()) {
+    assert.equal(view.getUint32(i * 20, true), storage[2 + p * 2]);
+    assert.equal(view.getUint32(i * 20 + 4, true), storage[3 + p * 2]);
+    assert.equal(view.getUint32(i * 20 + 8, true), corners[p]);
+  }
+  assert.deepEqual([...mesh.vertices.slice(8, 12)], [0x78, 0x56, 0x34, 0x12]);
+  for (const bad of [
+    {...grid, cols: -1},
+    {...grid, rows: 0.5},
+    {...grid, cols: NaN},
+    {...grid, cols: Number.MAX_SAFE_INTEGER},
+    {...grid, points: points.subarray(1)},
+  ])
+    assert.throws(() => packEmoteD3d11Mesh(bad, corners, 0, 0, 1, 1, 1, 1), RangeError);
+  assert.throws(() => packEmoteD3d11Mesh(grid, corners.subarray(1), 0, 0, 1, 1, 1, 1), RangeError);
+  // Valid-sized source storage; expanded output alone exceeds the renderer's bound.
+  assert.throws(
+    () =>
+      packEmoteD3d11Mesh(
+        {cols: 1024, rows: 1024, points: new Float32Array(1025 * 1025 * 2)},
+        corners,
+        0,
+        0,
+        1,
+        1,
+        1,
+        1,
+      ),
+    /64 MiB/,
+  );
+  const empty = packEmoteD3d11Mesh(
+    {cols: 0, rows: 1, points: new Float32Array(4)},
+    corners,
+    0,
+    0,
+    1,
+    1,
+    1,
+    1,
+  );
+  assert.equal(empty.vertices.length, 0);
+  assert.equal(empty.vertexCount, 0);
+  drawEmoteD3d11Mesh({}, {}, empty); // Empty draws issue no contract calls.
+});
+
+test('E-mote mesh submission releases its buffer reference after a failed draw while context bindings remain owned', async () => {
+  const {packEmoteD3d11Mesh, drawEmoteD3d11Mesh} =
+    await import('../dist/native/emotedriver/runtime/render/d3d11-mesh.js');
+  const host = capabilityContext(),
+    loaded = exportsFor(() => host.gl),
+    created = loaded.exports.d3d11CreateDevice(null, 1, 0, 0, null, 7),
+    device = created.device,
+    ctx = created.immediateContext,
+    mesh = packEmoteD3d11Mesh(
+      {cols: 1, rows: 1, points: Float32Array.of(0, 0, 2, 0, 0, 2, 2, 2)},
+      Uint32Array.of(0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff),
+      0,
+      0,
+      1,
+      1,
+      1,
+      1,
+    );
+  // Actual public factories and bindings; drawing intentionally fails before GPU work.
+  const interrupted = {
+    iaSetVertexBuffers: (...args) => ctx.iaSetVertexBuffers(...args),
+    iaSetPrimitiveTopology: (...args) => ctx.iaSetPrimitiveTopology(...args),
+    draw: () => {
+      throw Error('interrupted draw');
+    },
+  };
+  assert.throws(() => drawEmoteD3d11Mesh(device, interrupted, mesh), /interrupted draw/);
+  const bound = ctx.iaGetVertexBuffers(0, 1),
+    buffer = bound.buffers[0];
+  assert.deepEqual(bound.strides, [20]);
+  assert.deepEqual(bound.offsets, [0]);
+  assert.equal(buffer.getDesc().byteWidth, 80);
+  assert.equal(buffer.getDesc().usage, 0);
+  const staging = device.createBuffer(
+    bufferDesc({byteWidth: 80, usage: 3, bindFlags: 0, cpuAccessFlags: 0x20000}),
+    null,
+  ).value;
+  ctx.copyResource(staging, buffer);
+  const mapped = ctx.map(staging, 0, 1, 0);
+  assert.equal(mapped.hr, 0);
+  assert.deepEqual(mapped.value.data, mesh.vertices);
+  ctx.unmap(staging, 0);
+  staging.release();
+  assert.equal(buffer.release(), 1); // The context is the only remaining owner.
+  ctx.iaSetVertexBuffers(0, [null], [0], [0]);
+  assert.equal(buffer.queryInterface('00000000-0000-0000-c000-000000000046').hr, 0x80004002 | 0);
+  host.lose();
+  assert.throws(() => drawEmoteD3d11Mesh(device, ctx, mesh), /vertex buffer creation failed/);
+  ctx.release();
+  device.release();
+  loaded.loader.dispose();
+});
