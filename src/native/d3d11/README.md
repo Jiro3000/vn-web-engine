@@ -46,8 +46,8 @@ render-target and depth/stencil views. Views hold resources through binding refe
 copied, and factories reject foreign-device resources and missing bind flags. Array
 views and typeless reinterpretation are outside the declared view subset.
 
-These implementation components do not yet register a rendering device.
-GPU writes and readback must use the same resource storage when that device is wired.
+`webgl2/device.ts` composes these components and routes GPU writes/readback through
+the same resource storage. UI wiring registers the selected library implementation.
 The internal resource owner can synchronize deferred GPU writes before borrowed-byte
 reads, preserving maps, partial updates and copies. Validation precedes synchronization.
 Whole-resource copies synchronize their source; their destination is replaced in full.
@@ -138,7 +138,7 @@ Active uniform reflection bounds raw constant uploads to the array size retained
 the driver. Short and unbound buffers are zero-filled; unchanged buffer identities
 and revisions avoid repeated uploads. Texture/sampler pairs receive independent units.
 The synthetic shader probe exercises this cache, native buffer updates, unbinding,
-eviction and disposal with raw float readback. A rendering device still needs to bind
+eviction and disposal with raw float readback. The immediate context binds
 textures, input assembly, targets and raster/output state through this implementation.
 
 ## GPU texture storage
@@ -173,8 +173,8 @@ and attachments; decoder programs, scratch and the zero image belong to the devi
 
 Texture arrays and CPU depth/stencil readback are outside the GPU view subset. Staging
 depth textures are already rejected by resource creation; native depth copies stay on
-the GPU. The concrete device/context still supplies drawing and raster/output state.
-These components do not register a device yet.
+the GPU. The concrete immediate context supplies drawing and raster/output state; the device
+composes their ownership. Registration belongs to UI runtime wiring.
 
 ## Immediate-context transfers
 
@@ -260,8 +260,8 @@ write mask while preserving tests. Actual draws notify texture storage of writes
 
 The current output execution subset rejects nonzero depth bias, fractional/oversized
 viewports, alpha-to-coverage, dual-source blend factors and destination alpha-saturate
-blending. Missing required optional extensions also fail explicitly. These components
-still need the concrete draw/device wiring; no rendering device is registered here.
+blending. Missing required optional extensions also fail explicitly. `webgl2/context.ts`
+and `device.ts` compose these components; UI registration selects the implementation.
 Decoded texture uploads restore solid fill before running their private decoder draw,
 and the next native draw reapplies its own raster state.
 
@@ -295,7 +295,7 @@ each cut and preserve unsigned address wrapping/OOB defaults. All-ones list indi
 are ordinary vertex indices. Zero counts emit no work. Adjacency/patch topologies
 and shader stages outside the declared VS/PS subset fail explicitly.
 
-Complete draw execution still requires GPU integration verification and device/UI
+Complete draw execution still requires GPU integration verification and UI
 registration. CPU coordination tests and planar-byte oracles do not supply that GPU
 evidence, and no final performance claim is made for CPU-expanded input staging.
 
@@ -314,3 +314,29 @@ Resource rules follow Microsoft's [Map values](https://learn.microsoft.com/en-us
 [UpdateSubresource](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/nf-d3d11-id3d11devicecontext-updatesubresource)
 and [block compression](https://learn.microsoft.com/en-us/windows/uwp/graphics-concepts/block-compression)
 documentation. No Windows graphics binaries execute in this implementation.
+
+
+## Library and device
+
+`d3d11WebGl2Library(createContext)` implements the D3D11 contract for the existing
+Native library loader's system identity. The UI supplies a synchronous prepared-GL
+context provider; the public D3D11CreateDevice arguments remain native SDK values.
+SDK7, default hardware selection, supported creation flags and ordered feature
+levels11_0/10_1/10_0 are validated before host creation. Explicit adapters, other
+rasterizer drivers and unsupported flag modes fail. Debug-layer requests return
+SDK-component-missing; an unavailable context returns unsupported.
+
+`webgl2/device.ts` provides the device's factories, capabilities, owned immediate
+context and common child lifetime. Each successful creation output owns one caller
+reference. Child/getter references can keep the device/context alive after their
+original callers release them. Final lifetime release clears bindings, vertex storage,
+output attachments, programs, samplers and textures, attempting every cleanup action.
+
+Format queries describe the implemented texture/input/index subset. Resource creation
+uses the host texture-dimension limit and returns device-removed after context loss.
+Static feature/flag queries and context ownership remain available while an interface
+is alive. The library factory is ready for UI registration; Artemis/x64 E-mote UI
+wiring and complete real-GPU draw integration verification remain separate work.
+
+Device-creation and format-query behavior follow [D3D11CreateDevice](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/nf-d3d11-d3d11createdevice)
+and [CheckFormatSupport](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/nf-d3d11-id3d11device-checkformatsupport).

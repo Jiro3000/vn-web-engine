@@ -1,5 +1,8 @@
 import {defineNativeContract} from '../../platform/native-libraries.js';
 
+/** D3D11_SDK_VERSION from the native SDK header. */
+export const D3D11_SDK_VERSION = 7;
+
 /** D3D11 COM subset used by native clients. Slot numbers include IUnknown. */
 export interface D3d11Result<T> {
   readonly hr: number;
