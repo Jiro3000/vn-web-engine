@@ -724,3 +724,188 @@ test('x64 GetState reads applied transforms and retains the native duplicate col
   assert.equal(core.getState('coordY'), -20);
   assert.throws(() => player().core.getState('coordX'), /API unavailable for DLL build/);
 });
+
+test('x64 state assignment copies native value, orbit and tween ownership while retaining destination-only state', () => {
+  const orbit = (label, values) => ({
+    enabled: true,
+    label,
+    interval: 20,
+    tween: true,
+    orbitFrameList: values,
+  });
+  const source = x64Player({orbitControl: [orbit('orbit', [1, 3, 5])]}).core;
+  const target = x64Player({orbitControl: [orbit('obsolete', [7, 9])]}).core;
+  source.setVariable('plain', 4, 0, 0);
+  target.setVariable('stale', 9, 0, 0);
+  source.setCoord(10, 20, 8, 0);
+  source.setScale(2, 8, 0);
+  source.setRot(0.5, 8, 0);
+  source.setColor(0x204060ff, 8, 0);
+  source.setGrayscale(0.75, 8, 0);
+  source.setOuterRot(0.25, 8, 0);
+  for (const label of ['bust', 'hair', 'parts']) source.setOuterForce(label, 2, -3, 8, 0);
+  source.setVariableDiff('module', 'keep', 2, 0, 0);
+  source.setVariableDiff('module', 'insert', 6, 8, 0);
+  source.progress(2);
+  target.setCoord(99, 101, 0, 0);
+  target.setOuterForce('bust', 7, 8, 0, 0);
+  target.setVariableDiff('module', 'keep', 8, 0, 0);
+  target.setVariableDiff('other', 'retained', 9, 0, 0);
+  target.progress(1);
+  target.flags = 0x303;
+  target.setAsOriginalScale(true);
+  source.stereovision.volume = 0.75;
+  source.stereovision.parallaxRatio = f32(0.3);
+  source.stereovision.dirty = false;
+  const applied = target.getCoord(),
+    accumulators = target.forceSums.map((v) => v.slice()),
+    differenceSums = [...target.diffSums];
+  target.assignState(source);
+  assert.deepEqual(target.getCoord(), applied);
+  assert.equal(target.flags, 0x303);
+  assert.equal(target.isAsOriginalScale(), true);
+  assert.deepEqual(target.forceSums, accumulators);
+  assert.deepEqual([...target.diffSums], differenceSums);
+  assert.equal(target.cells.has('stale'), false);
+  assert.equal(target.getVariable('plain'), 4);
+  assert.notEqual(target.cells.get('plain'), source.cells.get('plain'));
+  assert.deepEqual(target.stereovision, {...source.stereovision, dirty: true});
+  assert.notEqual(target.stereovision, source.stereovision);
+  assert.equal(target.orbits.length, 1);
+  assert.notEqual(target.orbits[0], source.orbits[0]);
+  assert.deepEqual(target.orbits[0], source.orbits[0]);
+  assert.notEqual(target.orbits[0].values, source.orbits[0].values);
+  assert.equal(target.getVariableDiff('module', 'keep'), 8); // Native emplace preserves an existing key.
+  assert.equal(target.getVariableDiff('other', 'retained'), 9);
+  assert.equal(
+    target.getVariableDiff('module', 'insert'),
+    source.getVariableDiff('module', 'insert'),
+  );
+  for (const key of [
+    'coordTween',
+    'scaleTween',
+    'rotateTween',
+    'colorTween',
+    'grayscaleTween',
+    'outerRotateTween',
+  ]) {
+    assert.deepEqual(target[key], source[key]);
+    assert.notEqual(target[key], source[key]);
+  }
+  for (let i = 0; i < 3; i++) {
+    assert.deepEqual(target.forceTweens[i], source.forceTweens[i]);
+    assert.notEqual(target.forceTweens[i].current.buffer, source.forceTweens[i].current.buffer);
+  }
+  target.cell('plain').value = 999;
+  assert.equal(source.cell('plain').value, 4);
+  target.orbits[0].step(5);
+  assert.notEqual(target.orbits[0].time, source.orbits[0].time);
+  const before = target.getVariableDiff('module', 'insert');
+  source.diffs.find((d) => d.label === 'insert').tween.step(1);
+  assert.equal(target.getVariableDiff('module', 'insert'), before);
+  target.assignState(target);
+  assert.throws(() => target.assignState(player().core), /DLL build mismatch/);
+});
+
+test('x64 assignment restarts matching timelines and retains native play caches before the next fade', () => {
+  const definitions = [
+    timeline('main', [['v', [frame(0, 1), frame(4, 5), empty(20)]]], {lastTime: 20}),
+  ];
+  const source = x64Player({timelineControl: definitions}).core,
+    target = x64Player({timelineControl: definitions}).core;
+  source.timelines.play('main', 0);
+  source.progress(3);
+  source.timelines.setBlendRatio('main', 0, 8, 0, true);
+  source.timelines.states.get('main').blend.step(2);
+  source.timelines.states.get('main').stepped = true;
+  target.assignState(source);
+  const from = source.timelines.states.get('main'),
+    to = target.timelines.states.get('main');
+  assert.deepEqual(target.timelines.playing, ['main']);
+  assert.equal(to.time, from.time);
+  assert.equal(to.stopWhenBlendDone, from.stopWhenBlendDone);
+  assert.deepEqual(to.blend, from.blend);
+  assert.notEqual(to.blend.current.buffer, from.blend.current.buffer);
+  assert.equal(to.stepped, false); // Play reset; the assign body does not copy this cache.
+  assert.equal(to.blendRatio, 1);
+});
+
+test('x64 clone composes the actual shared scalar factory with independent clips and control state', async () => {
+  const {emoteScalarClipFactory} = await import('../dist/native/emotedriver/runtime/clip.js');
+  const file = model({
+    scale: 2,
+    suitableClearColor: null,
+    immediateControl: [],
+    charaProfile: null,
+    orbitControl: [],
+  });
+  const source = new EmotePlayerCore({
+    model: file,
+    driverSha256: EMOTEDRIVER_X64_SHA256,
+    random: () => 0.5,
+    createClip: emoteScalarClipFactory([file]),
+    createControls: createEmoteControls,
+  });
+  source.show();
+  source.setCoord(12, 24, 0, 0);
+  source.setScale(1.5, 0, 0);
+  source.setColor(0x204060ff, 0, 0);
+  source.setVariable('plain', 3, 0, 0);
+  source.setVariableDiff('module', 'v', 2, 8, 0);
+  source.setOuterForce('hair', 2, 3, 8, 0);
+  source.progress(2);
+  const copy = source.clone();
+  assert.notEqual(copy, source);
+  assert.notEqual(copy.clips[0], source.clips[0]);
+  assert.notEqual(copy.controls, source.controls);
+  assert.notEqual(copy.clips[0].root.adjust, source.clips[0].root.adjust);
+  assert.equal(copy.clips[0].timeRunning, source.clips[0].timeRunning);
+  assert.deepEqual(copy.getCoord(), source.getCoord());
+  assert.equal(copy.getScale(), source.getScale());
+  assert.equal(copy.inverseScale, 0.5); // Native loading uses the fresh default scale tween.
+  assert.notEqual(copy.inverseScale, source.inverseScale);
+  assert.equal(copy.getColor(), source.getColor());
+  assert.equal(copy.isHidden(), false);
+  assert.equal(copy.getVariable('plain'), 3);
+  assert.equal(copy.getVariableDiff('module', 'v'), source.getVariableDiff('module', 'v'));
+  assert.deepEqual(copy.forceSums, [new Float32Array(2), new Float32Array(2), new Float32Array(2)]);
+  copy.cell('plain').value = 9;
+  assert.equal(source.getVariable('plain'), 3);
+  copy.clips[0].rootX = 100;
+  assert.notEqual(source.clips[0].rootX, 100);
+  copy.setCoord(50, 60, 0, 0);
+  copy.progress(0);
+  assert.deepEqual(source.getCoord(), {x: 12, y: 24});
+});
+
+test('x64 state assignment preserves native wind reconfiguration and stopped-source restart quirks', () => {
+  const source = x64Player().core,
+    target = x64Player().core;
+  source.startWind(0, 10, 1, 0.2, 0.4);
+  target.startWind(100, 200, 3, 1, 2);
+  const retained = target.controls.wind;
+  retained.active[0] = 1;
+  retained.position[0] = 150;
+  retained.power[0] = 1;
+  retained.clock = -0.25;
+  target.assignState(source);
+  assert.equal(target.controls.wind, retained);
+  // Assign copied the argument fields before StartWind's endpoint comparison.
+  // The old field object is reused, including its original bounds and live gusts.
+  assert.equal(retained.start, 100);
+  assert.equal(retained.goal, 200);
+  assert.equal(retained.active[0], 1);
+  assert.equal(retained.position[0], 150);
+  assert.equal(retained.clock, 0);
+  assert.equal(retained.velocity, 1);
+  assert.equal(retained.powerMin, f32(0.2));
+  assert.equal(retained.powerMax, f32(0.4));
+  source.stopWind();
+  assert.equal(source.controls.wind, null);
+  const fresh = x64Player().core;
+  fresh.assignState(source);
+  // StopWind does not clear the native saved arguments; assigning them starts it again.
+  assert.notEqual(fresh.controls.wind, null);
+  assert.equal(fresh.controls.wind.start, 0);
+  assert.equal(fresh.controls.wind.goal, 10);
+});

@@ -28,6 +28,17 @@ export class EmoteOrbit {
     this.values = s.orbitFrameList.map(f32);
   }
 
+  /** Native 0x180022420: vector assignment copies settings and the running cursor. */
+  clone(): EmoteOrbit {
+    const copy = new EmoteOrbit(
+      {label: this.label, interval: this.interval, tween: this.tween, orbitFrameList: this.values},
+      this.driverSha256,
+    );
+    copy.reset = this.reset;
+    copy.time = this.time;
+    return copy;
+  }
+
   /** Returns the `setVariable` call the step makes, or null. */
   step(frames: number): {value: number; frames: number} | null {
     const n = this.values.length;

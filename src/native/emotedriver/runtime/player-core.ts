@@ -1,4 +1,3 @@
-import {EmoteUnsupportedError} from './errors.js';
 import {emoteBuild, EMOTEDRIVER_X64_SHA256, type EmoteBuild} from '../build.js';
 import {EmoteOrbit} from './controls/orbit.js';
 import type {EmoteModel, EmoteMotion} from '../../../formats/kirikiri/emote-model.js';
@@ -122,6 +121,14 @@ export class EmotePlayerCore {
   private readonly diffSums = new Map<string, number>();
   private readonly variableLabels = new Set<string>();
   private readonly orbits: EmoteOrbit[] = [];
+  /** Native x64 +0x300..+0x314, retained by copy independently of the camera cache. */
+  private readonly stereovision = {
+    enabled: false,
+    volume: 1,
+    parallaxRatio: f32(0.2),
+    screenCount: 2,
+    dirty: true,
+  };
   private asOriginalScale = false;
   flags = 0x201;
   private readonly forceSums = [
@@ -222,7 +229,6 @@ export class EmotePlayerCore {
     this.x64 = this.driverSha256 === EMOTEDRIVER_X64_SHA256;
     if (cloneOf && cloneOf.driverSha256 !== this.driverSha256)
       throw Error('emotedriver: player DLL build mismatch');
-    if (this.x64 && cloneOf) throw new EmoteUnsupportedError('clone');
     this.random = options.random;
     if (this.x64 && !this.random)
       throw Error('emotedriver: x64 player requires its process random source');
@@ -338,9 +344,8 @@ export class EmotePlayerCore {
     if (cloneOf) this.assignState(cloneOf);
   }
 
-  /** Copy constructor (slot 2, 0x10001dc0 → 0x10001bd0 → 0x1000e000). */
+  /** Copy constructors 0x1000e000 / 0x180008b50; each clip is copied independently. */
   clone(): EmotePlayerCore {
-    if (this.x64) throw new EmoteUnsupportedError('clone');
     return new EmotePlayerCore(
       {
         model: this.model,
@@ -381,7 +386,7 @@ export class EmotePlayerCore {
     clip.dispatchEvents(this.listener);
     this.modelScale = f32(md.scale);
     const s = this.scaleTween.step(0)[0]!;
-    if (!this.x64) this.inverseScale = f32(1 / (this.modelScale * s));
+    this.inverseScale = f32(1 / (this.x64 ? f32(this.modelScale * s) : this.modelScale * s));
 
     // 0x100193d0 runs before the selector loader 0x10019a50, which resolves its options'
     // transitions by label, so the transition tweens exist before the controls are built.
@@ -1177,10 +1182,9 @@ export class EmotePlayerCore {
   }
 
   // -------------------------------------------------------------------------------------
-  // AssignState (0x1000f2a0)
+  // AssignState (0x1000f2a0 / 0x180009df0)
 
   assignState(source: EmotePlayerCore): void {
-    if (this.x64) throw new EmoteUnsupportedError('assignState');
     if (source.driverSha256 !== this.driverSha256)
       throw Error('emotedriver: player DLL build mismatch');
     if (source === this) return;
@@ -1193,6 +1197,16 @@ export class EmotePlayerCore {
     this.queuePhase = source.queuePhase;
     this.pendingFrames = source.pendingFrames;
     this.currentClip = source.currentClip;
+    if (this.x64) {
+      Object.assign(this.stereovision, source.stereovision, {dirty: true});
+      // Native std::map assignment replaces the raw variable map. Metadata,
+      // bindings, flags, applied transforms and force accumulators stay local.
+      this.cells.clear();
+      for (const [label, cell] of source.cells) this.cells.set(label, {...cell});
+      this.cellOrder = [...source.cellOrder];
+      this.orbits.length = 0;
+      for (const orbit of source.orbits) this.orbits.push(orbit.clone());
+    }
     this.windStart = source.windStart;
     this.windGoal = source.windGoal;
     this.windSpeed = source.windSpeed;
@@ -1203,11 +1217,29 @@ export class EmotePlayerCore {
     this.scaleTween.copyFrom(source.scaleTween);
     this.colorTween.copyFrom(source.colorTween);
     this.rotateTween.copyFrom(source.rotateTween);
+    if (this.x64) {
+      this.grayscaleTween.copyFrom(source.grayscaleTween);
+      this.forceTweens.forEach((tween, i) => tween.copyFrom(source.forceTweens[i]!));
+      this.outerRotateTween.copyFrom(source.outerRotateTween);
+    }
     this.controls.assignState(source.controls);
     for (const from of source.transitions) {
       const to = this.transitions.find((t) => t.label === from.label);
       to?.tween.copyFrom(from.tween);
     }
     this.timelines.assignFrom(source.timelines);
+    if (this.x64) {
+      // Native emplace at the end of 0x180009df0 keeps an existing module/label entry;
+      // neither overwrite existing differences nor erase destination-only ones.
+      for (const from of source.diffs) {
+        if (this.diffs.some((to) => to.module === from.module && to.label === from.label)) continue;
+        const tween = new EmoteTween(1, this.driverSha256);
+        tween.copyFrom(from.tween);
+        this.diffs.push({module: from.module, label: from.label, tween});
+      }
+      this.diffs.sort(
+        (a, b) => compareEmoteUtf8(a.module, b.module) || compareEmoteUtf8(a.label, b.label),
+      );
+    }
   }
 }

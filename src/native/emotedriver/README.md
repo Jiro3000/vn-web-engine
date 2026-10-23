@@ -573,7 +573,6 @@ upward basis; other modes use the downward basis. Viewport placement is separate
 from these shader constants. Generated GPU checks exercise both camera directions
 and noncommuting manual transforms through the native shader bank.
 
-
 Scalar clips implement the shared private copy operation in `runtime/clip/scalar.ts`.
 Clocks, queued motions, variables, parameter positions and evaluated node state
 survive the copy without a playback tick. New nodes, nested clips, overrides,
@@ -582,5 +581,18 @@ composite masks refer to the copied tree; combinators register against its own
 variable source. Immutable models and cached frame sequences remain shared.
 Native renderer cache pointers and pass links are discarded, draw items are
 rebuilt, and the top root is marked dirty for its next layer pass. The player core
-separately owns control, timeline and tween state; its x64 public copy operations
-remain unavailable until that state copying is implemented.
+separately owns control, timeline and tween state; its private x64 copy path uses
+these independent clips while the public D3D11 player assembly remains pending.
+
+The x64 core copy follows `0x180008b50` / `0x180009df0`. It replaces raw variable
+cells and the orbit vector, copies nine transform/force tweens and matching-label
+expression controls, then restarts and seeks the playing timelines. Existing
+module/label difference entries stay in the destination; missing entries acquire
+owned tween copies. Applied transforms, flags, original-scale mode, accumulated
+forces and physics/blink caches stay local. A clone starts fresh physics and blink
+controllers; each loaded eye consumes one process RNG word for its new interval.
+Wind is reconfigured after copying its saved arguments, retaining native reuse of
+an existing field and restart from a stopped source's saved arguments. Native
+stereovision control fields copy with the mapping marked dirty; stereovision
+rendering and API-log integration remain separate paths. Loading initializes the
+inverse scale using the native float32 product before division.
