@@ -295,9 +295,10 @@ each cut and preserve unsigned address wrapping/OOB defaults. All-ones list indi
 are ordinary vertex indices. Zero counts emit no work. Adjacency/patch topologies
 and shader stages outside the declared VS/PS subset fail explicitly.
 
-Complete draw execution still requires GPU integration verification and UI
-registration. CPU coordination tests and planar-byte oracles do not supply that GPU
-evidence, and no final performance claim is made for CPU-expanded input staging.
+Synthetic public-contract GPU probes verify the assembled draw path. Broader x64
+E-mote integration and UI registration remain. CPU coordination tests and planar-byte
+oracles provide separate assembly evidence; no final performance claim is made for
+CPU-expanded input staging.
 
 `tools/probe-d3d11-textures.mjs` checks generated texture bytes and numeric readback,
 including every format/mip, independent ranges, cache pressure, pinned bindings,
@@ -336,7 +337,16 @@ Format queries describe the implemented texture/input/index subset. Resource cre
 uses the host texture-dimension limit and returns device-removed after context loss.
 Static feature/flag queries and context ownership remain available while an interface
 is alive. The library factory is ready for UI registration; Artemis/x64 E-mote UI
-wiring and complete real-GPU draw integration verification remain separate work.
+wiring and full model/route/performance verification remain separate work.
 
 Device-creation and format-query behavior follow [D3D11CreateDevice](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/nf-d3d11-d3d11createdevice)
 and [CheckFormatSupport](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/nf-d3d11-id3d11device-checkformatsupport).
+
+
+`tools/probe-d3d11-device.mjs` loads the system library and uses only public native
+interfaces for creation, binding, rendering, updates and staging readback. Synthetic
+cases cover packed BGRA input,16/32-bit indices with signed bases and strip cuts,
+dynamic buffers, constant updates/unbinding, sparse resource/sampler slots, private
+texture-decoder state changes, mip-view aliases and16input-register planes. It binds
+and verifies the complete compiled file set as well as source/fixture hashes. These
+checks load no game assets and capture no screenshots.
