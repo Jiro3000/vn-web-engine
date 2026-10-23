@@ -211,6 +211,30 @@ or readback, invalid-copy atomicity, alias invalidation, view-limited mip genera
 native shadow coherence, nonblocking staging maps, independent depth/stencil clears,
 raw D32 float words, buffer transfers, device removal and lifetime cleanup.
 
+## Pixel samplers
+
+`webgl2/samplers.ts` applies immutable native sampler descriptions to one reusable
+GPU sampler per pixel texture unit. Ordinary 2D sampling supports all eight point/
+linear minification, magnification and mip combinations, wrap/mirror/clamp U/V
+addressing and independent minimum/maximum LOD. These LODs are relative to the
+shader resource view's first mip. A null state selects native linear filtering,
+clamped addressing and unbounded LOD defaults.
+
+GPU sampler objects retain description records without retaining native interface
+references; the context owns native bindings. Separate units keep independent state
+even when they sample the same image. Uploads and other private operations may change
+bindings, so each draw rebinds its prepared GPU samplers. Allocation is bounded by the
+pixel texture-unit limit, and device disposal deletes every allocated sampler.
+
+Border/mirror-once addressing, anisotropy, comparison filtering and nonzero LOD bias
+are outside this ordinary-sample backend subset and return E_NOTIMPL when used. The
+state factory still validates and preserves native descriptors independently of this
+execution subset. AddressW and comparison/anisotropy fields have no effect on ordinary
+2D samples. The texture probe checks numeric filtering/addressing/mip results, default
+state, simultaneous units, unsupported-mode rejection and native/GPU ownership.
+
+The null-state defaults follow [PSSetSamplers](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/nf-d3d11-id3d11devicecontext-pssetsamplers).
+
 `tools/probe-d3d11-textures.mjs` checks generated texture bytes and numeric readback,
 including every format/mip, independent ranges, cache pressure, pinned bindings,
 unbound resources, clears, native CPU shadows, partial updates, dynamic discard,
