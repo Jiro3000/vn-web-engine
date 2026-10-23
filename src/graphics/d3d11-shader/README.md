@@ -77,3 +77,19 @@ and [system-value semantics](https://learn.microsoft.com/en-us/windows/win32/dir
 Instruction behavior follows Microsoft's [floating-point rules](https://learn.microsoft.com/en-us/windows/win32/direct3d11/floating-point-rules),
 [conditional moves](https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/movc--sm4---asm-)
 and [discard](https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/discard--sm4---asm-).
+
+## Constant reflection
+
+`parseSm4Reflection` reads the SM4.0 RDEF payload's resource slots, constant-buffer
+sizes and named variable byte spans. It preserves variables sharing one register,
+flat float scalar/vector/matrix types, compiler flags and borrowed default bytes.
+Buffer table indices do not substitute for resource binding slots. Reflection
+without a bound resource has a null slot. Tables, strings, types and variable/default
+spans are bounded before use; arrays, structs, other scalar types and other shader
+profiles are refused by this subset.
+
+The exact-hash x64 E-mote shader extractor prepares these records alongside the
+compiled shaders. Reflection is CPU metadata preparation; it does not load or run a
+native compiler or reflection DLL. RDEF field ordering is cross-checked against the
+[Wine reflection format reader](https://github.com/wine-mirror/wine/blob/wine-10.0/dlls/d3dcompiler_43/reflection.c).
+No native source or binary is bundled by this reader.

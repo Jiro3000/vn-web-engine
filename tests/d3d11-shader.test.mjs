@@ -391,3 +391,146 @@ test('SM4 executable creation rejects wrong stages, duplicate interface parts an
     p.data[8 + 20] = 3;
   });
 });
+
+/** Generated RDEF: resource order differs from buffer order and slots; variables share a register. */
+function reflectedConstants() {
+  const bytes = new Uint8Array(512),
+    view = new DataView(bytes.buffer);
+  const words = (at, values) =>
+    values.forEach((value, i) => view.setUint32(at + i * 4, value, true));
+  const names = {
+    $Globals: 352,
+    second: 361,
+    sampler0: 368,
+    image: 377,
+    first: 383,
+    scalar: 389,
+    vector: 396,
+    matrix: 403,
+    compiler: 410,
+  };
+  for (const [name, at] of Object.entries(names))
+    bytes.set(new TextEncoder().encode(name + '\0'), at);
+  words(0, [2, 28, 4, 76, 0xfffe0400, 0x101, names.compiler]);
+  words(28, [names.$Globals, 4, 204, 96, 0, 0]);
+  words(52, [names.second, 0, 0, 16, 0, 0]);
+  words(76, [names.sampler0, 3, 0, 0, 0, 15, 1, 0]);
+  words(108, [names.second, 0, 0, 0, 0, 7, 1, 0]);
+  words(140, [names.image, 2, 5, 4, 0xffffffff, 124, 1, 13]);
+  words(172, [names.$Globals, 0, 0, 0, 0, 3, 1, 0]);
+  words(204, [names.first, 0, 4, 2, 300, 448]);
+  words(228, [names.scalar, 4, 4, 0, 300, 0]);
+  words(252, [names.vector, 16, 16, 2, 316, 0]);
+  words(276, [names.matrix, 32, 64, 2, 332, 0]);
+  // six uint16 fields: class, float, rows, columns, array count, struct member count.
+  words(300, [0x00030000, 0x00010001, 0, 0]);
+  words(316, [0x00030001, 0x00040001, 0, 0]);
+  words(332, [0x00030003, 0x00040004, 0, 0]);
+  view.setUint32(448, 0x80000000, true); // Preserve negative zero as raw default bytes.
+  return bytes;
+}
+
+test('RDEF resolves named constants by byte span and resource binding, preserving shared registers', async () => {
+  const {parseSm4Reflection} = await import('../dist/graphics/d3d11-shader/reflection.js');
+  const backing = new Uint8Array(525),
+    bytes = backing.subarray(5, 517);
+  bytes.set(reflectedConstants());
+  const result = parseSm4Reflection(bytes);
+  assert.equal(result.stage, 'vertex');
+  assert.equal(result.creator, 'compiler');
+  assert.equal(result.flags, 0x101);
+  assert.deepEqual(
+    result.buffers.map((b) => [b.name, b.slot, b.bytes]),
+    [
+      ['$Globals', 3, 96],
+      ['second', 7, 16],
+    ],
+  );
+  assert.deepEqual(
+    result.buffers[0].variables.map((v) => [v.name, v.offset, v.bytes]),
+    [
+      ['first', 0, 4],
+      ['scalar', 4, 4],
+      ['vector', 16, 16],
+      ['matrix', 32, 64],
+    ],
+  );
+  assert.deepEqual(
+    result.buffers[0].variables.map((v) => v.type),
+    [
+      {variableClass: 0, rows: 1, columns: 1},
+      {variableClass: 0, rows: 1, columns: 1},
+      {variableClass: 1, rows: 1, columns: 4},
+      {variableClass: 3, rows: 4, columns: 4},
+    ],
+  );
+  assert.deepEqual(
+    result.resources.map((r) => [r.name, r.slot, r.inputType]),
+    [
+      ['sampler0', 15, 3],
+      ['second', 7, 0],
+      ['image', 124, 2],
+      ['$Globals', 3, 0],
+    ],
+  );
+  const value = result.buffers[0].variables[0].defaultValue;
+  assert.equal(value.buffer, backing.buffer);
+  assert.equal(value.byteOffset, 453);
+  assert.deepEqual([...value], [0, 0, 0, 128]);
+  assert.equal(result.buffers[0].variables[1].defaultValue, null);
+  const pixel = reflectedConstants();
+  new DataView(pixel.buffer).setUint32(16, 0xffff0400, true);
+  assert.equal(parseSm4Reflection(pixel).stage, 'pixel');
+  // An unbound reflected buffer has no fabricated slot.
+  const unbound = reflectedConstants();
+  new DataView(unbound.buffer).setUint32(8, 3, true);
+  assert.equal(parseSm4Reflection(unbound).buffers[0].slot, null);
+});
+
+test('RDEF bounds counts, strings, defaults, variable spans and the supported type/profile subset', async () => {
+  const {parseSm4Reflection} = await import('../dist/graphics/d3d11-shader/reflection.js');
+  assert.throws(() => parseSm4Reflection(new Uint8Array(27)));
+  const corrupt = (change) => {
+    const bytes = reflectedConstants();
+    change(new DataView(bytes.buffer), bytes);
+    assert.throws(() => parseSm4Reflection(bytes));
+  };
+  for (const [at, value] of [
+    [16, 0xffff0500],
+    [0, 15],
+    [4, 16],
+    [8, 257],
+    [12, 500],
+    [24, 0],
+    [24, 0xffffffff],
+    [28, 0],
+    [32, 4097],
+    [36, 500],
+    [40, 65552],
+    [40, 15],
+    [48, 2],
+    [204, 0],
+    [208, 96],
+    [212, 0],
+    [220, 0],
+    [220, 500],
+    [224, 510],
+    [176, 4],
+    [192, 14],
+    [196, 0],
+    [196, 2],
+  ]) {
+    corrupt((v) => v.setUint32(at, value, true));
+  }
+  corrupt((v, b) => {
+    v.setUint32(24, 500, true);
+    b.fill(1, 500);
+  });
+  corrupt((v) => v.setUint16(302, 2, true)); // int scalar unsupported.
+  corrupt((v) => v.setUint16(304, 0, true));
+  corrupt((v) => v.setUint16(308, 2, true)); // arrays unsupported.
+  corrupt((v) => v.setUint16(310, 1, true)); // structs unsupported.
+  corrupt((v) => v.setUint16(320, 2, true)); // a vector cannot have two rows.
+  corrupt((v) => v.setUint32(228, 383, true)); // duplicate variable name.
+  corrupt((v) => v.setUint32(52, 352, true)); // duplicate buffer name.
+});

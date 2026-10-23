@@ -2,6 +2,10 @@ import type {D3d11InputElementDesc} from '../../../d3d11/contract.js';
 import {ByteView, ascii} from '../../../../core/binary.js';
 import {PeImage} from '../../../../formats/pe/image.js';
 import {parseDxbcContainer} from '../../../../graphics/d3d11-shader/container.js';
+import {
+  parseSm4Reflection,
+  type Sm4Reflection,
+} from '../../../../graphics/d3d11-shader/reflection.js';
 import {EMOTEDRIVER_X64_SHA256} from '../../build.js';
 import {sha256Fallback} from '../../../../core/sha256.js';
 
@@ -131,6 +135,9 @@ export type EmoteX64InputElement = D3d11InputElementDesc;
 export interface EmoteX64ShaderBlobs {
   readonly vertex: readonly Uint8Array[];
   readonly pixel: readonly Uint8Array[];
+  /** Native RDEF byte spans and resource slots, indexed like the compiled programs. */
+  readonly vertexReflection: readonly Sm4Reflection[];
+  readonly pixelReflection: readonly Sm4Reflection[];
   /** Layouts indexed by the native vertex-shader index, not the table's row order. */
   readonly inputLayouts: readonly (readonly EmoteX64InputElement[])[];
 }
@@ -148,7 +155,8 @@ export function extractEmoteX64ShaderBlobs(file: Uint8Array): EmoteX64ShaderBlob
   const pointer = (address: number) => Number(image.view.u64(offsetOf(address, 8)));
   const word = (address: number) => image.view.u32(offsetOf(address, 4));
   const blobs = (pointers: number, sizes: number, count: number, stage: number) => {
-    const out: Uint8Array[] = [];
+    const out: Uint8Array[] = [],
+      reflection: Sm4Reflection[] = [];
     for (let i = 0; i < count; i++) {
       const address = pointer(pointers + i * 8),
         size = pointer(sizes + i * 8),
@@ -157,12 +165,18 @@ export function extractEmoteX64ShaderBlobs(file: Uint8Array): EmoteX64ShaderBlob
         container = parseDxbcContainer(bytes),
         code = container.parts.find((part) => part.kind === 'SHDR' || part.kind === 'SHEX');
       if (!code) throw new Error('E-mote shader lacks code');
+      const definitions = container.parts.filter((part) => part.kind === 'RDEF');
+      if (definitions.length !== 1) throw new Error('E-mote shader lacks unique reflection');
+      const constants = parseSm4Reflection(definitions[0]!.data);
+      if (constants.stage !== (stage === 1 ? 'vertex' : 'pixel'))
+        throw new Error('E-mote reflection stage mismatch');
+      reflection.push(constants);
       const view = new ByteView(code.data, {littleEndian: true});
       if (view.u32(0) !== ((stage << 16) | 0x40) || view.u32(4) * 4 !== code.data.length)
         throw new Error('Unexpected E-mote shader profile');
       out.push(bytes);
     }
-    return out;
+    return {bytes: out, reflection};
   };
   const vertex = blobs(0x18070d2c0, 0x1819990c0, 12, 1),
     pixel = blobs(0x180d3f690, 0x180143060, 2077, 0),
@@ -189,5 +203,11 @@ export function extractEmoteX64ShaderBlobs(file: Uint8Array): EmoteX64ShaderBlob
     }
     inputLayouts[index] = layout;
   }
-  return {vertex, pixel, inputLayouts};
+  return {
+    vertex: vertex.bytes,
+    pixel: pixel.bytes,
+    inputLayouts,
+    vertexReflection: vertex.reflection,
+    pixelReflection: pixel.reflection,
+  };
 }
