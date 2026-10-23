@@ -3,7 +3,12 @@ import {
   packedGpuTexture,
   type GpuTextureFormat,
 } from '../../../graphics/block-texture.js';
-import type {D3d11ShaderResourceViewDesc, D3d11RenderTargetViewDesc} from '../contract.js';
+import type {
+  D3d11Box,
+  D3d11DepthStencilViewDesc,
+  D3d11ShaderResourceViewDesc,
+  D3d11RenderTargetViewDesc,
+} from '../contract.js';
 import type {D3d11DeviceOwner} from '../runtime/com.js';
 import {D3d11Texture2D, type D3d11ResourceStorage} from '../runtime/resources.js';
 import type {D3d11TextureView} from '../runtime/views.js';
@@ -220,6 +225,175 @@ export class D3d11GpuTextures {
     );
     this.checkError('render target clear');
     this.markWritten(view.resource, view.firstMip);
+  }
+
+  clearDepthStencil(
+    view: D3d11TextureView<D3d11DepthStencilViewDesc>,
+    flags: number,
+    depth: number,
+    stencil: number,
+  ): void {
+    if (
+      !view.live ||
+      view.kind !== 'depth-stencil' ||
+      !Number.isInteger(flags) ||
+      flags < 0 ||
+      flags > 3 ||
+      ((flags & 1) !== 0 && Number.isNaN(depth)) ||
+      !Number.isInteger(stencil) ||
+      stencil < 0 ||
+      stencil > 255 ||
+      (flags & view.getDesc().flags) !== 0 ||
+      ((flags & 2) !== 0 && view.resource.getDesc().format !== 45)
+    )
+      throw new D3d11TextureError('Invalid or unsupported depth/stencil clear');
+    const entry = this.get(view.resource);
+    if (flags === 0) return;
+    const gl = this.gl;
+    gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, this.framebufferFor(entry, view.firstMip));
+    gl.disable(gl.SCISSOR_TEST);
+    gl.depthMask(true);
+    gl.stencilMask(255);
+    const value = Math.max(0, Math.min(1, depth));
+    if (flags === 3) gl.clearBufferfi(gl.DEPTH_STENCIL, 0, value, stencil);
+    else if (flags & 1) gl.clearBufferfv(gl.DEPTH, 0, new Float32Array([value]));
+    else gl.clearBufferiv(gl.STENCIL, 0, new Int32Array([stencil]));
+    this.checkError('depth/stencil clear');
+    this.markWritten(view.resource, view.firstMip);
+  }
+
+  /** Validated native copies of writable texels stay on the GPU, including depth/stencil. */
+  copyRegion(
+    destination: D3d11ResourceStorage,
+    subresource: number,
+    x: number,
+    y: number,
+    z: number,
+    source: D3d11ResourceStorage,
+    sourceSubresource: number,
+    box: D3d11Box | null,
+  ): void {
+    this.checkCopyResources(destination, source);
+    const plan = destination.copyPlan(subresource, x, y, z, source, sourceSubresource, box);
+    if (!plan) return;
+    if (!this.gpuCopy(destination) || !this.gpuCopy(source)) {
+      destination.copyFrom(subresource, x, y, z, source, sourceSubresource, box);
+      return;
+    }
+    const from = this.framebuffer(source, sourceSubresource),
+      to = this.framebuffer(destination, subresource);
+    this.blit(
+      destination,
+      from,
+      to,
+      box?.left ?? 0,
+      box?.top ?? 0,
+      x,
+      y,
+      plan.from.width,
+      plan.from.height,
+    );
+    this.markWritten(destination, subresource);
+  }
+
+  copyResource(destination: D3d11ResourceStorage, source: D3d11ResourceStorage): void {
+    this.checkCopyResources(destination, source);
+    destination.validateWholeCopy(source);
+    if (!this.gpuCopy(destination) || !this.gpuCopy(source)) {
+      destination.copyAllFrom(source);
+      return;
+    }
+    // Prepare every attachment before modifying the first destination mip.
+    const attachments = destination.levels.map((level, mip) => ({
+      level,
+      from: this.framebuffer(source, mip),
+      to: this.framebuffer(destination, mip),
+    }));
+    for (const [mip, {level, from, to}] of attachments.entries()) {
+      this.blit(destination, from, to, 0, 0, 0, 0, level.width, level.height);
+      this.markWritten(destination, mip);
+    }
+  }
+
+  /** Generate only the view's lower levels, preserving its source and all excluded mips. */
+  generateMips(view: D3d11TextureView<D3d11ShaderResourceViewDesc>): void {
+    this.checkLive();
+    if (!view.live || view.kind !== 'shader-resource' || view.lifetime !== this.owner.lifetime)
+      throw new D3d11TextureError('Invalid shader resource view');
+    const desc = view.resource.getDesc();
+    if (
+      (desc.bindFlags & 0x28) !== 0x28 ||
+      !(desc.miscFlags & 1) ||
+      view.resource.layout.blockWidth !== 1 ||
+      view.resource.layout.depth ||
+      view.mipCount <= 1
+    )
+      return;
+    const entry = this.get(view.resource),
+      gl = this.gl;
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, entry.texture);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_BASE_LEVEL, view.firstMip);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAX_LEVEL, view.firstMip + view.mipCount - 1);
+    try {
+      gl.generateMipmap(gl.TEXTURE_2D);
+      this.checkError('mip generation');
+    } finally {
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_BASE_LEVEL, 0);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAX_LEVEL, desc.mipLevels - 1);
+    }
+    for (let mip = view.firstMip + 1; mip < view.firstMip + view.mipCount; mip++)
+      this.markWritten(view.resource, mip);
+  }
+
+  private gpuCopy(resource: D3d11ResourceStorage): resource is D3d11Texture2D {
+    return (
+      resource instanceof D3d11Texture2D &&
+      resource.getDesc().arraySize === 1 &&
+      resource.layout.blockWidth === 1
+    );
+  }
+
+  private checkCopyResources(
+    destination: D3d11ResourceStorage,
+    source: D3d11ResourceStorage,
+  ): void {
+    this.checkLive();
+    if (destination.lifetime !== this.owner.lifetime || source.lifetime !== this.owner.lifetime)
+      throw new D3d11TextureError('Copying a foreign D3D11 resource');
+  }
+
+  private blit(
+    destination: D3d11Texture2D,
+    from: WebGLFramebuffer,
+    to: WebGLFramebuffer,
+    sx: number,
+    sy: number,
+    dx: number,
+    dy: number,
+    width: number,
+    height: number,
+  ): void {
+    const gl = this.gl;
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, from);
+    gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, to);
+    gl.disable(gl.SCISSOR_TEST);
+    const mask = destination.layout.depth
+      ? gl.DEPTH_BUFFER_BIT | (destination.getDesc().format === 45 ? gl.STENCIL_BUFFER_BIT : 0)
+      : gl.COLOR_BUFFER_BIT;
+    gl.blitFramebuffer(
+      sx,
+      sy,
+      sx + width,
+      sy + height,
+      dx,
+      dy,
+      dx + width,
+      dy + height,
+      mask,
+      gl.NEAREST,
+    );
+    this.checkError('resource copy');
   }
 
   /** The caller has written this attachment using its native draw/copy operation. */

@@ -172,9 +172,44 @@ bound. Readback uses chunks of at most1MiB. Resource final release deletes its i
 and attachments; decoder programs, scratch and the zero image belong to the device.
 
 Texture arrays and CPU depth/stencil readback are outside the GPU view subset. Staging
-depth textures are already rejected by resource creation; native depth copies must
-stay on the GPU. The concrete device/context still supplies drawing, transfer commands,
-mip generation and raster/output state. These components do not register a device yet.
+depth textures are already rejected by resource creation; native depth copies stay on
+the GPU. The concrete device/context still supplies drawing and raster/output state.
+These components do not register a device yet.
+
+## Immediate-context transfers
+
+`webgl2/transfers.ts` extends the native context binding storage with map/unmap,
+updates, copies, color/depth/stencil clears, mip generation and flush. Foreign or
+released handles are rejected. Map returns device errors as HRESULT results, including
+device removal after context loss. Texture2D updates ignore the unused slice pitch.
+
+Copies share `runtime/resources.ts` validation with the CPU storage path. Whole copies
+validate every subresource before changing any destination. Ordinary single-array
+typed color and depth/stencil copies use GPU blits; scissor and component/depth/stencil
+write masks do not restrict them. Copies between different mips of one texture are
+supported. Buffer, compressed and CPU array copies preserve canonical native bytes.
+
+GenerateMips requires render-target/shader-resource binding and GENERATE_MIPS at
+resource creation. Missing flags or a one-level view have no effect. Generation starts
+at the view's largest mip and stops at its last mip, preserving every excluded level.
+Generated levels and copies participate in deferred CPU synchronization and shader-view
+invalidation. Automatic mip filtering uses the underlying normalized GPU format.
+
+Depth/stencil clears cover the full view, ignore viewport/scissor/write masks and
+clamp depth to [0,1]. Each aspect can be cleared independently. Clears of read-only
+aspects, nonexistent stencil and NaN depth values are outside the supported clear
+subset and fail explicitly. CPU depth/stencil readback remains unsupported.
+
+The [native copy](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/nf-d3d11-id3d11devicecontext-copysubresourceregion),
+[mip generation](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/nf-d3d11-id3d11devicecontext-generatemips)
+and [depth clear](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/nf-d3d11-id3d11devicecontext-cleardepthstencilview)
+operations define these ranges and state-independent effects.
+
+`tools/probe-d3d11-transfers.mjs` verifies independent synthetic byte expectations
+through the immediate-context methods. It checks GPU copies without CPU synchronization
+or readback, invalid-copy atomicity, alias invalidation, view-limited mip generation,
+native shadow coherence, nonblocking staging maps, independent depth/stencil clears,
+raw D32 float words, buffer transfers, device removal and lifetime cleanup.
 
 `tools/probe-d3d11-textures.mjs` checks generated texture bytes and numeric readback,
 including every format/mip, independent ranges, cache pressure, pinned bindings,
