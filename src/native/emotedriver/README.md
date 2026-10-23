@@ -85,6 +85,14 @@ addresses are recorded on each member, including the x64 deleting-destructor slo
 that shifts reference counting. Unknown integer player slots 15/16 and device
 operations outside the audited subset are absent.
 
+`runtime/render/d3d11-program.ts` owns a shader, its input layout for a vertex stage,
+and reflected constant buffers through the D3D11 contract. Named writes update CPU
+shadows; binding uploads dirty buffers before selecting the native stage and buffers.
+Missing parameters are no-ops. Partial construction releases every acquired reference;
+disposal releases the owner's references without clearing the context's owned bindings.
+This resource owner consumes prepared reflection and has no browser context or GPU
+implementation dependency.
+
 The contract does not expose internal model caches, clips, draw commands, browser
 objects or a renderer callback. Rendering uses the compositor's D3D11 resources and
 context. The x64 implementation and Artemis consumer migration are still pending;

@@ -215,3 +215,220 @@ test('D3D11 creation and resource factories report unavailable or removed device
   assert.equal(loaded.exports.d3d11CreateDevice(null, 1, 0, 0, null, 7).hr, REMOVED);
   loaded.loader.dispose();
 });
+
+test('E-mote native shader programs upload named constants through the public device and retain context-owned bindings', async () => {
+  const {EmoteD3d11Program} =
+    await import('../dist/native/emotedriver/runtime/render/d3d11-program.js');
+  const {sm4SyntheticPipeline} = await import('../tools/lib/sm4-synthetic-fixtures.mjs');
+  const host = capabilityContext(),
+    loaded = exportsFor(() => host.gl);
+  const created = loaded.exports.d3d11CreateDevice(null, 1, 0, 0, null, 7),
+    device = created.device,
+    ctx = created.immediateContext,
+    shaders = sm4SyntheticPipeline(false, true);
+  const reflection = (stage, size) => ({
+    stage,
+    flags: 0,
+    creator: 'generated',
+    resources: [],
+    buffers: [
+      {
+        name: '$Globals',
+        bytes: size,
+        flags: 0,
+        bufferType: 0,
+        slot: 0,
+        variables: [
+          {
+            name: 'value',
+            offset: stage === 'vertex' ? 16 : 0,
+            bytes: 16,
+            flags: 2,
+            type: {variableClass: 1, rows: 1, columns: 4},
+            defaultValue: null,
+          },
+        ],
+      },
+    ],
+  });
+  const layout = [
+    {
+      semanticName: 'POSITION',
+      semanticIndex: 0,
+      format: 6,
+      inputSlot: 0,
+      alignedByteOffset: 0,
+      inputSlotClass: 0,
+      instanceDataStepRate: 0,
+    },
+    {
+      semanticName: 'COLOR',
+      semanticIndex: 0,
+      format: 87,
+      inputSlot: 0,
+      alignedByteOffset: 12,
+      inputSlotClass: 0,
+      instanceDataStepRate: 0,
+    },
+  ];
+  const vertex = new EmoteD3d11Program(device, shaders.vertex, reflection('vertex', 32), layout),
+    pixel = new EmoteD3d11Program(device, shaders.pixel, reflection('pixel', 16), null);
+  let uploads = 0,
+    reject = true;
+  const original = ctx.updateSubresource;
+  ctx.updateSubresource = function (...args) {
+    if (reject) throw Error('injected upload failure');
+    uploads++;
+    return original.apply(this, args);
+  };
+  assert.equal(vertex.setFloats('missing', [1]), false);
+  assert.equal(vertex.setFloats('value', [1], 'missing-buffer'), false);
+  assert.throws(() => vertex.setFloats('value', [1, 2, 3, 4, 5]), RangeError);
+  vertex.setFloats('value', [-0, 1 / 3, 2, 3]);
+  assert.throws(() => vertex.bind(ctx), /injected upload failure/);
+  reject = false;
+  vertex.bind(ctx);
+  vertex.bind(ctx);
+  assert.equal(uploads, 1); // Failed upload stayed dirty; an unchanged bind does not upload again.
+  const raw = new Uint8Array(16),
+    words = new DataView(raw.buffer);
+  [0x7fc12345, 0x80000000, 0x00000001, 0xffffffff].forEach((v, i) =>
+    words.setUint32(i * 4, v, true),
+  );
+  pixel.setRaw('value', raw);
+  raw.fill(0);
+  pixel.bind(ctx);
+  pixel.bind(ctx);
+  assert.equal(uploads, 2);
+  const vsBuffer = ctx.vsGetConstantBuffers(0, 1)[0],
+    psBuffer = ctx.psGetConstantBuffers(0, 1)[0],
+    vs = ctx.vsGetShader().shader,
+    ps = ctx.psGetShader().shader,
+    input = ctx.iaGetInputLayout();
+  const read = (buffer) => {
+    const staging = device.createBuffer(
+      bufferDesc({
+        byteWidth: buffer.getDesc().byteWidth,
+        usage: 3,
+        bindFlags: 0,
+        cpuAccessFlags: 0x20000,
+      }),
+      null,
+    ).value;
+    ctx.copyResource(staging, buffer);
+    const mapped = ctx.map(staging, 0, 1, 0);
+    assert.equal(mapped.hr, 0);
+    const data = mapped.value.data.slice();
+    ctx.unmap(staging, 0);
+    staging.release();
+    return new DataView(data.buffer);
+  };
+  const vb = read(vsBuffer),
+    pb = read(psBuffer);
+  assert.equal(vb.getUint32(16, true), 0x80000000);
+  assert.equal(vb.getFloat32(20, true), Math.fround(1 / 3));
+  assert.deepEqual(
+    Array.from({length: 4}, (_, i) => vb.getFloat32(i * 4, true)),
+    [0, 0, 0, 0],
+  );
+  assert.deepEqual(
+    Array.from({length: 4}, (_, i) => pb.getUint32(i * 4, true)),
+    [0x7fc12345, 0x80000000, 0x00000001, 0xffffffff],
+  );
+  vertex.dispose();
+  pixel.dispose();
+  vertex.dispose();
+  assert.throws(() => vertex.bind(ctx), /released/);
+  assert.throws(() => pixel.setRaw('value', raw), /released/);
+  // The real Native context and getter references outlive the program owner's references.
+  assert.equal(vs.getDevice(), device);
+  device.release();
+  assert.equal(vsBuffer.getDesc().byteWidth, 32);
+  assert.ok(input && ps);
+  ctx.vsSetShader(null, []);
+  ctx.psSetShader(null, []);
+  ctx.iaSetInputLayout(null);
+  ctx.vsSetConstantBuffers(0, [null]);
+  ctx.psSetConstantBuffers(0, [null]);
+  for (const resource of [vs, ps, input, vsBuffer, psBuffer]) {
+    resource.release();
+    assert.equal(
+      resource.queryInterface('00000000-0000-0000-c000-000000000046').hr,
+      0x80004002 | 0,
+    );
+  }
+  ctx.release();
+  device.release();
+  loaded.loader.dispose();
+  assert.ok(host.deleted.every(([, object]) => object === null)); // No rendering or GPU allocation was faked.
+});
+
+test('E-mote shader construction releases partially created native resources when a later factory fails', async () => {
+  const {EmoteD3d11Program} =
+    await import('../dist/native/emotedriver/runtime/render/d3d11-program.js');
+  const {sm4SyntheticPipeline} = await import('../tools/lib/sm4-synthetic-fixtures.mjs');
+  const host = capabilityContext(),
+    loaded = exportsFor(() => host.gl),
+    created = loaded.exports.d3d11CreateDevice(null, 1, 0, 0, null, 7),
+    device = created.device;
+  const reflection = {
+    stage: 'vertex',
+    flags: 0,
+    creator: 'generated',
+    resources: [],
+    buffers: [{name: '$Globals', bytes: 32, flags: 0, bufferType: 0, slot: 0, variables: []}],
+  };
+  let buffer, layout;
+  const failing = {
+    createBuffer: (...args) => {
+      const r = device.createBuffer(...args);
+      buffer = r.value;
+      return r;
+    },
+    createInputLayout: (...args) => {
+      const r = device.createInputLayout(...args);
+      layout = r.value;
+      return r;
+    },
+    createVertexShader: () => ({hr: INVALID, value: null}),
+  };
+  const elements = [
+    {
+      semanticName: 'POSITION',
+      semanticIndex: 0,
+      format: 6,
+      inputSlot: 0,
+      alignedByteOffset: 0,
+      inputSlotClass: 0,
+      instanceDataStepRate: 0,
+    },
+    {
+      semanticName: 'COLOR',
+      semanticIndex: 0,
+      format: 87,
+      inputSlot: 0,
+      alignedByteOffset: 12,
+      inputSlotClass: 0,
+      instanceDataStepRate: 0,
+    },
+  ];
+  assert.throws(
+    () =>
+      new EmoteD3d11Program(
+        failing,
+        sm4SyntheticPipeline(false, true).vertex,
+        reflection,
+        elements,
+      ),
+    /0x80070057/,
+  );
+  assert.ok(buffer && layout);
+  for (const resource of [buffer, layout])
+    assert.equal(
+      resource.queryInterface('00000000-0000-0000-c000-000000000046').hr,
+      0x80004002 | 0,
+    );
+  created.immediateContext.release();
+  device.release();
+  loaded.loader.dispose();
+});
