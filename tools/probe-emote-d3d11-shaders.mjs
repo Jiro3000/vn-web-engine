@@ -37,6 +37,8 @@ async function pageMain(fixture) {
   } = await import('/runtime/native/emotedriver/runtime/render/d3d11-shaders.js');
   const {packEmoteD3d11Mesh, drawEmoteD3d11Mesh} =
     await import('/runtime/native/emotedriver/runtime/render/d3d11-mesh.js');
+  const {EmoteD3d11Textures} =
+    await import('/runtime/native/emotedriver/runtime/render/d3d11-textures.js');
   const canvas = document.createElement('canvas'),
     gl = canvas.getContext('webgl2', {antialias: false});
   if (!gl) return {available: false, reason: 'WebGL2 unavailable'};
@@ -87,18 +89,22 @@ async function pageMain(fixture) {
     maskTarget = texture(65),
     maskRtv = own(device.createRenderTargetView(maskTarget, null)),
     maskStaging = texture(65, 4, 4, {usage: 3, bindFlags: 0, cpuAccessFlags: 0x20000});
+  const textures = new EmoteD3d11Textures(device);
   const sample = (format, data) =>
-    own(
-      device.createShaderResourceView(
-        texture(format, 1, 1, {bindFlags: 8}, [
-          {data: Uint8Array.from(data), rowPitch: data.length, slicePitch: data.length},
-        ]),
-        null,
-      ),
-    );
+    textures.acquire(
+      {
+        width: 1,
+        height: 1,
+        type: {28: 'RGBA8', 65: 'A8', 61: 'L8', 49: 'A8L8'}[format],
+        pixel: {bytes: Uint8Array.from(data)},
+      },
+      'common',
+    ).view;
   const source = sample(28, [85, 170, 255, 255]),
     alpha = sample(65, [128]),
-    destination = sample(28, [17, 34, 51, 255]);
+    destination = sample(28, [17, 34, 51, 255]),
+    gray = sample(61, [85]),
+    luminanceAlpha = sample(49, [85, 128]);
   const raster = own(
     device.createRasterizerState({
       fillMode: 3,
@@ -156,13 +162,13 @@ async function pageMain(fixture) {
     name,
     index,
     expected,
-    {color = [170, 85, 0, 255], constants = {}, mask = false} = {},
+    {color = [170, 85, 0, 255], constants = {}, mask = false, atlas = source} = {},
   ) {
     colors(color);
     ctx.updateSubresource(buffer, 0, null, bytes, 0, 0);
     const pixel = bank.pixel(index);
     for (const [key, value] of Object.entries(constants)) pixel.setFloats(key, value);
-    ctx.psSetShaderResources(0, [source, alpha, destination]);
+    ctx.psSetShaderResources(0, [atlas, alpha, destination]);
     ctx.psSetSamplers(0, [null, null, null]);
     ctx.omSetRenderTargets([mask ? maskRtv : rtv], null);
     ctx.clearRenderTargetView(mask ? maskRtv : rtv, [0, 0, 0, 0]);
@@ -227,6 +233,14 @@ async function pageMain(fixture) {
     draw('native-alpha-ref-equality', emoteD3d11AlphaShader(0), [0, 0, 0, 0], {
       color: [170, 85, 0, 128],
       constants: {alphaRef: [Math.fround(128 / 255)]},
+    });
+    draw('native-L8-atlas', emoteD3d11BasicShader(3, 0, 0, 0, 0), [85, 85, 85, 255], {
+      color: [255, 255, 255, 255],
+      atlas: gray,
+    });
+    draw('native-A8L8-atlas', emoteD3d11BasicShader(4, 0, 0, 0, 0), [85, 85, 85, 128], {
+      color: [255, 255, 255, 255],
+      atlas: luminanceAlpha,
     });
     for (const [cols, meshRows] of [
       [1, 1],
@@ -302,6 +316,7 @@ async function pageMain(fixture) {
     });
   } finally {
     bank.dispose();
+    textures.dispose();
     for (const object of objects) object.release();
     ctx.release();
     device.release();
@@ -351,6 +366,8 @@ else
         'src/native/emotedriver/runtime/render/d3d11-shaders.ts',
         'src/native/emotedriver/runtime/render/d3d11-mesh.ts',
         'src/native/emotedriver/runtime/render/vertex-colors.ts',
+        'src/native/emotedriver/runtime/render/d3d11-textures.ts',
+        'src/graphics/dxgi-layout.ts',
         'src/platform/native-libraries.ts',
       ];
     async function distFiles() {

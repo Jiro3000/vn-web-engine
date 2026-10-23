@@ -657,3 +657,132 @@ test('E-mote mesh submission releases its buffer reference after a failed draw w
   device.release();
   loaded.loader.dispose();
 });
+
+test('E-mote native atlas ownership preserves direct source bytes, DXGI formats and live context references', async () => {
+  const {EmoteD3d11Textures} =
+    await import('../dist/native/emotedriver/runtime/render/d3d11-textures.js');
+  const host = capabilityContext(),
+    loaded = exportsFor(() => host.gl),
+    created = loaded.exports.d3d11CreateDevice(null, 1, 0, 0, null, 7),
+    device = created.device,
+    ctx = created.immediateContext,
+    cache = new EmoteD3d11Textures(device);
+  const cases = [
+    ['L8', 'common', 61, 3, 7, 5],
+    ['A8', 'common', 65, 2, 7, 5],
+    ['A8L8', 'common', 49, 4, 14, 5],
+    ['RGBA8', 'common', 28, 1, 28, 5],
+    ['RGBX8', 'common', 28, 1, 28, 5],
+    ['RGBA8', 'win', 87, 1, 28, 5],
+    ['RGBX8', 'win', 87, 1, 28, 5],
+    ['DXT1', 'win', 71, 1, 16, 2],
+    ['DXT3', 'win', 74, 1, 32, 2],
+    ['DXT5', 'win', 77, 1, 32, 2],
+    ['BC7', 'win', 98, 1, 32, 2],
+    ['DXT1', 'common', 71, 1, 16, 2],
+    ['DXT3', 'common', 74, 1, 32, 2],
+    ['DXT5', 'common', 77, 1, 32, 2],
+  ];
+  for (const [type, spec, format, kind, pitch, rows] of [
+    ...cases,
+    ...cases.filter((c) => c[1] === 'win').map(([t, ...args]) => [t + '_SW', ...args]),
+    ['L8_SW', 'win', 61, 3, 7, 5],
+    ['A8_SW', 'win', 65, 2, 7, 5],
+    ['A8L8_SW', 'win', 49, 4, 14, 5],
+  ]) {
+    const compressed = [71, 74, 77, 98].includes(format),
+      width = compressed ? 8 : 7,
+      height = compressed ? 8 : 5,
+      data = Uint8Array.from({length: pitch * rows + 13}, (_, i) => (i * 53 + 17) & 255),
+      expected = data.slice(0, pitch * rows),
+      source = {
+        type,
+        width,
+        height,
+        pixel: {bytes: data},
+        truncatedWidth: 1,
+        truncatedHeight: 1,
+        mipMapLevel: 7,
+        mipMap: [],
+      },
+      entry = cache.acquire(source, spec);
+    assert.equal(cache.acquire(source, spec), entry);
+    assert.equal(entry.kind, kind);
+    const desc = entry.texture.getDesc();
+    assert.equal(desc.format, format);
+    assert.equal(desc.width, width);
+    assert.equal(desc.height, height);
+    assert.equal(desc.mipLevels, 1);
+    assert.equal(desc.arraySize, 1);
+    assert.equal(desc.usage, 0);
+    assert.equal(desc.bindFlags, 8);
+    assert.equal(entry.view.getDesc().texture2D.mipLevels, 1);
+    data.fill(0); // Native resource storage owns the original initial-data copy.
+    // Inspect actual factory-owned canonical storage. Texture CopyResource uses GPU
+    // execution, verified by the numeric browser probe rather than faked in this test.
+    const storage = entry.texture.storage(0);
+    assert.equal(storage.rowPitch, pitch);
+    assert.deepEqual(storage.bytes, expected);
+    ctx.psSetShaderResources(0, [entry.view]);
+    cache.release(source);
+    cache.release(source);
+    const retained = ctx.psGetShaderResources(0, 1)[0];
+    assert.equal(retained, entry.view);
+    assert.equal(retained.getDesc().format, format);
+    retained.release();
+    ctx.psSetShaderResources(0, [null]);
+    assert.equal(
+      entry.view.queryInterface('00000000-0000-0000-c000-000000000046').hr,
+      0x80004002 | 0,
+    );
+    assert.equal(
+      entry.texture.queryInterface('00000000-0000-0000-c000-000000000046').hr,
+      0x80004002 | 0,
+    );
+  }
+  cache.dispose();
+  cache.dispose();
+  ctx.release();
+  device.release();
+  loaded.loader.dispose();
+});
+
+test('E-mote atlas creation is atomic when its native view factory fails and refuses unsupported or short sources', async () => {
+  const {EmoteD3d11Textures} =
+    await import('../dist/native/emotedriver/runtime/render/d3d11-textures.js');
+  const host = capabilityContext(),
+    loaded = exportsFor(() => host.gl),
+    created = loaded.exports.d3d11CreateDevice(null, 1, 0, 0, null, 7),
+    device = created.device;
+  const resources = [];
+  const cache = new EmoteD3d11Textures({
+    createTexture2D: (...args) => {
+      const r = device.createTexture2D(...args);
+      resources.push(r.value);
+      return r;
+    },
+    createShaderResourceView: () => ({hr: INVALID, value: null}),
+  });
+  const source = {type: 'BC7', width: 4, height: 4, pixel: {bytes: new Uint8Array(16)}};
+  for (let i = 0; i < 2; i++)
+    assert.throws(() => cache.acquire(source, 'win'), /view creation failed/);
+  assert.equal(resources.length, 2);
+  for (const r of resources)
+    assert.equal(r.queryInterface('00000000-0000-0000-c000-000000000046').hr, 0x80004002 | 0);
+  for (const [s, spec] of [
+    [source, 'common'],
+    [source, 'unknown'],
+    [{...source, type: 'RGBA5650'}, 'win'],
+    [{...source, type: 'A8_SW'}, 'common'],
+    [{...source, width: -1}, 'win'],
+    [{...source, pixel: {bytes: new Uint8Array(15)}}, 'win'],
+  ])
+    assert.throws(() => cache.acquire(s, spec));
+  assert.equal(resources.length, 2); // Validation fails before native allocation.
+  assert.throws(() => cache.release(source), /unowned/);
+  cache.dispose();
+  assert.throws(() => cache.acquire(source, 'win'), /released/);
+  created.immediateContext.release();
+  device.release();
+  loaded.loader.dispose();
+});

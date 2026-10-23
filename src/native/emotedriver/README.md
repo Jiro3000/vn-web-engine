@@ -113,12 +113,23 @@ allocations are bounded to 64 MiB. Submission creates a native default vertex bu
 through the D3D11 contract and releases its reference after Draw, including failures;
 the context owns any retained binding. Shader and output state belong to the caller.
 
+`runtime/render/d3d11-textures.ts` owns shared native atlas textures and shader views.
+The x64 loader uploads one mip at the source dimensions through initial resource data;
+the x86 truncated-size and optional-mip rules do not apply. L8/A8/A8L8, RGBA8/RGBX8,
+BC1/2/3 and win-spec BC7 retain their native DXGI formats. Win RGBA8/RGBX8 use BGRA
+storage; common-spec data use RGBA. Native win software-storage aliases retain these
+formats. CPU converter formats are refused. Acquiring the same source shares its
+resource; the last release retires the cache's texture and view references. View
+creation failure retires the partially created texture. Context bindings keep their
+own native references, independently of cache disposal.
+
 `tools/probe-emote-d3d11-shaders.mjs --driver <exact-driver.dll> --output <new.json>`
 reads that image as data and exercises the bank through the D3D11 system library on
 an isolated WebGL2 context. Geometry and textures are generated; assertions compare
 numeric framebuffer bytes. It covers color modulation, filtering constants, screen
 masks, buffered addition, A8 mask construction and alpha-reference boundary/discard.
 Packed-mesh draws cover quads, subdivided grids and a numeric BGRA corner gradient.
+Atlas samples use the native texture owner, including L8 and A8L8 shader selection.
 It never executes PE functions, presents game pixels or takes screenshots. Full player,
 compositor and model verification are separate gates.
 
