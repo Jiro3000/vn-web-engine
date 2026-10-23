@@ -535,3 +535,9 @@ fail; no pixels are displayed. Native blend rows8/12 and conditional shader
 arithmetic can differ from the original GLSL renderer, and mirrored rasterization
 can select different nearest texels at interpolation boundaries. This tool preserves
 those differences; it does not establish full model or public-interface acceptance.
+
+The scalar player's `getState` query follows x64 entry `0x180002b80`: `coordX`,
+`coordY`, `scale` and `rot` read the applied transform; `colorR` and `colorG` read
+its packed color's high two bytes. Names are case-sensitive C strings. The native
+blue/alpha branches repeat the `colorG`/`colorR` comparisons and are unreachable;
+`colorB`, `colorA` and other unknown names therefore return zero.

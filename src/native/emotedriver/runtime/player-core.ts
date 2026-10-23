@@ -911,6 +911,33 @@ export class EmotePlayerCore {
     if (!this.x64) throw Error(`emotedriver: API unavailable for DLL build ${this.driverSha256}`);
   }
 
+  /**
+   * x64 public GetState, 0x180002b80. Labels are case-sensitive narrow C strings.
+   * The native color-byte branches repeat colorG/colorR, making the blue/alpha
+   * branches unreachable; unknown names (including colorB/colorA) return zero.
+   */
+  getState(label: string): number {
+    this.requireX64();
+    const end = label.indexOf('\0');
+    if (end !== -1) label = label.slice(0, end);
+    switch (label) {
+      case 'coordX':
+        return this.getCoord().x;
+      case 'coordY':
+        return this.getCoord().y;
+      case 'scale':
+        return this.getScale();
+      case 'rot':
+        return this.getRot();
+      case 'colorR':
+        return this.getColor() >>> 24;
+      case 'colorG':
+        return (this.getColor() >>> 16) & 255;
+      default:
+        return 0;
+    }
+  }
+
   addUserDefinedVariable(label: string): void {
     this.requireX64();
     if (this.bindings.has(label) || this.variableLabels.has(label)) return;

@@ -690,3 +690,37 @@ test('x64 rotation queues advance immediately and retain the shorter wrapped tar
   assert.equal(tween.current, Infinity);
   assert.throws(() => new EmoteRotateTween('unknown'), /unsupported DLL build/);
 });
+
+test('x64 GetState reads applied transforms and retains the native duplicate color labels', () => {
+  const {core} = x64Player();
+  core.flags &= ~2;
+  core.setCoord(12, -20, 4, 0);
+  core.setScale(1.5, 0, 0);
+  core.setRot(0.25, 0, 0);
+  core.setColor(0xdeaf5199, 0, 0);
+  core.progress(2);
+  assert.equal(core.getState('coordX'), 6);
+  assert.equal(core.getState('coordY'), -10);
+  assert.equal(core.getState('scale'), 1.5);
+  assert.equal(core.getState('rot'), core.getRot());
+  assert.equal(core.getState('colorR'), 222);
+  assert.equal(core.getState('colorG'), 175);
+  assert.equal(core.getState('coordX\0ignored'), 6);
+  for (const label of [
+    '',
+    'colorB',
+    'colorA',
+    'CoordX',
+    'coordx',
+    'rotated',
+    '__proto__',
+    'constructor',
+    '座標',
+    'x'.repeat(4096),
+  ])
+    assert.equal(core.getState(label), 0, label);
+  core.progress(2);
+  assert.equal(core.getState('coordX'), 12);
+  assert.equal(core.getState('coordY'), -20);
+  assert.throws(() => player().core.getState('coordX'), /API unavailable for DLL build/);
+});
