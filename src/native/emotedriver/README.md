@@ -46,6 +46,11 @@ angle and zoom parts of `meshSyncChildMask`, and software texture converters oth
 DXT5 → A8R8G8B8. Stereovision clip pairs (`p+0x1c0`, never set in this build) and the
 joinTarget pass (0x100460f0, whose maps are empty in shipped data) are not reproduced.
 
+Packed corner-color interpolation for both builds lives in
+`runtime/render/vertex-colors.ts`. Each edge is interpolated first, followed by each
+row, retaining the native per-channel truncation at both passes. The D3D9 device
+and x64 renderer share this routine.
+
 ## Numeric conventions
 
 The native code stores single-precision floats and computes in x87 registers, with SSE

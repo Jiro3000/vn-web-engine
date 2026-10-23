@@ -41,6 +41,8 @@ import type {
   EmoteScalarVertexGrid as EmoteVertexGrid,
 } from './runtime/interfaces.js';
 import {EmoteUnsupportedError} from './runtime/errors.js';
+import {emoteGridColors as emoteColorGrid} from './runtime/render/vertex-colors.js';
+export {emoteGridColors as emoteColorGrid} from './runtime/render/vertex-colors.js';
 
 const f32 = Math.fround;
 const FLT_MAX = f32(3.4028234663852886e38);
@@ -218,45 +220,6 @@ function flagFloat(flags: number): number {
 
 /** 0xRRGGBBAA → the vertex colour 0xAARRGGBB of the draw loop. */
 const vertexColor = (c: number): number => ((c << 24) | (c >>> 8)) >>> 0;
-
-/** FUN_180030320's channel-pair lerp: weight `f`/256 on `r`. */
-function lerpPacked(l: number, r: number, f: number): number {
-  const g = 256 - f;
-  const lo = (f * (r & 0xff00ff) + g * (l & 0xff00ff)) >>> 8;
-  const hi = f * ((r >>> 8) & 0xff00ff) + g * ((l >>> 8) & 0xff00ff);
-  return ((lo & 0xff00ff) | (hi & 0xff00ff00)) >>> 0;
-}
-
-/** Corner colours [top-left, top-right, bottom-left, bottom-right] spread over the vertex
- * grid (0x180032250): edge columns first, then each row. */
-export function emoteColorGrid(corners: Uint32Array, cols: number, rows: number): Uint32Array {
-  const w = cols + 1,
-    h = rows + 1,
-    out = new Uint32Array(w * h);
-  if (corners[0] === corners[1] && corners[0] === corners[2] && corners[0] === corners[3]) {
-    out.fill(corners[0]!);
-    return out;
-  }
-  out[0] = corners[0]!;
-  out[cols] = corners[1]!;
-  out[rows * w] = corners[2]!;
-  out[w * h - 1] = corners[3]!;
-  for (const x of [0, cols]) {
-    if (h <= 2) continue;
-    const a = out[x]!,
-      b = out[(h - 1) * w + x]!;
-    for (let k = 1; k < h - 1; k++)
-      out[k * w + x] = a === b ? a : lerpPacked(a, b, Math.trunc((k * 256) / (h - 1)));
-  }
-  for (let j = 0; j < h; j++) {
-    if (w <= 2) continue;
-    const a = out[j * w]!,
-      b = out[j * w + cols]!;
-    for (let k = 1; k < cols; k++)
-      out[j * w + k] = a === b ? a : lerpPacked(a, b, Math.trunc((k * 256) / cols));
-  }
-  return out;
-}
 
 /** Cached grid bounds (0x180006000): min x, min y, max x, max y. */
 function gridBounds(grid: EmoteVertexGrid): [number, number, number, number] {
