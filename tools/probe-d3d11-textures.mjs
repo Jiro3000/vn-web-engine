@@ -226,7 +226,7 @@ async function pageMain(fixture) {
     format: test.format,
     sampleDesc: {count: 1, quality: 0},
     usage: 0,
-    bindFlags: test.block || test.format === 65 ? 8 : 0x28,
+    bindFlags: test.block ? 8 : 0x28,
     cpuAccessFlags: 0,
     miscFlags: 0,
   });
@@ -400,7 +400,7 @@ async function pageMain(fixture) {
             groupViews.every((view) => view.live),
         });
       }
-      if (!test.block && test.format !== 65) {
+      if (!test.block) {
         const rtv = createRenderTargetViewStorage(owner, resource, null).value;
         views.push(rtv);
         const alias = createShaderResourceViewStorage(owner, resource, {
@@ -415,7 +415,7 @@ async function pageMain(fixture) {
         gl.colorMask(false, false, false, false);
         gpu.clearColor(rtv, [1, 0, 0, 1]);
         const red = Array(test.width * test.height)
-          .fill([255, 0, 0, 255])
+          .fill(test.format === 65 ? [0, 0, 0, 255] : [255, 0, 0, 255])
           .flat();
         await read(
           `${test.format}-clear-alias`,
@@ -427,7 +427,7 @@ async function pageMain(fixture) {
         );
         const bytes = resource.storage(0).bytes;
         const pixel =
-          test.format === 61
+          test.format === 61 || test.format === 65
             ? [255]
             : test.format === 49
               ? [255, 0]
@@ -445,13 +445,15 @@ async function pageMain(fixture) {
         );
         gpu.clearColor(rtv, [1, 1, 1, 1]);
         const native =
-          test.format === 61
-            ? [11]
-            : test.format === 49
-              ? [11, 22]
-              : test.format === 87
-                ? [33, 22, 11, 44]
-                : [11, 22, 33, 44];
+          test.format === 65
+            ? [44]
+            : test.format === 61
+              ? [11]
+              : test.format === 49
+                ? [11, 22]
+                : test.format === 87
+                  ? [33, 22, 11, 44]
+                  : [11, 22, 33, 44];
         resource.update(
           0,
           {left: 1, top: 1, front: 0, right: 2, bottom: 2, back: 1},
@@ -459,20 +461,24 @@ async function pageMain(fixture) {
           native.length,
         );
         const whitePixel =
-          test.format === 61
-            ? [255, 0, 0, 255]
-            : test.format === 49
-              ? [255, 255, 0, 255]
-              : [255, 255, 255, 255];
+          test.format === 65
+            ? [0, 0, 0, 255]
+            : test.format === 61
+              ? [255, 0, 0, 255]
+              : test.format === 49
+                ? [255, 255, 0, 255]
+                : [255, 255, 255, 255];
         const want = Array(test.width * test.height)
             .fill(whitePixel)
             .flat(),
           updated =
-            test.format === 61
-              ? [11, 0, 0, 255]
-              : test.format === 49
-                ? [11, 22, 0, 255]
-                : [11, 22, 33, 44];
+            test.format === 65
+              ? [0, 0, 0, 44]
+              : test.format === 61
+                ? [11, 0, 0, 255]
+                : test.format === 49
+                  ? [11, 22, 0, 255]
+                  : [11, 22, 33, 44];
         want.splice((test.width + 1) * 4, 4, ...updated);
         await read(
           `${test.format}-partial-update`,

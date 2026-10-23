@@ -213,7 +213,11 @@ export class D3d11GpuTextures {
     gl.disable(gl.SCISSOR_TEST);
     gl.disable(gl.DITHER);
     gl.colorMask(true, true, true, true);
-    gl.clearBufferfv(gl.COLOR, 0, new Float32Array(color));
+    gl.clearBufferfv(
+      gl.COLOR,
+      0,
+      new Float32Array(view.resource.getDesc().format === 65 ? [0, 0, 0, color[3]] : color),
+    );
     this.checkError('render target clear');
     this.markWritten(view.resource, view.firstMip);
   }
@@ -224,7 +228,7 @@ export class D3d11GpuTextures {
     if (
       !Number.isInteger(mip) ||
       !entry.resource.levels[mip] ||
-      (entry.format.decode && resource.getDesc().format !== 87)
+      (entry.format.decode && ![65, 87].includes(resource.getDesc().format))
     )
       throw new D3d11TextureError('Invalid D3D11 GPU write');
     resource.revision++;
@@ -306,6 +310,7 @@ export class D3d11GpuTextures {
               output[to + 2] = this.readback[from]!;
               output[to + 3] = this.readback[from + 3]!;
             } else if (format === 61) output[base + i] = this.readback[from]!;
+            else if (format === 65) output[base + i] = this.readback[from + 3]!;
             else if (format === 49) {
               output[base + i * 2] = this.readback[from]!;
               output[base + i * 2 + 1] = this.readback[from + 1]!;

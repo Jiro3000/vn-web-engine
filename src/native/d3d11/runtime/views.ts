@@ -115,8 +115,7 @@ export function createRenderTargetViewStorage(
   if (
     !ownedTexture(owner, resource, 0x20) ||
     resource.layout.depth ||
-    resource.layout.blockWidth !== 1 ||
-    resource.getDesc().format === 65
+    resource.layout.blockWidth !== 1
   )
     return {hr: INVALID, value: null};
   const texture = resource.getDesc();

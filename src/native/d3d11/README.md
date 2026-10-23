@@ -155,7 +155,9 @@ texels. Depth uploads support D32_FLOAT and D24_UNORM_S8_UINT, with native depth
 bit order converted to GL's packed order. Native row0 is GL row0 throughout upload,
 rendering, shader-view copies and readback.
 
-Render-target clears ignore scissor and component write masks. Device writes advance
+Render-target clears ignore scissor and component write masks. A8 render targets
+store alpha only; their physical RGBA8 image keeps RGB zero, and CPU readback
+extracts alpha into native one-byte texels. Device writes advance
 the resource revision and defer CPU readback. The resource owner's synchronization
 callback commits pending color writes in native byte order before a preserving CPU
 operation. CPU changes re-upload the coherent mip chain; WRITE_DISCARD replaces obsolete
