@@ -38,6 +38,8 @@ async function pageMain(fixture) {
     await import('/runtime/native/emotedriver/runtime/render/renderer-d3d11.js');
   const {EmoteD3d11Target} =
     await import('/runtime/native/emotedriver/runtime/render/d3d11-target.js');
+  const {EmoteD3d11Matrices} =
+    await import('/runtime/native/emotedriver/runtime/render/d3d11-matrices.js');
   const {EmoteRenderer, EmoteTextureCache} =
     await import('/runtime/native/emotedriver/renderer.js');
   const {WebGLDrawTarget} = await import('/runtime/graphics/webgl-draw.js');
@@ -825,6 +827,129 @@ async function pageMain(fixture) {
         rows.push({name: 'native-projected-copy-' + name, passed: false, error: error.stack});
       }
     }
+    // Exercise actual device-matrix preparation through the native shader bank,
+    // comparing asymmetric generated geometry with literal register matrices.
+    for (const mode of [0, 1, 'manual']) {
+      try {
+        const matrices = new EmoteD3d11Matrices();
+        let expectedMatrix;
+        if (mode === 'manual') {
+          matrices.setAutomaticMatrix(false);
+          matrices.setWorldMatrix([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 3, 2, 0, 1]);
+          matrices.setViewMatrix([0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+          matrices.setProjectionMatrix([
+            2 / width,
+            0,
+            0,
+            0,
+            0,
+            -2 / height,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            1,
+          ]);
+          expectedMatrix = Float32Array.of(
+            0,
+            -1 / 16,
+            0,
+            -1 / 8,
+            -1 / 12,
+            0,
+            0,
+            -1 / 4,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            1,
+          );
+        } else {
+          expectedMatrix = Float32Array.of(
+            1 / 16,
+            0,
+            0,
+            -0,
+            0,
+            (mode === 0 ? 1 : -1) / 12,
+            0,
+            -0,
+            0,
+            0,
+            mode === 0 ? -0.1 : 0.1,
+            -0.9,
+            0,
+            0,
+            0,
+            1,
+          );
+        }
+        const actualMatrix = matrices.shaderMatrix(width, height, mode === 'manual' ? 1 : mode),
+          matrixWordsExact =
+            hex(new Uint8Array(actualMatrix.buffer)) === hex(new Uint8Array(expectedMatrix.buffer)),
+          body = item({
+            grid: grid(1, 1, [1, 2, 7, 5]),
+            attr: 4,
+            colors: Uint32Array.of(0x204060ff, 0x604020ff, 0x406020ff, 0x206040ff),
+          });
+        const read = () => {
+          ctx.copyResource(staging, output);
+          const mapped = ctx.map(staging, 0, 1, 0);
+          if (mapped.hr !== 0) throw Error('Map ' + mapped.hr);
+          const bytes = new Uint8Array(width * height * 4);
+          for (let y = 0; y < height; y++)
+            bytes.set(
+              mapped.value.data.subarray(
+                y * mapped.value.rowPitch,
+                y * mapped.value.rowPitch + width * 4,
+              ),
+              y * width * 4,
+            );
+          ctx.unmap(staging, 0);
+          return bytes;
+        };
+        ctx.clearRenderTargetView(view, [0, 0, 0, 0]);
+        recording = true;
+        calls = [];
+        meshBuffers = [];
+        native.render([body], nativeOutput.binding, actualMatrix, false);
+        recording = false;
+        const actual = read(),
+          nativeCalls = calls;
+        ctx.clearRenderTargetView(view, [0, 0, 0, 0]);
+        native.render([body], nativeOutput.binding, expectedMatrix, false);
+        const expected = read(),
+          differences = actual.reduce((n, b, i) => n + (b !== expected[i]), 0),
+          nonzeroBytes = actual.reduce((n, b) => n + (b !== 0), 0);
+        compared += actual.length;
+        rows.push({
+          name: 'native-device-matrices-' + mode,
+          scope:
+            'actual matrix owner and native GPU path vs literal register words on asymmetric generated geometry',
+          passed: matrixWordsExact && differences === 0 && nonzeroBytes > 0,
+          matrixWordsExact,
+          actualMatrix: hex(new Uint8Array(actualMatrix.buffer)),
+          expectedMatrix: hex(new Uint8Array(expectedMatrix.buffer)),
+          differences,
+          nonzeroBytes,
+          expectedSha256: await hash(expected),
+          actualSha256: await hash(actual),
+          nativeCalls,
+        });
+      } catch (error) {
+        recording = false;
+        rows.push({name: 'native-device-matrices-' + mode, passed: false, error: error.stack});
+      }
+    }
   } finally {
     old.close();
     cache.close();
@@ -879,6 +1004,8 @@ else
         'tools/lib/synthetic-browser-probe.mjs',
         'src/native/emotedriver/runtime/render/renderer-d3d11.ts',
         'src/native/emotedriver/runtime/render/d3d11-target.ts',
+        'src/native/emotedriver/runtime/render/d3d11-matrices.ts',
+        'src/native/emotedriver/contract.ts',
         'src/native/emotedriver/renderer.ts',
         'src/graphics/webgl-draw.ts',
         'tests/d3d11-library.test.mjs',

@@ -296,6 +296,10 @@ export interface IEmoteD3d11Device {
    * the native layer passes (0, 0, width, height, 1).
    */
   setScreenRect(x: number, y: number, width: number, height: number, mode: number): void;
+  /** Slot 17, 0x180001b10. Automatic target-sized camera (enabled initially). */
+  setAutomaticMatrix(enabled: boolean): void;
+  /** Slot 18, 0x180001b20. */
+  getAutomaticMatrix(): boolean;
   /** Slot 19, 0x180001b70. Copies 64 bytes to the device's world matrix. */
   setWorldMatrix(matrix: EmoteD3d11Matrix): void;
   /** Slot 20, 0x180001ba0. Copies 64 bytes to the device's view matrix. */

@@ -561,3 +561,14 @@ clips share the group's immutable models, resource resolver and selected mesh
 kernel. The requested motion retains its owning file as the first source lookup,
 so duplicate motion or icon names in other files cannot change that selection.
 The factory snapshots the file list and imports no concrete player or renderer.
+
+`runtime/render/d3d11-matrices.ts` owns the native world, view and projection
+matrices and the automatic-camera switch (device slots17/18). Setters copy their
+input immediately and leave the switch unchanged. Automatic preparation installs
+the target-sized camera and multiplies projection by view with float32 scalar
+stores. Manual preparation multiplies world by view by projection with the native
+SSE product pairs, then transposes the raw words for VS1. The automatic camera
+ignores world, preserves signed translation zeros and uses screen mode0 for the
+upward basis; other modes use the downward basis. Viewport placement is separate
+from these shader constants. Generated GPU checks exercise both camera directions
+and noncommuting manual transforms through the native shader bank.

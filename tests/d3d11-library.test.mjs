@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {NativeLibraryLoader} from '../dist/platform/native-libraries.js';
 import {D3D11, D3D11_SDK_VERSION} from '../dist/native/d3d11/contract.js';
 import {d3d11WebGl2Library} from '../dist/native/d3d11/library.js';
+import {EmoteD3d11Matrices} from '../dist/native/emotedriver/runtime/render/d3d11-matrices.js';
 
 const INVALID = 0x80070057 | 0,
   UNSUPPORTED = 0x887a0004 | 0,
@@ -978,4 +979,54 @@ test('E-mote target construction unwinds native references when a later resource
   ctx.release();
   device.release();
   loaded.loader.dispose();
+});
+
+test('native E-mote matrix mode owns caller state and uploads noncommuting world/view/projection in the native layout', () => {
+  const state = new EmoteD3d11Matrices();
+  const world = Float32Array.of(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 10, 20, 0, 1);
+  state.setWorldMatrix(world);
+  world.fill(999); // The public setter copied all64bytes synchronously.
+  state.setViewMatrix([0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+  state.setProjectionMatrix([2, 0, 0, 0, 0, 3, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+  assert.equal(state.getAutomaticMatrix(), true);
+  state.setAutomaticMatrix(false);
+  const expected = Float32Array.of(0, -2, 0, -40, 3, 0, 0, 30, 0, 0, 1, 0, 0, 0, 0, 1);
+  assert.deepEqual(state.shaderMatrix(32, 24, 1), expected);
+  assert.deepEqual(state.shaderMatrix(100, 80, 0), expected); // Manual words ignore screen size/mode.
+  assert.throws(() => state.setViewMatrix([1, 2]), /Invalid E-mote matrix/);
+  assert.deepEqual(state.shaderMatrix(32, 24, 1), expected);
+});
+
+test('native E-mote matrix composition rounds products and preserves SSE cancellation pairs', () => {
+  const state = new EmoteD3d11Matrices();
+  state.setAutomaticMatrix(false);
+  state.setWorldMatrix([16777216, 1, -16777216, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+  state.setViewMatrix([1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0]);
+  assert.equal(state.shaderMatrix(1, 1, 1)[0], 2); // A left fold of float32 sums yields1.
+  state.setWorldMatrix([4097, 0, -16785408, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+  state.setViewMatrix([4097, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0]);
+  assert.equal(state.shaderMatrix(1, 1, 1)[0], 0); // A single final float32 rounding yields1.
+});
+
+test('automatic native E-mote camera replaces view/projection, ignores world and keeps exact target-sized shader words', () => {
+  const state = new EmoteD3d11Matrices();
+  state.setWorldMatrix(Array(16).fill(NaN)); // Auto preparation does not multiply world.
+  const words = (value) => [...new Uint32Array(value.buffer, value.byteOffset, 16)];
+  const expected = [
+    0x3d800000, 0, 0, 0x80000000, 0, 0xbdaaaaab, 0, 0x80000000, 0, 0, 0x3dcccccd, 0xbf666666, 0, 0,
+    0, 0x3f800000,
+  ];
+  assert.deepEqual(words(state.shaderMatrix(32, 24, 1)), expected);
+  assert.deepEqual(words(state.shaderMatrix(32, 24, -1)), expected);
+  assert.deepEqual(words(state.shaderMatrix(32, 24, 7)), expected);
+  expected[5] = 0x3daaaaab;
+  expected[10] = 0xbdcccccd;
+  assert.deepEqual(words(state.shaderMatrix(32, 24, 0)), expected);
+  state.setWorldMatrix([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+  state.setAutomaticMatrix(false);
+  const manual = state.shaderMatrix(200, 100, 1);
+  // Auto left its actual camera matrices installed; manual composition consumes them.
+  assert.equal(manual[0], 0.0625);
+  assert.equal(manual[5], Math.fround(1 / 12));
+  assert.equal(manual[14], -2);
 });
