@@ -1193,3 +1193,143 @@ test('scalar clip factories create independent clips with shared native file res
   }
   assert.throws(() => emoteScalarClipFactory([]), /requires a motion file/);
 });
+
+test('scalar clip copies retain clocks, parameters, nested ownership and independent mesh bytes on both kernels', async () => {
+  const {emoteScalarClipFactory} = await import('../dist/native/emotedriver/runtime/clip.js');
+  const patch = Float32Array.from({length: 32}, (_, i) => (i & 1 ? i >> 3 : (i >> 1) & 3) / 3);
+  const parameter = {
+    id: 'face',
+    discretization: false,
+    rangeBegin: -1,
+    rangeEnd: 1,
+    division: 10,
+    unread: {},
+  };
+  const child = motion(
+    [
+      layer('image', [frame(0, 2, {mask: 1, src: 'tex', icon: 'i'})]),
+      layer(
+        'point',
+        [frame(0, 3, {mask: 2, coord: [0, 0, 0]}), frame(10, 2, {mask: 2, coord: [20, 0, 0]})],
+        {type: 1, shape: 0, parameterize: 0},
+      ),
+    ],
+    {parameters: [parameter]},
+  );
+  const main = motion(
+    [
+      layer('nested', [frame(0, 2, {mask: 1, src: 'child', icon: 'm'})], {type: 3}),
+      layer(
+        'mesh',
+        [frame(0, 2, {mask: 0x2000001, src: 'tex', icon: 'i', mesh: {bp: patch, cc: null}})],
+        {
+          meshTransform: 1,
+          mesh: {
+            syncChildMask: 0,
+            division: 4,
+            combine: false,
+            combinators: [
+              {
+                key: 'shape',
+                rangeBegin: 0,
+                rangeEnd: 1,
+                meshCount: 2,
+                neutralIndex: 0,
+                raw: Float32Array.from({length: 64}, (_, i) => patch[i % 32] + (i >= 32 ? 0.1 : 0)),
+              },
+            ],
+          },
+        },
+      ),
+      layer('composite', [frame(0, 2, {mask: 1, src: 'blank', icon: '10:10:0:0'})], {
+        type: 12,
+        stencilType: 5,
+        stencilCompositeMaskLayerList: ['mesh', 'nested'],
+      }),
+    ],
+    {parameters: [parameter]},
+  );
+  const alternate = motion([
+    layer('alternate', [frame(0, 2, {mask: 3, src: 'tex', icon: 'i', coord: [5, 7, 0]})]),
+  ]);
+  const file = model({object: {main, alternate}, child: {m: child}});
+  file.sources.get('tex').icons.get('i').resolution = 1;
+  const draw = (clip) =>
+    clip.drawList.map((item) => ({
+      file: item.file,
+      source: item.source,
+      colors: [...item.colors],
+      z: item.z,
+      grid: item.grid && {
+        cols: item.grid.cols,
+        rows: item.grid.rows,
+        points: [...new Uint32Array(item.grid.points.buffer)],
+      },
+    }));
+  for (const wasm of [false, true]) {
+    const create = emoteScalarClipFactory([file], {
+      kernel: createEmoteMeshKernel({driverSha256: EMOTEDRIVER_X64_SHA256, wasm}),
+    });
+    const source = create(main),
+      copy = create(alternate);
+    source.rootVisible = true;
+    source.rootX = 12;
+    source.setVariable('face', 0.5);
+    source.setVariable('shape', 0.5);
+    source.progress(0);
+    source.progress(4.25);
+    source.layerEvents.push({type: 0, layer: 'nested', label: 'copied'});
+    copy.setVariable('stale', 5);
+    copy.assignState(source);
+    assert.equal(copy.motion, main);
+    assert.equal(copy.timeRunning, source.timeRunning);
+    assert.equal(copy.rootDirty, true);
+    assert.deepEqual(draw(copy), draw(source));
+    assert.notEqual(copy.layerEvents, source.layerEvents);
+    assert.notEqual(copy.layerEvents[0], source.layerEvents[0]);
+    assert.deepEqual(copy.layerEvents, source.layerEvents);
+    assert.equal(copy.values.has('stale'), false);
+    const a = source.layerNodes[1].sub,
+      b = copy.layerNodes[1].sub;
+    assert.notEqual(a, b);
+    assert.equal(b.parentClip, copy);
+    assert.equal(b.top, copy);
+    assert.notEqual(source.parameters[0], copy.parameters[0]);
+    assert.notEqual(a.parameters[0], b.parameters[0]);
+    assert.equal(a.parameters[0].position, b.parameters[0].position);
+    const originalMesh = source.layerNodes[2],
+      copiedMesh = copy.layerNodes[2];
+    assert.notEqual(originalMesh.grid.points.buffer, copiedMesh.grid.points.buffer);
+    assert.notEqual(originalMesh.mstate.world.buffer, copiedMesh.mstate.world.buffer);
+    assert.notEqual(originalMesh.mstate.bp.buffer, copiedMesh.mstate.bp.buffer);
+    assert.deepEqual(copy.layerNodes[3].masks, [copiedMesh, copy.layerNodes[1]]);
+    assert.notEqual(copy.layerNodes[3].masks, source.layerNodes[3].masks);
+    for (const frames of [0, 1, 2.5, -0.5]) {
+      source.progress(frames);
+      copy.progress(frames);
+      assert.deepEqual(draw(copy), draw(source));
+    }
+    copy.setVariable('face', -1);
+    assert.equal(a.parameters[0].position, 7.5);
+    assert.equal(b.parameters[0].position, 0);
+    const oldPatch = originalMesh.mstate.bp.slice();
+    copy.setVariable('shape', 1);
+    copy.progress(0);
+    assert.deepEqual(originalMesh.mstate.bp, oldPatch);
+    assert.notDeepEqual(copiedMesh.mstate.bp, oldPatch);
+    copiedMesh.grid.points[0] = 999;
+    assert.notEqual(originalMesh.grid.points[0], 999);
+    // A motion queued with the native hold bit survives a copy without ticking.
+    source.setMotion('alternate', 0x60);
+    copy.assignState(source);
+    assert.equal(copy.motion, main);
+    copy.progress(1);
+    source.progress(1);
+    assert.equal(copy.motion, alternate);
+    assert.equal(copy.timeRunning, source.timeRunning);
+    copy.assignState(copy);
+    assert.throws(() => copy.assignState(createEmoteClip(file, main)), /not a scalar/);
+    const foreign = new EmoteMotionClip(new EmoteResource([model({object: {main}})]));
+    assert.throws(() => copy.assignState(foreign), /different E-mote file group/);
+  }
+});

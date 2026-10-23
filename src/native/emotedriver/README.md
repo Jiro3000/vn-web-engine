@@ -572,3 +572,15 @@ ignores world, preserves signed translation zeros and uses screen mode0 for the
 upward basis; other modes use the downward basis. Viewport placement is separate
 from these shader constants. Generated GPU checks exercise both camera directions
 and noncommuting manual transforms through the native shader bank.
+
+
+Scalar clips implement the shared private copy operation in `runtime/clip/scalar.ts`.
+Clocks, queued motions, variables, parameter positions and evaluated node state
+survive the copy without a playback tick. New nodes, nested clips, overrides,
+patches and semantic vertex buffers have independent ownership. Parameters and
+composite masks refer to the copied tree; combinators register against its own
+variable source. Immutable models and cached frame sequences remain shared.
+Native renderer cache pointers and pass links are discarded, draw items are
+rebuilt, and the top root is marked dirty for its next layer pass. The player core
+separately owns control, timeline and tween state; its x64 public copy operations
+remain unavailable until that state copying is implemented.

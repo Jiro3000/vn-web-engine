@@ -316,8 +316,114 @@ export class EmoteMotionClip
   nodeIndex(_label: string): never {
     throw new EmoteUnsupportedError('x86 node lookup of x64 clip');
   }
-  assignState(_source: EmoteClipDriver): never {
-    throw new EmoteUnsupportedError('assignState');
+  /**
+   * Private clip-copy operation used by the shared player's copy constructor.
+   * Native 0x1800343e0 copies fields (0x1800335c0), then reconstructs parameter,
+   * node, nested-clip, combinator and draw ownership without advancing playback.
+   */
+  assignState(source: EmoteClipDriver): void {
+    if (!(source instanceof EmoteMotionClip))
+      throw new TypeError('assignState: not a scalar E-mote clip');
+    if (source === this) return;
+    if (source.resource.files.some((file) => !this.resource.files.includes(file)))
+      throw new TypeError('assignState: different E-mote file group');
+    this.reset();
+    this.unregisterParams();
+    this.values.clear();
+    for (const [key, value] of source.values) this.values.set(key, value);
+    for (const key of [
+      'objectName',
+      'playingObject',
+      'motionName',
+      'playingName',
+      'pendingObject',
+      'pendingMotion',
+      'queued',
+      'queuedFlags',
+      'file',
+      'motion',
+      'playing',
+      'jumped',
+      'starting',
+      'replay',
+      'syncStop',
+      'alignStop',
+      'timeRunning',
+      'time',
+      'speed',
+      'step',
+      'loopTime',
+      'lastTime',
+      'f18a',
+      'forceCalc',
+      'ownRotationAngle',
+      'decay',
+      'grayscaleMode',
+      'grayscaleLevel',
+      'color',
+      'effectMode',
+      'effectLevel',
+      'prIndex',
+      'clipFlags',
+      'independentInherit',
+      'meshDivisionRatio',
+      'smoothing',
+      'advanceHeld',
+      'typeMask',
+      'layerIndexMap',
+    ] as const)
+      (this as unknown as Record<string, unknown>)[key] = source[key];
+    this.velocity.set(source.velocity);
+    this.priority = source.priority.map((frame) => ({time: frame.time, order: [...frame.order]}));
+    this.order = [...source.order];
+    this.layerEvents = source.layerEvents.map((event) => ({...event}));
+    this.parameters = source.parameters.map((parameter) => {
+      const copy = new Param(parameter.def);
+      copy.position = parameter.position;
+      copy.flags = parameter.flags;
+      return copy;
+    });
+    this.registerParams();
+    this.motionParameter = source.motionParameter
+      ? this.parameters[source.parameters.indexOf(source.motionParameter)]!
+      : null;
+    if (this.top === this)
+      this.combinators = source.combinators
+        ? new EmoteMeshCombinators(this, EMOTEDRIVER_X64_SHA256)
+        : null;
+    this.root.copyScalarState(source.root);
+    for (let i = 1; i < source.layerNodes.length; i++) {
+      const from = source.layerNodes[i]!,
+        parameter = from.layer?.parameterize,
+        node = new Node(
+          this,
+          from.layer,
+          i,
+          from.parent,
+          parameter !== null && parameter !== undefined ? this.parameters[parameter]! : null,
+        );
+      this.layerNodes.push(node);
+      node.copyScalarState(from);
+      if (node.hasCombinator) {
+        this.top.combinators ??= new EmoteMeshCombinators(this.top, EMOTEDRIVER_X64_SHA256);
+        this.top.combinators.register(node, node.layer!.mesh!.combinators!, this);
+      }
+      if (node.type === 3) {
+        this.subNodes.push(node);
+        if (from.sub) {
+          node.sub = new EmoteMotionClip(this.resource, this);
+          node.sub.assignState(from.sub);
+        }
+      } else if (node.type === 1) this.shapeNodes.push(node);
+      else if (node.type === 12) this.stencilNodes.push(node);
+    }
+    for (let i = 1; i < source.layerNodes.length; i++)
+      this.layerNodes[i]!.masks = source.layerNodes[i]!.masks.map(
+        (node) => this.layerNodes[node.index]!,
+      );
+    this.drawList.length = 0;
+    this.buildDrawList(this.color, null);
+    if (this.parentClip === null) this.root.adjust.changed = true;
   }
 
   get rootVisible(): boolean {

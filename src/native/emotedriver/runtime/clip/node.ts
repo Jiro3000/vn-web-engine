@@ -635,6 +635,79 @@ export class EmoteScalarNode<Subclip>
     return this.states.length;
   }
 
+  /**
+   * Scalar copy constructor 0x1800343e0, after copying the node vector. Immutable
+   * frame sequences stay shared; evaluated values, overrides, patches and semantic
+   * vertex grids belong to the new node. Native renderer cache pointers and pass
+   * links are discarded. The owning clip rebinds child/mask references separately.
+   */
+  copyScalarState(source: EmoteScalarNode<Subclip>): void {
+    this.copyFrom(source);
+    this.adjust.copyFrom(source.adjust);
+    for (const key of [
+      'coordinate',
+      'transformOrder',
+      'framesDirty',
+      'modified',
+      'prevE',
+      'scalarColor',
+      'defaultColor',
+      'm00',
+      'm01',
+      'm10',
+      'm11',
+      'drawable',
+      'hidden',
+      'texture',
+      'attr',
+      'left',
+      'top',
+      'w',
+      'h',
+      'originX',
+      'originY',
+      'resolution',
+      'file',
+      'source',
+      'srcKey',
+      'iconKey',
+      'isDeformer',
+      'breaksChain',
+      'maskLayer',
+      'stencilVisible',
+      'drawn',
+      'combinatorOwned',
+    ] as const)
+      (this as unknown as Record<string, unknown>)[key] = source[key];
+    this.cur = source.cur;
+    this.next = source.next;
+    this.colors.set(source.colors);
+    this.vel.set(source.vel);
+    this.anchor.set(source.anchor);
+    if (this.shapeInfo && source.shapeInfo)
+      this.shapeInfo.splice(0, this.shapeInfo.length, ...source.shapeInfo);
+    const mesh = this.mstate,
+      from = source.mstate;
+    if (mesh && from) {
+      mesh.cols = from.cols;
+      mesh.rows = from.rows;
+      mesh.bp = from.bp?.slice() ?? null;
+      mesh.ms.set(from.ms);
+      mesh.world.set(from.world);
+      mesh.inv.set(from.inv);
+      mesh.negTx = from.negTx;
+      mesh.negTy = from.negTy;
+    }
+    // This runtime stores evaluated logical positions rather than native GPU
+    // cache handles. Copy their bytes so a clone can draw before its first tick.
+    this.grid = source.grid
+      ? {cols: source.grid.cols, rows: source.grid.rows, points: source.grid.points.slice()}
+      : null;
+    this.meshParent = null;
+    this.meshParentId = 0;
+    this.stencilParent = null;
+  }
+
   /** 0x18003dc40. */
   resolveSource(clip: EmoteScalarNodeHost, s: EmoteScalarFrameState): void {
     if (s.empty) return;
