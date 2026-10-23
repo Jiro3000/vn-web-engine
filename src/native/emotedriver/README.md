@@ -70,6 +70,26 @@ Probes on real files (non-visual: counts, NaN checks and SHA-256 digests):
 - `tools/probe-emotedriver-clip.mjs`: clip evaluation and mesh kernel agreement;
 - `tools/probe-emotedriver-controls.mjs`: control and physics output sequences.
 
+## Public D3D11 contract
+
+`EMOTE_DRIVER_D3D11` in `contract.ts` is revision `2`, for the exact x64 image
+`80d28bd0…1e051`. Revision `1` and its D3D9 exports remain independent. Both use the
+existing Native library loader; an implementation is selected by image identity,
+and callers request the matching contract token.
+
+The D3D11 revision declares the native SDK/build exports, the default-allocator
+`InitParam` with device and immediate context, ten device operations and 98 player
+operations. Public objects use only Native contracts and plain values. Player
+coordinate/force output pointers become `{x, y}` results. Native slots and entry
+addresses are recorded on each member, including the x64 deleting-destructor slot
+that shifts reference counting. Unknown integer player slots 15/16 and device
+operations outside the audited subset are absent.
+
+The contract does not expose internal model caches, clips, draw commands, browser
+objects or a renderer callback. Rendering uses the compositor's D3D11 resources and
+context. The x64 implementation and Artemis consumer migration are still pending;
+the legacy host path described below remains the current integration.
+
 ## Artemis x64 integration
 
 A browser port of the E-mote 3.9.8 runtime in the x64 D3D11 `emotedriver.dll`, SHA-256
