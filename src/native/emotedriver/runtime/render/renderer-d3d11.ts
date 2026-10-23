@@ -585,10 +585,11 @@ export class EmoteD3d11Renderer {
   private project(x: number, y: number): [number, number] {
     const matrix = this.matrix!,
       target = this.output!;
-    // D3D column-major constant words, matching the vertex shader's dot products.
-    const cx = f(f(f(f(x * matrix[0]!) + f(y * matrix[4]!)) + f(0 * matrix[8]!)) + matrix[12]!),
-      cy = f(f(f(f(x * matrix[1]!) + f(y * matrix[5]!)) + f(0 * matrix[9]!)) + matrix[13]!),
-      cw = f(f(f(f(x * matrix[3]!) + f(y * matrix[7]!)) + f(0 * matrix[11]!)) + matrix[15]!);
+    // VS1 emits dp3 against each constant register's x/y/w words. These are
+    // native upload words, rather than WebGL's column-major array indexing.
+    const cx = f(f(f(f(x * matrix[0]!) + f(y * matrix[1]!)) + f(0 * matrix[2]!)) + matrix[3]!),
+      cy = f(f(f(f(x * matrix[4]!) + f(y * matrix[5]!)) + f(0 * matrix[6]!)) + matrix[7]!),
+      cw = f(f(f(f(x * matrix[12]!) + f(y * matrix[13]!)) + f(0 * matrix[14]!)) + matrix[15]!);
     return [
       f(f(f(cx / cw) * f(target.width / 2)) + f(target.width / 2)),
       f(f(f(cy / cw) * f(-target.height / 2)) + f(target.height / 2)),

@@ -367,6 +367,48 @@ async function pageMain(fixture) {
       item({stencilParent: parent, file: sources[5][1]}),
     ]);
   }
+  // Native VS1 dots one constant register per output component. Transpose
+  // WebGL array storage as raw words, preserving every float32 bit pattern.
+  const nativeMatrixOf = (source) => {
+    const result = new Float32Array(16),
+      dst = new Uint32Array(result.buffer),
+      src = new Uint32Array(source.buffer, source.byteOffset, 16);
+    for (let row = 0; row < 4; row++)
+      for (let column = 0; column < 4; column++) dst[row * 4 + column] = src[column * 4 + row];
+    return result;
+  };
+  const affine = (xx, xy, yx, yy, dx, dy) =>
+    Float32Array.of(
+      (2 * xx) / width,
+      (-2 * yx) / height,
+      0,
+      0,
+      (2 * xy) / width,
+      (-2 * yy) / height,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      (2 * dx) / width,
+      (-2 * dy) / height,
+      0,
+      1,
+    );
+  const transforms = [
+    ['translation', affine(1, 0, 0, 1, 4, -3), [16, 6, 24, 12]],
+    ['quarter-turn', affine(0, -1, 1, 0, 0, 0), [13, 8, 19, 16]],
+    ['reflection', affine(-1, 0, 0, 1, 2, 0), [14, 9, 22, 15]],
+    ['shear', affine(1, 0.5, 0, 1, 0, 0), [10, 9, 22, 15]],
+  ];
+  for (const [name, transform] of transforms)
+    cases.push({
+      name: 'matrix-' + name,
+      transform,
+      items: [item({grid: grid(1, 1, [-4, -3, 4, 3]), attr: 4, colors: solid(0x204060ff)})],
+      smoothing: false,
+    });
   const hash = async (bytes) =>
     [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))]
       .map((b) => b.toString(16).padStart(2, '0'))
@@ -377,6 +419,8 @@ async function pageMain(fixture) {
     for (const test of cases) {
       try {
         cache.beginFrame();
+        old.transform.set(test.transform ?? matrix);
+        const nativeMatrix = nativeMatrixOf(old.transform);
         const commands = old.render(test.items, test.smoothing);
         target.draw({sprites: [], commands, offscreen: true}, (id) => images.get(id));
         const expected = target.readRenderSurface(old.surface, width, height);
@@ -384,7 +428,7 @@ async function pageMain(fixture) {
         recording = true;
         calls = [];
         meshBuffers = [];
-        native.render(test.items, nativeOutput.binding, matrix, test.smoothing);
+        native.render(test.items, nativeOutput.binding, nativeMatrix, test.smoothing);
         recording = false;
         const legacyMeshes = commands.filter(
           (command) => command.kind === 'triangles' && command.depthClip === false,
@@ -539,13 +583,8 @@ async function pageMain(fixture) {
                   : 2042 +
                     (Number(k) * 2 + Number(alphaTest)) * 3 +
                     (original.blendState.alpha.source === 'zero' ? 2 : Number(masked));
-            const transform = hex(
-              new Uint8Array(
-                original.transform.buffer,
-                original.transform.byteOffset,
-                original.transform.byteLength,
-              ),
-            );
+            const expectedNativeMatrix = nativeMatrixOf(original.transform);
+            const transform = hex(new Uint8Array(expectedNativeMatrix.buffer));
             const actualTransform = buffers.get(vsBuffers[0]);
             const constants = [];
             for (const buffer of fixture.pixelReflection[pixel.index].buffers) {
@@ -700,6 +739,90 @@ async function pageMain(fixture) {
       } catch (error) {
         recording = false;
         rows.push({name: test.name, passed: false, error: error.stack});
+      }
+    }
+    // With opaque source alpha, buffered addition equals fixed-function additive
+    // blending over generated color bands. The reference issues no destination
+    // copy and never calls project(). Literal boxes enclose the affine rectangle.
+    const readNative = () => {
+      ctx.copyResource(staging, output);
+      const mapped = ctx.map(staging, 0, 1, 0);
+      if (mapped.hr !== 0) throw Error('Map ' + mapped.hr);
+      const bytes = new Uint8Array(width * height * 4);
+      for (let y = 0; y < height; y++)
+        bytes.set(
+          mapped.value.data.subarray(
+            y * mapped.value.rowPitch,
+            y * mapped.value.rowPitch + width * 4,
+          ),
+          y * width * 4,
+        );
+      ctx.unmap(staging, 0);
+      return bytes;
+    };
+    for (const [name, transform, expectedBox] of transforms) {
+      try {
+        const nativeMatrix = nativeMatrixOf(transform),
+          background = item({
+            grid: grid(1, 1, [-100, -100, 100, 100]),
+            attr: 4,
+            colors: solid(0x102030ff),
+          }),
+          body = item({
+            grid: grid(1, 1, [-4, -3, 4, 3]),
+            attr: 4,
+            bm: 0x100,
+            colors: solid(0x203040ff),
+          });
+        const backgrounds = [
+          background,
+          ...[
+            [-4, -3, 0x104080ff],
+            [-2, 2, 0x204010ff],
+            [3, 4, 0x404010ff],
+          ].map(([left, right, color]) =>
+            item({grid: grid(1, 1, [left, -100, right, 100]), attr: 4, colors: solid(color)}),
+          ),
+        ];
+        ctx.clearRenderTargetView(view, [0, 0, 0, 0]);
+        recording = true;
+        calls = [];
+        meshBuffers = [];
+        native.render([...backgrounds, body], nativeOutput.binding, nativeMatrix, false);
+        recording = false;
+        const actual = readNative(),
+          nativeCalls = calls;
+        ctx.clearRenderTargetView(view, [0, 0, 0, 0]);
+        native.render(
+          [...backgrounds, {...body, bm: 1}],
+          nativeOutput.binding,
+          nativeMatrix,
+          false,
+        );
+        const expected = readNative();
+        compared += actual.length;
+        const differences = actual.reduce((n, b, i) => n + (b !== expected[i]), 0);
+        const copyCall = nativeCalls.find((call) => call.method === 'copySubresourceRegion'),
+          box = copyCall?.args.at(-1),
+          actualBox = box ? [box.left, box.top, box.right, box.bottom] : null,
+          copyBoundsExact = JSON.stringify(actualBox) === JSON.stringify(expectedBox);
+        rows.push({
+          name: 'native-projected-copy-' + name,
+          scope:
+            'generated native buffered-addition/fixed-function-addition relation and literal copy bounds',
+          passed: !differences && copyBoundsExact,
+          expectedBox,
+          actualBox,
+          copyBoundsExact,
+          differences,
+          bytes: actual.length,
+          expectedSha256: await hash(expected),
+          actualSha256: await hash(actual),
+          nativeCalls,
+        });
+      } catch (error) {
+        recording = false;
+        rows.push({name: 'native-projected-copy-' + name, passed: false, error: error.stack});
       }
     }
   } finally {

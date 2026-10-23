@@ -521,7 +521,7 @@ the DLL bytes unchanged. The shared DXBC envelope reader validates part ranges
 and preserves native table order; it does not interpret shader instructions.
 
 The private scalar D3D11 draw pass is `runtime/render/renderer-d3d11.ts`. Its caller
-supplies a native target and column-major matrix words; the compositor owns clearing.
+supplies a native target and raw matrix constant-register words; the compositor owns clearing.
 The pass owns fixed blend/depth/raster/sampler states, retained atlas references,
 viewport-sized A8 intersection/subtraction masks and a bounded destination-copy
 surface. It submits packed native meshes with the original DXBC bank through the
@@ -547,3 +547,10 @@ references of an external render target (`0x18005b2e0`, `0x18005ec10`). Installi
 it leaves the compositor's context bindings and pixels alone. The wrapper retains
 the native base-resource dimensions and copy subresource zero, including for a view
 of another mip. Context bindings keep their own references after wrapper disposal.
+
+VS1 reads `modelViewProj` with four `dp3` instructions, one per output component,
+using each constant register's x/y/w words. The renderer's destination-copy
+projection uses that same register layout. The generated probe transposes WebGL
+matrix storage as raw DWORDs and checks translation, rotation, reflection and
+shear. Separate copy tests compare destination-reading addition with fixed-function
+additive blending over color bands and verify literal enclosing copy rectangles.
