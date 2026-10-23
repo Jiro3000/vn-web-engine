@@ -432,3 +432,105 @@ test('E-mote shader construction releases partially created native resources whe
   device.release();
   loaded.loader.dispose();
 });
+
+test('E-mote native shader bank selects disjoint native tables and unwinds every partially built program', async () => {
+  const {
+    EmoteD3d11Shaders,
+    emoteD3d11BasicShader,
+    emoteD3d11BufferedShader,
+    emoteD3d11MaskShader,
+    emoteD3d11AlphaShader,
+  } = await import('../dist/native/emotedriver/runtime/render/d3d11-shaders.js');
+  const slots = new Set([2040, 2041]);
+  for (let k = 0; k < 5; k++) {
+    for (const a of [0, 4, 8])
+      for (let m = 0; m < 4; m++) {
+        for (const f of [0, 3, 6, 9, 12])
+          for (let b = 0; b < 3; b++) {
+            const index = emoteD3d11BasicShader(k, a, m, f, b);
+            assert.ok(!slots.has(index));
+            slots.add(index);
+          }
+        for (let n = 0; n < 19; n++) {
+          const index = emoteD3d11BufferedShader(k, a, m, n);
+          assert.ok(!slots.has(index));
+          slots.add(index);
+        }
+      }
+    for (const alpha of [false, true])
+      for (const pass of [0, 1, 2]) {
+        const index = emoteD3d11MaskShader(k, alpha, pass);
+        assert.ok(!slots.has(index));
+        slots.add(index);
+      }
+    const index = emoteD3d11AlphaShader(k);
+    assert.ok(!slots.has(index));
+    slots.add(index);
+  }
+  assert.deepEqual(
+    [...slots].sort((a, b) => a - b),
+    Array.from({length: 2077}, (_, i) => i),
+  );
+  assert.equal(emoteD3d11BasicShader(1, 4, 0, 0, 0), 240);
+  assert.equal(emoteD3d11BufferedShader(4, 8, 3, 18), 2039);
+  assert.equal(emoteD3d11MaskShader(4, true, 2), 2071);
+  for (const args of [
+    [5, 0, 0, 0, 0],
+    [0, 3, 0, 0, 0],
+    [0, 0, 4, 0, 0],
+    [0, 0, 0, 2, 0],
+    [0, 0, 0, 0, 3],
+  ])
+    assert.throws(() => emoteD3d11BasicShader(...args), RangeError);
+  const created = [];
+  let failAt = Infinity;
+  const make = () => {
+    if (created.length === failAt) return {hr: INVALID, value: null};
+    const resource = {
+      references: 1,
+      release() {
+        return --this.references;
+      },
+    };
+    created.push(resource);
+    return {hr: 0, value: resource};
+  };
+  // Contract factory stand-in: only resource ownership is tested here, never GPU work.
+  const initialized = [];
+  const device = {
+    createInputLayout: make,
+    createVertexShader: (bytes) => {
+      initialized.push(bytes[0]);
+      return make();
+    },
+    createPixelShader: make,
+  };
+  const reflection = (stage) => ({
+    stage,
+    flags: 0,
+    creator: 'generated',
+    buffers: [],
+    resources: [],
+  });
+  const blobs = {
+    vertex: Array.from({length: 12}, (_, i) => Uint8Array.of(i)),
+    pixel: Array(2077).fill(new Uint8Array()),
+    vertexReflection: Array.from({length: 12}, () => reflection('vertex')),
+    pixelReflection: Array.from({length: 2077}, () => reflection('pixel')),
+    inputLayouts: Array.from({length: 12}, () => []),
+  };
+  const bank = new EmoteD3d11Shaders(device, blobs);
+  assert.deepEqual(initialized, [3, 0, 4, 5, 1, 2, 9, 6, 10, 11, 7, 8]);
+  assert.notEqual(bank.vertex(0), bank.vertex(11));
+  assert.notEqual(bank.pixel(0), bank.pixel(2076));
+  assert.throws(() => bank.pixel(2077), RangeError);
+  bank.dispose();
+  bank.dispose();
+  assert.ok(created.every((r) => r.references === 0));
+  assert.throws(() => bank.vertex(0), /released/);
+  created.length = 0;
+  failAt = 2100; // Failure at the last pixel factory after every earlier stage exists.
+  assert.throws(() => new EmoteD3d11Shaders(device, blobs), /resource creation failed/);
+  assert.equal(created.length, 2100);
+  assert.ok(created.every((r) => r.references === 0));
+});
