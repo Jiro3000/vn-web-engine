@@ -141,6 +141,50 @@ The synthetic shader probe exercises this cache, native buffer updates, unbindin
 eviction and disposal with raw float readback. A rendering device still needs to bind
 textures, input assembly, targets and raster/output state through this implementation.
 
+## GPU texture storage
+
+`webgl2/textures.ts` owns single-sample Texture2D images, mip attachments and independent
+shader-view mip ranges. Full-range views share the canonical image; other ranges use
+copied GPU images so simultaneous views have independent base levels. A draw acquires
+its context-owned views together, pinning their images until release. Unbound resources
+sample an all-zero image, including alpha.
+
+R8/RG8 upload directly. BGRA, A8 and BC1/2/3/7 use the shared integer GPU decoder in
+`graphics/block-texture.ts`; their canonical images contain the corresponding RGBA8
+texels. Depth uploads support D32_FLOAT and D24_UNORM_S8_UINT, with native depth/stencil
+bit order converted to GL's packed order. Native row0 is GL row0 throughout upload,
+rendering, shader-view copies and readback.
+
+Render-target clears ignore scissor and component write masks. Device writes advance
+the resource revision and defer CPU readback. The resource owner's synchronization
+callback commits pending color writes in native byte order before a preserving CPU
+operation. CPU changes re-upload the coherent mip chain; WRITE_DISCARD replaces obsolete
+contents. Map(DO_NOT_WAIT) queries a lazily created fence with zero timeout, returning
+still-drawing until ready. Fences are retired on another device write, CPU replacement,
+completed synchronization or final release. Lost contexts report device-removed.
+
+Texture allocations, aliases and packed-upload scratch share a512MiB limit. Aliases
+and scratch each have a64MiB bound; idle view ranges use LRU eviction with eight cached
+ranges per resource. Active draws can temporarily pin more ranges within the memory
+bound. Readback uses chunks of at most1MiB. Resource final release deletes its images
+and attachments; decoder programs, scratch and the zero image belong to the device.
+
+Texture arrays and CPU depth/stencil readback are outside the GPU view subset. Staging
+depth textures are already rejected by resource creation; native depth copies must
+stay on the GPU. The concrete device/context still supplies drawing, transfer commands,
+mip generation and raster/output state. These components do not register a device yet.
+
+`tools/probe-d3d11-textures.mjs` checks generated texture bytes and numeric readback,
+including every format/mip, independent ranges, cache pressure, pinned bindings,
+unbound resources, clears, native CPU shadows, partial updates, dynamic discard,
+staging-map readiness, depth/stencil upload, final ownership and context loss. It
+captures no screenshots and loads no game assets. This is resource coverage, not
+full draw-command or performance acceptance.
+
+Map behavior follows [D3D11_MAP_FLAG](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/ne-d3d11-d3d11_map_flag).
+Storage conventions follow [DXGI formats](https://learn.microsoft.com/en-us/windows/win32/api/dxgiformat/ne-dxgiformat-dxgi_format)
+and the [WebGL2 specification](https://registry.khronos.org/webgl/specs/2.0.0/).
+
 Resource rules follow Microsoft's [Map values](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/ne-d3d11-d3d11_map),
 [UpdateSubresource](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/nf-d3d11-id3d11devicecontext-updatesubresource)
 and [block compression](https://learn.microsoft.com/en-us/windows/uwp/graphics-concepts/block-compression)
