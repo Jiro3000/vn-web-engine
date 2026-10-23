@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {D3d11ChildObject, D3d11Lifetime, D3d11Object} from '../dist/native/d3d11/runtime/com.js';
 import {D3d11StateCache} from '../dist/native/d3d11/runtime/states.js';
 import {D3d11ContextState} from '../dist/native/d3d11/runtime/context-state.js';
+import {D3d11DrawContext} from '../dist/native/d3d11/webgl2/context.js';
 import {createInputLayoutStorage} from '../dist/native/d3d11/runtime/input-layout.js';
 import {readDxgiVertexElement} from '../dist/graphics/dxgi-vertex.js';
 import {dxgiVertexByteAddress, fetchDxgiVertexElement} from '../dist/graphics/dxgi-vertex.js';
@@ -849,4 +850,241 @@ test('D3D11 index reads retain strip-cut words and handle offsets, wraparound an
   }
   ctx.release();
   host.device.release();
+});
+
+test('native vertex registers can be staged in separate float4 planes without a256-byte stride', () => {
+  const {host, ctx} = context(),
+    parameters = Array.from({length: 16}, (_, i) => ({name: 'ATTR' + i, register: i, mask: 3}));
+  const layout = createInputLayoutStorage(
+    host,
+    parameters.map((p) => element(p.name, 16)),
+    inputSignature(parameters),
+  ).value;
+  const data = new Float32Array(64);
+  for (let v = 0; v < 2; v++)
+    for (let a = 0; a < 16; a++) {
+      data[v * 32 + a * 2] = v * 100 + a;
+      data[v * 32 + a * 2 + 1] = v * 100 + a + 0.5;
+    }
+  const source = stream(host, new Uint8Array(data.buffer)),
+    reader = new D3d11VertexReader(
+      host,
+      layout,
+      parameters.map((p) => p.register),
+      [source],
+      [128],
+      [0],
+    ),
+    out = new Float32Array(128);
+  reader.read(0, out, 0, 8);
+  reader.read(1, out, 4, 8);
+  assert.deepEqual(
+    [...out],
+    parameters.flatMap((_, a) => [a, a + 0.5, 0, 1, a + 100, a + 100.5, 0, 1]),
+  );
+  assert.throws(() => reader.read(0, out, 0, 3), /read/);
+  assert.throws(() => reader.read(1, out, 5, 8), /read/);
+  source.release();
+  layout.release();
+  ctx.release();
+  host.device.release();
+});
+
+test('native Draw and DrawIndexed preserve planar inputs, base vertices, strip cuts and borrowed resource leases', () => {
+  // This command sink proves CPU assembly and coordination only. It supplies no
+  // GPU rendering evidence for the complete draw path.
+  let ctx,
+    uploaded,
+    acquired = 0,
+    released = 0,
+    written = 0,
+    visible = true,
+    deleted = 0;
+  const calls = [],
+    pointers = [];
+  const host = owner(() => {
+    ctx.disposeBindings();
+    ctx.disposeGpu();
+  });
+  host.resourceDestroyed = () => {};
+  const gl = {
+    POINTS: 0,
+    LINES: 1,
+    LINE_STRIP: 3,
+    TRIANGLES: 4,
+    TRIANGLE_STRIP: 5,
+    ARRAY_BUFFER: 0x8892,
+    STREAM_DRAW: 0x88e0,
+    FLOAT: 0x1406,
+    TEXTURE0: 0x84c0,
+    TEXTURE_2D: 0x0de1,
+    NO_ERROR: 0,
+    isContextLost: () => false,
+    createVertexArray: () => ({}),
+    createBuffer: () => ({}),
+    bindVertexArray: () => {},
+    bindBuffer: () => {},
+    bufferData: (_target, data) => {
+      uploaded = new Float32Array(data);
+    },
+    enableVertexAttribArray: () => {},
+    disableVertexAttribArray: () => {},
+    vertexAttribDivisor: () => {},
+    vertexAttribPointer: (...args) => pointers.push(args),
+    activeTexture: () => {},
+    bindTexture: () => {},
+    drawArrays: (...args) => calls.push(args),
+    getError: () => 0,
+    deleteVertexArray: () => {
+      deleted++;
+    },
+    deleteBuffer: () => {
+      deleted++;
+    },
+  };
+  const program = {
+    attributes: [
+      {register: 0, location: 0},
+      {register: 1, location: 1},
+    ],
+    samples: [],
+  };
+  ctx = new D3d11DrawContext(
+    host,
+    gl,
+    {
+      acquireShaderResources: () => {
+        acquired++;
+        return {
+          images: program.samples.map(() => ({})),
+          release: () => {
+            released++;
+          },
+        };
+      },
+    },
+    {
+      use: () => visible,
+      written: () => {
+        written++;
+      },
+    },
+    {use: () => program, uploadConstants: () => {}},
+    {
+      bind: () => {
+        throw Error('Unexpected sampler');
+      },
+    },
+  );
+  const fixture = sm4SyntheticPipeline(),
+    vertex = createShaderStorage(host, 'vertex', fixture.vertex, null).value,
+    pixel = createShaderStorage(host, 'pixel', fixture.pixel, null).value;
+  const layout = createInputLayoutStorage(
+    host,
+    [element('POSITION', 6), element('COLOR', 87)],
+    fixture.vertex,
+  ).value;
+  const bytes = new Uint8Array(64),
+    data = new DataView(bytes.buffer);
+  for (let i = 0; i < 4; i++) {
+    data.setFloat32(i * 16, i + 1, true);
+    data.setFloat32(i * 16 + 4, i * 2, true);
+    data.setFloat32(i * 16 + 8, i * 0.25, true);
+    data.setUint32(
+      i * 16 + 12,
+      (0x80000000 | ((i * 50) << 16) | ((i * 30) << 8) | (i * 10)) >>> 0,
+      true,
+    );
+  }
+  const source = stream(host, bytes);
+  ctx.vsSetShader(vertex, []);
+  ctx.psSetShader(pixel, []);
+  ctx.iaSetInputLayout(layout);
+  ctx.iaSetVertexBuffers(0, [source], [16], [0]);
+  ctx.iaSetPrimitiveTopology(4);
+  ctx.draw(3, 1);
+  const expected = Float32Array.from(
+    [1, 2, 3]
+      .flatMap((i) => [i + 1, i * 2, i * 0.25, 1])
+      .concat(
+        [1, 2, 3].flatMap((i) => [(i * 50) / 255, (i * 30) / 255, (i * 10) / 255, 128 / 255]),
+      ),
+  );
+  assert.deepEqual(new Uint32Array(uploaded.buffer), new Uint32Array(expected.buffer));
+  assert.deepEqual(calls, [[4, 0, 3]]);
+  assert.deepEqual(
+    pointers.map((p) => [p[0], p[4], p[5]]),
+    [
+      [0, 0, 0],
+      [1, 0, 48],
+    ],
+  );
+  for (const [format, values] of [
+    [57, new Uint16Array([99, 1, 2, 3, 0xffff, 2, 3, 4])],
+    [42, new Uint32Array([99, 1, 2, 3, 0xffffffff, 2, 3, 4])],
+  ]) {
+    const indices = stream(host, new Uint8Array(values.buffer), 2);
+    ctx.iaSetIndexBuffer(indices, format, 0);
+    ctx.iaSetPrimitiveTopology(5);
+    calls.length = 0;
+    ctx.drawIndexed(7, 1, -1);
+    assert.deepEqual(calls, [
+      [5, 0, 3],
+      [5, 4, 3],
+    ]);
+    for (const [ordinal, i] of [
+      [0, 0],
+      [1, 1],
+      [2, 2],
+      [4, 1],
+      [5, 2],
+      [6, 3],
+    ]) {
+      assert.deepEqual(
+        [...uploaded.subarray(ordinal * 4, ordinal * 4 + 4)],
+        [i + 1, i * 2, i * 0.25, 1],
+      );
+      assert.deepEqual(
+        [...uploaded.subarray(28 + ordinal * 4, 32 + ordinal * 4)],
+        [(i * 50) / 255, (i * 30) / 255, (i * 10) / 255, 128 / 255].map(Math.fround),
+      );
+    }
+    ctx.iaSetPrimitiveTopology(4);
+    calls.length = 0;
+    ctx.drawIndexed(1, 4, 0);
+    assert.deepEqual(calls, [[4, 0, 1]]);
+    assert.deepEqual([...uploaded], [0, 0, 0, 1, 0, 0, 0, 0]); // An all-ones list index is an OOB vertex, not a strip cut.
+    indices.release();
+  }
+  visible = false;
+  const previous = calls.length;
+  ctx.draw(3, 0);
+  assert.equal(calls.length, previous);
+  assert.equal(acquired, released);
+  visible = true;
+  program.samples = [{resource: 0, sampler: 0, unit: 0}];
+  const beforeError = calls.length;
+  assert.throws(() => ctx.draw(3, 0), /Unexpected sampler/);
+  assert.equal(calls.length, beforeError);
+  assert.equal(acquired, released);
+  program.samples = [];
+  assert.throws(
+    () => ctx.draw(0xffffffff, 0),
+    (error) => error.hr === (0x8007000e | 0),
+  );
+  ctx.iaSetIndexBuffer(null, 0, 0);
+  ctx.drawIndexed(0, 0, 0);
+  assert.throws(() => ctx.drawIndexed(1, 0, 0), /Unbound/);
+  assert.equal(written, 5);
+  assert.equal(acquired, released);
+  source.release();
+  layout.release();
+  vertex.release();
+  pixel.release();
+  ctx.release();
+  host.device.release();
+  assert.equal(host.lifetime.closed, true);
+  assert.equal(deleted, 2);
+  ctx.disposeGpu();
+  assert.equal(deleted, 2);
 });

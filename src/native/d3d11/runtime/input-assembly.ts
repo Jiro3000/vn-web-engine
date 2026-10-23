@@ -78,13 +78,18 @@ export class D3d11VertexReader {
     this.floatsPerVertex = registers.length * 4;
   }
 
-  /** Draw/DrawIndexed use instance0. Each supported input register receives one full float4. */
-  read(vertex: number, output: Float32Array, destination = 0): void {
+  /** Instance0 input registers receive float4 values at a caller-selected float stride. */
+  read(vertex: number, output: Float32Array, destination = 0, registerStride = 4): void {
+    const span =
+      this.floatsPerVertex === 0 ? 0 : (this.floatsPerVertex / 4 - 1) * registerStride + 4;
     if (
       !uint(vertex) ||
       !Number.isSafeInteger(destination) ||
       destination < 0 ||
-      destination > output.length - this.floatsPerVertex
+      !Number.isSafeInteger(registerStride) ||
+      registerStride < 4 ||
+      !Number.isSafeInteger(span) ||
+      destination > output.length - span
     )
       throw new RangeError('Invalid D3D11 vertex read');
     for (const e of this.elements) {
@@ -94,7 +99,14 @@ export class D3d11VertexReader {
         e.instance ? 0 : vertex,
         e.relative,
       );
-      fetchDxgiVertexElement(e.format, e.data, address, e.offset, output, destination + e.target);
+      fetchDxgiVertexElement(
+        e.format,
+        e.data,
+        address,
+        e.offset,
+        output,
+        destination + (e.target / 4) * registerStride,
+      );
     }
   }
 }

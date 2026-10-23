@@ -275,6 +275,30 @@ State semantics follow [native rasterizer state](https://learn.microsoft.com/en-
 [depth clamping](https://registry.khronos.org/webgl/extensions/EXT_depth_clamp/)
 and [indexed draw-buffer state](https://registry.khronos.org/webgl/extensions/OES_draw_buffers_indexed/).
 
+## Draw assembly
+
+`webgl2/context.ts` completes the immediate-context interface with Draw/DrawIndexed.
+It combines the owned bindings and transfers with native vertex/index readers,
+shader programs, pinned resource views, samplers and output state. Resource/target
+preparation precedes reapplying raster state, vertex arrays, programs and constants.
+View leases are released after draws, skipped output and errors.
+
+The current input conversion stages float4 register planes using the verified CPU
+readers. Planes support16attributes without exceeding WebGL's255-byte interleaved
+stride limit. Staging is reusable and bounded to64MiB, with a corresponding streaming
+GPU vertex buffer. Device teardown frees both the vertex array and buffer. Instance
+streams use instance0 for these non-instanced draws.
+
+Points, line lists/strips and triangle lists/strips are supported. Indexed strips
+consume cut words before adding signed BaseVertexLocation, reset strip parity after
+each cut and preserve unsigned address wrapping/OOB defaults. All-ones list indices
+are ordinary vertex indices. Zero counts emit no work. Adjacency/patch topologies
+and shader stages outside the declared VS/PS subset fail explicitly.
+
+Complete draw execution still requires GPU integration verification and device/UI
+registration. CPU coordination tests and planar-byte oracles do not supply that GPU
+evidence, and no final performance claim is made for CPU-expanded input staging.
+
 `tools/probe-d3d11-textures.mjs` checks generated texture bytes and numeric readback,
 including every format/mip, independent ranges, cache pressure, pinned bindings,
 unbound resources, clears, native CPU shadows, partial updates, dynamic discard,
