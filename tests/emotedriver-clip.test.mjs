@@ -1151,3 +1151,45 @@ test('nested child interfaces retain native flags, reverse loop endpoints and ev
     assert.notEqual(scalar ? child.layerEvents : child.events, queue);
   }
 });
+
+test('scalar clip factories create independent clips with shared native file resources and exact motion ownership', async () => {
+  const {emoteScalarClipFactory} = await import('../dist/native/emotedriver/runtime/clip.js');
+  for (const wasm of [false, true]) {
+    const firstMotion = motion([layer('image', [frame(0, 2, {src: 'tex', icon: 'i'})])]);
+    const lastMotion = motion([layer('image', [frame(0, 2, {src: 'tex', icon: 'i'})])]);
+    const first = model({object: {main: firstMotion}}),
+      last = model({object: {main: lastMotion}});
+    first.sources.get('tex').icons.get('i').width = 99;
+    first.sources.get('tex').icons.get('i').resolution = 1;
+    last.sources.get('tex').icons.get('i').resolution = 1;
+    const files = [first, last],
+      kernel = createEmoteMeshKernel({driverSha256: EMOTEDRIVER_X64_SHA256, wasm});
+    const create = emoteScalarClipFactory(files, {kernel});
+    files.pop(); // The native player snapshots its file-pointer array.
+    const a = create(lastMotion),
+      b = create(firstMotion),
+      c = create(lastMotion);
+    assert.ok(a instanceof EmoteMotionClip);
+    assert.notEqual(a, c);
+    assert.equal(a.resource, b.resource);
+    assert.equal(a.resource, c.resource);
+    assert.equal(a.resource.kernel, kernel);
+    assert.deepEqual(a.resource.files, [first, last]);
+    assert.equal(a.file, last);
+    assert.equal(b.file, first);
+    assert.equal(a.motion, lastMotion);
+    assert.equal(b.motion, firstMotion);
+    assert.notEqual(a.root.id, c.root.id);
+    a.rootVisible = b.rootVisible = true;
+    a.progress(0);
+    b.progress(0);
+    assert.equal(a.drawList[0].file, last);
+    assert.equal(a.drawList[0].width, 10);
+    assert.equal(b.drawList[0].file, first);
+    assert.equal(b.drawList[0].width, 99);
+    a.rootX = 42;
+    assert.equal(c.rootX, 0);
+    assert.throws(() => create(motion([])), /outside the player file group/);
+  }
+  assert.throws(() => emoteScalarClipFactory([]), /requires a motion file/);
+});

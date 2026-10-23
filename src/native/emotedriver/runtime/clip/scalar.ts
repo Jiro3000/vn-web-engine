@@ -34,6 +34,7 @@ import type {
   EmoteScalarDrawItem,
   EmoteX64MeshKernel,
   EmoteClipDriver,
+  EmoteClipFactory,
   EmoteX64ClipPlayerAccess,
   EmoteClipListener,
   EmoteRootTransform,
@@ -781,3 +782,36 @@ export class EmoteMotionClip
 
 /** Degrees per radian as the clip computes it. */
 export const EMOTE_RAD_TO_DEG = RAD_TO_DEG;
+
+/** Options of the private x64 clip factory used by the native player core. */
+export interface EmoteScalarClipFactoryOptions {
+  readonly kernel?: EmoteX64MeshKernel;
+}
+
+/**
+ * Bind a player's immutable motion-file group without a concrete player/renderer.
+ * Every call creates a fresh scalar clip; clips share the group's resource and
+ * mesh kernel. The requested motion retains its own file as the first lookup
+ * owner, including when another file defines the same object/motion or icon.
+ */
+export function emoteScalarClipFactory(
+  files: readonly EmoteModel[],
+  options: EmoteScalarClipFactoryOptions = {},
+): EmoteClipFactory {
+  if (files.length === 0) throw new RangeError('E-mote player requires a motion file');
+  const group = [...files],
+    resource = new EmoteResource(group, options.kernel),
+    motions = new WeakMap<object, {file: EmoteModel; object: string; label: string}>();
+  for (const file of group)
+    for (const [object, value] of file.objects)
+      for (const [label, motion] of value.motions) motions.set(motion, {file, object, label});
+  return (motion) => {
+    const selected = motions.get(motion);
+    if (!selected) throw new TypeError('E-mote motion is outside the player file group');
+    const clip = new EmoteMotionClip(resource);
+    clip.file = selected.file;
+    clip.selectObject(selected.object);
+    clip.setMotion(selected.label);
+    return clip;
+  };
+}

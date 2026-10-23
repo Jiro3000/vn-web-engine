@@ -554,3 +554,10 @@ projection uses that same register layout. The generated probe transposes WebGL
 matrix storage as raw DWORDs and checks translation, rotation, reflection and
 shear. Separate copy tests compare destination-reading addition with fixed-function
 additive blending over color bands and verify literal enclosing copy rectangles.
+
+`emoteScalarClipFactory` in `runtime/clip/scalar.ts` binds a motion-file group to
+the existing `EmoteClipFactory` interface. Each call creates a fresh scalar clip;
+clips share the group's immutable models, resource resolver and selected mesh
+kernel. The requested motion retains its owning file as the first source lookup,
+so duplicate motion or icon names in other files cannot change that selection.
+The factory snapshots the file list and imports no concrete player or renderer.
