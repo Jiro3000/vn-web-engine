@@ -72,12 +72,14 @@ export class D3d11GpuTextures {
   private aliasBytes = 0;
   private disposed = false;
   private readonly maxSize: number;
+  private readonly polygon;
 
   constructor(
     private readonly owner: D3d11DeviceOwner,
     private readonly gl: WebGL2RenderingContext,
   ) {
     this.maxSize = gl.getParameter(gl.MAX_TEXTURE_SIZE);
+    this.polygon = gl.getExtension('WEBGL_polygon_mode');
   }
 
   /** Allocate or refresh the canonical complete mip chain. No native reference is acquired. */
@@ -731,6 +733,7 @@ export class D3d11GpuTextures {
     ])
       gl.disable(flag);
     gl.colorMask(true, true, true, true);
+    this.polygon?.polygonModeWEBGL(gl.FRONT_AND_BACK, this.polygon.FILL_WEBGL);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
 

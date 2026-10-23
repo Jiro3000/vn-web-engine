@@ -1,0 +1,474 @@
+import type {
+  D3d11BlendDesc,
+  D3d11DepthStencilDesc,
+  D3d11DepthStencilOpDesc,
+  D3d11DepthStencilViewDesc,
+  D3d11RasterizerDesc,
+  D3d11Rect,
+  D3d11RenderTargetBlendDesc,
+  D3d11RenderTargetViewDesc,
+  D3d11Viewport,
+} from '../contract.js';
+import type {D3d11DeviceOwner} from '../runtime/com.js';
+import type {D3d11ResourceStorage, D3d11Texture2D} from '../runtime/resources.js';
+import type {D3d11TextureView} from '../runtime/views.js';
+import {D3d11GpuTextures, D3d11TextureError} from './textures.js';
+
+type Rtv = D3d11TextureView<D3d11RenderTargetViewDesc>;
+type Dsv = D3d11TextureView<D3d11DepthStencilViewDesc>;
+export interface D3d11DrawOutputState {
+  readonly targets: readonly (Rtv | null)[];
+  readonly depthTarget: Dsv | null;
+  readonly blend: D3d11BlendDesc | null;
+  readonly blendFactor: readonly [number, number, number, number];
+  readonly sampleMask: number;
+  readonly depth: D3d11DepthStencilDesc | null;
+  readonly stencilRef: number;
+  readonly raster: D3d11RasterizerDesc | null;
+  readonly viewports: readonly D3d11Viewport[];
+  readonly scissors: readonly D3d11Rect[];
+}
+interface Attachment {
+  readonly resource: D3d11Texture2D;
+  readonly texture: WebGLTexture;
+  readonly mip: number;
+}
+const DEFAULT_BLEND: D3d11RenderTargetBlendDesc = {
+  blendEnable: false,
+  srcBlend: 2,
+  destBlend: 1,
+  blendOp: 1,
+  srcBlendAlpha: 2,
+  destBlendAlpha: 1,
+  blendOpAlpha: 1,
+  renderTargetWriteMask: 15,
+};
+const DEFAULT_FACE: D3d11DepthStencilOpDesc = {
+  stencilFailOp: 1,
+  stencilDepthFailOp: 1,
+  stencilPassOp: 1,
+  stencilFunc: 8,
+};
+const DEFAULT_DEPTH: D3d11DepthStencilDesc = {
+  depthEnable: true,
+  depthWriteMask: 1,
+  depthFunc: 2,
+  stencilEnable: false,
+  stencilReadMask: 255,
+  stencilWriteMask: 255,
+  frontFace: DEFAULT_FACE,
+  backFace: DEFAULT_FACE,
+};
+const DEFAULT_RASTER: D3d11RasterizerDesc = {
+  fillMode: 3,
+  cullMode: 3,
+  frontCounterClockwise: false,
+  depthBias: 0,
+  depthBiasClamp: 0,
+  slopeScaledDepthBias: 0,
+  depthClipEnable: true,
+  scissorEnable: false,
+  multisampleEnable: false,
+  antialiasedLineEnable: false,
+};
+
+/** Context-owned framebuffer and native raster/output state. Context bindings retain the views. */
+export class D3d11GpuOutput {
+  private framebuffer: WebGLFramebuffer | null = null;
+  private readonly colors: (Attachment | null)[];
+  private depth: Attachment | null = null;
+  private width = 0;
+  private height = 0;
+  private disposed = false;
+  private readonly indexed;
+  private readonly clamp;
+  private readonly polygon;
+  private readonly maxViewport: Int32Array;
+  private readonly colorFactors: readonly (number | undefined)[];
+  private readonly alphaFactors: readonly (number | undefined)[];
+  private readonly equations: readonly number[];
+  private readonly comparisons: readonly number[];
+  private readonly stencilOps: readonly number[];
+
+  constructor(
+    private readonly owner: D3d11DeviceOwner,
+    private readonly gl: WebGL2RenderingContext,
+    private readonly textures: D3d11GpuTextures,
+  ) {
+    this.colors = Array(
+      Math.min(8, gl.getParameter(gl.MAX_DRAW_BUFFERS), gl.getParameter(gl.MAX_COLOR_ATTACHMENTS)),
+    ).fill(null);
+    this.indexed = gl.getExtension('OES_draw_buffers_indexed');
+    this.clamp = gl.getExtension('EXT_depth_clamp');
+    this.polygon = gl.getExtension('WEBGL_polygon_mode');
+    this.maxViewport = gl.getParameter(gl.MAX_VIEWPORT_DIMS);
+    this.colorFactors = [
+      undefined,
+      gl.ZERO,
+      gl.ONE,
+      gl.SRC_COLOR,
+      gl.ONE_MINUS_SRC_COLOR,
+      gl.SRC_ALPHA,
+      gl.ONE_MINUS_SRC_ALPHA,
+      gl.DST_ALPHA,
+      gl.ONE_MINUS_DST_ALPHA,
+      gl.DST_COLOR,
+      gl.ONE_MINUS_DST_COLOR,
+      gl.SRC_ALPHA_SATURATE,
+      undefined,
+      undefined,
+      gl.CONSTANT_COLOR,
+      gl.ONE_MINUS_CONSTANT_COLOR,
+    ];
+    const alpha = this.colorFactors.slice();
+    alpha[11] = gl.ONE;
+    alpha[14] = gl.CONSTANT_ALPHA;
+    alpha[15] = gl.ONE_MINUS_CONSTANT_ALPHA;
+    this.alphaFactors = alpha;
+    this.equations = [gl.FUNC_ADD, gl.FUNC_SUBTRACT, gl.FUNC_REVERSE_SUBTRACT, gl.MIN, gl.MAX];
+    this.comparisons = [
+      gl.NEVER,
+      gl.LESS,
+      gl.EQUAL,
+      gl.LEQUAL,
+      gl.GREATER,
+      gl.NOTEQUAL,
+      gl.GEQUAL,
+      gl.ALWAYS,
+    ];
+    this.stencilOps = [
+      gl.KEEP,
+      gl.ZERO,
+      gl.REPLACE,
+      gl.INCR,
+      gl.DECR,
+      gl.INVERT,
+      gl.INCR_WRAP,
+      gl.DECR_WRAP,
+    ];
+  }
+
+  /** Reapply after resource preparation, which may have changed private GL state. */
+  use(state: D3d11DrawOutputState): boolean {
+    this.checkLive();
+    const raster = state.raster ?? DEFAULT_RASTER,
+      viewport = state.viewports[0];
+    if (raster.depthBias || raster.depthBiasClamp || raster.slopeScaledDepthBias)
+      this.unsupported('depth bias');
+    if (!raster.depthClipEnable && !this.clamp) this.unsupported('depth clipping disabled');
+    if (raster.fillMode === 2 && !this.polygon) this.unsupported('wireframe fill');
+    if (state.blend?.alphaToCoverageEnable) this.unsupported('alpha to coverage');
+    if (state.targets.some((v, i) => v !== null && i >= this.colors.length))
+      this.unsupported('render target count');
+    for (let i = 0; i < state.targets.length; i++) {
+      if (!state.targets[i]) continue;
+      const blend = this.blend(state, i);
+      if (
+        blend.blendEnable &&
+        ([blend.srcBlend, blend.destBlend, blend.srcBlendAlpha, blend.destBlendAlpha].some(
+          (v) => v >= 16,
+        ) ||
+          blend.destBlend === 11)
+      )
+        this.unsupported('dual source or destination alpha-saturate blending');
+    }
+    if (!this.indexed && state.targets.filter((v) => v !== null).length > 1)
+      this.unsupported('independent render target state');
+    if (
+      viewport &&
+      (![viewport.topLeftX, viewport.topLeftY, viewport.width, viewport.height].every(
+        Number.isInteger,
+      ) ||
+        viewport.width > this.maxViewport[0]! ||
+        viewport.height > this.maxViewport[1]!)
+    )
+      this.unsupported('fractional or oversized viewport');
+    // No geometry shader or SV_ViewportArrayIndex exists in the declared shader subset.
+    if (!viewport || viewport.width === 0 || viewport.height === 0 || !(state.sampleMask & 1))
+      return false;
+    if (!this.attach(state)) return false;
+    const gl = this.gl;
+    gl.disable(gl.RASTERIZER_DISCARD);
+    gl.disable(gl.DITHER);
+    gl.disable(gl.POLYGON_OFFSET_FILL);
+    gl.disable(gl.SAMPLE_ALPHA_TO_COVERAGE);
+    gl.disable(gl.SAMPLE_COVERAGE);
+    if (this.polygon)
+      this.polygon.polygonModeWEBGL(
+        gl.FRONT_AND_BACK,
+        raster.fillMode === 2 ? this.polygon.LINE_WEBGL : this.polygon.FILL_WEBGL,
+      );
+    if (this.clamp) {
+      if (raster.depthClipEnable) gl.disable(this.clamp.DEPTH_CLAMP_EXT);
+      else gl.enable(this.clamp.DEPTH_CLAMP_EXT);
+    }
+    // The shader maps native Y to -Y; front-face orientation must change with it.
+    gl.frontFace(raster.frontCounterClockwise ? gl.CW : gl.CCW);
+    if (raster.cullMode === 1) gl.disable(gl.CULL_FACE);
+    else {
+      gl.enable(gl.CULL_FACE);
+      gl.cullFace(raster.cullMode === 2 ? gl.FRONT : gl.BACK);
+    }
+    gl.viewport(viewport.topLeftX, viewport.topLeftY, viewport.width, viewport.height);
+    gl.depthRange(viewport.minDepth, viewport.maxDepth);
+    if (raster.scissorEnable) {
+      const rect = state.scissors[0];
+      gl.enable(gl.SCISSOR_TEST);
+      if (rect) {
+        const left = Math.max(0, Math.min(this.width, rect.left)),
+          top = Math.max(0, Math.min(this.height, rect.top)),
+          right = Math.max(left, Math.min(this.width, rect.right)),
+          bottom = Math.max(top, Math.min(this.height, rect.bottom));
+        gl.scissor(left, top, right - left, bottom - top);
+      } else gl.scissor(0, 0, 0, 0);
+    } else gl.disable(gl.SCISSOR_TEST);
+    this.depthStencil(state);
+    gl.blendColor(...state.blendFactor);
+    gl.disable(gl.BLEND);
+    for (let i = 0; i < this.colors.length; i++) {
+      const target = state.targets[i],
+        blend = this.blend(state, i),
+        mask = blend.renderTargetWriteMask;
+      const alphaOnly = target?.resource.getDesc().format === 65;
+      const write: [boolean, boolean, boolean, boolean] = [
+        !alphaOnly && !!(mask & 1),
+        !alphaOnly && !!(mask & 2),
+        !alphaOnly && !!(mask & 4),
+        !!(mask & 8),
+      ];
+      if (this.indexed) {
+        this.indexed.colorMaskiOES(i, ...write);
+        if (!target || !blend.blendEnable) this.indexed.disableiOES(gl.BLEND, i);
+        else {
+          this.indexed.enableiOES(gl.BLEND, i);
+          this.indexed.blendEquationSeparateiOES(
+            i,
+            this.equation(blend.blendOp),
+            this.equation(blend.blendOpAlpha),
+          );
+          this.indexed.blendFuncSeparateiOES(
+            i,
+            this.factor(blend.srcBlend, false),
+            this.factor(blend.destBlend, false),
+            this.factor(blend.srcBlendAlpha, true),
+            this.factor(blend.destBlendAlpha, true),
+          );
+        }
+      } else if (target) {
+        gl.colorMask(...write);
+        if (blend.blendEnable) {
+          gl.enable(gl.BLEND);
+          gl.blendEquationSeparate(this.equation(blend.blendOp), this.equation(blend.blendOpAlpha));
+          gl.blendFuncSeparate(
+            this.factor(blend.srcBlend, false),
+            this.factor(blend.destBlend, false),
+            this.factor(blend.srcBlendAlpha, true),
+            this.factor(blend.destBlendAlpha, true),
+          );
+        }
+      }
+    }
+    const error = gl.getError();
+    if (error !== gl.NO_ERROR)
+      throw new D3d11TextureError('D3D11 draw output state failed: ' + error);
+    return true;
+  }
+
+  /** Called only after an actual draw, while the same native bindings are still retained. */
+  written(state: D3d11DrawOutputState): void {
+    this.checkLive();
+    for (let i = 0; i < state.targets.length; i++) {
+      const target = state.targets[i],
+        mask = this.blend(state, i).renderTargetWriteMask;
+      if (target && (target.resource.getDesc().format === 65 ? mask & 8 : mask))
+        this.textures.markWritten(target.resource, target.firstMip);
+    }
+    const depth = state.depth ?? DEFAULT_DEPTH,
+      view = state.depthTarget;
+    if (
+      view &&
+      ((depth.depthEnable && depth.depthWriteMask && !(view.getDesc().flags & 1)) ||
+        (depth.stencilEnable &&
+          depth.stencilWriteMask &&
+          view.resource.getDesc().format === 45 &&
+          !(view.getDesc().flags & 2)))
+    )
+      this.textures.markWritten(view.resource, view.firstMip);
+  }
+
+  /** Owner callback: delete attachments at native resource retirement, even between draws. */
+  destroy(resource: D3d11ResourceStorage): void {
+    if (!this.framebuffer) return;
+    const gl = this.gl;
+    for (let i = 0; i < this.colors.length; i++)
+      if (this.colors[i]?.resource === resource) {
+        gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, this.framebuffer);
+        gl.framebufferTexture2D(
+          gl.DRAW_FRAMEBUFFER,
+          gl.COLOR_ATTACHMENT0 + i,
+          gl.TEXTURE_2D,
+          null,
+          0,
+        );
+        this.colors[i] = null;
+      }
+    if (this.depth?.resource === resource) {
+      gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, this.framebuffer);
+      gl.framebufferTexture2D(
+        gl.DRAW_FRAMEBUFFER,
+        gl.DEPTH_STENCIL_ATTACHMENT,
+        gl.TEXTURE_2D,
+        null,
+        0,
+      );
+      this.depth = null;
+    }
+  }
+
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.gl.deleteFramebuffer(this.framebuffer);
+    this.framebuffer = null;
+    this.colors.fill(null);
+    this.depth = null;
+  }
+
+  private attach(state: D3d11DrawOutputState): boolean {
+    const active = [...state.targets, state.depthTarget].filter((v): v is Rtv | Dsv => !!v);
+    if (!active.length) return false;
+    const first = active[0]!,
+      size = first.resource.levels[first.firstMip]!;
+    for (const v of active) {
+      const level = v.resource.levels[v.firstMip];
+      if (
+        !v.live ||
+        v.lifetime !== this.owner.lifetime ||
+        !level ||
+        level.width !== size.width ||
+        level.height !== size.height
+      )
+        throw new D3d11TextureError('Invalid D3D11 draw output views');
+    }
+    // Image preparation can bind its own framebuffers. Finish it before binding ours.
+    const colors = Array.from({length: this.colors.length}, (_, i): Attachment | null => {
+      const v = state.targets[i];
+      return v
+        ? {resource: v.resource, texture: this.textures.image(v.resource), mip: v.firstMip}
+        : null;
+    });
+    const d = state.depthTarget,
+      depth = d
+        ? {resource: d.resource, texture: this.textures.image(d.resource), mip: d.firstMip}
+        : null;
+    const gl = this.gl;
+    if (!this.framebuffer) this.framebuffer = gl.createFramebuffer();
+    if (!this.framebuffer)
+      throw new D3d11TextureError('D3D11 output framebuffer allocation failed', 0x8007000e | 0);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.framebuffer);
+    gl.readBuffer(gl.NONE);
+    const same = (a: Attachment | null, b: Attachment | null) =>
+      a?.texture === b?.texture && a?.mip === b?.mip;
+    for (let i = 0; i < colors.length; i++) {
+      const next = colors[i]!;
+      if (!same(next, this.colors[i]!)) {
+        gl.framebufferTexture2D(
+          gl.DRAW_FRAMEBUFFER,
+          gl.COLOR_ATTACHMENT0 + i,
+          gl.TEXTURE_2D,
+          next?.texture ?? null,
+          next?.mip ?? 0,
+        );
+        this.colors[i] = next;
+      }
+    }
+    if (!same(depth, this.depth)) {
+      gl.framebufferTexture2D(
+        gl.DRAW_FRAMEBUFFER,
+        gl.DEPTH_STENCIL_ATTACHMENT,
+        gl.TEXTURE_2D,
+        null,
+        0,
+      );
+      if (depth)
+        gl.framebufferTexture2D(
+          gl.DRAW_FRAMEBUFFER,
+          depth.resource.getDesc().format === 45
+            ? gl.DEPTH_STENCIL_ATTACHMENT
+            : gl.DEPTH_ATTACHMENT,
+          gl.TEXTURE_2D,
+          depth.texture,
+          depth.mip,
+        );
+      this.depth = depth;
+    }
+    gl.drawBuffers(colors.map((v, i) => (v ? gl.COLOR_ATTACHMENT0 + i : gl.NONE)));
+    if (gl.checkFramebufferStatus(gl.DRAW_FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE)
+      throw new D3d11TextureError('Incomplete D3D11 draw output framebuffer');
+    this.width = size.width;
+    this.height = size.height;
+    return true;
+  }
+
+  private depthStencil(state: D3d11DrawOutputState): void {
+    const gl = this.gl,
+      depth = state.depth ?? DEFAULT_DEPTH,
+      view = state.depthTarget,
+      flags = view?.getDesc().flags ?? 0;
+    if (view && depth.depthEnable) {
+      gl.enable(gl.DEPTH_TEST);
+      gl.depthFunc(this.compare(depth.depthFunc));
+    } else gl.disable(gl.DEPTH_TEST);
+    gl.depthMask(!!view && depth.depthEnable && !!depth.depthWriteMask && !(flags & 1));
+    if (view?.resource.getDesc().format === 45 && depth.stencilEnable) {
+      gl.enable(gl.STENCIL_TEST);
+      gl.stencilMask(flags & 2 ? 0 : depth.stencilWriteMask);
+      for (const [side, face] of [
+        [gl.FRONT, depth.frontFace],
+        [gl.BACK, depth.backFace],
+      ] as const) {
+        gl.stencilFuncSeparate(
+          side,
+          this.compare(face.stencilFunc),
+          state.stencilRef & 255,
+          depth.stencilReadMask,
+        );
+        gl.stencilOpSeparate(
+          side,
+          this.stencil(face.stencilFailOp),
+          this.stencil(face.stencilDepthFailOp),
+          this.stencil(face.stencilPassOp),
+        );
+      }
+    } else {
+      gl.disable(gl.STENCIL_TEST);
+      gl.stencilMask(0);
+    }
+  }
+  private blend(state: D3d11DrawOutputState, i: number): D3d11RenderTargetBlendDesc {
+    return state.blend?.renderTarget[state.blend.independentBlendEnable ? i : 0] ?? DEFAULT_BLEND;
+  }
+  private factor(value: number, alpha: boolean): number {
+    const factor = (alpha ? this.alphaFactors : this.colorFactors)[value];
+    if (factor === undefined) this.unsupported('blend factor');
+    return factor;
+  }
+  private equation(value: number): number {
+    return this.equations[value - 1]!;
+  }
+  private compare(value: number): number {
+    return this.comparisons[value - 1]!;
+  }
+  private stencil(value: number): number {
+    return this.stencilOps[value - 1]!;
+  }
+  private checkLive(): void {
+    if (this.disposed || this.owner.lifetime.closed)
+      throw new D3d11TextureError('Using retired D3D11 output storage');
+    if (this.gl.isContextLost())
+      throw new D3d11TextureError('D3D11 device removed', 0x887a0005 | 0);
+  }
+  private unsupported(feature: string): never {
+    throw new D3d11TextureError('Unsupported D3D11 ' + feature, 0x80004001 | 0);
+  }
+}

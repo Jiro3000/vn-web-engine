@@ -235,6 +235,46 @@ state, simultaneous units, unsupported-mode rejection and native/GPU ownership.
 
 The null-state defaults follow [PSSetSamplers](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/nf-d3d11-id3d11devicecontext-pssetsamplers).
 
+## Raster and output execution
+
+`webgl2/output.ts` owns the immediate context's draw framebuffer. It prepares typed
+color/depth images before attaching them, tracks mip attachments, and detaches retired
+resources through the resource owner's `destroy` callback. Context bindings retain
+the native views; cached framebuffer attachments acquire no native references.
+Device disposal deletes the framebuffer.
+
+Draw state reapplies viewport/scissor, front-face/cull, fill, clipping, depth/stencil,
+blend equations/factors and component masks after private texture preparation. Native
+row0 is GL row0, so scissor coordinates retain native ordering. The vertex shader's Y
+flip also flips front-face orientation. Missing viewports, zero-sized viewports,
+empty output sets and a zero single-sample mask emit no geometry. Scissors intersect
+the target extent before their dimensions are passed to GL.
+
+Depth clipping disabled uses `EXT_depth_clamp`; it preserves clipping of X/Y and W
+without changing vertex depths. Optional wireframe fill uses `WEBGL_polygon_mode`.
+Indexed blend/mask state uses `OES_draw_buffers_indexed` for multiple outputs. A8
+attachments force RGB write masks off while retaining their native alpha mask.
+Ordinary blend factors, separate color/alpha equations, all depth comparisons and
+stencil operations map to GL state. Read-only DSV flags disable the corresponding
+write mask while preserving tests. Actual draws notify texture storage of writes.
+
+The current output execution subset rejects nonzero depth bias, fractional/oversized
+viewports, alpha-to-coverage, dual-source blend factors and destination alpha-saturate
+blending. Missing required optional extensions also fail explicitly. These components
+still need the concrete draw/device wiring; no rendering device is registered here.
+Decoded texture uploads restore solid fill before running their private decoder draw,
+and the next native draw reapplies its own raster state.
+
+`tools/probe-d3d11-output.mjs` checks numeric synthetic output: viewport/scissor,
+native winding/culling, actual near/far depth clamping, blending and write masks,
+A8 and independent targets, depth writes, read-only depth/stencil, stencil replace/
+compare, decoding after wireframe and resource/framebuffer retirement. It captures
+no screenshots or game data.
+
+State semantics follow [native rasterizer state](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/ns-d3d11-d3d11_rasterizer_desc),
+[depth clamping](https://registry.khronos.org/webgl/extensions/EXT_depth_clamp/)
+and [indexed draw-buffer state](https://registry.khronos.org/webgl/extensions/OES_draw_buffers_indexed/).
+
 `tools/probe-d3d11-textures.mjs` checks generated texture bytes and numeric readback,
 including every format/mip, independent ranges, cache pressure, pinned bindings,
 unbound resources, clears, native CPU shadows, partial updates, dynamic discard,
