@@ -519,3 +519,19 @@ verifies the whole DLL identity before returning borrowed byte views for 12
 vertex shaders, 2,077 pixel shaders and their 12 input layouts. The owner keeps
 the DLL bytes unchanged. The shared DXBC envelope reader validates part ranges
 and preserves native table order; it does not interpret shader instructions.
+
+The private scalar D3D11 draw pass is `runtime/render/renderer-d3d11.ts`. Its caller
+supplies a native target and column-major matrix words; the compositor owns clearing.
+The pass owns fixed blend/depth/raster/sampler states, retained atlas references,
+viewport-sized A8 intersection/subtraction masks and a bounded destination-copy
+surface. It submits packed native meshes with the original DXBC bank through the
+D3D11 contract. Shader, atlas-cache and output-target owners remain borrowed.
+
+`tools/probe-emote-d3d11-renderer.mjs --driver <exact DLL>` compares generated draws
+against the original command renderer using numeric RGBA8 readbacks. It records
+raw native calls, resource descriptors, DXBC identities, packed buffers and mapped
+float32 vertex hashes. Any framebuffer or vertex difference makes the diagnostic
+fail; no pixels are displayed. Native blend rows8/12 and conditional shader
+arithmetic can differ from the original GLSL renderer, and mirrored rasterization
+can select different nearest texels at interpolation boundaries. This tool preserves
+those differences; it does not establish full model or public-interface acceptance.

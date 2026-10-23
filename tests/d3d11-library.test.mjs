@@ -786,3 +786,109 @@ test('E-mote atlas creation is atomic when its native view factory fails and ref
   device.release();
   loaded.loader.dispose();
 });
+
+test('E-mote native draw states use complete native descriptors and retire partial construction', async () => {
+  const {EmoteD3d11Renderer} =
+    await import('../dist/native/emotedriver/runtime/render/renderer-d3d11.js');
+  const loaded = exportsFor(() => capabilityContext().gl);
+  const created = loaded.exports.d3d11CreateDevice(null, 1, 0, 0, null, 7);
+  const device = created.device,
+    ctx = created.immediateContext;
+  const resources = [],
+    descriptors = [];
+  const observe = (failSampler = 0) => {
+    let samplers = 0;
+    return new Proxy(device, {
+      get(target, key) {
+        const original = target[key];
+        if (
+          ![
+            'createBlendState',
+            'createDepthStencilState',
+            'createRasterizerState',
+            'createSamplerState',
+          ].includes(key)
+        )
+          return typeof original === 'function' ? original.bind(target) : original;
+        return (...args) => {
+          descriptors.push([key, args[0]]);
+          if (key === 'createSamplerState' && ++samplers === failSampler)
+            return {hr: INVALID, value: null};
+          const result = original.apply(target, args);
+          if (result.value) resources.push(result.value);
+          return result;
+        };
+      },
+    });
+  };
+  // No draw is issued here; shader and atlas owners are borrowed but never consulted.
+  assert.throws(() => new EmoteD3d11Renderer(observe(2), ctx, null, null), /state creation failed/);
+  assert.equal(resources.length, 16);
+  for (const resource of resources)
+    assert.equal(
+      resource.queryInterface('00000000-0000-0000-c000-000000000046').hr,
+      0x80004002 | 0,
+    );
+  resources.length = descriptors.length = 0;
+  const renderer = new EmoteD3d11Renderer(observe(), ctx, null, null);
+  const blends = descriptors
+    .filter(([name]) => name === 'createBlendState')
+    .map(([, desc]) => desc);
+  assert.equal(blends.length, 13);
+  for (const [index, desc] of blends.entries()) {
+    assert.equal(desc.renderTarget.length, 8);
+    assert.equal(desc.independentBlendEnable, false);
+    assert.equal(desc.renderTarget[0].blendEnable, index !== 8);
+    assert.equal(desc.renderTarget[0].renderTargetWriteMask, 15);
+    for (const unused of desc.renderTarget.slice(1))
+      for (const [key, value] of Object.entries(unused))
+        assert.equal(value, key === 'blendEnable' ? false : 0);
+  }
+  // Native row8 disables blending; row12 preserves destination alpha.
+  assert.equal(blends[12].renderTarget[0].srcBlendAlpha, 1);
+  assert.equal(blends[12].renderTarget[0].destBlendAlpha, 2);
+  const raster = descriptors.find(([name]) => name === 'createRasterizerState')[1];
+  assert.equal(raster.scissorEnable, true);
+  assert.equal(raster.depthClipEnable, false);
+  const samplers = descriptors
+    .filter(([name]) => name === 'createSamplerState')
+    .map(([, desc]) => desc);
+  assert.deepEqual(
+    samplers.map((desc) => desc.filter),
+    [0, 21],
+  );
+  assert.ok(
+    samplers.every((desc) => desc.addressU === 3 && desc.addressV === 3 && desc.addressW === 1),
+  );
+  const color = device.createTexture2D(textureDesc({format: 28}), null).value;
+  const view = device.createRenderTargetView(color, null).value;
+  renderer.render(
+    [],
+    {texture: color, view, depth: null, width: 4, height: 4, subresource: 0},
+    new Float32Array(16),
+    false,
+  );
+  const bound = ctx.omGetRenderTargets(1);
+  assert.equal(bound.views[0], view);
+  bound.views[0].release();
+  assert.deepEqual(ctx.rsGetScissorRects(), [{left: 0, top: 0, right: 4, bottom: 4}]);
+  assert.deepEqual(ctx.rsGetViewports(), [
+    {topLeftX: 0, topLeftY: 0, width: 4, height: 4, minDepth: 0, maxDepth: 1},
+  ]);
+  ctx.omSetRenderTargets([], null);
+  ctx.rsSetState(null);
+  ctx.omSetDepthStencilState(null, 0);
+  view.release();
+  color.release();
+  renderer.dispose();
+  renderer.dispose();
+  for (const resource of resources)
+    assert.equal(
+      resource.queryInterface('00000000-0000-0000-c000-000000000046').hr,
+      0x80004002 | 0,
+    );
+  assert.throws(() => renderer.render([], null, new Float32Array(16), false), /released/);
+  ctx.release();
+  device.release();
+  loaded.loader.dispose();
+});
