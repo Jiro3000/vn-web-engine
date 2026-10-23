@@ -45,6 +45,19 @@ interface Access {
   readonly bindFlags: number;
   readonly miscFlags: number;
 }
+interface CopyRegion {
+  readonly offset: number;
+  readonly rowBytes: number;
+  readonly rows: number;
+  readonly width: number;
+  readonly height: number;
+}
+export interface D3d11CopyPlan {
+  readonly source: Level;
+  readonly destination: Level;
+  readonly from: CopyRegion;
+  readonly to: CopyRegion;
+}
 const uint = (n: number): boolean => Number.isInteger(n) && n >= 0 && n <= 0xffffffff;
 
 /** Common usage rules for the supported ordinary buffer/Texture2D storage. */
@@ -218,9 +231,35 @@ export abstract class D3d11ResourceStorage extends D3d11Object implements ID3D11
     sourceSubresource: number,
     box: D3d11Box | null,
   ): void {
+    const plan = this.copyPlan(subresource, x, y, z, source, sourceSubresource, box);
+    if (!plan) return;
+    const {destination, source: input, from, to} = plan;
+    source.owner.synchronizeResource?.(source);
+    this.owner.synchronizeResource?.(this);
+    for (let row = 0; row < from.rows; row++)
+      destination.bytes.set(
+        input.bytes.subarray(
+          from.offset + row * input.rowPitch,
+          from.offset + row * input.rowPitch + from.rowBytes,
+        ),
+        to.offset + row * destination.rowPitch,
+      );
+    this.revision++;
+  }
+
+  /** Validate a CPU/GPU copy without synchronizing or changing any bytes. */
+  copyPlan(
+    subresource: number,
+    x: number,
+    y: number,
+    z: number,
+    source: D3d11ResourceStorage,
+    sourceSubresource: number,
+    box: D3d11Box | null,
+  ): D3d11CopyPlan | null {
     const destination = this.level(subresource),
       input = source.level(sourceSubresource);
-    if (empty(box)) return;
+    if (empty(box)) return null;
     if (this === source && subresource === sourceSubresource)
       throw new Error('Copying a D3D11 subresource onto itself');
     if (
@@ -251,20 +290,18 @@ export abstract class D3d11ResourceStorage extends D3d11Object implements ID3D11
         destination.height !== input.height)
     )
       throw new Error('D3D11 depth copies require a complete subresource');
-    source.owner.synchronizeResource?.(source);
-    this.owner.synchronizeResource?.(this);
-    for (let row = 0; row < from.rows; row++)
-      destination.bytes.set(
-        input.bytes.subarray(
-          from.offset + row * input.rowPitch,
-          from.offset + row * input.rowPitch + from.rowBytes,
-        ),
-        to.offset + row * destination.rowPitch,
-      );
-    this.revision++;
+    return {source: input, destination, from, to};
   }
 
   copyAllFrom(source: D3d11ResourceStorage): void {
+    this.validateWholeCopy(source);
+    source.owner.synchronizeResource?.(source);
+    for (let i = 0; i < this.levels.length; i++) this.levels[i]!.bytes.set(source.levels[i]!.bytes);
+    this.revision++;
+  }
+
+  /** Validate a whole CPU/GPU resource copy before any destination is modified. */
+  validateWholeCopy(source: D3d11ResourceStorage): void {
     this.ensureAlive();
     source.ensureAlive();
     if (
@@ -283,9 +320,6 @@ export abstract class D3d11ResourceStorage extends D3d11Object implements ID3D11
       )
     )
       throw new Error('Incompatible D3D11 whole-resource copy');
-    source.owner.synchronizeResource?.(source);
-    for (let i = 0; i < this.levels.length; i++) this.levels[i]!.bytes.set(source.levels[i]!.bytes);
-    this.revision++;
   }
 
   protected abstract sameFormat(other: D3d11ResourceStorage): boolean;
@@ -294,10 +328,7 @@ export abstract class D3d11ResourceStorage extends D3d11Object implements ID3D11
     if (this.disposed || this.lifetime.closed) throw new Error('Using a released D3D11 resource');
   }
 
-  private region(
-    level: Level,
-    box: D3d11Box | null,
-  ): {offset: number; rowBytes: number; rows: number; width: number; height: number} {
+  private region(level: Level, box: D3d11Box | null): CopyRegion {
     const b = box ?? {left: 0, top: 0, front: 0, right: level.width, bottom: level.height, back: 1};
     const {blockWidth: bw, blockHeight: bh, blockBytes: bytes} = this.layout;
     if (
