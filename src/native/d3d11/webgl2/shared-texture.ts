@@ -6,8 +6,8 @@ export interface D3d11WebGl2TextureLease {
   readonly texture: WebGLTexture;
   readonly width: number;
   readonly height: number;
-  /** Native row0 is texture row0. No framebuffer readback or vertical copy is involved. */
-  readonly rowOrigin: 'top';
+  /** The compositor applies this explicit physical texture origin to native rows. */
+  readonly rowOrigin: 'top' | 'bottom';
   /** Publish pending CPU transfers without a framebuffer readback. */
   prepare(): void;
   dispose(): void;

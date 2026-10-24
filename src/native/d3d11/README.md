@@ -152,16 +152,22 @@ textures, input assembly, targets and raster/output state through this implement
 ## GPU texture storage
 
 `webgl2/textures.ts` owns single-sample Texture2D images, mip attachments and independent
-shader-view mip ranges. Full-range views share the canonical image; other ranges use
-copied GPU images so simultaneous views have independent base levels. A draw acquires
-its context-owned views together, pinning their images until release. Unbound resources
+shader-view mip ranges. Ordinary source images retain their upload rows; writable
+canonical targets keep native top at the GL top. Shader-resource views present
+native row order. Full-range ordinary views share their source image; target and
+mip-range views use revision-cached independent GPU images with their own base levels.
+A draw acquires its context-owned views together, pinning their images until release. Unbound resources
 sample an all-zero image, including alpha.
 
 R8/RG8 upload directly. BGRA, A8 and BC1/2/3/7 use the shared integer GPU decoder in
 `graphics/block-texture.ts`; their canonical images contain the corresponding RGBA8
 texels. Depth uploads support D32_FLOAT and D24_UNORM_S8_UINT, with native depth/stencil
-bit order converted to GL's packed order. Native row0 is GL row0 throughout upload,
-rendering, shader-view copies and readback.
+bit order converted to GL's packed order. CPU upload/readback reverses bounded row
+chunks when storage is reflected; native byte order remains top-left. GPU resource
+copies map each rectangle endpoint according to its source and destination origin.
+Shader-view aliases use NEAREST blits to reflect integer rows, preserving sampler
+tie selection without changing sample coordinates. Their 64 MiB cache budget and
+pinned draw lifetime also apply to full-range aliases.
 
 Render-target clears ignore scissor and component write masks. A8 render targets
 store alpha only; their physical RGBA8 image keeps RGB zero, and CPU readback
@@ -253,8 +259,10 @@ Device disposal deletes the framebuffer.
 
 Draw state reapplies viewport/scissor, front-face/cull, fill, clipping, depth/stencil,
 blend equations/factors and component masks after private texture preparation. Native
-row0 is GL row0, so scissor coordinates retain native ordering. The vertex shader's Y
-flip also flips front-face orientation. Missing viewports, zero-sized viewports,
+top-left viewport/scissor coordinates are mapped against the attachment height.
+Vertex clip-space Y retains its native orientation; pixel SV_Position converts GL Y
+to native top-left coordinates. Culling follows that same orientation. Missing
+viewports, zero-sized viewports,
 empty output sets and a zero single-sample mask emit no geometry. Scissors intersect
 the target extent before their dimensions are passed to GL.
 

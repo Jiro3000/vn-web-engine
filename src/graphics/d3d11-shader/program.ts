@@ -88,9 +88,9 @@ export interface Sm4GlslPipeline {
 }
 
 /**
- * Link native register locations, never relocate by semantic. Framebuffer row0 is
- * native top: it occupies the GL bottom row, matching Texture2D upload/sample rows.
- * The host must account for this convention when presenting outside this backend.
+ * Link native register locations, never relocate by semantic. Render targets keep
+ * native top at the GL top, preserving clip-space raster orientation. Texture
+ * storage and presentation account for their own logical row origins.
  */
 export function linkSm4GlslPrograms(vertex: Sm4GlslShader, pixel: Sm4GlslShader): Sm4GlslPipeline {
   if (vertex.code.stage !== 'vertex' || pixel.code.stage !== 'pixel') invalid('pipeline stages');
@@ -145,13 +145,17 @@ export function linkSm4GlslPrograms(vertex: Sm4GlslShader, pixel: Sm4GlslShader)
   }
   vertexBody.push(`${vertex.code.entry}(inputs,outputs);`);
   vertexBody.push(`vec4 position=uintBitsToFloat(outputs[${positions[0]!.register}]);`);
-  vertexBody.push('gl_Position=vec4(position.x,-position.y,2.0*position.z-position.w,position.w);');
+  vertexBody.push('gl_Position=vec4(position.xy,2.0*position.z-position.w,position.w);');
   vertexBody.push('gl_PointSize=1.0;');
+  if (pixel.code.inputs.some((p) => p.systemValue === 1))
+    ps.push('uniform highp float sm4_targetHeight;');
   for (const p of pixel.code.inputs) {
     const swizzle = components(p.mask);
     if (p.systemValue === 1) {
       if (![4, 5].includes(p.interpolation)) unsupported('position interpolation');
-      pixelBody.push(`inputs[${p.register}].${swizzle}=floatBitsToUint(gl_FragCoord.${swizzle});`);
+      pixelBody.push(
+        `inputs[${p.register}].${swizzle}=floatBitsToUint(vec4(gl_FragCoord.x,sm4_targetHeight-gl_FragCoord.y,gl_FragCoord.zw).${swizzle});`,
+      );
       continue;
     }
     if (p.systemValue || ![2, 3].includes(p.interpolation))

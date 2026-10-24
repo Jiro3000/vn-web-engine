@@ -112,7 +112,7 @@ async function pageMain(fixture) {
     return result;
   }
   const sample = program(
-    'uniform highp sampler2D firstImage;uniform highp sampler2D secondImage;uniform int mip;uniform bool pair;layout(location=0)out highp uvec4 result;void main(){ivec2 p=ivec2(gl_FragCoord.xy);result=uvec4(round(texelFetch(firstImage,p,mip)*255.));if(pair)result+=uvec4(round(texelFetch(secondImage,p,0)*255.));}',
+    'uniform highp sampler2D firstImage;uniform highp sampler2D secondImage;uniform int mip;uniform bool pair;uniform bool firstFlip;uniform bool secondFlip;layout(location=0)out highp uvec4 result;void main(){ivec2 p=ivec2(gl_FragCoord.xy),a=p,b=p;if(firstFlip)a.y=textureSize(firstImage,mip).y-1-a.y;if(secondFlip)b.y=textureSize(secondImage,0).y-1-b.y;result=uvec4(round(texelFetch(firstImage,a,mip)*255.));if(pair)result+=uvec4(round(texelFetch(secondImage,b,0)*255.));}',
   );
   const depthProgram = program(
     'layout(location=0)out vec4 result;void main(){result=vec4(1,0,0,1);}',
@@ -124,6 +124,17 @@ async function pageMain(fixture) {
     [...new Uint8Array(await crypto.subtle.digest('SHA-256', words))]
       .map((n) => n.toString(16).padStart(2, '0'))
       .join('');
+  const origins = new WeakMap();
+  function borrowImage(gpu, resource) {
+    const value = gpu.image(resource);
+    origins.set(value, gpu.flipped(resource));
+    return value;
+  }
+  function borrowShaderResource(gpu, view) {
+    const value = gpu.shaderResource(view);
+    origins.set(value, false);
+    return value;
+  }
   function baseline() {
     for (const flag of [
       gl.BLEND,
@@ -212,6 +223,8 @@ async function pageMain(fixture) {
     }
     gl.uniform1i(gl.getUniformLocation(sample, 'mip'), mip);
     gl.uniform1i(gl.getUniformLocation(sample, 'pair'), second ? 1 : 0);
+    gl.uniform1i(gl.getUniformLocation(sample, 'firstFlip'), +!!origins.get(first));
+    gl.uniform1i(gl.getUniformLocation(sample, 'secondFlip'), +!!origins.get(second ?? first));
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     const actual = new Uint32Array(width * height * 4),
       want = Uint32Array.from(expected, (n, i) => n + (secondExpected?.[i] ?? 0));
@@ -259,12 +272,12 @@ async function pageMain(fixture) {
       if (!resource) throw Error('Native texture creation failed');
       const srv = createShaderResourceViewStorage(owner, resource, null).value;
       views.push(srv);
-      canonical = gpu.image(resource);
+      canonical = borrowImage(gpu, resource);
       for (let mip = 0; mip < test.mips; mip++) {
         const level = test.levels[mip];
         await read(
           `${test.format}-mip${mip}`,
-          gpu.shaderResource(srv),
+          borrowShaderResource(gpu, srv),
           level.width,
           level.height,
           mip,
@@ -282,8 +295,8 @@ async function pageMain(fixture) {
         texture2D: {mostDetailedMip: 2, mipLevels: 1},
       }).value;
       views.push(a, b);
-      const first = gpu.shaderResource(a),
-        second = gpu.shaderResource(b),
+      const first = borrowShaderResource(gpu, a),
+        second = borrowShaderResource(gpu, b),
         level = test.levels[2],
         larger = test.levels[1],
         cropped = [];
@@ -309,7 +322,7 @@ async function pageMain(fixture) {
           texture2D: {mostDetailedMip: 0, mipLevels: 1},
         }).value;
         views.push(oldView);
-        const oldImage = gpu.shaderResource(oldView);
+        const oldImage = borrowShaderResource(gpu, oldView);
         for (const [first, count] of [
           [0, 2],
           [0, 3],
@@ -328,10 +341,10 @@ async function pageMain(fixture) {
             texture2D: {mostDetailedMip: first, mipLevels: count},
           }).value;
           views.push(view);
-          gpu.shaderResource(view);
+          borrowShaderResource(gpu, view);
         }
         const evicted = !gl.isTexture(oldImage),
-          reacquired = gpu.shaderResource(oldView);
+          reacquired = borrowShaderResource(gpu, oldView);
         rows.push({
           name: '71-view-eviction',
           passed: evicted && oldView.live && reacquired !== oldImage,
@@ -411,7 +424,7 @@ async function pageMain(fixture) {
           texture2D: {mostDetailedMip: 0, mipLevels: 1},
         }).value;
         views.push(alias);
-        gpu.shaderResource(alias);
+        borrowShaderResource(gpu, alias);
         gl.enable(gl.SCISSOR_TEST);
         gl.scissor(0, 0, 0, 0);
         gl.colorMask(false, false, false, false);
@@ -421,7 +434,7 @@ async function pageMain(fixture) {
           .flat();
         await read(
           `${test.format}-clear-alias`,
-          gpu.shaderResource(alias),
+          borrowShaderResource(gpu, alias),
           test.width,
           test.height,
           0,
@@ -484,7 +497,7 @@ async function pageMain(fixture) {
         want.splice((test.width + 1) * 4, 4, ...updated);
         await read(
           `${test.format}-partial-update`,
-          gpu.shaderResource(alias),
+          borrowShaderResource(gpu, alias),
           test.width,
           test.height,
           0,
@@ -493,7 +506,7 @@ async function pageMain(fixture) {
         const other = test.levels[1];
         await read(
           `${test.format}-unchanged-mip`,
-          gpu.shaderResource(srv),
+          borrowShaderResource(gpu, srv),
           other.width,
           other.height,
           1,
@@ -540,19 +553,19 @@ async function pageMain(fixture) {
         },
         null,
       ).value;
-      gpu.image(resource);
+      borrowImage(gpu, resource);
       const mapped = resource.map(0, 4, 0);
       if (mapped.hr !== 0) throw Error('Dynamic texture map failed');
       let rejected = false;
       try {
-        gpu.image(resource);
+        borrowImage(gpu, resource);
       } catch {
         rejected = true;
       }
       rows.push({name: 'mapped-texture-rejected', passed: rejected});
       mapped.value.data.fill(18);
       resource.unmap(0);
-      const image = gpu.image(resource);
+      const image = borrowImage(gpu, resource);
       await read('discard-base-upload', image, 4, 4, 0, Array(64).fill(18));
       await read('discard-lower-mip1', image, 2, 2, 1, Array(16).fill(0));
       await read('discard-lower-mip2', image, 1, 1, 2, Array(4).fill(0));
@@ -663,7 +676,7 @@ async function pageMain(fixture) {
         {...desc({format, width: 4, height: 4, mips: 1}), bindFlags: 0x40},
         [{data: bytes, rowPitch: 16, slicePitch: 0}],
       ).value;
-      const depth = gpu.image(resource);
+      const depth = borrowImage(gpu, resource);
       gpu.framebuffer(resource, 0);
       baseline();
       gl.activeTexture(gl.TEXTURE2);
@@ -700,7 +713,11 @@ async function pageMain(fixture) {
       gl.readPixels(0, 0, 4, 4, gl.RGBA, gl.UNSIGNED_BYTE, actual);
       const error = gl.getError();
       if (error !== gl.NO_ERROR) throw Error('Depth texture WebGL error' + error);
-      await record(`${format}-depth-stencil-upload`, actual, expected);
+      const logical = actual.slice();
+      if (gpu.flipped(resource))
+        for (let y = 0; y < 4; y++)
+          logical.set(actual.subarray(y * 16, (y + 1) * 16), (3 - y) * 16);
+      await record(`${format}-depth-stencil-upload`, logical, expected);
       gl.framebufferTexture2D(
         gl.FRAMEBUFFER,
         format === 45 ? gl.DEPTH_STENCIL_ATTACHMENT : gl.DEPTH_ATTACHMENT,
@@ -784,7 +801,7 @@ async function pageMain(fixture) {
         'uniform sampler2D firstImage;uniform sampler2D secondImage;uniform vec2 coord;uniform float lod;uniform bool pair;layout(location=0)out uvec4 result;void main(){vec4 value=textureLod(firstImage,coord,lod);if(pair)value+=textureLod(secondImage,coord,lod);result=uvec4(round(value*255.0));}',
       );
       async function sampleState(name, first, uv, lod, expected, second = undefined, view = srv) {
-        const image = gpu.shaderResource(view);
+        const image = borrowShaderResource(gpu, view);
         baseline();
         gl.activeTexture(gl.TEXTURE2);
         gl.bindTexture(gl.TEXTURE_2D, target);
@@ -987,7 +1004,7 @@ async function pageMain(fixture) {
         {...desc({format: 28, width: 1, height: 1, mips: 1}), bindFlags: 8},
         null,
       ).value;
-      gpu.image(resource);
+      borrowImage(gpu, resource);
       const extension = gl.getExtension('WEBGL_lose_context');
       if (!extension) throw Error('Context-loss extension unavailable');
       await new Promise((resolve, reject) => {
@@ -1005,7 +1022,7 @@ async function pageMain(fixture) {
       });
       let hr = null;
       try {
-        gpu.image(resource);
+        borrowImage(gpu, resource);
       } catch (error) {
         hr = error.hr;
       }

@@ -335,6 +335,24 @@ async function pageMain(fixture) {
     ctx.psSetSamplers(15, [sampler]);
     ctx.draw(3, 0);
     await record('public-sparse-resource-sampler', imageBytes);
+    const sourceOnly = texture({bindFlags: 8}, [{data: imageBytes, rowPitch: 16, slicePitch: 0}]),
+      sourceOnlyView = own(device.createShaderResourceView(sourceOnly, null));
+    for (const [index, selected] of [sourceOnlyView, srv, sourceOnlyView].entries()) {
+      ctx.psSetShaderResources(124, [selected]);
+      ctx.draw(3, 0);
+      await record('public-reflected-source-switch-' + index, imageBytes);
+    }
+
+    // A point sample at an exact native texel boundary selects floor(v * height).
+    const boundaryUv = new Float32Array(uv);
+    for (let i = 0; i < 3; i++) boundaryUv[i * 5 + 4] = 0.5;
+    ctx.updateSubresource(uvBuffer, 0, null, new Uint8Array(boundaryUv.buffer), 0, 0);
+    ctx.draw(3, 0);
+    await record(
+      'public-source-point-boundary',
+      Uint8Array.from(Array.from({length: 16}, (_, i) => [(i % 4) * 40, 100, 90, 255]).flat()),
+    );
+    ctx.updateSubresource(uvBuffer, 0, null, floatBytes(uv), 0, 0);
     const bgraBytes = imageBytes.slice();
     for (let i = 0; i < bgraBytes.length; i += 4) {
       bgraBytes[i] = imageBytes[i + 2];

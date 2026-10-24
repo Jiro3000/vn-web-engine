@@ -90,6 +90,11 @@ export class D3d11GpuOutput {
   private readonly comparisons: readonly number[];
   private readonly stencilOps: readonly number[];
 
+  /** Current attachment height for native top-left SV_Position coordinates. */
+  get targetHeight(): number {
+    return this.height;
+  }
+
   constructor(
     private readonly owner: D3d11DeviceOwner,
     private readonly gl: WebGL2RenderingContext,
@@ -202,14 +207,18 @@ export class D3d11GpuOutput {
       if (raster.depthClipEnable) gl.disable(this.clamp.DEPTH_CLAMP_EXT);
       else gl.enable(this.clamp.DEPTH_CLAMP_EXT);
     }
-    // The shader maps native Y to -Y; front-face orientation must change with it.
-    gl.frontFace(raster.frontCounterClockwise ? gl.CW : gl.CCW);
+    gl.frontFace(raster.frontCounterClockwise ? gl.CCW : gl.CW);
     if (raster.cullMode === 1) gl.disable(gl.CULL_FACE);
     else {
       gl.enable(gl.CULL_FACE);
       gl.cullFace(raster.cullMode === 2 ? gl.FRONT : gl.BACK);
     }
-    gl.viewport(viewport.topLeftX, viewport.topLeftY, viewport.width, viewport.height);
+    gl.viewport(
+      viewport.topLeftX,
+      this.height - viewport.topLeftY - viewport.height,
+      viewport.width,
+      viewport.height,
+    );
     gl.depthRange(viewport.minDepth, viewport.maxDepth);
     if (raster.scissorEnable) {
       const rect = state.scissors[0];
@@ -219,7 +228,7 @@ export class D3d11GpuOutput {
           top = Math.max(0, Math.min(this.height, rect.top)),
           right = Math.max(left, Math.min(this.width, rect.right)),
           bottom = Math.max(top, Math.min(this.height, rect.bottom));
-        gl.scissor(left, top, right - left, bottom - top);
+        gl.scissor(left, this.height - bottom, right - left, bottom - top);
       } else gl.scissor(0, 0, 0, 0);
     } else gl.disable(gl.SCISSOR_TEST);
     this.depthStencil(state);

@@ -58,7 +58,7 @@ async function pageMain() {
     program,
     compile(
       gl.VERTEX_SHADER,
-      'uniform float z;uniform bool reverse;void main(){vec2 p[3]=vec2[3](vec2(-1,-1),vec2(3,-1),vec2(-1,3));int i=gl_VertexID;if(reverse&&i>0)i=3-i;gl_Position=vec4(p[i].x,-p[i].y,2.0*z-1.0,1);}',
+      'uniform float z;uniform bool reverse;void main(){vec2 p[3]=vec2[3](vec2(-1,-1),vec2(3,-1),vec2(-1,3));int i=gl_VertexID;if(reverse&&i>0)i=3-i;gl_Position=vec4(p[i],2.0*z-1.0,1);}',
     ),
   );
   gl.attachShader(
@@ -207,7 +207,11 @@ async function pageMain() {
     gl.readPixels(0, 0, 4, 4, gl.RGBA, gl.UNSIGNED_BYTE, actual);
     const error = gl.getError();
     if (error !== gl.NO_ERROR) throw Error('Output readback error ' + error);
-    await record(name, actual, expected);
+    // Direct GL readback is physical; the native output uses top-left logical rows.
+    const logical = actual.slice();
+    if (gpu.flipped(resource))
+      for (let y = 0; y < 4; y++) logical.set(actual.subarray(y * 16, (y + 1) * 16), (3 - y) * 16);
+    await record(name, logical, expected);
   }
   function draw(changes = {}, color = [1, 0, 0, 1], z = 0.5, reverse = false) {
     const state = {...base, ...changes};

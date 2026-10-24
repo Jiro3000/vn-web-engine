@@ -168,7 +168,7 @@ async function pageMain() {
     return result;
   }
   const sample = program(
-    'uniform sampler2D image;uniform int mip;uniform bool rawDepth;layout(location=0)out uvec4 result;void main(){vec4 value=texelFetch(image,ivec2(gl_FragCoord.xy),mip);result=rawDepth?uvec4(floatBitsToUint(value.r)):uvec4(round(value*255.0));}',
+    'uniform sampler2D image;uniform int mip;uniform bool rawDepth;uniform bool flipY;layout(location=0)out uvec4 result;void main(){vec4 value=texelFetch(image,ivec2(gl_FragCoord.x,flipY?float(textureSize(image,mip).y)-gl_FragCoord.y:gl_FragCoord.y),mip);result=rawDepth?uvec4(floatBitsToUint(value.r)):uvec4(round(value*255.0));}',
   );
   const depthProgram = program('out vec4 result;void main(){result=vec4(1,0,0,1);}');
   const target = gl.createTexture(),
@@ -253,6 +253,7 @@ async function pageMain() {
     gl.uniform1i(gl.getUniformLocation(sample, 'image'), 0);
     gl.uniform1i(gl.getUniformLocation(sample, 'mip'), srv ? 0 : mip);
     gl.uniform1i(gl.getUniformLocation(sample, 'rawDepth'), rawDepth ? 1 : 0);
+    gl.uniform1i(gl.getUniformLocation(sample, 'flipY'), +(!srv && gpu.flipped(resource)));
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     const actual = new Uint32Array(level.width * level.height * 4);
     gl.readPixels(0, 0, level.width, level.height, gl.RGBA_INTEGER, gl.UNSIGNED_INT, actual);
@@ -340,6 +341,42 @@ async function pageMain() {
       for (let y = 4; y < 6; y++)
         for (let x = 3; x < 6; x++) partial.set(expected[0].subarray(0, bpp), (y * 8 + x) * bpp);
       await color(format + '-region-copy', destination, 0, partial, alias);
+      // Opposite physical row origins must preserve native top-left coordinates.
+      const bppMixed = bytesPerPixel(format),
+        mixedBytes = Uint8Array.from(
+          {length: 8 * 8 * bppMixed},
+          (_, i) => (Math.floor(i / bppMixed / 8) * 31 + i * 13) & 255,
+        ),
+        mixedSource = texture(format, 8, 8, 1, [mixedBytes], {bindFlags: 8}),
+        mixedTarget = texture(format, 8, 8, 1),
+        mixedReturn = texture(format, 8, 8, 1, null, {bindFlags: 8});
+      transfer(() => context.copyResource(mixedTarget, mixedSource));
+      await color(format + '-source-to-target-origin', mixedTarget, 0, mixedBytes);
+      transfer(() => context.copyResource(mixedReturn, mixedTarget));
+      await color(format + '-target-to-source-origin', mixedReturn, 0, mixedBytes);
+      await record(
+        format + '-mixed-origin-native-shadow',
+        mixedReturn.storage(0).bytes,
+        mixedBytes,
+      );
+      transfer(() => context.clearRenderTargetView(view(mixedTarget, 'rtv'), [0, 0, 0, 0]));
+      transfer(() =>
+        context.copySubresourceRegion(mixedTarget, 0, 3, 4, 0, mixedSource, 0, {
+          left: 1,
+          top: 2,
+          front: 0,
+          right: 4,
+          bottom: 4,
+          back: 1,
+        }),
+      );
+      const mixedExpected = fill(64, nativePixel(format, [0, 0, 0, 0]));
+      for (let y = 0; y < 2; y++)
+        mixedExpected.set(
+          mixedBytes.subarray(((y + 2) * 8 + 1) * bppMixed, ((y + 2) * 8 + 4) * bppMixed),
+          ((y + 4) * 8 + 3) * bppMixed,
+        );
+      await color(format + '-mixed-origin-region', mixedTarget, 0, mixedExpected);
       const revision = destination.revision;
       let rejected = false;
       try {

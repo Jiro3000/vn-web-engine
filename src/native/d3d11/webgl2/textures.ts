@@ -46,6 +46,7 @@ interface Texture {
   readonly texture: WebGLTexture;
   readonly format: Format;
   readonly bytes: number;
+  readonly flipped: boolean;
   readonly framebuffers: Map<number, WebGLFramebuffer>;
   readonly aliases: Map<string, Alias>;
   readonly dirty: Set<number>;
@@ -54,7 +55,8 @@ interface Texture {
 }
 
 /**
- * Private device texture storage. Native row0 occupies GL row0, including render targets.
+ * Private device texture storage. Writable targets keep native top at GL top;
+ * ordinary source images keep their upload rows. All native transfers use top-left rows.
  * Operations can change GL bindings/state; the context reapplies its complete draw state.
  * The resource owner routes synchronization and final-resource callbacks here.
  */
@@ -63,11 +65,13 @@ export class D3d11GpuTextures {
   private readonly aliases = new Map<Alias, Alias>();
   private readonly aliasImages = new Map<WebGLTexture, Alias>();
   private readonly decoders = new Map<GpuTextureFormat, WebGLProgram>();
+  private aliasFramebuffer: WebGLFramebuffer | null = null;
   private scratch: WebGLTexture | null = null;
   private zero: WebGLTexture | null = null;
   private scratchBytes = 0;
   private vao: WebGLVertexArrayObject | null = null;
   private readback = new Uint8Array(0);
+  private uploadScratch = new Uint8Array(0);
   private bytes = 0;
   private aliasBytes = 0;
   private disposed = false;
@@ -85,6 +89,11 @@ export class D3d11GpuTextures {
   /** Allocate or refresh the canonical complete mip chain. No native reference is acquired. */
   image(resource: D3d11Texture2D): WebGLTexture {
     return this.get(resource).texture;
+  }
+
+  /** Canonical image storage origin; shader-view aliases use native row order. */
+  flipped(resource: D3d11Texture2D): boolean {
+    return !!(resource.getDesc().bindFlags & 0x60);
   }
 
   /** Borrow a draw's context-owned views together, pinning aliases until release. */
@@ -136,7 +145,8 @@ export class D3d11GpuTextures {
     const entry = this.get(view.resource),
       first = view.firstMip,
       count = view.mipCount;
-    if (first === 0 && count === entry.resource.levels.length) return entry.texture;
+    if (first === 0 && count === entry.resource.levels.length && !entry.flipped)
+      return entry.texture;
     const key = `${first}/${count}`;
     let alias = entry.aliases.get(key);
     if (!alias) {
@@ -189,9 +199,54 @@ export class D3d11GpuTextures {
           level = resourceLevel(entry, mip);
         gl.bindFramebuffer(gl.READ_FRAMEBUFFER, this.framebufferFor(entry, mip));
         gl.readBuffer(gl.COLOR_ATTACHMENT0);
-        gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, alias.texture);
-        gl.copyTexSubImage2D(gl.TEXTURE_2D, i, 0, 0, 0, 0, level.width, level.height);
+        if (!entry.flipped) {
+          gl.activeTexture(gl.TEXTURE0);
+          gl.bindTexture(gl.TEXTURE_2D, alias.texture);
+          gl.copyTexSubImage2D(gl.TEXTURE_2D, i, 0, 0, 0, 0, level.width, level.height);
+        } else {
+          // Reflect integer texel rows, preserving point-filter tie breaking and
+          // native sampler coordinates at exact texel boundaries.
+          if (!this.aliasFramebuffer) this.aliasFramebuffer = gl.createFramebuffer();
+          if (!this.aliasFramebuffer)
+            throw new D3d11TextureError(
+              'D3D11 shader view framebuffer allocation failed',
+              0x8007000e | 0,
+            );
+          gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, this.aliasFramebuffer);
+          gl.framebufferTexture2D(
+            gl.DRAW_FRAMEBUFFER,
+            gl.COLOR_ATTACHMENT0,
+            gl.TEXTURE_2D,
+            alias.texture,
+            i,
+          );
+          try {
+            gl.drawBuffers([gl.COLOR_ATTACHMENT0]);
+            if (gl.checkFramebufferStatus(gl.DRAW_FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE)
+              throw new D3d11TextureError('Incomplete D3D11 shader view framebuffer');
+            gl.disable(gl.SCISSOR_TEST);
+            gl.blitFramebuffer(
+              0,
+              0,
+              level.width,
+              level.height,
+              0,
+              level.height,
+              level.width,
+              0,
+              gl.COLOR_BUFFER_BIT,
+              gl.NEAREST,
+            );
+          } finally {
+            gl.framebufferTexture2D(
+              gl.DRAW_FRAMEBUFFER,
+              gl.COLOR_ATTACHMENT0,
+              gl.TEXTURE_2D,
+              null,
+              0,
+            );
+          }
+        }
       }
       this.checkError('shader view copy');
       alias.revision = entry.revision;
@@ -286,6 +341,9 @@ export class D3d11GpuTextures {
       to = this.framebuffer(destination, subresource);
     this.blit(
       destination,
+      subresource,
+      source,
+      sourceSubresource,
       from,
       to,
       box?.left ?? 0,
@@ -312,7 +370,7 @@ export class D3d11GpuTextures {
       to: this.framebuffer(destination, mip),
     }));
     for (const [mip, {level, from, to}] of attachments.entries()) {
-      this.blit(destination, from, to, 0, 0, 0, 0, level.width, level.height);
+      this.blit(destination, mip, source, mip, from, to, 0, 0, 0, 0, level.width, level.height);
       this.markWritten(destination, mip);
     }
   }
@@ -367,6 +425,9 @@ export class D3d11GpuTextures {
 
   private blit(
     destination: D3d11Texture2D,
+    destinationMip: number,
+    source: D3d11Texture2D,
+    sourceMip: number,
     from: WebGLFramebuffer,
     to: WebGLFramebuffer,
     sx: number,
@@ -383,15 +444,19 @@ export class D3d11GpuTextures {
     const mask = destination.layout.depth
       ? gl.DEPTH_BUFFER_BIT | (destination.getDesc().format === 45 ? gl.STENCIL_BUFFER_BIT : 0)
       : gl.COLOR_BUFFER_BIT;
+    const sourceY = (y: number) =>
+        this.flipped(source) ? source.levels[sourceMip]!.height - y : y,
+      destinationY = (y: number) =>
+        this.flipped(destination) ? destination.levels[destinationMip]!.height - y : y;
     gl.blitFramebuffer(
       sx,
-      sy,
+      sourceY(sy),
       sx + width,
-      sy + height,
+      sourceY(sy + height),
       dx,
-      dy,
+      destinationY(dy),
       dx + width,
-      dy + height,
+      destinationY(dy + height),
       mask,
       gl.NEAREST,
     );
@@ -470,27 +535,44 @@ export class D3d11GpuTextures {
       gl.readBuffer(gl.COLOR_ATTACHMENT0);
       for (let y = 0; y < level.height; y += rows) {
         const height = Math.min(rows, level.height - y);
-        gl.readPixels(0, y, level.width, height, gl.RGBA, gl.UNSIGNED_BYTE, this.readback);
+        gl.readPixels(
+          0,
+          entry.flipped ? level.height - y - height : y,
+          level.width,
+          height,
+          gl.RGBA,
+          gl.UNSIGNED_BYTE,
+          this.readback,
+        );
         this.checkError('resource readback');
         const pixels = level.width * height,
           output = level.bytes,
           base = y * level.rowPitch;
-        if (format === 28) output.set(this.readback.subarray(0, pixels * 4), base);
+        if (format === 28 && !entry.flipped)
+          output.set(this.readback.subarray(0, pixels * 4), base);
         else
-          for (let i = 0; i < pixels; i++) {
-            const from = i * 4;
-            if (format === 87) {
-              const to = base + from;
-              output[to] = this.readback[from + 2]!;
-              output[to + 1] = this.readback[from + 1]!;
-              output[to + 2] = this.readback[from]!;
-              output[to + 3] = this.readback[from + 3]!;
-            } else if (format === 61) output[base + i] = this.readback[from]!;
-            else if (format === 65) output[base + i] = this.readback[from + 3]!;
-            else if (format === 49) {
-              output[base + i * 2] = this.readback[from]!;
-              output[base + i * 2 + 1] = this.readback[from + 1]!;
-            } else throw new D3d11TextureError('Unsupported writable texture format');
+          for (let row = 0; row < height; row++) {
+            const rowFrom = (entry.flipped ? height - row - 1 : row) * level.width * 4,
+              rowTo = base + row * level.rowPitch;
+            if (format === 28) {
+              output.set(this.readback.subarray(rowFrom, rowFrom + level.width * 4), rowTo);
+              continue;
+            }
+            for (let x = 0; x < level.width; x++) {
+              const from = rowFrom + x * 4;
+              if (format === 87) {
+                const to = rowTo + x * 4;
+                output[to] = this.readback[from + 2]!;
+                output[to + 1] = this.readback[from + 1]!;
+                output[to + 2] = this.readback[from]!;
+                output[to + 3] = this.readback[from + 3]!;
+              } else if (format === 61) output[rowTo + x] = this.readback[from]!;
+              else if (format === 65) output[rowTo + x] = this.readback[from + 3]!;
+              else if (format === 49) {
+                output[rowTo + x * 2] = this.readback[from]!;
+                output[rowTo + x * 2 + 1] = this.readback[from + 1]!;
+              } else throw new D3d11TextureError('Unsupported writable texture format');
+            }
           }
       }
     }
@@ -530,6 +612,7 @@ export class D3d11GpuTextures {
     for (const program of this.decoders.values())
       actions.push(() => this.gl.deleteProgram(program));
     actions.push(
+      () => this.gl.deleteFramebuffer(this.aliasFramebuffer),
       () => this.gl.deleteTexture(this.scratch),
       () => this.gl.deleteTexture(this.zero),
       () => this.gl.deleteVertexArray(this.vao),
@@ -538,10 +621,12 @@ export class D3d11GpuTextures {
       this.disposeAll(actions);
     } finally {
       this.decoders.clear();
+      this.aliasFramebuffer = null;
       this.scratch = null;
       this.zero = null;
       this.vao = null;
       this.readback = new Uint8Array(0);
+      this.uploadScratch = new Uint8Array(0);
       this.scratchBytes = 0;
       this.bytes = 0;
       this.aliasBytes = 0;
@@ -577,6 +662,7 @@ export class D3d11GpuTextures {
         texture,
         format,
         bytes,
+        flipped: this.flipped(resource),
         revision: -1,
         framebuffers: new Map(),
         aliases: new Map(),
@@ -652,17 +738,53 @@ export class D3d11GpuTextures {
       }
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, entry.texture);
-      gl.texSubImage2D(
-        gl.TEXTURE_2D,
-        mip,
-        0,
-        0,
-        level.width,
-        level.height,
-        entry.format.format,
-        entry.format.type,
-        data,
-      );
+      if (!entry.flipped) {
+        gl.texSubImage2D(
+          gl.TEXTURE_2D,
+          mip,
+          0,
+          0,
+          level.width,
+          level.height,
+          entry.format.format,
+          entry.format.type,
+          data,
+        );
+      } else {
+        // Typed-array uploads have explicit row order. Reverse bounded chunks;
+        // do not depend on DOM-source UNPACK_FLIP_Y behavior or copy whole targets.
+        const rowBytes = level.width * entry.format.bytes,
+          rows = Math.max(1, Math.floor(READBACK_BYTES / rowBytes)),
+          size = rowBytes * Math.min(rows, level.height),
+          input = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+        if (this.uploadScratch.length < size) this.uploadScratch = new Uint8Array(size);
+        for (let y = 0; y < level.height; y += rows) {
+          const height = Math.min(rows, level.height - y),
+            length = rowBytes * height;
+          for (let row = 0; row < height; row++)
+            this.uploadScratch.set(
+              input.subarray((y + row) * rowBytes, (y + row + 1) * rowBytes),
+              (height - row - 1) * rowBytes,
+            );
+          const chunk =
+            data instanceof Float32Array
+              ? new Float32Array(this.uploadScratch.buffer, 0, length / 4)
+              : data instanceof Uint32Array
+                ? new Uint32Array(this.uploadScratch.buffer, 0, length / 4)
+                : this.uploadScratch.subarray(0, length);
+          gl.texSubImage2D(
+            gl.TEXTURE_2D,
+            mip,
+            0,
+            level.height - y - height,
+            level.width,
+            height,
+            entry.format.format,
+            entry.format.type,
+            chunk,
+          );
+        }
+      }
     }
     this.checkError('texture upload');
     entry.revision = entry.resource.revision;
@@ -717,6 +839,7 @@ export class D3d11GpuTextures {
     gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, this.framebufferFor(entry, mip));
     gl.useProgram(program);
     gl.uniform1i(gl.getUniformLocation(program, 'atlas'), 0);
+    gl.uniform1f(gl.getUniformLocation(program, 'topHeight'), entry.flipped ? level.height : 0);
     if (!this.vao) this.vao = gl.createVertexArray();
     if (!this.vao)
       throw new D3d11TextureError('Texture decode VAO allocation failed', 0x8007000e | 0);
@@ -782,9 +905,9 @@ export class D3d11GpuTextures {
         ],
         [
           gl.FRAGMENT_SHADER,
-          '#version 300 es\nprecision highp float;precision highp int;uniform highp sampler2D atlas;vec2 tex;out vec4 result;\n' +
+          '#version 300 es\nprecision highp float;precision highp int;uniform highp sampler2D atlas;uniform float topHeight;vec2 tex;out vec4 result;\n' +
             gpuTextureDecodeFragment(format) +
-            '\nvoid main(){tex=gl_FragCoord.xy;result=shade(vec4(0),vec4(0));}',
+            '\nvoid main(){tex=vec2(gl_FragCoord.x,topHeight>0.0?topHeight-gl_FragCoord.y:gl_FragCoord.y);result=shade(vec4(0),vec4(0));}',
         ],
       ] as const) {
         const shader = gl.createShader(type);

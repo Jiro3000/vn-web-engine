@@ -248,7 +248,7 @@ export class WebGl2D3d11Device
         texture,
         width: desc.width,
         height: desc.height,
-        rowOrigin: 'top',
+        rowOrigin: 'bottom',
         prepare() {
           if (closed) throw new Error('Using a released shared texture');
           if (images.image(resource) !== texture)
