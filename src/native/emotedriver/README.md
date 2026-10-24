@@ -83,7 +83,7 @@ existing Native library loader; an implementation is selected by image identity,
 and callers request the matching contract token.
 
 The D3D11 revision declares the native SDK/build exports, the default-allocator
-`InitParam` with device and immediate context, twelve device operations and 98 player
+`InitParam` with device and immediate context, fourteen device operations and 98 player
 operations. Public objects use only Native contracts and plain values. Player
 coordinate/force output pointers become `{x, y}` results. Native slots and entry
 addresses are recorded on each member, including the x64 deleting-destructor slot
@@ -105,6 +105,21 @@ belongs to the shared group; assigning state leaves the destination group in pla
 seeds its own xorshift generator from the low32 bits of the current Unix time;
 clones and `initCore` retain that generator. Last-owner retirement releases GPU
 resources independently of any references retained by the D3D11 context.
+
+Mask mode is the DLL motion device's shared signed32-bit word at `+0x1fc`, initially
+alpha (`1`). The native SDK diagnoses concurrent device initialization; its ordinary
+caller owns one device per DLL instance. `setMaskMode`/`getMaskMode` preserve that word,
+and rendering implements alpha (`1`) and stencil (`0`). Other mode words are retained
+but refused when a mask would need them. Artemis explicitly selects alpha mode in
+its constructor, matching the native surface's device-slot5 call.
+
+Stencil masks clear the supplied D24S8 attachment to zero, or one when the chain
+contains a subtraction. Intersections use EQUAL and wrapping INCR; subtractions use
+EQUAL and wrapping DECR. Both depth-fail and pass take that operation. The color pass
+uses EQUAL/KEEP at the resulting reference, then disables stencil without replacing
+the other depth-state fields. Mask draws suppress color writes and use the original
+texture-kind alpha-reference shader with threshold `64/255` (equality discards).
+The renderer does not invent a depth attachment when the caller supplies none.
 
 `render` submits the selected stereo clip's evaluated draw list without progressing
 playback. The compositor owns the context viewport; E-mote target/mask binding

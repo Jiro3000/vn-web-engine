@@ -1231,6 +1231,8 @@ export class ArtemisRuntime {
         context: native.graphics.context,
       });
       ownedDevice = emoteDevice;
+      // CEmoteSurface constructor0x14001a270 explicitly selects alpha masks (device slot5).
+      emoteDevice.setMaskMode(1);
     }
     const emoteBytes = new Map<string, Uint8Array>();
     const emoteOwner = emoteDevice;

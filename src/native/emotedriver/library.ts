@@ -13,6 +13,7 @@ import type {EmoteShaderBlobs} from './runtime/render/shaders.js';
 import {EMOTE_DRIVER_D3D11, type EmoteDriverD3d11Exports} from './contract.js';
 import {EMOTEDRIVER_X64_SHA256} from './build.js';
 import {PEmoteD3d11Device} from './device-d3d11.js';
+import {EmoteD3d11MaskState} from './runtime/render/d3d11-mask-state.js';
 import type {EmoteX64MeshKernel} from './runtime/interfaces.js';
 import type {EmoteX64ShaderBlobs} from './runtime/render/shaders.js';
 
@@ -84,13 +85,16 @@ export function emoteDriverD3d11Library(
     contract: EMOTE_DRIVER_D3D11,
     identities: [{kind: 'image', sha256: EMOTEDRIVER_X64_SHA256}],
     imports: [],
-    link: () => ({
-      exports: {
-        emoteCreate: (param) => new PEmoteD3d11Device(param, options.shaders, kernel),
-        // Native0x180004130/4120 metadata; neither string selects implementation behavior.
-        emoteGetSDKVersion: () => '3.9.8',
-        emoteGetBuildDateTime: () => '2022/12/28-13:02:35',
-      },
-    }),
+    link: () => {
+      const masks = new EmoteD3d11MaskState();
+      return {
+        exports: {
+          emoteCreate: (param) => new PEmoteD3d11Device(param, options.shaders, kernel, masks),
+          // Native0x180004130/4120 metadata; neither string selects implementation behavior.
+          emoteGetSDKVersion: () => '3.9.8',
+          emoteGetBuildDateTime: () => '2022/12/28-13:02:35',
+        },
+      };
+    },
   };
 }

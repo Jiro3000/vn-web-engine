@@ -277,6 +277,10 @@ export interface IEmoteD3d11Device {
   release(): number;
   /** Slot 3, 0x180001520. */
   refCount(): number;
+  /** Slot 5, 0x180001850. Shared MMotionDevice mask mode: stencil0 or alpha1 (initially1). */
+  setMaskMode(mode: number): void;
+  /** Slot 6, 0x180001860. Returns the shared signed32-bit mode word. */
+  getMaskMode(): number;
   /**
    * Slot 9, 0x1800018c0. Native count, image-pointer and uint32-size arrays plus
    * an output player pointer. A successful output owns one reference. Images stay

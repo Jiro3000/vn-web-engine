@@ -924,7 +924,7 @@ test('E-mote native draw states use complete native descriptors and retire parti
   };
   // No draw is issued here; shader and atlas owners are borrowed but never consulted.
   assert.throws(() => new EmoteD3d11Renderer(observe(2), ctx, null, null), /state creation failed/);
-  assert.equal(resources.length, 16);
+  assert.equal(resources.length, 17);
   for (const resource of resources)
     assert.equal(
       resource.queryInterface('00000000-0000-0000-c000-000000000046').hr,
@@ -935,8 +935,8 @@ test('E-mote native draw states use complete native descriptors and retire parti
   const blends = descriptors
     .filter(([name]) => name === 'createBlendState')
     .map(([, desc]) => desc);
-  assert.equal(blends.length, 13);
-  for (const [index, desc] of blends.entries()) {
+  assert.equal(blends.length, 14);
+  for (const [index, desc] of blends.slice(0, 13).entries()) {
     assert.equal(desc.renderTarget.length, 8);
     assert.equal(desc.independentBlendEnable, false);
     assert.equal(desc.renderTarget[0].blendEnable, index !== 8);
@@ -945,6 +945,11 @@ test('E-mote native draw states use complete native descriptors and retire parti
       for (const [key, value] of Object.entries(unused))
         assert.equal(value, key === 'blendEnable' ? false : 0);
   }
+  // Native stencil mask draws use row8's disabled blend with color writes suppressed.
+  assert.deepEqual(blends[13], {
+    ...blends[8],
+    renderTarget: blends[8].renderTarget.map((target) => ({...target, renderTargetWriteMask: 0})),
+  });
   // Native row8 disables blending; row12 preserves destination alpha.
   assert.equal(blends[12].renderTarget[0].srcBlendAlpha, 1);
   assert.equal(blends[12].renderTarget[0].destBlendAlpha, 2);

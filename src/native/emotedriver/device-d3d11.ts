@@ -17,6 +17,7 @@ import {EmoteXorshift128} from './runtime/controls/random.js';
 import type {EmoteClipFactory, EmoteX64MeshKernel} from './runtime/interfaces.js';
 import {EmotePlayerCore} from './runtime/player-core.js';
 import {EmoteD3d11Matrices} from './runtime/render/d3d11-matrices.js';
+import {EmoteD3d11MaskState} from './runtime/render/d3d11-mask-state.js';
 import {EmoteD3d11Screen} from './runtime/render/d3d11-screen.js';
 import {EmoteD3d11Shaders} from './runtime/render/d3d11-shaders.js';
 import {EmoteD3d11Target} from './runtime/render/d3d11-target.js';
@@ -98,7 +99,9 @@ export class PEmoteD3d11Device implements IEmoteD3d11Device {
     param: EmoteD3d11InitParam,
     blobs: EmoteX64ShaderBlobs,
     private readonly kernel: EmoteX64MeshKernel,
+    private readonly maskState = new EmoteD3d11MaskState(),
   ) {
+    maskState.retain();
     this.param = {device: param.device, context: param.context};
     param.device.addRef();
     param.context.addRef();
@@ -132,6 +135,14 @@ export class PEmoteD3d11Device implements IEmoteD3d11Device {
   }
   refCount(): number {
     return this.references;
+  }
+  setMaskMode(mode: number): void {
+    this.live();
+    this.maskState.mode = mode | 0;
+  }
+  getMaskMode(): number {
+    this.live();
+    return this.maskState.mode;
   }
 
   /** 0x1800018c0 -> 0x180002130; each new resource seeds its own RNG at0x180006110. */
@@ -218,6 +229,7 @@ export class PEmoteD3d11Device implements IEmoteD3d11Device {
       target,
       this.matrices.shaderMatrix(target.width, target.height, this.screen.mode),
       smoothing,
+      this.maskState.mode,
     );
   }
 
@@ -236,6 +248,7 @@ export class PEmoteD3d11Device implements IEmoteD3d11Device {
       } catch (error) {
         errors.push(error);
       }
+    this.maskState.release();
     if (errors.length) throw new AggregateError(errors, 'E-mote device retirement failed');
   }
 }

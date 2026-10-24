@@ -14,6 +14,8 @@ function nativeHost() {
     calls = [],
     bindings = new Map();
   let failed = null;
+  let depthState = null,
+    stencilReference = 0;
   const object = (kind, desc = null, data = null) => {
     const value = {
       kind,
@@ -76,6 +78,8 @@ function nativeHost() {
   const clear = () => {
     for (const values of bindings.values()) for (const value of values) value.release();
     bindings.clear();
+    depthState = null;
+    stencilReference = 0;
   };
   const releaseContext = context.release;
   context.release = () => {
@@ -106,6 +110,16 @@ function nativeHost() {
   ])
     context[name] = (value) => bind(name, [value]);
   context.omSetRenderTargets = (views, depth) => bind('targets', [...views, depth]);
+  context.omSetDepthStencilState = (value, reference) => {
+    bind('omSetDepthStencilState', [value]);
+    depthState = value;
+    stencilReference = reference >>> 0;
+    calls.push({method: 'depthStencil', desc: value?.getDesc(), reference: stencilReference});
+  };
+  context.omGetDepthStencilState = () => {
+    depthState?.addRef();
+    return {state: depthState, stencilRef: stencilReference};
+  };
   context.iaSetVertexBuffers = (slot, values, strides, offsets) => {
     bind('vertices' + slot, values);
     calls.push({method: 'vertices', bytes: values[0].data.slice(), strides, offsets});
@@ -114,6 +128,7 @@ function nativeHost() {
     'rsSetViewports',
     'rsSetScissorRects',
     'clearRenderTargetView',
+    'clearDepthStencilView',
     'iaSetPrimitiveTopology',
   ])
     context[name] = (...args) => calls.push({method: name, args});
@@ -151,7 +166,7 @@ function shaderStandins() {
 }
 
 /** A synthetic PSB with one image and a real scalar stereo parameter. */
-function imageFile({variableFrame = -30} = {}) {
+function imageFile({variableFrame = -30, maskType = 0} = {}) {
   const tree = emoteWinTree(),
     motion = tree.object.all_parts.motion.base;
   const layer = structuredClone(motion.layer[0]);
@@ -172,6 +187,22 @@ function imageFile({variableFrame = -30} = {}) {
     {time: 61, type: 1, content: null},
   ];
   motion.layerIndexMap = {image: 0};
+  if (maskType) {
+    const mask = {
+      ...structuredClone(layer),
+      type: 12,
+      label: 'mask',
+      stencilType: maskType,
+      stencilCompositeMaskLayerList: [],
+      children: [layer],
+    };
+    motion.layer = [mask];
+    motion.layerIndexMap = {mask: 0, image: 1};
+    motion.priority = [
+      {time: 0, type: 1, content: [0, 1]},
+      {time: 61, type: 1, content: null},
+    ];
+  }
   Object.assign(tree.source.tex.texture, {
     type: 'RGBA8',
     width: 4,
@@ -380,4 +411,104 @@ test('x64 public construction failures retire partially created native resources
   loaded.loader.dispose();
   host.context.release();
   host.device.release();
+});
+
+test('native mask-mode words are shared by live devices and reset with their DLL motion state', () => {
+  const loaded = load(false),
+    host = nativeHost();
+  const a = loaded.exports.emoteCreate(host),
+    b = loaded.exports.emoteCreate(host);
+  assert.equal(a.getMaskMode(), 1);
+  a.setMaskMode(0);
+  assert.equal(b.getMaskMode(), 0);
+  b.setMaskMode(0x100000001);
+  assert.equal(a.getMaskMode(), 1);
+  a.setMaskMode(0xffffffff);
+  assert.equal(b.getMaskMode(), -1);
+  const isolated = load(false),
+    other = isolated.exports.emoteCreate(host);
+  assert.equal(other.getMaskMode(), 1);
+  other.release();
+  isolated.loader.dispose();
+  a.release();
+  b.release();
+  const fresh = loaded.exports.emoteCreate(host);
+  assert.equal(fresh.getMaskMode(), 1);
+  fresh.release();
+  loaded.loader.dispose();
+  host.context.release();
+  host.device.release();
+  assert.ok(host.created.slice(2).every((r) => r.references === 0));
+});
+
+test('public stencil masks clear and count through the native depth-stencil and alpha shaders', () => {
+  for (const maskType of [1, 2]) {
+    const host = nativeHost(),
+      loaded = load(false),
+      device = loaded.exports.emoteCreate(host);
+    const player = device.createPlayer(imageFile({maskType}));
+    const texture = host.device.createTexture2D({width: 4, height: 4, format: 28}, null).value;
+    const view = host.device.createRenderTargetView(texture, null).value;
+    const depth = host.device.createTexture2D({width: 4, height: 4, format: 45}, null).value;
+    const dsv = host.device.createDepthStencilView(depth, {
+      format: 45,
+      viewDimension: 3,
+      flags: 0,
+      mipSlice: 0,
+    }).value;
+    device.setRenderTarget(view, dsv);
+    device.setMaskMode(0);
+    player.progress(0);
+    player.render();
+    assert.ok(
+      host.calls.some(
+        (c) =>
+          c.method === 'clearDepthStencilView' &&
+          c.args[1] === 2 &&
+          c.args[3] === (maskType === 2 ? 1 : 0),
+      ),
+    );
+    const states = host.calls.filter((c) => c.method === 'depthStencil');
+    assert.ok(
+      states.some(
+        (c) =>
+          c.desc?.stencilEnable &&
+          c.desc.frontFace.stencilFunc === 3 &&
+          c.desc.frontFace.stencilPassOp === (maskType === 1 ? 7 : 8) &&
+          c.reference === (maskType === 2 ? 1 : 0),
+      ),
+    );
+    assert.ok(
+      states.some(
+        (c) => c.desc?.stencilEnable && c.desc.frontFace.stencilPassOp === 1 && c.reference === 1,
+      ),
+    );
+    assert.equal(states.at(-1).desc.stencilEnable, false);
+    const draw = host.context.draw;
+    host.context.draw = () => {
+      throw new Error('synthetic stencil draw failure');
+    };
+    assert.throws(() => player.render(), /stencil draw failure/);
+    assert.equal(
+      host.calls.filter((c) => c.method === 'depthStencil').at(-1).desc.stencilEnable,
+      false,
+    );
+    host.context.draw = draw;
+    device.setMaskMode(99);
+    assert.equal(device.getMaskMode(), 99);
+    assert.throws(() => player.render(), /mask mode 99/);
+    device.setMaskMode(0);
+    player.render();
+    player.release();
+    device.release();
+    host.context.clearState();
+    dsv.release();
+    depth.release();
+    view.release();
+    texture.release();
+    assert.ok(host.created.slice(2).every((r) => r.references === 0));
+    loaded.loader.dispose();
+    host.context.release();
+    host.device.release();
+  }
 });

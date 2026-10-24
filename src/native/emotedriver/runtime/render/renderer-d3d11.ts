@@ -1,6 +1,7 @@
 import type {EmoteTexture, EmoteX64Model} from '../../../../formats/kirikiri/emote-model.js';
 import type {
   D3d11Result,
+  D3d11DepthStencilDesc,
   IUnknown,
   ID3D11Device,
   ID3D11DeviceContext,
@@ -21,6 +22,7 @@ import {
   emoteD3d11BasicShader,
   emoteD3d11BufferedShader,
   emoteD3d11MaskShader,
+  emoteD3d11AlphaShader,
   type EmoteD3d11ColorMode,
 } from './d3d11-shaders.js';
 import {EmoteD3d11Textures, type EmoteD3d11Texture} from './d3d11-textures.js';
@@ -45,7 +47,7 @@ interface Mesh {
   readonly width: number;
   readonly height: number;
 }
-type Pass = 0 | 1 | 3 | 4 | 5 | 6;
+type Pass = 0 | 1 | 2 | 3 | 4 | 5 | 6;
 const f = Math.fround,
   MAX = f(3.4028234663852886e38);
 const WHITE = Uint32Array.of(0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff);
@@ -108,6 +110,7 @@ export class EmoteD3d11Renderer {
   private readonly depth: ID3D11DepthStencilState;
   private readonly nearest: ID3D11SamplerState;
   private readonly linear: ID3D11SamplerState;
+  private readonly stencilBlend: ID3D11BlendState;
   private readonly used = new Map<EmoteTexture, EmoteD3d11Texture>();
   private readonly sources = new WeakMap<EmoteX64Model, (EmoteTexture | null)[]>();
   private readonly screenMulOffset = new Float32Array(4);
@@ -121,6 +124,8 @@ export class EmoteD3d11Renderer {
   private matrix: Float32Array | null = null;
   private mask: OwnedTarget | null = null;
   private smoothing = true;
+  private maskMode = 1;
+  private stencilActive = false;
   private pass: Pass = 0;
   private alphaTest = false;
   private alphaMul = 1;
@@ -172,6 +177,13 @@ export class EmoteD3d11Renderer {
             }),
           ),
         );
+      const blend = this.blends[8]!.getDesc();
+      this.stencilBlend = this.take(
+        device.createBlendState({
+          ...blend,
+          renderTarget: blend.renderTarget.map((target) => ({...target, renderTargetWriteMask: 0})),
+        }),
+      );
       const face = {stencilFailOp: 1, stencilDepthFailOp: 1, stencilPassOp: 1, stencilFunc: 8};
       this.depth = this.take(
         device.createDepthStencilState({
@@ -243,6 +255,7 @@ export class EmoteD3d11Renderer {
     output: EmoteD3d11RenderTarget,
     modelViewProj: Float32Array,
     smoothing: boolean,
+    maskMode = 1,
   ): void {
     if (this.closed) throw new Error('Using a released E-mote renderer');
     if (this.rendering) throw new Error('Reentrant E-mote rendering');
@@ -251,6 +264,7 @@ export class EmoteD3d11Renderer {
     this.output = output;
     this.matrix = modelViewProj;
     this.smoothing = smoothing;
+    this.maskMode = maskMode | 0;
     this.pass = 0;
     this.mask = null;
     try {
@@ -271,6 +285,7 @@ export class EmoteD3d11Renderer {
           group = item.stencilParent;
           if (group) this.buildMask(group);
           else {
+            if (this.stencilActive) this.setStencil(0, null);
             this.mask = null;
             this.pass = 0;
           }
@@ -278,12 +293,17 @@ export class EmoteD3d11Renderer {
         this.drawItem(item);
       }
     } finally {
-      // Texture references retained by native context bindings are independent of ours.
-      this.pass = 0;
-      this.mask = null;
-      this.target = this.output = null;
-      this.matrix = null;
-      this.rendering = false;
+      try {
+        if (this.stencilActive) this.setStencil(0, null);
+      } finally {
+        // Texture references retained by native context bindings are independent of ours.
+        this.pass = 0;
+        this.mask = null;
+        this.stencilActive = false;
+        this.target = this.output = null;
+        this.matrix = null;
+        this.rendering = false;
+      }
     }
   }
 
@@ -437,6 +457,11 @@ export class EmoteD3d11Renderer {
   }
 
   private buildMask(parent: EmoteScalarDrawItem): void {
+    if (this.maskMode === 0) {
+      this.buildStencilMask(parent);
+      return;
+    }
+    if (this.maskMode !== 1) throw new EmoteUnsupportedError(`mask mode ${this.maskMode}`);
     const masks = this.maskTargets();
     this.pass = 1;
     this.mask = null;
@@ -467,6 +492,89 @@ export class EmoteD3d11Renderer {
       }
     this.bind(this.output!);
     this.mask = masks[0];
+    this.pass = 6;
+  }
+
+  /** Native060a20/060920: preserve depth fields, replace only the stencil description. */
+  private setStencil(reference: number, operation: number | null): void {
+    const ctx = this.context,
+      prior = ctx.omGetDepthStencilState();
+    let desc: D3d11DepthStencilDesc;
+    try {
+      const face = {stencilFailOp: 1, stencilDepthFailOp: 1, stencilPassOp: 1, stencilFunc: 8};
+      desc = prior.state?.getDesc() ?? {
+        depthEnable: true,
+        depthWriteMask: 1,
+        depthFunc: 2,
+        stencilEnable: false,
+        stencilReadMask: 255,
+        stencilWriteMask: 255,
+        frontFace: face,
+        backFace: face,
+      };
+    } finally {
+      prior.state?.release();
+    }
+    if (operation === null) desc = {...desc, stencilEnable: false};
+    else {
+      // EQUAL with wrapping INCR/DECR for masks, KEEP for the color pass.
+      const face = {
+        stencilFailOp: 1,
+        stencilDepthFailOp: operation,
+        stencilPassOp: operation,
+        stencilFunc: 3,
+      };
+      desc = {
+        ...desc,
+        stencilEnable: true,
+        stencilReadMask: 255,
+        stencilWriteMask: 255,
+        frontFace: face,
+        backFace: face,
+      };
+    }
+    const state = this.contextState(this.device.createDepthStencilState(desc));
+    try {
+      ctx.omSetDepthStencilState(state, operation === null ? prior.stencilRef : reference >>> 0);
+      this.stencilActive = operation !== null;
+    } finally {
+      state.release();
+    }
+  }
+
+  /** A temporary COM reference transferred to the context, not retained by this renderer. */
+  private contextState<T extends IUnknown>(result: D3d11Result<T>): T {
+    if (result.hr !== 0 || !result.value) {
+      result.value?.release();
+      throw new Error(`E-mote stencil state creation failed: ${result.hr}`);
+    }
+    return result.value;
+  }
+
+  /** Native060b40/69a0: clear, intersections, subtractions, then the equality color pass. */
+  private buildStencilMask(parent: EmoteScalarDrawItem): void {
+    let reference = 0;
+    for (let node: EmoteScalarDrawItem | null = parent; node; node = node.stencilParent)
+      if ((node.stencilType & 3) === 2) {
+        reference = 1;
+        break;
+      }
+    const depth = this.output!.depth;
+    if (depth && depth.getDesc().format === 45)
+      this.context.clearDepthStencilView(depth, 2, 0, reference);
+    this.mask = null;
+    this.pass = 2;
+    for (const role of [1, 2])
+      for (let node: EmoteScalarDrawItem | null = parent; node; node = node.stencilParent) {
+        if ((node.stencilType & 3) !== role) continue;
+        this.setStencil(reference, role === 1 ? 7 : 8);
+        if (role === 1) reference++;
+        if (node.stencilType & 4) {
+          for (const child of node.composite)
+            if (!child.blank) this.draw(this.mesh(child), WHITE, 4, 0, 0);
+        } else if (!node.blank) this.draw(this.mesh(node), WHITE, 4, 0, 0);
+      }
+    this.setStencil(reference, 1);
     this.pass = 6;
   }
 
@@ -507,7 +615,9 @@ export class EmoteD3d11Renderer {
       a: EmoteD3d11ColorMode = attr & 4 ? 0 : bm & 0x10 ? 8 : 4,
       masked = this.mask !== null;
     let index: number;
-    if (this.pass === 3 || this.pass === 4 || this.pass === 5) {
+    if (this.pass === 2) {
+      index = emoteD3d11AlphaShader(k);
+    } else if (this.pass === 3 || this.pass === 4 || this.pass === 5) {
       index = emoteD3d11MaskShader(k, this.alphaTest, (this.pass - 3) as 0 | 1 | 2);
     } else if ((bm & 0xf00) === 0x100) {
       this.destinationCopy(bm, parameter);
@@ -530,7 +640,10 @@ export class EmoteD3d11Renderer {
     const pixel = this.shaders.pixel(index),
       target = this.target!;
     pixel.setFloats('screenMul', [f(1 / target.width), f(1 / target.height)]);
-    if (this.pass === 3 || this.pass === 4 || this.pass === 5)
+    if (this.pass === 2) {
+      pixel.setFloats('alphaRef', [f(64 / 255)]);
+      pixel.setFloats('filterColor', [1, 1, 1, 1]);
+    } else if (this.pass === 3 || this.pass === 4 || this.pass === 5)
       pixel.setFloats('alphaMulAdd', [this.alphaMul, this.alphaAdd, 0, 0]);
     else if ((bm & 0xf00) === 0x100) {
       pixel.setFloats('screenMulOffset', this.screenMulOffset);
@@ -545,14 +658,16 @@ export class EmoteD3d11Renderer {
       pixel.setFloats('filterColor', filter);
     }
     const blendIndex =
-      this.pass === 3 || this.pass === 4
-        ? 9
-        : this.pass === 5
-          ? 10
-          : (bm & 0xf00) === 0x100
-            ? 11
-            : bm & 0xff0f;
-    const blend = this.blends[blendIndex];
+      this.pass === 2
+        ? 8
+        : this.pass === 3 || this.pass === 4
+          ? 9
+          : this.pass === 5
+            ? 10
+            : (bm & 0xf00) === 0x100
+              ? 11
+              : bm & 0xff0f;
+    const blend = this.pass === 2 ? this.stencilBlend : this.blends[blendIndex];
     if (!blend) throw new EmoteUnsupportedError(`blend mode 0x${bm.toString(16)}`);
     const ctx = this.context,
       vertex = this.shaders.vertex(1);
