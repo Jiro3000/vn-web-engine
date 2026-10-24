@@ -15,6 +15,7 @@ import type {
   ID3D11ClassLinkage,
   ID3D11Device,
   ID3D11Resource,
+  ID3D11Texture2D,
 } from '../contract.js';
 import {D3d11Lifetime, D3d11Object} from '../runtime/com.js';
 import {createInputLayoutStorage} from '../runtime/input-layout.js';
@@ -22,6 +23,7 @@ import {
   createBufferStorage,
   createTexture2DStorage,
   type D3d11ResourceOwner,
+  D3d11Texture2D,
 } from '../runtime/resources.js';
 import {createShaderStorage} from '../runtime/shaders.js';
 import {D3d11StateCache} from '../runtime/states.js';
@@ -35,6 +37,7 @@ import {D3d11GpuOutput} from './output.js';
 import {D3d11GpuSamplers} from './samplers.js';
 import {D3d11ProgramCache} from './shaders.js';
 import {D3d11GpuTextures, D3d11TextureError} from './textures.js';
+import type {D3d11WebGl2TextureLease, D3d11WebGl2TextureSharing} from './shared-texture.js';
 
 function attemptAll(actions: readonly (() => void)[]): void {
   const errors: unknown[] = [];
@@ -48,7 +51,10 @@ function attemptAll(actions: readonly (() => void)[]): void {
 }
 
 /** Real device/child lifetime and factories over the native immediate-context implementation. */
-export class WebGl2D3d11Device extends D3d11Object implements ID3D11Device {
+export class WebGl2D3d11Device
+  extends D3d11Object
+  implements ID3D11Device, D3d11WebGl2TextureSharing
+{
   readonly context: D3d11DrawContext;
   private readonly owner: D3d11ResourceOwner;
   private readonly states: D3d11StateCache;
@@ -213,6 +219,52 @@ export class WebGl2D3d11Device extends D3d11Object implements ID3D11Device {
     this.checkLive();
     this.context.addRef();
     return this.context;
+  }
+  /** Borrowed GPU integration at UI registration; never an invented native device slot. */
+  acquireColorTexture(resource: ID3D11Texture2D): D3d11WebGl2TextureLease {
+    this.checkLive();
+    if (
+      !(resource instanceof D3d11Texture2D) ||
+      resource.lifetime !== this.lifetime ||
+      !resource.live
+    )
+      throw new D3d11TextureError('Invalid or foreign shared color texture');
+    const desc = resource.getDesc();
+    if (
+      ![28, 87].includes(desc.format) ||
+      desc.mipLevels !== 1 ||
+      desc.arraySize !== 1 ||
+      desc.sampleDesc.count !== 1 ||
+      !(desc.bindFlags & 0x20)
+    )
+      throw new D3d11TextureError('Shared color image requires a single-level RGBA8 render target');
+    resource.addRef();
+    try {
+      const texture = this.textures.image(resource);
+      let closed = false;
+      const images = this.textures;
+      return {
+        context: this.gl,
+        texture,
+        width: desc.width,
+        height: desc.height,
+        rowOrigin: 'top',
+        prepare() {
+          if (closed) throw new Error('Using a released shared texture');
+          if (images.image(resource) !== texture)
+            throw new Error('Shared texture allocation changed');
+        },
+        dispose() {
+          if (!closed) {
+            closed = true;
+            resource.release();
+          }
+        },
+      };
+    } catch (error) {
+      resource.release();
+      throw error;
+    }
   }
   private checkLive(): void {
     if (!this.live) throw new D3d11TextureError('Using a retired D3D11 device');

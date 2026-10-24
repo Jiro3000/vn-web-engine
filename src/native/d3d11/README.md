@@ -23,6 +23,14 @@ Clients import only this contract. The UI runtime wiring registers the chosen
 implementation with the existing native-library loader. Rendering hosts, browser
 surfaces, shader translators and implementation classes stay outside the contract.
 
+UI registration can supply `deviceCreated` to receive the borrowed native device
+and its `D3d11WebGl2TextureSharing` service. This backend service is separate from
+the DLL ABI. A color-texture lease retains a single-level RGBA8/BGRA8 render target
+on its existing context; `prepare` publishes pending uploads without reading back
+the framebuffer. The compositor attaches the borrowed texture with its explicit
+row origin, detaches it before lease disposal, and restores its own draw state.
+Engines use `D3d11SurfaceHost` and Native contracts instead of this backend service.
+
 ## Resource storage
 
 `runtime/com.ts` separates caller references from internal bindings. The device and
@@ -316,7 +324,6 @@ Resource rules follow Microsoft's [Map values](https://learn.microsoft.com/en-us
 and [block compression](https://learn.microsoft.com/en-us/windows/uwp/graphics-concepts/block-compression)
 documentation. No Windows graphics binaries execute in this implementation.
 
-
 ## Library and device
 
 `d3d11WebGl2Library(createContext)` implements the D3D11 contract for the existing
@@ -341,7 +348,6 @@ wiring and full model/route/performance verification remain separate work.
 
 Device-creation and format-query behavior follow [D3D11CreateDevice](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/nf-d3d11-d3d11createdevice)
 and [CheckFormatSupport](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/nf-d3d11-id3d11device-checkformatsupport).
-
 
 `tools/probe-d3d11-device.mjs` loads the system library and uses only public native
 interfaces for creation, binding, rendering, updates and staging readback. Synthetic

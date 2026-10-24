@@ -1,11 +1,20 @@
 import type {NativeLibraryImplementation} from '../../platform/native-libraries.js';
-import {D3D11, D3D11_SDK_VERSION, type D3d11Exports} from './contract.js';
+import {D3D11, D3D11_SDK_VERSION, type D3d11Exports, type ID3D11Device} from './contract.js';
 import {WebGl2D3d11Device} from './webgl2/device.js';
 import {D3d11TextureError} from './webgl2/textures.js';
+import type {D3d11WebGl2TextureSharing} from './webgl2/shared-texture.js';
+
+export type {D3d11WebGl2TextureSharing, D3d11WebGl2TextureLease} from './webgl2/shared-texture.js';
+
+export interface D3d11WebGl2LibraryOptions {
+  /** UI wiring receives borrowed interfaces and the backend's texture-sharing service. */
+  readonly deviceCreated?: (device: ID3D11Device, sharing: D3d11WebGl2TextureSharing) => void;
+}
 
 /** UI wiring supplies a prepared GL context; native exports keep their SDK arguments. */
 export function d3d11WebGl2Library(
   createContext: () => WebGL2RenderingContext | null,
+  options: D3d11WebGl2LibraryOptions = {},
 ): NativeLibraryImplementation<D3d11Exports> {
   return {
     contract: D3D11,
@@ -52,6 +61,16 @@ export function d3d11WebGl2Library(
             if (!gl) return fail(0x887a0004 | 0);
             if (gl.isContextLost()) return fail(0x887a0005 | 0);
             const device = new WebGl2D3d11Device(gl, flags, level);
+            try {
+              options.deviceCreated?.(device, device);
+            } catch (error) {
+              try {
+                device.context.release();
+              } finally {
+                device.release();
+              }
+              throw error;
+            }
             return {hr: 0, device, featureLevel: level, immediateContext: device.context};
           } catch (error) {
             return fail(

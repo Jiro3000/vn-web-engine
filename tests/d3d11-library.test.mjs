@@ -144,8 +144,8 @@ function capabilityContext() {
     },
   };
 }
-function exportsFor(factory) {
-  const loader = new NativeLibraryLoader([d3d11WebGl2Library(factory)], {
+function exportsFor(factory, options) {
+  const loader = new NativeLibraryLoader([d3d11WebGl2Library(factory, options)], {
     locate: (fileName) => ({kind: 'system', fileName}),
   });
   const result = loader.load('D3D11.DLL');
@@ -154,6 +154,25 @@ function exportsFor(factory) {
   assert.ok(exports);
   return {loader, exports, handle: result.library};
 }
+
+test('UI backend registration receives borrowed native interfaces and unwinds failed registration', () => {
+  const host = capabilityContext();
+  let device, sharing;
+  const loaded = exportsFor(() => host.gl, {
+    deviceCreated: (value, service) => {
+      device = value;
+      sharing = service;
+      throw new Error('synthetic registration refusal');
+    },
+  });
+  const result = loaded.exports.d3d11CreateDevice(null, 1, 0, 0, null, 7);
+  assert.notEqual(result.hr, 0);
+  assert.equal(result.device, null);
+  assert.equal(result.immediateContext, null);
+  assert.equal(typeof sharing.acquireColorTexture, 'function');
+  assert.throws(() => device.createBuffer(bufferDesc(), null), /retired/);
+  loaded.loader.dispose();
+});
 
 test('D3D11 system exports validate SDK, driver, flags and ordered feature levels before host creation', () => {
   let calls = 0;
