@@ -1451,9 +1451,10 @@ shared E-mote driver port in `src/native/emotedriver` (see its README).
   conversions. Scalar state queries, stereovision controls, explicit rendering,
   API-log recording/replay and core initialization call the public Native contract.
   Lua floats are stored as float32, unsigned arguments keep their low32 bits and
-  narrow strings stop at NUL. Void methods return no Lua values. Manual reference
-  operations, clone/state-assignment userdata and the two reference-output getters
-  remain refused until their Lua ownership and marshaling are modeled.
+  narrow strings stop at NUL. Void methods return no Lua values. `clone` returns
+  borrowed userdata over the clone's initial native reference; `assignState` accepts
+  player userdata. Manual `addRef`, `release` and `refCount` reach the Native player.
+  The two reference-output getters require native `float&` userdata and remain refused.
 - Drawing (`ArtemisEmoteLayer`, CEmoteLayer draw 0x14001adf0): each draw that reaches the
   layer advances the player by the elapsed clock time (at most 1000 ms, as 60 fps frames;
   `progress(0)` on the first draw) when `progress` is set, then renders the clip's draw
@@ -1474,8 +1475,12 @@ texture lease keeps each native allocation alive until the compositor detaches i
 Native texture row0 is the logical top, while ordinary compositor render surfaces
 retain their bottom-row convention. Compositor draws restore fixed raster state
 after native rendering. Passing a native surface to the compositor requires no
-framebuffer readback or CPU pixel copy. Lua player proxies hold native references
-independently of layer lifetime and release them on garbage collection or VM close.
+framebuffer readback or CPU pixel copy. Lua player proxies borrow native pointers,
+matching the native luabind raw-pointer holder. Creating or collecting a proxy does
+not change the player's reference count. Callers retain a player explicitly when
+it must survive its layer; using userdata after the final native release is refused.
+The host tracks explicit Lua `addRef`/`clone` references for shutdown cleanup,
+independently of userdata collection. It does not add a hidden native reference.
 
 ## Nonvisual resource geometry probe
 

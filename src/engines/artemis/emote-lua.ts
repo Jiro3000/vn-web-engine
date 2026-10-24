@@ -189,17 +189,10 @@ const methods: ReadonlyMap<string, Method> = new Map<string, Method>([
   ['getBlinkEnabled', {args: [], call: (p) => p.getBlinkEnabled()}],
 ]);
 
-/** Bound IEmotePlayer names awaiting Lua object-lifetime and out-parameter marshaling.
- * Calling one is refused; the Native player contract already provides these operations. */
-const unmodeled = [
-  'addRef',
-  'release',
-  'refCount',
-  'clone',
-  'assignState',
-  'getCoord',
-  'getOuterForce',
-];
+/** Object conversions and explicit references are dispatched by the Lua handle owner. */
+const objectMethods = ['addRef', 'release', 'refCount', 'clone', 'assignState'];
+/** Native null-policy float& arguments require typed userdata, not ordinary Lua numbers. */
+const unmodeled = ['getCoord', 'getOuterForce'];
 
 function convert(kind: Argument, value: LuaValue | undefined): Converted | undefined {
   switch (kind) {
@@ -232,7 +225,8 @@ export function callArtemisEmotePlayer(
 ): LuaValue[] {
   const method = methods.get(name);
   if (!method) {
-    if (unmodeled.includes(name)) throw unsupported(`IEmotePlayer:${name}`);
+    if (unmodeled.includes(name) || objectMethods.includes(name))
+      throw unsupported(`IEmotePlayer:${name}`);
     throw Error(`IEmotePlayer has no method ${name}`);
   }
   if (args.length !== method.args.length)
@@ -247,11 +241,16 @@ export function callArtemisEmotePlayer(
 }
 
 /** Every method name of the bound class. */
-export const artemisEmotePlayerMethodNames: readonly string[] = [...methods.keys(), ...unmodeled];
+export const artemisEmotePlayerMethodNames: readonly string[] = [
+  ...methods.keys(),
+  ...objectMethods,
+  ...unmodeled,
+];
 
 /** Installs the Lua side of the IEmotePlayer class: each player is a `newproxy` userdata
  * whose methods forward to the host by handle. Collected proxies queue their handles, which
- * the next forwarded call releases. Returns the Lua prelude source that wraps `engine`; it
+ * the next forwarded call forgets without releasing the native borrowed pointer. Returns
+ * the Lua prelude source that wraps `engine`; it
  * runs where `resourceFailure` is in scope. */
 export function artemisEmoteLuaPrelude(): string {
   const names = artemisEmotePlayerMethodNames.map((name) => `'${name}'`).join(',');
@@ -273,14 +272,6 @@ export function artemisEmoteLuaPrelude(): string {
           end
         end
         local emoteMethods = {}
-        for _, name in ipairs({${names}}) do
-          emoteMethods[name] = function(proxy, ...)
-            local handle = emoteHandles[proxy]
-            if handle == nil then error('IEmotePlayer method on a non-player value', 2) end
-            emoteFlush(engine)
-            return emoteCall(engine, handle, name, ...)
-          end
-        end
         local function emoteWrap(handle)
           if handle == nil then return nil end
           local proxy = newproxy(true)
@@ -290,6 +281,24 @@ export function artemisEmoteLuaPrelude(): string {
           meta.__gc = function() emoteReleased[#emoteReleased + 1] = handle end
           emoteHandles[proxy] = handle
           return proxy
+        end
+        for _, name in ipairs({${names}}) do
+          emoteMethods[name] = function(proxy, ...)
+            local handle = emoteHandles[proxy]
+            if handle == nil then error('IEmotePlayer method on a non-player value', 2) end
+            emoteFlush(engine)
+            if name == 'clone' then
+              return emoteWrap(emoteCall(engine, handle, name, ...))
+            elseif name == 'assignState' then
+              local source = ...
+              local other = emoteHandles[source]
+              if select('#', ...) ~= 1 or (source ~= nil and other == nil) then
+                error('No matching overload found for IEmotePlayer:assignState', 2)
+              end
+              return emoteCall(engine, handle, name, other)
+            end
+            return emoteCall(engine, handle, name, ...)
+          end
         end
         engine.createEmoteLayer = function(self, args)
           emoteFlush(self)

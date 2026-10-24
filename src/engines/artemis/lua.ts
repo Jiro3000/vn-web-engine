@@ -599,6 +599,8 @@ export class ArtemisLua {
     installArtemisLuaOs(this.vm, host.os, () => (host.wallClock ? host.wallClock() : Date.now()));
   }
   private readonly emotePlayers = new Map<number, IEmoteD3d11Player>();
+  /** Explicit Lua addRef/clone references retire with this host, independently of userdata GC. */
+  private readonly emoteOwnedReferences = new Map<IEmoteD3d11Player, number>();
   private emoteHandle = 0;
   /** `getEmoteVersion`, `createEmoteLayer` and `getEmoteLayer` (Rev.3258 0x1401535d0,
    * 0x140151480, 0x140152960). Players reach Lua as handles that the prelude wraps. */
@@ -608,7 +610,6 @@ export class ArtemisLua {
       throw Error('Artemis E-mote layers require a coroutine owner and error reports');
     const handle = (player: IEmoteD3d11Player) => {
       const id = ++this.emoteHandle;
-      player.addRef();
       this.emotePlayers.set(id, player);
       return id;
     };
@@ -658,16 +659,44 @@ export class ArtemisLua {
     });
     this.vm.bind('artemisEmoteCall', (args) => {
       const player = this.emotePlayers.get(args[0] as number);
-      if (!player) throw Error('Released Artemis E-mote player handle');
-      return callArtemisEmotePlayer(player, luaText(args[1]), args.slice(2));
+      if (!player || player.refCount() <= 0) throw Error('Released Artemis E-mote player handle');
+      const name = luaText(args[1]),
+        values = args.slice(2);
+      if (['addRef', 'release', 'refCount', 'clone', 'assignState'].includes(name)) {
+        if (values.length !== (name === 'assignState' ? 1 : 0))
+          throw Error(`No matching overload found for IEmotePlayer:${name}`);
+        if (name === 'refCount') return [player.refCount()];
+        if (name === 'assignState') {
+          // The native converter accepts nil, but the DLL dereferences it. Refuse that
+          // undefined call instead of fabricating a player or an empty state.
+          const source = this.emotePlayers.get(values[0] as number);
+          if (!source || source.refCount() <= 0) throw Error('Invalid Artemis E-mote state source');
+          player.assignState(source);
+          return [];
+        }
+        if (name === 'clone') {
+          const copy = player.clone();
+          if (!copy) return [null];
+          this.emoteOwnedReferences.set(copy, (this.emoteOwnedReferences.get(copy) ?? 0) + 1);
+          return [handle(copy)];
+        }
+        const owned = this.emoteOwnedReferences.get(player) ?? 0;
+        if (name === 'addRef') {
+          const count = player.addRef();
+          this.emoteOwnedReferences.set(player, owned + 1);
+          return [count];
+        }
+        // A caller may explicitly consume a borrowed engine reference, as natively.
+        // Only references acquired by Lua belong to this host's shutdown cleanup.
+        if (owned > 1) this.emoteOwnedReferences.set(player, owned - 1);
+        else this.emoteOwnedReferences.delete(player);
+        return [player.release()];
+      }
+      return callArtemisEmotePlayer(player, name, values);
     });
     this.vm.bind('artemisEmoteRelease', (args) => {
       for (const id of args) {
-        const player = this.emotePlayers.get(id as number);
-        if (player) {
-          this.emotePlayers.delete(id as number);
-          player.release();
-        }
+        this.emotePlayers.delete(id as number);
       }
       return [];
     });
@@ -816,14 +845,17 @@ export class ArtemisLua {
     } catch (error) {
       errors.push(error);
     }
-    const players = [...this.emotePlayers.values()];
+    const players = [...this.emoteOwnedReferences];
+    this.emoteOwnedReferences.clear();
     this.emotePlayers.clear();
-    for (const player of players)
-      try {
-        player.release();
-      } catch (error) {
-        errors.push(error);
-      }
+    for (const [player, count] of players)
+      for (let i = 0; i < count; i++)
+        try {
+          if (player.refCount() <= 0) break;
+          player.release();
+        } catch (error) {
+          errors.push(error);
+        }
     if (errors.length) throw new AggregateError(errors, 'Artemis Lua retirement failed');
   }
 }

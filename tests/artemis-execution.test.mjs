@@ -6,7 +6,7 @@ import {ArtemisScript} from '../dist/engines/artemis/script.js';
 import {luaText} from '../dist/core/lua51/runtime.js';
 const bytes = (s) => new TextEncoder().encode(s);
 
-test('Lua E-mote proxies own native references through GC and close without requiring a concrete player', () => {
+test('Lua E-mote proxies borrow native pointers without changing references at GC or close', () => {
   let references = 1,
     additions = 0,
     releases = 0,
@@ -15,6 +15,7 @@ test('Lua E-mote proxies own native references through GC and close without requ
   const player = {
     addRef: () => (additions++, ++references),
     release: () => (releases++, --references),
+    refCount: () => references,
     setHairScale: (value) => {
       hair = value;
     },
@@ -41,6 +42,9 @@ test('Lua E-mote proxies own native references through GC and close without requ
       assert(engine:getEmoteVersion() == '3.9.8\\nsynthetic-contract')
       held = engine:createEmoteLayer{id='native',files={'a.psb'},width=4,height=2,progress=false}
       local other = engine:getEmoteLayer{id='native'}
+      assert(held:refCount() == 1 and other:refCount() == 1)
+      assert(held:addRef() == 2)
+      assert(other:release() == 1)
       held:setHairScale(1.23456789)
       assert(other:getHairScale() == held:getHairScale())
       other:setQueuing(true)
@@ -52,20 +56,20 @@ test('Lua E-mote proxies own native references through GC and close without requ
     assert.deepEqual(requests, [
       {id: 'native', files: ['a.psb'], width: 4, height: 2, progress: false},
     ]);
-    assert.equal(additions, 2);
+    assert.equal(additions, 1);
     lua.vm.execute(
       bytes(`collectgarbage('collect'); collectgarbage('collect'); held:getHairScale()`),
     );
     assert.equal(releases, 1);
-    assert.equal(references, 2);
+    assert.equal(references, 1);
     assert.deepEqual(reports, []);
   } finally {
     lua.close();
   }
   assert.equal(references, 1);
-  assert.equal(releases, 2);
+  assert.equal(releases, 1);
   lua.close();
-  assert.equal(releases, 2);
+  assert.equal(releases, 1);
 });
 
 test('Lua E-mote primitive methods forward native values and overloads through the player contract', () => {
@@ -103,6 +107,7 @@ test('Lua E-mote primitive methods forward native values and overloads through t
   const player = {
     addRef: () => ++references,
     release: () => --references,
+    refCount: () => references,
     ...Object.fromEntries(
       names.map((name) => [
         name,
@@ -177,6 +182,96 @@ test('Lua E-mote primitive methods forward native values and overloads through t
     lua.close();
   }
   assert.equal(references, 1);
+});
+
+test('Lua E-mote clones use borrowed userdata and explicit native references survive GC', () => {
+  const copies = [];
+  let nullClone = false;
+  const makePlayer = (hair) => ({
+    references: 1,
+    hair,
+    addRef() {
+      assert.ok(this.references > 0);
+      return ++this.references;
+    },
+    release() {
+      assert.ok(this.references > 0);
+      return --this.references;
+    },
+    refCount() {
+      return this.references;
+    },
+    clone() {
+      if (nullClone) return null;
+      const copy = makePlayer(this.hair);
+      copies.push(copy);
+      return copy;
+    },
+    assignState(source) {
+      this.hair = source.hair;
+    },
+    setHairScale(value) {
+      this.hair = value;
+    },
+    getHairScale() {
+      return this.hair;
+    },
+  });
+  const player = makePlayer(1.5);
+  const lua = new ArtemisLua({
+    suspendableTags: true,
+    reportError: () => assert.fail('unexpected report'),
+    emote: {version: 'synthetic', createLayer: () => player, layer: () => player},
+  });
+  try {
+    lua.vm.execute(
+      bytes(`
+      held=engine:getEmoteLayer{id='native'}
+      copied=held:clone()
+      assert(copied:refCount()==1 and held:refCount()==1)
+      copied:setHairScale(2.5)
+      assert(held:getHairScale()==1.5)
+      assert(select('#',copied:assignState(held))==0)
+      assert(copied:getHairScale()==1.5)
+      assert(copied:release()==0)
+      abandoned=held:clone()
+      assert(abandoned:addRef()==2)
+      abandoned=nil
+      collectgarbage('collect');collectgarbage('collect')
+      assert(held:addRef()==2)
+      held:getHairScale()
+      `),
+    );
+    assert.deepEqual(
+      copies.map((p) => p.references),
+      [0, 2],
+    );
+    assert.equal(player.references, 2);
+    for (const expression of [
+      'held:clone(1)',
+      'held:addRef(nil)',
+      'held:release(false)',
+      'held:refCount(1)',
+      'held:assignState()',
+      'held:assignState(held,held)',
+      'held:assignState(1)',
+      'held:assignState({})',
+    ])
+      assert.throws(() => lua.vm.execute(bytes(expression)), /No matching overload found/);
+    assert.throws(() => lua.vm.execute(bytes('held:assignState(nil)')), /Invalid.*state source/);
+    assert.throws(() => lua.vm.execute(bytes('copied:getHairScale()')), /Released.*handle/);
+    nullClone = true;
+    lua.vm.execute(bytes('assert(held:clone()==nil)'));
+  } finally {
+    lua.close();
+  }
+  assert.equal(player.references, 1);
+  assert.deepEqual(
+    copies.map((p) => p.references),
+    [0, 0],
+  );
+  lua.close();
+  assert.equal(player.references, 1);
 });
 
 test('Release-mode Lua debug skips arbitrary arguments before validation and follows the current debug mode', () => {
