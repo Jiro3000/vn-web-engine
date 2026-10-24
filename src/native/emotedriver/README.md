@@ -596,3 +596,11 @@ an existing field and restart from a stopped source's saved arguments. Native
 stereovision control fields copy with the mapping marked dirty; stereovision
 rendering and API-log integration remain separate paths. Loading initializes the
 inverse scale using the native float32 product before division.
+
+`runtime/render/d3d11-screen.ts` owns the x64 screen projection rectangle.
+The native setter stores five int32 words; frame preparation resolves mode 0's
+bottom origin using uint32 subtraction and float32 projection scales/centres.
+Mode -1 retains the previous mapping with manual matrices and selects the full
+external target in mode 1 with automatic matrices. Changing the rectangle does
+not resize the automatic camera, which uses the target resource dimensions.
+This projection state does not change the compositor's D3D11 viewport bindings.

@@ -4,6 +4,87 @@ import {NativeLibraryLoader} from '../dist/platform/native-libraries.js';
 import {D3D11, D3D11_SDK_VERSION} from '../dist/native/d3d11/contract.js';
 import {d3d11WebGl2Library} from '../dist/native/d3d11/library.js';
 import {EmoteD3d11Matrices} from '../dist/native/emotedriver/runtime/render/d3d11-matrices.js';
+import {EmoteD3d11Screen} from '../dist/native/emotedriver/runtime/render/d3d11-screen.js';
+
+test('native screen rectangles resolve at frame preparation and retain mode-1 manual state', () => {
+  const screen = new EmoteD3d11Screen();
+  const state = screen.prepare(320, 240, false);
+  assert.deepEqual(Array.from(state), [...Array(14).fill(0), 0xffffffff]);
+  screen.setScreenRect(10, 20, 100, 40, 0);
+  assert.equal(screen.mode, -1);
+  assert.deepEqual(
+    Array.from(screen.prepare(320, 240, false)),
+    [
+      10, 180, 100, 40, 0x42480000, 0xc1a00000, 0x3f000000, 0, 0x42700000, 0x43480000, 0x3f000000,
+      0, 0, 0x3f800000, 0,
+    ],
+  );
+  screen.setScreenRect(99, 98, 1, 2, -1);
+  const retained = state.slice();
+  assert.equal(screen.prepare(640, 480, false), state);
+  assert.deepEqual(state, retained);
+  screen.prepare(640, 480, true);
+  assert.equal(screen.mode, 1);
+  assert.deepEqual(Array.from(state.subarray(0, 4)), [0, 0, 640, 480]);
+  assert.deepEqual(
+    Array.from(new Float32Array(state.buffer, 16, 10)),
+    [320, 240, 0.5, 0, 320, 240, 0.5, 0, 0, 1],
+  );
+  screen.prepare(127, 67, true);
+  assert.deepEqual(
+    Array.from(new Float32Array(state.buffer, 16, 10)),
+    [63.5, 33.5, 0.5, 0, 63.5, 33.5, 0.5, 0, 0, 1],
+  );
+});
+
+test('native screen mapping keeps uint32 conversions, wraparound and signed zero', () => {
+  const screen = new EmoteD3d11Screen();
+  screen.setScreenRect(-1, 32, -1, 32, 0);
+  const state = screen.prepare(16, 16, true);
+  assert.deepEqual(Array.from(state.subarray(0, 4)), [0xffffffff, 0xffffffd0, 0xffffffff, 32]);
+  assert.deepEqual(Array.from(new Float32Array(state.buffer, 16, 10)), [
+    2 ** 31,
+    -16,
+    0.5,
+    0,
+    1.5 * 2 ** 32,
+    2 ** 32,
+    0.5,
+    0,
+    0,
+    1,
+  ]);
+  screen.setScreenRect(0, 0, 0, 0, 0);
+  screen.prepare(16, 16, false);
+  assert.equal(state[5], 0x80000000);
+  screen.setScreenRect(10.9, 20.1, 100.9, 40.9, 0x100000007);
+  screen.prepare(320, 240, false);
+  assert.equal(screen.mode, 7);
+  assert.deepEqual(Array.from(state.subarray(0, 4)), [10, 20, 100, 40]);
+  assert.deepEqual(
+    Array.from(new Float32Array(state.buffer, 16, 10)),
+    [50, 20, 0.5, 0, 60, 40, 0.5, 0, 0, 1],
+  );
+});
+
+test('automatic camera uses target dimensions and the resolved screen orientation', () => {
+  const screen = new EmoteD3d11Screen(),
+    matrices = new EmoteD3d11Matrices();
+  screen.setScreenRect(10, 20, 100, 40, 0);
+  screen.prepare(320, 240, true);
+  const upward = matrices.shaderMatrix(320, 240, screen.mode).slice();
+  screen.setScreenRect(70, 80, 20, 10, 0);
+  screen.prepare(320, 240, true);
+  assert.deepEqual(matrices.shaderMatrix(320, 240, screen.mode), upward);
+  screen.setScreenRect(70, 80, 20, 10, 7);
+  screen.prepare(320, 240, true);
+  const downward = matrices.shaderMatrix(320, 240, screen.mode).slice();
+  assert.equal(downward[0], upward[0]);
+  assert.equal(downward[5], -upward[5]);
+  screen.setScreenRect(0, 0, 0, 0, -1);
+  screen.prepare(320, 240, true);
+  assert.deepEqual(matrices.shaderMatrix(320, 240, screen.mode), downward);
+});
 
 const INVALID = 0x80070057 | 0,
   UNSUPPORTED = 0x887a0004 | 0,
