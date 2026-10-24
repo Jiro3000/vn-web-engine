@@ -7,6 +7,7 @@ import {EMOTE_TWO_PI, EmoteRotateTween, wrapAngle} from './controls/rotate.js';
 import {EmoteVariableClamp} from './player/clamp.js';
 import {EmoteTimelineSet} from './player/timelines.js';
 import {EmoteApiLog} from './player/api-log.js';
+import {emoteStereovisionCoefficients} from './player/stereovision.js';
 import type {
   EmoteClipDriver,
   EmoteClipFactory,
@@ -131,6 +132,13 @@ export class EmotePlayerCore {
     screenCount: 2,
     dirty: true,
   };
+  private readonly stereoVariables = new Map<
+    string,
+    {
+      readonly range: readonly [number, number];
+      readonly coefficients: Float32Array;
+    }
+  >();
   private asOriginalScale = false;
   flags = 0x201;
   private readonly forceSums = [
@@ -466,6 +474,121 @@ export class EmotePlayerCore {
     if (this.x64)
       for (const orbit of md.orbitControl ?? [])
         if (orbit.enabled) this.orbits.push(new EmoteOrbit(orbit, this.driverSha256));
+    if (this.x64 && md.stereovisionControl) {
+      const rangeOf = this.x64Clip.getVariableRange;
+      if (!rangeOf && md.stereovisionControl.variableMatchList.length)
+        throw Error('emotedriver: x64 clip missing getVariableRange');
+      for (const label of md.stereovisionControl.variableMatchList) {
+        const range = rangeOf!.call(this.mainClip, label);
+        if (!range) continue;
+        if (!this.stereoVariables.has(label))
+          this.stereoVariables.set(label, {
+            range,
+            coefficients: new Float32Array(this.stereovision.screenCount * 2),
+          });
+        this.setVariable(label, 0, 0, 0);
+      }
+      this.updateStereoCoefficients();
+    }
+  }
+
+  private updateStereoCoefficients(): void {
+    const state = this.stereovision;
+    for (const {range, coefficients} of this.stereoVariables.values())
+      emoteStereovisionCoefficients(
+        range[0],
+        range[1],
+        state.volume,
+        state.parallaxRatio,
+        state.screenCount,
+        coefficients,
+      );
+  }
+
+  /** Native 0x18000d3f0: synchronize ownership only on an eligible progress call. */
+  private updateStereoClips(): void {
+    if (!this.stereovision.enabled) {
+      if (this.clips.length === 2) this.clips.splice(1, 1);
+    } else if (this.clips.length === 1 && this.stereoVariables.size) {
+      const copy = this.createClip(this.motion);
+      if (copy === this.mainClip)
+        throw Error('emotedriver: clip factory did not create an independent stereo clip');
+      copy.assignState(this.mainClip);
+      this.clips.push(copy);
+    }
+    if (this.stereovision.enabled && this.stereovision.dirty) {
+      this.updateStereoCoefficients();
+      this.stereovision.dirty = false;
+    }
+  }
+
+  /** Native 0x18000f9f0: mirrored mapped variables swap screen order after sign handling. */
+  private applyClipVariable(label: string, value: number): void {
+    if (!this.x64 || !this.stereovision.enabled) {
+      this.mainClip.applyVariable(label, value);
+      return;
+    }
+    const variable = this.stereoVariables.get(label);
+    if (!variable) {
+      for (const clip of this.clips) clip.applyVariable(label, value);
+      return;
+    }
+    const count = this.stereovision.screenCount;
+    for (let screen = 0; screen < count; screen++) {
+      const index = this.mirror ? count - screen - 1 : screen;
+      this.clips[index]!.applyVariable(
+        label,
+        f32(
+          f32(value * variable.coefficients[screen * 2]!) + variable.coefficients[screen * 2 + 1]!,
+        ),
+      );
+    }
+  }
+
+  /** Native render slot72 clamps the uint32 screen index to the last owned clip. */
+  get renderClip(): EmotePlayerClip {
+    return this.clips[Math.min(this.currentClip >>> 0, this.clips.length - 1)]!;
+  }
+
+  setStereovisionEnabled(enabled: boolean): void {
+    this.requireX64();
+    this.stereovision.enabled = enabled;
+  }
+  getStereovisionEnabled(): boolean {
+    this.requireX64();
+    return this.stereovision.enabled;
+  }
+  setStereovisionVolume(volume: number): void {
+    this.requireX64();
+    volume = f32(volume);
+    if (volume !== this.stereovision.volume) {
+      this.stereovision.volume = volume;
+      this.stereovision.dirty = true;
+    }
+  }
+  getStereovisionVolume(): number {
+    this.requireX64();
+    return this.stereovision.volume;
+  }
+  setStereovisionParallaxRatio(ratio: number): void {
+    this.requireX64();
+    ratio = f32(ratio);
+    if (ratio !== this.stereovision.parallaxRatio) {
+      this.stereovision.parallaxRatio = ratio;
+      this.stereovision.dirty = true;
+    }
+  }
+  getStereovisionParallaxRatio(): number {
+    this.requireX64();
+    return this.stereovision.parallaxRatio;
+  }
+  setStereovisionRenderScreen(screen: number): void {
+    this.requireX64();
+    this.currentClip = screen | 0;
+  }
+  getStereovisionRenderScreen(): number {
+    this.requireX64();
+    return this.currentClip;
   }
 
   // -------------------------------------------------------------------------------------
@@ -537,7 +660,6 @@ export class EmotePlayerCore {
 
   /** 0x10012910: variables → main clip (0x100129d0 → 0x100319f0), then the clamps. */
   private applyVariables(): void {
-    const clip = this.mainClip;
     for (const label of this.cellOrder) {
       let v = this.timelines.blended(label, this.cells.get(label)!.value);
       if (this.x64) {
@@ -545,14 +667,13 @@ export class EmotePlayerCore {
         if (difference !== undefined) v = f32(v + difference);
       }
       if (this.mirrorSign(label)) v = -v;
-      clip.applyVariable(label, v);
+      this.applyClipVariable(label, v);
     }
     this.applyClamps();
   }
 
   /** 0x1001bff0: `clampControl` limits a two-variable pair to a disc (type 1) or eases it (0). */
   private applyClamps(): void {
-    const clip = this.mainClip;
     for (const c of this.clamps) {
       let lr = this.timelines.blended(c.varLr, this.cells.get(c.varLr)?.value ?? 0);
       let ud = this.timelines.blended(c.varUd, this.cells.get(c.varUd)?.value ?? 0);
@@ -566,8 +687,8 @@ export class EmotePlayerCore {
       lr = values[0]!;
       ud = values[1]!;
       if (this.mirrorSign(c.varLr)) lr = -lr;
-      clip.applyVariable(c.varLr, lr);
-      clip.applyVariable(c.varUd, ud);
+      this.applyClipVariable(c.varLr, lr);
+      this.applyClipVariable(c.varUd, ud);
     }
   }
 
@@ -586,7 +707,7 @@ export class EmotePlayerCore {
         return;
       }
       this.pendingFrames = 0;
-      // 0x1001fc00 maintains the stereovision clip pair only.
+      if (this.x64) this.updateStereoClips();
       if (this.x64) {
         for (const orbit of this.orbits) {
           const call = orbit.step(total);
@@ -687,17 +808,24 @@ export class EmotePlayerCore {
     this.root.y = this.flags & 2 ? f32(coord[1]! * scale) : coord[1]!;
     this.root.scale = scale;
     const channel = (i: number) => Math.trunc(color[i]!) | 0;
-    this.mainClip.color =
+    const packed =
       ((((((channel(3) << 8) | channel(2)) << 8) | channel(1)) << 8) | channel(0)) >>> 0;
     const degrees = f32(f32(rad * 360) / EMOTE_TWO_PI);
-    if (this.x64Clip.ownRotation)
-      this.x64Clip.setOwnRotation(Number.isFinite(degrees) ? wrapAngle(degrees, 360) : degrees);
-    else this.root.angle = degrees;
+    for (const clip of this.clips) {
+      clip.color = packed;
+      const access = clip as EmotePlayerClip & EmoteX64ClipPlayerAccess;
+      if (access.ownRotation)
+        access.setOwnRotation(Number.isFinite(degrees) ? wrapAngle(degrees, 360) : degrees);
+    }
+    if (!this.x64Clip.ownRotation) this.root.angle = degrees;
     this.writeRoot();
-    this.x64Clip.rootDirty = true;
     const gray = this.grayscaleTween.step(frames)[0]!;
     const value = gray <= 1 ? gray : 1;
-    this.x64Clip.setGrayscale(value > 0 ? 5 : 0, Math.trunc(f32(value * 255)));
+    for (const clip of this.clips) {
+      const access = clip as EmotePlayerClip & EmoteX64ClipPlayerAccess;
+      access.rootDirty = true;
+      access.setGrayscale(value > 0 ? 5 : 0, Math.trunc(f32(value * 255)));
+    }
   }
 
   /** Root node +0x283 (mirror) and +0x288..+0x29c; the clip sets its dirty flag on change. */

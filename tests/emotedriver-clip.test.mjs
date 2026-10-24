@@ -18,6 +18,59 @@ import {FrameSlot, loadHeader, loadContent} from '../dist/native/emotedriver/run
 import {ClipParameter, NodeState} from '../dist/native/emotedriver/runtime/clip/node.js';
 import {EmoteClipTime} from '../dist/native/emotedriver/runtime/clip/time.js';
 import {EmoteMotionClip, EmoteResource} from '../dist/native/emotedriver/runtime/clip.js';
+
+test('x64 variable ranges include loaded nested degenerate parameters and mesh-combinator ranges', async () => {
+  const {emoteScalarClipFactory} = await import('../dist/native/emotedriver/runtime/clip.js');
+  const parameter = (id, rangeBegin, rangeEnd) => ({
+    id,
+    rangeBegin,
+    rangeEnd,
+    division: 10,
+    discretization: false,
+    unread: {},
+  });
+  const patch = Float32Array.from({length: 32}, (_, i) => (i & 1 ? i >> 3 : (i >> 1) & 3) / 3);
+  const child = motion([], {parameters: [parameter('mixed', 5, 5)]});
+  const main = motion(
+    [
+      layer('nested', [frame(0, 2, {mask: 1, src: 'child', icon: 'm'})], {type: 3}),
+      layer(
+        'mesh',
+        [frame(0, 2, {mask: 0x2000001, src: 'tex', icon: 'i', mesh: {bp: patch, cc: null}})],
+        {
+          meshTransform: 1,
+          mesh: {
+            syncChildMask: 0,
+            division: 4,
+            combine: false,
+            combinators: [
+              {
+                key: 'shape',
+                rangeBegin: 7,
+                rangeEnd: -3,
+                meshCount: 2,
+                neutralIndex: 0,
+                raw: new Float32Array(64),
+              },
+            ],
+          },
+        },
+      ),
+    ],
+    {parameters: [parameter('mixed', 1, 0), parameter('constant', 2, 2)]},
+  );
+  const file = model({object: {main}, child: {m: child}});
+  file.sources.get('tex').icons.get('i').resolution = 1;
+  for (const wasm of [false, true]) {
+    const kernel = createEmoteMeshKernel({driverSha256: EMOTEDRIVER_X64_SHA256, wasm});
+    const clip = emoteScalarClipFactory([file], {kernel})(main);
+    clip.progress(0);
+    assert.deepEqual(clip.getVariableRange('mixed'), [0, 5]);
+    assert.deepEqual(clip.getVariableRange('shape'), [-3, 7]);
+    assert.equal(clip.getVariableRange('constant'), null);
+    assert.equal(clip.getVariableRange('unknown'), null);
+  }
+});
 import {
   composeEmoteMatrix,
   multiplyEmoteMatrices,

@@ -47,6 +47,7 @@ import {evaluateScalarMotions} from './nested.js';
 import {EmoteLayerPass} from './layer.js';
 import {EmoteSourceResolver, type EmoteSourceIcon} from './source.js';
 import {syncToParentMeshX64, type EmoteScalarVertexHost} from './vertices.js';
+import {expandEmoteVariableBounds} from '../player/stereovision.js';
 
 const f32 = Math.fround;
 const NEUTRAL = 0x808080ff;
@@ -468,6 +469,21 @@ export class EmoteMotionClip
   /** 0x180037cf0. */
   getVariable(label: string): number {
     return this.values.get(label) ?? 0;
+  }
+
+  /** 0x180038480: union of loaded parameter ranges and this clip's combinator registry. */
+  getVariableRange(label: string): readonly [number, number] | null {
+    const bounds = Float32Array.of(3.4028234663852886e38, -3.4028234663852886e38);
+    this.expandParameterBounds(label, bounds);
+    this.combinators?.expandVariableBounds(label, bounds);
+    return bounds[0]! < bounds[1]! ? [bounds[0]!, bounds[1]!] : null;
+  }
+
+  private expandParameterBounds(label: string, bounds: Float32Array): void {
+    for (const parameter of this.parameters)
+      if (parameter.id === label)
+        expandEmoteVariableBounds(bounds, parameter.rangeBegin, parameter.rangeEnd);
+    for (const node of this.subNodes) node.sub?.expandParameterBounds(label, bounds);
   }
 
   // Object and motion ------------------------------------------------------------------

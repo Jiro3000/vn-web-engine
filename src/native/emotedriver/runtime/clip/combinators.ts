@@ -2,6 +2,7 @@ import type {EmoteMeshCombinator} from '../../../../formats/kirikiri/emote-model
 import {emoteBuild, EMOTEDRIVER_X64_SHA256} from '../../build.js';
 import {EmoteUnsupportedError} from '../errors.js';
 import type {EmoteCombinatorTarget, EmoteCombinatorVariables} from '../interfaces.js';
+import {expandEmoteVariableBounds} from '../player/stereovision.js';
 
 /** X64 mesh-combinator registry (0x180058c50 / 0x180059e80). */
 const f32 = Math.fround;
@@ -146,6 +147,12 @@ export class EmoteMeshCombinators {
 
   get empty(): boolean {
     return this.layers.length === 0;
+  }
+
+  /** The combinator-variable contribution to 0x180038480. */
+  expandVariableBounds(label: string, bounds: Float32Array): void {
+    for (const variable of this.variables.get(label) ?? [])
+      expandEmoteVariableBounds(bounds, variable.rangeBegin, variable.rangeEnd);
   }
 
   /** 0x180059e80. */

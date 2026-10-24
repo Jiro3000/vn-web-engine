@@ -334,6 +334,8 @@ export interface EmoteClipPlayerAccess {
 
 /** Additional clip state used by the exact x64 player's transform and physics calls. */
 export interface EmoteX64ClipPlayerAccess extends EmoteClipPlayerAccess {
+  /** Native 0x180038480; required when stereovisionControl requests variable bounds. */
+  getVariableRange?(label: string): readonly [number, number] | null;
   /** Root dirty byte (+0x340); x64 writes it even when the transform is unchanged. */
   rootDirty: boolean;
   smoothing: boolean;

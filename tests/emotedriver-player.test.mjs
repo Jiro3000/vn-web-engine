@@ -1091,3 +1091,161 @@ test('x64 API scopes unwind after exceptions and assignment records its native i
   assert.equal(entries.length, 3);
   assert.ok(entries[2].startsWith('SetVariable v '));
 });
+
+async function stereoCore(fields = {}, wasm = false) {
+  const {emoteScalarClipFactory} = await import('../dist/native/emotedriver/runtime/clip.js');
+  const {createEmoteMeshKernel} = await import('../dist/native/emotedriver/runtime/mesh/index.js');
+  const file = model({
+    stereovisionControl: {variableMatchList: ['eye', 'missing', 'constant', 'eye']},
+    ...fields,
+  });
+  const definition = {
+    ...motion,
+    lastTime: 20,
+    loopTime: -1,
+    parameters: [
+      {id: 'eye', discretization: false, rangeBegin: -1, rangeEnd: 1, division: 10, unread: {}},
+      {id: 'constant', discretization: false, rangeBegin: 2, rangeEnd: 2, division: 10, unread: {}},
+    ],
+  };
+  file.objects = new Map([['chara', {motions: new Map([['motion', definition]]), unread: {}}]]);
+  const kernel = createEmoteMeshKernel({driverSha256: EMOTEDRIVER_X64_SHA256, wasm});
+  assert.equal(kernel.accelerated, wasm);
+  let randomDraws = 0;
+  const core = new EmotePlayerCore({
+    model: file,
+    driverSha256: EMOTEDRIVER_X64_SHA256,
+    random: () => {
+      randomDraws++;
+      return 0.5;
+    },
+    createClip: emoteScalarClipFactory([file], {kernel}),
+    createControls: createEmoteControls,
+  });
+  return {core, randomDraws: () => randomDraws};
+}
+
+test('x64 stereo owns a deferred independent clip pair and advances both with shared transforms', async () => {
+  for (const wasm of [false, true]) {
+    const {core, randomDraws} = await stereoCore({}, wasm);
+    assert.equal(core.stereoVariables.size, 1);
+    assert.equal(core.cells.has('eye'), true);
+    assert.equal(core.cells.has('missing'), false);
+    assert.equal(core.cells.has('constant'), false);
+    assert.equal(core.getStereovisionEnabled(), false);
+    assert.equal(core.getStereovisionVolume(), 1);
+    assert.equal(core.getStereovisionParallaxRatio(), f32(0.2));
+    core.setVariable('plain', 4, 0, 0);
+    core.setCoord(12, -4, 0, 0);
+    core.setScale(2, 0, 0);
+    core.setColor(0x20406080, 0, 0);
+    core.setGrayscale(0.5, 0, 0);
+    core.setStereovisionEnabled(true);
+    core.queueDivisor = 2;
+    core.queueSlot = 0;
+    core.queuePhase = 0;
+    core.progress(1);
+    assert.equal(core.clips.length, 1);
+    core.progress(1);
+    assert.equal(core.clips.length, 2);
+    const [left, right] = core.clips;
+    assert.notEqual(left, right);
+    assert.notEqual(left.values, right.values);
+    assert.notEqual(left.root.adjust, right.root.adjust);
+    assert.notEqual(left.parameters[0], right.parameters[0]);
+    assert.equal(left.resource, right.resource);
+    assert.equal(left.getVariable('eye'), 0.19999998807907104);
+    assert.equal(right.getVariable('eye'), -0.19999998807907104);
+    for (const clip of core.clips) {
+      assert.equal(clip.getVariable('plain'), 4);
+      assert.equal(clip.timeRunning, 2);
+      assert.equal(clip.rootX, 12);
+      assert.equal(clip.rootY, -4);
+      assert.equal(clip.rootZoomX, 2);
+      assert.equal(clip.color, 0x20406080);
+      assert.equal(clip.grayscaleMode, 5);
+      assert.equal(clip.grayscaleLevel, 127);
+    }
+    assert.equal(randomDraws(), 0);
+    assert.equal(core.stereovision.dirty, false);
+    core.setStereovisionVolume(1 + 2 ** -25);
+    core.setStereovisionParallaxRatio(0.2);
+    assert.equal(core.stereovision.dirty, false);
+    core.setStereovisionRenderScreen(1);
+    assert.equal(core.renderClip, right);
+    core.setStereovisionRenderScreen(-1);
+    assert.equal(core.getStereovisionRenderScreen() >>> 0, 0xffffffff);
+    assert.equal(core.renderClip, right);
+    core.setStereovisionEnabled(false);
+    assert.equal(core.clips.length, 2);
+    core.progress(1);
+    assert.equal(core.clips.length, 2);
+    core.progress(1);
+    assert.equal(core.clips.length, 1);
+    assert.equal(core.renderClip, left);
+    assert.equal(left.getVariable('eye'), 0);
+    assert.throws(
+      () => player().core.setStereovisionEnabled(true),
+      /API unavailable for DLL build/,
+    );
+  }
+});
+
+test('x64 stereo mirrors screen mapping, rebuilds dirty coefficients and retains destination ranges on copy', async () => {
+  const {core} = await stereoCore({mirror: true, mirrorControl: {variableMatchList: ['eye']}});
+  core.setStereovisionEnabled(true);
+  core.progress(0);
+  assert.equal(core.clips[0].getVariable('eye'), -0.19999998807907104);
+  assert.equal(core.clips[1].getVariable('eye'), 0.19999998807907104);
+  core.setStereovisionVolume(-0);
+  core.progress(0);
+  assert.equal(core.clips[0].getVariable('eye'), 0);
+  assert.equal(core.clips[1].getVariable('eye'), 0);
+  core.setStereovisionVolume(0);
+  assert.equal(Object.is(core.getStereovisionVolume(), -0), true);
+  assert.equal(core.stereovision.dirty, false);
+  core.setStereovisionVolume(0.75);
+  core.setStereovisionParallaxRatio(0.4);
+  assert.equal(core.stereovision.dirty, true);
+  core.progress(0);
+  const copied = core.clone();
+  assert.equal(copied.clips.length, 2);
+  assert.equal(copied.getStereovisionEnabled(), true);
+  assert.equal(copied.stereovision.dirty, true);
+  assert.notEqual(copied.stereoVariables.get('eye'), core.stereoVariables.get('eye'));
+  assert.notEqual(
+    copied.stereoVariables.get('eye').coefficients.buffer,
+    core.stereoVariables.get('eye').coefficients.buffer,
+  );
+  for (let i = 0; i < 2; i++) {
+    assert.notEqual(copied.clips[i], core.clips[i]);
+    assert.equal(copied.clips[i].getVariable('eye'), core.clips[i].getVariable('eye'));
+  }
+  copied.progress(0);
+  assert.deepEqual(
+    copied.stereoVariables.get('eye').coefficients,
+    core.stereoVariables.get('eye').coefficients,
+  );
+  copied.setStereovisionEnabled(false);
+  copied.progress(0);
+  assert.equal(copied.clips.length, 1);
+  assert.equal(core.clips.length, 2);
+  core.clearAPILog();
+  core.startRecordAPILog();
+  core.setStereovisionEnabled(false);
+  core.setStereovisionVolume(1);
+  core.setStereovisionParallaxRatio(0.2);
+  core.setStereovisionRenderScreen(0);
+  assert.equal(core.getAPILog(), '');
+});
+
+test('x64 stereo keeps a single clip when no requested variable has a nonzero range', async () => {
+  const {core} = await stereoCore({
+    stereovisionControl: {variableMatchList: ['missing', 'constant']},
+  });
+  core.setStereovisionEnabled(true);
+  core.progress(0);
+  assert.equal(core.getStereovisionEnabled(), true);
+  assert.equal(core.clips.length, 1);
+  assert.equal(core.stereoVariables.size, 0);
+});

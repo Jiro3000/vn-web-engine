@@ -618,3 +618,15 @@ uses its frame count. Reaching the end stops replay and uses the caller's frame
 count. Parsing accepts native numeric prefixes and rounds decimal input directly
 to float32. Clones start with an empty, idle log; assignment retains the receiving
 log and records its own native internal timeline calls when recording is active.
+
+The shared x64 core also owns stereovision control and its clip pair. Loading
+`stereovisionControl.variableMatchList` resolves exact variable labels against the
+union of loaded motion parameters and mesh-combinator ranges; only nonzero ranges
+participate. Screen coefficients retain the native float32 operation order and
+cancellation. Mapped variables reverse screen order when mirrored; other variables
+apply to every owned clip. Transform and grayscale updates apply to both clips.
+An eligible progress call creates the second independent clip when enabled and a
+range is available, or removes it when disabled. Render-screen selection clamps its
+uint32 index to the last owned clip. Clones load independent range/coefficient
+storage; assignment retains the destination's ranges and marks coefficients dirty.
+The public D3D11 player assembly supplies the actual selected-clip draw pass.
