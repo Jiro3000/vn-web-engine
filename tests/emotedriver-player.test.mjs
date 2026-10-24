@@ -854,7 +854,11 @@ test('x64 clone composes the actual shared scalar factory with independent clips
   source.setVariableDiff('module', 'v', 2, 8, 0);
   source.setOuterForce('hair', 2, 3, 8, 0);
   source.progress(2);
+  source.startRecordAPILog();
   const copy = source.clone();
+  assert.equal(source.isRecordingAPILog(), true);
+  assert.equal(copy.isRecordingAPILog(), false);
+  assert.equal(copy.getAPILog(), '');
   assert.notEqual(copy, source);
   assert.notEqual(copy.clips[0], source.clips[0]);
   assert.notEqual(copy.controls, source.controls);
@@ -908,4 +912,182 @@ test('x64 state assignment preserves native wind reconfiguration and stopped-sou
   assert.notEqual(fresh.controls.wind, null);
   assert.equal(fresh.controls.wind.start, 0);
   assert.equal(fresh.controls.wind.goal, 10);
+});
+
+test('x64 API recording suppresses nested timeline and progress calls and preserves native mode changes', () => {
+  const {core} = x64Player({
+    timelineControl: [
+      timeline('main', [['v', [frame(0, 1), frame(4, 5), empty(20)]]], {lastTime: 20}),
+    ],
+  });
+  core.startRecordAPILog();
+  core.fadeInTimeline('main', 8, 0);
+  core.progress(1);
+  core.fadeOutTimeline('main', 4, -1);
+  assert.equal(
+    core.getAPILog(),
+    'FadeInTimeline main 8.000000 0.000000\r\nCalcLayerFrameInfo 1.000000\r\nFadeOutTimeline main 4.000000 -1.000000\r\n',
+  );
+  core.stopRecordAPILog();
+  core.setCoord(3, 4, 0, 0);
+  core.startRecordAPILog();
+  core.pass();
+  assert.ok(core.getAPILog().endsWith('Pass \r\n'));
+  core.startReplayAPILog();
+  assert.equal(core.isRecordingAPILog(), false);
+  assert.equal(core.isReplayingAPILog(), true);
+  core.stopRecordAPILog(); // Both native stop entry points select mode0.
+  assert.equal(core.isReplayingAPILog(), false);
+  core.clearAPILog();
+  assert.equal(core.getAPILog(), '');
+  core.setAPILog('');
+  assert.equal(core.getAPILog(), '\r\n'); // Native splitter inserts the empty input substring.
+  core.setAPILog('\r\nSetScale 2 0 0\n\nPass \r\n\0ignored');
+  assert.equal(core.getAPILog(), '\r\nSetScale 2 0 0\r\nPass \r\n');
+  assert.throws(() => player().core.startRecordAPILog(), /API unavailable for DLL build/);
+});
+
+test('x64 API recording preserves float32 fixed decimals, signed color, UTF8 buffer limits and unlogged operations', () => {
+  const {core} = x64Player();
+  core.startRecordAPILog();
+  core.setCoord(1.0000000596046448, -0, 0.0078125, 0.0234375);
+  core.setColor(0xffffffff, 0, 0);
+  core.setVariable('huge', f32(3.4028234663852886e38), 0, 0);
+  core.setVariable('infinite', Infinity, -Infinity, NaN);
+  core.setVariable('界'.repeat(400), 1, 0, 0);
+  assert.equal(
+    core.getAPILog(),
+    'SetCoord 1.000000 -0.000000 0.007812 0.023438\r\nSetColor -1 0.000000 0.000000\r\nSetVariable huge 340282346638528859811704183484516925440.000000 0.000000 0.000000\r\nSetVariable infinite inf -inf nan\r\nBufferOverflow\r\n',
+  );
+  const saved = core.getAPILog();
+  core.show();
+  core.hide();
+  core.setSmoothing(false);
+  core.setBlinkEnabled(false);
+  core.setAsOriginalScale(true);
+  core.startWind(0, 10, 1, 0, 1);
+  core.stopWind();
+  assert.equal(core.getAPILog(), saved);
+  core.clearAPILog();
+  core.startRecordAPILog();
+  core.setVariable('界'.repeat(328), 1, 0, 0);
+  core.setVariable('界'.repeat(328) + 'a', 1, 0, 0);
+  const entries = core.getAPILog().split('\r\n');
+  assert.equal(new TextEncoder().encode(entries[0]).length, 1023);
+  assert.equal(entries[1], 'BufferOverflow');
+});
+
+test('x64 API replay uses frame markers and applies queued commands before the caller frame fallback', () => {
+  const {core, log} = x64Player();
+  const input =
+    'Unknown command\nSetCoord 4.5 -3 0 0\nCalcLayerFrameInfo 0.25\nSetVariable plain 0.333333 0 0\nSetCoord 10 20 0 0\nCalcLayerFrameInfo 0.5\nSetScale 2 0 0\nCalcLayerFrameInfo broken\n';
+  core.setAPILog(input);
+  const saved = core.getAPILog();
+  core.startReplayAPILog();
+  log.length = 0;
+  core.progress(99);
+  assert.deepEqual(core.getCoord(), {x: 4.5, y: -3});
+  assert.ok(log.includes('advance:0.25'));
+  assert.equal(core.isReplayingAPILog(), true);
+  log.length = 0;
+  core.progress(99);
+  assert.deepEqual(core.getCoord(), {x: 10, y: 20});
+  assert.equal(core.getVariable('plain'), f32(0.333333));
+  assert.ok(log.includes('advance:0.5'));
+  assert.equal(core.isReplayingAPILog(), true);
+  log.length = 0;
+  core.progress(0.125);
+  assert.equal(core.getScale(), 2);
+  assert.ok(log.includes('advance:0.125'));
+  assert.equal(core.isReplayingAPILog(), false);
+  assert.equal(core.getAPILog(), saved);
+  core.setAPILog('CalcLayerFrameInfo 0\n');
+  core.startReplayAPILog();
+  core.progress(7);
+  assert.equal(core.isReplayingAPILog(), true); // A final marker returns before the end check.
+  core.progress(0);
+  assert.equal(core.isReplayingAPILog(), false);
+});
+
+test('x64 API replay scans numeric prefixes and rounds decimal input directly to binary32', () => {
+  const {core} = x64Player();
+  core.setAPILog(
+    'SetVariable up 1.000000059604644775390625000001 0 0\nSetVariable down 1.000000059604644775390624999999 0 0\nSetVariable tie 1.000000059604644775390625 0 0\nSetVariable hex 0x1.ep+2 0 0\nSetVariable prefixes 2-3+4 trailing text\nSetVariable malformed 1e+ 0 0\nCalcLayerFrameInfo 0\n',
+  );
+  core.startReplayAPILog();
+  core.progress(0);
+  assert.equal(core.getVariable('up'), f32(1 + 2 ** -23));
+  assert.equal(core.getVariable('down'), 1);
+  assert.equal(core.getVariable('tie'), 1);
+  assert.equal(core.getVariable('hex'), 7.5);
+  assert.equal(core.getVariable('prefixes'), 2);
+  assert.equal(core.cells.has('malformed'), false);
+  core.setAPILog(
+    'SetVariable \uFEFFlabel 2 0 0\nSetVariable bomNumber \uFEFF2 0 0\nCalcLayerFrameInfo 0\n',
+  );
+  core.startReplayAPILog();
+  core.progress(0);
+  assert.equal(core.getVariable('\uFEFFlabel'), 2);
+  assert.equal(core.cells.has('label'), false);
+  assert.equal(core.cells.has('bomNumber'), false);
+  const edges = [
+    ['0x1p-149', 0x00000001],
+    ['0x1p-150', 0x00000000],
+    ['0x1.0000001p-150', 0x00000001],
+    ['-0x1p-150', 0x80000000],
+    ['0x0.ffffffp-126', 0x00800000],
+    ['0x0.fffffeffffffffffffp-126', 0x007fffff],
+    ['0x1.fffffep127', 0x7f7fffff],
+    ['0x1.ffffffp127', 0x7f800000],
+    ['1.000000059604644775390625' + '0'.repeat(1000) + '1', 0x3f800001],
+  ];
+  core.setAPILog(
+    edges.map(([text], i) => `SetVariable edge${i} ${text} 0 0`).join('\n') +
+      '\nCalcLayerFrameInfo 0\n',
+  );
+  core.startReplayAPILog();
+  core.progress(0);
+  const bytes = new DataView(new ArrayBuffer(4));
+  for (const [i, [, word]] of edges.entries()) {
+    bytes.setFloat32(0, core.getVariable(`edge${i}`), true);
+    assert.equal(bytes.getUint32(0, true), word);
+  }
+});
+
+test('x64 API scopes unwind after exceptions and assignment records its native internal calls', () => {
+  const {core, clip} = x64Player();
+  core.startRecordAPILog();
+  const evaluate = clip.evaluate;
+  clip.evaluate = () => {
+    throw Error('synthetic evaluation failure');
+  };
+  assert.throws(() => core.progress(0), /synthetic evaluation failure/);
+  clip.evaluate = evaluate;
+  core.setVariable('plain', 2, 0, 0);
+  assert.equal(
+    core.getAPILog(),
+    'CalcLayerFrameInfo 0.000000\r\nSetVariable plain 2.000000 0.000000 0.000000\r\n',
+  );
+  core.clearAPILog();
+  core.startRecordAPILog();
+  const source = x64Player().core;
+  source.setAPILog('Pass \r\n');
+  core.assignState(source);
+  assert.equal(core.isRecordingAPILog(), true);
+  assert.equal(core.getAPILog(), 'StopTimeline \r\n');
+  assert.equal(source.getAPILog(), 'Pass \r\n');
+  const definitions = [
+    timeline('main', [['v', [frame(0, 1), frame(4, 5), empty(20)]]], {lastTime: 20}),
+  ];
+  const playing = x64Player({timelineControl: definitions}).core;
+  playing.playTimeline('main');
+  playing.progress(5);
+  const receiver = x64Player({timelineControl: definitions}).core;
+  receiver.startRecordAPILog();
+  receiver.assignState(playing);
+  const entries = receiver.getAPILog().trimEnd().split('\r\n');
+  assert.equal(entries[0], 'StopTimeline ');
+  assert.equal(entries[1], 'PlayTimeline main 1');
+  assert.equal(entries.length, 3);
+  assert.ok(entries[2].startsWith('SetVariable v '));
 });

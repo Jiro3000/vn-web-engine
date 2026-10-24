@@ -1,6 +1,7 @@
 import {emoteBuild, EMOTEDRIVER_X64_SHA256, type EmoteBuild} from '../../build.js';
 import type {EmoteTimeline} from '../../../../formats/kirikiri/emote-metadata.js';
 import {EmoteTween, easingPower} from '../controls/transition.js';
+import type {EmoteApiLogScope} from './api-log.js';
 
 /**
  * Timelines of `MEmotePlayer` (`timelineControl`): the label lists (`p+0x1a0` main,
@@ -36,6 +37,7 @@ export function normalizeTimelineLabel(label: string): string | null {
 
 /** What timelines call back into on their player. */
 export interface EmoteTimelineHost {
+  readonly apiLog?: EmoteApiLogScope | null;
   /** `p+0x30` (`queuing`): tweens queue instead of replacing. */
   readonly queuing: boolean;
   /** 0x10012510 (`SetVariable` core; `easing` is converted there). */
@@ -178,21 +180,26 @@ export class EmoteTimelineSet {
 
   /** 0x1001caf0. Without the parallel flag every playing timeline stops first. */
   play(label: string, flags: number): void {
-    if ((flags & PARALLEL) === 0) this.stop('');
-    const key = this.key(label);
-    if (key === null) return;
-    const state = this.states.get(key);
-    if (!state) return;
-    if (!this.playing.includes(key)) this.playing.push(key);
-    if (!state.loaded) state.load(this.instant);
-    if (this.x64) {
-      state.blendRatio = 1;
-      state.stopWhenBlendDone = 0;
-      state.stepped = false;
-      state.blend!.set([1], 0, 0, false);
+    try {
+      if (this.host.apiLog?.enter()) this.host.apiLog.record('PlayTimeline', [label, flags]);
+      if ((flags & PARALLEL) === 0) this.stop('');
+      const key = this.key(label);
+      if (key === null) return;
+      const state = this.states.get(key);
+      if (!state) return;
+      if (!this.playing.includes(key)) this.playing.push(key);
+      if (!state.loaded) state.load(this.instant);
+      if (this.x64) {
+        state.blendRatio = 1;
+        state.stopWhenBlendDone = 0;
+        state.stepped = false;
+        state.blend!.set([1], 0, 0, false);
+      }
+      this.setupPlay(state, flags);
+      this.seek(state, 0);
+    } finally {
+      this.host.apiLog?.leave();
     }
-    this.setupPlay(state, flags);
-    this.seek(state, 0);
   }
 
   /** 0x1001e650: stores the flags; difference tracks get a tween reset to 0. */
@@ -215,31 +222,42 @@ export class EmoteTimelineSet {
 
   /** 0x1001cdc0. The empty label stops all. */
   stop(label: string): void {
-    const key = this.key(label);
-    if (key === '') {
-      this.playing = [];
-      return;
+    try {
+      if (this.host.apiLog?.enter()) this.host.apiLog.record('StopTimeline', [label]);
+      const key = this.key(label);
+      if (key === '') {
+        this.playing = [];
+        return;
+      }
+      if (key === null) return;
+      if (this.x64) {
+        this.playing = this.playing.filter((name) => name !== key);
+        return;
+      }
+      const i = this.playing.indexOf(key);
+      if (i >= 0) this.removeAt(i);
+    } finally {
+      this.host.apiLog?.leave();
     }
-    if (key === null) return;
-    if (this.x64) {
-      this.playing = this.playing.filter((name) => name !== key);
-      return;
-    }
-    const i = this.playing.indexOf(key);
-    if (i >= 0) this.removeAt(i);
   }
 
   /** 0x1001cf30. Only loaded timelines; the blend tween advances only in the fade step. */
   setBlendRatio(label: string, value: number, frames: number, easing: number, stop: boolean): void {
-    const state = this.find(label);
-    if (!state?.loaded || !state.blend) return;
-    state.blend.set(
-      [f32(value)],
-      f32(frames),
-      easingPower(easing, this.driverSha256),
-      this.host.queuing,
-    );
-    state.stopWhenBlendDone = stop ? 1 : 0;
+    try {
+      if (this.host.apiLog?.enter())
+        this.host.apiLog.record('SetTimelineBlendRatio', [label, value, frames, easing, stop]);
+      const state = this.find(label);
+      if (!state?.loaded || !state.blend) return;
+      state.blend.set(
+        [f32(value)],
+        f32(frames),
+        easingPower(easing, this.driverSha256),
+        this.host.queuing,
+      );
+      state.stopWhenBlendDone = stop ? 1 : 0;
+    } finally {
+      this.host.apiLog?.leave();
+    }
   }
 
   /** 0x1001d090. */
@@ -666,15 +684,27 @@ export class EmoteTimelineSet {
   }
 
   fadeIn(label: string, frames: number, easing: number): void {
-    if (!this.isPlaying(label)) {
-      this.play(label, PARALLEL | DIFFERENCE);
-      this.setBlendRatio(label, 0, 0, 0, false);
+    try {
+      if (this.host.apiLog?.enter())
+        this.host.apiLog.record('FadeInTimeline', [label, frames, easing]);
+      if (!this.isPlaying(label)) {
+        this.play(label, PARALLEL | DIFFERENCE);
+        this.setBlendRatio(label, 0, 0, 0, false);
+      }
+      this.setBlendRatio(label, 1, frames, easing, false);
+    } finally {
+      this.host.apiLog?.leave();
     }
-    this.setBlendRatio(label, 1, frames, easing, false);
   }
 
   fadeOut(label: string, frames: number, easing: number): void {
-    this.setBlendRatio(label, 0, frames, easing, true);
+    try {
+      if (this.host.apiLog?.enter())
+        this.host.apiLog.record('FadeOutTimeline', [label, frames, easing]);
+      this.setBlendRatio(label, 0, frames, easing, true);
+    } finally {
+      this.host.apiLog?.leave();
+    }
   }
 
   private removeAt(index: number): void {

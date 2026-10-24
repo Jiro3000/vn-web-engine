@@ -594,7 +594,7 @@ controllers; each loaded eye consumes one process RNG word for its new interval.
 Wind is reconfigured after copying its saved arguments, retaining native reuse of
 an existing field and restart from a stopped source's saved arguments. Native
 stereovision control fields copy with the mapping marked dirty; stereovision
-rendering and API-log integration remain separate paths. Loading initializes the
+rendering and public player assembly remain separate paths. Loading initializes the
 inverse scale using the native float32 product before division.
 
 `runtime/render/d3d11-screen.ts` owns the x64 screen projection rectangle.
@@ -604,3 +604,17 @@ Mode -1 retains the previous mapping with manual matrices and selects the full
 external target in mode 1 with automatic matrices. Changing the rectangle does
 not resize the automatic camera, which uses the target resource dimensions.
 This projection state does not change the compositor's D3D11 viewport bindings.
+
+`runtime/player/api-log.ts` supplies the x64 core's native record/replay state.
+Its 18 command kinds cover frame progress, variable and transform setters, forces,
+timeline operations, Skip, Step and Pass. A shared scope counter suppresses nested
+record entries while allowing the calls to execute, including timeline callbacks
+into variable setters. Recording appends fixed-decimal float32 values and signed
+int32 fields to CRLF-separated lines; a formatted command that does not fit the
+native 1,024-byte buffer becomes `BufferOverflow`. Float formatting follows the
+DLL's CRT initialization, including ties-to-even rounding and negative zero.
+Replay executes commands through the next valid `CalcLayerFrameInfo` marker and
+uses its frame count. Reaching the end stops replay and uses the caller's frame
+count. Parsing accepts native numeric prefixes and rounds decimal input directly
+to float32. Clones start with an empty, idle log; assignment retains the receiving
+log and records its own native internal timeline calls when recording is active.
