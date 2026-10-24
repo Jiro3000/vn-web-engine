@@ -108,9 +108,10 @@ resources independently of any references retained by the D3D11 context.
 
 `render` submits the selected stereo clip's evaluated draw list without progressing
 playback. The compositor owns the context viewport; E-mote target/mask binding
-preserves it. The Artemis UI's registration and compositor interoperation remain
-separate integration work; private renderer probes do not establish full public
-framebuffer or route acceptance.
+preserves it. The Artemis UI registers this library and D3D11 on the compositor's
+shared context. The engine uses Native contracts and a shared graphics surface
+interface; backend texture leases and shader preparation stay in UI wiring.
+Synthetic public-pipeline probes do not establish full model or route acceptance.
 
 `runtime/render/d3d11-program.ts` owns a shader, its input layout for a vertex stage,
 and reflected constant buffers through the D3D11 contract. Named writes update CPU

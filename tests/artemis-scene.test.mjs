@@ -758,6 +758,7 @@ async function rasterFixture(
   surfaces = false,
   clock = undefined,
   files = {},
+  nativeGraphics = undefined,
 ) {
   const {ArtemisImageGraphics} = await import('../dist/engines/artemis/image-graphics.js');
   const {ArtemisLayers} = await import('../dist/engines/artemis/layers.js');
@@ -809,6 +810,7 @@ async function rasterFixture(
     rasterPolicy,
     undefined,
     clock,
+    nativeGraphics?.(target),
   );
   const layers = new ArtemisLayers(
     revision,
@@ -961,39 +963,50 @@ test('Artemis anime builds a timed animation layer that draws its current frame 
 
 test('Artemis E-mote layers redraw their player into the layer target once per draw', async () => {
   let now = 500;
-  const {graphics, layers, prepared, invalidated} = await rasterFixture(undefined, true, {
-    now: () => now,
-  });
+  const {ArtemisEmoteLayer} = await import('../dist/engines/artemis/emote-layer.js');
+  const nativeCalls = [];
+  const view = {};
+  const {graphics, layers, prepared, invalidated} = await rasterFixture(
+    undefined,
+    true,
+    {
+      now: () => now,
+    },
+    {},
+    (target) => ({
+      device: {},
+      context: {
+        rsSetViewports: (values) => nativeCalls.push(['viewport', values]),
+        clearRenderTargetView: (value, color) => nativeCalls.push(['clear', value, color]),
+      },
+      createSurface(width, height) {
+        const image = {width, height, pixels: new Uint8Array(0)};
+        prepared.push(image);
+        return {
+          image,
+          view,
+          prepare: () => nativeCalls.push(['prepare']),
+          dispose: () => target.invalidate(image),
+        };
+      },
+    }),
+  );
   const advanced = [];
-  const atlas = {type: 'L8', width: 4, height: 4, pixel: {bytes: new Uint8Array(16)}};
-  const item = {
-    blank: false,
-    clipFlags: 0,
-    bm: 0x10,
-    bmParam: 0,
-    grayscaleMode: 0,
-    grayscaleLevel: 0,
-    z: 0,
-    texIndex: 0,
-    file: {sources: new Map([['s', {texture: atlas}]])},
-    attr: 0,
-    left: 0,
-    top: 0,
-    width: 4,
-    height: 4,
-    opa: 255,
-    colors: Uint32Array.of(0x808080ff, 0x808080ff, 0x808080ff, 0x808080ff),
-    grid: {cols: 1, rows: 1, points: Float32Array.of(-2, -1, 2, -1, -2, 1, 2, 1)},
-    stencilType: 0,
-    stencilParent: null,
-    composite: [],
-  };
-  const emote = {
-    width: 4,
-    height: 2,
-    player: {clip: {drawList: [item], smoothing: false}},
-    advance: (time) => advanced.push(time),
-  };
+  let released = 0;
+  const emote = new ArtemisEmoteLayer(
+    {
+      progress: (frames) => advanced.push(frames),
+      render: () => nativeCalls.push(['render']),
+      release: () => ++released,
+    },
+    4,
+    2,
+    true,
+    {
+      setRenderTarget: (value, depth) => nativeCalls.push(['target', value, depth]),
+      setScreenRect: (...rect) => nativeCalls.push(['screen', ...rect]),
+    },
+  );
   try {
     const actor = graphics.createEmoteLayer(emote);
     assert.equal(graphics.emoteOf(actor), emote);
@@ -1011,17 +1024,27 @@ test('Artemis E-mote layers redraw their player into the layer target once per d
             : 'screen'
         : c.kind,
     );
-    // Atlas decode, the player's draw into the layer, then the layer's own quad.
-    assert.deepEqual(kinds, ['surface', 'triangles', 'layer', 'triangles', 'screen', 'triangles']);
+    assert.deepEqual(nativeCalls, [
+      ['target', view, null],
+      ['screen', 0, 0, 4, 2, 1],
+      ['viewport', [{topLeftX: 0, topLeftY: 0, width: 4, height: 2, minDepth: 0, maxDepth: 1}]],
+      ['clear', view, [0, 0, 0, 0]],
+      ['render'],
+      ['prepare'],
+    ]);
+    // Native rendering is complete before the compositor samples its shared texture.
+    assert.deepEqual(kinds, ['triangles']);
     assert.equal(commands.at(-1).texture, actor.texture);
-    assert.deepEqual(advanced, [500]);
+    assert.deepEqual(advanced, [0]);
     now = 516;
-    assert.equal(graphics.drawCommitted(layers.scene).commands.length, 4);
-    assert.deepEqual(advanced, [500, 516]);
+    assert.equal(graphics.drawCommitted(layers.scene).commands.length, 1);
+    assert.deepEqual(advanced, [0, Math.fround(16 * Math.fround(0.06))]);
+    assert.equal(nativeCalls.filter(([method]) => method === 'render').length, 2);
     assert.ok(prepared.includes(layer));
     await layers.dispatch(command('lydel', {id: 'e'}));
     layers.commit();
     assert.ok(invalidated.includes(layer));
+    assert.equal(released, 1);
     assert.throws(() => graphics.image(actor.texture), /released/);
   } finally {
     layers.close();

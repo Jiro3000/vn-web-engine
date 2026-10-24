@@ -1,5 +1,5 @@
 import {luaText, type LuaValue} from '../../core/lua51/runtime.js';
-import {EmoteUnsupportedError, type EmotePlayer} from '../../native/emotedriver/player.js';
+import type {IEmoteD3d11Player} from '../../native/emotedriver/contract.js';
 
 /** luabind's argument converters of the IEmotePlayer class (0x14001b070): `f` float and
  * `u` unsigned int take Lua numbers, `s` char const* Lua strings, `b` bool Lua booleans. */
@@ -7,7 +7,7 @@ type Argument = 'f' | 'u' | 's' | 'b';
 type Converted = number | string | boolean;
 interface Method {
   readonly args: readonly Argument[];
-  readonly call: (player: EmotePlayer, args: readonly Converted[]) => LuaValue | void;
+  readonly call: (player: IEmoteD3d11Player, args: readonly Converted[]) => LuaValue | void;
 }
 
 const n = (value: Converted) => value as number;
@@ -25,14 +25,14 @@ const methods: ReadonlyMap<string, Method> = new Map<string, Method>([
   ['getSmoothing', {args: [], call: (p) => p.getSmoothing()}],
   ['setMeshDivisionRatio', {args: ['f'], call: (p, a) => p.setMeshDivisionRatio(n(a[0]!))}],
   ['getMeshDivisionRatio', {args: [], call: (p) => p.getMeshDivisionRatio()}],
-  ['setQueuing', {args: ['b'], call: (p, a) => void (p.queuing = b(a[0]!))}],
-  ['getQueuing', {args: [], call: (p) => p.queuing}],
-  ['setHairScale', {args: ['f'], call: (p, a) => void (p.hairScale = n(a[0]!))}],
-  ['getHairScale', {args: [], call: (p) => p.hairScale}],
-  ['setPartsScale', {args: ['f'], call: (p, a) => void (p.partsScale = n(a[0]!))}],
-  ['getPartsScale', {args: [], call: (p) => p.partsScale}],
-  ['setBustScale', {args: ['f'], call: (p, a) => void (p.bustScale = n(a[0]!))}],
-  ['getBustScale', {args: [], call: (p) => p.bustScale}],
+  ['setQueuing', {args: ['b'], call: (p, a) => p.setQueuing(b(a[0]!))}],
+  ['getQueuing', {args: [], call: (p) => p.getQueuing()}],
+  ['setHairScale', {args: ['f'], call: (p, a) => p.setHairScale(n(a[0]!))}],
+  ['getHairScale', {args: [], call: (p) => p.getHairScale()}],
+  ['setPartsScale', {args: ['f'], call: (p, a) => p.setPartsScale(n(a[0]!))}],
+  ['getPartsScale', {args: [], call: (p) => p.getPartsScale()}],
+  ['setBustScale', {args: ['f'], call: (p, a) => p.setBustScale(n(a[0]!))}],
+  ['getBustScale', {args: [], call: (p) => p.getBustScale()}],
   [
     'setCoord',
     {
@@ -221,13 +221,13 @@ const nul = (value: Uint8Array) => {
 /** Calls the IEmotePlayer method `name` with Lua arguments, as luabind's overload match:
  * a wrong argument count or type raises the Lua error. */
 export function callArtemisEmotePlayer(
-  player: EmotePlayer,
+  player: IEmoteD3d11Player,
   name: string,
   args: readonly LuaValue[],
 ): LuaValue[] {
   const method = methods.get(name);
   if (!method) {
-    if (unmodeled.includes(name)) throw new EmoteUnsupportedError(`IEmotePlayer:${name}`);
+    if (unmodeled.includes(name)) throw unsupported(`IEmotePlayer:${name}`);
     throw Error(`IEmotePlayer has no method ${name}`);
   }
   if (args.length !== method.args.length)
@@ -299,4 +299,11 @@ export function artemisEmoteLuaPrelude(): string {
           emoteFlush(self)
           return emoteWrap(emoteGet(self, args))
         end`;
+}
+
+/** Keep the established Lua host error text without importing a DLL implementation. */
+function unsupported(feature: string): Error {
+  const error = new Error(`E-mote: ${feature} is not supported`);
+  error.name = 'EmoteUnsupportedError';
+  return error;
 }

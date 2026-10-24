@@ -272,6 +272,7 @@ export function createMetadataLayerFixture(
       if (!actors.delete(actor)) throw Error('Probe actor released twice');
       actor.shader?.close();
       actor.animation?.close();
+      actor.emote?.dispose();
       if (actor.kind === 'message') actor.messageOwner.release(actor.message);
       if (actor.video) {
         const references = videos.get(actor.video) - 1;

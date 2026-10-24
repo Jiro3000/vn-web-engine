@@ -1452,11 +1452,23 @@ shared E-mote driver port in `src/native/emotedriver` (see its README).
 - Drawing (`ArtemisEmoteLayer`, CEmoteLayer draw 0x14001adf0): each draw that reaches the
   layer advances the player by the elapsed clock time (at most 1000 ms, as 60 fps frames;
   `progress(0)` on the first draw) when `progress` is set, then renders the clip's draw
-  list into the layer's render target, cleared to transparent black. `image-graphics.ts`
-  holds the layer as an image actor whose texture is that target; the E-mote commands of a
-  draw list precede its other targets, and each layer renders once per draw list.
+  list into the layer's render target, cleared to transparent black. The engine calls
+  revision2 of the Native E-mote contract and the D3D11 contract. `image-graphics.ts`
+  holds the layer as an image actor whose texture is that target; native rendering
+  completes before the compositor samples it, once per draw list.
 - A CEmoteLayer copy clones its player natively (0x14001a4f0); that clone is not modeled
   and a copy is refused.
+
+`ui/runtimes/artemis-native.ts` prepares the exact DLL's shaders and mesh kernel,
+then registers the E-mote and D3D11 implementations with the existing library loader.
+Both graphics implementations share the compositor's WebGL2 context. A
+`D3d11SurfaceHost` supplies owned target views and GPU-only images; the backend's
+texture lease keeps each native allocation alive until the compositor detaches it.
+Native texture row0 is the logical top, while ordinary compositor render surfaces
+retain their bottom-row convention. Compositor draws restore fixed raster state
+after native rendering. Passing a native surface to the compositor requires no
+framebuffer readback or CPU pixel copy. Lua player proxies hold native references
+independently of layer lifetime and release them on garbage collection or VM close.
 
 ## Nonvisual resource geometry probe
 

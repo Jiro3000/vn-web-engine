@@ -17,7 +17,7 @@ import {decodeCp932, encodeCp932} from '../../text/cp932.js';
 import {readArtemisPngComments} from './png-comments.js';
 import {installArtemisLuaOs, type ArtemisLuaOsHost} from './lua-os.js';
 import {artemisEmoteLuaPrelude, callArtemisEmotePlayer} from './emote-lua.js';
-import type {EmotePlayer} from '../../native/emotedriver/player.js';
+import type {IEmoteD3d11Player} from '../../native/emotedriver/contract.js';
 
 /** `createEmoteLayer` arguments after luabind's type filter (0x140151480). */
 export interface ArtemisEmoteLayerRequest {
@@ -34,9 +34,9 @@ export interface ArtemisLuaEmoteHost {
   readonly version: string;
   /** Creates the layer and returns its player; 'missing' when a file does not exist, and
    * 'suspended' while files are read (the call is repeated on resume). */
-  createLayer(request: ArtemisEmoteLayerRequest): EmotePlayer | 'missing' | 'suspended';
+  createLayer(request: ArtemisEmoteLayerRequest): IEmoteD3d11Player | 'missing' | 'suspended';
   /** The player of the current actor at `id`. */
-  layer(id: string): EmotePlayer | 'not-found' | 'not-emote';
+  layer(id: string): IEmoteD3d11Player | 'not-found' | 'not-emote';
 }
 
 export interface ArtemisLuaHost {
@@ -598,7 +598,7 @@ export class ArtemisLua {
     }
     installArtemisLuaOs(this.vm, host.os, () => (host.wallClock ? host.wallClock() : Date.now()));
   }
-  private readonly emotePlayers = new Map<number, EmotePlayer>();
+  private readonly emotePlayers = new Map<number, IEmoteD3d11Player>();
   private emoteHandle = 0;
   /** `getEmoteVersion`, `createEmoteLayer` and `getEmoteLayer` (Rev.3258 0x1401535d0,
    * 0x140151480, 0x140152960). Players reach Lua as handles that the prelude wraps. */
@@ -606,8 +606,9 @@ export class ArtemisLua {
     const host = this.host;
     if (!host.suspendableTags || !host.reportError)
       throw Error('Artemis E-mote layers require a coroutine owner and error reports');
-    const handle = (player: EmotePlayer) => {
+    const handle = (player: IEmoteD3d11Player) => {
       const id = ++this.emoteHandle;
+      player.addRef();
       this.emotePlayers.set(id, player);
       return id;
     };
@@ -661,7 +662,13 @@ export class ArtemisLua {
       return callArtemisEmotePlayer(player, luaText(args[1]), args.slice(2));
     });
     this.vm.bind('artemisEmoteRelease', (args) => {
-      for (const id of args) this.emotePlayers.delete(id as number);
+      for (const id of args) {
+        const player = this.emotePlayers.get(id as number);
+        if (player) {
+          this.emotePlayers.delete(id as number);
+          player.release();
+        }
+      }
       return [];
     });
   }
@@ -803,7 +810,21 @@ export class ArtemisLua {
     );
   }
   close(): void {
-    this.vm.close();
+    const errors: unknown[] = [];
+    try {
+      this.vm.close();
+    } catch (error) {
+      errors.push(error);
+    }
+    const players = [...this.emotePlayers.values()];
+    this.emotePlayers.clear();
+    for (const player of players)
+      try {
+        player.release();
+      } catch (error) {
+        errors.push(error);
+      }
+    if (errors.length) throw new AggregateError(errors, 'Artemis Lua retirement failed');
   }
 }
 

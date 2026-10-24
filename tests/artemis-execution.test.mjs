@@ -6,6 +6,68 @@ import {ArtemisScript} from '../dist/engines/artemis/script.js';
 import {luaText} from '../dist/core/lua51/runtime.js';
 const bytes = (s) => new TextEncoder().encode(s);
 
+test('Lua E-mote proxies own native references through GC and close without requiring a concrete player', () => {
+  let references = 1,
+    additions = 0,
+    releases = 0,
+    hair = 1,
+    queuing = false;
+  const player = {
+    addRef: () => (additions++, ++references),
+    release: () => (releases++, --references),
+    setHairScale: (value) => {
+      hair = value;
+    },
+    getHairScale: () => hair,
+    setQueuing: (value) => {
+      queuing = value;
+    },
+    getQueuing: () => queuing,
+  };
+  const requests = [],
+    reports = [];
+  const lua = new ArtemisLua({
+    suspendableTags: true,
+    reportError: (value) => reports.push(value),
+    emote: {
+      version: '3.9.8\nsynthetic-contract',
+      createLayer: (request) => (requests.push(request), player),
+      layer: () => player,
+    },
+  });
+  try {
+    lua.vm.execute(
+      bytes(`
+      assert(engine:getEmoteVersion() == '3.9.8\\nsynthetic-contract')
+      held = engine:createEmoteLayer{id='native',files={'a.psb'},width=4,height=2,progress=false}
+      local other = engine:getEmoteLayer{id='native'}
+      held:setHairScale(1.23456789)
+      assert(other:getHairScale() == held:getHairScale())
+      other:setQueuing(true)
+      assert(held:getQueuing() == true)
+    `),
+    );
+    assert.equal(hair, Math.fround(1.23456789));
+    assert.equal(queuing, true);
+    assert.deepEqual(requests, [
+      {id: 'native', files: ['a.psb'], width: 4, height: 2, progress: false},
+    ]);
+    assert.equal(additions, 2);
+    lua.vm.execute(
+      bytes(`collectgarbage('collect'); collectgarbage('collect'); held:getHairScale()`),
+    );
+    assert.equal(releases, 1);
+    assert.equal(references, 2);
+    assert.deepEqual(reports, []);
+  } finally {
+    lua.close();
+  }
+  assert.equal(references, 1);
+  assert.equal(releases, 2);
+  lua.close();
+  assert.equal(releases, 2);
+});
+
 test('Release-mode Lua debug skips arbitrary arguments before validation and follows the current debug mode', () => {
   let mode = 0;
   const lua = new ArtemisLua({debugMode: () => mode});
