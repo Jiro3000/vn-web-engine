@@ -44,7 +44,7 @@ export type EmotePlayerClip = EmoteClipDriver & EmoteClipPlayerAccess;
 
 export interface EmotePlayerCoreOptions {
   readonly driverSha256?: string;
-  /** Process-wide generator used by the x64 blink and wind controls. */
+  /** X64 resource-group generator, retained across clones and InitCore. */
   readonly random?: () => number;
   readonly model: EmoteModel;
   readonly createClip: EmoteClipFactory;

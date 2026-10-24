@@ -60,6 +60,8 @@ async function pageMain(fixture) {
   const device = created.device,
     ctx = created.immediateContext,
     objects = [];
+  // The native compositor establishes the viewport; E-mote target binding preserves it.
+  ctx.rsSetViewports([{topLeftX: 0, topLeftY: 0, width, height, minDepth: 0, maxDepth: 1}]);
   const own = (r) => {
     if (r.hr !== 0 || !r.value) throw Error('Resource creation ' + r.hr);
     objects.push(r.value);

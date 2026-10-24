@@ -83,12 +83,34 @@ existing Native library loader; an implementation is selected by image identity,
 and callers request the matching contract token.
 
 The D3D11 revision declares the native SDK/build exports, the default-allocator
-`InitParam` with device and immediate context, ten device operations and 98 player
+`InitParam` with device and immediate context, twelve device operations and 98 player
 operations. Public objects use only Native contracts and plain values. Player
 coordinate/force output pointers become `{x, y}` results. Native slots and entry
 addresses are recorded on each member, including the x64 deleting-destructor slot
 that shifts reference counting. Unknown integer player slots 15/16 and device
 operations outside the audited subset are absent.
+
+`emoteDriverD3d11Library({shaders, kernel})` registers this revision for the exact
+x64 image. Shader extraction and mesh-kernel preparation happen before native
+export calls. `device-d3d11.ts` retains the caller's D3D11 device/context, owns the
+shader/atlas caches and external target, and assembles `player-d3d11.ts` from the
+shared scalar clip factory, controls and player core. Each input file's sources
+load before core construction; the last file supplies motion and metadata. Input
+PSB bytes remain unchanged and retained for the player group's lifetime.
+
+A player owns one device reference. Clones share the file/resource group and
+renderer while copying the core's playback state and mutable clips. Smoothing
+belongs to the shared group; assigning state leaves the destination group in place.
+`initCore` constructs on that existing group's last file. Each new resource group
+seeds its own xorshift generator from the low32 bits of the current Unix time;
+clones and `initCore` retain that generator. Last-owner retirement releases GPU
+resources independently of any references retained by the D3D11 context.
+
+`render` submits the selected stereo clip's evaluated draw list without progressing
+playback. The compositor owns the context viewport; E-mote target/mask binding
+preserves it. The Artemis UI's registration and compositor interoperation remain
+separate integration work; private renderer probes do not establish full public
+framebuffer or route acceptance.
 
 `runtime/render/d3d11-program.ts` owns a shader, its input layout for a vertex stage,
 and reflected constant buffers through the D3D11 contract. Named writes update CPU
@@ -582,7 +604,7 @@ variable source. Immutable models and cached frame sequences remain shared.
 Native renderer cache pointers and pass links are discarded, draw items are
 rebuilt, and the top root is marked dirty for its next layer pass. The player core
 separately owns control, timeline and tween state; its private x64 copy path uses
-these independent clips while the public D3D11 player assembly remains pending.
+these independent clips in the public D3D11 player assembly.
 
 The x64 core copy follows `0x180008b50` / `0x180009df0`. It replaces raw variable
 cells and the orbit vector, copies nine transform/force tweens and matching-label
@@ -590,11 +612,11 @@ expression controls, then restarts and seeks the playing timelines. Existing
 module/label difference entries stay in the destination; missing entries acquire
 owned tween copies. Applied transforms, flags, original-scale mode, accumulated
 forces and physics/blink caches stay local. A clone starts fresh physics and blink
-controllers; each loaded eye consumes one process RNG word for its new interval.
+controllers; each loaded eye consumes one resource-group RNG word for its new interval.
 Wind is reconfigured after copying its saved arguments, retaining native reuse of
 an existing field and restart from a stopped source's saved arguments. Native
 stereovision control fields copy with the mapping marked dirty; stereovision
-rendering and public player assembly remain separate paths. Loading initializes the
+render selection uses the public player's current clip. Loading initializes the
 inverse scale using the native float32 product before division.
 
 `runtime/render/d3d11-screen.ts` owns the x64 screen projection rectangle.

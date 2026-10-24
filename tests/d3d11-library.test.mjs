@@ -944,6 +944,15 @@ test('E-mote native draw states use complete native descriptors and retire parti
   );
   const color = device.createTexture2D(textureDesc({format: 28}), null).value;
   const view = device.createRenderTargetView(color, null).value;
+  const callerViewport = {
+    topLeftX: 1,
+    topLeftY: 2,
+    width: 3,
+    height: 2,
+    minDepth: 0.25,
+    maxDepth: 0.75,
+  };
+  ctx.rsSetViewports([callerViewport]);
   renderer.render(
     [],
     {texture: color, view, depth: null, width: 4, height: 4, subresource: 0},
@@ -954,9 +963,7 @@ test('E-mote native draw states use complete native descriptors and retire parti
   assert.equal(bound.views[0], view);
   bound.views[0].release();
   assert.deepEqual(ctx.rsGetScissorRects(), [{left: 0, top: 0, right: 4, bottom: 4}]);
-  assert.deepEqual(ctx.rsGetViewports(), [
-    {topLeftX: 0, topLeftY: 0, width: 4, height: 4, minDepth: 0, maxDepth: 1},
-  ]);
+  assert.deepEqual(ctx.rsGetViewports(), [callerViewport]);
   ctx.omSetRenderTargets([], null);
   ctx.rsSetState(null);
   ctx.omSetDepthStencilState(null, 0);

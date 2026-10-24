@@ -229,6 +229,14 @@ export class EmoteD3d11Renderer {
     }
   }
 
+  /** Native resource load (0x180030900) creates every file source before Core construction. */
+  loadModelSources(model: EmoteX64Model): void {
+    if (this.closed) throw new Error('Using a released E-mote renderer');
+    for (const {texture} of model.sources.values())
+      if (texture && !this.used.has(texture))
+        this.used.set(texture, this.textures.acquire(texture, model.spec));
+  }
+
   /** Native render draws into the caller's target; clearing belongs to the compositor. */
   render(
     items: readonly EmoteScalarDrawItem[],
@@ -354,16 +362,8 @@ export class EmoteD3d11Renderer {
     const ctx = this.context;
     ctx.psSetShaderResources(0, [null, null, null]);
     ctx.omSetRenderTargets([target.view], target.depth);
-    ctx.rsSetViewports([
-      {
-        topLeftX: 0,
-        topLeftY: 0,
-        width: target.width,
-        height: target.height,
-        minDepth: 0,
-        maxDepth: 1,
-      },
-    ]);
+    // Native0x1800619e0 binds the views without replacing the caller's viewport.
+    // Mask targets have the output dimensions and inherit that same viewport.
     ctx.rsSetState(this.raster);
     ctx.rsSetScissorRects([{left: 0, top: 0, right: target.width, bottom: target.height}]);
     ctx.omSetDepthStencilState(this.depth, 0);
