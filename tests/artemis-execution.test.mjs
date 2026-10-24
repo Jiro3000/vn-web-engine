@@ -68,6 +68,117 @@ test('Lua E-mote proxies own native references through GC and close without requ
   assert.equal(releases, 2);
 });
 
+test('Lua E-mote primitive methods forward native values and overloads through the player contract', () => {
+  const calls = [];
+  const results = {
+    getState: -3.25,
+    getStereovisionVolume: 0.375,
+    getStereovisionParallaxRatio: -0.625,
+    getStereovisionRenderScreen: 0xffffffff,
+    isRecordingAPILog: true,
+    isReplayingAPILog: false,
+    getAPILog: 'ログ\n原文',
+  };
+  const names = [
+    'getState',
+    'render',
+    'setStereovisionVolume',
+    'getStereovisionVolume',
+    'setStereovisionParallaxRatio',
+    'getStereovisionParallaxRatio',
+    'setStereovisionRenderScreen',
+    'getStereovisionRenderScreen',
+    'startRecordAPILog',
+    'stopRecordAPILog',
+    'isRecordingAPILog',
+    'startReplayAPILog',
+    'stopReplayAPILog',
+    'isReplayingAPILog',
+    'clearAPILog',
+    'getAPILog',
+    'setAPILog',
+    'initCore',
+  ];
+  let references = 1;
+  const player = {
+    addRef: () => ++references,
+    release: () => --references,
+    ...Object.fromEntries(
+      names.map((name) => [
+        name,
+        (...args) => {
+          calls.push([name, ...args]);
+          return results[name];
+        },
+      ]),
+    ),
+  };
+  const lua = new ArtemisLua({
+    suspendableTags: true,
+    reportError: () => assert.fail('unexpected E-mote report'),
+    emote: {version: 'synthetic', createLayer: () => player, layer: () => player},
+  });
+  try {
+    lua.vm.execute(
+      bytes(`
+      held = engine:getEmoteLayer{id='native'}
+      assert(held:getState('coordX'..string.char(0)..'ignored') == -3.25)
+      assert(select('#', held:render()) == 0)
+      assert(select('#', held:setStereovisionVolume(1.23456789)) == 0)
+      assert(held:getStereovisionVolume() == 0.375)
+      held:setStereovisionParallaxRatio(-2.34567891)
+      assert(held:getStereovisionParallaxRatio() == -0.625)
+      held:setStereovisionRenderScreen(-1)
+      assert(held:getStereovisionRenderScreen() == 4294967295)
+      held:startRecordAPILog()
+      held:stopRecordAPILog()
+      assert(held:isRecordingAPILog() == true)
+      held:startReplayAPILog()
+      held:stopReplayAPILog()
+      assert(held:isReplayingAPILog() == false)
+      held:clearAPILog()
+      assert(held:getAPILog() == 'ログ\\n原文')
+      held:setAPILog('記録'..string.char(0)..'ignored')
+      assert(select('#', held:initCore()) == 0)
+    `),
+    );
+    assert.deepEqual(calls, [
+      ['getState', 'coordX'],
+      ['render'],
+      ['setStereovisionVolume', Math.fround(1.23456789)],
+      ['getStereovisionVolume'],
+      ['setStereovisionParallaxRatio', Math.fround(-2.34567891)],
+      ['getStereovisionParallaxRatio'],
+      ['setStereovisionRenderScreen', 0xffffffff],
+      ['getStereovisionRenderScreen'],
+      ['startRecordAPILog'],
+      ['stopRecordAPILog'],
+      ['isRecordingAPILog'],
+      ['startReplayAPILog'],
+      ['stopReplayAPILog'],
+      ['isReplayingAPILog'],
+      ['clearAPILog'],
+      ['getAPILog'],
+      ['setAPILog', '記録'],
+      ['initCore'],
+    ]);
+    for (const expression of [
+      "held:setStereovisionVolume('1')",
+      'held:setStereovisionRenderScreen(true)',
+      'held:setAPILog(1)',
+      'held:getState()',
+      'held:render(1)',
+      'held:getAPILog(false)',
+      'held:initCore(nil)',
+    ])
+      assert.throws(() => lua.vm.execute(bytes(expression)), /No matching overload found/);
+    assert.equal(calls.length, 18);
+  } finally {
+    lua.close();
+  }
+  assert.equal(references, 1);
+});
+
 test('Release-mode Lua debug skips arbitrary arguments before validation and follows the current debug mode', () => {
   let mode = 0;
   const lua = new ArtemisLua({debugMode: () => mode});

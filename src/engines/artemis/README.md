@@ -1448,7 +1448,12 @@ shared E-mote driver port in `src/native/emotedriver` (see its README).
   profiles (`artemisEmoteLayerSize`), or the stage size when it is empty.
 - `getEmoteLayer(id)` returns the player of the current actor at `id`; the luabind
   wrapper (`emote-lua.ts`) exposes the `IEmotePlayer` methods with the native argument
-  conversions.
+  conversions. Scalar state queries, stereovision controls, explicit rendering,
+  API-log recording/replay and core initialization call the public Native contract.
+  Lua floats are stored as float32, unsigned arguments keep their low32 bits and
+  narrow strings stop at NUL. Void methods return no Lua values. Manual reference
+  operations, clone/state-assignment userdata and the two reference-output getters
+  remain refused until their Lua ownership and marshaling are modeled.
 - Drawing (`ArtemisEmoteLayer`, CEmoteLayer draw 0x14001adf0): each draw that reaches the
   layer advances the player by the elapsed clock time (at most 1000 ms, as 60 fps frames;
   `progress(0)` on the first draw) when `progress` is set, then renders the clip's draw

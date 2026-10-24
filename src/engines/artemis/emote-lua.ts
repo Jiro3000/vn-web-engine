@@ -53,6 +53,7 @@ const methods: ReadonlyMap<string, Method> = new Map<string, Method>([
   ['getGrayscale', {args: [], call: (p) => p.getGrayscale()}],
   ['setAsOriginalScale', {args: ['b'], call: (p, a) => p.setAsOriginalScale(b(a[0]!))}],
   ['isAsOriginalScale', {args: [], call: (p) => p.isAsOriginalScale()}],
+  ['getState', {args: ['s'], call: (p, a) => p.getState(s(a[0]!))}],
   ['countVariables', {args: [], call: (p) => p.countVariables()}],
   ['getVariableLabelAt', {args: ['u'], call: (p, a) => text(p.getVariableLabelAt(n(a[0]!)))}],
   ['countVariableFrameAt', {args: ['u'], call: (p, a) => p.countVariableFrameAt(n(a[0]!))}],
@@ -145,8 +146,21 @@ const methods: ReadonlyMap<string, Method> = new Map<string, Method>([
   ['step', {args: [], call: (p) => p.step()}],
   ['progress', {args: ['f'], call: (p, a) => p.progress(n(a[0]!))}],
   ['isModified', {args: [], call: (p) => p.isModified()}],
+  ['render', {args: [], call: (p) => p.render()}],
   ['setStereovisionEnabled', {args: ['b'], call: (p, a) => p.setStereovisionEnabled(b(a[0]!))}],
   ['getStereovisionEnabled', {args: [], call: (p) => p.getStereovisionEnabled()}],
+  ['setStereovisionVolume', {args: ['f'], call: (p, a) => p.setStereovisionVolume(n(a[0]!))}],
+  ['getStereovisionVolume', {args: [], call: (p) => p.getStereovisionVolume()}],
+  [
+    'setStereovisionParallaxRatio',
+    {args: ['f'], call: (p, a) => p.setStereovisionParallaxRatio(n(a[0]!))},
+  ],
+  ['getStereovisionParallaxRatio', {args: [], call: (p) => p.getStereovisionParallaxRatio()}],
+  [
+    'setStereovisionRenderScreen',
+    {args: ['u'], call: (p, a) => p.setStereovisionRenderScreen(n(a[0]!))},
+  ],
+  ['getStereovisionRenderScreen', {args: [], call: (p) => p.getStereovisionRenderScreen()}],
   ['isCharaProfileAvailable', {args: [], call: (p) => p.isCharaProfileAvailable()}],
   ['getCharaHeight', {args: [], call: (p) => p.getCharaHeight()}],
   ['countCharaProfiles', {args: [], call: (p) => p.countCharaProfiles()}],
@@ -160,14 +174,23 @@ const methods: ReadonlyMap<string, Method> = new Map<string, Method>([
     {args: ['f', 'f', 'f'], call: (p, a) => p.setOuterRot(n(a[0]!), n(a[1]!), n(a[2]!))},
   ],
   ['getOuterRot', {args: [], call: (p) => p.getOuterRot()}],
+  ['startRecordAPILog', {args: [], call: (p) => p.startRecordAPILog()}],
+  ['stopRecordAPILog', {args: [], call: (p) => p.stopRecordAPILog()}],
+  ['isRecordingAPILog', {args: [], call: (p) => p.isRecordingAPILog()}],
+  ['startReplayAPILog', {args: [], call: (p) => p.startReplayAPILog()}],
+  ['stopReplayAPILog', {args: [], call: (p) => p.stopReplayAPILog()}],
+  ['isReplayingAPILog', {args: [], call: (p) => p.isReplayingAPILog()}],
+  ['clearAPILog', {args: [], call: (p) => p.clearAPILog()}],
+  ['getAPILog', {args: [], call: (p) => text(p.getAPILog())}],
+  ['setAPILog', {args: ['s'], call: (p, a) => p.setAPILog(s(a[0]!))}],
   ['getSuitableClearColor', {args: [], call: (p) => p.getSuitableClearColor()}],
+  ['initCore', {args: [], call: (p) => p.initCore()}],
   ['setBlinkEnabled', {args: ['b'], call: (p, a) => p.setBlinkEnabled(b(a[0]!))}],
   ['getBlinkEnabled', {args: [], call: (p) => p.getBlinkEnabled()}],
 ]);
 
-/** Bound IEmotePlayer names without a modeled implementation: reference counting and
- * cloning, state assignment, out-parameter getters, rendering, stereovision volume and
- * screen, API logs and core initialization. Calling one is refused. */
+/** Bound IEmotePlayer names awaiting Lua object-lifetime and out-parameter marshaling.
+ * Calling one is refused; the Native player contract already provides these operations. */
 const unmodeled = [
   'addRef',
   'release',
@@ -175,25 +198,7 @@ const unmodeled = [
   'clone',
   'assignState',
   'getCoord',
-  'getState',
   'getOuterForce',
-  'render',
-  'setStereovisionVolume',
-  'getStereovisionVolume',
-  'setStereovisionParallaxRatio',
-  'getStereovisionParallaxRatio',
-  'setStereovisionRenderScreen',
-  'getStereovisionRenderScreen',
-  'startRecordAPILog',
-  'stopRecordAPILog',
-  'isRecordingAPILog',
-  'startReplayAPILog',
-  'stopReplayAPILog',
-  'isReplayingAPILog',
-  'clearAPILog',
-  'getAPILog',
-  'setAPILog',
-  'initCore',
 ];
 
 function convert(kind: Argument, value: LuaValue | undefined): Converted | undefined {
