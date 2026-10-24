@@ -1010,7 +1010,6 @@ test('Artemis E-mote layers redraw their player into the layer target once per d
   try {
     const actor = graphics.createEmoteLayer(emote);
     assert.equal(graphics.emoteOf(actor), emote);
-    assert.throws(() => graphics.copyImageLayer(actor), /E-mote layer copy/);
     assert.ok(layers.attachActor('e', actor));
     layers.commit();
     const commands = graphics.drawCommitted(layers.scene).commands;
@@ -1049,6 +1048,129 @@ test('Artemis E-mote layers redraw their player into the layer target once per d
   } finally {
     layers.close();
   }
+});
+
+test('E-mote actor copies own native targets and players while retaining the last draw clock', async () => {
+  const {ArtemisEmoteLayer} = await import('../dist/engines/artemis/emote-layer.js');
+  let now = 0xfffffff0,
+    allocationFailure = false,
+    cloneFailure = false;
+  const surfaces = [],
+    players = [],
+    rendered = [];
+  const makePlayer = (value) => {
+    const player = {
+      value,
+      frames: [],
+      releases: 0,
+      getVariable: () => player.value,
+      setVariable: (_name, next) => {
+        player.value = next;
+      },
+      progress: (frames) => player.frames.push(frames),
+      render: () => rendered.push(player),
+      release: () => ++player.releases,
+      clone: () => (cloneFailure ? null : makePlayer(player.value)),
+    };
+    players.push(player);
+    return player;
+  };
+  const fixture = await rasterFixture(undefined, true, {now: () => now}, {}, (target) => ({
+    device: {},
+    context: {rsSetViewports() {}, clearRenderTargetView() {}},
+    createSurface(width, height) {
+      if (allocationFailure) throw new Error('synthetic native target allocation failure');
+      const surface = {
+        image: {width, height, pixels: new Uint8Array(0)},
+        view: {},
+        disposed: false,
+        prepare() {},
+        dispose() {
+          assert.equal(this.disposed, false);
+          this.disposed = true;
+          target.invalidate(this.image);
+        },
+      };
+      surfaces.push(surface);
+      return surface;
+    },
+  }));
+  const {graphics, layers, invalidated} = fixture;
+  const player = makePlayer(17);
+  const device = {setRenderTarget() {}, setScreenRect() {}};
+  try {
+    const original = graphics.createEmoteLayer(new ArtemisEmoteLayer(player, 4, 2, true, device));
+    assert.ok(layers.attachActor('e', original));
+    layers.commit();
+    graphics.drawCommitted(layers.scene);
+    assert.deepEqual(player.frames, [0]);
+    allocationFailure = true;
+    assert.throws(() => graphics.copyImageLayer(original), /target allocation failure/);
+    assert.equal(players.length, 1);
+    allocationFailure = false;
+    cloneFailure = true;
+    assert.throws(() => graphics.copyImageLayer(original), /player clone failed/);
+    assert.equal(players.length, 1);
+    assert.equal(surfaces.at(-1).disposed, true);
+    cloneFailure = false;
+    const copyShader = original.shaderState.copy;
+    original.shaderState.copy = () => {
+      throw new Error('synthetic shader copy failure');
+    };
+    try {
+      assert.throws(() => graphics.copyImageLayer(original), /shader copy failure/);
+      assert.equal(surfaces.at(-1).disposed, true);
+      assert.equal(players.at(-1).releases, 1);
+    } finally {
+      original.shaderState.copy = copyShader;
+    }
+    const copied = graphics.copyImageLayer(original),
+      copyLayer = graphics.emoteOf(copied);
+    assert.notEqual(copied.texture, original.texture);
+    assert.notEqual(graphics.image(copied.texture), graphics.image(original.texture));
+    assert.equal(copyLayer.device, device);
+    assert.equal(copyLayer.progress, true);
+    assert.deepEqual([copyLayer.width, copyLayer.height], [4, 2]);
+    assert.equal(copyLayer.player.getVariable('x'), 17);
+    copyLayer.player.setVariable('x', 99);
+    assert.equal(player.getVariable('x'), 17);
+    assert.ok(layers.attachActor('copy', copied));
+    layers.commit();
+    now = 16;
+    graphics.drawCommitted(layers.scene);
+    const elapsed = Math.fround(32 * Math.fround(0.06));
+    assert.deepEqual(player.frames, [0, elapsed]);
+    assert.deepEqual(copyLayer.player.frames, [elapsed]);
+    assert.equal(rendered.filter((p) => p === player).length, 2);
+    assert.equal(rendered.filter((p) => p === copyLayer.player).length, 1);
+    // A real property edit copies the retained actor before replacing it in the scene.
+    await layers.dispatch(command('lyprop', {id: 'e', left: '13'}));
+    const edited = layers.scene.entry('e').value;
+    assert.notEqual(edited.texture, original.texture);
+    assert.equal(edited.display.properties.left, 13);
+    assert.equal(original.display.properties.left, 0);
+    layers.commit();
+    assert.equal(player.releases, 1);
+    assert.ok(invalidated.includes(surfaces[0].image));
+    now = 32;
+    graphics.drawCommitted(layers.scene);
+    assert.deepEqual(graphics.emoteOf(edited).player.frames, [Math.fround(16 * Math.fround(0.06))]);
+    assert.equal(copyLayer.player.getVariable('x'), 99);
+    const frozen = new ArtemisEmoteLayer(makePlayer(0), 4, 2, false, device);
+    const frozenCopy = frozen.copy();
+    frozen.advance(100);
+    frozenCopy.advance(100);
+    assert.deepEqual(frozen.player.frames, []);
+    assert.deepEqual(frozenCopy.player.frames, []);
+    frozen.dispose();
+    frozen.dispose();
+    frozenCopy.dispose();
+    assert.throws(() => frozen.copy(), /released/);
+  } finally {
+    layers.close();
+  }
+  assert.ok(players.every((p) => p.releases === 1));
+  assert.ok(surfaces.every((s) => s.disposed));
 });
 
 test('Artemis raster upload refusal preserves the old scene and hidden images retain resource ownership', async () => {

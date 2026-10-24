@@ -637,19 +637,49 @@ export class ArtemisImageGraphics implements ArtemisLayerHost<ArtemisDisplayActo
   copyImageLayer(old: ArtemisDisplayActor): ArtemisDisplayActor;
   copyImageLayer(old: ArtemisDisplayActor): ArtemisDisplayActor {
     this.checkActor(old);
-    // A CEmoteLayer copy clones its player (0x14001a4f0), which is not modeled.
-    if (old.texture !== null && this.check(old).emote)
-      throw new Error('Unsupported Artemis E-mote layer copy');
-    const actor: ArtemisDisplayActor = {
-      ...old,
-      display: old.display.copy(),
-      shaderState: old.shaderState.copy(),
-      shaderConstants: old.shaderConstants.copy(),
-      raster: {...old.raster},
-      ...(isAnimation(old) ? {animation: old.animation.copy()} : {}),
-    };
+    const emote = old.texture === null ? undefined : this.check(old).emote;
+    let copiedTexture: Texture | undefined;
+    if (emote) {
+      // Native Copy(true) prepares a fresh target before cloning the player; no pixels copy.
+      const surface = this.nativeGraphics!.createSurface(emote.layer.width, emote.layer.height);
+      try {
+        const layer = emote.layer.copy();
+        copiedTexture = {
+          id: this.nextTexture++,
+          image: surface.image,
+          references: 1,
+          managed: true,
+          emote: {layer, surface, drawn: -1},
+        };
+      } catch (error) {
+        surface.dispose();
+        throw error;
+      }
+    }
+    let actor: ArtemisDisplayActor;
+    try {
+      actor = {
+        ...old,
+        display: old.display.copy(),
+        shaderState: old.shaderState.copy(),
+        shaderConstants: old.shaderConstants.copy(),
+        raster: {...old.raster},
+        ...(isAnimation(old) ? {animation: old.animation.copy()} : {}),
+      };
+      if (copiedTexture && actor.texture !== null) actor = {...actor, texture: copiedTexture.id};
+    } catch (error) {
+      if (copiedTexture?.emote) {
+        try {
+          copiedTexture.emote.surface.dispose();
+        } finally {
+          copiedTexture.emote.layer.dispose();
+        }
+      }
+      throw error;
+    }
     if (isText(old)) old.text.retain();
-    if (old.texture !== null) this.check(old).references++;
+    if (copiedTexture) this.textures.set(copiedTexture.id, copiedTexture);
+    else if (old.texture !== null) this.check(old).references++;
     this.wrappers.get(actor.wrapper)!.references++;
     this.actors.add(actor);
     const mask = this.masks.get(old);

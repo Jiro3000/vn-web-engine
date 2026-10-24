@@ -66,6 +66,21 @@ export class ArtemisEmoteLayer {
       this.player.progress(f32(Math.min((time - this.last) >>> 0, 1000) * FRAMES_PER_MILLISECOND));
     this.last = time;
   }
+  /** Native CEmoteSurface::Copy(true), 0x14001a4f0: copy player, flags and last draw clock. */
+  copy(): ArtemisEmoteLayer {
+    if (this.closed) throw new Error('Copying a released Artemis E-mote layer');
+    const player = this.player.clone();
+    if (!player) throw new Error('Artemis E-mote player clone failed');
+    const layer = new ArtemisEmoteLayer(
+      player,
+      this.width,
+      this.height,
+      this.progress,
+      this.device,
+    );
+    layer.last = this.last;
+    return layer;
+  }
   dispose(): void {
     if (this.closed) return;
     this.closed = true;

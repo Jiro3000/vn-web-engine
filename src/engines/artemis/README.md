@@ -1456,8 +1456,10 @@ shared E-mote driver port in `src/native/emotedriver` (see its README).
   revision2 of the Native E-mote contract and the D3D11 contract. `image-graphics.ts`
   holds the layer as an image actor whose texture is that target; native rendering
   completes before the compositor samples it, once per draw list.
-- A CEmoteLayer copy clones its player natively (0x14001a4f0); that clone is not modeled
-  and a copy is refused.
+- A CEmoteLayer copy prepares its own target and clones the public player
+  (CEmoteSurface::Copy(true), 0x14001a4f0). It retains the progress flag and last
+  draw timestamp, so each actor advances independently from the copied clock.
+  The new target receives its own native render; no prior target pixels are copied.
 
 `ui/runtimes/artemis-native.ts` prepares the exact DLL's shaders and mesh kernel,
 then registers the E-mote and D3D11 implementations with the existing library loader.
