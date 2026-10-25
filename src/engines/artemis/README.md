@@ -1446,6 +1446,10 @@ shared E-mote driver port in `src/native/emotedriver` (see its README).
   A missing file reports the native error and returns nil. A zero width or height takes
   the rectangle of the `boundsLeft`/`boundsTop`/`boundsRight`/`boundsBottom` chara
   profiles (`artemisEmoteLayerSize`), or the stage size when it is empty.
+  Motion-file bytes use a sixteen-entry cache in access order, keyed by resolved
+  installation paths. Pending batches remain available until the repeated call can
+  supply every file, including players larger than the cache capacity. Runtime
+  shutdown clears both pending and cached bytes and discards late read completions.
 - `getEmoteLayer(id)` returns the player of the current actor at `id`; the luabind
   wrapper (`emote-lua.ts`) exposes the `IEmotePlayer` methods with the native argument
   conversions. Scalar state queries, stereovision controls, explicit rendering,

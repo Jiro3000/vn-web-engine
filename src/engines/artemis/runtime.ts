@@ -1234,7 +1234,16 @@ export class ArtemisRuntime {
       // CEmoteSurface constructor0x14001a270 explicitly selects alpha masks (device slot5).
       emoteDevice.setMaskMode(1);
     }
-    const emoteBytes = new Map<string, Uint8Array>();
+    // Pending reads are consumed at the repeated Lua call. The completed cache
+    // retains the sixteen most recently used files, like the former model cache.
+    const emoteBytes = new Map<string, Uint8Array>(),
+      emoteCache = new Map<string, Uint8Array>();
+    let emoteOpen = true;
+    this.closers.push(() => {
+      emoteOpen = false;
+      emoteBytes.clear();
+      emoteCache.clear();
+    });
     const emoteOwner = emoteDevice;
     const emote: ArtemisLuaEmoteHost | null = emoteOwner && {
       version: `${emoteExports!.emoteGetSDKVersion()}\n${emoteExports!.emoteGetBuildDateTime()}`,
@@ -1242,26 +1251,49 @@ export class ArtemisRuntime {
         const layers = this.layers;
         if (!layers.createEmoteLayer) throw Error('Unsupported Artemis E-mote layer owner');
         const images: Uint8Array[] = [],
-          reads: Promise<void>[] = [];
+          resolvedFiles: string[] = [],
+          reads: {file: string; resolved: string}[] = [];
         for (const file of request.files) {
-          const resolved = files.resolvePath(file);
-          const bytes = emoteBytes.get(resolved);
-          if (bytes) images.push(bytes);
-          else if (!files.paths.has(resolved)) return 'missing';
-          else
-            reads.push(
-              files.read(file).then((data) => {
-                if (data === null) throw Error('Artemis E-mote file disappeared: ' + file);
-                emoteBytes.set(resolved, data);
-              }),
-            );
+          const resolved = files.resolvePath(file),
+            cached = emoteCache.get(resolved),
+            bytes = cached ?? emoteBytes.get(resolved);
+          resolvedFiles.push(resolved);
+          if (bytes) {
+            images.push(bytes);
+            if (cached) {
+              emoteCache.delete(resolved);
+              emoteCache.set(resolved, cached);
+            }
+          } else if (!files.paths.has(resolved)) return 'missing';
+          else reads.push({file, resolved});
         }
         if (reads.length) {
-          suspend(Promise.all(reads));
+          // Publish only a complete successful read batch. Failed or late reads
+          // must not leave orphaned bytes after a call fails or the runtime closes.
+          suspend(
+            Promise.all(
+              reads.map(async ({file, resolved}) => {
+                const data = await files.read(file);
+                if (data === null) throw Error('Artemis E-mote file disappeared: ' + file);
+                return {resolved, data};
+              }),
+            ).then((loaded) => {
+              if (emoteOpen) for (const {resolved, data} of loaded) emoteBytes.set(resolved, data);
+            }),
+          );
           return 'suspended';
         }
+        // Capture every member before eviction: one player may need more than
+        // sixteen files even though only sixteen completed inputs stay cached.
+        for (const resolved of resolvedFiles) emoteBytes.delete(resolved);
         const player = emoteOwner.createPlayers(images);
         if (!player) throw new Error('E-mote player requires a motion file');
+        for (let i = 0; i < resolvedFiles.length; i++) {
+          const resolved = resolvedFiles[i]!;
+          emoteCache.delete(resolved);
+          emoteCache.set(resolved, images[i]!);
+          while (emoteCache.size > 16) emoteCache.delete(emoteCache.keys().next().value!);
+        }
         let layer: ArtemisEmoteLayer | null = null;
         try {
           const size = artemisEmoteLayerSize(player, request.width, request.height, {
