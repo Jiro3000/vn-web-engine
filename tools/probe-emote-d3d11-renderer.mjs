@@ -1,6 +1,6 @@
 import {readFile, readdir, stat, writeFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
-import {resolve} from 'node:path';
+import {resolve, join} from 'node:path';
 import {createHash} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 import {
@@ -41,8 +41,8 @@ async function pageMain(fixture) {
   const {EmoteD3d11Matrices} =
     await import('/runtime/native/emotedriver/runtime/render/d3d11-matrices.js');
   const {EmoteRenderer, EmoteTextureCache} =
-    await import('/runtime/native/emotedriver/renderer.js');
-  const {WebGLDrawTarget} = await import('/runtime/graphics/webgl-draw.js');
+    await import('/reference/native/emotedriver/renderer.js');
+  const {WebGLDrawTarget} = await import('/reference/graphics/webgl-draw.js');
   const width = 32,
     height = 24;
   const canvas = document.createElement('canvas');
@@ -990,7 +990,7 @@ async function pageMain(fixture) {
 
 if (process.argv.includes('--help'))
   console.log(
-    'Usage: node tools/probe-emote-d3d11-renderer.mjs --driver exact-driver.dll [--browser path] [--output new-results.json]',
+    'Usage: node tools/probe-emote-d3d11-renderer.mjs --driver exact-driver.dll --reference-dist saved-original-dist [--browser path] [--output new-results.json]',
   );
 else
   try {
@@ -999,27 +999,47 @@ else
       driverAt = args.indexOf('--driver');
     if (driverAt < 0 || !args[driverAt + 1])
       throw Error('--driver requires an exact native DLL image');
-    const driver = resolve(args.splice(driverAt, 2)[1]),
-      paths = [
-        driver,
-        'tools/probe-emote-d3d11-renderer.mjs',
-        'tools/lib/synthetic-browser-probe.mjs',
-        'src/native/emotedriver/runtime/render/renderer-d3d11.ts',
-        'src/native/emotedriver/runtime/render/d3d11-target.ts',
-        'src/native/emotedriver/runtime/render/d3d11-matrices.ts',
-        'src/native/emotedriver/contract.ts',
-        'src/native/emotedriver/renderer.ts',
-        'src/graphics/webgl-draw.ts',
-        'tests/d3d11-library.test.mjs',
-        'src/native/emotedriver/runtime/render/shaders.ts',
-        'src/native/emotedriver/runtime/render/d3d11-program.ts',
-        'src/native/emotedriver/runtime/render/d3d11-shaders.ts',
-        'src/native/emotedriver/runtime/render/d3d11-mesh.ts',
-        'src/native/emotedriver/runtime/render/vertex-colors.ts',
-        'src/native/emotedriver/runtime/render/d3d11-textures.ts',
-        'src/graphics/dxgi-layout.ts',
-        'src/platform/native-libraries.ts',
-      ];
+    const driver = resolve(args.splice(driverAt, 2)[1]);
+    const referenceAt = args.indexOf('--reference-dist');
+    if (referenceAt < 0 || !args[referenceAt + 1])
+      throw Error('--reference-dist requires an external saved-original compiled runtime');
+    const reference = resolve(args.splice(referenceAt, 2)[1]),
+      referencePaths = (await readdir(reference, {recursive: true}))
+        .filter((p) => p.endsWith('.js'))
+        .sort(),
+      modules = new Map(),
+      referenceFiles = [];
+    if (!referencePaths.includes('native/emotedriver/renderer.js'))
+      throw Error('Saved-original renderer is missing');
+    for (const path of referencePaths) {
+      const absolute = join(reference, path),
+        bytes = await readFile(absolute);
+      referenceFiles.push({
+        path: absolute,
+        bytes: bytes.length,
+        sha256: createHash('sha256').update(bytes).digest('hex'),
+      });
+      modules.set('/reference/' + path, bytes.toString('utf8'));
+    }
+    const paths = [
+      driver,
+      'tools/probe-emote-d3d11-renderer.mjs',
+      'tools/lib/synthetic-browser-probe.mjs',
+      'src/native/emotedriver/runtime/render/renderer-d3d11.ts',
+      'src/native/emotedriver/runtime/render/d3d11-target.ts',
+      'src/native/emotedriver/runtime/render/d3d11-matrices.ts',
+      'src/native/emotedriver/contract.ts',
+      'src/graphics/webgl-draw.ts',
+      'tests/d3d11-library.test.mjs',
+      'src/native/emotedriver/runtime/render/shaders.ts',
+      'src/native/emotedriver/runtime/render/d3d11-program.ts',
+      'src/native/emotedriver/runtime/render/d3d11-shaders.ts',
+      'src/native/emotedriver/runtime/render/d3d11-mesh.ts',
+      'src/native/emotedriver/runtime/render/vertex-colors.ts',
+      'src/native/emotedriver/runtime/render/d3d11-textures.ts',
+      'src/graphics/dxgi-layout.ts',
+      'src/platform/native-libraries.ts',
+    ];
     async function distFiles() {
       const found = [];
       for (const path of await readdir(new URL('dist/', root), {recursive: true}))
@@ -1054,15 +1074,23 @@ else
       fixture,
       pageMain,
       runtimeRoot: fileURLToPath(new URL('dist/', root)),
+      modules,
       name: 'vn-emote-d3d11-renderer',
     });
-    for (const f of files)
+    for (const f of [...files, ...referenceFiles])
       if (
         createHash('sha256')
           .update(await readFile(f.path))
           .digest('hex') !== f.sha256
       )
         throw Error('Source/dist changed during public device probe: ' + f.path);
+    if (
+      JSON.stringify(referencePaths) !==
+      JSON.stringify(
+        (await readdir(reference, {recursive: true})).filter((p) => p.endsWith('.js')).sort(),
+      )
+    )
+      throw Error('Saved-original reference file set changed during probe');
     if (JSON.stringify(dist) !== JSON.stringify(await distFiles()))
       throw Error('Complete compiled dist file set changed during public device probe');
     await writeFile(
@@ -1072,6 +1100,8 @@ else
           ...result,
           files,
           fullDistFileCount: dist.length,
+          referenceFiles,
+          referenceDist: reference,
           fixtureSha256,
           nodeVersion: process.version,
           head: execFileSync('git', ['rev-parse', 'HEAD'], {

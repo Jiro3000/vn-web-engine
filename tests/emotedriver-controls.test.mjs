@@ -16,7 +16,6 @@ import {
 } from '../dist/native/emotedriver/runtime/controls/index.js';
 import {EmoteTween} from '../dist/native/emotedriver/runtime/controls/transition.js';
 import {EmoteSelector} from '../dist/native/emotedriver/runtime/controls/selector.js';
-import {EmotePendulum as X64Pendulum} from '../dist/native/emotedriver/physics.js';
 
 const f32 = Math.fround;
 const vec = (x = 0, y = 0, z = 0) => ({x, y, z});
@@ -431,28 +430,23 @@ test('pendulum: wind gust pushes both joints', () => {
 });
 
 test('x64 physics samples an alternate wind field through its query interface', () => {
-  const control = hair({gravity: 0});
-  const pendulum = new X64Pendulum(control);
-  const values = new Map(),
-    samples = [];
-  const host = {
-    basePosition: () => [0, 0],
-    physicsAngle: 0,
-    wind: {
-      query: (x) => {
-        samples.push(x);
-        return 0.5;
-      },
+  const pendulum = new EmotePendulum(hair({gravity: 0}), EMOTEDRIVER_X64_SHA256);
+  const samples = [],
+    out = {lr: 0, lrm: 0, ud: 0};
+  const wind = {
+    query: (x) => {
+      samples.push(x);
+      return 0.5;
     },
-    setValue: (label, value) => values.set(label, value),
   };
-  pendulum.step(host, 1, 1, 0, 0);
-  assert.deepEqual([...values.values()], [0, 0, 0]);
+  // The native entry driver anchors its first sample at zero time.
+  pendulum.update(0, 0, 0, 1, 0, wind, out);
+  assert.ok(out.lr === 0 && out.lrm === 0 && out.ud === 0);
   assert.equal(samples.length, 2);
-  pendulum.step(host, 1, 1, 0, 0);
+  pendulum.update(0, 0, 1, 1, 0, wind, out);
   assert.equal(samples.length, 4);
-  assert.ok(values.get('hlr') > 0);
-  assert.ok(values.get('hlrm') > 0);
+  assert.ok(out.lr > 0);
+  assert.ok(out.lrm > 0);
 });
 
 test('pendulum bend sways lr against lrm when |ud| exceeds 28', () => {
