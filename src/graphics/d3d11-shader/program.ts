@@ -179,7 +179,11 @@ export function linkSm4GlslPrograms(vertex: Sm4GlslShader, pixel: Sm4GlslShader)
   pixelBody.push(`${pixel.code.entry}(inputs,outputs);`);
   for (const r of [...new Set(pixel.code.outputs.map((p) => p.register))]) {
     ps.push(`layout(location=${r}) out highp vec4 sm4_target${r};`);
+    ps.push(`uniform bool sm4_target${r}_isUnorm;`);
     pixelBody.push(`sm4_target${r}=uintBitsToFloat(outputs[${r}]);`);
+    // D3D11 output-merger inputs are clamped to the current target's range.
+    // The target format is draw state, independent of the VS/PS program pair.
+    pixelBody.push(`if(sm4_target${r}_isUnorm)sm4_target${r}=clamp(sm4_target${r},0.0,1.0);`);
   }
   vs.push('void main(){', ...vertexBody, '}');
   ps.push('void main(){', ...pixelBody, '}');

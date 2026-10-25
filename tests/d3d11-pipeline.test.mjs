@@ -965,11 +965,19 @@ test('native Draw and DrawIndexed preserve planar inputs, base vertices, strip c
     },
     {
       use: () => visible,
+      normalizedTargetMask: 5,
       written: () => {
         written++;
       },
     },
-    {use: () => program, uploadConstants: () => {}},
+    {
+      use: () => program,
+      uploadConstants: () => {},
+      uploadOutputRanges: (selected, mask) => {
+        assert.equal(selected, program);
+        assert.equal(mask, 5);
+      },
+    },
     {
       bind: () => {
         throw Error('Unexpected sampler');

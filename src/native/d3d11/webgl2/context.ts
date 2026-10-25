@@ -160,6 +160,7 @@ export class D3d11DrawContext extends D3d11TransferContext implements ID3D11Devi
       this.bindVertices(program, count, floats);
       // Texture/target preparation may have selected decoder programs or VAOs.
       this.programs.uploadConstants(program, this.vsBuffers, this.psBuffers);
+      this.programs.uploadOutputRanges(program, this.output.normalizedTargetMask);
       if (program.targetHeight) gl.uniform1f(program.targetHeight, this.output.targetHeight);
       for (let i = 0; i < program.samples.length; i++) {
         const sample = program.samples[i]!;

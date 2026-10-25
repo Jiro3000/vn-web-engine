@@ -149,6 +149,14 @@ The synthetic shader probe exercises this cache, native buffer updates, unbindin
 eviction and disposal with raw float readback. The immediate context binds
 textures, input assembly, targets and raster/output state through this implementation.
 
+Pixel output ranges are draw state. The linked output wrapper clamps each UNORM
+output to `[0,1]` before blending, as required by the
+[D3D11 output-merger rules](https://microsoft.github.io/DirectX-Specs/d3d/archive/D3D11_3_FunctionalSpec.htm).
+Per-output uniforms follow the bound color attachments; shader-pair reuse does not
+imply that the output formats stayed the same. Unbound or non-normalized slots keep
+their original float output. The program cache avoids repeating unchanged range
+uploads. This handling stays inside the backend and does not change Native contracts.
+
 ## GPU texture storage
 
 `webgl2/textures.ts` owns single-sample Texture2D images, mip attachments and independent

@@ -26,6 +26,11 @@ interface Entry extends D3d11LinkedProgram {
   readonly vertex: D3d11Shader;
   readonly pixel: D3d11Shader;
   readonly constants: readonly ConstantUpload[];
+  readonly outputRanges: readonly {
+    readonly register: number;
+    readonly location: WebGLUniformLocation | null;
+  }[];
+  outputMask: number;
 }
 
 /** Device-owned bounded program cache. Cached programs retain their native shader children. */
@@ -115,6 +120,18 @@ export class D3d11ProgramCache {
       c.buffer = buffer;
       c.revision = buffer?.revision ?? 0;
     }
+  }
+
+  /** Apply native format-dependent clamping without specializing the shader pair. */
+  uploadOutputRanges(program: D3d11LinkedProgram, normalizedMask: number): void {
+    this.checkLive();
+    const entry = this.entries.get(program);
+    if (!entry) throw new Error('Using a retired or foreign D3D11 program');
+    if (entry.outputMask === normalizedMask) return;
+    this.gl.useProgram(entry.program);
+    for (const output of entry.outputRanges)
+      this.gl.uniform1i(output.location, (normalizedMask >>> output.register) & 1);
+    entry.outputMask = normalizedMask;
   }
 
   /** Release every program and retained child, including after a context loss. */
@@ -232,6 +249,13 @@ export class D3d11ProgramCache {
         vertex,
         pixel,
         constants,
+        outputRanges: [...new Set(pixel.shader.code.outputs.map((p) => p.register))].map(
+          (register) => ({
+            register,
+            location: gl.getUniformLocation(program!, `sm4_target${register}_isUnorm`),
+          }),
+        ),
+        outputMask: -1,
       };
     } catch (error) {
       if (program) gl.deleteProgram(program);

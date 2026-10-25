@@ -62,6 +62,20 @@ function fixtures() {
         instruction(89, [[0x00208f02, 0, 1]]),
         instruction(0, [destination(2, 0), source(1, 1), constant(0, 0)]),
       );
+    else if (kind === 'modulate')
+      ops.push(
+        instruction(104, [[1]]),
+        instruction(88, [[(7 << 12) | (1 << 20), slot], [0x5555]], 3),
+        instruction(90, [samplerOperand(sampler)]),
+        instruction(69, [
+          destination(0, 0),
+          literal([0.5, 0.5, 0, 0]),
+          sampleResource(slot),
+          samplerOperand(sampler),
+        ]),
+        instruction(56, [destination(0, 0), source(0, 0), source(1, 1)]),
+        instruction(56, [destination(2, 0), source(0, 0), literal([2, 2, 2, 1])]),
+      );
     else if (kind === 'sample')
       ops.push(
         instruction(88, [[(7 << 12) | (1 << 20), slot], [0x5555]], 3),
@@ -90,6 +104,7 @@ function fixtures() {
     pixel: pixel(),
     constantPixel: pixel('constant'),
     samplePixel: pixel('sample', 124, 15),
+    modulatePixel: pixel('modulate', 124, 15),
   };
 }
 
@@ -382,6 +397,47 @@ async function pageMain(fixture) {
     ctx.psSetShaderResources(124, [null]);
     ctx.draw(3, 0);
     await record('public-null-resource-zero', fill([0, 0, 0, 0]));
+    // Native output ranges apply before blending. Keep consecutive overlapping
+    // draws together so a staging read cannot hide a precision difference.
+    const modulatePs = own(device.createPixelShader(Uint8Array.from(fixture.modulatePixel), null)),
+      modulation = buffer(packedVertices(0xff80ffc8)),
+      onePixel = texture({width: 1, height: 1, bindFlags: 8}, [
+        {data: Uint8Array.of(128, 73, 87, 254), rowPitch: 4, slicePitch: 0},
+      ]),
+      onePixelView = own(device.createShaderResourceView(onePixel, null)),
+      alphaBlend = own(
+        device.createBlendState({
+          alphaToCoverageEnable: false,
+          independentBlendEnable: false,
+          renderTarget: Array.from({length: 8}, () => ({
+            blendEnable: true,
+            srcBlend: 5,
+            destBlend: 6,
+            blendOp: 1,
+            srcBlendAlpha: 2,
+            destBlendAlpha: 6,
+            blendOpAlpha: 1,
+            renderTargetWriteMask: 15,
+          })),
+        }),
+      );
+    const modulate = (stream = modulation) => {
+      setup(vs, modulatePs, layout, stream);
+      ctx.psSetShaderResources(124, [onePixelView]);
+      ctx.psSetSamplers(15, [sampler]);
+      ctx.omSetBlendState(alphaBlend, [0, 0, 0, 0], 0xffffffff);
+    };
+    modulate();
+    ctx.draw(3, 0);
+    await record('public-unorm-range-first-blend', fill([128, 145, 136, 254]));
+    modulate();
+    ctx.draw(3, 0);
+    ctx.draw(3, 0);
+    await record('public-unorm-range-consecutive-blend', fill([129, 146, 136, 255]));
+    ctx.updateSubresource(onePixel, 0, null, Uint8Array.of(255, 128, 64, 128), 4, 0);
+    modulate(buffer(packedVertices(0xffffffff)));
+    ctx.draw(3, 0);
+    await record('public-unorm-source-clamp-before-blend', fill([128, 128, 64, 128]));
     const v16 = own(device.createVertexShader(Uint8Array.from(fixture.vertex16), null)),
       elements = Array.from({length: 16}, (_, i) =>
         element(i === 0 ? 'POSITION' : i === 1 ? 'COLOR' : 'ATTR' + i, 16),

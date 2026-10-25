@@ -248,15 +248,31 @@ async function pageMain(fixture) {
       if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE)
         throw Error('Incomplete float target');
       gl.viewport(0, 0, test.width, test.height);
-      function draw(name, vsBuffers, psBuffers, delta) {
+      function draw(name, vsBuffers, psBuffers, delta, normalizedMask = 0) {
         cache.uploadConstants(linked, vsBuffers, psBuffers);
+        cache.uploadOutputRanges(linked, normalizedMask);
+        if (linked.targetHeight) gl.uniform1f(linked.targetHeight, test.height);
         gl.clearBufferfv(gl.COLOR, 0, new Float32Array(4).fill(-9));
         gl.drawArrays(gl.TRIANGLES, 0, 3);
-        const pixels = new Float32Array(test.width * test.height * 4);
-        gl.readPixels(0, 0, test.width, test.height, gl.RGBA, gl.FLOAT, pixels);
+        const raw = new Float32Array(test.width * test.height * 4),
+          pixels = new Float32Array(raw.length),
+          stride = test.width * 4;
+        gl.readPixels(0, 0, test.width, test.height, gl.RGBA, gl.FLOAT, raw);
+        // The linked shader uses native top-left SV_Position. Raw GL rows start
+        // at the bottom; compare the native top-left order used by the fixture.
+        for (let y = 0; y < test.height; y++)
+          pixels.set(
+            raw.subarray((test.height - 1 - y) * stride, (test.height - y) * stride),
+            y * stride,
+          );
         const error = gl.getError();
         if (error !== gl.NO_ERROR) throw Error('WebGL error ' + error);
-        const expected = new Float32Array(test.expected.map((n, i) => n + delta[i % 4]));
+        const expected = new Float32Array(
+          test.expected.map((n, i) => {
+            const value = n + delta[i % 4];
+            return normalizedMask & 1 ? Math.max(0, Math.min(1, value)) : value;
+          }),
+        );
         const actual = new Uint32Array(pixels.buffer),
           words = new Uint32Array(expected.buffer);
         const mismatches = [...actual].flatMap((value, i) =>
@@ -287,6 +303,12 @@ async function pageMain(fixture) {
         draw(test.name + '-updated', vertexConstants, pixelConstants, [0.25, 0.5, 0.25, 0]);
         draw(test.name + '-unbound', [], [], [0, 0, 0, 0]);
       }
+      // Reuse one linked pair across different output ranges. Float readback
+      // distinguishes shader source clamping from automatic UNORM target stores.
+      draw(test.name + '-unorm-range', [], [], [0, 0, 0, 0], 1);
+      draw(test.name + '-unchanged-range', [], [], [0, 0, 0, 0], 1);
+      draw(test.name + '-other-output-range', [], [], [0, 0, 0, 0], 2);
+      draw(test.name + '-float-range-restored', [], [], [0, 0, 0, 0], 0);
       alternative = createShaderStorage(owner, 'pixel', new Uint8Array(test.pixel), null).value;
       const replaced = cache.use(vertex, alternative);
       alternative.release();
@@ -298,8 +320,20 @@ async function pageMain(fixture) {
       } catch {
         retiredRejected = true;
       }
+      let retiredRangeRejected = false;
+      try {
+        cache.uploadOutputRanges(linked, 1);
+      } catch {
+        retiredRangeRejected = true;
+      }
       cache.dispose();
-      if (gl.isProgram(replaced.program) || vertex.live || alternative.live || !retiredRejected)
+      if (
+        gl.isProgram(replaced.program) ||
+        vertex.live ||
+        alternative.live ||
+        !retiredRejected ||
+        !retiredRangeRejected
+      )
         throw Error('Native cache disposal ownership failed');
       rows.push({
         name: test.name + '-ownership',
@@ -307,6 +341,7 @@ async function pageMain(fixture) {
         reused: true,
         evicted: true,
         retiredRejected,
+        retiredRangeRejected,
         disposed: true,
       });
     } catch (error) {

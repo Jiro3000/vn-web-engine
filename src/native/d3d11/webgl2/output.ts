@@ -32,6 +32,7 @@ interface Attachment {
   readonly resource: D3d11Texture2D;
   readonly texture: WebGLTexture;
   readonly mip: number;
+  readonly format: number;
 }
 const DEFAULT_BLEND: D3d11RenderTargetBlendDesc = {
   blendEnable: false,
@@ -93,6 +94,22 @@ export class D3d11GpuOutput {
   /** Current attachment height for native top-left SV_Position coordinates. */
   get targetHeight(): number {
     return this.height;
+  }
+
+  /** Per-target source range for the linked pixel output, before blending. */
+  get normalizedTargetMask(): number {
+    let mask = 0;
+    for (let i = 0; i < this.colors.length; i++) {
+      switch (this.colors[i]?.format) {
+        case 28:
+        case 49:
+        case 61:
+        case 65:
+        case 87:
+          mask |= 1 << i;
+      }
+    }
+    return mask;
   }
 
   constructor(
@@ -238,7 +255,7 @@ export class D3d11GpuOutput {
       const target = state.targets[i],
         blend = this.blend(state, i),
         mask = blend.renderTargetWriteMask;
-      const alphaOnly = target?.resource.getDesc().format === 65;
+      const alphaOnly = this.colors[i]?.format === 65;
       const write: [boolean, boolean, boolean, boolean] = [
         !alphaOnly && !!(mask & 1),
         !alphaOnly && !!(mask & 2),
@@ -363,12 +380,22 @@ export class D3d11GpuOutput {
     const colors = Array.from({length: this.colors.length}, (_, i): Attachment | null => {
       const v = state.targets[i];
       return v
-        ? {resource: v.resource, texture: this.textures.image(v.resource), mip: v.firstMip}
+        ? {
+            resource: v.resource,
+            texture: this.textures.image(v.resource),
+            mip: v.firstMip,
+            format: v.resource.getDesc().format,
+          }
         : null;
     });
     const d = state.depthTarget,
       depth = d
-        ? {resource: d.resource, texture: this.textures.image(d.resource), mip: d.firstMip}
+        ? {
+            resource: d.resource,
+            texture: this.textures.image(d.resource),
+            mip: d.firstMip,
+            format: d.resource.getDesc().format,
+          }
         : null;
     const gl = this.gl;
     if (!this.framebuffer) this.framebuffer = gl.createFramebuffer();
@@ -377,7 +404,7 @@ export class D3d11GpuOutput {
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.framebuffer);
     gl.readBuffer(gl.NONE);
     const same = (a: Attachment | null, b: Attachment | null) =>
-      a?.texture === b?.texture && a?.mip === b?.mip;
+      a?.texture === b?.texture && a?.mip === b?.mip && a?.format === b?.format;
     for (let i = 0; i < colors.length; i++) {
       const next = colors[i]!;
       if (!same(next, this.colors[i]!)) {
