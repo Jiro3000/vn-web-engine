@@ -314,6 +314,12 @@ readback retain their own error checks. The private output framebuffer caches it
 completeness until an attachment changes or is destroyed; each draw still reapplies
 the raster state after texture preparation and host-context use.
 
+Output completeness also remembers up to 64 previously validated immutable attachment
+configurations, with least-recently-used eviction and resource-retirement invalidation.
+Returning from a mask/copy pass can reuse that validation. Shader-view row copies
+validate each immutable alias mip once. Pixel revisions still refresh the copies,
+and allocation, copy and submission errors retain their existing checks.
+
 The current input conversion stages float4 register planes using the verified CPU
 readers. Planes support16attributes without exceeding WebGL's255-byte interleaved
 stride limit. Staging is reusable and bounded to64MiB, with a corresponding streaming

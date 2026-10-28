@@ -38,6 +38,7 @@ interface Alias {
   readonly first: number;
   readonly count: number;
   readonly bytes: number;
+  readonly completeLevels: Set<number>;
   revision: number;
   pins: number;
 }
@@ -185,7 +186,17 @@ export class D3d11GpuTextures {
         this.gl.deleteTexture(texture);
         throw error;
       }
-      alias = {owner: entry, key, texture, first, count, bytes, revision: -1, pins: 0};
+      alias = {
+        owner: entry,
+        key,
+        texture,
+        first,
+        count,
+        bytes,
+        completeLevels: new Set(),
+        revision: -1,
+        pins: 0,
+      };
       entry.aliases.set(key, alias);
       this.aliases.set(alias, alias);
       this.aliasImages.set(texture, alias);
@@ -222,8 +233,11 @@ export class D3d11GpuTextures {
           );
           try {
             gl.drawBuffers([gl.COLOR_ATTACHMENT0]);
-            if (gl.checkFramebufferStatus(gl.DRAW_FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE)
-              throw new D3d11TextureError('Incomplete D3D11 shader view framebuffer');
+            if (!alias.completeLevels.has(i)) {
+              if (gl.checkFramebufferStatus(gl.DRAW_FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE)
+                throw new D3d11TextureError('Incomplete D3D11 shader view framebuffer');
+              alias.completeLevels.add(i);
+            }
             gl.disable(gl.SCISSOR_TEST);
             gl.blitFramebuffer(
               0,

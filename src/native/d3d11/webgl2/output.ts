@@ -34,6 +34,13 @@ interface Attachment {
   readonly mip: number;
   readonly format: number;
 }
+interface OutputConfiguration {
+  readonly colors: readonly (Attachment | null)[];
+  readonly depth: Attachment | null;
+}
+const MAX_COMPLETE_CONFIGURATIONS = 64;
+const sameAttachment = (a: Attachment | null, b: Attachment | null) =>
+  a?.texture === b?.texture && a?.mip === b?.mip && a?.format === b?.format;
 const DEFAULT_BLEND: D3d11RenderTargetBlendDesc = {
   blendEnable: false,
   srcBlend: 2,
@@ -77,6 +84,7 @@ const DEFAULT_RASTER: D3d11RasterizerDesc = {
 export class D3d11GpuOutput {
   private framebuffer: WebGLFramebuffer | null = null;
   private framebufferComplete = false;
+  private readonly completeConfigurations: OutputConfiguration[] = [];
   private readonly colors: (Attachment | null)[];
   private depth: Attachment | null = null;
   private width = 0;
@@ -324,6 +332,14 @@ export class D3d11GpuOutput {
 
   /** Owner callback: delete attachments at native resource retirement, even between draws. */
   destroy(resource: D3d11ResourceStorage): void {
+    for (let i = this.completeConfigurations.length - 1; i >= 0; i--) {
+      const config = this.completeConfigurations[i]!;
+      if (
+        config.depth?.resource === resource ||
+        config.colors.some((a) => a?.resource === resource)
+      )
+        this.completeConfigurations.splice(i, 1);
+    }
     if (!this.framebuffer) return;
     const gl = this.gl;
     for (let i = 0; i < this.colors.length; i++)
@@ -359,6 +375,7 @@ export class D3d11GpuOutput {
     this.gl.deleteFramebuffer(this.framebuffer);
     this.framebuffer = null;
     this.framebufferComplete = false;
+    this.completeConfigurations.length = 0;
     this.colors.fill(null);
     this.depth = null;
   }
@@ -406,11 +423,9 @@ export class D3d11GpuOutput {
       throw new D3d11TextureError('D3D11 output framebuffer allocation failed', 0x8007000e | 0);
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.framebuffer);
     gl.readBuffer(gl.NONE);
-    const same = (a: Attachment | null, b: Attachment | null) =>
-      a?.texture === b?.texture && a?.mip === b?.mip && a?.format === b?.format;
     for (let i = 0; i < colors.length; i++) {
       const next = colors[i]!;
-      if (!same(next, this.colors[i]!)) {
+      if (!sameAttachment(next, this.colors[i]!)) {
         this.framebufferComplete = false;
         gl.framebufferTexture2D(
           gl.DRAW_FRAMEBUFFER,
@@ -422,7 +437,7 @@ export class D3d11GpuOutput {
         this.colors[i] = next;
       }
     }
-    if (!same(depth, this.depth)) {
+    if (!sameAttachment(depth, this.depth)) {
       this.framebufferComplete = false;
       gl.framebufferTexture2D(
         gl.DRAW_FRAMEBUFFER,
@@ -444,11 +459,24 @@ export class D3d11GpuOutput {
       this.depth = depth;
     }
     gl.drawBuffers(colors.map((v, i) => (v ? gl.COLOR_ATTACHMENT0 + i : gl.NONE)));
-    // This framebuffer is private and its texture storage is immutable. Its
-    // completeness can change only when an attachment is changed or destroyed.
+    // Immutable storage makes completeness a property of the complete attachment
+    // configuration. Native mask/copy passes repeatedly revisit those same sets.
     if (!this.framebufferComplete) {
-      if (gl.checkFramebufferStatus(gl.DRAW_FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE)
-        throw new D3d11TextureError('Incomplete D3D11 draw output framebuffer');
+      const known = this.completeConfigurations.findIndex(
+        (config) =>
+          sameAttachment(config.depth, depth) &&
+          config.colors.every((a, i) => sameAttachment(a, colors[i]!)),
+      );
+      if (known >= 0) {
+        const config = this.completeConfigurations.splice(known, 1)[0]!;
+        this.completeConfigurations.push(config);
+      } else {
+        if (gl.checkFramebufferStatus(gl.DRAW_FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE)
+          throw new D3d11TextureError('Incomplete D3D11 draw output framebuffer');
+        this.completeConfigurations.push({colors, depth});
+        if (this.completeConfigurations.length > MAX_COMPLETE_CONFIGURATIONS)
+          this.completeConfigurations.shift();
+      }
       this.framebufferComplete = true;
     }
     this.width = size.width;

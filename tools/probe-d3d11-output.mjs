@@ -231,11 +231,59 @@ async function pageMain() {
   try {
     clear();
     draw();
+    const outputFramebuffer = gl.getParameter(gl.DRAW_FRAMEBUFFER_BINDING),
+      originalStatus = gl.checkFramebufferStatus.bind(gl);
+    let outputChecks = 0,
+      rejectOutput = false;
+    gl.checkFramebufferStatus = (target) => {
+      if (gl.getParameter(gl.DRAW_FRAMEBUFFER_BINDING) === outputFramebuffer) {
+        outputChecks++;
+        if (rejectOutput) return gl.FRAMEBUFFER_INCOMPLETE_ATTACHMENT;
+      }
+      return originalStatus(target);
+    };
     await read('ordinary-output', rgba, fill([255, 0, 0, 255]));
     // Readback and texture preparation use other framebuffers. Reusing the same
     // output must restore its binding and still render the next color exactly.
     draw({}, [0, 1, 0, 1]);
     await read('repeated-output-after-readback', rgba, fill([0, 255, 0, 255]));
+    outputChecks = 0;
+    draw({targets: [a8]}, [0, 0, 0, 1]);
+    draw();
+    draw({targets: [a8]}, [0, 0, 0, 0.5]);
+    draw({}, [0, 1, 0, 1]);
+    rows.push({
+      name: 'return-to-validated-output-configurations',
+      passed: outputChecks === 1,
+      outputChecks,
+    });
+    await read('restored-output-configuration', rgba, fill([0, 255, 0, 255]));
+    const retryTexture = texture(),
+      retryView = view(retryTexture);
+    let incompleteRejected = false;
+    rejectOutput = true;
+    try {
+      draw({targets: [retryView]});
+    } catch (error) {
+      incompleteRejected = /Incomplete D3D11 draw output framebuffer/.test(String(error));
+    } finally {
+      rejectOutput = false;
+    }
+    const checksBeforeRetry = outputChecks;
+    draw({targets: [retryView]}, [0, 0, 1, 1]);
+    rows.push({
+      name: 'incomplete-output-is-not-cached',
+      passed: incompleteRejected && outputChecks === checksBeforeRetry + 1,
+    });
+    await read('revalidated-output-after-failure', retryTexture, fill([0, 0, 255, 255]));
+    draw();
+    for (let i = 0; i < 64; i++) draw({targets: [view(texture())]});
+    const checksBeforeEvicted = outputChecks;
+    draw();
+    rows.push({
+      name: 'bounded-output-cache-rechecks-evicted-configuration',
+      passed: outputChecks === checksBeforeEvicted + 1,
+    });
     clear();
     draw({
       raster: raster({scissorEnable: true}),
