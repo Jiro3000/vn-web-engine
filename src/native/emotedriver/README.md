@@ -98,6 +98,14 @@ shared scalar clip factory, controls and player core. Each input file's sources
 load before core construction; the last file supplies motion and metadata. Input
 PSB bytes remain unchanged and retained for the player group's lifetime.
 
+The x64 device caches immutable parsed definitions for up to four files and32MiB
+of private source snapshots. Hits require equality of every input byte, including
+when a caller changes or replaces its buffer. Larger files parse without entering
+the cache. Each resource group receives fresh file, motion and texture identities;
+GPU ownership, clips, controls and RNG state remain independent. Eviction drops only
+the cache's references, and device retirement clears it. Entry and source-byte limits
+bound retained definitions; parsed JavaScript object overhead is additional.
+
 A player owns one device reference. Clones share the file/resource group and
 renderer while copying the core's playback state and mutable clips. Smoothing
 belongs to the shared group; assigning state leaves the destination group in place.

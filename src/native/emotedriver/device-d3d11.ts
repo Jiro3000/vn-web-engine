@@ -1,7 +1,4 @@
 import type {EmoteX64Model} from '../../formats/kirikiri/emote-model.js';
-import {readEmoteModel} from '../../formats/kirikiri/emote-model.js';
-import {PsbFile} from '../../formats/kirikiri/psb.js';
-import {EMOTE_PSB_KEYS} from '../../formats/kirikiri/psb-filter.js';
 import type {ID3D11DepthStencilView, ID3D11RenderTargetView} from '../d3d11/contract.js';
 import type {
   EmoteD3d11InitParam,
@@ -16,6 +13,7 @@ import {createEmoteControls} from './runtime/controls/index.js';
 import {EmoteXorshift128} from './runtime/controls/random.js';
 import type {EmoteClipFactory, EmoteX64MeshKernel} from './runtime/interfaces.js';
 import {EmotePlayerCore} from './runtime/player-core.js';
+import {EmoteModelCache} from './runtime/model-cache.js';
 import {EmoteD3d11Matrices} from './runtime/render/d3d11-matrices.js';
 import {EmoteD3d11MaskState} from './runtime/render/d3d11-mask-state.js';
 import {EmoteD3d11Screen} from './runtime/render/d3d11-screen.js';
@@ -94,6 +92,7 @@ export class PEmoteD3d11Device implements IEmoteD3d11Device {
   private target: EmoteD3d11Target | null = null;
   private readonly screen = new EmoteD3d11Screen();
   private readonly matrices = new EmoteD3d11Matrices();
+  private readonly models = new EmoteModelCache();
 
   constructor(
     param: EmoteD3d11InitParam,
@@ -159,13 +158,7 @@ export class PEmoteD3d11Device implements IEmoteD3d11Device {
       );
     try {
       const models = images.map((image) => {
-        const model = readEmoteModel(
-          new PsbFile(image, {
-            driverSha256: EMOTEDRIVER_X64_SHA256,
-            headerKey: EMOTE_PSB_KEYS.get(EMOTEDRIVER_X64_SHA256),
-          }),
-          EMOTEDRIVER_X64_SHA256,
-        );
+        const model = this.models.read(image);
         renderer.loadModelSources(model);
         return model;
       });
@@ -234,6 +227,7 @@ export class PEmoteD3d11Device implements IEmoteD3d11Device {
   }
 
   private dispose(): void {
+    this.models.clear();
     const errors: unknown[] = [];
     for (const object of [this.target, this.textures, this.shaders])
       try {

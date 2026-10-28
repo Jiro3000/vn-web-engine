@@ -4,6 +4,7 @@ import {NativeLibraryLoader} from '../dist/platform/native-libraries.js';
 import {EMOTE_DRIVER, EMOTE_DRIVER_D3D11} from '../dist/native/emotedriver/contract.js';
 import {emoteDriverD3d11Library} from '../dist/native/emotedriver/library.js';
 import {createEmoteMeshKernel} from '../dist/native/emotedriver/runtime/mesh/index.js';
+import {EmoteModelCache} from '../dist/native/emotedriver/runtime/model-cache.js';
 import {buildPsb, emoteWinTree, resource} from './kirikiri-psb-fixtures.mjs';
 
 import {nativeHost, shaderStandins} from './emotedriver-d3d11-fixture.mjs';
@@ -100,6 +101,111 @@ function load(wasm) {
   assert.equal(loaded.status, 'loaded');
   return {loader, library: loaded.library, exports: loaded.library.exports(EMOTE_DRIVER_D3D11)};
 }
+
+test('x64 parsed definitions reuse exact bytes while preserving file, motion and texture identities', () => {
+  const cache = new EmoteModelCache(),
+    bytes = imageFile({variableFrame: 14}),
+    original = bytes.slice(),
+    a = cache.read(bytes),
+    b = cache.read(bytes.slice()),
+    motion = (model) => model.objects.get('all_parts').motions.get('base'),
+    texture = (model) => model.sources.get('tex').texture;
+  assert.notEqual(a, b);
+  assert.notEqual(motion(a), motion(b));
+  assert.equal(motion(a).layers, motion(b).layers, 'Immutable definitions should be reused');
+  assert.notEqual(texture(a), texture(b), 'Native GPU cache keys must remain per-resource');
+  assert.notEqual(texture(a).pixel.bytes.buffer, bytes.buffer);
+  const changed = imageFile({variableFrame: 15});
+  assert.equal(changed.length, bytes.length);
+  bytes.set(changed);
+  const c = cache.read(bytes);
+  assert.notEqual(motion(c).layers, motion(a).layers);
+  assert.equal(c.metadata.variableList[0].frames[0].frame, 15);
+  assert.equal(a.metadata.variableList[0].frames[0].frame, 14);
+  bytes.fill(0);
+  assert.throws(() => cache.read(bytes), /PSB/);
+  assert.ok(texture(a).pixel.bytes.every((value) => value === 255));
+  bytes.set(original);
+  assert.equal(motion(cache.read(bytes)).layers, motion(a).layers);
+  cache.clear();
+  assert.notEqual(motion(cache.read(bytes)).layers, motion(a).layers);
+  const buffer = Buffer.from(original),
+    bufferCache = new EmoteModelCache(),
+    owned = bufferCache.read(buffer);
+  buffer.fill(0);
+  assert.ok(texture(owned).pixel.bytes.every((value) => value === 255));
+  assert.equal(motion(bufferCache.read(original)).layers, motion(owned).layers);
+  const unaligned = new Uint8Array(new ArrayBuffer(original.length + 1), 1);
+  unaligned.set(original);
+  assert.equal(motion(bufferCache.read(unaligned)).layers, motion(owned).layers);
+  const padded = new Uint8Array(original.length + 3);
+  padded.set(original);
+  const paddedModel = bufferCache.read(padded);
+  padded[padded.length - 1] = 1;
+  assert.notEqual(motion(bufferCache.read(padded)).layers, motion(paddedModel).layers);
+});
+
+test('x64 parsed model cache evicts by recency and source bytes without invalidating live definitions', () => {
+  const bytes = [14, 15, 16].map((variableFrame) => imageFile({variableFrame})),
+    layers = (model) => model.objects.get('all_parts').motions.get('base').layers,
+    cache = new EmoteModelCache(2, bytes[0].length * 2),
+    a = cache.read(bytes[0]),
+    b = cache.read(bytes[1]);
+  assert.equal(layers(cache.read(bytes[0])), layers(a));
+  cache.read(bytes[2]);
+  assert.equal(layers(cache.read(bytes[0])), layers(a));
+  assert.notEqual(layers(cache.read(bytes[1])), layers(b));
+  assert.equal(a.sources.get('tex').texture.pixel.bytes[0], 255);
+  const sourceBound = new EmoteModelCache(4, bytes[0].length),
+    first = sourceBound.read(bytes[0]);
+  sourceBound.read(bytes[1]);
+  assert.notEqual(layers(sourceBound.read(bytes[0])), layers(first));
+  const uncached = new EmoteModelCache(4, bytes[0].length - 1);
+  assert.notEqual(layers(uncached.read(bytes[0])), layers(uncached.read(bytes[0])));
+});
+
+test('x64 cached public creation preserves separate resources, variables and seeds on both kernels', () => {
+  for (const wasm of [false, true]) {
+    const host = nativeHost(),
+      loaded = load(wasm),
+      device = loaded.exports.emoteCreate(host),
+      bytes = imageFile(),
+      now = Date.now;
+    let seeds = 0;
+    Date.now = () => {
+      seeds++;
+      return 1700000000000;
+    };
+    try {
+      const warm = device.createPlayer(bytes);
+      warm.release();
+      const a = device.createPlayer(bytes.slice()),
+        b = device.createPlayers([bytes, bytes.slice()]),
+        c = device.createPlayer(imageFile({variableFrame: 14}));
+      assert.equal(seeds, 4);
+      assert.equal(host.created.filter((r) => r.kind === 'texture').length, 5);
+      a.setVariable('head_LR', 4, 0, 0);
+      b.setVariable('head_LR', 8, 0, 0);
+      a.progress(1);
+      b.progress(2);
+      b.initCore();
+      assert.equal(seeds, 4);
+      assert.equal(a.getVariable('head_LR'), 4);
+      assert.equal(b.getVariable('head_LR'), 0);
+      assert.equal(c.getVariableFrameValueAt(0, 0), 14);
+      a.release();
+      b.release();
+      c.release();
+      device.release();
+      assert.ok(host.created.slice(2).every((r) => r.references === 0));
+    } finally {
+      Date.now = now;
+    }
+    loaded.loader.dispose();
+    host.context.release();
+    host.device.release();
+  }
+});
 
 test('x64 native exports retain independent player cores and shared clone resources on both kernels', () => {
   for (const wasm of [false, true]) {
