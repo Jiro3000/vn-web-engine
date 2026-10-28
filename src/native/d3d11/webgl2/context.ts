@@ -21,6 +21,7 @@ export class D3d11DrawContext extends D3d11TransferContext implements ID3D11Devi
   private vertexBuffer: WebGLBuffer | null = null;
   private enabledAttributes = 0;
   private gpuDisposed = false;
+  private pendingDraw = false;
   private readonly outputState: Mutable<D3d11DrawOutputState>;
 
   constructor(
@@ -72,6 +73,22 @@ export class D3d11DrawContext extends D3d11TransferContext implements ID3D11Devi
       this.indexOffset,
     );
     this.execute(indexCount, startIndexLocation, baseVertexLocation, indices);
+  }
+
+  override flush(): void {
+    super.flush();
+    this.checkSubmission();
+  }
+
+  /** Backend publication boundary; CPU binding validation remains synchronous. */
+  checkSubmission(): void {
+    this.checkLive();
+    if (this.gl.isContextLost())
+      throw new D3d11TextureError('D3D11 device removed', 0x887a0005 | 0);
+    if (!this.pendingDraw) return;
+    this.pendingDraw = false;
+    const error = this.gl.getError();
+    if (error !== this.gl.NO_ERROR) throw new D3d11TextureError('D3D11 draw failed: ' + error);
   }
 
   /** Device-lifetime callback, separate from clearing native context bindings. */
@@ -183,9 +200,12 @@ export class D3d11DrawContext extends D3d11TransferContext implements ID3D11Devi
         gl.drawArrays(mode, 0, count);
         emitted = true;
       }
-      const error = gl.getError();
-      if (error !== gl.NO_ERROR) throw new D3d11TextureError('D3D11 draw failed: ' + error);
-      if (emitted) this.output.written(state);
+      if (emitted) {
+        // Preserve asynchronous GPU submission across adjacent native draws.
+        // Flush and shared-image publication check the submitted batch.
+        this.pendingDraw = true;
+        this.output.written(state);
+      }
     } finally {
       resources.release();
     }

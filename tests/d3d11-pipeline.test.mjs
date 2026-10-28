@@ -899,7 +899,9 @@ test('native Draw and DrawIndexed preserve planar inputs, base vertices, strip c
     released = 0,
     written = 0,
     visible = true,
-    deleted = 0;
+    deleted = 0,
+    gpuError = 0,
+    errorQueries = 0;
   const calls = [],
     pointers = [];
   const host = owner(() => {
@@ -934,7 +936,13 @@ test('native Draw and DrawIndexed preserve planar inputs, base vertices, strip c
     activeTexture: () => {},
     bindTexture: () => {},
     drawArrays: (...args) => calls.push(args),
-    getError: () => 0,
+    getError: () => {
+      errorQueries++;
+      const error = gpuError;
+      gpuError = 0;
+      return error;
+    },
+    flush: () => {},
     deleteVertexArray: () => {
       deleted++;
     },
@@ -1084,6 +1092,16 @@ test('native Draw and DrawIndexed preserve planar inputs, base vertices, strip c
   ctx.drawIndexed(0, 0, 0);
   assert.throws(() => ctx.drawIndexed(1, 0, 0), /Unbound/);
   assert.equal(written, 5);
+  assert.equal(acquired, released);
+  assert.equal(errorQueries, 0, 'Adjacent draws must not synchronously query GPU errors');
+  ctx.flush();
+  assert.equal(errorQueries, 1);
+  ctx.flush();
+  assert.equal(errorQueries, 1, 'A checked batch needs no second error query');
+  ctx.draw(3, 0);
+  gpuError = 0x0502;
+  assert.throws(() => ctx.flush(), /D3D11 draw failed: 1282/);
+  assert.equal(errorQueries, 2, 'Submission errors must remain visible at flush');
   assert.equal(acquired, released);
   source.release();
   layout.release();

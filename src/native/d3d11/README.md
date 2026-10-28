@@ -307,6 +307,13 @@ shader programs, pinned resource views, samplers and output state. Resource/targ
 preparation precedes reapplying raster state, vertex arrays, programs and constants.
 View leases are released after draws, skipped output and errors.
 
+Draw calls validate native arguments and bindings synchronously, while GPU commands
+remain queued across adjacent draws. `flush` and shared-texture `prepare` check GPU
+submission errors before returning to the host. Resource allocation, uploads and
+readback retain their own error checks. The private output framebuffer caches its
+completeness until an attachment changes or is destroyed; each draw still reapplies
+the raster state after texture preparation and host-context use.
+
 The current input conversion stages float4 register planes using the verified CPU
 readers. Planes support16attributes without exceeding WebGL's255-byte interleaved
 stride limit. Staging is reusable and bounded to64MiB, with a corresponding streaming

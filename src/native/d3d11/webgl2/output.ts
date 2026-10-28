@@ -76,6 +76,7 @@ const DEFAULT_RASTER: D3d11RasterizerDesc = {
 /** Context-owned framebuffer and native raster/output state. Context bindings retain the views. */
 export class D3d11GpuOutput {
   private framebuffer: WebGLFramebuffer | null = null;
+  private framebufferComplete = false;
   private readonly colors: (Attachment | null)[];
   private depth: Attachment | null = null;
   private width = 0;
@@ -294,9 +295,8 @@ export class D3d11GpuOutput {
         }
       }
     }
-    const error = gl.getError();
-    if (error !== gl.NO_ERROR)
-      throw new D3d11TextureError('D3D11 draw output state failed: ' + error);
+    // The draw context checks GL errors after submitting the complete draw,
+    // including these state writes. Avoid a second synchronous query per draw.
     return true;
   }
 
@@ -337,6 +337,7 @@ export class D3d11GpuOutput {
           0,
         );
         this.colors[i] = null;
+        this.framebufferComplete = false;
       }
     if (this.depth?.resource === resource) {
       gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, this.framebuffer);
@@ -348,6 +349,7 @@ export class D3d11GpuOutput {
         0,
       );
       this.depth = null;
+      this.framebufferComplete = false;
     }
   }
 
@@ -356,6 +358,7 @@ export class D3d11GpuOutput {
     this.disposed = true;
     this.gl.deleteFramebuffer(this.framebuffer);
     this.framebuffer = null;
+    this.framebufferComplete = false;
     this.colors.fill(null);
     this.depth = null;
   }
@@ -408,6 +411,7 @@ export class D3d11GpuOutput {
     for (let i = 0; i < colors.length; i++) {
       const next = colors[i]!;
       if (!same(next, this.colors[i]!)) {
+        this.framebufferComplete = false;
         gl.framebufferTexture2D(
           gl.DRAW_FRAMEBUFFER,
           gl.COLOR_ATTACHMENT0 + i,
@@ -419,6 +423,7 @@ export class D3d11GpuOutput {
       }
     }
     if (!same(depth, this.depth)) {
+      this.framebufferComplete = false;
       gl.framebufferTexture2D(
         gl.DRAW_FRAMEBUFFER,
         gl.DEPTH_STENCIL_ATTACHMENT,
@@ -439,8 +444,13 @@ export class D3d11GpuOutput {
       this.depth = depth;
     }
     gl.drawBuffers(colors.map((v, i) => (v ? gl.COLOR_ATTACHMENT0 + i : gl.NONE)));
-    if (gl.checkFramebufferStatus(gl.DRAW_FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE)
-      throw new D3d11TextureError('Incomplete D3D11 draw output framebuffer');
+    // This framebuffer is private and its texture storage is immutable. Its
+    // completeness can change only when an attachment is changed or destroyed.
+    if (!this.framebufferComplete) {
+      if (gl.checkFramebufferStatus(gl.DRAW_FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE)
+        throw new D3d11TextureError('Incomplete D3D11 draw output framebuffer');
+      this.framebufferComplete = true;
+    }
     this.width = size.width;
     this.height = size.height;
     return true;

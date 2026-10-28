@@ -242,7 +242,8 @@ export class WebGl2D3d11Device
     try {
       const texture = this.textures.image(resource);
       let closed = false;
-      const images = this.textures;
+      const images = this.textures,
+        context = this.context;
       return {
         context: this.gl,
         texture,
@@ -253,6 +254,7 @@ export class WebGl2D3d11Device
           if (closed) throw new Error('Using a released shared texture');
           if (images.image(resource) !== texture)
             throw new Error('Shared texture allocation changed');
+          context.checkSubmission();
         },
         dispose() {
           if (!closed) {

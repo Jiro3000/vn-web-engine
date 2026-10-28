@@ -232,6 +232,10 @@ async function pageMain() {
     clear();
     draw();
     await read('ordinary-output', rgba, fill([255, 0, 0, 255]));
+    // Readback and texture preparation use other framebuffers. Reusing the same
+    // output must restore its binding and still render the next color exactly.
+    draw({}, [0, 1, 0, 1]);
+    await read('repeated-output-after-readback', rgba, fill([0, 255, 0, 255]));
     clear();
     draw({
       raster: raster({scissorEnable: true}),
@@ -420,6 +424,11 @@ async function pageMain() {
           gl.FRAMEBUFFER_ATTACHMENT_OBJECT_NAME,
         ) === null,
     });
+    const replacement = texture(),
+      replacementView = view(replacement);
+    gpu.clearColor(replacementView, [0, 0, 0, 0]);
+    draw({targets: [replacementView]}, [0, 0, 1, 1]);
+    await read('output-after-attachment-retirement', replacement, fill([0, 0, 255, 255]));
     output.dispose();
     rows.push({name: 'output-framebuffer-disposed', passed: !gl.isFramebuffer(fbo)});
   } catch (error) {
