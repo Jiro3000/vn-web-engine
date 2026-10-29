@@ -17,6 +17,8 @@ type Mutable<T> = {-readonly [P in keyof T]: T[P]};
 /** Native immediate context over shared owned bindings, transfers and GPU execution. */
 export class D3d11DrawContext extends D3d11TransferContext implements ID3D11DeviceContext {
   private vertices = new Float32Array(0);
+  /** Per-slot vertex scratch of the staged draw. */
+  private slots = new Float64Array(0);
   private vertexArray: WebGLVertexArrayObject | null = null;
   private vertexBuffer: WebGLBuffer | null = null;
   private enabledAttributes = 0;
@@ -115,6 +117,7 @@ export class D3d11DrawContext extends D3d11TransferContext implements ID3D11Devi
     this.enabledAttributes = 0;
     this.attributeOffsets.length = 0;
     this.vertices = new Float32Array(0);
+    this.slots = new Float64Array(0);
     if (errors.length) throw new AggregateError(errors, 'D3D11 draw storage disposal failed');
   }
 
@@ -183,26 +186,33 @@ export class D3d11DrawContext extends D3d11TransferContext implements ID3D11Devi
         this.vertexStrides,
         this.vertexOffsets,
       );
-      if (this.vertices.length < floats) {
-        try {
+      try {
+        if (this.vertices.length < floats)
           this.vertices = new Float32Array(
             Math.min(MAX_FLOATS, Math.max(1024, 2 ** Math.ceil(Math.log2(floats)))),
           );
-        } catch (error) {
-          if (error instanceof RangeError)
-            throw new D3d11TextureError('D3D11 vertex staging allocation failed', 0x8007000e | 0);
-          throw error;
-        }
+        if (this.slots.length < count)
+          this.slots = new Float64Array(
+            Math.min(MAX_VERTICES, Math.max(256, 2 ** Math.ceil(Math.log2(count)))),
+          );
+      } catch (error) {
+        if (error instanceof RangeError)
+          throw new D3d11TextureError('D3D11 vertex staging allocation failed', 0x8007000e | 0);
+        throw error;
       }
     }
     const strip = this.topology === 3 || this.topology === 5,
       cut = this.indexFormat === 57 ? 0xffff : 0xffffffff;
-    for (let i = 0; i < count && vertices; i++) {
-      const index = indices ? indices.read((start + i) >>> 0) : (start + i) >>> 0;
-      if (indices && strip && index === cut) continue;
-      // Planar float4 attributes avoid WebGL's255-byte interleaved-stride limit.
-      vertices.read((index + base) >>> 0, this.vertices, i * 4, count * 4);
-    }
+    // Planar float4 attributes avoid WebGL's255-byte interleaved-stride limit.
+    vertices?.readDraw(
+      this.vertices,
+      count,
+      start,
+      base,
+      indices,
+      indices && strip ? cut : -1,
+      this.slots,
+    );
     const resources = this.textures.acquireShaderResources(
       program.samples.map((s) => this.psResources[s.resource] ?? null),
       reflectedSamples,

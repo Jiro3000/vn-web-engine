@@ -118,6 +118,75 @@ export class D3d11VertexReader {
       }
     }
   }
+
+  /** Planar draw staging: register `r` of draw slot `i` is the float4 at `(r * count + i) * 4`.
+   * Slot `i` reads vertex `(start + i)`, or its index when `indices` is bound, plus `base`;
+   * index values equal to `cut` skip their slot, which keeps its previous contents. `slots`
+   * is caller scratch for the per-slot vertices. */
+  readDraw(
+    output: Float32Array,
+    count: number,
+    start: number,
+    base: number,
+    indices: D3d11IndexReader | null,
+    cut: number,
+    slots: Float64Array,
+  ): void {
+    if (
+      !uint(count) ||
+      !uint(start) ||
+      !Number.isInteger(base) ||
+      count * this.floatsPerVertex > output.length ||
+      count > slots.length
+    )
+      throw new RangeError('Invalid D3D11 vertex read');
+    let drawn = false;
+    for (let i = 0; i < count; i++) {
+      let vertex = (start + i) >>> 0;
+      if (indices) {
+        vertex = indices.read(vertex);
+        if (vertex === cut) {
+          slots[i] = -1;
+          continue;
+        }
+      }
+      slots[i] = (vertex + base) >>> 0;
+      drawn = true;
+    }
+    if (!drawn) return;
+    // Element-major fetchDxgiVertexElement; the bound check above covers every slot.
+    const registerStride = count * 4;
+    for (const e of this.elements) {
+      if (!e.bytes) throw new Error(`Unsupported DXGI vertex format ${e.format}`);
+      const data = e.data,
+        first = e.offset,
+        last = data.byteLength - e.bytes,
+        stride = e.instance ? 0 : e.stride,
+        relative = e.relative,
+        bgra = e.format === 87,
+        z = e.format === 6;
+      for (let i = 0, at = (e.target / 4) * registerStride; i < count; i++, at += 4) {
+        const vertex = slots[i]!;
+        if (vertex < 0) continue;
+        const address = (first + Math.imul(stride, vertex) + relative) >>> 0;
+        if (address < first || address > last) {
+          output[at] = output[at + 1] = output[at + 2] = 0;
+          output[at + 3] = bgra ? 0 : 1;
+        } else if (bgra) {
+          const color = data.getUint32(address, true);
+          output[at] = ((color >>> 16) & 255) / 255;
+          output[at + 1] = ((color >>> 8) & 255) / 255;
+          output[at + 2] = (color & 255) / 255;
+          output[at + 3] = (color >>> 24) / 255;
+        } else {
+          output[at] = data.getFloat32(address, true);
+          output[at + 1] = data.getFloat32(address + 4, true);
+          output[at + 2] = z ? data.getFloat32(address + 8, true) : 0;
+          output[at + 3] = 1;
+        }
+      }
+    }
+  }
 }
 
 /** Native16/32-bit index reads, with wrapping addresses and zero out-of-bounds values. */

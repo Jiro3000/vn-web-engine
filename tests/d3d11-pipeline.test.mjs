@@ -852,6 +852,53 @@ test('D3D11 index reads retain strip-cut words and handle offsets, wraparound an
   host.device.release();
 });
 
+test('D3D11 draw staging equals per-slot vertex reads and skips strip-cut slots', () => {
+  const {host, ctx} = context();
+  const signature = inputSignature([
+    {name: 'POSITION', register: 0},
+    {name: 'COLOR', register: 1},
+  ]);
+  const layout = createInputLayoutStorage(
+    host,
+    [element('POSITION', 6), element('COLOR', 87, 1, 0)],
+    signature,
+  ).value;
+  const positions = stream(
+    host,
+    new Uint8Array(new Float32Array([1, 2, 3, 4, 5, 6, 7, 8, 9]).buffer),
+  );
+  const colors = stream(host, new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]));
+  const indices = stream(host, new Uint8Array(new Uint16Array([2, 0xffff, 0, 1, 7]).buffer), 2);
+  const reader = new D3d11VertexReader(host, layout, [1, 0], [positions, colors], [12, 4], [0, 0]),
+    index = new D3d11IndexReader(host, indices, 57, 0),
+    slots = new Float64Array(5);
+  for (const [start, base, cut, source] of [
+    [0, 0, -1, null],
+    [1, 0, -1, null],
+    [0, 0, 0xffff, index],
+    [0, -1, 0xffff, index],
+    [0, 0, -1, index],
+  ]) {
+    const count = 5,
+      expected = new Float32Array(count * 8).fill(99),
+      actual = new Float32Array(count * 8 + 3).fill(99);
+    for (let i = 0; i < count; i++) {
+      const vertex = source ? source.read(start + i) : start + i;
+      if (vertex !== cut) reader.read((vertex + base) >>> 0, expected, i * 4, count * 4);
+    }
+    reader.readDraw(actual, count, start, base, source, cut, slots);
+    assert.deepEqual([...actual.subarray(0, count * 8)], [...expected]);
+    assert.deepEqual([...actual.subarray(count * 8)], [99, 99, 99]);
+  }
+  assert.throws(() => reader.readDraw(new Float32Array(39), 5, 0, 0, null, -1, slots), /read/);
+  assert.throws(
+    () => reader.readDraw(new Float32Array(40), 5, 0, 0, null, -1, new Float64Array(4)),
+    /read/,
+  );
+  for (const resource of [layout, positions, colors, indices, ctx]) resource.release();
+  host.device.release();
+});
+
 test('native vertex registers can be staged in separate float4 planes without a256-byte stride', () => {
   const {host, ctx} = context(),
     parameters = Array.from({length: 16}, (_, i) => ({name: 'ATTR' + i, register: i, mask: 3}));
