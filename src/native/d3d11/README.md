@@ -391,3 +391,12 @@ dynamic buffers, constant updates/unbinding, sparse resource/sampler slots, priv
 texture-decoder state changes, mip-view aliases and16input-register planes. It binds
 and verifies the complete compiled file set as well as source/fixture hashes. These
 checks load no game assets and capture no screenshots.
+
+The concrete device caches fixed raster, depth/stencil and blend writes within its
+owned Native command batch. It snapshots mutable viewport, scissor, blend-factor and
+stencil-reference values; immutable Native state descriptions are borrowed. Attachment
+and unsupported-state validation still runs on every draw. Private texture operations
+that disturb output state advance an invalidation epoch. Flush, shared-texture
+publication and retirement of an attached resource discard the snapshot before external context use.
+The standalone output helper remains uncached unless its owner opts into this batch
+and immutable-description discipline. Cached state retains no Native caller reference.

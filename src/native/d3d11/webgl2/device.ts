@@ -83,7 +83,7 @@ export class WebGl2D3d11Device
     };
     this.states = new D3d11StateCache(this.owner);
     this.textures = new D3d11GpuTextures(this.owner, gl);
-    this.output = new D3d11GpuOutput(this.owner, gl, this.textures);
+    this.output = new D3d11GpuOutput(this.owner, gl, this.textures, true);
     this.programs = new D3d11ProgramCache(this.owner, gl);
     this.samplers = new D3d11GpuSamplers(this.owner, gl);
     this.context = new D3d11DrawContext(

@@ -82,6 +82,13 @@ const DEFAULT_RASTER: D3d11RasterizerDesc = {
 
 /** Context-owned framebuffer and native raster/output state. Context bindings retain the views. */
 export class D3d11GpuOutput {
+  private fixedState:
+    | (Pick<D3d11DrawOutputState, 'blend' | 'depth' | 'raster' | 'depthTarget'> & {
+        revision: number;
+      })
+    | null = null;
+  private readonly fixedValues = new Float64Array(20);
+  private readonly nextValues = new Float64Array(20);
   private framebuffer: WebGLFramebuffer | null = null;
   private framebufferComplete = false;
   private readonly completeConfigurations: OutputConfiguration[] = [];
@@ -125,6 +132,7 @@ export class D3d11GpuOutput {
     private readonly owner: D3d11DeviceOwner,
     private readonly gl: WebGL2RenderingContext,
     private readonly textures: D3d11GpuTextures,
+    private readonly cacheFixedState = false,
   ) {
     this.colors = Array(
       Math.min(8, gl.getParameter(gl.MAX_DRAW_BUFFERS), gl.getParameter(gl.MAX_COLOR_ATTACHMENTS)),
@@ -218,6 +226,8 @@ export class D3d11GpuOutput {
     if (!viewport || viewport.width === 0 || viewport.height === 0 || !(state.sampleMask & 1))
       return false;
     if (!this.attach(state)) return false;
+    if (this.cacheFixedState && this.sameFixedState(state)) return true;
+    this.invalidateState();
     const gl = this.gl;
     gl.disable(gl.RASTERIZER_DISCARD);
     gl.disable(gl.DITHER);
@@ -303,8 +313,66 @@ export class D3d11GpuOutput {
         }
       }
     }
+    if (this.cacheFixedState) {
+      this.fixedValues.set(this.nextValues);
+      this.fixedState = {
+        blend: state.blend,
+        depth: state.depth,
+        raster: state.raster,
+        depthTarget: state.depthTarget,
+        revision: this.textures.outputStateRevision,
+      };
+    }
     // The draw context checks GL errors after submitting the complete draw,
     // including these state writes. Avoid a second synchronous query per draw.
+    return true;
+  }
+
+  /** Drop borrowed immutable state descriptions before external GL use. */
+  invalidateState(): void {
+    this.fixedState = null;
+  }
+
+  /** Enabled only for a Native-owned command batch with immutable descriptions. */
+  private sameFixedState(state: D3d11DrawOutputState): boolean {
+    const values = this.nextValues,
+      viewport = state.viewports[0]!,
+      rect = state.scissors[0];
+    let targets = 0,
+      alpha = 0;
+    for (let i = 0; i < this.colors.length; i++) {
+      if (this.colors[i]) targets |= 1 << i;
+      if (this.colors[i]?.format === 65) alpha |= 1 << i;
+    }
+    values[0] = this.width;
+    values[1] = this.height;
+    values[2] = targets;
+    values[3] = alpha;
+    values[4] = viewport.topLeftX;
+    values[5] = viewport.topLeftY;
+    values[6] = viewport.width;
+    values[7] = viewport.height;
+    values[8] = viewport.minDepth;
+    values[9] = viewport.maxDepth;
+    values[10] = rect ? 1 : 0;
+    values[11] = rect?.left ?? 0;
+    values[12] = rect?.top ?? 0;
+    values[13] = rect?.right ?? 0;
+    values[14] = rect?.bottom ?? 0;
+    for (let i = 0; i < 4; i++) values[15 + i] = state.blendFactor[i]!;
+    values[19] = state.stencilRef & 255;
+    const cached = this.fixedState;
+    if (
+      !cached ||
+      cached.revision !== this.textures.outputStateRevision ||
+      cached.blend !== state.blend ||
+      cached.depth !== state.depth ||
+      cached.raster !== state.raster ||
+      cached.depthTarget !== state.depthTarget
+    )
+      return false;
+    for (let i = 0; i < values.length; i++)
+      if (!Object.is(values[i], this.fixedValues[i])) return false;
     return true;
   }
 
@@ -332,6 +400,8 @@ export class D3d11GpuOutput {
 
   /** Owner callback: delete attachments at native resource retirement, even between draws. */
   destroy(resource: D3d11ResourceStorage): void {
+    if (this.depth?.resource === resource || this.colors.some((a) => a?.resource === resource))
+      this.invalidateState();
     for (let i = this.completeConfigurations.length - 1; i >= 0; i--) {
       const config = this.completeConfigurations[i]!;
       if (
@@ -372,6 +442,7 @@ export class D3d11GpuOutput {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.invalidateState();
     this.gl.deleteFramebuffer(this.framebuffer);
     this.framebuffer = null;
     this.framebufferComplete = false;

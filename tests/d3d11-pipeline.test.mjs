@@ -973,6 +973,7 @@ test('native Draw and DrawIndexed preserve planar inputs, base vertices, strip c
       },
     },
     {
+      invalidateState: () => {},
       use: () => visible,
       normalizedTargetMask: 5,
       written: () => {

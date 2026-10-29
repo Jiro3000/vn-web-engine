@@ -83,6 +83,7 @@ export class D3d11DrawContext extends D3d11TransferContext implements ID3D11Devi
   /** Backend publication boundary; CPU binding validation remains synchronous. */
   checkSubmission(): void {
     this.checkLive();
+    this.output.invalidateState();
     if (this.gl.isContextLost())
       throw new D3d11TextureError('D3D11 device removed', 0x887a0005 | 0);
     const texturesChecked = this.textures.checkSubmission();

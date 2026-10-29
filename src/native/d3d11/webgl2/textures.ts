@@ -62,6 +62,11 @@ interface Texture {
  * The resource owner routes synchronization and final-resource callbacks here.
  */
 export class D3d11GpuTextures {
+  private outputRevision = 0;
+  /** Changes only when a private texture operation can disturb raster/output state. */
+  get outputStateRevision(): number {
+    return this.outputRevision;
+  }
   private readonly textures = new Map<D3d11Texture2D, Texture>();
   private readonly aliases = new Map<Alias, Alias>();
   private readonly aliasImages = new Map<WebGLTexture, Alias>();
@@ -206,6 +211,7 @@ export class D3d11GpuTextures {
       this.aliasBytes += bytes;
     }
     if (alias.revision !== entry.revision) {
+      this.outputRevision++;
       const gl = this.gl;
       for (let i = 0; i < alias.count; i++) {
         const mip = alias.first + i,
@@ -240,6 +246,7 @@ export class D3d11GpuTextures {
                 throw new D3d11TextureError('Incomplete D3D11 shader view framebuffer');
               alias.completeLevels.add(i);
             }
+            this.outputRevision++;
             gl.disable(gl.SCISSOR_TEST);
             gl.blitFramebuffer(
               0,
@@ -299,6 +306,7 @@ export class D3d11GpuTextures {
     const entry = this.get(view.resource),
       gl = this.gl;
     gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, this.framebufferFor(entry, view.firstMip));
+    this.outputRevision++;
     gl.disable(gl.SCISSOR_TEST);
     gl.disable(gl.DITHER);
     gl.colorMask(true, true, true, true);
@@ -335,6 +343,7 @@ export class D3d11GpuTextures {
     if (flags === 0) return;
     const gl = this.gl;
     gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, this.framebufferFor(entry, view.firstMip));
+    this.outputRevision++;
     gl.disable(gl.SCISSOR_TEST);
     gl.depthMask(true);
     gl.stencilMask(255);
@@ -467,6 +476,7 @@ export class D3d11GpuTextures {
     const gl = this.gl;
     gl.bindFramebuffer(gl.READ_FRAMEBUFFER, from);
     gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, to);
+    this.outputRevision++;
     gl.disable(gl.SCISSOR_TEST);
     const mask = destination.layout.depth
       ? gl.DEPTH_BUFFER_BIT | (destination.getDesc().format === 45 ? gl.STENCIL_BUFFER_BIT : 0)
@@ -736,6 +746,7 @@ export class D3d11GpuTextures {
   }
 
   private upload(entry: Texture): void {
+    this.outputRevision++;
     const gl = this.gl;
     gl.bindBuffer(gl.PIXEL_UNPACK_BUFFER, null);
     for (const [name, value] of [

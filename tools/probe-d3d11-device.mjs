@@ -269,6 +269,136 @@ async function pageMain(fixture) {
     setup();
     ctx.draw(3, 0);
     await record('public-draw-bgra-input', fill([32, 96, 64, 255]));
+    // Fixed-state caching is owned by the concrete Native device, including
+    // invalidation at private texture operations and external GL handoff.
+    const originalViewport = gl.viewport;
+    let viewportWrites = 0;
+    gl.viewport = function (...args) {
+      viewportWrites++;
+      return originalViewport.apply(gl, args);
+    };
+    try {
+      setup();
+      ctx.draw(3, 0);
+      const before = viewportWrites;
+      ctx.draw(3, 0);
+      rows.push({name: 'public-fixed-state-repeat', passed: viewportWrites === before});
+      const temporary = device.createBuffer(
+        {
+          byteWidth: 48,
+          usage: 0,
+          bindFlags: 1,
+          cpuAccessFlags: 0,
+          miscFlags: 0,
+          structureByteStride: 0,
+        },
+        {data: packedVertices(), rowPitch: 0, slicePitch: 0},
+      ).value;
+      temporary.release();
+      ctx.draw(3, 0);
+      rows.push({
+        name: 'public-fixed-state-unrelated-buffer-retirement',
+        passed: viewportWrites === before,
+      });
+      await record('public-fixed-state-repeat-pixels', fill([32, 96, 64, 255]));
+      setup();
+      ctx.draw(3, 0);
+      ctx.updateSubresource(packed, 0, null, packedVertices(0xff00ff00), 0, 0);
+      ctx.rsSetViewports([
+        {topLeftX: 0, topLeftY: 0, width: 2, height: 4, minDepth: 0, maxDepth: 1},
+      ]);
+      ctx.draw(3, 0);
+      await record(
+        'public-fixed-state-viewport-mutation',
+        Uint8Array.from(
+          Array.from({length: 16}, (_, i) =>
+            i % 4 < 2 ? [0, 255, 0, 255] : [32, 96, 64, 255],
+          ).flat(),
+        ),
+      );
+      ctx.updateSubresource(packed, 0, null, packedVertices(), 0, 0);
+      setup();
+      const blendDesc = {
+        alphaToCoverageEnable: false,
+        independentBlendEnable: false,
+        renderTarget: Array.from({length: 8}, () => ({
+          blendEnable: true,
+          srcBlend: 14,
+          destBlend: 1,
+          blendOp: 1,
+          srcBlendAlpha: 2,
+          destBlendAlpha: 1,
+          blendOpAlpha: 1,
+          renderTargetWriteMask: 15,
+        })),
+      };
+      const constantBlend = own(device.createBlendState(blendDesc));
+      ctx.omSetBlendState(constantBlend, [1, 0, 0, 1], 0xffffffff);
+      ctx.draw(3, 0);
+      ctx.omSetBlendState(constantBlend, [0, 1, 0, 1], 0xffffffff);
+      ctx.draw(3, 0);
+      await record('public-fixed-state-blend-factor-mutation', fill([0, 96, 0, 255]));
+      const redBlend = own(
+        device.createBlendState({
+          ...blendDesc,
+          renderTarget: blendDesc.renderTarget.map((t) => ({
+            ...t,
+            blendEnable: false,
+            renderTargetWriteMask: 1,
+          })),
+        }),
+      );
+      setup();
+      ctx.omSetBlendState(redBlend, [0, 0, 0, 0], 0xffffffff);
+      ctx.draw(3, 0);
+      ctx.clearRenderTargetView(rtv, [0, 0.25, 0.5, 1]);
+      ctx.draw(3, 0);
+      await record('public-fixed-state-clear-restores-mask', fill([32, 64, 128, 255]));
+      setup();
+      ctx.draw(3, 0);
+      const lease = device.acquireColorTexture(target);
+      try {
+        lease.prepare();
+        gl.colorMask(false, false, false, false);
+        gl.viewport(0, 0, 1, 1);
+        ctx.updateSubresource(packed, 0, null, packedVertices(0xff0000ff), 0, 0);
+        ctx.draw(3, 0);
+      } finally {
+        lease.dispose();
+      }
+      await record('public-fixed-state-publication-handoff', fill([0, 0, 255, 255]));
+      ctx.updateSubresource(packed, 0, null, packedVertices(), 0, 0);
+      setup();
+      ctx.draw(3, 0);
+      ctx.flush();
+      gl.colorMask(false, false, false, false);
+      gl.viewport(0, 0, 1, 1);
+      ctx.updateSubresource(packed, 0, null, packedVertices(0xff00ff00), 0, 0);
+      ctx.draw(3, 0);
+      await record('public-fixed-state-flush-handoff', fill([0, 255, 0, 255]));
+      ctx.updateSubresource(packed, 0, null, packedVertices(), 0, 0);
+      const scissor = own(device.createRasterizerState({...raster.getDesc(), scissorEnable: true}));
+      setup();
+      ctx.rsSetState(scissor);
+      ctx.rsSetScissorRects([{left: 0, top: 0, right: 2, bottom: 4}]);
+      ctx.draw(3, 0);
+      ctx.updateSubresource(packed, 0, null, packedVertices(0xff00ff00), 0, 0);
+      ctx.rsSetScissorRects([{left: 2, top: 0, right: 4, bottom: 4}]);
+      ctx.draw(3, 0);
+      await record(
+        'public-fixed-state-scissor-mutation',
+        Uint8Array.from(
+          Array.from({length: 16}, (_, i) =>
+            i % 4 < 2 ? [32, 96, 64, 255] : [0, 255, 0, 255],
+          ).flat(),
+        ),
+      );
+    } finally {
+      gl.viewport = originalViewport;
+      ctx.updateSubresource(packed, 0, null, packedVertices(), 0, 0);
+      setup();
+    }
+
     for (const [format, typed] of [
       [57, Uint16Array],
       [42, Uint32Array],
