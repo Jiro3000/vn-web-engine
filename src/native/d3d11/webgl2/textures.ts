@@ -104,9 +104,22 @@ export class D3d11GpuTextures {
     return !!(resource.getDesc().bindFlags & 0x60);
   }
 
-  /** Borrow a draw's context-owned views together, pinning aliases until release. */
+  /** Whether a view is one complete level of row-reflected storage. */
+  reflectable(view: D3d11TextureView<D3d11ShaderResourceViewDesc>): boolean {
+    const levels = view.resource.levels.length;
+    return (
+      this.flipped(view.resource) && levels === 1 && view.firstMip === 0 && view.mipCount === 1
+    );
+  }
+
+  /**
+   * Borrow a draw's context-owned views together, pinning aliases until release.
+   * Reflected views (bit mask by index) bind canonical storage; their programs
+   * select native rows.
+   */
   acquireShaderResources(
     views: readonly (D3d11TextureView<D3d11ShaderResourceViewDesc> | null)[],
+    reflected = 0,
   ): {
     readonly images: readonly WebGLTexture[];
     release(): void;
@@ -130,8 +143,14 @@ export class D3d11GpuTextures {
       held.clear();
     };
     try {
-      for (const view of views) {
-        const image = view === null ? this.zeroImage() : this.shaderResource(view),
+      for (let i = 0; i < views.length; i++) {
+        const view = views[i]!,
+          image =
+            view === null
+              ? this.zeroImage()
+              : (reflected >>> i) & 1
+                ? this.reflectedResource(view)
+                : this.shaderResource(view),
           alias = this.aliasImages.get(image);
         if (alias && !held.has(alias)) {
           alias.pins++;
@@ -144,6 +163,12 @@ export class D3d11GpuTextures {
       release();
       throw error;
     }
+  }
+
+  private reflectedResource(view: D3d11TextureView<D3d11ShaderResourceViewDesc>): WebGLTexture {
+    if (!view.live || view.kind !== 'shader-resource' || !this.reflectable(view))
+      throw new D3d11TextureError('Invalid reflected shader resource view');
+    return this.get(view.resource).texture;
   }
 
   /** Independent image storage implements simultaneous SRVs with different mip ranges. */

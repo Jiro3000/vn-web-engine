@@ -92,13 +92,16 @@ export interface Sm4GlslPipeline {
  * native top at the GL top, preserving clip-space raster orientation. Texture
  * storage and presentation account for their own logical row origins. Alpha-only
  * targets and pixel samples (bit masks by register and sample index) use red
- * storage; other programs preprocess to the unchanged token stream.
+ * storage. Reflected samples read point/clamp views of GL-row-ordered storage at
+ * the center of the native texel row instead of a row-reflected copy. Other
+ * programs preprocess to the unchanged token stream.
  */
 export function linkSm4GlslPrograms(
   vertex: Sm4GlslShader,
   pixel: Sm4GlslShader,
   alphaTargets = 0,
   alphaSamples = 0,
+  reflectedSamples = 0,
 ): Sm4GlslPipeline {
   if (vertex.code.stage !== 'vertex' || pixel.code.stage !== 'pixel') invalid('pipeline stages');
   const positions = vertex.code.outputs.filter((p) => p.systemValue === 1);
@@ -135,6 +138,13 @@ export function linkSm4GlslPrograms(
       ...pixel.code.samples
         .filter((_, i) => (alphaSamples >>> i) & 1)
         .map((s) => `#define ${s.uniform}_view(t) vec4(0.0, 0.0, 0.0, (t).x)`),
+      ...pixel.code.samples
+        .filter((_, i) => (reflectedSamples >>> i) & 1)
+        .map((s) => {
+          // Native row floor(v*h), clamped, read at its storage row center.
+          const h = `float(textureSize(${s.uniform}, 0).y)`;
+          return `#define ${s.uniform}_coord(c) vec2((c).x, (${h} - 0.5 - clamp(floor((c).y * ${h}), 0.0, ${h} - 1.0)) / ${h})`;
+        }),
       pixel.code.source,
     ];
   const vertexBody = [

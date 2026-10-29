@@ -136,18 +136,32 @@ export class D3d11DrawContext extends D3d11TransferContext implements ID3D11Devi
       );
     // A8 storage is red; its targets and views select a program variant.
     let alphaTargets = 0,
-      alphaSamples = 0;
+      alphaSamples = 0,
+      reflectedSamples = 0;
     for (let i = 0; i < this.renderTargets.length; i++)
       if (this.renderTargets[i]?.resource.getDesc().format === 65) alphaTargets |= 1 << i;
     const samples = this.pixelShader.shader.code.samples;
-    for (let i = 0; i < samples.length; i++)
-      if (this.psResources[samples[i]!.resource]?.resource.getDesc().format === 65)
-        alphaSamples |= 1 << i;
+    for (let i = 0; i < samples.length; i++) {
+      const view = this.psResources[samples[i]!.resource],
+        sampler = this.psSamplers[samples[i]!.sampler]?.description;
+      if (view?.resource.getDesc().format === 65) alphaSamples |= 1 << i;
+      // Point/clamp rows of a reflected view are selected in the shader, which
+      // avoids refreshing a row-reflected copy after every target revision.
+      if (
+        view &&
+        sampler &&
+        (sampler.filter & 0x14) === 0 &&
+        sampler.addressV === 3 &&
+        this.textures.reflectable(view)
+      )
+        reflectedSamples |= 1 << i;
+    }
     const program = this.programs.use(
         this.vertexShader,
         this.pixelShader,
         alphaTargets,
         alphaSamples,
+        reflectedSamples,
       ),
       registers = program.attributes.map((a) => a.register),
       floats = count * registers.length * 4;
@@ -187,6 +201,7 @@ export class D3d11DrawContext extends D3d11TransferContext implements ID3D11Devi
     }
     const resources = this.textures.acquireShaderResources(
       program.samples.map((s) => this.psResources[s.resource] ?? null),
+      reflectedSamples,
     );
     try {
       const state = this.snapshot();

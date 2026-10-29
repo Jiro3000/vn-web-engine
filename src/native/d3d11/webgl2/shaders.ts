@@ -51,13 +51,15 @@ export class D3d11ProgramCache {
 
   /**
    * Select an owned VS/PS pair and make its GPU program current. Alpha-only target
-   * registers and pixel sample indices select a red-storage program variant.
+   * registers and pixel sample indices select a red-storage program variant;
+   * reflected sample indices select row-reflected point views.
    */
   use(
     vertex: D3d11Shader,
     pixel: D3d11Shader,
     alphaTargets = 0,
     alphaSamples = 0,
+    reflectedSamples = 0,
   ): D3d11LinkedProgram {
     this.checkLive();
     for (const [shader, stage] of [
@@ -71,9 +73,11 @@ export class D3d11ProgramCache {
       )
         throw new Error('Invalid D3D11 shader pair');
     const outputs = pixel.shader.code.outputs.reduce((m, p) => m | (1 << p.register), 0),
+      samples = (1 << Math.min(16, pixel.shader.code.samples.length)) - 1,
       variant =
-        (alphaTargets & outputs) |
-        ((alphaSamples & ((1 << pixel.shader.code.samples.length) - 1)) << 8);
+        (alphaTargets & outputs) +
+        (alphaSamples & samples) * 2 ** 8 +
+        (reflectedSamples & samples) * 2 ** 24;
     const found = this.pairs.get(vertex)?.get(pixel)?.get(variant);
     if (found) {
       this.entries.delete(found);
@@ -198,7 +202,13 @@ export class D3d11ProgramCache {
   }
   private compile(vertex: D3d11Shader, pixel: D3d11Shader, variant: number): Entry {
     const gl = this.gl,
-      sources = linkSm4GlslPrograms(vertex.shader, pixel.shader, variant & 255, variant >>> 8);
+      sources = linkSm4GlslPrograms(
+        vertex.shader,
+        pixel.shader,
+        variant % 2 ** 8,
+        Math.floor(variant / 2 ** 8) % 2 ** 16,
+        Math.floor(variant / 2 ** 24),
+      );
     const samples = pixel.shader.code.samples;
     if (
       samples.length > gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS) ||
