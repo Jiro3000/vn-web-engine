@@ -47,7 +47,11 @@ moves preserve those bits; arithmetic flushes denormals at its boundaries. Helpe
 cover NaN selection/saturation and division, logarithm, reciprocal-square-root and
 exponential special values. Pixel discard is deferred until return so subsequent
 instructions retain their derivative participation. GPU arithmetic retains the
-precision limits of the target GLSL implementation.
+precision limits of the target GLSL implementation. Built-in helper definitions and
+their dependency masks are shared per stage. A64-entry LRU per stage caches the
+complete helper block for each recently used dependency mask. Each executable includes only the
+helpers its instruction body needs, including their transitive dependencies; the
+retained helper text and native instruction order stay unchanged.
 
 `tools/probe-sm4-glsl.mjs` executes generated instruction fixtures in an isolated
 headless WebGL2 browser and reads an integer framebuffer. Fixtures cover raw words,

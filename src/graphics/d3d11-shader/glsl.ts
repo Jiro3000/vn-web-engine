@@ -67,13 +67,97 @@ function mask(operand: Sm4Operand): number {
   return operand.components.reduce((bits, c) => bits | (1 << c), 0);
 }
 
+interface GlslHelper {
+  readonly name: string;
+  readonly source: string;
+  readonly dependencies: readonly string[];
+}
+function makeHelpers(prefix: string) {
+  const helpers = [
+    `uvec4 ${prefix}_select(uvec4 a, uvec4 b, bvec4 takeB) { uvec4 bits = uvec4(takeB) * 0xffffffffu; return (a & ~bits) | (b & bits); }`,
+    `uvec4 ${prefix}_flush(uvec4 a) { return ${prefix}_select(a, a & uvec4(0x80000000u), lessThan(a & uvec4(0x7fffffffu), uvec4(0x00800000u))); }`,
+    `vec4 ${prefix}_float(uvec4 a) { return uintBitsToFloat(${prefix}_flush(a)); }`,
+    `uvec4 ${prefix}_store(vec4 a) { return ${prefix}_flush(floatBitsToUint(a)); }`,
+    `vec4 ${prefix}_min(vec4 a, vec4 b) { return mix(mix(min(a,b), b, isnan(a)), a, isnan(b)); }`,
+    `vec4 ${prefix}_max(vec4 a, vec4 b) { return mix(mix(max(a,b), b, isnan(a)), a, isnan(b)); }`,
+    `vec4 ${prefix}_sat(vec4 a) { return mix(clamp(a,0.0,1.0), vec4(0.0), isnan(a)); }`,
+    `float ${prefix}_div1(float a, float b) {
+      uint sign = (floatBitsToUint(a) ^ floatBitsToUint(b)) & 0x80000000u;
+      if (isnan(a) || isnan(b) || (a==0.0 && b==0.0) || (isinf(a) && isinf(b))) return uintBitsToFloat(0x7fc00000u);
+      if (b==0.0 || isinf(a)) return uintBitsToFloat(sign | 0x7f800000u);
+      if (isinf(b)) return uintBitsToFloat(sign);
+      return a/b;
+    }`,
+    `vec4 ${prefix}_div(vec4 a, vec4 b) { return vec4(${prefix}_div1(a.x,b.x), ${prefix}_div1(a.y,b.y), ${prefix}_div1(a.z,b.z), ${prefix}_div1(a.w,b.w)); }`,
+    `float ${prefix}_log1(float a) {
+      if (isnan(a)) return a;
+      if (a==0.0) return uintBitsToFloat(0xff800000u);
+      if (a<0.0) return uintBitsToFloat(0x7fc00000u);
+      if (isinf(a)) return a;
+      return log2(a);
+    }`,
+    `vec4 ${prefix}_log(vec4 a) { return vec4(${prefix}_log1(a.x), ${prefix}_log1(a.y), ${prefix}_log1(a.z), ${prefix}_log1(a.w)); }`,
+    `float ${prefix}_rsq1(float a) {
+      if (isnan(a)) return a;
+      if (a==0.0) return uintBitsToFloat((floatBitsToUint(a) & 0x80000000u) | 0x7f800000u);
+      if (a<0.0) return uintBitsToFloat(0x7fc00000u);
+      if (isinf(a)) return 0.0;
+      return inversesqrt(a);
+    }`,
+    `vec4 ${prefix}_rsq(vec4 a) { return vec4(${prefix}_rsq1(a.x), ${prefix}_rsq1(a.y), ${prefix}_rsq1(a.z), ${prefix}_rsq1(a.w)); }`,
+    `float ${prefix}_exp1(float a) { if (isnan(a)) return a; if (isinf(a)) return a<0.0 ? 0.0 : a; return exp2(a); }`,
+    `vec4 ${prefix}_exp(vec4 a) { return vec4(${prefix}_exp1(a.x), ${prefix}_exp1(a.y), ${prefix}_exp1(a.z), ${prefix}_exp1(a.w)); }`,
+  ];
+  const pattern = new RegExp(`\\b${prefix}_([a-zA-Z0-9]+)\\(`, 'g');
+  const definitions: readonly GlslHelper[] = helpers.map((source) => {
+    const name = source.match(pattern)![0]!.slice(prefix.length + 1, -1);
+    return {
+      name,
+      source,
+      dependencies: [...new Set([...source.matchAll(pattern)].map((m) => m[1]!))].filter(
+        (dependency) => dependency !== name,
+      ),
+    };
+  });
+  const byName = new Map(definitions.map((d) => [d.name, d])),
+    masks: Record<string, number> = Object.create(null);
+  function dependencies(name: string): number {
+    if (masks[name] !== undefined) return masks[name];
+    const definition = byName.get(name)!;
+    let mask = 1 << definitions.indexOf(definition);
+    for (const dependency of definition.dependencies) mask |= dependencies(dependency);
+    return (masks[name] = mask);
+  }
+  for (const definition of definitions) dependencies(definition.name);
+  const blocks = new Map<number, string>();
+  function source(mask: number): string {
+    const found = blocks.get(mask);
+    if (found !== undefined) {
+      blocks.delete(mask);
+      blocks.set(mask, found);
+      return found;
+    }
+    const text = definitions
+      .filter((_, i) => mask & (1 << i))
+      .map((d) => d.source)
+      .join('\n');
+    blocks.set(mask, text);
+    if (blocks.size > 64) blocks.delete(blocks.keys().next().value!);
+    return text;
+  }
+  return {masks, source};
+}
+const HELPERS = {vertex: makeHelpers('sm4_vs'), pixel: makeHelpers('sm4_ps')};
+
 /**
  * Lower the surveyed SM4 arithmetic/2D-sample subset. Raw register words preserve moves,
  * condition bits and source sign modifiers. Backend wrappers supply stage linkage,
  * position conventions, raw constant uploads, texture formats and sampler bindings.
  */
 export function translateSm4ToGlsl(program: Sm4Program): Sm4GlslProgram {
-  const prefix = program.stage === 'vertex' ? 'sm4_vs' : 'sm4_ps';
+  const prefix = program.stage === 'vertex' ? 'sm4_vs' : 'sm4_ps',
+    builtins = HELPERS[program.stage];
+  let requiredHelpers = 0;
   const inputs = new Map<number, Sm4GlslIo[]>(),
     outputs = new Map<number, Sm4GlslIo[]>();
   const constants = new Map<number, Sm4GlslConstantBuffer>(),
@@ -295,13 +379,20 @@ export function translateSm4ToGlsl(program: Sm4Program): Sm4GlslProgram {
     }
     if ((instruction.controls & ~4) !== 0) fail('arithmetic instruction controls');
     let raw: string;
-    const f = (i: number) => `${prefix}_float(${source(operands[i]!)})`;
-    const store = (expression: string) => `${prefix}_store(${expression})`;
+    const f = (i: number) => {
+      requiredHelpers |= builtins.masks.float!;
+      return `${prefix}_float(${source(operands[i]!)})`;
+    };
+    const store = (expression: string) => {
+      requiredHelpers |= builtins.masks.store!;
+      return `${prefix}_store(${expression})`;
+    };
     switch (instruction.opcode) {
       case Op.MOV:
         raw = source(operands[1]!);
         break;
       case Op.MOVC:
+        requiredHelpers |= builtins.masks.select!;
         if (operands[1]!.extended.length) fail('conditional source modifier');
         raw = `${prefix}_select(${source(operands[3]!)}, ${source(operands[2]!)}, notEqual(${source(operands[1]!)}, uvec4(0u)))`;
         break;
@@ -318,15 +409,18 @@ export function translateSm4ToGlsl(program: Sm4Program): Sm4GlslProgram {
         raw = store(`${f(1)} * ${f(2)}`);
         break;
       case Op.DIV:
+        requiredHelpers |= builtins.masks.div!;
         raw = store(`${prefix}_div(${f(1)}, ${f(2)})`);
         break;
       case Op.MAD:
         raw = store(`${f(1)} * ${f(2)} + ${f(3)}`);
         break;
       case Op.MIN:
+        requiredHelpers |= builtins.masks.min!;
         raw = store(`${prefix}_min(${f(1)}, ${f(2)})`);
         break;
       case Op.MAX:
+        requiredHelpers |= builtins.masks.max!;
         raw = store(`${prefix}_max(${f(1)}, ${f(2)})`);
         break;
       case Op.DP3:
@@ -336,15 +430,18 @@ export function translateSm4ToGlsl(program: Sm4Program): Sm4GlslProgram {
         raw = store(`vec4(dot(${f(1)}, ${f(2)}))`);
         break;
       case Op.EXP:
+        requiredHelpers |= builtins.masks.exp!;
         raw = store(`${prefix}_exp(${f(1)})`);
         break;
       case Op.LOG:
+        requiredHelpers |= builtins.masks.log!;
         raw = store(`${prefix}_log(${f(1)})`);
         break;
       case Op.ROUND_NI:
         raw = store(`floor(${f(1)})`);
         break;
       case Op.RSQ:
+        requiredHelpers |= builtins.masks.rsq!;
         raw = store(`${prefix}_rsq(${f(1)})`);
         break;
       case Op.SAMPLE: {
@@ -367,7 +464,10 @@ export function translateSm4ToGlsl(program: Sm4Program): Sm4GlslProgram {
       default:
         fail(`opcode ${instruction.opcode}`);
     }
-    if (instruction.controls & 4) raw = `floatBitsToUint(${prefix}_sat(uintBitsToFloat(${raw})))`;
+    if (instruction.controls & 4) {
+      requiredHelpers |= builtins.masks.sat!;
+      raw = `floatBitsToUint(${prefix}_sat(uintBitsToFloat(${raw})))`;
+    }
     const dest = destination(operands[0]!),
       swizzle = operands[0]!.components.map((c) => channels[c]).join('');
     lines.push(`{ uvec4 value = ${raw}; ${dest} = value.${swizzle}; }`);
@@ -376,48 +476,14 @@ export function translateSm4ToGlsl(program: Sm4Program): Sm4GlslProgram {
     sampleBindings = [...samples.values()];
   const declarations = cb.map((b) => `uniform highp uvec4 ${b.uniform}[${b.vectors}];`);
   declarations.push(...sampleBindings.map((s) => `uniform highp sampler2D ${s.uniform};`));
-  const helpers = [
-    `uvec4 ${prefix}_select(uvec4 a, uvec4 b, bvec4 takeB) { uvec4 bits = uvec4(takeB) * 0xffffffffu; return (a & ~bits) | (b & bits); }`,
-    `uvec4 ${prefix}_flush(uvec4 a) { return ${prefix}_select(a, a & uvec4(0x80000000u), lessThan(a & uvec4(0x7fffffffu), uvec4(0x00800000u))); }`,
-    `vec4 ${prefix}_float(uvec4 a) { return uintBitsToFloat(${prefix}_flush(a)); }`,
-    `uvec4 ${prefix}_store(vec4 a) { return ${prefix}_flush(floatBitsToUint(a)); }`,
-    `vec4 ${prefix}_min(vec4 a, vec4 b) { return mix(mix(min(a,b), b, isnan(a)), a, isnan(b)); }`,
-    `vec4 ${prefix}_max(vec4 a, vec4 b) { return mix(mix(max(a,b), b, isnan(a)), a, isnan(b)); }`,
-    `vec4 ${prefix}_sat(vec4 a) { return mix(clamp(a,0.0,1.0), vec4(0.0), isnan(a)); }`,
-    `float ${prefix}_div1(float a, float b) {
-      uint sign = (floatBitsToUint(a) ^ floatBitsToUint(b)) & 0x80000000u;
-      if (isnan(a) || isnan(b) || (a==0.0 && b==0.0) || (isinf(a) && isinf(b))) return uintBitsToFloat(0x7fc00000u);
-      if (b==0.0 || isinf(a)) return uintBitsToFloat(sign | 0x7f800000u);
-      if (isinf(b)) return uintBitsToFloat(sign);
-      return a/b;
-    }`,
-    `vec4 ${prefix}_div(vec4 a, vec4 b) { return vec4(${prefix}_div1(a.x,b.x), ${prefix}_div1(a.y,b.y), ${prefix}_div1(a.z,b.z), ${prefix}_div1(a.w,b.w)); }`,
-    `float ${prefix}_log1(float a) {
-      if (isnan(a)) return a;
-      if (a==0.0) return uintBitsToFloat(0xff800000u);
-      if (a<0.0) return uintBitsToFloat(0x7fc00000u);
-      if (isinf(a)) return a;
-      return log2(a);
-    }`,
-    `vec4 ${prefix}_log(vec4 a) { return vec4(${prefix}_log1(a.x), ${prefix}_log1(a.y), ${prefix}_log1(a.z), ${prefix}_log1(a.w)); }`,
-    `float ${prefix}_rsq1(float a) {
-      if (isnan(a)) return a;
-      if (a==0.0) return uintBitsToFloat((floatBitsToUint(a) & 0x80000000u) | 0x7f800000u);
-      if (a<0.0) return uintBitsToFloat(0x7fc00000u);
-      if (isinf(a)) return 0.0;
-      return inversesqrt(a);
-    }`,
-    `vec4 ${prefix}_rsq(vec4 a) { return vec4(${prefix}_rsq1(a.x), ${prefix}_rsq1(a.y), ${prefix}_rsq1(a.z), ${prefix}_rsq1(a.w)); }`,
-    `float ${prefix}_exp1(float a) { if (isnan(a)) return a; if (isinf(a)) return a<0.0 ? 0.0 : a; return exp2(a); }`,
-    `vec4 ${prefix}_exp(vec4 a) { return vec4(${prefix}_exp1(a.x), ${prefix}_exp1(a.y), ${prefix}_exp1(a.z), ${prefix}_exp1(a.w)); }`,
-  ];
+
   const init: string[] = ['for (int i=0; i<32; i++) outputRegisters[i] = uvec4(0u);'];
   if (program.stage === 'pixel') init.push(`bool ${prefix}_discarded = false;`);
   for (let i = 0; i < temps; i++) init.push(`uvec4 ${prefix}_r${i} = uvec4(0u);`);
   for (const output of outputRegisters) init.push(`uvec4 ${prefix}_o${output} = uvec4(0u);`);
   const sourceText = [
     ...declarations,
-    ...helpers,
+    ...(requiredHelpers ? [builtins.source(requiredHelpers)] : []),
     `void ${prefix}(in uvec4 inputRegisters[32], out uvec4 outputRegisters[32]) {`,
     ...init,
     ...lines,
