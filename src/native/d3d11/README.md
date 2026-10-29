@@ -269,7 +269,9 @@ The null-state defaults follow [PSSetSamplers](https://learn.microsoft.com/en-us
 color/depth images before attaching them, tracks mip attachments, and detaches retired
 resources through the resource owner's `destroy` callback. Context bindings retain
 the native views; cached framebuffer attachments acquire no native references.
-Device disposal deletes the framebuffer.
+Device disposal deletes the framebuffer. A draw with only a first color target and no
+depth view binds that mip's own complete framebuffer, the one its clears and copies
+use, so alternating mask/copy/output passes never re-attach images per draw.
 
 Draw state reapplies viewport/scissor, front-face/cull, fill, clipping, depth/stencil,
 blend equations/factors and component masks after private texture preparation. Native

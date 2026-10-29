@@ -92,6 +92,11 @@ export class D3d11GpuOutput {
   private framebuffer: WebGLFramebuffer | null = null;
   private framebufferComplete = false;
   private readonly completeConfigurations: OutputConfiguration[] = [];
+  /** Attachments of the shared multi-target framebuffer. */
+  private readonly attachedColors: (Attachment | null)[];
+  private attachedDepth: Attachment | null = null;
+  private attachedDrawBuffers = '';
+  /** Attachments of the framebuffer bound for the current draw. */
   private readonly colors: (Attachment | null)[];
   private depth: Attachment | null = null;
   private width = 0;
@@ -138,6 +143,7 @@ export class D3d11GpuOutput {
     this.colors = Array(
       Math.min(8, gl.getParameter(gl.MAX_DRAW_BUFFERS), gl.getParameter(gl.MAX_COLOR_ATTACHMENTS)),
     ).fill(null);
+    this.attachedColors = this.colors.slice();
     this.indexed = gl.getExtension('OES_draw_buffers_indexed');
     this.clamp = gl.getExtension('EXT_depth_clamp');
     this.polygon = gl.getExtension('WEBGL_polygon_mode');
@@ -413,6 +419,9 @@ export class D3d11GpuOutput {
   destroy(resource: D3d11ResourceStorage): void {
     if (this.depth?.resource === resource || this.colors.some((a) => a?.resource === resource))
       this.invalidateState();
+    for (let i = 0; i < this.colors.length; i++)
+      if (this.colors[i]?.resource === resource) this.colors[i] = null;
+    if (this.depth?.resource === resource) this.depth = null;
     for (let i = this.completeConfigurations.length - 1; i >= 0; i--) {
       const config = this.completeConfigurations[i]!;
       if (
@@ -423,8 +432,8 @@ export class D3d11GpuOutput {
     }
     if (!this.framebuffer) return;
     const gl = this.gl;
-    for (let i = 0; i < this.colors.length; i++)
-      if (this.colors[i]?.resource === resource) {
+    for (let i = 0; i < this.attachedColors.length; i++)
+      if (this.attachedColors[i]?.resource === resource) {
         gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, this.framebuffer);
         gl.framebufferTexture2D(
           gl.DRAW_FRAMEBUFFER,
@@ -433,10 +442,10 @@ export class D3d11GpuOutput {
           null,
           0,
         );
-        this.colors[i] = null;
+        this.attachedColors[i] = null;
         this.framebufferComplete = false;
       }
-    if (this.depth?.resource === resource) {
+    if (this.attachedDepth?.resource === resource) {
       gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, this.framebuffer);
       gl.framebufferTexture2D(
         gl.DRAW_FRAMEBUFFER,
@@ -445,7 +454,7 @@ export class D3d11GpuOutput {
         null,
         0,
       );
-      this.depth = null;
+      this.attachedDepth = null;
       this.framebufferComplete = false;
     }
   }
@@ -458,6 +467,8 @@ export class D3d11GpuOutput {
     this.framebuffer = null;
     this.framebufferComplete = false;
     this.completeConfigurations.length = 0;
+    this.attachedColors.fill(null);
+    this.attachedDepth = null;
     this.colors.fill(null);
     this.depth = null;
   }
@@ -500,14 +511,29 @@ export class D3d11GpuOutput {
           }
         : null;
     const gl = this.gl;
-    if (!this.framebuffer) this.framebuffer = gl.createFramebuffer();
-    if (!this.framebuffer)
-      throw new D3d11TextureError('D3D11 output framebuffer allocation failed', 0x8007000e | 0);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, this.framebuffer);
-    gl.readBuffer(gl.NONE);
+    for (let i = 0; i < colors.length; i++) this.colors[i] = colors[i]!;
+    this.depth = depth;
+    this.width = size.width;
+    this.height = size.height;
+    // A lone first target draws through the resource's own complete framebuffer,
+    // which its clears and copies also use, so attachments never change per draw.
+    if (!depth && colors[0] && colors.every((v, i) => !i || !v)) {
+      gl.bindFramebuffer(
+        gl.FRAMEBUFFER,
+        this.textures.framebuffer(colors[0].resource, colors[0].mip),
+      );
+      return true;
+    }
+    if (!this.framebuffer) {
+      this.framebuffer = gl.createFramebuffer();
+      if (!this.framebuffer)
+        throw new D3d11TextureError('D3D11 output framebuffer allocation failed', 0x8007000e | 0);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.framebuffer);
+      gl.readBuffer(gl.NONE);
+    } else gl.bindFramebuffer(gl.FRAMEBUFFER, this.framebuffer);
     for (let i = 0; i < colors.length; i++) {
       const next = colors[i]!;
-      if (!sameAttachment(next, this.colors[i]!)) {
+      if (!sameAttachment(next, this.attachedColors[i]!)) {
         this.framebufferComplete = false;
         gl.framebufferTexture2D(
           gl.DRAW_FRAMEBUFFER,
@@ -516,10 +542,10 @@ export class D3d11GpuOutput {
           next?.texture ?? null,
           next?.mip ?? 0,
         );
-        this.colors[i] = next;
+        this.attachedColors[i] = next;
       }
     }
-    if (!sameAttachment(depth, this.depth)) {
+    if (!sameAttachment(depth, this.attachedDepth)) {
       this.framebufferComplete = false;
       gl.framebufferTexture2D(
         gl.DRAW_FRAMEBUFFER,
@@ -538,9 +564,14 @@ export class D3d11GpuOutput {
           depth.texture,
           depth.mip,
         );
-      this.depth = depth;
+      this.attachedDepth = depth;
     }
-    gl.drawBuffers(colors.map((v, i) => (v ? gl.COLOR_ATTACHMENT0 + i : gl.NONE)));
+    // Draw buffers are framebuffer state; only this class binds this framebuffer.
+    const buffers = colors.map((v, i) => (v ? gl.COLOR_ATTACHMENT0 + i : gl.NONE));
+    if (buffers.join() !== this.attachedDrawBuffers) {
+      gl.drawBuffers(buffers);
+      this.attachedDrawBuffers = buffers.join();
+    }
     // Immutable storage makes completeness a property of the complete attachment
     // configuration. Native mask/copy passes repeatedly revisit those same sets.
     if (!this.framebufferComplete) {
@@ -561,8 +592,6 @@ export class D3d11GpuOutput {
       }
       this.framebufferComplete = true;
     }
-    this.width = size.width;
-    this.height = size.height;
     return true;
   }
 

@@ -159,7 +159,9 @@ async function pageMain() {
   const rgba = texture(),
     rtv = view(rgba),
     alpha = texture(65),
-    a8 = view(alpha);
+    a8 = view(alpha),
+    second = texture(),
+    rtv2 = view(second);
   const base = {
     targets: [rtv],
     depthTarget: null,
@@ -244,11 +246,25 @@ async function pageMain() {
   try {
     clear();
     draw();
+    // A lone first target draws through its resource framebuffer; several targets
+    // use the private output framebuffer and its completeness cache.
+    const resourceFramebuffer = gl.getParameter(gl.DRAW_FRAMEBUFFER_BINDING);
+    draw({targets: [rtv, rtv2]});
     const outputFramebuffer = gl.getParameter(gl.DRAW_FRAMEBUFFER_BINDING),
       originalStatus = gl.checkFramebufferStatus.bind(gl);
+    rows.push({
+      name: 'single-target-output-uses-resource-framebuffer',
+      passed:
+        resourceFramebuffer === gpu.framebuffer(rgba, 0) &&
+        outputFramebuffer !== resourceFramebuffer,
+    });
     let outputChecks = 0,
-      rejectOutput = false;
+      allChecks = 0,
+      rejectOutput = false,
+      rejectAll = false;
     gl.checkFramebufferStatus = (target) => {
+      allChecks++;
+      if (rejectAll) return gl.FRAMEBUFFER_INCOMPLETE_ATTACHMENT;
       if (gl.getParameter(gl.DRAW_FRAMEBUFFER_BINDING) === outputFramebuffer) {
         outputChecks++;
         if (rejectOutput) return gl.FRAMEBUFFER_INCOMPLETE_ATTACHMENT;
@@ -261,14 +277,26 @@ async function pageMain() {
     draw({}, [0, 1, 0, 1]);
     await read('repeated-output-after-readback', rgba, fill([0, 255, 0, 255]));
     outputChecks = 0;
+    allChecks = 0;
+    draw({targets: [a8, rtv2]}, [0, 0, 0, 1]);
+    draw({targets: [rtv, rtv2]});
+    draw({targets: [a8, rtv2]}, [0, 0, 0, 0.5]);
+    draw({targets: [rtv, rtv2]}, [0, 1, 0, 1]);
+    rows.push({
+      name: 'return-to-validated-output-configurations',
+      passed: outputChecks === 1 && allChecks === 1,
+      outputChecks,
+      allChecks,
+    });
+    allChecks = 0;
     draw({targets: [a8]}, [0, 0, 0, 1]);
     draw();
     draw({targets: [a8]}, [0, 0, 0, 0.5]);
     draw({}, [0, 1, 0, 1]);
     rows.push({
-      name: 'return-to-validated-output-configurations',
-      passed: outputChecks === 1,
-      outputChecks,
+      name: 'return-to-validated-single-target-framebuffers',
+      passed: allChecks === 1,
+      allChecks,
     });
     await read('restored-output-configuration', rgba, fill([0, 255, 0, 255]));
     const retryTexture = texture(),
@@ -276,23 +304,41 @@ async function pageMain() {
     let incompleteRejected = false;
     rejectOutput = true;
     try {
-      draw({targets: [retryView]});
+      draw({targets: [retryView, rtv2]});
     } catch (error) {
       incompleteRejected = /Incomplete D3D11 draw output framebuffer/.test(String(error));
     } finally {
       rejectOutput = false;
     }
     const checksBeforeRetry = outputChecks;
-    draw({targets: [retryView]}, [0, 0, 1, 1]);
+    draw({targets: [retryView, rtv2]}, [0, 0, 1, 1]);
     rows.push({
       name: 'incomplete-output-is-not-cached',
       passed: incompleteRejected && outputChecks === checksBeforeRetry + 1,
     });
     await read('revalidated-output-after-failure', retryTexture, fill([0, 0, 255, 255]));
-    draw();
-    for (let i = 0; i < 64; i++) draw({targets: [view(texture())]});
+    const singleTexture = texture(),
+      singleView = view(singleTexture);
+    let singleRejected = false;
+    rejectAll = true;
+    try {
+      draw({targets: [singleView]});
+    } catch (error) {
+      singleRejected = /Incomplete D3D11 framebuffer/.test(String(error));
+    } finally {
+      rejectAll = false;
+    }
+    const checksBeforeSingleRetry = allChecks;
+    draw({targets: [singleView]}, [0, 0, 1, 1]);
+    rows.push({
+      name: 'incomplete-single-target-output-is-not-cached',
+      passed: singleRejected && allChecks === checksBeforeSingleRetry + 1,
+    });
+    await read('revalidated-single-target-after-failure', singleTexture, fill([0, 0, 255, 255]));
+    draw({targets: [rtv, rtv2]});
+    for (let i = 0; i < 64; i++) draw({targets: [rtv, view(texture())]});
     const checksBeforeEvicted = outputChecks;
-    draw();
+    draw({targets: [rtv, rtv2]});
     rows.push({
       name: 'bounded-output-cache-rechecks-evicted-configuration',
       passed: outputChecks === checksBeforeEvicted + 1,
@@ -466,9 +512,10 @@ async function pageMain() {
         hr,
       });
     }
-    draw();
+    draw({targets: [rtv, rtv2]});
     const fbo = gl.getParameter(gl.DRAW_FRAMEBUFFER_BINDING),
-      image = gpu.image(rgba);
+      image = gpu.image(rgba),
+      own = gpu.framebuffer(rgba, 0);
     rtv.release();
     views.splice(views.indexOf(rtv), 1);
     rgba.release();
@@ -484,6 +531,10 @@ async function pageMain() {
           gl.COLOR_ATTACHMENT0,
           gl.FRAMEBUFFER_ATTACHMENT_OBJECT_NAME,
         ) === null,
+    });
+    rows.push({
+      name: 'resource-retirement-deletes-own-framebuffer',
+      passed: !gl.isFramebuffer(own),
     });
     const replacement = texture(),
       replacementView = view(replacement);

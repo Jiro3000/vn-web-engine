@@ -20,6 +20,8 @@ export class D3d11DrawContext extends D3d11TransferContext implements ID3D11Devi
   private vertexArray: WebGLVertexArrayObject | null = null;
   private vertexBuffer: WebGLBuffer | null = null;
   private enabledAttributes = 0;
+  /** Vertex array pointer offsets by location; the array never sets a divisor. */
+  private readonly attributeOffsets: number[] = [];
   private gpuDisposed = false;
   private pendingDraw = false;
   private readonly outputState: Mutable<D3d11DrawOutputState>;
@@ -110,6 +112,8 @@ export class D3d11DrawContext extends D3d11TransferContext implements ID3D11Devi
       }
     this.vertexArray = null;
     this.vertexBuffer = null;
+    this.enabledAttributes = 0;
+    this.attributeOffsets.length = 0;
     this.vertices = new Float32Array(0);
     if (errors.length) throw new AggregateError(errors, 'D3D11 draw storage disposal failed');
   }
@@ -256,10 +260,14 @@ export class D3d11DrawContext extends D3d11TransferContext implements ID3D11Devi
       gl.bindBuffer(gl.ARRAY_BUFFER, this.vertexBuffer);
       gl.bufferData(gl.ARRAY_BUFFER, this.vertices.subarray(0, floats), gl.STREAM_DRAW);
     }
+    // Attribute enables and pointers are state of this private vertex array.
     for (const a of program.attributes) {
-      gl.enableVertexAttribArray(a.location);
-      gl.vertexAttribPointer(a.location, 4, gl.FLOAT, false, 0, a.location * count * 16);
-      gl.vertexAttribDivisor(a.location, 0);
+      const offset = a.location * count * 16;
+      if (a.location >= this.enabledAttributes) gl.enableVertexAttribArray(a.location);
+      if (this.attributeOffsets[a.location] !== offset) {
+        gl.vertexAttribPointer(a.location, 4, gl.FLOAT, false, 0, offset);
+        this.attributeOffsets[a.location] = offset;
+      }
     }
     for (let i = program.attributes.length; i < this.enabledAttributes; i++)
       gl.disableVertexAttribArray(i);
