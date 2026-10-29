@@ -961,6 +961,7 @@ test('native Draw and DrawIndexed preserve planar inputs, base vertices, strip c
     host,
     gl,
     {
+      checkSubmission: () => false,
       acquireShaderResources: () => {
         acquired++;
         return {

@@ -85,8 +85,10 @@ export class D3d11DrawContext extends D3d11TransferContext implements ID3D11Devi
     this.checkLive();
     if (this.gl.isContextLost())
       throw new D3d11TextureError('D3D11 device removed', 0x887a0005 | 0);
+    const texturesChecked = this.textures.checkSubmission();
     if (!this.pendingDraw) return;
     this.pendingDraw = false;
+    if (texturesChecked) return;
     const error = this.gl.getError();
     if (error !== this.gl.NO_ERROR) throw new D3d11TextureError('D3D11 draw failed: ' + error);
   }

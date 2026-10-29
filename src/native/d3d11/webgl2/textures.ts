@@ -65,6 +65,8 @@ export class D3d11GpuTextures {
   private readonly textures = new Map<D3d11Texture2D, Texture>();
   private readonly aliases = new Map<Alias, Alias>();
   private readonly aliasImages = new Map<WebGLTexture, Alias>();
+  private readonly pendingAliases = new Set<Alias>();
+  private pendingCommands = false;
   private readonly decoders = new Map<GpuTextureFormat, WebGLProgram>();
   private aliasFramebuffer: WebGLFramebuffer | null = null;
   private scratch: WebGLTexture | null = null;
@@ -262,7 +264,10 @@ export class D3d11GpuTextures {
           }
         }
       }
-      this.checkError('shader view copy');
+      // Copies and the draws that consume them stay ordered in the same GL
+      // command stream. Check their errors together at the submission boundary.
+      this.pendingCommands = true;
+      this.pendingAliases.add(alias);
       alias.revision = entry.revision;
     }
     this.aliases.delete(alias);
@@ -270,6 +275,14 @@ export class D3d11GpuTextures {
     entry.aliases.delete(key);
     entry.aliases.set(key, alias);
     return alias.texture;
+  }
+
+  /** True when this query also checked preceding draw commands in the stream. */
+  checkSubmission(): boolean {
+    this.checkLive();
+    if (!this.pendingCommands) return false;
+    this.checkError('texture submission');
+    return true;
   }
 
   /** Single-mip attachment for clears, copies and readback; depth attachments are supported. */
@@ -294,7 +307,7 @@ export class D3d11GpuTextures {
       0,
       new Float32Array(view.resource.getDesc().format === 65 ? [0, 0, 0, color[3]] : color),
     );
-    this.checkError('render target clear');
+    this.pendingCommands = true;
     this.markWritten(view.resource, view.firstMip);
   }
 
@@ -634,6 +647,8 @@ export class D3d11GpuTextures {
     try {
       this.disposeAll(actions);
     } finally {
+      this.pendingAliases.clear();
+      this.pendingCommands = false;
       this.decoders.clear();
       this.aliasFramebuffer = null;
       this.scratch = null;
@@ -1000,6 +1015,7 @@ export class D3d11GpuTextures {
       throw new D3d11TextureError('D3D11 GPU texture storage limit reached', 0x8007000e | 0);
   }
   private deleteAlias(alias: Alias): void {
+    this.pendingAliases.delete(alias);
     alias.owner.aliases.delete(alias.key);
     this.aliases.delete(alias);
     this.aliasImages.delete(alias.texture);
@@ -1034,12 +1050,22 @@ export class D3d11GpuTextures {
       throw new D3d11TextureError('D3D11 device removed', 0x887a0005 | 0);
   }
   private checkError(operation: string): void {
-    const error = this.gl.getError();
-    if (error !== this.gl.NO_ERROR)
-      throw new D3d11TextureError(
-        `D3D11 ${operation}: WebGL error${error}`,
-        error === this.gl.OUT_OF_MEMORY ? 0x8007000e | 0 : 0x80004005 | 0,
-      );
+    let complete = false;
+    try {
+      const error = this.gl.getError();
+      if (error !== this.gl.NO_ERROR)
+        throw new D3d11TextureError(
+          `D3D11 ${operation}: WebGL error${error}`,
+          error === this.gl.OUT_OF_MEMORY ? 0x8007000e | 0 : 0x80004005 | 0,
+        );
+      complete = true;
+    } finally {
+      // No failed batch may leave a cached alias claiming to contain its source
+      // revision. Allocation, transfer and readback queries also check the batch.
+      if (!complete) for (const alias of this.pendingAliases) alias.revision = -1;
+      this.pendingAliases.clear();
+      this.pendingCommands = false;
+    }
   }
   private disposeAll(actions: readonly (() => void)[]): void {
     const errors: unknown[] = [];

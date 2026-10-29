@@ -177,6 +177,12 @@ Shader-view aliases use NEAREST blits to reflect integer rows, preserving sample
 tie selection without changing sample coordinates. Their 64 MiB cache budget and
 pinned draw lifetime also apply to full-range aliases.
 
+Color-target clears, shader-view copies and their consuming draws share the ordered
+GPU command stream. Their error query is batched until context flush or shared-texture
+publication; allocation, resource transfer and CPU readback queries also check the batch. A failed
+batch invalidates its cached alias revisions so later use refreshes their pixels.
+CPU validation and framebuffer completeness checks still precede submission.
+
 Render-target clears ignore scissor and component write masks. A8 render targets
 store alpha only; their physical RGBA8 image keeps RGB zero, and CPU readback
 extracts alpha into native one-byte texels. Device writes advance

@@ -979,6 +979,228 @@ async function pageMain(fixture) {
       device.release();
     }
   }
+  // Real GPU copies, with deliberate GL errors and numeric pixel expectations.
+  {
+    let gpu;
+    const lifetime = new D3d11Lifetime(() => gpu?.dispose()),
+      device = new D3d11Object(lifetime, [], () => {}, true),
+      owner = {
+        lifetime,
+        device,
+        resourceDestroyed: (r) => gpu?.destroy(r),
+        synchronizeResource: (r) => gpu?.synchronize(r),
+      },
+      resources = [],
+      views = [],
+      targets = [],
+      originalError = gl.getError,
+      originalBlit = gl.blitFramebuffer;
+    let queries = 0,
+      copies = 0;
+    gl.getError = function () {
+      queries++;
+      return originalError.call(gl);
+    };
+    gl.blitFramebuffer = function (...args) {
+      copies++;
+      return originalBlit.apply(gl, args);
+    };
+    try {
+      gpu = new D3d11GpuTextures(owner, gl);
+      for (let i = 0; i < 2; i++) {
+        const r = createTexture2DStorage(
+          owner,
+          desc({format: 28, width: 2, height: 3, mips: 1}),
+          null,
+        ).value;
+        resources.push(r);
+        views.push(createShaderResourceViewStorage(owner, r, null).value);
+        targets.push(createRenderTargetViewStorage(owner, r, null).value);
+        gpu.clearColor(targets[i], [0, 0, 0, 1]);
+        gpu.shaderResource(views[i]);
+        gpu.checkSubmission();
+      }
+      const beforeClears = queries;
+      gpu.clearColor(targets[0], [1, 0, 0, 1]);
+      gpu.clearColor(targets[1], [0, 1, 0, 1]);
+      rows.push({name: 'color-clears-deferred', passed: queries === beforeClears});
+      const beforeQueries = queries,
+        beforeCopies = copies;
+      const images = views.map((v) => borrowShaderResource(gpu, v));
+      views.forEach((v) => gpu.shaderResource(v));
+      rows.push({
+        name: 'alias-copy-batch-deferred',
+        passed: queries === beforeQueries && copies === beforeCopies + 2,
+      });
+      const checked = gpu.checkSubmission();
+      rows.push({
+        name: 'alias-copy-batch-one-query',
+        passed: checked && queries === beforeQueries + 1,
+      });
+      const empty = gpu.checkSubmission();
+      rows.push({
+        name: 'alias-copy-empty-submission',
+        passed: !empty && queries === beforeQueries + 1,
+      });
+      await read(
+        'alias-copy-batch-red',
+        images[0],
+        2,
+        3,
+        0,
+        Array.from({length: 6}, () => [255, 0, 0, 255]).flat(),
+      );
+      await read(
+        'alias-copy-batch-green',
+        images[1],
+        2,
+        3,
+        0,
+        Array.from({length: 6}, () => [0, 255, 0, 255]).flat(),
+      );
+
+      for (const target of targets) gpu.clearColor(target, [0, 0, 1, 1]);
+      views.forEach((v) => gpu.shaderResource(v));
+      gl.enable(0xffffffff); // A genuine INVALID_ENUM, never a fabricated getError result.
+      let rejected = false;
+      try {
+        gpu.checkSubmission();
+      } catch (error) {
+        rejected = /texture submission/.test(String(error));
+      }
+      const retryCopies = copies;
+      views.forEach((v) => gpu.shaderResource(v));
+      gpu.checkSubmission();
+      rows.push({
+        name: 'alias-copy-failed-batch-refreshes-all',
+        passed: rejected && copies === retryCopies + 2,
+      });
+      await read(
+        'alias-copy-recovered-blue',
+        borrowShaderResource(gpu, views[0]),
+        2,
+        3,
+        0,
+        Array.from({length: 6}, () => [0, 0, 255, 255]).flat(),
+      );
+
+      gpu.clearColor(targets[0], [1, 1, 0, 1]);
+      gpu.shaderResource(views[0]);
+      gl.enable(0xffffffff);
+      rejected = false;
+      try {
+        gpu.clearColor(targets[1], [0, 0, 0, 1]);
+        gpu.synchronize(resources[1]);
+      } catch (error) {
+        rejected = /WebGL error/.test(String(error));
+      }
+      const transferRetry = copies;
+      gpu.shaderResource(views[0]);
+      gpu.checkSubmission();
+      rows.push({
+        name: 'alias-copy-readback-error-invalidates',
+        passed: rejected && copies === transferRetry + 1,
+      });
+      await read(
+        'alias-copy-recovered-yellow',
+        borrowShaderResource(gpu, views[0]),
+        2,
+        3,
+        0,
+        Array.from({length: 6}, () => [255, 255, 0, 255]).flat(),
+      );
+
+      const beforeInvalid = queries;
+      let invalidRejected = false;
+      gpu.clearColor(targets[1], [0, 1, 1, 1]);
+      try {
+        gpu.clearColor({live: false, kind: 'render-target'}, [0, 0, 0, 0]);
+      } catch (error) {
+        invalidRejected = /Invalid render target view/.test(String(error));
+      }
+      rows.push({
+        name: 'color-clear-invalid-view-immediate',
+        passed: invalidRejected && queries === beforeInvalid,
+      });
+      gl.enable(0xffffffff);
+      rejected = false;
+      try {
+        gpu.checkSubmission();
+      } catch (error) {
+        rejected = /texture submission/.test(String(error));
+      }
+      rows.push({name: 'color-clear-only-error-submission', passed: rejected});
+
+      gpu.clearColor(targets[0], [1, 0, 1, 1]);
+      gpu.shaderResource(views[0]);
+      targets[0].release();
+      targets[0] = null;
+      views[0].release();
+      views[0] = null;
+      resources[0].release();
+      resources[0] = null;
+      gl.enable(0xffffffff);
+      rejected = false;
+      try {
+        gpu.checkSubmission();
+      } catch (error) {
+        rejected = /texture submission/.test(String(error));
+      }
+      rows.push({name: 'alias-copy-retirement-retains-error-check', passed: rejected});
+    } catch (error) {
+      rows.push({name: 'alias-copy-batch-exception', passed: false, error: error.stack});
+    } finally {
+      gl.getError = originalError;
+      gl.blitFramebuffer = originalBlit;
+      for (const v of [...targets, ...views, ...resources]) v?.release();
+      gpu?.dispose();
+      device.release();
+    }
+  }
+  // Publication must check clears even when the device has submitted no draw.
+  {
+    const {WebGl2D3d11Device} = await import('/runtime/native/d3d11/webgl2/device.js');
+    const device = new WebGl2D3d11Device(gl, 0, 0xb000),
+      ctx = device.getImmediateContext();
+    let resource, view, lease;
+    try {
+      resource = device.createTexture2D(
+        desc({format: 28, width: 2, height: 3, mips: 1}),
+        null,
+      ).value;
+      view = device.createRenderTargetView(resource, null).value;
+      lease = device.acquireColorTexture(resource);
+      ctx.clearRenderTargetView(view, [0, 1, 0, 1]);
+      gl.enable(0xffffffff);
+      let rejected = false;
+      try {
+        lease.prepare();
+      } catch (error) {
+        rejected = /texture submission/.test(String(error));
+      }
+      rows.push({name: 'clear-only-publication-error', passed: rejected});
+      ctx.clearRenderTargetView(view, [0, 1, 0, 1]);
+      lease.prepare();
+      origins.set(lease.texture, true);
+      await read(
+        'clear-only-publication-green',
+        lease.texture,
+        2,
+        3,
+        0,
+        Array.from({length: 6}, () => [0, 255, 0, 255]).flat(),
+      );
+      ctx.flush();
+    } catch (error) {
+      rows.push({name: 'clear-only-publication-exception', passed: false, error: error.stack});
+    } finally {
+      lease?.dispose();
+      view?.release();
+      resource?.release();
+      ctx.release();
+      device.release();
+    }
+  }
   baseline();
   gl.useProgram(null);
   gl.deleteProgram(sample);
