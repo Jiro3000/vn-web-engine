@@ -1,4 +1,4 @@
-import {dxgiVertexByteAddress, fetchDxgiVertexElement} from '../../../graphics/dxgi-vertex.js';
+import {dxgiVertexFormat} from '../../../graphics/dxgi-vertex.js';
 import type {D3d11DeviceOwner} from './com.js';
 import type {D3d11InputLayout} from './input-layout.js';
 import type {D3d11Buffer} from './resources.js';
@@ -6,6 +6,8 @@ import type {D3d11Buffer} from './resources.js';
 const uint = (n: number): boolean => Number.isInteger(n) && n >= 0 && n <= 0xffffffff;
 interface Element {
   readonly format: number;
+  /** Element size, or0 for a format that fails when read. */
+  readonly bytes: number;
   readonly target: number;
   readonly data: DataView;
   readonly offset: number;
@@ -64,6 +66,7 @@ export class D3d11VertexReader {
       }
       elements.push({
         format: e.format,
+        bytes: dxgiVertexFormat(e.format)?.bytes ?? 0,
         target: targets.get(e.register)!,
         data,
         offset: offset!,
@@ -92,21 +95,27 @@ export class D3d11VertexReader {
       destination > output.length - span
     )
       throw new RangeError('Invalid D3D11 vertex read');
+    // Inline fetchDxgiVertexElement: the span check above bounds every destination.
     for (const e of this.elements) {
-      const address = dxgiVertexByteAddress(
-        e.offset,
-        e.stride,
-        e.instance ? 0 : vertex,
-        e.relative,
-      );
-      fetchDxgiVertexElement(
-        e.format,
-        e.data,
-        address,
-        e.offset,
-        output,
-        destination + (e.target / 4) * registerStride,
-      );
+      if (!e.bytes) throw new Error(`Unsupported DXGI vertex format ${e.format}`);
+      const address = (e.offset + Math.imul(e.stride, e.instance ? 0 : vertex) + e.relative) >>> 0,
+        data = e.data,
+        at = destination + (e.target / 4) * registerStride;
+      if (address < e.offset || address > data.byteLength - e.bytes) {
+        output[at] = output[at + 1] = output[at + 2] = 0;
+        output[at + 3] = e.format === 87 ? 0 : 1;
+      } else if (e.format === 87) {
+        const color = data.getUint32(address, true);
+        output[at] = ((color >>> 16) & 255) / 255;
+        output[at + 1] = ((color >>> 8) & 255) / 255;
+        output[at + 2] = (color & 255) / 255;
+        output[at + 3] = (color >>> 24) / 255;
+      } else {
+        output[at] = data.getFloat32(address, true);
+        output[at + 1] = data.getFloat32(address + 4, true);
+        output[at + 2] = e.format === 6 ? data.getFloat32(address + 8, true) : 0;
+        output[at + 3] = 1;
+      }
     }
   }
 }

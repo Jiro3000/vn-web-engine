@@ -65,7 +65,7 @@ async function pageMain(fixture) {
       const source =
         version +
         translated.source +
-        `\nuniform highp uvec4 probe_inputs[32];\nlayout(location=0) out highp uvec4 result;\nvoid main(){uvec4 outputRegisters[32]; ${translated.entry}(probe_inputs,outputRegisters);result=outputRegisters[0];}`;
+        `\nuniform highp uvec4 probe_inputs[${translated.inputRegisters}];\nlayout(location=0) out highp uvec4 result;\nvoid main(){uvec4 outputRegisters[${translated.outputRegisters}]; ${translated.entry}(probe_inputs,outputRegisters);result=outputRegisters[0];}`;
       ps = compile(gl.FRAGMENT_SHADER, source);
       program = gl.createProgram();
       gl.attachShader(program, vs);

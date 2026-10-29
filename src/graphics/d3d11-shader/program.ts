@@ -147,14 +147,12 @@ export function linkSm4GlslPrograms(
         }),
       pixel.code.source,
     ];
-  const vertexBody = [
-    'uvec4 inputs[32], outputs[32];',
-    'for(int i=0;i<32;i++) inputs[i]=uvec4(0u);',
+  const body = (code: Sm4GlslProgram): string[] => [
+    `uvec4 inputs[${code.inputRegisters}], outputs[${code.outputRegisters}];`,
+    `for(int i=0;i<${code.inputRegisters};i++) inputs[i]=uvec4(0u);`,
   ];
-  const pixelBody = [
-    'uvec4 inputs[32], outputs[32];',
-    'for(int i=0;i<32;i++) inputs[i]=uvec4(0u);',
-  ];
+  const vertexBody = body(vertex.code),
+    pixelBody = body(pixel.code);
   const registers = [...new Set(vertex.code.inputs.map((p) => p.register))];
   if (registers.length > 16) unsupported('more than16vertex attributes');
   const attributes = registers.map((register, location) => ({

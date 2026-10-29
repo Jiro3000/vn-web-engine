@@ -28,6 +28,9 @@ export interface Sm4GlslProgram {
   /** GLSL ES3 declarations and a callable stage function, without main or a version directive. */
   readonly source: string;
   readonly entry: string;
+  /** Lengths of the entry's input and output register array parameters. */
+  readonly inputRegisters: number;
+  readonly outputRegisters: number;
   readonly inputs: readonly Sm4GlslIo[];
   readonly outputs: readonly Sm4GlslIo[];
   readonly constantBuffers: readonly Sm4GlslConstantBuffer[];
@@ -491,14 +494,18 @@ export function translateSm4ToGlsl(program: Sm4Program): Sm4GlslProgram {
       '#endif',
     );
 
-  const init: string[] = ['for (int i=0; i<32; i++) outputRegisters[i] = uvec4(0u);'];
+  // Arrays end at the highest declared register: every access uses a declared
+  // immediate index, and full32-entry arrays exhaust GPU registers.
+  const inputCount = Math.max(0, ...inputs.keys()) + 1,
+    outputCount = Math.max(0, ...outputs.keys()) + 1;
+  const init: string[] = [`for (int i=0; i<${outputCount}; i++) outputRegisters[i] = uvec4(0u);`];
   if (program.stage === 'pixel') init.push(`bool ${prefix}_discarded = false;`);
   for (let i = 0; i < temps; i++) init.push(`uvec4 ${prefix}_r${i} = uvec4(0u);`);
   for (const output of outputRegisters) init.push(`uvec4 ${prefix}_o${output} = uvec4(0u);`);
   const sourceText = [
     ...declarations,
     ...(requiredHelpers ? [builtins.source(requiredHelpers)] : []),
-    `void ${prefix}(in uvec4 inputRegisters[32], out uvec4 outputRegisters[32]) {`,
+    `void ${prefix}(in uvec4 inputRegisters[${inputCount}], out uvec4 outputRegisters[${outputCount}]) {`,
     ...init,
     ...lines,
     '}',
@@ -508,6 +515,8 @@ export function translateSm4ToGlsl(program: Sm4Program): Sm4GlslProgram {
     stage: program.stage,
     source: sourceText,
     entry: prefix,
+    inputRegisters: inputCount,
+    outputRegisters: outputCount,
     inputs: [...inputs.values()].flat().sort((a, b) => a.register - b.register),
     outputs: sortedOutputs,
     constantBuffers: cb,

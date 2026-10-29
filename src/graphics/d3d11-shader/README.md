@@ -40,7 +40,9 @@ bounds, instruction controls and supported operand forms. Disjoint component
 declarations may share an input/output register. Unsupported effects fail explicitly.
 The returned binding records describe raw constant-buffer DWORD arrays and distinct
 texture/sampler pairs; the caller supplies stage linkage, positions, texture formats
-and sampler state.
+and sampler state. The function's input and output register arrays end at the highest
+declared register (`inputRegisters`/`outputRegisters`), since every access uses a
+declared immediate index and full32-entry arrays exhaust GPU registers.
 
 Registers contain raw unsigned words. Moves, masks, sign modifiers and conditional
 moves preserve those bits; arithmetic flushes denormals at its boundaries. Helpers
