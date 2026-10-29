@@ -13,7 +13,9 @@ import type {D3d11DeviceOwner} from '../runtime/com.js';
 import {D3d11Texture2D, type D3d11ResourceStorage} from '../runtime/resources.js';
 import type {D3d11TextureView} from '../runtime/views.js';
 
-const MAX_GPU_BYTES = 512 * 1024 * 1024;
+// Block formats decode to RGBA8 here (4-8x their native size); E-mote BC7 atlases reach
+// 100-180 MiB per player, so a few live characters must fit beside surfaces.
+const MAX_GPU_BYTES = 2048 * 1024 * 1024;
 const MAX_AUXILIARY_BYTES = 64 * 1024 * 1024;
 const READBACK_BYTES = 1024 * 1024;
 export class D3d11TextureError extends Error {

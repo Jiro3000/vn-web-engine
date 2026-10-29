@@ -194,7 +194,8 @@ contents. Map(DO_NOT_WAIT) queries a lazily created fence with zero timeout, ret
 still-drawing until ready. Fences are retired on another device write, CPU replacement,
 completed synchronization or final release. Lost contexts report device-removed.
 
-Texture allocations, aliases and packed-upload scratch share a512MiB limit. Aliases
+Texture allocations, aliases and packed-upload scratch share a 2 GiB limit; block formats
+are stored as decoded RGBA8. Aliases
 and scratch each have a64MiB bound; idle view ranges use LRU eviction with eight cached
 ranges per resource. Active draws can temporarily pin more ranges within the memory
 bound. Readback uses chunks of at most1MiB. Resource final release deletes its images
