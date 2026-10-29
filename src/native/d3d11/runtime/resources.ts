@@ -383,11 +383,13 @@ export class D3d11Buffer extends D3d11ResourceStorage implements ID3D11Buffer {
 }
 
 export class D3d11Texture2D extends D3d11ResourceStorage implements ID3D11Texture2D {
+  /** `zeroCreated`: created without initial data, so revision 0 bytes are all zero. */
   constructor(
     owner: D3d11ResourceOwner,
     private readonly desc: D3d11Texture2DDesc,
     layout: DxgiLayout,
     levels: Level[],
+    readonly zeroCreated = false,
   ) {
     super(owner, desc, layout, 3, levels, '6f15aaf2-d208-4e89-9ab4-489535d34f9c');
   }
@@ -518,6 +520,7 @@ export function createTexture2DStorage(
       {...desc, mipLevels, sampleDesc: {...desc.sampleDesc}},
       layout,
       levels,
+      initial === null,
     ),
   };
 }

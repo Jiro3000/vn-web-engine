@@ -736,7 +736,11 @@ export class D3d11GpuTextures {
       try {
         this.allocate(texture, format, desc.mipLevels, desc.width, desc.height);
         this.checkError('texture allocation');
-        this.upload(entry);
+        // WebGL zero-initializes new storage; zero creation bytes need no upload.
+        if (resource.zeroCreated && resource.revision === 0 && !format.decode) {
+          this.outputRevision++;
+          entry.revision = 0;
+        } else this.upload(entry);
       } catch (error) {
         this.bytes -= bytes;
         for (const framebuffer of entry.framebuffers.values())
