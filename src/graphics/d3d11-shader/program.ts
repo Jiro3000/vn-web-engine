@@ -90,9 +90,16 @@ export interface Sm4GlslPipeline {
 /**
  * Link native register locations, never relocate by semantic. Render targets keep
  * native top at the GL top, preserving clip-space raster orientation. Texture
- * storage and presentation account for their own logical row origins.
+ * storage and presentation account for their own logical row origins. Alpha-only
+ * targets and pixel samples (bit masks by register and sample index) use red
+ * storage; other programs preprocess to the unchanged token stream.
  */
-export function linkSm4GlslPrograms(vertex: Sm4GlslShader, pixel: Sm4GlslShader): Sm4GlslPipeline {
+export function linkSm4GlslPrograms(
+  vertex: Sm4GlslShader,
+  pixel: Sm4GlslShader,
+  alphaTargets = 0,
+  alphaSamples = 0,
+): Sm4GlslPipeline {
   if (vertex.code.stage !== 'vertex' || pixel.code.stage !== 'pixel') invalid('pipeline stages');
   const positions = vertex.code.outputs.filter((p) => p.systemValue === 1);
   if (positions.length !== 1 || positions[0]!.mask !== 15) unsupported('vertex position output');
@@ -123,7 +130,13 @@ export function linkSm4GlslPrograms(vertex: Sm4GlslShader, pixel: Sm4GlslShader)
   }
   const version = '#version 300 es\nprecision highp float;\nprecision highp int;';
   const vs: string[] = [version, vertex.code.source],
-    ps: string[] = [version, pixel.code.source];
+    ps: string[] = [
+      version,
+      ...pixel.code.samples
+        .filter((_, i) => (alphaSamples >>> i) & 1)
+        .map((s) => `#define ${s.uniform}_view(t) vec4(0.0, 0.0, 0.0, (t).x)`),
+      pixel.code.source,
+    ];
   const vertexBody = [
     'uvec4 inputs[32], outputs[32];',
     'for(int i=0;i<32;i++) inputs[i]=uvec4(0u);',
@@ -184,6 +197,7 @@ export function linkSm4GlslPrograms(vertex: Sm4GlslShader, pixel: Sm4GlslShader)
     // D3D11 output-merger inputs are clamped to the current target's range.
     // The target format is draw state, independent of the VS/PS program pair.
     pixelBody.push(`if(sm4_target${r}_isUnorm)sm4_target${r}=clamp(sm4_target${r},0.0,1.0);`);
+    if ((alphaTargets >>> r) & 1) pixelBody.push(`sm4_target${r}.x=sm4_target${r}.w;`);
   }
   vs.push('void main(){', ...vertexBody, '}');
   ps.push('void main(){', ...pixelBody, '}');

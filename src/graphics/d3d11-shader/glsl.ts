@@ -458,7 +458,11 @@ export function translateSm4ToGlsl(program: Sm4Program): Sm4GlslProgram {
         const id = `${resource}_${sampler}`,
           uniform = `${prefix}_t${resource}_s${sampler}`;
         samples.set(id, {resource, sampler, uniform});
-        raw = select(`floatBitsToUint(texture(${uniform}, (${f(1)}).xy))`, operands[2]!);
+        // `<uniform>_view` is the identity unless linkage selects another view.
+        raw = select(
+          `floatBitsToUint(${uniform}_view(texture(${uniform}, (${f(1)}).xy)))`,
+          operands[2]!,
+        );
         break;
       }
       default:
@@ -476,6 +480,8 @@ export function translateSm4ToGlsl(program: Sm4Program): Sm4GlslProgram {
     sampleBindings = [...samples.values()];
   const declarations = cb.map((b) => `uniform highp uvec4 ${b.uniform}[${b.vectors}];`);
   declarations.push(...sampleBindings.map((s) => `uniform highp sampler2D ${s.uniform};`));
+  for (const s of sampleBindings)
+    declarations.push(`#ifndef ${s.uniform}_view`, `#define ${s.uniform}_view(t) t`, '#endif');
 
   const init: string[] = ['for (int i=0; i<32; i++) outputRegisters[i] = uvec4(0u);'];
   if (program.stage === 'pixel') init.push(`bool ${prefix}_discarded = false;`);

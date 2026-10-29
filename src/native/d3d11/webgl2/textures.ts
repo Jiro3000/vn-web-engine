@@ -313,7 +313,7 @@ export class D3d11GpuTextures {
     gl.clearBufferfv(
       gl.COLOR,
       0,
-      new Float32Array(view.resource.getDesc().format === 65 ? [0, 0, 0, color[3]] : color),
+      new Float32Array(view.resource.getDesc().format === 65 ? [color[3], 0, 0, 0] : color),
     );
     this.pendingCommands = true;
     this.markWritten(view.resource, view.firstMip);
@@ -506,7 +506,7 @@ export class D3d11GpuTextures {
     if (
       !Number.isInteger(mip) ||
       !entry.resource.levels[mip] ||
-      (entry.format.decode && ![65, 87].includes(resource.getDesc().format))
+      (entry.format.decode && resource.getDesc().format !== 87)
     )
       throw new D3d11TextureError('Invalid D3D11 GPU write');
     resource.revision++;
@@ -603,8 +603,7 @@ export class D3d11GpuTextures {
                 output[to + 1] = this.readback[from + 1]!;
                 output[to + 2] = this.readback[from]!;
                 output[to + 3] = this.readback[from + 3]!;
-              } else if (format === 61) output[rowTo + x] = this.readback[from]!;
-              else if (format === 65) output[rowTo + x] = this.readback[from + 3]!;
+              } else if (format === 61 || format === 65) output[rowTo + x] = this.readback[from]!;
               else if (format === 49) {
                 output[rowTo + x * 2] = this.readback[from]!;
                 output[rowTo + x * 2 + 1] = this.readback[from + 1]!;
@@ -978,7 +977,9 @@ export class D3d11GpuTextures {
 
   private format(format: number): Format {
     const gl = this.gl;
-    if (format === 61)
+    // A8 keeps its single channel in red storage. Programs read it as alpha and
+    // alpha-only targets blend it with the native alpha equation.
+    if (format === 61 || format === 65)
       return {internal: gl.R8, format: gl.RED, type: gl.UNSIGNED_BYTE, bytes: 1, decode: null};
     if (format === 49)
       return {internal: gl.RG8, format: gl.RG, type: gl.UNSIGNED_BYTE, bytes: 2, decode: null};
@@ -999,7 +1000,6 @@ export class D3d11GpuTextures {
         decode: null,
       };
     const decode: Partial<Record<number, GpuTextureFormat>> = {
-      65: 'a8',
       87: 'b8g8r8a8',
       71: 'bc1',
       74: 'bc2',

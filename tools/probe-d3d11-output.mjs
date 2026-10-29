@@ -65,7 +65,8 @@ async function pageMain() {
     program,
     compile(
       gl.FRAGMENT_SHADER,
-      'uniform vec4 color;layout(location=0)out vec4 first;layout(location=1)out vec4 second;void main(){first=color;second=vec4(1.0-color.rgb,color.a);}',
+      // Linked programs place alpha in red for alpha-only targets.
+      'uniform vec4 color;uniform int alphaTargets;layout(location=0)out vec4 first;layout(location=1)out vec4 second;void main(){first=color;second=vec4(1.0-color.rgb,color.a);if((alphaTargets&1)!=0)first.x=first.w;if((alphaTargets&2)!=0)second.x=second.w;}',
     ),
   );
   gl.linkProgram(program);
@@ -208,9 +209,14 @@ async function pageMain() {
     const error = gl.getError();
     if (error !== gl.NO_ERROR) throw Error('Output readback error ' + error);
     // Direct GL readback is physical; the native output uses top-left logical rows.
+    // Alpha-only storage is red: its physical RGBA readback is (a, 0, 0, 1).
     const logical = actual.slice();
     if (gpu.flipped(resource))
       for (let y = 0; y < 4; y++) logical.set(actual.subarray(y * 16, (y + 1) * 16), (3 - y) * 16);
+    if (resource.getDesc().format === 65)
+      expected = Uint8Array.from(expected, (_, i) =>
+        i % 4 === 0 ? expected[i + 3] : i % 4 === 3 ? 255 : 0,
+      );
     await record(name, logical, expected);
   }
   function draw(changes = {}, color = [1, 0, 0, 1], z = 0.5, reverse = false) {
@@ -221,6 +227,13 @@ async function pageMain() {
     gl.uniform4fv(gl.getUniformLocation(program, 'color'), color);
     gl.uniform1f(gl.getUniformLocation(program, 'z'), z);
     gl.uniform1i(gl.getUniformLocation(program, 'reverse'), reverse ? 1 : 0);
+    gl.uniform1i(
+      gl.getUniformLocation(program, 'alphaTargets'),
+      state.targets.reduce(
+        (m, v, i) => (v?.resource.getDesc().format === 65 ? m | (1 << i) : m),
+        0,
+      ),
+    );
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     const error = gl.getError();
     if (error !== gl.NO_ERROR) throw Error('Output draw error ' + error);

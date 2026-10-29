@@ -25,6 +25,7 @@ interface ConstantUpload {
 interface Entry extends D3d11LinkedProgram {
   readonly vertex: D3d11Shader;
   readonly pixel: D3d11Shader;
+  readonly variant: number;
   readonly constants: readonly ConstantUpload[];
   readonly outputRanges: readonly {
     readonly register: number;
@@ -36,7 +37,7 @@ interface Entry extends D3d11LinkedProgram {
 /** Device-owned bounded program cache. Cached programs retain their native shader children. */
 export class D3d11ProgramCache {
   private readonly entries = new Map<D3d11LinkedProgram, Entry>();
-  private pairs = new WeakMap<D3d11Shader, WeakMap<D3d11Shader, Entry>>();
+  private pairs = new WeakMap<D3d11Shader, WeakMap<D3d11Shader, Map<number, Entry>>>();
   private disposed = false;
 
   constructor(
@@ -48,8 +49,16 @@ export class D3d11ProgramCache {
       throw new RangeError('Invalid D3D11 program cache capacity');
   }
 
-  /** Select an owned VS/PS pair and make its GPU program current. */
-  use(vertex: D3d11Shader, pixel: D3d11Shader): D3d11LinkedProgram {
+  /**
+   * Select an owned VS/PS pair and make its GPU program current. Alpha-only target
+   * registers and pixel sample indices select a red-storage program variant.
+   */
+  use(
+    vertex: D3d11Shader,
+    pixel: D3d11Shader,
+    alphaTargets = 0,
+    alphaSamples = 0,
+  ): D3d11LinkedProgram {
     this.checkLive();
     for (const [shader, stage] of [
       [vertex, 'vertex'],
@@ -61,20 +70,26 @@ export class D3d11ProgramCache {
         shader.shader.code.stage !== stage
       )
         throw new Error('Invalid D3D11 shader pair');
-    const found = this.pairs.get(vertex)?.get(pixel);
+    const outputs = pixel.shader.code.outputs.reduce((m, p) => m | (1 << p.register), 0),
+      variant =
+        (alphaTargets & outputs) |
+        ((alphaSamples & ((1 << pixel.shader.code.samples.length) - 1)) << 8);
+    const found = this.pairs.get(vertex)?.get(pixel)?.get(variant);
     if (found) {
       this.entries.delete(found);
       this.entries.set(found, found);
       this.gl.useProgram(found.program);
       return found;
     }
-    const entry = this.compile(vertex, pixel);
+    const entry = this.compile(vertex, pixel, variant);
     vertex.retainBinding();
     pixel.retainBinding();
     this.entries.set(entry, entry);
     let pixels = this.pairs.get(vertex);
     if (!pixels) this.pairs.set(vertex, (pixels = new WeakMap()));
-    pixels.set(pixel, entry);
+    let variants = pixels.get(pixel);
+    if (!variants) pixels.set(pixel, (variants = new Map()));
+    variants.set(variant, entry);
     if (this.entries.size > this.capacity) {
       const oldest = this.entries.keys().next().value!;
       this.entries.delete(oldest);
@@ -164,7 +179,9 @@ export class D3d11ProgramCache {
       throw new Error('Using a released D3D11 program cache');
   }
   private retire(entry: Entry): void {
-    this.pairs.get(entry.vertex)?.delete(entry.pixel);
+    const variants = this.pairs.get(entry.vertex)?.get(entry.pixel);
+    variants?.delete(entry.variant);
+    if (variants?.size === 0) this.pairs.get(entry.vertex)?.delete(entry.pixel);
     const errors: unknown[] = [];
     for (const dispose of [
       () => this.gl.deleteProgram(entry.program),
@@ -179,9 +196,9 @@ export class D3d11ProgramCache {
     }
     if (errors.length) throw new AggregateError(errors, 'D3D11 GPU program release failed');
   }
-  private compile(vertex: D3d11Shader, pixel: D3d11Shader): Entry {
+  private compile(vertex: D3d11Shader, pixel: D3d11Shader, variant: number): Entry {
     const gl = this.gl,
-      sources = linkSm4GlslPrograms(vertex.shader, pixel.shader);
+      sources = linkSm4GlslPrograms(vertex.shader, pixel.shader, variant & 255, variant >>> 8);
     const samples = pixel.shader.code.samples;
     if (
       samples.length > gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS) ||
@@ -248,6 +265,7 @@ export class D3d11ProgramCache {
         targetHeight: gl.getUniformLocation(program, 'sm4_targetHeight'),
         vertex,
         pixel,
+        variant,
         constants,
         outputRanges: [...new Set(pixel.shader.code.outputs.map((p) => p.register))].map(
           (register) => ({

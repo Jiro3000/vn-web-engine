@@ -134,7 +134,21 @@ export class D3d11DrawContext extends D3d11TransferContext implements ID3D11Devi
         'The SM4 draw subset requires vertex and pixel shaders',
         0x80004001 | 0,
       );
-    const program = this.programs.use(this.vertexShader, this.pixelShader),
+    // A8 storage is red; its targets and views select a program variant.
+    let alphaTargets = 0,
+      alphaSamples = 0;
+    for (let i = 0; i < this.renderTargets.length; i++)
+      if (this.renderTargets[i]?.resource.getDesc().format === 65) alphaTargets |= 1 << i;
+    const samples = this.pixelShader.shader.code.samples;
+    for (let i = 0; i < samples.length; i++)
+      if (this.psResources[samples[i]!.resource]?.resource.getDesc().format === 65)
+        alphaSamples |= 1 << i;
+    const program = this.programs.use(
+        this.vertexShader,
+        this.pixelShader,
+        alphaTargets,
+        alphaSamples,
+      ),
       registers = program.attributes.map((a) => a.register),
       floats = count * registers.length * 4;
     if (count > MAX_VERTICES || floats > MAX_FLOATS)

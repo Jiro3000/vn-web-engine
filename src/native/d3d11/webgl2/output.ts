@@ -103,6 +103,7 @@ export class D3d11GpuOutput {
   private readonly maxViewport: Int32Array;
   private readonly colorFactors: readonly (number | undefined)[];
   private readonly alphaFactors: readonly (number | undefined)[];
+  private readonly alphaOnlyFactors: readonly (number | undefined)[];
   private readonly equations: readonly number[];
   private readonly comparisons: readonly number[];
   private readonly stencilOps: readonly number[];
@@ -164,6 +165,14 @@ export class D3d11GpuOutput {
     alpha[14] = gl.CONSTANT_ALPHA;
     alpha[15] = gl.ONE_MINUS_CONSTANT_ALPHA;
     this.alphaFactors = alpha;
+    // Native alpha factors in the red slot: COLOR factors of the alpha equation
+    // read alpha, destination alpha is the stored red channel.
+    const only = alpha.slice();
+    only[3] = gl.SRC_ALPHA;
+    only[4] = gl.ONE_MINUS_SRC_ALPHA;
+    only[7] = only[9] = gl.DST_COLOR;
+    only[8] = only[10] = gl.ONE_MINUS_DST_COLOR;
+    this.alphaOnlyFactors = only;
     this.equations = [gl.FUNC_ADD, gl.FUNC_SUBTRACT, gl.FUNC_REVERSE_SUBTRACT, gl.MIN, gl.MAX];
     this.comparisons = [
       gl.NEVER,
@@ -275,12 +284,14 @@ export class D3d11GpuOutput {
         blend = this.blend(state, i),
         mask = blend.renderTargetWriteMask;
       const alphaOnly = this.colors[i]?.format === 65;
-      const write: [boolean, boolean, boolean, boolean] = [
-        !alphaOnly && !!(mask & 1),
-        !alphaOnly && !!(mask & 2),
-        !alphaOnly && !!(mask & 4),
-        !!(mask & 8),
-      ];
+      const write: [boolean, boolean, boolean, boolean] = alphaOnly
+        ? [!!(mask & 8), false, false, false]
+        : [!!(mask & 1), !!(mask & 2), !!(mask & 4), !!(mask & 8)];
+      const colorOp = alphaOnly ? blend.blendOpAlpha : blend.blendOp,
+        colorFactors = alphaOnly ? this.alphaOnlyFactors : this.colorFactors,
+        alphaFactors = alphaOnly ? this.alphaOnlyFactors : this.alphaFactors,
+        srcColor = alphaOnly ? blend.srcBlendAlpha : blend.srcBlend,
+        destColor = alphaOnly ? blend.destBlendAlpha : blend.destBlend;
       if (this.indexed) {
         this.indexed.colorMaskiOES(i, ...write);
         if (!target || !blend.blendEnable) this.indexed.disableiOES(gl.BLEND, i);
@@ -288,27 +299,27 @@ export class D3d11GpuOutput {
           this.indexed.enableiOES(gl.BLEND, i);
           this.indexed.blendEquationSeparateiOES(
             i,
-            this.equation(blend.blendOp),
+            this.equation(colorOp),
             this.equation(blend.blendOpAlpha),
           );
           this.indexed.blendFuncSeparateiOES(
             i,
-            this.factor(blend.srcBlend, false),
-            this.factor(blend.destBlend, false),
-            this.factor(blend.srcBlendAlpha, true),
-            this.factor(blend.destBlendAlpha, true),
+            this.factor(srcColor, colorFactors),
+            this.factor(destColor, colorFactors),
+            this.factor(blend.srcBlendAlpha, alphaFactors),
+            this.factor(blend.destBlendAlpha, alphaFactors),
           );
         }
       } else if (target) {
         gl.colorMask(...write);
         if (blend.blendEnable) {
           gl.enable(gl.BLEND);
-          gl.blendEquationSeparate(this.equation(blend.blendOp), this.equation(blend.blendOpAlpha));
+          gl.blendEquationSeparate(this.equation(colorOp), this.equation(blend.blendOpAlpha));
           gl.blendFuncSeparate(
-            this.factor(blend.srcBlend, false),
-            this.factor(blend.destBlend, false),
-            this.factor(blend.srcBlendAlpha, true),
-            this.factor(blend.destBlendAlpha, true),
+            this.factor(srcColor, colorFactors),
+            this.factor(destColor, colorFactors),
+            this.factor(blend.srcBlendAlpha, alphaFactors),
+            this.factor(blend.destBlendAlpha, alphaFactors),
           );
         }
       }
@@ -593,8 +604,8 @@ export class D3d11GpuOutput {
   private blend(state: D3d11DrawOutputState, i: number): D3d11RenderTargetBlendDesc {
     return state.blend?.renderTarget[state.blend.independentBlendEnable ? i : 0] ?? DEFAULT_BLEND;
   }
-  private factor(value: number, alpha: boolean): number {
-    const factor = (alpha ? this.alphaFactors : this.colorFactors)[value];
+  private factor(value: number, table: readonly (number | undefined)[]): number {
+    const factor = table[value];
     if (factor === undefined) this.unsupported('blend factor');
     return factor;
   }

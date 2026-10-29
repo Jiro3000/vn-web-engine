@@ -168,7 +168,8 @@ async function pageMain() {
     return result;
   }
   const sample = program(
-    'uniform sampler2D image;uniform int mip;uniform bool rawDepth;uniform bool flipY;layout(location=0)out uvec4 result;void main(){vec4 value=texelFetch(image,ivec2(gl_FragCoord.x,flipY?float(textureSize(image,mip).y)-gl_FragCoord.y:gl_FragCoord.y),mip);result=rawDepth?uvec4(floatBitsToUint(value.r)):uvec4(round(value*255.0));}',
+    // Alpha-only images use the linked-program view: red storage reads as (0, 0, 0, a).
+    'uniform sampler2D image;uniform int mip;uniform bool rawDepth;uniform bool flipY;uniform bool alphaView;layout(location=0)out uvec4 result;void main(){vec4 value=texelFetch(image,ivec2(gl_FragCoord.x,flipY?float(textureSize(image,mip).y)-gl_FragCoord.y:gl_FragCoord.y),mip);if(alphaView)value=vec4(0.0,0.0,0.0,value.r);result=rawDepth?uvec4(floatBitsToUint(value.r)):uvec4(round(value*255.0));}',
   );
   const depthProgram = program('out vec4 result;void main(){result=vec4(1,0,0,1);}');
   const target = gl.createTexture(),
@@ -254,6 +255,7 @@ async function pageMain() {
     gl.uniform1i(gl.getUniformLocation(sample, 'mip'), srv ? 0 : mip);
     gl.uniform1i(gl.getUniformLocation(sample, 'rawDepth'), rawDepth ? 1 : 0);
     gl.uniform1i(gl.getUniformLocation(sample, 'flipY'), +(!srv && gpu.flipped(resource)));
+    gl.uniform1i(gl.getUniformLocation(sample, 'alphaView'), +(resource.getDesc().format === 65));
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     const actual = new Uint32Array(level.width * level.height * 4);
     gl.readPixels(0, 0, level.width, level.height, gl.RGBA_INTEGER, gl.UNSIGNED_INT, actual);

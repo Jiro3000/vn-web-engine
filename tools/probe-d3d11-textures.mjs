@@ -112,7 +112,8 @@ async function pageMain(fixture) {
     return result;
   }
   const sample = program(
-    'uniform highp sampler2D firstImage;uniform highp sampler2D secondImage;uniform int mip;uniform bool pair;uniform bool firstFlip;uniform bool secondFlip;layout(location=0)out highp uvec4 result;void main(){ivec2 p=ivec2(gl_FragCoord.xy),a=p,b=p;if(firstFlip)a.y=textureSize(firstImage,mip).y-1-a.y;if(secondFlip)b.y=textureSize(secondImage,0).y-1-b.y;result=uvec4(round(texelFetch(firstImage,a,mip)*255.));if(pair)result+=uvec4(round(texelFetch(secondImage,b,0)*255.));}',
+    // Alpha-only images use the linked-program view: red storage reads as (0, 0, 0, a).
+    'uniform highp sampler2D firstImage;uniform highp sampler2D secondImage;uniform int mip;uniform bool pair;uniform bool firstFlip;uniform bool secondFlip;uniform bool firstAlpha;uniform bool secondAlpha;layout(location=0)out highp uvec4 result;vec4 view(vec4 t,bool alpha){return alpha?vec4(0.,0.,0.,t.r):t;}void main(){ivec2 p=ivec2(gl_FragCoord.xy),a=p,b=p;if(firstFlip)a.y=textureSize(firstImage,mip).y-1-a.y;if(secondFlip)b.y=textureSize(secondImage,0).y-1-b.y;result=uvec4(round(view(texelFetch(firstImage,a,mip),firstAlpha)*255.));if(pair)result+=uvec4(round(view(texelFetch(secondImage,b,0),secondAlpha)*255.));}',
   );
   const depthProgram = program(
     'layout(location=0)out vec4 result;void main(){result=vec4(1,0,0,1);}',
@@ -124,15 +125,18 @@ async function pageMain(fixture) {
     [...new Uint8Array(await crypto.subtle.digest('SHA-256', words))]
       .map((n) => n.toString(16).padStart(2, '0'))
       .join('');
-  const origins = new WeakMap();
+  const origins = new WeakMap(),
+    alphaImages = new WeakMap();
   function borrowImage(gpu, resource) {
     const value = gpu.image(resource);
     origins.set(value, gpu.flipped(resource));
+    alphaImages.set(value, resource.getDesc().format === 65);
     return value;
   }
   function borrowShaderResource(gpu, view) {
     const value = gpu.shaderResource(view);
     origins.set(value, false);
+    alphaImages.set(value, view.resource.getDesc().format === 65);
     return value;
   }
   function baseline() {
@@ -225,6 +229,8 @@ async function pageMain(fixture) {
     gl.uniform1i(gl.getUniformLocation(sample, 'pair'), second ? 1 : 0);
     gl.uniform1i(gl.getUniformLocation(sample, 'firstFlip'), +!!origins.get(first));
     gl.uniform1i(gl.getUniformLocation(sample, 'secondFlip'), +!!origins.get(second ?? first));
+    gl.uniform1i(gl.getUniformLocation(sample, 'firstAlpha'), +!!alphaImages.get(first));
+    gl.uniform1i(gl.getUniformLocation(sample, 'secondAlpha'), +!!alphaImages.get(second ?? first));
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     const actual = new Uint32Array(width * height * 4),
       want = Uint32Array.from(expected, (n, i) => n + (secondExpected?.[i] ?? 0));
