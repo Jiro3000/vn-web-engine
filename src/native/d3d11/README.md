@@ -178,8 +178,9 @@ tie selection without changing sample coordinates. Their 64 MiB cache budget and
 pinned draw lifetime also apply to full-range aliases.
 
 Color-target clears, shader-view copies and their consuming draws share the ordered
-GPU command stream. Their error query is batched until context flush or shared-texture
-publication; allocation, resource transfer and CPU readback queries also check the batch. A failed
+GPU command stream. Their error query is batched until context flush; allocation, resource
+transfer and CPU readback queries also check the batch. Shared-texture publication does not
+wait for the GPU process: it reports device removal and leaves the batch pending. A failed
 batch invalidates its cached alias revisions so later use refreshes their pixels.
 CPU validation and framebuffer completeness checks still precede submission.
 
@@ -316,8 +317,9 @@ preparation precedes reapplying raster state, vertex arrays, programs and consta
 View leases are released after draws, skipped output and errors.
 
 Draw calls validate native arguments and bindings synchronously, while GPU commands
-remain queued across adjacent draws. `flush` and shared-texture `prepare` check GPU
-submission errors before returning to the host. Resource allocation, uploads and
+remain queued across adjacent draws. `flush` checks GPU submission errors before returning
+to the host; shared-texture `prepare` checks device removal and invalidates cached state, and
+its queued errors surface at the next flush, allocation, transfer or readback. Resource allocation, uploads and
 readback retain their own error checks. The private output framebuffer caches its
 completeness until an attachment changes or is destroyed; each draw still reapplies
 the raster state after texture preparation and host-context use.

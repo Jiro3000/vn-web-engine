@@ -1163,7 +1163,7 @@ async function pageMain(fixture) {
       device.release();
     }
   }
-  // Publication must check clears even when the device has submitted no draw.
+  // Publication leaves a clear-only batch pending; the next flush reports its error.
   {
     const {WebGl2D3d11Device} = await import('/runtime/native/d3d11/webgl2/device.js');
     const device = new WebGl2D3d11Device(gl, 0, 0xb000),
@@ -1178,13 +1178,14 @@ async function pageMain(fixture) {
       lease = device.acquireColorTexture(resource);
       ctx.clearRenderTargetView(view, [0, 1, 0, 1]);
       gl.enable(0xffffffff);
+      lease.prepare();
       let rejected = false;
       try {
-        lease.prepare();
+        ctx.flush();
       } catch (error) {
         rejected = /texture submission/.test(String(error));
       }
-      rows.push({name: 'clear-only-publication-error', passed: rejected});
+      rows.push({name: 'clear-only-publication-error-at-flush', passed: rejected});
       ctx.clearRenderTargetView(view, [0, 1, 0, 1]);
       lease.prepare();
       origins.set(lease.texture, true);

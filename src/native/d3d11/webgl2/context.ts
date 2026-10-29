@@ -84,7 +84,16 @@ export class D3d11DrawContext extends D3d11TransferContext implements ID3D11Devi
     this.checkSubmission();
   }
 
-  /** Backend publication boundary; CPU binding validation remains synchronous. */
+  /** Shared-image publication: host-visible GL state and device removal are settled, while
+   * queued GPU errors stay pending for flush and the next allocation, transfer or readback. */
+  publish(): void {
+    this.checkLive();
+    this.output.invalidateState();
+    if (this.gl.isContextLost())
+      throw new D3d11TextureError('D3D11 device removed', 0x887a0005 | 0);
+  }
+
+  /** Backend submission boundary; CPU binding validation remains synchronous. */
   checkSubmission(): void {
     this.checkLive();
     this.output.invalidateState();

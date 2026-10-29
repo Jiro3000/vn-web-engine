@@ -254,7 +254,7 @@ export class WebGl2D3d11Device
           if (closed) throw new Error('Using a released shared texture');
           if (images.image(resource) !== texture)
             throw new Error('Shared texture allocation changed');
-          context.checkSubmission();
+          context.publish();
         },
         dispose() {
           if (!closed) {

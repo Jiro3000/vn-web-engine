@@ -1151,6 +1151,12 @@ test('native Draw and DrawIndexed preserve planar inputs, base vertices, strip c
   gpuError = 0x0502;
   assert.throws(() => ctx.flush(), /D3D11 draw failed: 1282/);
   assert.equal(errorQueries, 2, 'Submission errors must remain visible at flush');
+  ctx.draw(3, 0);
+  gpuError = 0x0505;
+  ctx.publish();
+  assert.equal(errorQueries, 2, 'Shared-image publication must not wait for GPU errors');
+  assert.throws(() => ctx.flush(), /D3D11 draw failed: 1285/);
+  assert.equal(errorQueries, 3, 'A published batch keeps its error for the next flush');
   assert.equal(acquired, released);
   source.release();
   layout.release();
