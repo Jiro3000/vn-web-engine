@@ -1,3 +1,4 @@
+import type {YurisNode} from './nodes.js';
 import type {ByteString} from './numbers.js';
 
 /** Nesting limit of the IF, LOOP and GOSUB stacks (error 0x18CE0). */
@@ -143,11 +144,13 @@ export class YurisTask {
   readonly ints = new BigInt64Array(17);
   readonly floats = new Float64Array(17);
   readonly strings: ByteString[] = new Array(17).fill('');
-  /** +0xC and +0x10: the arguments of the last RETURNCODE. */
-  returnCode = 0;
-  returnCodeSize = 0;
-  /** Task node fields: +0x38 Z order. */
-  z = 0;
+  /** +0xC and +0x10: TASKINFO TEXTLINE and NEXTVOICE. */
+  textLine = 0;
+  nextVoice = 0;
+  /** +0: the dispatcher pass (0x871F40) in which the task last ran. */
+  pass = 0n;
+  /** The task tree leaf that owns the task (its Z and name). */
+  node: YurisNode<YurisTask> | null = null;
 
   constructor(readonly name: ByteString) {}
 

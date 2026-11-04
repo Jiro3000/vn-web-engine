@@ -14,9 +14,13 @@ import {type YurisInputHost, YurisInput, installInput} from './input.js';
 import {type ByteString, STRING_CAPACITY, fistp, i64} from './numbers.js';
 import {YurisFramePacer} from './pacing.js';
 import {YurisSystem, type YurisSystemHost} from './system.js';
+import {type YurisNode, YurisTree} from './nodes.js';
 import {NESTING_LIMIT, YurisTask} from './task.js';
+import {installTasks} from './tasks.js';
 import {SYSTEM_VARIABLE_LIMIT, YurisType, YurisVariables} from './variables.js';
 import {installMath} from './math.js';
+import {type YurisFontHost, YurisFonts, installFonts} from './font.js';
+import {type YurisSoundHost, YurisSounds} from './sound.js';
 import {installVariableCommands} from './vars.js';
 import {type YurisWindowHost, YurisWindows} from './window.js';
 
@@ -139,7 +143,9 @@ export interface YurisMachineHost
     YurisFolderHost,
     YurisImageEncoder,
     YurisInputHost,
-    YurisWindowHost {
+    YurisWindowHost,
+    YurisFontHost,
+    YurisSoundHost {
   /** A fatal script error with its formatted `YSER` message, after the quit flag is set. */
   error(message: string, error: YurisError): void;
   /** `Sleep` of the frame pacing 0x4109A8. */
@@ -165,9 +171,15 @@ export class YurisMachine {
   readonly pacer = new YurisFramePacer();
   readonly input: YurisInput;
   readonly windows: YurisWindows;
-  readonly tasks: YurisTask[] = [];
-  /** 0x872434: the running task. */
+  /** 0x87241C: the task tree; the dispatcher runs its leaves. */
+  readonly taskTree = new YurisTree<YurisTask>();
+  /** 0x872434: the running task; 0x872438: its node. */
   task!: YurisTask;
+  taskNode!: YurisNode<YurisTask>;
+  /** 0x871F50: TASK RESTART asks the frame for another dispatcher pass. */
+  restartPending = false;
+  /** 0x871F58: that pass skips the tasks above this Z (0: none). */
+  restartZ = 0n;
   /** 0x872448: the running instruction. */
   position = 0;
   /** 0x87260C: set by END and by every script error. */
@@ -178,6 +190,8 @@ export class YurisMachine {
   readonly errorFlags = new Uint8Array(0x80).fill(1);
   readonly files: YurisFiles;
   readonly layers: YurisLayers;
+  readonly fonts: YurisFonts;
+  readonly sounds: YurisSounds;
   private readonly handlers: (YurisCommandHandler | undefined)[] = [];
   private readonly loaded = new Map<number, LoadedScript>();
   private current!: LoadedScript;
@@ -208,6 +222,12 @@ export class YurisMachine {
     installInput(this, this.input, host);
     this.windows = new YurisWindows(this, host, project.config.width || 640, project.config.height || 480);
     this.windows.install();
+    this.fonts = new YurisFonts(host);
+    installFonts(this, this.fonts);
+    installTasks(this);
+    // YSCF setting 0x8722D4: 0 no sound, 1 sound, 2 sound required.
+    this.sounds = new YurisSounds(this, this.files, host, project.config.settings[3] ?? 0);
+    this.sounds.install();
   }
 
   /**
@@ -222,9 +242,14 @@ export class YurisMachine {
     const index = machine.label(bytes('SYSTEM_START'));
     if (index < 0) throw new YurisError(0x1a694, ['SYSTEM_START']);
     const label = project.labels.labels[index]!;
-    const task = new YurisTask('');
-    task.noReturn = 0;
-    machine.tasks.push(task);
+    // 0x468ADA: the root and the group "" carry tasks; the leaf SYSTEM runs the program.
+    const tree = machine.taskTree;
+    tree.root.payload = new YurisTask('');
+    tree.create('', true, 100n, new YurisTask(''));
+    const task = new YurisTask('SYSTEM');
+    task.noReturn = 1;
+    task.node = tree.create('SYSTEM', false, 100n, task);
+    machine.taskNode = task.node;
     machine.task = task;
     machine.system.task = task;
     task.script = label.script;
@@ -232,6 +257,7 @@ export class YurisMachine {
     task.position = label.position;
     task.ifDepth = label.ifNest;
     task.loopDepth = label.loopNest;
+    await machine.sounds.open();
     return machine;
   }
 
@@ -288,9 +314,15 @@ export class YurisMachine {
     }
     this.input.poll(this.screenWidth, this.screenHeight);
     this.system.frames++;
-    this.system.drawnFrames++;
     this.input.update(this.host.now(), this.pacer.time);
-    await this.dispatch();
+    // 0x404237: a TASK RESTART during a pass runs the dispatcher again.
+    do {
+      this.restartPending = false;
+      this.system.passes++;
+      await this.dispatch(this.taskTree.root);
+    } while (this.restartPending && !this.quit);
+    // One pass of the sound thread 0x41C6DC, which natively runs every 3 to 20 ms.
+    await this.sounds.update();
     if (this.quit) return;
     const pacer = this.pacer,
       skipping = pacer.skipping;
@@ -307,13 +339,27 @@ export class YurisMachine {
   }
 
   /**
-   * The dispatcher 0x40449C: every enabled and active task whose waits are over runs until a
-   * handler yields or the program quits.
+   * The dispatcher 0x40449C: the children of `group` from the highest Z down (by position, so
+   * nodes added or removed meanwhile shift the walk). After a RESTART the pass skips the
+   * tasks above the restart Z until it reaches one at or below it. Groups recurse; a leaf
+   * whose E and A are set and whose waits are over runs until a handler yields.
    */
-  private async dispatch(): Promise<void> {
-    for (let t = this.tasks.length - 1; t >= 0 && !this.quit; t--) {
-      const task = this.tasks[t]!;
+  private async dispatch(group: YurisNode<YurisTask>): Promise<void> {
+    for (let i = group.children.length - 1; i >= 0; i--) {
+      const node = group.childAt(i + 1);
+      if (!node) continue;
+      if (!this.restartPending && this.restartZ !== 0n) {
+        if (node.z > this.restartZ) continue;
+        this.restartZ = 0n;
+      }
+      const task = node.payload!;
       if (!(task.enabled & task.active)) continue;
+      if (node.group) {
+        await this.dispatch(node);
+        continue;
+      }
+      this.taskNode = node;
+      task.pass = this.system.passes;
       this.select(task);
       if (task.flushText) {
         task.flushText = 0;
@@ -335,7 +381,7 @@ export class YurisMachine {
 
   private async run(task: YurisTask): Promise<void> {
     let yielded = false;
-    while (!this.quit && !yielded && this.tasks.includes(task)) {
+    while (!this.quit && !yielded) {
       this.select(task);
       const position = (this.position = task.position);
       task.position = position + 1;
@@ -368,7 +414,7 @@ export class YurisMachine {
     const template = this.project.errors.get(error.code);
     const text = template ? sjisText(template) : `error ${error.code}`;
     const file = this.project.files.find((f) => f.index === this.task?.script);
-    const prefix = file ? `${sjisText(file.name)}(${this.line}) ` : '';
+    const prefix = file && error.prefix ? `${sjisText(file.name)}(${this.line}) ` : '';
     this.host.error(prefix + printf(text, error.args), error);
   }
 
@@ -405,6 +451,32 @@ export class YurisMachine {
     this.loaded.set(index, loaded);
     this.current = loaded;
     this.variables.initialize(this.project.variables, index, (b) => this.expression.string(b));
+  }
+
+  /** Loads a script for another task (0x4511C1) and keeps the running script current. */
+  loadFor(index: number): void {
+    const current = this.current;
+    this.load(index);
+    this.current = current;
+  }
+
+  /** The source line of `position` in a loaded script. */
+  lineOf(script: number, position: number): number {
+    return this.loaded.get(script)?.script.lines[position] ?? 0;
+  }
+
+  /** 0x8725F0: the source file name of a script number. */
+  scriptName(script: number): ByteString {
+    const file = this.project.files.find((f) => f.index === script);
+    return file ? String.fromCharCode(...file.name) : '';
+  }
+
+  /** 0x46F350 over the script names: the script whose name matches, ASCII case-folded. */
+  findScript(name: ByteString): number {
+    const fold = (t: ByteString) => t.replace(/[A-Z]/g, (c) => c.toLowerCase());
+    const wanted = fold(name);
+    for (let i = 0; i < this.project.files.length; i++) if (fold(this.scriptName(i)) === wanted) return i;
+    return -1;
   }
 
   /** Moves the task to a label's script position, loading the script when it changes. */
@@ -799,15 +871,8 @@ export class YurisMachine {
       return 0;
     }
     if (task.noReturn) throw new YurisError(0x18bb4, ['RETURN', 'RETURN', 'GOSUB']);
-    this.endTask(task);
+    this.taskTree.remove(this.taskNode); // 0x451AE8
     return -1;
-  }
-
-  /** 0x451AE8: removes a task; the program ends with its last task. */
-  endTask(task: YurisTask): void {
-    const at = this.tasks.indexOf(task);
-    if (at >= 0) this.tasks.splice(at, 1);
-    if (this.tasks.length === 0) this.quit = true;
   }
 
   /** WAIT 0x45611C: FRAME frames, else TIME milliseconds. */

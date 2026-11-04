@@ -55,9 +55,9 @@ export class YurisSystem implements YurisSystemValues {
   /** 0x87225C: the program is suspended in the background; 0x871F20: when it was suspended. */
   suspended = false;
   private suspendedAt = 0;
-  /** 0x871F48 and 0x871F40: frame counters (0x6D, 0x6E). */
+  /** 0x871F48: the frame counter (0x6D); 0x871F40: the dispatcher pass counter (0x6E). */
   frames = 0n;
-  drawnFrames = 0n;
+  passes = 0n;
   /** 0x59B050: the CG preload thread runs (on unless the engine settings file turns it off). */
   preloadEnabled = true;
   /**
@@ -226,7 +226,7 @@ export class YurisSystem implements YurisSystemValues {
       case 0x6d:
         return this.frames;
       case 0x6e:
-        return this.drawnFrames;
+        return this.passes;
       case 0x6f:
         return this.timer(1);
       case 0x70:

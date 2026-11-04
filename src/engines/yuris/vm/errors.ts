@@ -7,6 +7,8 @@ export class YurisError extends Error {
   constructor(
     readonly code: number,
     readonly args: readonly (number | bigint | string)[] = [],
+    /** False for the reporters 0x46C2E8/0x46C28C, which omit the file and line prefix. */
+    readonly prefix = true,
   ) {
     super(`YU-RIS error ${code}`);
     this.name = 'YurisError';
