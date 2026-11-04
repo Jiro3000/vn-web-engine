@@ -788,7 +788,10 @@ export class YurisLayers {
       [Info.OnMouse3, 3],
     ] as const) {
       if (!a.has(id)) continue;
-      const w = Math.min(Math.max(Number(BigInt.asIntN(32, a.int(id))), 0), WINDOWS - 1);
+      // 0x43B448 indexes from 0x872798, four bytes before the main-window
+      // pointer at 0x87279C: ONMOUSE*=1 therefore selects window 0. The
+      // script argument is one-based even though the host arrays are not.
+      const w = Math.max(0, Math.min(Number(BigInt.asIntN(32, a.int(id))), WINDOWS - 1) - 1);
       const mx = set ?? m.system.mouseX[w]!,
         my = set2 ?? m.system.mouseY[w]!;
       if (mx < 0 || my < 0 || mx >= m.screenWidth || my >= m.screenHeight) return store(-1n);

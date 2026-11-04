@@ -266,8 +266,8 @@ export function cgAct(layers: YurisLayers, m: YurisMachine): number {
     // 0x428E7B: BNO selects the text buffer and the tests go on.
     [Act.Bno, () => ((layers.textBuffer = low(a.int(Act.Bno))), NaN)],
     [Act.Text, null],
-    [Act.Merge, null],
-    [Act.Merge2, null],
+    [Act.Merge, () => merge(layers, node, destination, extra, x, y, false)],
+    [Act.Merge2, () => merge(layers, node, destination, extra, x, y, true)],
     [Act.Transition, null],
     [Act.Transition2, null],
     [Act.Xor, null],
@@ -289,6 +289,69 @@ export function cgAct(layers: YurisLayers, m: YurisMachine): number {
   }
   // 0x428CD6: no operation resets the text buffer.
   layers.textBuffer = 0;
+  return 0;
+}
+
+/**
+ * 0x439A30 / 0x439BFC: alpha-compose the whole source at X,Y in ID2.
+ * MERGE2 first applies the destination layer's A to its alpha. These use the
+ * displayed +0xC0 buffers, ignore X2/Y2 and preserve both layers' properties.
+ * The row workers 0x4028F8/0x402828/0x402758/0x402654 use the product table
+ * of 0x4686F9 and the normalization table 0x769900 built by 0x4626FC.
+ */
+function merge(
+  layers: YurisLayers,
+  src: YurisCgNode,
+  dst: YurisCgNode | null,
+  extra: number,
+  x: number,
+  y: number,
+  attenuateDestination: boolean,
+): number {
+  if (!extra)
+    throw new YurisError(0x18bb2, [
+      layers.commandName(),
+      attenuateDestination ? 'MERGE2' : 'MERGE',
+    ]);
+  const s = src.payload!,
+    d = dst!.payload!;
+  if (!attenuateDestination && s.a === 0) return 0;
+  d.masked = 1;
+  const from = s.pixels,
+    to = d.pixels;
+  if (!from || !to) return 0;
+  const sx = Math.max(0, -x),
+    sy = Math.max(0, -y);
+  const width = Math.min(s.width - sx, d.width - Math.max(0, x));
+  const height = Math.min(s.height - sy, d.height - Math.max(0, y));
+  for (let row = 0; row < height; row++)
+    for (let col = 0; col < width; col++) {
+      const si = ((sy + row) * s.width + sx + col) * 4;
+      const di = ((Math.max(0, y) + row) * d.width + Math.max(0, x) + col) * 4;
+      let da = to[di + 3]!;
+      if (attenuateDestination) {
+        da = (da * d.a) >> 8;
+        to[di + 3] = da;
+      }
+      const sa = from[si + 3]!;
+      const overlap =
+        attenuateDestination && s.a !== 256 ? ((sa + 1) * da) >> 8 : Math.trunc((da * sa) / 255);
+      const alpha = da + (((sa - overlap) * s.a) >> 8);
+      to[di + 3] = alpha;
+      const sourceAlpha = from[si + 3]!; // May alias the just-written destination.
+      if (attenuateDestination && s.a !== 256) {
+        for (let c = 0; c < 3; c++)
+          to[di + c] =
+            to[di + c]! +
+            Math.trunc(
+              ((((from[si + c]! - to[di + c]!) * s.a) >> 8) * sourceAlpha) / ((alpha & 255) + 1),
+            );
+      } else {
+        const weight = (alpha & 255) === 0 ? 0 : Math.trunc((sourceAlpha * 256) / (alpha & 255));
+        for (let c = 0; c < 3; c++)
+          to[di + c] = to[di + c]! + (((from[si + c]! - to[di + c]!) * weight * s.a) >> 16);
+      }
+    }
   return 0;
 }
 

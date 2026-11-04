@@ -161,7 +161,7 @@ export interface YurisMachineHost
   /** `MessageBoxA` of 0x409070: a message the command shows before yielding. */
   messageBox(text: string): void;
   /** Called after every executed instruction when tracing. */
-  trace?(task: YurisTask, position: number, instruction: YurisInstruction): void;
+  trace?(task: YurisTask, position: number, instruction: YurisInstruction, script: number): void;
   /** The window output of a frame (0x404824, 0x40FCAC), before its marks are cleared. */
   present?(layers: YurisLayers): void;
 }
@@ -423,6 +423,7 @@ export class YurisMachine {
     while (!this.quit && !yielded) {
       this.select(task);
       const position = (this.position = task.position);
+      const script = task.script;
       task.position = position + 1;
       const instruction = this.current.script.instructions[position];
       try {
@@ -432,7 +433,9 @@ export class YurisMachine {
         if (!handler) throw new YurisError(0xdbbd2);
         let result = handler(this);
         if (typeof result !== 'number') result = await result;
-        this.host.trace?.(task, position, instruction);
+        // GOSUB/RETURN may have switched task.script; report the instruction's
+        // source script, not the destination, for control-flow verification.
+        this.host.trace?.(task, position, instruction, script);
         yielded = result !== 0;
       } catch (error) {
         if (!(error instanceof YurisError)) throw error;
