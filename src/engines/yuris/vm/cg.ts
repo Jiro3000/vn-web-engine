@@ -1,3 +1,5 @@
+import {cgAct} from './cgact.js';
+import {compose} from './compose.js';
 import {YurisError} from './errors.js';
 import {YurisFileKind, YurisFileType, type YurisFiles} from './files.js';
 import type {YurisMachine} from './machine.js';
@@ -24,10 +26,14 @@ export interface YurisImageHost {
  */
 export class YurisCg {
   references = 1;
-  /** +0x30..+0x4C: the clip rectangle x0, y0, x1, y1 of a layer set's buffer. */
+  /** +0x8: dirty marks since the last frame (0x41060C counts them, 0x410D30 clears them). */
+  marks = 0;
+  /** +0x30..+0x4C: the area x0, y0, x1, y1 of a layer set's buffer to recompose. */
   readonly clip = [0, 0, 0, 0];
-  /** +0x50, +0x51: the buffer needs recomposition. */
+  /** +0x50: the buffer needs recomposition. */
   dirty = false;
+  /** +0x51: the whole buffer goes to the texture on the next upload (0x406801). */
+  uploadAll = false;
   /** +0x54: TID (with ".TIDNO"). */
   tid: ByteString = '';
   /** +0x60, +0x68: LINT and LINT2, free script values. */
@@ -54,8 +60,16 @@ export class YurisCg {
   e = 1;
   /** +0xA8: the alpha channel came from a MID mask layer. */
   masked = 0;
-  /** +0xC0: the pixels, straight BGRA; null until a buffer exists. */
+  /**
+   * +0xC0: the pixels the compositor reads and a layer set's composition writes, straight
+   * BGRA; null until a buffer exists. It is `source` or, after an MD or SD pass, `filtered`.
+   */
   pixels: Uint8Array | null = null;
+  /** +0xD0: the loaded or allocated buffer, the input of the MD and SD filters. */
+  source: Uint8Array | null = null;
+  /** +0xE0, +0xE8: the filtered copy and the frame (0x871F48) of its last filter pass. */
+  filtered: Uint8Array | null = null;
+  filterFrame = 0n;
   /** +0x102 REMALLOC, +0x10C TEX (kept as a texture). */
   remalloc = 0;
   tex = 0;
@@ -82,7 +96,7 @@ export class YurisCg {
   allocate(width: number, height: number): void {
     this.width = this.textureWidth = width;
     this.height = this.textureHeight = height;
-    this.pixels = new Uint8Array(width * height * 4);
+    this.setPixels(new Uint8Array(width * height * 4));
     this.dirty = true;
     this.clip[0] = this.clip[1] = 0;
     this.clip[2] = width - 1;
@@ -93,7 +107,21 @@ export class YurisCg {
   empty(): void {
     this.masked = 0;
     this.width = this.height = this.textureWidth = this.textureHeight = 1;
-    this.pixels = new Uint8Array(4);
+    this.setPixels(new Uint8Array(4));
+  }
+
+  /** A new buffer replaces both +0xD0 and +0xC0. */
+  setPixels(pixels: Uint8Array | null): void {
+    this.pixels = this.source = pixels;
+  }
+
+  /** 0x434440: a new buffer and size; the filtered copy is dropped. */
+  replace(pixels: Uint8Array, width: number, height: number): void {
+    this.setPixels(pixels);
+    this.filtered = null;
+    this.filterFrame = 0n;
+    this.width = this.textureWidth = width;
+    this.height = this.textureHeight = height;
   }
 }
 
@@ -186,6 +214,7 @@ const enum Info {
 
 /** Command ids (`ysc.ybn`). */
 const CG = 0x01,
+  CGACT = 0x02,
   CGEND = 0x03,
   CGINFO = 0x04,
   ERROR = 0x0e;
@@ -207,6 +236,8 @@ export class YurisLayers {
    * with WebGL, so it stays on.
    */
   readonly direct = true;
+  /** 0x5B8664: the text buffer CGACT TEXT draws with (set by BNO, 0x4039D0). */
+  textBuffer = 0;
   /** 0x872234: the layer DXBUF selected. */
   directBuffer: YurisCgNode | null = null;
   /** +0x124 of each window: the layer set it shows. */
@@ -234,10 +265,11 @@ export class YurisLayers {
     m.define(CGEND, () => this.cgEnd());
     m.define(CGINFO, () => this.cgInfo());
     m.define(ERROR, () => this.error());
+    m.define(CGACT, () => cgAct(this, m));
   }
 
   /** ID with ".IDNO" (`_i64toa` base 10), resolved against the layer namespace (id 0x80). */
-  private target(idArg: number, idNoArg: number): {path: ByteString; group: boolean} {
+  target(idArg: number, idNoArg: number): {path: ByteString; group: boolean} {
     const a = this.machine.args;
     let id = a.text(idArg);
     if (a.has(idNoArg)) id = `${id}.${formatInt(a.int(idNoArg))}`;
@@ -246,11 +278,11 @@ export class YurisLayers {
     return {path: resolved.path, group: a.has(idNoArg) ? false : resolved.group};
   }
 
-  private lookup(path: ByteString, group: boolean): YurisCgNode | null {
+  lookup(path: ByteString, group: boolean): YurisCgNode | null {
     return this.tree.lookup(path, group ? LookupMode.Group : LookupMode.Leaf);
   }
 
-  private commandName(): string {
+  commandName(): string {
     return this.machine.commandName(this.machine.instruction.command);
   }
 
@@ -301,11 +333,16 @@ export class YurisLayers {
         node = this.tree.create(path, true, z);
         cg = node.payload = new YurisCg();
         cg.allocate(Number(sx & 0xffffffffn) | 0, Number(sy & 0xffffffffn) | 0);
+        this.markSet(node);
       }
     }
     if (!cg) return 0;
+    // Each change first marks the area the node covers before it (0x410550, or 0x425E74 for
+    // a layer set); the final mark adds the area after the change.
+    const touch = () => (group ? this.markSet(node) : this.markDirty(node));
     if (file) {
       if (group) throw new YurisError(0x18ba0, [this.commandName()]);
+      this.markDirty(node);
       if ((await this.load(cg, a.text(Cg.File))) !== 0) {
         m.quit = true;
         return -1;
@@ -334,17 +371,22 @@ export class YurisLayers {
     const bounded = (id: number, current: number, min: bigint, max: bigint) =>
       Number(applyBounded(op(id), BigInt(current), value(id), min, max));
     if (a.has(Cg.E) && BigInt(cg.e) !== value(Cg.E)) {
+      touch();
       cg.e = (Number(value(Cg.E) & 0xffn) << 24) >> 24;
       changed = true;
     }
     if (a.has(Cg.A)) {
-      const before = cg.a;
-      cg.a = (bounded(Cg.A, cg.a, 0n, 256n) << 16) >> 16;
-      if (cg.a !== before) changed = true;
+      const next = (bounded(Cg.A, cg.a, 0n, 256n) << 16) >> 16;
+      if (next !== cg.a) {
+        touch();
+        cg.a = next;
+        changed = true;
+      }
     }
     if (a.has(Cg.X)) {
       const x = applyOp(op(Cg.X), cg.x, value(Cg.X));
       if (x !== cg.x) {
+        touch();
         cg.x = x;
         cg.fx = i64(x * 100n);
         changed = true;
@@ -353,6 +395,7 @@ export class YurisLayers {
     if (a.has(Cg.Fx)) {
       const fx = applyOp(op(Cg.Fx), cg.fx, value(Cg.Fx));
       if (fx !== cg.fx) {
+        touch();
         cg.fx = fx;
         cg.x = fx / 100n;
         changed = true;
@@ -362,6 +405,7 @@ export class YurisLayers {
       // Y is kept as its low 32 bits, sign extended, and FY as the 32-bit product.
       const y = BigInt.asIntN(32, applyOp(op(Cg.Y), cg.y, value(Cg.Y)));
       if (y !== cg.y) {
+        touch();
         cg.y = y;
         cg.fy = BigInt.asIntN(32, y * 100n);
         changed = true;
@@ -370,6 +414,7 @@ export class YurisLayers {
     if (a.has(Cg.Fy)) {
       const fy = applyOp(op(Cg.Fy), cg.fy, value(Cg.Fy));
       if (fy !== cg.fy) {
+        touch();
         cg.fy = fy;
         cg.y = fy / 100n;
         changed = true;
@@ -387,18 +432,22 @@ export class YurisLayers {
     }
     if (group) {
       if (a.has(Cg.Sx)) {
+        this.markSet(node);
         cg.width = cg.textureWidth = Number(sx & 0xffffffffn) | 0;
-        if (cg.width > 0 && cg.height > 0) this.reallocate(cg);
+        if (cg.width > 0 && cg.height > 0) this.reallocate(node);
       }
       if (a.has(Cg.Sy)) {
+        this.markSet(node);
         cg.height = cg.textureHeight = Number(sy & 0xffffffffn) | 0;
-        if (cg.width > 0 && cg.height > 0) this.reallocate(cg);
+        if (cg.width > 0 && cg.height > 0) this.reallocate(node);
       }
     } else if (sx !== -1n || sy !== -1n) {
       if (!file) changed = true;
       else {
         if (sx === -1n || sy === -1n) throw new YurisError(0x18793, [this.commandName()]);
+        this.markDirty(node);
         this.resize(cg, Number(sx), Number(sy));
+        this.markDirty(node);
       }
     }
     if (a.has(Cg.T)) {
@@ -478,14 +527,52 @@ export class YurisLayers {
     if (a.has(Cg.Lint2)) cg.lint2 = applyOp(op(Cg.Lint2), cg.lint2, value(Cg.Lint2));
     if (changed) {
       this.redraw = true;
-      this.markDirty(node);
+      touch();
     }
     return 0;
   }
 
-  /** CG SX/SY on a layer set: a new zeroed buffer of the new size (0x425E74 marks it). */
-  private reallocate(cg: YurisCg): void {
+  /**
+   * CG SX/SY on a layer set (0x424195): a zeroed buffer of the new size, marked whole, then
+   * composed at once.
+   */
+  private reallocate(node: YurisCgNode): void {
+    const cg = node.payload!;
+    if (cg.width > 0x2000) throw new YurisError(0x186aa, [cg.width, cg.height]);
     cg.allocate(cg.width, cg.height);
+    this.markSet(node);
+    if (this.composeSet(node) < 0) this.machine.quit = true;
+  }
+
+  /** 0x425DF4: composes a layer set's whole buffer (0x404A51 with window -1). */
+  composeSet(node: YurisCgNode): number {
+    const cg = node.payload;
+    if (!cg) return 0;
+    const host = {
+      frame: this.machine.system.frames,
+      ruleLayer: (tid: ByteString) =>
+        this.tree.lookup(resolveNodePath(this.machine.system.names[0]!, tid).path, LookupMode.Leaf),
+    };
+    return compose(host, node, 0, 0, [0, 0, cg.width - 1, cg.height - 1]);
+  }
+
+  /**
+   * 0x425E74: marks a layer set's pending area in itself and, moved by each position on the
+   * way up, in the enclosing sets.
+   */
+  markSet(node: YurisCgNode | null): void {
+    const cg = node?.payload;
+    if (!node || !cg) return;
+    const rect = [...cg.clip];
+    for (let n: YurisCgNode | null = node; n && n !== this.tree.root && n.payload; n = n.parent) {
+      markArea(n.payload, rect);
+      const x = Number(n.payload.x),
+        y = Number(n.payload.y);
+      rect[0]! += x;
+      rect[1]! += y;
+      rect[2]! += x;
+      rect[3]! += y;
+    }
   }
 
   /**
@@ -500,9 +587,7 @@ export class YurisLayers {
     if (cg.pixels)
       for (let y = 0; y < rows; y++)
         pixels.set(cg.pixels.subarray(y * cg.width * 4, (y * cg.width + columns) * 4), y * width * 4);
-    cg.pixels = pixels;
-    cg.width = cg.textureWidth = width;
-    cg.height = cg.textureHeight = height;
+    cg.replace(pixels, width, height);
   }
 
   /**
@@ -525,15 +610,42 @@ export class YurisLayers {
       return -1;
     }
     const image = await this.images.decodeImage(await this.files.read(file.path), file.type, file.path);
-    cg.pixels = image.pixels;
+    cg.setPixels(image.pixels);
     cg.width = cg.textureWidth = image.width;
     cg.height = cg.textureHeight = image.height;
     return 0;
   }
 
-  /** 0x410550 / 0x425E74: marks the node's object and its layer sets for recomposition. */
-  private markDirty(node: YurisCgNode | null): void {
-    for (let n = node; n && n !== this.tree.root; n = n.parent) if (n.payload) n.payload.dirty = true;
+  /**
+   * 0x410550: marks the node's area in each enclosing layer set for recomposition. The area
+   * starts as the node's buffer and moves by each node's position on the way up.
+   */
+  markDirty(node: YurisCgNode | null): void {
+    const cg = node?.payload;
+    if (!node || !cg) return;
+    const rect = [0, 0, cg.width - 1, cg.height - 1];
+    for (let child = node, set = node.parent; set && set !== this.tree.root; child = set, set = set.parent) {
+      const x = Number(child.payload?.x ?? 0n),
+        y = Number(child.payload?.y ?? 0n);
+      rect[0]! += x;
+      rect[1]! += y;
+      rect[2]! += x;
+      rect[3]! += y;
+      if (set.payload) markArea(set.payload, rect);
+    }
+  }
+
+  /** 0x410D30: the frame's marks are consumed; every layer set starts clean. */
+  frameEnd(): void {
+    const clear = (node: YurisCgNode): void => {
+      for (const child of node.children) {
+        if (!child.group || !child.payload) continue;
+        child.payload.marks = 0;
+        child.payload.dirty = false;
+        clear(child);
+      }
+    };
+    clear(this.tree.root);
   }
 
   /**
@@ -558,7 +670,10 @@ export class YurisLayers {
     for (let w = 0; w < WINDOWS; w++) if (this.windowLayers[w] === node) this.windowLayers[w] = null;
     if (this.directBuffer === node) this.directBuffer = null;
     this.tree.remove(node);
-    if (node.payload && --node.payload.references === 0) node.payload.pixels = null;
+    if (node.payload && --node.payload.references === 0) {
+      node.payload.setPixels(null);
+      node.payload.filtered = null;
+    }
     node.payload = null;
   }
 
@@ -632,8 +747,8 @@ export class YurisLayers {
     ] as const) {
       if (!a.has(id)) continue;
       const w = Math.min(Math.max(Number(BigInt.asIntN(32, a.int(id))), 0), WINDOWS - 1);
-      const mx = set ?? m.system.windowA[w]!,
-        my = set2 ?? m.system.windowB[w]!;
+      const mx = set ?? m.system.mouseX[w]!,
+        my = set2 ?? m.system.mouseY[w]!;
       if (mx < 0 || my < 0 || mx >= m.screenWidth || my >= m.screenHeight) return store(-1n);
       let left = 0n,
         top = 0n;
@@ -662,6 +777,41 @@ export class YurisLayers {
     }
     return 0;
   }
+}
+
+/** The rectangle of 0x41060C that matches nothing (-999999999 in every field). */
+const NO_AREA = -999999999;
+
+/**
+ * 0x41060C: clips `rect` (changed in place) to the layer set's buffer and joins it to the area
+ * to recompose; the first mark of a frame or of a clean set replaces the area. A rectangle
+ * outside the buffer becomes NO_AREA, which stays outside every enclosing set.
+ */
+function markArea(set: YurisCg, rect: number[]): void {
+  if (set.width !== 0 && set.height !== 0) {
+    if (!(rect[0]! < set.width && rect[1]! < set.height && rect[2]! >= 0 && rect[3]! >= 0)) {
+      rect.fill(NO_AREA);
+      return;
+    }
+    if (rect[0]! < 0) rect[0] = 0;
+    if (rect[1]! < 0) rect[1] = 0;
+    if (rect[2]! > set.width - 1) rect[2] = set.width - 1;
+    if (rect[3]! > set.height - 1) rect[3] = set.height - 1;
+  }
+  const c = set.clip;
+  if (set.marks === 0 || !set.dirty) {
+    c[0] = rect[0]!;
+    c[1] = rect[1]!;
+    c[2] = rect[2]!;
+    c[3] = rect[3]!;
+    set.dirty = true;
+    set.marks++;
+    return;
+  }
+  if (rect[0]! < c[0]!) c[0] = rect[0]!;
+  if (rect[1]! < c[1]!) c[1] = rect[1]!;
+  if (rect[2]! > c[2]!) c[2] = rect[2]!;
+  if (rect[3]! > c[3]!) c[3] = rect[3]!;
 }
 
 /**

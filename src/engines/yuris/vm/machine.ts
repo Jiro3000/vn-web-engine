@@ -8,12 +8,16 @@ import {
 import {YurisLayers, type YurisImageHost} from './cg.js';
 import {YurisError} from './errors.js';
 import {YurisExpression} from './expression.js';
+import {type YurisFolderHost, type YurisImageEncoder, installFiles} from './fileact.js';
 import {type YurisFileHost, YurisFiles} from './files.js';
+import {type YurisInputHost, YurisInput, installInput} from './input.js';
 import {type ByteString, STRING_CAPACITY, fistp, i64} from './numbers.js';
+import {YurisFramePacer} from './pacing.js';
 import {YurisSystem, type YurisSystemHost} from './system.js';
 import {NESTING_LIMIT, YurisTask} from './task.js';
 import {SYSTEM_VARIABLE_LIMIT, YurisType, YurisVariables} from './variables.js';
 import {installVariableCommands} from './vars.js';
+import {type YurisWindowHost, YurisWindows} from './window.js';
 
 /**
  * A command handler (table at 0x78B040, filled by 0x4635A8). It returns 0 to continue with
@@ -29,6 +33,7 @@ export const enum Command {
   Else = 0x0b,
   End = 0x0d,
   Flt = 0x19,
+  Fps = 0x1c,
   Go = 0x2a,
   Gosub = 0x2b,
   If = 0x2c,
@@ -38,6 +43,7 @@ export const enum Command {
   IfEnd = 0x30,
   Int = 0x32,
   Label = 0x33,
+  LabelInfo = 0x34,
   Let = 0x35,
   Loop = 0x37,
   LoopBreak = 0x38,
@@ -125,13 +131,24 @@ interface LoadedScript {
   readonly gosubLabel: Uint16Array;
 }
 
-export interface YurisMachineHost extends YurisSystemHost, YurisFileHost, YurisImageHost {
+export interface YurisMachineHost
+  extends YurisSystemHost,
+    YurisFileHost,
+    YurisImageHost,
+    YurisFolderHost,
+    YurisImageEncoder,
+    YurisInputHost,
+    YurisWindowHost {
   /** A fatal script error with its formatted `YSER` message, after the quit flag is set. */
   error(message: string, error: YurisError): void;
+  /** `Sleep` of the frame pacing 0x4109A8. */
+  sleep(milliseconds: number): Promise<void>;
   /** `MessageBoxA` of 0x409070: a message the command shows before yielding. */
   messageBox(text: string): void;
   /** Called after every executed instruction when tracing. */
   trace?(task: YurisTask, position: number, instruction: YurisInstruction): void;
+  /** The window output of a frame (0x404824, 0x40FCAC), before its marks are cleared. */
+  present?(layers: YurisLayers): void;
 }
 
 /**
@@ -144,6 +161,9 @@ export class YurisMachine {
   readonly expression: YurisExpression;
   readonly system: YurisSystem;
   readonly args = new YurisArguments();
+  readonly pacer = new YurisFramePacer();
+  readonly input: YurisInput;
+  readonly windows: YurisWindows;
   readonly tasks: YurisTask[] = [];
   /** 0x872434: the running task. */
   task!: YurisTask;
@@ -174,6 +194,13 @@ export class YurisMachine {
     this.installCore();
     this.layers = new YurisLayers(this, this.files, host);
     this.layers.install();
+    installFiles(this, host, host);
+    this.input = new YurisInput(this.system, host);
+    // 0x46C028: joyGetNumDevs at start-up.
+    this.input.padsPresent = host.readPads().length > 0;
+    installInput(this, this.input, host);
+    this.windows = new YurisWindows(this, host, project.config.width || 640, project.config.height || 480);
+    this.windows.install();
   }
 
   /**
@@ -211,6 +238,11 @@ export class YurisMachine {
     return this.project.commands.commands[command]?.name ?? `#${command}`;
   }
 
+  /** The name of argument `id` of the running command (`ysc.ybn`). */
+  argName(id: number): string {
+    return this.project.commands.commands[this.instruction.command]?.args[id]?.name ?? `#${id}`;
+  }
+
   get instruction(): YurisInstruction {
     return this.current.script.instructions[this.position]!;
   }
@@ -226,10 +258,35 @@ export class YurisMachine {
   }
 
   /**
-   * One frame of the dispatcher 0x40449C: every enabled and active task whose waits are over
-   * runs until a handler yields or the program quits.
+   * One frame of 0x404164: the frame counter 0x871F48 advances, the dispatcher runs, the
+   * windows are output and the frame's layer marks are cleared (0x410D30).
    */
   async frame(): Promise<void> {
+    this.input.poll(this.screenWidth, this.screenHeight);
+    this.system.frames++;
+    this.system.drawnFrames++;
+    this.input.update(this.host.now(), this.pacer.time);
+    await this.dispatch();
+    if (this.quit) return;
+    const pacer = this.pacer,
+      skipping = pacer.skipping;
+    // 0x4109A8 between the window preparation 0x404824 and the output 0x40FCAC.
+    const wait = pacer.begin(this.host.now());
+    if (wait > 0) await this.host.sleep(wait);
+    pacer.end(this.host.now(), wait > 0);
+    if (!skipping) {
+      this.host.present?.(this.layers);
+      pacer.countDrawn();
+      this.layers.frameEnd();
+    }
+    pacer.advance();
+  }
+
+  /**
+   * The dispatcher 0x40449C: every enabled and active task whose waits are over runs until a
+   * handler yields or the program quits.
+   */
+  private async dispatch(): Promise<void> {
     for (let t = this.tasks.length - 1; t >= 0 && !this.quit; t--) {
       const task = this.tasks[t]!;
       if (!(task.enabled & task.active)) continue;
@@ -401,12 +458,35 @@ export class YurisMachine {
     }
   }
 
+  /**
+   * LABELINFO 0x443A38: with EXIST, the LET element becomes 1 when the label `#` exists and 0
+   * otherwise (1.0 / 0.0 for a float element).
+   */
+  private labelInfo(): number {
+    const a = this.args;
+    this.decode();
+    if (!a.has(2)) return 0;
+    const slot = a.has(1);
+    const found = this.label(latin1(a.text(0))) >= 0;
+    this.setInt(a.variable[slot]!, a.variableIndex[slot]!, found ? 1n : 0n);
+    return 0;
+  }
+
+  /** FPS 0x442A68: SET (0x442AB8) sets the frame rate, SKIP whether late frames skip output. */
+  private fps(): number {
+    const a = this.args;
+    this.decode();
+    if (a.has(0)) this.pacer.setRate(Number(BigInt.asIntN(32, a.int(0))), this.host.now());
+    if (a.has(1)) this.pacer.skip = Number(BigInt.asIntN(32, a.int(1)));
+    return 0;
+  }
+
   /** Width and height of the main window's screen (0x87279C + 0xC / + 0x10). */
   get screenWidth(): number {
-    return this.project.config.width || 640;
+    return this.windows?.windows[0]!.width ?? (this.project.config.width || 640);
   }
   get screenHeight(): number {
-    return this.project.config.height || 480;
+    return this.windows?.windows[0]!.height ?? (this.project.config.height || 480);
   }
 
   /** The expression bytes of the running instruction's argument at `position` (1-based). */
@@ -428,6 +508,8 @@ export class YurisMachine {
     ])
       this.define(c, nothing);
     this.define(Command.Label, nothing);
+    this.define(Command.LabelInfo, () => this.labelInfo());
+    this.define(Command.Fps, () => this.fps());
     this.define(Command.If, () => this.if());
     this.define(Command.Else, () => this.else());
     this.define(Command.IfBlend, () => this.ifBlend());
@@ -888,8 +970,8 @@ export class YurisMachine {
       if (id === 0x84) s.value84 = value;
       else if (id === 0xf) s.listLength = low >>> 0;
       else if (id >= 0x75 && id <= 0x78) s.bytes75[id - 0x75] = low & 0xff;
-      else if (id === 0x91) s.value91 = low | 0;
-      else if (id === 0x92) s.value92 = low | 0;
+      else if (id === 0x91) s.lastKey = low | 0;
+      else if (id === 0x92) s.lastButton = low | 0;
       else if (id === 0x90) {
         if (!(indexHigh < 0 || (indexHigh === 0 && index === 0))) s.setInput(index, value);
       } else if (id >= 0x93 && id <= 0x113) s.setInput(s.keys[id - 0x93]!, value);

@@ -51,25 +51,36 @@ export class YurisSystem implements YurisSystemValues {
   /** 0x871F48 and 0x871F40: frame counters (0x6D, 0x6E). */
   frames = 0n;
   drawnFrames = 0n;
-  /** 0x872030 (save folder kind), 0x871FF4, 0x8723A4, 0x87239C, 0x8723A0 (desktop size). */
+  /** 0x59B050: the CG preload thread runs (on unless the engine settings file turns it off). */
+  preloadEnabled = true;
+  /**
+   * 0x59B04C: the SSE image routines are used (yscfg.dat word 2, read by 0x466AC0; on by
+   * default). They also need the CPU's SSE flag 0x5B8614, which every browser host has.
+   */
+  simd = true;
+  /**
+   * 0x872030 (save folder kind), 0x871FF4, and the desktop's GetDeviceCaps values read by
+   * 0x468EB0: 0x8723A4 BITSPIXEL, 0x87239C HORZRES and 0x8723A0 VERTRES.
+   */
   saveFolderKind = 0;
   value71 = 0;
-  displayCount = 1;
+  bitsPerPixel = 32;
   desktopWidth = 0;
   desktopHeight = 0;
-  /** 0x8726B8..0x8726C4 (bytes), 0x872048, 0x872464 (YSTD text count), 0x8726A8, 0x8726AC. */
+  /** 0x8726B8..0x8726C4 (bytes), 0x872048, 0x872464 (YSTD text count). */
   readonly bytes75 = new Uint8Array(4);
   value79 = 0;
   textCount = 0;
-  value91 = 0;
-  value92 = 0;
+  /** 0x8726A8: the last WM_KEYDOWN key; 0x8726AC: the last mouse button pressed (1, 2, 4). */
+  lastKey = 0;
+  lastButton = 0;
   /** 0x871F60: the value of id 0x84 (the last LET of 0x84). */
   value84 = 0n;
   /** 0x87241C + 0x34. */
   value7e = 0;
-  /** +0x2AC and +0x2B0 of the windows at 0x87279C..0x8727A8 (ids 0x85-0x8E). */
-  readonly windowA = new Int32Array(4);
-  readonly windowB = new Int32Array(4);
+  /** +0x2AC and +0x2B0 of the windows at 0x87279C..0x8727A8: the cursor in each (ids 0x85-0x8E). */
+  readonly mouseX = new Int32Array(4);
+  readonly mouseY = new Int32Array(4);
   /** 0x448F6C. */
   value8f = 0;
   /** 0x660C80 (game folder), 0x660DA0, 0x5CF080 (save folder), 0x660EC0, 0x660FE0. */
@@ -179,7 +190,7 @@ export class YurisSystem implements YurisSystemValues {
       case 0x71:
         return BigInt(this.value71);
       case 0x72:
-        return BigInt(this.displayCount);
+        return BigInt(this.bitsPerPixel);
       case 0x73:
         return BigInt(this.desktopWidth);
       case 0x74:
@@ -202,21 +213,21 @@ export class YurisSystem implements YurisSystemValues {
       case 0x87:
       case 0x88:
       case 0x89:
-        return BigInt(this.windowA[Math.max(0, id - 0x86)]!);
+        return BigInt(this.mouseX[Math.max(0, id - 0x86)]!);
       case 0x8a:
       case 0x8b:
       case 0x8c:
       case 0x8d:
       case 0x8e:
-        return BigInt(this.windowB[Math.max(0, id - 0x8b)]!);
+        return BigInt(this.mouseY[Math.max(0, id - 0x8b)]!);
       case 0x8f:
         return BigInt(this.value8f);
       case 0x90:
         return indexHigh < 0 || (indexHigh === 0 && index === 0) ? 0n : this.input[index >>> 0]!;
       case 0x91:
-        return BigInt(this.value91);
+        return BigInt(this.lastKey);
       case 0x92:
-        return BigInt(this.value92);
+        return BigInt(this.lastButton);
     }
     if (id >= 0x93 && id <= 0x113) return this.input[this.keys[id - 0x93]!]!;
     if (id >= 0x114 && id <= 0x117) return this.input[PAD_BASE - 0x114 + id + index * PAD_STRIDE] ?? 0n;

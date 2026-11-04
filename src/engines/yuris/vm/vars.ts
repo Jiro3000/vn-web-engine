@@ -1,3 +1,4 @@
+import {applyOp} from './operators.js';
 import {YurisError} from './errors.js';
 import type {YurisMachine} from './machine.js';
 import {type ByteString, atoi64, formatFloat, formatInt, isLeadByte, parseHex, strtod} from './numbers.js';
@@ -206,7 +207,8 @@ function varAct(machine: YurisMachine): number {
   if (a.has(Act.DimSize)) {
     if (variable.dimensions.length !== 1)
       return machine.messageBox('配列サイズを変更しようとしましたが、この変数は１次元配列ではありません。');
-    const size = a.int(Act.DimSize);
+    // 0x45467F: the assignment operator applies to the current size (0x425220).
+    const size = applyOp(a.op[a.has(Act.DimSize)]!, BigInt(variable.dimensions[0]!), a.int(Act.DimSize));
     if (size < 1n) return machine.messageBox('変更後の配列サイズが不正です。');
     if (size !== BigInt(variable.dimensions[0]!)) machine.variables.resize(set.id, Number(size));
   }
