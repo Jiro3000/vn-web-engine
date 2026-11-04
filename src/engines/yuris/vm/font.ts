@@ -46,6 +46,14 @@ export interface YurisFontHost {
   textOut(request: YurisGlyphRequest): Uint8Array;
 }
 
+/** The native glyph DIB and the advance returned by 0x442390. */
+export interface YurisGlyph {
+  readonly bits: Uint8Array;
+  readonly cell: number;
+  readonly width: number;
+  readonly height: number;
+}
+
 /**
  * Face names the start-up selection 0x403AF8 tries for every text buffer, in order (the
  * string constants at 0x878008, 0x878018, 0x878028, 0x878038 and 0x878044 of the executable
@@ -168,6 +176,19 @@ export class YurisFonts {
     bold: number,
     antialiasing: number,
   ): [number, number] {
+    const glyph = this.glyph(buffer, text, sx, sy, bold, antialiasing);
+    return [glyph.width, glyph.height];
+  }
+
+  /** 0x442390 also leaves its monochrome DIB available to CGACT TEXT. */
+  glyph(
+    buffer: number,
+    text: ByteString,
+    sx: number,
+    sy: number,
+    bold: number,
+    antialiasing: number,
+  ): YurisGlyph {
     const cell = glyphCell(sx);
     const length = charLength(text.charCodeAt(0) & 0xff);
     const first = text.slice(0, length).padEnd(length, '\0');
@@ -179,7 +200,7 @@ export class YurisFonts {
       text: first,
     });
     const pitch = this.pitch[this.selected[buffer]!] ?? 0;
-    if (pitch === 0) return [Math.trunc(sx / (3 - length)), sy];
+    if (pitch === 0) return {bits, cell, width: Math.trunc(sx / (3 - length)), height: sy};
     let right = 0,
       top = 0;
     if (pitch === 1) {
@@ -193,7 +214,7 @@ export class YurisFonts {
     }
     const width = (right >> 2) + 4,
       height = (top >> 2) + 4;
-    return [width <= sx ? width : sx, height <= sy ? height : sy];
+    return {bits, cell, width: width <= sx ? width : sx, height: height <= sy ? height : sy};
   }
 }
 

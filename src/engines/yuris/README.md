@@ -16,6 +16,8 @@ The shared WebP decoder emits straight BGRA and supports VP8L, VP8 and VP8X with
 
 YMV (0x45886C) is a YSMV container of independently indexed, XOR-obfuscated color and grayscale alpha JPEG pairs. The movie belongs to the shared CG object and is released by YMVEND or its final layer reference. YMVINFO reads the container metadata; FRAME clamps to the first/last frame. DIALOG (0x43CD48) uses shared modal message/input services. Its FILEOPEN branch and the additional checkbox/slider arguments are unused in this executable.
 
+CGACT TEXT (0x427D0F) consumes FONT's monochrome glyph DIB and measured advance (0x442390). Its native CPU rasterizers (0x4298D0/0x42B444) support 4x4 coverage, straight-alpha blending, mono replacement, all gradient/rotation modes and SET's offset passes. The text operation continues to later CGACT tests; it does not consume a following COPY or MERGE operation.
+
 MOVIE/MOVIEEND/MOVIEINFO (0x44A010/0x44A5FC/0x44A650) use physical folder files and OS media services, separately from YMV. The fixed native backend is DirectShow (0x59B790 = 1); its 4000·log10 volume conversion is preserved. Tasks continue during playback, while window composition/output pauses unless PRODUCT COM 0x1B enables it.
 
 ## Host differences
@@ -29,6 +31,7 @@ MOVIE/MOVIEEND/MOVIEINFO (0x44A010/0x44A5FC/0x44A650) use physical folder files 
 - Host write failures propagate instead of raising native error 0x18EFC.
 - LOAD without FILE or MEM uses an empty filename.
 - The TEXT line buffer is not bounded to 0x1000 bytes.
+- CGACT TEXT bounds DIB and destination accesses to their allocated storage; invalid glyph sizes that divide by zero in the native rasterizer raise RangeError.
 - MATH3D uses JavaScript double precision instead of x87 80-bit intermediates.
 - GRADATION retains the native full-source stride for a cropped destination, but discards writes outside the allocated buffer instead of corrupting memory. Vertical ramps also discard rows outside the source height.
 - YMV frame JPEGs are decrypted into owned copies rather than mutating the archive buffer.

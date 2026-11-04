@@ -3,6 +3,7 @@ import {type YurisCgNode, YurisCg, type YurisLayers} from './cg.js';
 import {YurisError} from './errors.js';
 import type {YurisMachine} from './machine.js';
 import {sizeBicubic, sizeBilinear, sizeLanczos, sizeNearest, sizeSupersampled} from './resize.js';
+import {drawCgText} from './glyph.js';
 
 /** CGACT argument ids (`ysc.ybn`). */
 const enum Act {
@@ -272,7 +273,14 @@ export function cgAct(layers: YurisLayers, m: YurisMachine): number {
     ],
     // 0x428E7B: BNO selects the text buffer and the tests go on.
     [Act.Bno, () => ((layers.textBuffer = low(a.int(Act.Bno))), NaN)],
-    [Act.Text, null],
+    [
+      Act.Text,
+      () => {
+        if (!a.has(Act.SetStr)) return -1;
+        drawCgText(layers, m.fonts, node, a.text(Act.SetStr), x, y, set);
+        return NaN;
+      },
+    ],
     [Act.Merge, () => merge(layers, node, destination, extra, x, y, false)],
     [Act.Merge2, () => merge(layers, node, destination, extra, x, y, true)],
     [

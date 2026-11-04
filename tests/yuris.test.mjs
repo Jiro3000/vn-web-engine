@@ -528,3 +528,155 @@ test('YU-RIS MOVIE uses physical files, native volume, resize notifications and 
   await commands.get(72)();
   assert.equal(stored, 256n);
 });
+
+test('CGACT TEXT shares the measured DIB, reproduces mono backgrounds and AA straight-alpha blending, then continues to COPY2', async () => {
+  const {YurisFonts} = await import('../dist/engines/yuris/vm/font.js');
+  const commands = new Map(),
+    values = new Map([
+      [11, '\x81\x40'],
+      [64, 1n],
+    ]),
+    requests = [];
+  const m = {
+    screenWidth: 16,
+    screenHeight: 16,
+    system: {names: ['']},
+    define: (id, fn) => commands.set(id, fn),
+    decode() {},
+    commandName: () => 'CGACT',
+    argName: () => 'TEXT',
+    expression: {intOf: (_type, id) => values.get(id) ?? 0n},
+    args: {
+      has: (id) => (id === 0 || values.has(id) ? id + 1 : 0),
+      text: (id) => (id === 0 ? 'SOURCE' : id === 1 ? 'DEST' : values.get(id)),
+      int: (id) => values.get(id),
+      type: [],
+      expression: Array.from({length: 73}, (_, i) => i - 1),
+    },
+  };
+  m.fonts = new YurisFonts({
+    fontFamilies: () => [{name: 'Synthetic', pitchAndFamily: 1, script: 'Japanese'}],
+    textOut: (request) => {
+      requests.push(request);
+      const bits = new Uint8Array((request.cell * request.cell) / 8).fill(255),
+        stride = request.cell / 8;
+      if (request.height === 16) {
+        for (let y = 0; y < 2; y++)
+          for (let x = 0; x < 4; x++) bits[y * stride + (x >> 3)] &= ~(128 >> (x & 7));
+      } else bits[0] &= 127;
+      return bits;
+    },
+  });
+  const f = m.fonts;
+  f.sx[0] = f.sy[0] = 4;
+  f.color[0] = f.color2[0] = 0xff0000;
+  f.antialiasing[0] = 0;
+  const layers = new YurisLayers(m, {}, {}),
+    source = new YurisCg(),
+    dest = new YurisCg();
+  layers.install();
+  source.allocate(8, 8);
+  dest.allocate(1, 1);
+  layers.tree.create('SOURCE', false, 1n, source);
+  layers.tree.create('DEST', false, 2n, dest);
+  commands.get(2)();
+  assert.deepEqual([...source.pixels.subarray(0, 8)], [0, 0, 255, 255, 0, 0, 0, 255]);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].text, '\x81\x40');
+  assert.equal(source.masked, 1);
+  f.antialiasing[0] = 1;
+  f.drawMode[0] = 1;
+  for (let i = 0; i < source.pixels.length; i += 4) source.pixels.set([50, 60, 70, 128], i);
+  values.set(1, 1n);
+  values.set(66, 1n);
+  commands.get(2)();
+  assert.deepEqual([...source.pixels.subarray(0, 4)], [14, 17, 203, 200]);
+  assert.deepEqual(dest.pixels, source.pixels);
+  assert.equal(requests.length, 2);
+  assert.equal(layers.textBuffer, 0);
+  values.delete(1);
+  values.delete(66);
+  values.delete(11);
+  assert.equal(commands.get(2)(), -1);
+});
+
+test('CGACT TEXT retains native gradient rotations, whole-box rejection and right/up/center/down/left stroke order', async () => {
+  const {YurisFonts} = await import('../dist/engines/yuris/vm/font.js');
+  const {drawCgText} = await import('../dist/engines/yuris/vm/glyph.js');
+  let full = true;
+  const fonts = new YurisFonts({
+    fontFamilies: () => [{name: 'Synthetic', pitchAndFamily: 1, script: 'Japanese'}],
+    textOut: (r) => {
+      const bits = new Uint8Array((r.cell * r.cell) / 8).fill(255),
+        stride = r.cell / 8;
+      if (full) {
+        for (let y = 0; y < r.height; y++)
+          for (let x = 0; x < r.height; x++) bits[y * stride + (x >> 3)] &= ~(128 >> (x & 7));
+      } else bits[0] &= 127;
+      return bits;
+    },
+  });
+  fonts.sx[0] = fonts.sy[0] = 4;
+  fonts.color[0] = 0;
+  fonts.color2[0] = 0xffffff;
+  const cg = new YurisCg();
+  cg.allocate(12, 12);
+  const node = {payload: cg};
+  let dirty = 0;
+  const layers = {textBuffer: 0, markDirty: () => dirty++};
+  drawCgText(layers, fonts, node, '\x81\x40', 0, 0, 0);
+  assert.deepEqual(
+    [0, 1, 2, 3].map((x) => cg.pixels[x * 4]),
+    [0, 85, 170, 255],
+  );
+  fonts.rotation[0] = 1;
+  drawCgText(layers, fonts, node, '\x81\x40', 0, 0, 0);
+  assert.deepEqual(
+    [0, 1, 2, 3].map((x) => cg.pixels[x * 4]),
+    [255, 170, 85, 0],
+  );
+  const previous = cg.pixels.slice(),
+    before = dirty;
+  cg.masked = 0;
+  drawCgText(layers, fonts, node, '\x81\x40', 10, 0, 0);
+  assert.deepEqual(cg.pixels, previous);
+  assert.equal(dirty, before);
+  assert.equal(cg.masked, 1);
+  fonts.rotation[0] = 0;
+  fonts.gradation[0] = 5;
+  fonts.color[0] = 5;
+  fonts.color2[0] = 0;
+  drawCgText(layers, fonts, node, '\x81\x40', 0, 0, 0);
+  assert.deepEqual(
+    [
+      [0, 0],
+      [0, 3],
+      [3, 0],
+      [3, 3],
+    ].map(([x, y]) => cg.pixels[(y * 12 + x) * 4]),
+    [5, 3, 3, 0],
+  );
+  cg.pixels.fill(0);
+  fonts.rotation[0] = 0;
+  fonts.antialiasing[0] = 0;
+  fonts.color[0] = fonts.color2[0] = 0xff0000;
+  full = false;
+  drawCgText(layers, fonts, node, '\x81\x40', 4, 4, 1);
+  const colored = [];
+  for (let y = 0; y < 12; y++)
+    for (let x = 0; x < 12; x++) if (cg.pixels[(y * 12 + x) * 4 + 2]) colored.push([x, y]);
+  assert.deepEqual(colored, [
+    [4, 3],
+    [3, 4],
+  ]);
+  cg.pixels.fill(0);
+  drawCgText(layers, fonts, node, '\x81\x40', 4, 4, 11);
+  const shadow = [];
+  for (let y = 0; y < 12; y++)
+    for (let x = 0; x < 12; x++) if (cg.pixels[(y * 12 + x) * 4 + 2]) shadow.push([x, y]);
+  assert.deepEqual(shadow, [
+    [5, 4],
+    [4, 5],
+    [5, 5],
+  ]);
+});
