@@ -94,8 +94,13 @@ export class YurisFiles {
     let path = asciiLower(resolveNodePath('', separators(name, '\\', '/'), true).path);
     path = separators(path, '/', '\\');
     const extensions =
-      kind === YurisFileKind.Image ? IMAGE_EXTENSIONS : kind === YurisFileKind.Sound ? SOUND_EXTENSIONS : null;
-    const known = extensions === null ? kind === YurisFileKind.Any : extensions.some((e) => path.endsWith(e));
+      kind === YurisFileKind.Image
+        ? IMAGE_EXTENSIONS
+        : kind === YurisFileKind.Sound
+          ? SOUND_EXTENSIONS
+          : null;
+    const known =
+      extensions === null ? kind === YurisFileKind.Any : extensions.some((e) => path.endsWith(e));
     if (!known && kind !== YurisFileKind.Any) {
       const order = kind === YurisFileKind.Image ? this.config.reserved : this.config.reserved2;
       const names = kind === YurisFileKind.Image ? IMAGE_ORDER : SOUND_ORDER;
@@ -104,12 +109,17 @@ export class YurisFiles {
         const extension = names[order[i]!];
         if (!extension) continue;
         const candidate = path + extension;
-        if (this.host.exists(candidate)) return {path: candidate, found: true, type: fileType(candidate)};
+        if (this.host.exists(candidate))
+          return {path: candidate, found: true, type: fileType(candidate)};
       }
       return {path, found: false, type: YurisFileType.None};
     }
     const found = this.host.exists(path);
     return {path, found, type: found ? fileType(path) : YurisFileType.None};
+  }
+
+  exists(path: ByteString): boolean {
+    return this.host.exists(path);
   }
 
   read(path: ByteString): Promise<Uint8Array> {
@@ -124,7 +134,7 @@ export class YurisFiles {
 /** Replaces `from` with `to` outside double-byte characters. */
 function separators(text: ByteString, from: string, to: string): ByteString {
   let out = '';
-  for (let i = 0; i < text.length; ) {
+  for (let i = 0; i < text.length;) {
     const c = text.charCodeAt(i);
     if (isLeadByte(c)) {
       out += text.slice(i, i + 2);

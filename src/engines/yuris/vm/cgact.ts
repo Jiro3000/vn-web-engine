@@ -166,8 +166,15 @@ export function cgAct(layers: YurisLayers, m: YurisMachine): number {
     const slot = a.has(id);
     return slot ? low(m.expression.intOf(a.type[slot]!, a.expression[slot]!)) : 0;
   };
-  const set = expression(Act.Set),
+  const setSlot = a.has(Act.Set),
+    setValue = setSlot ? m.expression.intOf(a.type[setSlot]!, a.expression[setSlot]!) : 0n;
+  const set = low(setValue),
     set2 = expression(Act.Set2);
+  // SAIDO, MEIDO and REVERSE test the low dword of SET as unsigned against their maximum.
+  const setUpTo = (max: number): void => {
+    if (set >>> 0 > max)
+      throw new YurisError(0x18a88, [layers.commandName(), m.argName(Act.Set), setValue, 0, max]);
+  };
   const tw = cg.textureWidth,
     th = cg.textureHeight;
   const clamped = !UNCLAMPED.some((id) => a.has(id));
@@ -232,8 +239,8 @@ export function cgAct(layers: YurisLayers, m: YurisMachine): number {
     [Act.Size5, () => size(Act.Size5, 0x32)],
     [Act.Rotation, null],
     [Act.Rotation2, null],
-    [Act.Saido, () => region(Op.Saido, 0)],
-    [Act.Meido, () => region(Op.Meido, 0)],
+    [Act.Saido, () => (setUpTo(0x100), region(Op.Saido, 0))],
+    [Act.Meido, () => (setUpTo(0xffffff), region(Op.Meido, 0))],
     [Act.Sepia, null],
     [Act.Akarusa, null],
     [Act.Mono, null],
@@ -251,7 +258,7 @@ export function cgAct(layers: YurisLayers, m: YurisMachine): number {
     [Act.Raster2, null],
     [Act.Raster3, null],
     [Act.Whirlpool, null],
-    [Act.Reverse, null],
+    [Act.Reverse, () => (setUpTo(1), region(Op.Reverse, 0))],
     [Act.RectPaint, () => paint(Act.RectPaint, 1)],
     [Act.RectPaint2, () => paint(Act.RectPaint2, 2)],
     [Act.RectPaint3, () => paint(Act.RectPaint3, 3)],
@@ -517,11 +524,39 @@ function run(
     case Op.Saido:
       saturation(to, rw, from, tw, p.x, p.y, p.x2, p.y2, p.set);
       return;
+    case Op.Reverse:
+      invert(to, rw, from, tw, p.x, p.y, p.x2, p.y2);
+      return;
     case Op.RectPaint:
       rectPaint(to, s, p.x, p.y, p.x2, p.y2, tw, th, p.set, mode);
       return;
   }
   throw new Error(`CGACT region operation ${op} is not implemented`);
+}
+
+/**
+ * 0x433D0C: columns x0..x1 of rows y0..y1 of `from` (stride `fromWidth`) to the top left of
+ * `to` (stride `toWidth`) with the three colour bytes inverted and the alpha kept.
+ */
+function invert(
+  to: Uint8Array,
+  toWidth: number,
+  from: Uint8Array,
+  fromWidth: number,
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+): void {
+  for (let y = y0, row = 0; y <= y1; y++, row += toWidth * 4)
+    for (let x = x0; x <= x1; x++) {
+      const i = (y * fromWidth + x) * 4,
+        o = row + (x - x0) * 4;
+      to[o] = 255 - from[i]!;
+      to[o + 1] = 255 - from[i + 1]!;
+      to[o + 2] = 255 - from[i + 2]!;
+      to[o + 3] = from[i + 3]!;
+    }
 }
 
 /** 0x43A688: rows y0..y1, columns x0..x1 of `from` (stride `fromWidth`) to the top of `to`. */

@@ -20,6 +20,7 @@ import {NESTING_LIMIT, YurisTask} from './task.js';
 import {installTasks} from './tasks.js';
 import {installProduct, type YurisProductHost} from './product.js';
 import {installSave, type YurisSaveData} from './save.js';
+import {installText} from './text.js';
 import {STARTUP_SETTINGS_MISSING, YurisStartupSettings} from './startup.js';
 import {SYSTEM_VARIABLE_LIMIT, YurisType, YurisVariables} from './variables.js';
 import {installMath} from './math.js';
@@ -255,6 +256,7 @@ export class YurisMachine {
     this.sounds.install();
     installProduct(this, host, host, host);
     this.saveData = installSave(this, host);
+    installText(this);
   }
 
   /**
