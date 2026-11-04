@@ -36,6 +36,8 @@ export interface WindowsMenusHost {
 export class BrowserWindowsMenus implements WindowsMenusHost {
   private readonly bars = new Map<number, HTMLElement>();
   private popup: HTMLElement | null = null;
+  private closed: Promise<void> = Promise.resolve();
+  private resolveClosed: (() => void) | null = null;
   private popupSelect: ((code: number) => void) | null = null;
   private tray: HTMLButtonElement | null = null;
   private readonly abort = new AbortController();
@@ -92,6 +94,9 @@ export class BrowserWindowsMenus implements WindowsMenusHost {
     this.root.append(menu);
     this.popup = menu;
     this.popupSelect = select;
+    this.closed = new Promise((resolve) => {
+      this.resolveClosed = resolve;
+    });
     menu.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus();
   }
   setTray(tray: WindowsTray | null, select: (code: number) => void, activate: () => void): void {
@@ -159,11 +164,17 @@ export class BrowserWindowsMenus implements WindowsMenusHost {
       parent.append(button);
     }
   }
+  /** TrackPopupMenu runs the OS message loop while the caller's game loop is suspended. */
+  async waitForMenu(): Promise<void> {
+    while (this.popup) await this.closed;
+  }
   private closePopup(cancel = true): void {
     const select = this.popupSelect;
     this.popup?.remove();
     this.popup = null;
     this.popupSelect = null;
+    this.resolveClosed?.();
+    this.resolveClosed = null;
     if (cancel) select?.(0);
   }
   dispose(): void {

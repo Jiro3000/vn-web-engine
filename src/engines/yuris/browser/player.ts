@@ -341,6 +341,8 @@ export class YurisBrowserPlayer {
   private async loop(): Promise<void> {
     try {
       while (this.running && !this.machine.quit) {
+        await this.menus.waitForMenu();
+        if (!this.running) break;
         await this.device.flush();
         await this.machine.frame();
       }
