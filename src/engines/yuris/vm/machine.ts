@@ -21,6 +21,7 @@ import {installTasks} from './tasks.js';
 import {installProduct, type YurisProductHost} from './product.js';
 import {installSave, type YurisSaveData} from './save.js';
 import {installText} from './text.js';
+import {installMath3d} from './math3d.js';
 import {STARTUP_SETTINGS_MISSING, YurisStartupSettings} from './startup.js';
 import {SYSTEM_VARIABLE_LIMIT, YurisType, YurisVariables} from './variables.js';
 import {installMath} from './math.js';
@@ -257,6 +258,7 @@ export class YurisMachine {
     installProduct(this, host, host, host);
     this.saveData = installSave(this, host);
     installText(this);
+    installMath3d(this);
   }
 
   /**
