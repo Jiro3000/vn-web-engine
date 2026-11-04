@@ -78,8 +78,11 @@ export class YurisSystem implements YurisSystemValues {
   saveFolder = 'save\\';
   appData = '';
   documents = '';
-  /** 0x872424 ("W0"), 0x872430, 0x87242C, 0x872428 (ids 0x80-0x83). */
-  readonly names: ByteString[] = ['W0', '', '', ''];
+  /**
+   * The current paths of the node namespaces (ids 0x80-0x83), set by tree initialisation
+   * 0x46891C: layers 0x872424 "W0", sounds 0x872430 "S0", tasks 0x87242C "", 0x872428 "M0".
+   */
+  readonly names: ByteString[] = ['W0', 'S0', '', 'M0'];
   /** The text buffer at 0x8725A4 + 0x18 and its kind buffer at + 0x1C (ids 0x7A, 0x7B). */
   text = '';
   textKinds = '';

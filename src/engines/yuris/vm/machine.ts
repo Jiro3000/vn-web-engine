@@ -5,8 +5,10 @@ import {
   type YurisScript,
   findYurisLabel,
 } from '../../../formats/yuris/ybn.js';
+import {YurisLayers, type YurisImageHost} from './cg.js';
 import {YurisError} from './errors.js';
 import {YurisExpression} from './expression.js';
+import {type YurisFileHost, YurisFiles} from './files.js';
 import {type ByteString, STRING_CAPACITY, fistp, i64} from './numbers.js';
 import {YurisSystem, type YurisSystemHost} from './system.js';
 import {NESTING_LIMIT, YurisTask} from './task.js';
@@ -123,7 +125,7 @@ interface LoadedScript {
   readonly gosubLabel: Uint16Array;
 }
 
-export interface YurisMachineHost extends YurisSystemHost {
+export interface YurisMachineHost extends YurisSystemHost, YurisFileHost, YurisImageHost {
   /** A fatal script error with its formatted `YSER` message, after the quit flag is set. */
   error(message: string, error: YurisError): void;
   /** `MessageBoxA` of 0x409070: a message the command shows before yielding. */
@@ -151,6 +153,10 @@ export class YurisMachine {
   quit = false;
   /** 0x872258: END's exit code. */
   exitCode = 0;
+  /** 0x667E60: per command, whether a missing target is an error (ERROR COM_<command>). */
+  readonly errorFlags = new Uint8Array(0x80).fill(1);
+  readonly files: YurisFiles;
+  readonly layers: YurisLayers;
   private readonly handlers: (YurisCommandHandler | undefined)[] = [];
   private readonly loaded = new Map<number, LoadedScript>();
   private current!: LoadedScript;
@@ -164,7 +170,10 @@ export class YurisMachine {
     this.system = new YurisSystem(this.variables, project.commands.table, host);
     this.expression = new YurisExpression(this.variables, this.system);
     this.system.textCount = project.table.textCount;
+    this.files = new YurisFiles(host, project.config);
     this.installCore();
+    this.layers = new YurisLayers(this, this.files, host);
+    this.layers.install();
   }
 
   /**
