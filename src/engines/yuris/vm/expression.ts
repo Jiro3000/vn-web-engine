@@ -172,7 +172,7 @@ export class YurisExpression {
     this.prefix = 0;
     this.wholeVariable = false;
     this.slots[0] = 0;
-    for (let p = 0; p < bytes.length; ) {
+    for (let p = 0; p < bytes.length;) {
       const op = bytes[p]!,
         length = bytes[p + 1]! | (bytes[p + 2]! << 8);
       const ok = this.step(op, bytes, p + 3, length);
@@ -591,14 +591,12 @@ export class YurisExpression {
       l = r - 1;
     if (this.slots[r] === 0) {
       if (this.slots[l] !== 0) throw new YurisError(0x2710a);
-      if (this.floating)
-        this.doubles[l] = (this.doubles[l] === this.doubles[r]) === equal ? 1 : 0;
+      if (this.floating) this.doubles[l] = (this.doubles[l] === this.doubles[r]) === equal ? 1 : 0;
       else this.ints[l] = (this.ints[l] === this.ints[r]) === equal ? 1n : 0n;
       return true;
     }
     if (this.slots[l] === 0) throw new YurisError(0x2710a);
-    const same =
-      compareBytes(this.buffers[this.slots[l]!]!, this.buffers[this.slots[r]!]!) === 0;
+    const same = compareBytes(this.buffers[this.slots[l]!]!, this.buffers[this.slots[r]!]!) === 0;
     this.ints[l] = same === equal ? 1n : 0n;
     this.slots[l] = 0;
     this.slots[r] = 0;
@@ -637,8 +635,7 @@ export class YurisExpression {
   private logical(test: (a: boolean, b: boolean) => boolean): boolean {
     const r = --this.top,
       l = r - 1;
-    if (this.floating)
-      this.doubles[l] = test(this.doubles[l] !== 0, this.doubles[r] !== 0) ? 1 : 0;
+    if (this.floating) this.doubles[l] = test(this.doubles[l] !== 0, this.doubles[r] !== 0) ? 1 : 0;
     else this.ints[l] = test(this.ints[l] !== 0n, this.ints[r] !== 0n) ? 1n : 0n;
     return true;
   }

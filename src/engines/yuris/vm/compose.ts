@@ -52,7 +52,13 @@ function intersect(
  *
  * Returns -1 when a TID cannot be resolved or a filter buffer cannot be allocated.
  */
-export function compose(host: ComposeHost, node: YurisCgNode, ox: number, oy: number, clip: Rect): number {
+export function compose(
+  host: ComposeHost,
+  node: YurisCgNode,
+  ox: number,
+  oy: number,
+  clip: Rect,
+): number {
   const group = node.payload;
   if (!group?.pixels) return 0;
   // +0xA8 is 1 - ECX; both calls pass ECX = 1.
@@ -72,7 +78,13 @@ export function compose(host: ComposeHost, node: YurisCgNode, ox: number, oy: nu
     if (child.tid && child.t !== 0x100) continue;
     const x = Number(child.x),
       y = Number(child.y);
-    if (x <= area[0] && y <= area[1] && x + child.width - 1 >= area[2] && y + child.height - 1 >= area[3]) break;
+    if (
+      x <= area[0] &&
+      y <= area[1] &&
+      x + child.width - 1 >= area[2] &&
+      y + child.height - 1 >= area[3]
+    )
+      break;
   }
   if (start < 0) {
     start = 0;
@@ -101,7 +113,8 @@ export function compose(host: ComposeHost, node: YurisCgNode, ox: number, oy: nu
     if (child.tex !== 0) continue;
     const x = Number(child.x),
       y = Number(child.y);
-    if (x > area[2] || y > area[3] || x + child.width <= area[0] || y + child.height <= area[1]) continue;
+    if (x > area[2] || y > area[3] || x + child.width <= area[0] || y + child.height <= area[1])
+      continue;
     const part = intersect(x, y, child.width, child.height, area);
     if (part.width < 1 || part.height < 1) continue;
     let rule: YurisCg | null = null,
@@ -111,18 +124,51 @@ export function compose(host: ComposeHost, node: YurisCgNode, ox: number, oy: nu
       rule = ruleNode?.payload ?? null;
     }
     if (!child.pixels) continue;
-    if (child.md !== 0x808080 && filter(host, child, (to, from) =>
-      colourShift(to, child.width, from, child.width, 0, 0, child.width - 1, child.height - 1, child.md),
-    ) < 0)
+    if (
+      child.md !== 0x808080 &&
+      filter(host, child, (to, from) =>
+        colourShift(
+          to,
+          child.width,
+          from,
+          child.width,
+          0,
+          0,
+          child.width - 1,
+          child.height - 1,
+          child.md,
+        ),
+      ) < 0
+    )
       return -1;
-    if (child.sd !== 0x80 && filter(host, child, (to, from) =>
-      saturation(to, child.width, from, child.width, 0, 0, child.width - 1, child.height - 1, child.sd),
-    ) < 0)
+    if (
+      child.sd !== 0x80 &&
+      filter(host, child, (to, from) =>
+        saturation(
+          to,
+          child.width,
+          from,
+          child.width,
+          0,
+          0,
+          child.width - 1,
+          child.height - 1,
+          child.sd,
+        ),
+      ) < 0
+    )
       return -1;
     let blendRule: BlendRule | null = null;
     if (rule && child.t <= 0xff) {
       if (child.width !== rule.width || child.height !== rule.height)
-        throw new YurisError(0x187d6, [childNode.name, child.width, child.height, ruleNode!.name, rule.width, rule.height]);
+        throw new YurisError(0x187d6, [
+          childNode.name,
+          child.width,
+          child.height,
+          ruleNode!.name,
+          rule.width,
+          rule.height,
+        ]);
       blendRule = {pixels: rule.pixels!, weights: ruleWeights(child.t, child.ta, child.a)};
     }
     blendRect(
@@ -130,7 +176,13 @@ export function compose(host: ComposeHost, node: YurisCgNode, ox: number, oy: nu
       group.width,
       part.dx,
       part.dy,
-      {pixels: child.pixels, width: child.width, mode: child.mode, a: child.a, masked: child.masked === 1},
+      {
+        pixels: child.pixels,
+        width: child.width,
+        mode: child.mode,
+        a: child.a,
+        masked: child.masked === 1,
+      },
       part.sx,
       part.sy,
       part.width,
@@ -146,7 +198,11 @@ export function compose(host: ComposeHost, node: YurisCgNode, ox: number, oy: nu
  * pixels (+0xD0) into the layer's copy (+0xE0); a later pass in the same frame filters that
  * copy again. The layer's pixels (+0xC0) then point at the copy.
  */
-function filter(host: ComposeHost, cg: YurisCg, apply: (to: Uint8Array, from: Uint8Array) => void): number {
+function filter(
+  host: ComposeHost,
+  cg: YurisCg,
+  apply: (to: Uint8Array, from: Uint8Array) => void,
+): number {
   if (cg.width > FILTER_WIDTH) throw new YurisError(0x186aa, [cg.width, cg.height]);
   const size = cg.width * cg.height * 4;
   const copy = new Uint8Array(size);

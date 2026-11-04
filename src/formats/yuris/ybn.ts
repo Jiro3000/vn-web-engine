@@ -411,7 +411,7 @@ export interface YurisToken {
 export function tokenizeExpression(bytes: Uint8Array): readonly YurisToken[] {
   const view = new ByteView(bytes, {littleEndian: true});
   const tokens: YurisToken[] = [];
-  for (let p = 0; p < bytes.length; ) {
+  for (let p = 0; p < bytes.length;) {
     const op = view.u8(p),
       length = view.u16(p + 1);
     const expected = EXPRESSION_OPS.get(op);

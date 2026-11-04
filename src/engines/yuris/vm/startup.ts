@@ -49,7 +49,8 @@ export class YurisStartupSettings {
     data.set(file.subarray(0, 0x80));
     const view = new DataView(data.buffer),
       w = (n: number): number => view.getInt32(n * 4, true);
-    const flag = (n: number, current: number): number => (w(n) === 0 ? 0 : w(n) === 1 ? 1 : current);
+    const flag = (n: number, current: number): number =>
+      w(n) === 0 ? 0 : w(n) === 1 ? 1 : current;
     s.value0 = flag(0, s.value0);
     s.value22 = flag(0x16, s.value22);
     s.value1 = flag(1, s.value1);

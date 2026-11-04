@@ -51,7 +51,13 @@ export interface YurisFontHost {
  * string constants at 0x878008, 0x878018, 0x878028, 0x878038 and 0x878044 of the executable
  * with SHA-256 feb81d5e…a043).
  */
-export const DEFAULT_FACES: readonly ByteString[] = ['SimHei', 'SimHei', 'SimHei', 'SimHei', 'SimHei'];
+export const DEFAULT_FACES: readonly ByteString[] = [
+  'SimHei',
+  'SimHei',
+  'SimHei',
+  'SimHei',
+  'SimHei',
+];
 
 /** 0x7D6560 (filled by 0x46B7EC): the glyph cell for font size `size`, a multiple of 32. */
 export function glyphCell(size: number): number {
@@ -154,7 +160,14 @@ export class YurisFonts {
    * quarter of each plus 4, bounded by the size; fixed-pitch faces are a full (double-byte)
    * or half (single-byte) `sx` wide and `sy` high.
    */
-  measure(buffer: number, text: ByteString, sx: number, sy: number, bold: number, antialiasing: number): [number, number] {
+  measure(
+    buffer: number,
+    text: ByteString,
+    sx: number,
+    sy: number,
+    bold: number,
+    antialiasing: number,
+  ): [number, number] {
     const cell = glyphCell(sx);
     const length = charLength(text.charCodeAt(0) & 0xff);
     const first = text.slice(0, length).padEnd(length, '\0');
@@ -311,14 +324,24 @@ function fontInfo(m: YurisMachine, fonts: YurisFonts): number {
   if (a.has(InfoArg.Pitch)) return put(0);
   if (a.has(InfoArg.X) || a.has(InfoArg.Y)) {
     // Without SETSTR the native call reads its text through a null pointer.
-    if (!a.has(InfoArg.SetStr)) throw new Error('FONTINFO X/Y without SETSTR: the native engine faults');
-    const [width, height] = fonts.measure(buffer, a.text(InfoArg.SetStr), s.sx, s.sy, s.bold, s.antialiasing);
+    if (!a.has(InfoArg.SetStr))
+      throw new Error('FONTINFO X/Y without SETSTR: the native engine faults');
+    const [width, height] = fonts.measure(
+      buffer,
+      a.text(InfoArg.SetStr),
+      s.sx,
+      s.sy,
+      s.bold,
+      s.antialiasing,
+    );
     return put(a.has(InfoArg.X) ? width : height);
   }
   const name = isOne(InfoArg.Name),
     lang = !name && isOne(InfoArg.Lang);
   if (!name && !lang) return put(0);
-  const no = a.has(InfoArg.No) ? Number(BigInt.asIntN(32, a.int(InfoArg.No))) : fonts.selected[buffer]! + 1;
+  const no = a.has(InfoArg.No)
+    ? Number(BigInt.asIntN(32, a.int(InfoArg.No)))
+    : fonts.selected[buffer]! + 1;
   const command = m.commandName(FONTINFO),
     arg = m.argName(InfoArg.No);
   if (no < 1) throw new YurisError(0x18a92, [command, arg, no, 1]);

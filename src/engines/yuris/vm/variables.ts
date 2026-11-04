@@ -144,7 +144,13 @@ export class YurisVariables {
       if (declaration.id >= this.entries.length) throw new YurisError(0xdbbe6);
       const type = declaration.type as number;
       const mask =
-        type === YurisType.Int ? ints : type === YurisType.Float ? floats : type === YurisType.String ? strings : 0;
+        type === YurisType.Int
+          ? ints
+          : type === YurisType.Float
+            ? floats
+            : type === YurisType.String
+              ? strings
+              : 0;
       const category = declaration.flags;
       if (declaration.scope !== 1 || category < 1 || category > 4) continue;
       if (mask & (1 << (category - 1))) this.initializeOne(declaration, stringValue);

@@ -1,8 +1,24 @@
 import {applyOp} from './operators.js';
 import {YurisError} from './errors.js';
 import type {YurisMachine} from './machine.js';
-import {type ByteString, atoi64, formatFloat, formatInt, isLeadByte, parseHex, strtod} from './numbers.js';
-import {asciiLower, asciiUpper, charCount, charLength, mbsCase, toFullWidth, toHalfWidth} from './sjis.js';
+import {
+  type ByteString,
+  atoi64,
+  formatFloat,
+  formatInt,
+  isLeadByte,
+  parseHex,
+  strtod,
+} from './numbers.js';
+import {
+  asciiLower,
+  asciiUpper,
+  charCount,
+  charLength,
+  mbsCase,
+  toFullWidth,
+  toHalfWidth,
+} from './sjis.js';
 import {YurisType} from './variables.js';
 
 /** VARACT and VARINFO command ids. */
@@ -76,18 +92,18 @@ function varInfo(machine: YurisMachine): number {
     to = target(machine, Info.Let),
     variable = machine.variables.get(set.id),
     store = (value: bigint) => machine.setInt(to.id, to.index, value);
-  if (a.has(Info.Type)) return store(BigInt(variable.type)), 0;
+  if (a.has(Info.Type)) return (store(BigInt(variable.type)), 0);
   if (a.has(Info.StrType)) {
     const text = machine.getString(set.id, set.index);
     if (text.length === 0) throw new YurisError(0x18c4a, ['VARINFO', 'STRTYPE']);
-    return store(isLeadByte(text.charCodeAt(0)) ? 2n : 1n), 0;
+    return (store(isLeadByte(text.charCodeAt(0)) ? 2n : 1n), 0);
   }
-  if (a.has(Info.DimNum)) return store(BigInt(variable.dimensions.length)), 0;
+  if (a.has(Info.DimNum)) return (store(BigInt(variable.dimensions.length)), 0);
   for (let id = Info.DimSize; id <= Info.DimSize8; id++)
-    if (a.has(id)) return store(BigInt(variable.dimensions[id - Info.DimSize] ?? 0)), 0;
+    if (a.has(id)) return (store(BigInt(variable.dimensions[id - Info.DimSize] ?? 0)), 0);
   if (a.has(Info.Length)) {
     if (variable.type !== YurisType.String) throw new YurisError(0x1a6bc);
-    return store(BigInt(charCount(machine.getString(set.id, set.index)))), 0;
+    return (store(BigInt(charCount(machine.getString(set.id, set.index)))), 0);
   }
   if (a.has(Info.Search)) store(search(machine, set.id));
   if (a.has(Info.StrFirst) && variable.type === YurisType.String) {
@@ -153,7 +169,12 @@ function stringOperands(machine: YurisMachine): {text: ByteString; id: number; i
  * The byte range of the characters POS (1-based) .. POS + LENGTH - 1; a position at or past
  * the end raises `position`, a range past the end raises `range`.
  */
-function charRange(machine: YurisMachine, text: ByteString, position: number, range: number): [number, number] {
+function charRange(
+  machine: YurisMachine,
+  text: ByteString,
+  position: number,
+  range: number,
+): [number, number] {
   const pos = machine.args.int(Act.Pos),
     length = machine.args.int(Act.Length);
   let start = 0;
@@ -206,15 +227,23 @@ function varAct(machine: YurisMachine): number {
     variable = machine.variables.get(set.id);
   if (a.has(Act.DimSize)) {
     if (variable.dimensions.length !== 1)
-      return machine.messageBox('配列サイズを変更しようとしましたが、この変数は１次元配列ではありません。');
+      return machine.messageBox(
+        '配列サイズを変更しようとしましたが、この変数は１次元配列ではありません。',
+      );
     // 0x45467F: the assignment operator applies to the current size (0x425220).
-    const size = applyOp(a.op[a.has(Act.DimSize)]!, BigInt(variable.dimensions[0]!), a.int(Act.DimSize));
+    const size = applyOp(
+      a.op[a.has(Act.DimSize)]!,
+      BigInt(variable.dimensions[0]!),
+      a.int(Act.DimSize),
+    );
     if (size < 1n) return machine.messageBox('変更後の配列サイズが不正です。');
     if (size !== BigInt(variable.dimensions[0]!)) machine.variables.resize(set.id, Number(size));
   }
   if (a.has(Act.Push)) {
     if (variable.dimensions.length !== 1)
-      return machine.messageBox('配列挿入処理をしようとしましたが、この変数は１次元配列ではありません。');
+      return machine.messageBox(
+        '配列挿入処理をしようとしましたが、この変数は１次元配列ではありません。',
+      );
     // Shifts the elements from PUSH one up, dropping the last, and clears element PUSH.
     const position = a.int(Act.Push);
     let i = BigInt((variable.dimensions[0]! - 1) | 0);
@@ -223,7 +252,9 @@ function varAct(machine: YurisMachine): number {
   }
   if (a.has(Act.Pop)) {
     if (variable.dimensions.length !== 1)
-      return machine.messageBox('配列削除処理をしようとしましたが、この変数は１次元配列ではありません。');
+      return machine.messageBox(
+        '配列削除処理をしようとしましたが、この変数は１次元配列ではありません。',
+      );
     // Shifts the elements after POP one down and clears the last.
     let i = BigInt.asIntN(32, a.int(Act.Pop));
     const last = BigInt(variable.dimensions[0]!) - 1n;
@@ -250,8 +281,10 @@ function varAct(machine: YurisMachine): number {
 function moveElement(machine: YurisMachine, id: number, to: bigint, from: bigint): void {
   const variable = machine.variables.get(id);
   if (variable.type === YurisType.Int) machine.setInt(id, to, variable.ints![Number(from)] ?? 0n);
-  else if (variable.type === YurisType.Float) machine.setFloat(id, to, variable.floats![Number(from)] ?? 0);
-  else if (variable.type === YurisType.String) machine.setString(id, to, variable.strings![Number(from)] ?? '');
+  else if (variable.type === YurisType.Float)
+    machine.setFloat(id, to, variable.floats![Number(from)] ?? 0);
+  else if (variable.type === YurisType.String)
+    machine.setString(id, to, variable.strings![Number(from)] ?? '');
 }
 
 function clearElement(machine: YurisMachine, id: number, index: bigint): void {
@@ -274,7 +307,8 @@ function convert(machine: YurisMachine): number {
     into = machine.variables.get(to.id).type;
   if ((from < YurisType.String && into < YurisType.String) || from === into)
     throw new YurisError(0x1a6a8);
-  if (from === YurisType.Int) machine.setString(to.id, to.index, formatInt(machine.getInt(set.id, set.index)));
+  if (from === YurisType.Int)
+    machine.setString(to.id, to.index, formatInt(machine.getInt(set.id, set.index)));
   else if (from === YurisType.Float)
     machine.setString(to.id, to.index, formatFloat(machine.getFloat(set.id, set.index)));
   else if (from === YurisType.String) {

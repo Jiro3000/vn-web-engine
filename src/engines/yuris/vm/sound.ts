@@ -211,7 +211,10 @@ const DEVICE_MESSAGES: Record<number, readonly [string, string]> = {
   ],
   [0x8007000e]: ['メモリ不足です。', 'メモリ不足です。'],
   [0x80070057]: ['無効なパラメータです。', '無効なパラメータです。'],
-  [0x80040110]: ['このオブジェクトは集合体をサポートしません。', 'このオブジェクトは集合体をサポートしません。'],
+  [0x80040110]: [
+    'このオブジェクトは集合体をサポートしません。',
+    'このオブジェクトは集合体をサポートしません。',
+  ],
 };
 
 /** C division truncates toward zero. */
@@ -286,7 +289,10 @@ export class YurisSounds {
 
   /** 0x4573E8 in the sound namespace, then 0x40CA7D by kind. */
   private find(): {node: SoundNode | null; path: ByteString; group: boolean} {
-    const {path, group} = resolveNodePath(this.machine.system.names[1]!, this.machine.args.text(Arg.Id));
+    const {path, group} = resolveNodePath(
+      this.machine.system.names[1]!,
+      this.machine.args.text(Arg.Id),
+    );
     const node = this.tree.lookup(path, group ? LookupMode.Group : LookupMode.Leaf);
     return {node, path, group};
   }
@@ -406,13 +412,13 @@ export class YurisSounds {
       else if (type === YurisType.Int || type === YurisType.Float) put(0);
       return 0;
     }
-    if (a.has(InfoArg.Exist)) return put(s.type > 0 ? 1 : 0), 0;
-    if (a.has(InfoArg.E)) return put(s.enabled), 0;
-    if (a.has(InfoArg.Play)) return put(s.state >= State.FadingIn ? 1 : 0), 0;
-    if (a.has(InfoArg.Pause)) return put(s.paused), 0;
-    if (a.has(InfoArg.Volume)) return put(s.volume), 0;
-    if (a.has(InfoArg.Pan)) return put(s.pan), 0;
-    if (a.has(InfoArg.Pitch)) return put(s.pitch), 0;
+    if (a.has(InfoArg.Exist)) return (put(s.type > 0 ? 1 : 0), 0);
+    if (a.has(InfoArg.E)) return (put(s.enabled), 0);
+    if (a.has(InfoArg.Play)) return (put(s.state >= State.FadingIn ? 1 : 0), 0);
+    if (a.has(InfoArg.Pause)) return (put(s.paused), 0);
+    if (a.has(InfoArg.Volume)) return (put(s.volume), 0);
+    if (a.has(InfoArg.Pan)) return (put(s.pan), 0);
+    if (a.has(InfoArg.Pitch)) return (put(s.pitch), 0);
     if (a.has(InfoArg.FileType)) put(s.type);
     if (a.has(InfoArg.File)) m.setString(id, index, s.name);
     if (a.has(InfoArg.Start)) put(s.start);
@@ -447,7 +453,7 @@ export class YurisSounds {
     const cursor = s.buffer.playCursor();
     if (ring.length - cursor < frame) return -1;
     const at = (o: number) => ring[(cursor + o) % ring.length]!;
-    const magnitude = (v: number) => ((Math.abs(v) << 16) >> 16);
+    const magnitude = (v: number) => (Math.abs(v) << 16) >> 16;
     if (s.bits === 16) {
       const left = ((at(0) | (at(1) << 8)) << 16) >> 16;
       if (!right || s.channels === 1) return magnitude(left);
@@ -509,7 +515,7 @@ export class YurisSounds {
     if (this.device === 0) return;
     if (node.group) return this.applyBelow(node);
     const parent = this.namedParent(node);
-    this.applyVolume(node, parent ? (Math.imul(this.effective(parent), v)) >> 8 : v);
+    this.applyVolume(node, parent ? Math.imul(this.effective(parent), v) >> 8 : v);
   }
 
   /** 0x41F230 (operation 5): VOLUME without a fade. */
@@ -661,7 +667,14 @@ export class YurisSounds {
     s.total = round((ogg.frames / ogg.sampleRate) * 1000);
     s.end = i32(s.total);
     s.codec = 1;
-    return this.format(s, ogg.sampleRate, ogg.channels, ogg.sampleRate * ogg.channels * 2, ogg.channels * 2, 16);
+    return this.format(
+      s,
+      ogg.sampleRate,
+      ogg.channels,
+      ogg.sampleRate * ogg.channels * 2,
+      ogg.channels * 2,
+      16,
+    );
   }
 
   /**
@@ -680,7 +693,7 @@ export class YurisSounds {
       data = -1,
       dataSize = 0;
     const end = Math.min(file.length, u32(4) + 8);
-    for (let p = 12; p + 8 <= end; ) {
+    for (let p = 12; p + 8 <= end;) {
       const id = u32(p),
         size = u32(p + 4);
       if (id === 0x20746d66 && fmt < 0) {
@@ -812,13 +825,19 @@ export class YurisSounds {
         s.fadeStart = i32(now);
         s.fadeDone = 0;
         s.fadeFrom = s.volume;
-        s.slope = s.fadeTime === 0 ? (s.fadeTo - s.target) * 0x400 : div((s.fadeTo - s.target) * 0x400, s.fadeTime);
+        s.slope =
+          s.fadeTime === 0
+            ? (s.fadeTo - s.target) * 0x400
+            : div((s.fadeTo - s.target) * 0x400, s.fadeTime);
         return;
       case State.Playing:
         s.fadeStart = i32(now);
         s.fadeDone = 0;
         s.fadeFrom = s.volume;
-        s.slope = s.fadeTime === 0 ? (s.fadeTo - s.volume) * 0x400 : div((s.fadeTo - s.volume) * 0x400, s.fadeTime);
+        s.slope =
+          s.fadeTime === 0
+            ? (s.fadeTo - s.volume) * 0x400
+            : div((s.fadeTo - s.volume) * 0x400, s.fadeTime);
         s.state = State.FadingIn;
         return;
       case State.FadingOut: {
@@ -959,7 +978,7 @@ export class YurisSounds {
     }
     const offset = div(ms * perSecond, 1000);
     const aligned = offset - (offset % s.blockAlign);
-    s.readPosition = (aligned >>> 0) < (s.dataSize >>> 0) ? aligned : s.dataSize - s.blockAlign;
+    s.readPosition = aligned >>> 0 < s.dataSize >>> 0 ? aligned : s.dataSize - s.blockAlign;
     return 0;
   }
 
@@ -1014,7 +1033,8 @@ export class YurisSounds {
         n = i32(endBytes - (written + s.decoded));
         n -= n % s.blockAlign;
       } else n = 0x1000;
-      const got = s.type === SoundType.Ogg && n < 0x20 ? 0 : n <= 0 ? 0 : this.readPcm(s, decode, filled, n);
+      const got =
+        s.type === SoundType.Ogg && n < 0x20 ? 0 : n <= 0 ? 0 : this.readPcm(s, decode, filled, n);
       filled += got;
       written += got;
       if (got !== 0) continue;

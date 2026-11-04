@@ -146,7 +146,8 @@ export function calculate(text: ByteString): bigint {
   // 0x4468BC: the next token into 0x866CC0; false at the end of the text.
   const advance = (): boolean => {
     token = '';
-    while (position < source.length && (source[position] === ' ' || source[position] === '\t')) position++;
+    while (position < source.length && (source[position] === ' ' || source[position] === '\t'))
+      position++;
     const c = source.charCodeAt(position);
     if (position >= source.length || c === 10) return false;
     if (!isDigit(c)) {

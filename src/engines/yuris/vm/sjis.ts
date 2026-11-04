@@ -29,7 +29,7 @@ export function asciiLower(text: ByteString): ByteString {
 
 function mapSingle(text: ByteString, map: (c: number) => number): ByteString {
   let out = '';
-  for (let i = 0; i < text.length; ) {
+  for (let i = 0; i < text.length;) {
     const c = text.charCodeAt(i);
     if (isLeadByte(c)) {
       out += text.slice(i, i + 2);
@@ -65,7 +65,7 @@ function doubleByteCase(code: number, upper: boolean): number {
 /** `_mbsupr` / `_mbslwr`: single bytes by the ASCII case, double bytes by `LCMapStringA`. */
 export function mbsCase(text: ByteString, upper: boolean): ByteString {
   let out = '';
-  for (let i = 0; i < text.length; ) {
+  for (let i = 0; i < text.length;) {
     const c = text.charCodeAt(i);
     if (isLeadByte(c) && i + 1 < text.length) {
       const code = doubleByteCase((c << 8) | text.charCodeAt(i + 1), upper);
@@ -133,14 +133,14 @@ export function mbctombb(c: number): number {
  */
 export function toFullWidth(text: ByteString): ByteString {
   let out = '';
-  for (let i = 0; i < text.length; ) {
+  for (let i = 0; i < text.length;) {
     const c = text.charCodeAt(i);
     if (isLeadByte(c)) {
       out += text.slice(i, i + 2);
       i += 2;
       continue;
     }
-    const signed = c << 24 >> 24;
+    const signed = (c << 24) >> 24;
     const wide = (signed >= 0 ? mbbtombc(signed) : signed) & 0xffff;
     out += wide === signed ? text[i] : String.fromCharCode(wide >> 8, wide & 0xff);
     i++;
@@ -151,7 +151,7 @@ export function toFullWidth(text: ByteString): ByteString {
 /** VARACT ZENTOHAN: double-byte characters through `_mbctombb`. */
 export function toHalfWidth(text: ByteString): ByteString {
   let out = '';
-  for (let i = 0; i < text.length; ) {
+  for (let i = 0; i < text.length;) {
     const c = text.charCodeAt(i);
     if (!isLeadByte(c)) {
       out += text[i];

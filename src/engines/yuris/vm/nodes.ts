@@ -81,7 +81,7 @@ export const enum LookupMode {
 function components(path: ByteString): {dirs: ByteString[]; last: ByteString} {
   const dirs: ByteString[] = [];
   let start = 0;
-  for (let i = 0; i < path.length; ) {
+  for (let i = 0; i < path.length;) {
     const c = path.charCodeAt(i);
     if (c === 0x2f) {
       dirs.push(path.slice(start, i));
@@ -153,7 +153,7 @@ const PATH_SYNTAX = /[./:]/;
 
 /** Whether `text` contains path syntax outside double-byte characters. */
 function hasSyntax(text: ByteString): boolean {
-  for (let i = 0; i < text.length; ) {
+  for (let i = 0; i < text.length;) {
     const c = text.charCodeAt(i);
     if (PATH_SYNTAX.test(text[i]!)) return true;
     i += isLeadByte(c) ? 2 : 1;

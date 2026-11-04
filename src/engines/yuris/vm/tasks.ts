@@ -228,7 +228,8 @@ function taskInfo(m: YurisMachine): number {
   if (a.has(InfoArg.LoopNest)) return put(t.loopDepth);
   if (a.has(InfoArg.FileNo)) return put(t.script);
   if (a.has(InfoArg.FileNo0)) put(script0);
-  if (a.has(InfoArg.ScriptPos) && type === YurisType.String) m.setString(id, index, encodeScriptPos(m, t));
+  if (a.has(InfoArg.ScriptPos) && type === YurisType.String)
+    m.setString(id, index, encodeScriptPos(m, t));
   return 0;
 }
 

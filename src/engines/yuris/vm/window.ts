@@ -243,7 +243,8 @@ export class YurisWindows {
   background(): void {
     const s = this.m.system,
       now = this.m.now();
-    for (const w of this.windows) if (w.exists && w.active && this.host.minimized(w.no)) w.active = false;
+    for (const w of this.windows)
+      if (w.exists && w.active && this.host.minimized(w.no)) w.active = false;
     const active = this.windows[0]!.active;
     if (s.backgroundExec !== 0) s.suspended = false;
     else if (!active) s.suspend(now);
@@ -291,14 +292,19 @@ export class YurisWindows {
       }
       if (changed) {
         const client = host.clientSize(no);
-        host.setClientSize(no, client.width - desktopWidth + w.width, client.height - desktopHeight + w.height);
+        host.setClientSize(
+          no,
+          client.width - desktopWidth + w.width,
+          client.height - desktopHeight + w.height,
+        );
       }
     }
     if (!w.exists) {
       w.x = w.y = 0;
       w.width = width ?? 0x80;
       w.height = height ?? 0x80;
-      if (!a.has(Arg.Caption)) throw new YurisError(0x18bc8, [m.commandName(m.instruction.command)]);
+      if (!a.has(Arg.Caption))
+        throw new YurisError(0x18bc8, [m.commandName(m.instruction.command)]);
       if (!host.createWindow(no, a.text(Arg.Caption) || ' ', w.width, w.height)) return -1;
       if (id !== 0n) host.showWindow(no, 'show');
       w.exists = true;
@@ -312,7 +318,7 @@ export class YurisWindows {
       host.setAlpha(no, Math.min(w.alpha, 0xff) & 0xff);
     }
     if (a.has(Arg.E)) {
-      const e = low(Arg.E) << 24 >> 24;
+      const e = (low(Arg.E) << 24) >> 24;
       const changed = e !== w.e;
       w.e = e;
       if (changed) host.showWindow(no, e < 1 ? 'hide' : 'show');
@@ -327,18 +333,24 @@ export class YurisWindows {
     }
     if (a.has(Arg.Z)) {
       const z = a.int(Arg.Z);
-      if (id === 0n && z === 3n) throw new YurisError(0x18bbe, [m.commandName(m.instruction.command), 'Z', '3']);
+      if (id === 0n && z === 3n)
+        throw new YurisError(0x18bbe, [m.commandName(m.instruction.command), 'Z', '3']);
       if (w.exists && z >= 0n && z <= 3n) host.setOrder(no, Number(z));
     }
-    if (a.has(Arg.MaxMode)) w.maxMode = low(Arg.MaxMode) << 24 >> 24;
-    if (a.has(Arg.MinMode)) w.minMode = low(Arg.MinMode) << 24 >> 24;
+    if (a.has(Arg.MaxMode)) w.maxMode = (low(Arg.MaxMode) << 24) >> 24;
+    if (a.has(Arg.MinMode)) w.minMode = (low(Arg.MinMode) << 24) >> 24;
     if (a.has(Arg.CloseMode)) {
-      const mode = low(Arg.CloseMode) << 24 >> 24;
+      const mode = (low(Arg.CloseMode) << 24) >> 24;
       w.closeMode = mode;
       if (id === 0n && (mode < 0 || mode > 2))
-        throw new YurisError(0x18bbe, [m.commandName(m.instruction.command), 'CLOSEMODE', String(mode)]);
+        throw new YurisError(0x18bbe, [
+          m.commandName(m.instruction.command),
+          'CLOSEMODE',
+          String(mode),
+        ]);
     }
-    if (a.has(Arg.Flash)) host.flash(no, low(Arg.Flash), a.has(Arg.FlashTime) ? low(Arg.FlashTime) : 0);
+    if (a.has(Arg.Flash))
+      host.flash(no, low(Arg.Flash), a.has(Arg.FlashTime) ? low(Arg.FlashTime) : 0);
     if (a.has(Arg.CgId)) {
       const node = this.layer(a.text(Arg.CgId));
       if (!node) return -1;
@@ -367,7 +379,11 @@ export class YurisWindows {
       host.setFrame(no, this.maximizeBox, this.resizable !== 0);
     }
     if (a.has(Arg.Active) && a.int(Arg.Active) === 1n) host.activate(no);
-    if (a.has(Arg.Fullscreen) && id === 0n && this.setFullscreen(low(Arg.Fullscreen) << 24 >> 24 === 1)) {
+    if (
+      a.has(Arg.Fullscreen) &&
+      id === 0n &&
+      this.setFullscreen((low(Arg.Fullscreen) << 24) >> 24 === 1)
+    ) {
       const cg = m.layers.windowLayers[no]?.payload;
       if (cg) {
         cg.uploadAll = true;
@@ -456,30 +472,31 @@ export class YurisWindows {
       else throw new YurisError(0x18b14);
       return 0;
     }
-    if (a.has(Info.A)) return put(w.alpha), 0;
-    if (a.has(Info.E)) return put(w.e), 0;
-    if (a.has(Info.Active)) return put(w.active ? 1 : 0), 0;
+    if (a.has(Info.A)) return (put(w.alpha), 0);
+    if (a.has(Info.E)) return (put(w.e), 0);
+    if (a.has(Info.Active)) return (put(w.active ? 1 : 0), 0);
     if (a.has(Info.Caption)) {
       if (type === YurisType.String) m.setString(id, index, w.caption);
       return 0;
     }
     if (a.has(Info.X)) {
       w.x = this.host.position(no).x;
-      return put(w.x), 0;
+      return (put(w.x), 0);
     }
     if (a.has(Info.Y)) {
       w.y = this.host.position(no).y;
-      return put(w.y), 0;
+      return (put(w.y), 0);
     }
-    if (a.has(Info.Sx)) return put(w.width), 0;
-    if (a.has(Info.Sy)) return put(w.height), 0;
-    if (a.has(Info.Wsx)) return put(this.host.clientSize(no).width), 0;
-    if (a.has(Info.Wsy)) return put(this.host.clientSize(no).height), 0;
-    if (a.has(Info.Fullscreen)) return put(this.fullscreen ? 1 : 0), 0;
-    if (a.has(Info.Fullscreen2)) return put(this.maximized ? 1 : 0), 0;
-    if (a.has(Info.DisplayNo)) return put(this.display), 0;
+    if (a.has(Info.Sx)) return (put(w.width), 0);
+    if (a.has(Info.Sy)) return (put(w.height), 0);
+    if (a.has(Info.Wsx)) return (put(this.host.clientSize(no).width), 0);
+    if (a.has(Info.Wsy)) return (put(this.host.clientSize(no).height), 0);
+    if (a.has(Info.Fullscreen)) return (put(this.fullscreen ? 1 : 0), 0);
+    if (a.has(Info.Fullscreen2)) return (put(this.maximized ? 1 : 0), 0);
+    if (a.has(Info.DisplayNo)) return (put(this.display), 0);
     if (a.has(Info.Minimize)) {
-      if (type === YurisType.Int || type === YurisType.Float) m.setInt(id, index, this.host.minimized(no) ? 1n : 0n);
+      if (type === YurisType.Int || type === YurisType.Float)
+        m.setInt(id, index, this.host.minimized(no) ? 1n : 0n);
       else throw new YurisError(0x18b14);
     }
     return 0;

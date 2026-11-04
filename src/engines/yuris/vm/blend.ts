@@ -67,14 +67,18 @@ function blendTables(): Uint8Array[] {
   // 9 0x6A8900 exclusion.
   t[9] = build((s, d) => s + d - 2 * Math.trunc((d * s) / 255));
   // 10 0x729100 overlay, by the destination.
-  t[10] = build((s, d) => (d < 0x80 ? product(s, 2 * d) : d === 0x80 ? s : product(s, 512 - 2 * d) + 2 * d - 1));
+  t[10] = build((s, d) =>
+    d < 0x80 ? product(s, 2 * d) : d === 0x80 ? s : product(s, 512 - 2 * d) + 2 * d - 1,
+  );
   // 11 0x6B8A00 dodge, 12 0x6C8B00 burn.
   t[11] = build((s, d) => Math.min(255, Math.trunc((d * 256) / (256 - s))));
   t[12] = build((s, d) => Math.max(0, 255 - Math.trunc(((255 - d) * 256) / (s + 1))));
   // 13 0x719000 linear burn.
   t[13] = build((s, d) => clamp(s + d - 255));
   // 14 0x6D8C00 hard light, by the source.
-  t[14] = build((s, d) => (s < 0x80 ? product(d, 2 * s) : s === 0x80 ? d : product(d, 512 - 2 * s) + 2 * s - 1));
+  t[14] = build((s, d) =>
+    s < 0x80 ? product(d, 2 * s) : s === 0x80 ? d : product(d, 512 - 2 * s) + 2 * s - 1,
+  );
   // 15 0x6E8D00 soft light; the x87 results are truncated (control word | 0xC00).
   t[15] = build((s, d) => {
     let g: number, shift: number;
@@ -89,7 +93,8 @@ function blendTables(): Uint8Array[] {
   });
   // 16 0x6F8E00 vivid light.
   t[16] = build((s, d) => {
-    if (s < 0x80) return s === 0 ? 0 : Math.max(0, Math.trunc((255 * d + 510 * s - 0xfe01) / (2 * s)));
+    if (s < 0x80)
+      return s === 0 ? 0 : Math.max(0, Math.trunc((255 * d + 510 * s - 0xfe01) / (2 * s)));
     if (s === 0xff) return 0xff;
     return Math.min(255, Math.trunc((255 * d) / (510 - 2 * s)));
   });
@@ -171,7 +176,8 @@ export function blendRect(
         if (mode === 1 && a < 0x100) {
           // 0x4011E4.
           const k = (sa * a) >> 8;
-          for (let c = 0; c < 3; c++) dst[di + c] = Math.min(255, dst[di + c]! + ((s[si + c]! * k) >> 8));
+          for (let c = 0; c < 3; c++)
+            dst[di + c] = Math.min(255, dst[di + c]! + ((s[si + c]! * k) >> 8));
           continue;
         }
         const k = a >= 0x100 ? sa + 1 : mode === 0 ? ((sa * a) >> 8) + 1 : (sa * a + a) >> 8;

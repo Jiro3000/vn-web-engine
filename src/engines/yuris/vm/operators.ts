@@ -26,7 +26,13 @@ export function applyOp(op: number, current: bigint, value: bigint): bigint {
  * 0x4252A0: as `applyOp`, bounded: `+=` by the maximum, `-=` by the minimum, `*=` and `/=` by
  * both. Plain assignment is not bounded (the decoder's range check covers it).
  */
-export function applyBounded(op: number, current: bigint, value: bigint, min: bigint, max: bigint): bigint {
+export function applyBounded(
+  op: number,
+  current: bigint,
+  value: bigint,
+  min: bigint,
+  max: bigint,
+): bigint {
   switch (op) {
     case 0:
       return value;

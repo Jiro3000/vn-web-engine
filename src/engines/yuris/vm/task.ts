@@ -60,9 +60,7 @@ export class YurisFrame {
     return this.within(Group.ResultFloat, index, indexHigh) ? (this.floats[1]![index] ?? 0) : 0;
   }
   resultString(index: number, indexHigh: number): ByteString {
-    return this.within(Group.ResultString, index, indexHigh)
-      ? (this.strings[1]![index] ?? '')
-      : '';
+    return this.within(Group.ResultString, index, indexHigh) ? (this.strings[1]![index] ?? '') : '';
   }
 
   /** Ids 0x39-0x3B and 0x40-0x42: 1 when the flag byte is positive. */
