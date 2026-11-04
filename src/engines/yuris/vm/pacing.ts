@@ -28,6 +28,11 @@ export class YurisFramePacer {
   lastPaced = 0;
   lastDrawn = 0;
 
+  /** 0x4459F8 (after LOAD restores a layer): the reference time becomes `now`. */
+  rebase(now: number): void {
+    this.base = now >>> 0;
+  }
+
   /** 0x442AB8: FPS SET restarts the per-second counts. */
   setRate(fps: number, now: number): void {
     this.fps = fps;

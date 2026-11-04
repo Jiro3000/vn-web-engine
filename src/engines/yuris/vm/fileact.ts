@@ -30,7 +30,9 @@ export interface YurisFolderHost {
    * FindFirstFileA/FindNextFileA over `path\*.*` in the file system's order, null when the
    * folder cannot be searched. The '.' and '..' entries are included as Windows returns them.
    */
-  list(path: ByteString): HostResult<readonly {readonly name: ByteString; readonly directory: boolean}[] | null>;
+  list(
+    path: ByteString,
+  ): HostResult<readonly {readonly name: ByteString; readonly directory: boolean}[] | null>;
   /** ShellExecuteExA "open" of `file`; `wait` waits for the started process (EXEC2). */
   shellExecute(file: ByteString, parameters: ByteString | null, wait: boolean): HostResult<void>;
   /** FindExecutableA: the program associated with `file`, empty when there is none. */
@@ -92,19 +94,23 @@ const enum Info {
 const FILEACT = 0x14,
   FILEINFO = 0x15;
 
-export function installFiles(m: YurisMachine, folder: YurisFolderHost, encoder: YurisImageEncoder): void {
+export function installFiles(
+  m: YurisMachine,
+  folder: YurisFolderHost,
+  encoder: YurisImageEncoder,
+): void {
   m.define(FILEACT, () => fileAct(m, folder, encoder));
   m.define(FILEINFO, () => fileInfo(m, folder));
 }
 
 /** 0x4652F8 and the '/' to '\' pass of FILEACT: the form the Win32 calls receive. */
-function windowsPath(text: ByteString): ByteString {
+export function windowsPath(text: ByteString): ByteString {
   return replaceSingle(asciiLower(text), '/', '\\');
 }
 
 function replaceSingle(text: ByteString, from: string, to: string): ByteString {
   let out = '';
-  for (let i = 0; i < text.length; ) {
+  for (let i = 0; i < text.length;) {
     if (isLeadByte(text.charCodeAt(i))) {
       out += text.slice(i, i + 2);
       i += 2;
@@ -131,7 +137,11 @@ function endsWithSeparator(text: ByteString): boolean {
  * to FILE2, DELETE deletes FILE and removes FOLDER, and EXEC (or EXEC2, which waits) opens
  * FILE with PARAM.
  */
-async function fileAct(m: YurisMachine, folder: YurisFolderHost, encoder: YurisImageEncoder): Promise<number> {
+async function fileAct(
+  m: YurisMachine,
+  folder: YurisFolderHost,
+  encoder: YurisImageEncoder,
+): Promise<number> {
   const a = m.args;
   m.decode();
   const file = a.has(Act.File) ? windowsPath(a.text(Act.File)) : null;
@@ -197,7 +207,14 @@ async function saveImage(
       : format === 3
         ? (['jpeg', '.jpg', clamp(90, 1n, 100n)] as const)
         : (['webp', '.webp', clamp(90, 0n, 101n)] as const);
-  const data = await encoder.encodeImage(type, pixels, cg.width, cg.height, cg.masked !== 0, quality);
+  const data = await encoder.encodeImage(
+    type,
+    pixels,
+    cg.width,
+    cg.height,
+    cg.masked !== 0,
+    quality,
+  );
   await folder.writeFile(named(extension), data);
   return 0;
 }
@@ -256,7 +273,8 @@ async function fileInfo(m: YurisMachine, folder: YurisFolderHost): Promise<numbe
     let exists = false;
     if (kind === 1) exists = (await folder.stat(path))?.directory ?? false;
     else if (kind >= 2) {
-      const resolver = kind === 2 ? YurisFileKind.Any : kind === 3 ? YurisFileKind.Image : YurisFileKind.Sound;
+      const resolver =
+        kind === 2 ? YurisFileKind.Any : kind === 3 ? YurisFileKind.Image : YurisFileKind.Sound;
       exists = m.files.resolve(name, resolver).found;
     }
     if (kind !== 0) m.setInt(id, index, exists ? 1n : 0n);

@@ -32,7 +32,11 @@ export interface YurisProductHost {
   /** SetCurrentDirectoryA. */
   setCurrentDirectory(path: ByteString): HostResult<void>;
   /** RegOpenKeyExA and RegDeleteValueA; false when either failed. */
-  deleteRegistryValue(hive: 'HKCU' | 'HKLM', key: ByteString, name: ByteString): HostResult<boolean>;
+  deleteRegistryValue(
+    hive: 'HKCU' | 'HKLM',
+    key: ByteString,
+    name: ByteString,
+  ): HostResult<boolean>;
   /** RegDeleteKeyA; false when it failed. */
   deleteRegistryKey(hive: 'HKCU' | 'HKLM', key: ByteString): HostResult<boolean>;
   /** Shell32 `IsUserAnAdmin` (ordinal 680 on the OS version 0x28). */
@@ -115,7 +119,9 @@ class YurisProduct {
       letIndex = a.variableIndex[letSlot]!;
     const text = (id: number): ByteString => {
       const slot = a.has(id);
-      return slot ? m.getString(a.variable[slot]!, a.variableIndex[slot]!).slice(0, BUFFER - 1) : '';
+      return slot
+        ? m.getString(a.variable[slot]!, a.variableIndex[slot]!).slice(0, BUFFER - 1)
+        : '';
     };
     const int = (id: number): bigint => {
       const slot = a.has(id);
@@ -185,7 +191,7 @@ class YurisProduct {
         s.runDuringMovie = false;
         break;
       case 0x1d:
-        setInt(BigInt(s.removableMedia));
+        setInt(BigInt(s.archives));
         break;
       case 0x1e:
         m.messageBox('COM:30 Deleted.');
@@ -199,7 +205,8 @@ class YurisProduct {
       case 0x21: {
         // 0x45C330: HKCU, the value and then the key.
         const key = backslashes(pstr);
-        if (await host.deleteRegistryValue('HKCU', key, pstr2)) await host.deleteRegistryKey('HKCU', key);
+        if (await host.deleteRegistryValue('HKCU', key, pstr2))
+          await host.deleteRegistryKey('HKCU', key);
         break;
       }
       case 0x22:
@@ -318,14 +325,21 @@ class YurisProduct {
    * is empty or the name ends with '.' + `extension` (any case); folders only with `folders`,
    * then with '/' appended. The list stops at 0x2000 names with a message.
    */
-  private async listFolder(path: ByteString, extension: ByteString, folders: boolean): Promise<ByteString[]> {
+  private async listFolder(
+    path: ByteString,
+    extension: ByteString,
+    folders: boolean,
+  ): Promise<ByteString[]> {
     const names: ByteString[] = [],
       suffix = '.' + extension,
       entries = await this.folder.list(path);
     if (!entries) return names;
     for (const entry of entries) {
       if (entry.name === '.' || entry.name === '..') continue;
-      if (entry.directory ? !folders : extension !== '' && !endsWithIgnoringCase(entry.name, suffix)) continue;
+      if (
+        entry.directory ? !folders : extension !== '' && !endsWithIgnoringCase(entry.name, suffix)
+      )
+        continue;
       names.push(entry.directory ? entry.name + '/' : entry.name);
       if (names.length === LIST_LIMIT) {
         this.m.messageBox(`リストが ${LIST_LIMIT} 個に達しました. 取得を中断します。`);
@@ -390,8 +404,10 @@ class YurisProduct {
     let count = 0,
       at = 0,
       start = 0;
-    const kind = (value: number): void => m.setInt(kindId, BigInt((count + kindBase) | 0), BigInt(value));
-    const token = (value: ByteString): void => m.setString(stringId, BigInt((count + stringBase) | 0), value);
+    const kind = (value: number): void =>
+      m.setInt(kindId, BigInt((count + kindBase) | 0), BigInt(value));
+    const token = (value: ByteString): void =>
+      m.setString(stringId, BigInt((count + stringBase) | 0), value);
     const emit = (k: number, value: ByteString): void => {
       kind(k);
       token(value);
@@ -587,7 +603,7 @@ function high(value: bigint): number {
 /** The '/' to '\' pass PRODUCT applies to path arguments (outside double-byte characters). */
 function backslashes(text: ByteString): ByteString {
   let out = '';
-  for (let i = 0; i < text.length; ) {
+  for (let i = 0; i < text.length;) {
     if (isLeadByte(text.charCodeAt(i))) {
       out += text.slice(i, i + 2);
       i += 2;
@@ -615,7 +631,7 @@ function fold(c: number): number {
 }
 
 /** 0x440DA0: whether `name` ends with `suffix`, compared with `_strnicmp`. */
-function endsWithIgnoringCase(name: ByteString, suffix: ByteString): boolean {
+export function endsWithIgnoringCase(name: ByteString, suffix: ByteString): boolean {
   if (name.length < suffix.length) return false;
   return compareIgnoringCase(name.slice(name.length - suffix.length), suffix, suffix.length) === 0;
 }

@@ -1,5 +1,6 @@
 import {ByteView, checkRange} from '../../core/binary.js';
 import type {ByteSource} from '../../core/source.js';
+import {zlibUncompress} from '../zlib.js';
 import {murmurHash2} from './murmur.js';
 
 /**
@@ -86,8 +87,7 @@ export class YpfArchive {
     const version = header.u32(4),
       count = header.u32(8),
       indexSize = header.u32(12);
-    if (version !== 0x22b && version < 0xea)
-      throw new Error(`Unsupported YPF version ${version}`);
+    if (version !== 0x22b && version < 0xea) throw new Error(`Unsupported YPF version ${version}`);
     checkRange(source.size, 0x20, indexSize);
     const index = new ByteView(await source.read(0x20, indexSize), {littleEndian: true});
     const entries: YpfEntry[] = [];
@@ -129,7 +129,7 @@ export class YpfArchive {
     if (entry.compression === 0) return stored;
     if (entry.compression !== 1)
       throw new Error(`${entry.name}: unknown YPF compression ${entry.compression}`);
-    const bytes = await inflateZlib(stored);
+    const bytes = await zlibUncompress(stored);
     if (bytes.length !== entry.size)
       throw new Error(`${entry.name}: inflated ${bytes.length} bytes, expected ${entry.size}`);
     return bytes;
@@ -144,13 +144,6 @@ export function ypfDataMatches(entry: YpfEntry, stored: Uint8Array): boolean {
 /** Whether the index's name hash is the hash of the stored name. */
 export function ypfNameMatches(entry: YpfEntry): boolean {
   return murmurHash2(entry.nameBytes) === entry.nameHash;
-}
-
-async function inflateZlib(bytes: Uint8Array): Promise<Uint8Array> {
-  const stream = new Blob([bytes as Uint8Array<ArrayBuffer>])
-    .stream()
-    .pipeThrough(new DecompressionStream('deflate'));
-  return new Uint8Array(await new Response(stream).arrayBuffer());
 }
 
 export interface YpfFileRef {
@@ -168,9 +161,7 @@ export interface YpfFileRef {
  */
 export class YpfFileSystem {
   private readonly byName = new Map<string, YpfFileRef>();
-  constructor(
-    readonly archives: readonly {readonly name: string; readonly archive: YpfArchive}[],
-  ) {
+  constructor(readonly archives: readonly {readonly name: string; readonly archive: YpfArchive}[]) {
     archives.forEach(({name, archive}, archiveIndex) => {
       const update = /^update[1-9]\.ypf$/i.test(name);
       for (const entry of archive.entries) {

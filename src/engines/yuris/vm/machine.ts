@@ -12,12 +12,14 @@ import {type YurisFolderHost, type YurisImageEncoder, installFiles} from './file
 import {type YurisFileHost, YurisFiles} from './files.js';
 import {type YurisInputHost, YurisInput, installInput} from './input.js';
 import {type ByteString, STRING_CAPACITY, fistp, i64} from './numbers.js';
+import {asciiLower} from './sjis.js';
 import {YurisFramePacer} from './pacing.js';
 import {YurisSystem, type YurisSystemHost} from './system.js';
 import {type YurisNode, YurisTree} from './nodes.js';
 import {NESTING_LIMIT, YurisTask} from './task.js';
 import {installTasks} from './tasks.js';
 import {installProduct, type YurisProductHost} from './product.js';
+import {installSave, type YurisSaveData} from './save.js';
 import {STARTUP_SETTINGS_MISSING, YurisStartupSettings} from './startup.js';
 import {SYSTEM_VARIABLE_LIMIT, YurisType, YurisVariables} from './variables.js';
 import {installMath} from './math.js';
@@ -139,7 +141,8 @@ interface LoadedScript {
 }
 
 export interface YurisMachineHost
-  extends YurisSystemHost,
+  extends
+    YurisSystemHost,
     YurisFileHost,
     YurisImageHost,
     YurisFolderHost,
@@ -193,6 +196,8 @@ export class YurisMachine {
   readonly errorFlags = new Uint8Array(0x80).fill(1);
   readonly files: YurisFiles;
   readonly layers: YurisLayers;
+  /** The SAVE/LOAD block and memory-slot buffers. */
+  readonly saveData: YurisSaveData;
   readonly fonts: YurisFonts;
   readonly sounds: YurisSounds;
   private readonly handlers: (YurisCommandHandler | undefined)[] = [];
@@ -221,6 +226,12 @@ export class YurisMachine {
     this.system.desktopHeight = desktop.height;
     this.system.bitsPerPixel = desktop.bitsPerPixel;
     this.files = new YurisFiles(host, project.config);
+    // 0x46436C: an archive entry named `ysbin\yscfg.ybn` marks an archive installation.
+    this.system.archives = this.files
+      .archiveNames()
+      .some((names) => names.some((name) => asciiLower(name) === 'ysbin\\yscfg.ybn'))
+      ? 1
+      : 0;
     this.installCore();
     this.layers = new YurisLayers(this, this.files, host);
     this.layers.install();
@@ -229,7 +240,12 @@ export class YurisMachine {
     // 0x46C028: joyGetNumDevs at start-up.
     this.input.padsPresent = host.readPads().length > 0;
     installInput(this, this.input, host);
-    this.windows = new YurisWindows(this, host, project.config.width || 640, project.config.height || 480);
+    this.windows = new YurisWindows(
+      this,
+      host,
+      project.config.width || 640,
+      project.config.height || 480,
+    );
     this.windows.install();
     this.fonts = new YurisFonts(host);
     installFonts(this, this.fonts);
@@ -238,10 +254,11 @@ export class YurisMachine {
     this.sounds = new YurisSounds(this, this.files, host, project.config.settings[3] ?? 0);
     this.sounds.install();
     installProduct(this, host, host, host);
+    this.saveData = installSave(this, host);
   }
 
   /**
- * Start-up (0x46BA54): the project files are loaded, the global variables (YSVR scopes 1 and
+   * Start-up (0x46BA54): the project files are loaded, the global variables (YSVR scopes 1 and
    * 3) initialised, and the main task starts at `SYSTEM_START` with that label's nesting.
    */
   static async create(project: YurisProject, host: YurisMachineHost): Promise<YurisMachine> {
@@ -254,7 +271,9 @@ export class YurisMachine {
     const scripts = new Map<number, YurisScript>();
     for (const file of project.files) scripts.set(file.index, await project.script(file.index));
     const machine = new YurisMachine(project, scripts, host, YurisStartupSettings.read(file));
-    machine.variables.initialize(project.variables, -1, (bytes) => machine.expression.string(bytes));
+    machine.variables.initialize(project.variables, -1, (bytes) =>
+      machine.expression.string(bytes),
+    );
     const index = machine.label(bytes('SYSTEM_START'));
     if (index < 0) throw new YurisError(0x1a694, ['SYSTEM_START']);
     const label = project.labels.labels[index]!;
@@ -491,7 +510,8 @@ export class YurisMachine {
   findScript(name: ByteString): number {
     const fold = (t: ByteString) => t.replace(/[A-Z]/g, (c) => c.toLowerCase());
     const wanted = fold(name);
-    for (let i = 0; i < this.project.files.length; i++) if (fold(this.scriptName(i)) === wanted) return i;
+    for (let i = 0; i < this.project.files.length; i++)
+      if (fold(this.scriptName(i)) === wanted) return i;
     return -1;
   }
 
@@ -648,7 +668,11 @@ export class YurisMachine {
   /** IF 0x4435B0: pushes the IF entry, then jumps to the next branch or IFEND when false. */
   private if(): number {
     const task = this.task,
-      [condition, next, end] = this.instruction.args as [YurisArgument, YurisArgument, YurisArgument];
+      [condition, next, end] = this.instruction.args as [
+        YurisArgument,
+        YurisArgument,
+        YurisArgument,
+      ];
     const entry = task.ifEntry(task.ifDepth);
     entry.position = this.position;
     entry.loopDepth = task.loopDepth;
@@ -781,8 +805,8 @@ export class YurisMachine {
       loopDepth = label.loopNest;
     if (task.gosubDepth > 0) {
       const caller = task.frameAt(task.gosubDepth - 1);
-      ifDepth = (ifDepth + caller.ifDepth) << 24 >> 24;
-      loopDepth = (loopDepth + caller.loopDepth) << 24 >> 24;
+      ifDepth = ((ifDepth + caller.ifDepth) << 24) >> 24;
+      loopDepth = ((loopDepth + caller.loopDepth) << 24) >> 24;
     }
     task.ifDepth = ifDepth;
     task.loopDepth = loopDepth;
@@ -806,7 +830,7 @@ export class YurisMachine {
     const callee = task.frameAt(depth + 1);
     const extra = this.instruction.extra;
     const ints = (extra & 0xff) >> 3,
-      floats = ((extra & 7) * 4 + (extra >> 14)) << 24 >> 24,
+      floats = (((extra & 7) * 4 + (extra >> 14)) << 24) >> 24,
       strings = (extra >> 9) & 0x1f;
     callee.flags[0]![0] = ints;
     callee.flags[1]![0] = floats;
@@ -860,7 +884,7 @@ export class YurisMachine {
       const caller = task.frameAt(depth - 1);
       const extra = this.instruction.extra;
       const ints = (extra & 0xff) >> 3,
-        floats = ((extra & 7) * 4 + (extra >> 14)) << 24 >> 24,
+        floats = (((extra & 7) * 4 + (extra >> 14)) << 24) >> 24,
         strings = (extra >> 9) & 0x1f;
       caller.flags[3]![0] = ints;
       caller.flags[4]![0] = floats;
@@ -981,7 +1005,13 @@ export class YurisMachine {
       throw new YurisError(0x18b14);
     }
     if (whole) return 0;
-    this.assignSystem(id, Number(index & 0xffffffffn), Number(BigInt.asIntN(32, index >> 32n)), op, source);
+    this.assignSystem(
+      id,
+      Number(index & 0xffffffffn),
+      Number(BigInt.asIntN(32, index >> 32n)),
+      op,
+      source,
+    );
     return 0;
   }
 
@@ -1066,7 +1096,13 @@ export class YurisMachine {
   }
 
   /** The system-variable branches of LET 0x443BCC. */
-  private assignSystem(id: number, index: number, indexHigh: number, op: number, source: YurisArgument): void {
+  private assignSystem(
+    id: number,
+    index: number,
+    indexHigh: number,
+    op: number,
+    source: YurisArgument,
+  ): void {
     const e = this.expression,
       s = this.system,
       type = this.variables.get(id).type;
@@ -1127,7 +1163,13 @@ export class YurisMachine {
 }
 
 /** Int assignment operators (table 0x872B04, 0x423098..0x42335C); out-of-range is ignored. */
-function assignInt(values: BigInt64Array, count: number, index: bigint, op: number, value: bigint): void {
+function assignInt(
+  values: BigInt64Array,
+  count: number,
+  index: bigint,
+  op: number,
+  value: bigint,
+): void {
   if (index < 0n || index >= BigInt(count)) return;
   const i = Number(index);
   values[i] = applyInt(values[i]!, op, value);
@@ -1158,7 +1200,13 @@ function applyInt(current: bigint, op: number, value: bigint): bigint {
 }
 
 /** Float assignment operators (table 0x872B28, 0x4233AC..0x423744). */
-function assignFloat(values: Float64Array, count: number, index: bigint, op: number, value: number): void {
+function assignFloat(
+  values: Float64Array,
+  count: number,
+  index: bigint,
+  op: number,
+  value: number,
+): void {
   if (index < 0n || index >= BigInt(count)) return;
   const i = Number(index),
     current = values[i]!;

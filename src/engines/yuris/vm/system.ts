@@ -72,10 +72,12 @@ export class YurisSystem implements YurisSystemValues {
    */
   saveFolderKind = 0;
   /**
-   * 0x8722C0: set at start-up by 0x411038 when the drive checks find the program running from
-   * removable media; archive and save paths are then absolute. A browser installation is not.
+   * 0x8722C0: the game runs from its archives. 0x46436C sets it when an archive holds
+   * `ysbin\yscfg.ybn` (`_stricmp`); 0x411038 also sets it when the drive checks find the
+   * program on removable media, which a browser installation never is. File opens then read
+   * archive entries before the folder (0x872308 / 0x87230C select the exceptions).
    */
-  removableMedia = 0;
+  archives = 0;
   /** 0x871FFC (PRODUCT COM 0x50/0x51): the window output goes through Direct3D. */
   direct3d = false;
   /** 0x8722DC (PRODUCT COM 0x1B/0x1C): scripts and drawing keep running during MOVIE playback. */
@@ -313,7 +315,8 @@ export class YurisSystem implements YurisSystemValues {
         return BigInt(this.lastButton);
     }
     if (id >= 0x93 && id <= 0x113) return this.input[this.keys[id - 0x93]!]!;
-    if (id >= 0x114 && id <= 0x117) return this.input[PAD_BASE - 0x114 + id + index * PAD_STRIDE] ?? 0n;
+    if (id >= 0x114 && id <= 0x117)
+      return this.input[PAD_BASE - 0x114 + id + index * PAD_STRIDE] ?? 0n;
     if (id === 0x118) return this.input[padButton(index)] ?? 0n;
     if (id >= 0x119 && id <= 0x198) return this.inputEdge[this.keys[id - 0x119]!]!;
     if (id >= 0x19a && id <= 0x19d)
@@ -407,7 +410,8 @@ export class YurisSystem implements YurisSystemValues {
     let value = 0;
     if (variable.type === YurisType.Int)
       value = Number(variable.has(index) ? variable.ints![index]! : 0n);
-    if (variable.type === YurisType.Float) value = variable.has(index) ? variable.floats![index]! : 0;
+    if (variable.type === YurisType.Float)
+      value = variable.has(index) ? variable.floats![index]! : 0;
     this.select(id, index);
     return value;
   }

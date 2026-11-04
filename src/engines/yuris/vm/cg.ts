@@ -321,7 +321,10 @@ export class YurisLayers {
         if (file) {
           cg = node.payload = new YurisCg();
         } else if (a.text(Cg.Rid)) {
-          const source = this.lookup(resolveNodePath(m.system.names[0]!, a.text(Cg.Rid)).path, false);
+          const source = this.lookup(
+            resolveNodePath(m.system.names[0]!, a.text(Cg.Rid)).path,
+            false,
+          );
           if (!source) throw new YurisError(0x18b82, [this.commandName(), a.text(Cg.Rid)]);
           cg = node.payload = source.payload;
           if (cg) cg.references++;
@@ -350,7 +353,10 @@ export class YurisLayers {
       changed = true;
     }
     if (a.has(Cg.Mid) && a.text(Cg.Mid)) {
-      const mask = this.lookup(resolveNodePath(m.system.names[0]!, a.text(Cg.Mid)).path, false)?.payload;
+      const mask = this.lookup(
+        resolveNodePath(m.system.names[0]!, a.text(Cg.Mid)).path,
+        false,
+      )?.payload;
       if (mask) {
         if (cg.width !== mask.width || cg.height !== mask.height) {
           m.quit = true;
@@ -586,7 +592,10 @@ export class YurisLayers {
       rows = Math.min(height, cg.height);
     if (cg.pixels)
       for (let y = 0; y < rows; y++)
-        pixels.set(cg.pixels.subarray(y * cg.width * 4, (y * cg.width + columns) * 4), y * width * 4);
+        pixels.set(
+          cg.pixels.subarray(y * cg.width * 4, (y * cg.width + columns) * 4),
+          y * width * 4,
+        );
     cg.replace(pixels, width, height);
   }
 
@@ -605,11 +614,19 @@ export class YurisLayers {
       return 0;
     }
     cg.masked = 0;
-    if (file.type === YurisFileType.None || file.type === YurisFileType.Wav || file.type === YurisFileType.Ogg) {
+    if (
+      file.type === YurisFileType.None ||
+      file.type === YurisFileType.Wav ||
+      file.type === YurisFileType.Ogg
+    ) {
       this.machine.fail(new YurisError(0x186be, [this.commandName(), name]));
       return -1;
     }
-    const image = await this.images.decodeImage(await this.files.read(file.path), file.type, file.path);
+    const image = await this.images.decodeImage(
+      await this.files.read(file.path),
+      file.type,
+      file.path,
+    );
     cg.setPixels(image.pixels);
     cg.width = cg.textureWidth = image.width;
     cg.height = cg.textureHeight = image.height;
@@ -624,7 +641,11 @@ export class YurisLayers {
     const cg = node?.payload;
     if (!node || !cg) return;
     const rect = [0, 0, cg.width - 1, cg.height - 1];
-    for (let child = node, set = node.parent; set && set !== this.tree.root; child = set, set = set.parent) {
+    for (
+      let child = node, set = node.parent;
+      set && set !== this.tree.root;
+      child = set, set = set.parent
+    ) {
       const x = Number(child.payload?.x ?? 0n),
         y = Number(child.payload?.y ?? 0n);
       rect[0]! += x;
@@ -633,6 +654,26 @@ export class YurisLayers {
       rect[3]! += y;
       if (set.payload) markArea(set.payload, rect);
     }
+  }
+
+  /**
+   * 0x445810 (LOAD with ID): the layer is marked (0x410550) and released (0x43B264), and a new
+   * layer is created at `path` with Z 1 (0x46753D) holding the saved size and pixels.
+   */
+  restore(
+    node: YurisCgNode,
+    path: ByteString,
+    width: number,
+    height: number,
+    pixels: Uint8Array,
+  ): void {
+    this.markDirty(node);
+    this.remove(node);
+    const cg = new YurisCg();
+    cg.width = cg.textureWidth = width;
+    cg.height = cg.textureHeight = height;
+    cg.setPixels(pixels);
+    this.tree.create(path, false, 1n, cg);
   }
 
   /** 0x410D30: the frame's marks are consumed; every layer set starts clean. */
@@ -667,7 +708,8 @@ export class YurisLayers {
   /** 0x43B220 then 0x43B264: children first, then the node itself. */
   private remove(node: YurisCgNode): void {
     for (const child of [...node.children]) this.remove(child);
-    for (let w = 0; w < WINDOWS; w++) if (this.windowLayers[w] === node) this.windowLayers[w] = null;
+    for (let w = 0; w < WINDOWS; w++)
+      if (this.windowLayers[w] === node) this.windowLayers[w] = null;
     if (this.directBuffer === node) this.directBuffer = null;
     this.tree.remove(node);
     if (node.payload && --node.payload.references === 0) {
@@ -695,7 +737,7 @@ export class YurisLayers {
     if (!node || !cg) {
       const type = m.variables.get(to.id).type;
       if (type === YurisType.Int) return store(0n);
-      if (type === YurisType.Float) return m.setFloat(to.id, to.index, 0), 0;
+      if (type === YurisType.Float) return (m.setFloat(to.id, to.index, 0), 0);
       if (type === YurisType.String) return storeString('');
       return 0;
     }
@@ -759,7 +801,8 @@ export class YurisLayers {
       return store(pixel(cg, mx - Number(left), my - Number(top), mode));
     }
     if (a.has(Info.Color)) {
-      if (set === null || set2 === null) throw new YurisError(0x18baf, [this.commandName(), 'COLOR']);
+      if (set === null || set2 === null)
+        throw new YurisError(0x18baf, [this.commandName(), 'COLOR']);
       return store(pixel(cg, set, set2, 1));
     }
     if (a.has(Info.Trim)) return store(trim(cg, set2 ?? 0, set ?? 0));
@@ -824,7 +867,7 @@ function pixel(cg: YurisCg, x: number, y: number, mode: 1 | 2 | 3): bigint {
     b = cg.pixels;
   if (mode === 2) return BigInt(b[p + 3]!);
   const rgb = b[p]! | (b[p + 1]! << 8) | (b[p + 2]! << 16);
-  return mode === 1 ? BigInt(rgb) : BigInt((rgb | (b[p + 3]! << 24)) | 0);
+  return mode === 1 ? BigInt(rgb) : BigInt(rgb | (b[p + 3]! << 24) | 0);
 }
 
 /**
