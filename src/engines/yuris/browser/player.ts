@@ -17,6 +17,7 @@ import {LegacyFolder} from '../../../platform/legacy-folder.js';
 import {LegacyImageCodec, swap} from '../../../graphics/legacy-image-codec.js';
 import {WebGLDrawTarget} from '../../../graphics/webgl-draw.js';
 import {BrowserFileMovie} from '../../../video/browser-file-movie.js';
+import {setWindowsVirtualKey} from '../../../input/windows-virtual-keys.js';
 import type {TriangleImage} from '../../../graphics/triangle-draw.js';
 import type {YurisLayers} from '../vm/cg.js';
 
@@ -288,8 +289,8 @@ export class YurisBrowserPlayer {
           (e.target instanceof Element && e.target.closest('dialog[open]'))
         )
           return;
-        this.machine.input.keyboard[e.keyCode] = 128;
-        this.machine.input.keyDown(e.keyCode);
+        const key = setWindowsVirtualKey(this.machine.input.keyboard, e, true);
+        if (key) this.machine.input.keyDown(key);
         e.preventDefault();
       },
       {signal},
@@ -297,7 +298,7 @@ export class YurisBrowserPlayer {
     document.addEventListener(
       'keyup',
       (e) => {
-        if (this.machine) this.machine.input.keyboard[e.keyCode] = 0;
+        if (this.machine) setWindowsVirtualKey(this.machine.input.keyboard, e, false);
       },
       {signal},
     );

@@ -789,3 +789,23 @@ test('ROTATION safe and preserve modes cover every quadrant and retain signed an
     (error) => error.code === 0x186aa && error.prefix === false,
   );
 });
+
+test('browser virtual keys keep both Ctrl sides and the aggregate held independently of pointer buttons', async () => {
+  const {setWindowsVirtualKey} = await import('../dist/input/windows-virtual-keys.js');
+  const state = new Uint8Array(256);
+  state[1] = 128;
+  const event = (code, location = 0, keyCode = 17) => ({keyCode, code, location});
+  assert.equal(setWindowsVirtualKey(state, event('ControlLeft', 1), true), 17);
+  assert.deepEqual([state[17], state[162], state[163]], [128, 128, 0]);
+  setWindowsVirtualKey(state, event('ControlRight', 2), true);
+  setWindowsVirtualKey(state, event('ControlLeft', 1), false);
+  assert.deepEqual([state[17], state[162], state[163]], [128, 0, 128]);
+  setWindowsVirtualKey(state, event('ControlRight', 2), false);
+  assert.deepEqual([state[17], state[162], state[163]], [0, 0, 0]);
+  setWindowsVirtualKey(state, event('', 2, 16), true);
+  assert.deepEqual([state[16], state[160], state[161]], [128, 0, 128]);
+  setWindowsVirtualKey(state, event('AltLeft', 1, 18), true);
+  assert.equal(state[164], 128);
+  assert.equal(state[18], 128);
+  assert.equal(state[1], 128);
+});
