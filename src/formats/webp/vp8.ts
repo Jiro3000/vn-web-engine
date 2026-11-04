@@ -992,11 +992,22 @@ function filterMacroblock(
 // YUV to BGRA (libwebp 0.4 yuv.h, 14-bit fixed point).
 const clipYuv = (v: number): number => ((v & 0xffc00000) === 0 ? v >> 14 : v < 0 ? 0 : 255);
 
-function store(out: Uint8Array, o: number, y: number, u: number, v: number): void {
+function storeLegacy(out: Uint8Array, o: number, y: number, u: number, v: number): void {
   const yy = 19077 * y;
   out[o] = clipYuv(yy + 33050 * u - 4527440);
   out[o + 1] = clipYuv(yy - 6419 * u - 13320 * v + 2229552);
   out[o + 2] = clipYuv(yy + 26149 * v - 3644112);
+  out[o + 3] = 255;
+}
+
+// Current libwebp yuv.h: intermediate products truncate to eight fractional
+// bits, matching its SIMD implementations. The 0.4 scalar path above keeps 14.
+function store(out: Uint8Array, o: number, y: number, u: number, v: number): void {
+  const yy = (19077 * y) >> 8;
+  const clip = (v: number): number => Math.max(0, Math.min(255, v >> 6));
+  out[o] = clip(yy + ((33050 * u) >> 8) - 17685);
+  out[o + 1] = clip(yy - ((6419 * u) >> 8) - ((13320 * v) >> 8) + 8708);
+  out[o + 2] = clip(yy + ((26149 * v) >> 8) - 14234);
   out[o + 3] = 255;
 }
 
@@ -1008,6 +1019,7 @@ function upsamplePair(
   bottomRow: number,
   topUv: number,
   curUv: number,
+  store: typeof storeLegacy,
 ): void {
   const {width: len, y: Y, u: U, v: V, yStride, uvStride} = img;
   const ty = topRow * yStride,
@@ -1061,12 +1073,13 @@ function upsamplePair(
 }
 
 /** EmitFancyRGB over the whole frame: opaque BGRA, `width * height * 4` bytes. */
-export function yuvToBgra(img: YuvImage): Uint8Array {
+export function yuvToBgra(img: YuvImage, legacyColor = false): Uint8Array {
   const out = new Uint8Array(img.width * img.height * 4);
   const h = img.height;
-  upsamplePair(img, out, 0, -1, 0, 0);
+  const convert = legacyColor ? storeLegacy : store;
+  upsamplePair(img, out, 0, -1, 0, 0, convert);
   let y = 1;
-  for (; y + 1 < h; y += 2) upsamplePair(img, out, y, y + 1, (y - 1) >> 1, (y + 1) >> 1);
-  if (!(h & 1)) upsamplePair(img, out, h - 1, -1, (h >> 1) - 1, (h >> 1) - 1);
+  for (; y + 1 < h; y += 2) upsamplePair(img, out, y, y + 1, (y - 1) >> 1, (y + 1) >> 1, convert);
+  if (!(h & 1)) upsamplePair(img, out, h - 1, -1, (h >> 1) - 1, (h >> 1) - 1, convert);
   return out;
 }

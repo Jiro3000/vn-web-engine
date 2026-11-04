@@ -34,6 +34,7 @@ for (const {name, path} of archives) {
   if (!(await YpfArchive.isArchive(source))) {
     console.log(`${name}: not a YPF archive, skipped as the native registration skips it`);
     count('non-archive .ypf');
+    await source.close();
     continue;
   }
   const archive = await YpfArchive.open(source);
@@ -55,7 +56,9 @@ for (const {name, path} of archives) {
     }
     count(`type ${entry.type}`);
   }
-  console.log(`${name}: version ${archive.version}, ${archive.entries.length} entries, ${bytes} stored bytes`);
+  console.log(
+    `${name}: version ${archive.version}, ${archive.entries.length} entries, ${bytes} stored bytes`,
+  );
 }
 const files = new YpfFileSystem(opened);
 console.log(`file system: ${files.size} files`);
@@ -74,13 +77,27 @@ for (const ref of [...files.files()].filter((f) => /^ysbin\\.*\.ybn$/i.test(f.en
     const signature = ybn.ybnSignature(bytes);
     count(`ybn ${signature}`);
     switch (signature) {
-      case 'YSCM': ybn.parseYscm(bytes); break;
-      case 'YSLB': ybn.parseYslb(bytes); break;
-      case 'YSTD': ybn.parseYstd(bytes); break;
-      case 'YSTL': ybn.parseYstl(bytes); break;
-      case 'YSVR': ybn.parseYsvr(bytes); break;
-      case 'YSCF': ybn.parseYscf(bytes); break;
-      case 'YSER': ybn.parseYser(bytes); break;
+      case 'YSCM':
+        ybn.parseYscm(bytes);
+        break;
+      case 'YSLB':
+        ybn.parseYslb(bytes);
+        break;
+      case 'YSTD':
+        ybn.parseYstd(bytes);
+        break;
+      case 'YSTL':
+        ybn.parseYstl(bytes);
+        break;
+      case 'YSVR':
+        ybn.parseYsvr(bytes);
+        break;
+      case 'YSCF':
+        ybn.parseYscf(bytes);
+        break;
+      case 'YSER':
+        ybn.parseYser(bytes);
+        break;
       case 'YSTB': {
         const script = ybn.parseYstb(bytes, project.key, project.commands);
         count('instructions', script.instructions.length);
@@ -103,3 +120,5 @@ console.log(counts);
 console.log(`${failures.length} failures`);
 for (const failure of failures.slice(0, 40)) console.log(`  ${failure}`);
 process.exitCode = failures.length ? 1 : 0;
+
+for (const {archive} of opened) await archive.source.close();
