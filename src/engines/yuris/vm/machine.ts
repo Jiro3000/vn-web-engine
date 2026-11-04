@@ -17,6 +17,8 @@ import {YurisSystem, type YurisSystemHost} from './system.js';
 import {type YurisNode, YurisTree} from './nodes.js';
 import {NESTING_LIMIT, YurisTask} from './task.js';
 import {installTasks} from './tasks.js';
+import {installProduct, type YurisProductHost} from './product.js';
+import {STARTUP_SETTINGS_MISSING, YurisStartupSettings} from './startup.js';
 import {SYSTEM_VARIABLE_LIMIT, YurisType, YurisVariables} from './variables.js';
 import {installMath} from './math.js';
 import {type YurisFontHost, YurisFonts, installFonts} from './font.js';
@@ -145,7 +147,8 @@ export interface YurisMachineHost
     YurisInputHost,
     YurisWindowHost,
     YurisFontHost,
-    YurisSoundHost {
+    YurisSoundHost,
+    YurisProductHost {
   /** A fatal script error with its formatted `YSER` message, after the quit flag is set. */
   error(message: string, error: YurisError): void;
   /** `Sleep` of the frame pacing 0x4109A8. */
@@ -200,11 +203,17 @@ export class YurisMachine {
     readonly project: YurisProject,
     private readonly scripts: ReadonlyMap<number, YurisScript>,
     private readonly host: YurisMachineHost,
+    settings: YurisStartupSettings,
   ) {
     this.variables = new YurisVariables(project.table.variableCount);
     this.system = new YurisSystem(this.variables, project.commands.table, host);
     this.expression = new YurisExpression(this.variables, this.system);
     this.system.textCount = project.table.textCount;
+    this.system.settings = settings;
+    this.system.simd = settings.simd !== 0;
+    this.system.preloadEnabled = settings.preload !== 0;
+    this.system.value79 = settings.value10;
+    this.system.config23 = settings.value23;
     this.system.startTimers(host.now());
     // 0x468EB0: the desktop's size and colour depth.
     const desktop = host.desktop();
@@ -228,6 +237,7 @@ export class YurisMachine {
     // YSCF setting 0x8722D4: 0 no sound, 1 sound, 2 sound required.
     this.sounds = new YurisSounds(this, this.files, host, project.config.settings[3] ?? 0);
     this.sounds.install();
+    installProduct(this, host, host, host);
   }
 
   /**
@@ -235,9 +245,15 @@ export class YurisMachine {
    * 3) initialised, and the main task starts at `SYSTEM_START` with that label's nesting.
    */
   static async create(project: YurisProject, host: YurisMachineHost): Promise<YurisMachine> {
+    // 0x46BA54 calls 0x466AC0 first and stops when yscfg.dat cannot be read.
+    const file = await host.readFile('yscfg.dat');
+    if (file === null) {
+      host.messageBox(STARTUP_SETTINGS_MISSING);
+      throw new Error(STARTUP_SETTINGS_MISSING);
+    }
     const scripts = new Map<number, YurisScript>();
     for (const file of project.files) scripts.set(file.index, await project.script(file.index));
-    const machine = new YurisMachine(project, scripts, host);
+    const machine = new YurisMachine(project, scripts, host, YurisStartupSettings.read(file));
     machine.variables.initialize(project.variables, -1, (bytes) => machine.expression.string(bytes));
     const index = machine.label(bytes('SYSTEM_START'));
     if (index < 0) throw new YurisError(0x1a694, ['SYSTEM_START']);

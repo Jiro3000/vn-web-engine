@@ -21,7 +21,16 @@ export interface YurisFolderHost {
   copyFile(from: ByteString, to: ByteString): HostResult<void>;
   deleteFile(path: ByteString): HostResult<void>;
   removeDirectory(path: ByteString): HostResult<void>;
+  /** `fopen` "rb" of a file in the folder (never an archive entry), null when it cannot be read. */
+  readFile(path: ByteString): HostResult<Uint8Array | null>;
   writeFile(path: ByteString, data: Uint8Array): HostResult<void>;
+  /** `_open` with O_APPEND | O_CREAT: `data` is added to the end of the file. */
+  appendFile(path: ByteString, data: Uint8Array): HostResult<void>;
+  /**
+   * FindFirstFileA/FindNextFileA over `path\*.*` in the file system's order, null when the
+   * folder cannot be searched. The '.' and '..' entries are included as Windows returns them.
+   */
+  list(path: ByteString): HostResult<readonly {readonly name: ByteString; readonly directory: boolean}[] | null>;
   /** ShellExecuteExA "open" of `file`; `wait` waits for the started process (EXEC2). */
   shellExecute(file: ByteString, parameters: ByteString | null, wait: boolean): HostResult<void>;
   /** FindExecutableA: the program associated with `file`, empty when there is none. */

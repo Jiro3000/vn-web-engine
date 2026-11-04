@@ -1,3 +1,4 @@
+import {YurisStartupSettings} from './startup.js';
 import {YurisError} from './errors.js';
 import type {YurisSystemValues} from './expression.js';
 import {type ByteString, fistp, i64} from './numbers.js';
@@ -70,6 +71,24 @@ export class YurisSystem implements YurisSystemValues {
    * 0x468EB0: 0x8723A4 BITSPIXEL, 0x87239C HORZRES and 0x8723A0 VERTRES.
    */
   saveFolderKind = 0;
+  /**
+   * 0x8722C0: set at start-up by 0x411038 when the drive checks find the program running from
+   * removable media; archive and save paths are then absolute. A browser installation is not.
+   */
+  removableMedia = 0;
+  /** 0x871FFC (PRODUCT COM 0x50/0x51): the window output goes through Direct3D. */
+  direct3d = false;
+  /** 0x8722DC (PRODUCT COM 0x1B/0x1C): scripts and drawing keep running during MOVIE playback. */
+  runDuringMovie = false;
+  /**
+   * 0x872268 (PRODUCT COM 0x4E2B/0x4E2C): pressing the main window's caption (WM_NCLBUTTONDOWN
+   * HTCAPTION, 0x45D48C) suspends the program until the button is released (0x45D470).
+   */
+  suspendOnCaption = false;
+  /** 0x87204C: yscfg.dat word 0x17 (0..3), read by 0x466AC0 and rewritten by PRODUCT COM 0x39. */
+  config23 = 0;
+  /** The start-up `yscfg.dat` settings (0x466AC0). */
+  settings = new YurisStartupSettings();
   value71 = 0;
   bitsPerPixel = 0;
   desktopWidth = 0;
@@ -141,6 +160,26 @@ export class YurisSystem implements YurisSystemValues {
     if (this.suspended) return;
     this.suspended = true;
     this.suspendedAt = now;
+  }
+
+  /** 0x872260 and 0x871F28: the timer pause of PRODUCT COM 0x4E2D, when it began. */
+  private timersPaused = false;
+  private timersPausedAt = 0;
+
+  /** PRODUCT COM 0x4E2D (0x45C718): the four timers stop counting until COM 0x4E2E. */
+  pauseTimers(now: number): void {
+    if (this.timersPaused) return;
+    this.timersPaused = true;
+    this.timersPausedAt = now;
+  }
+
+  /** PRODUCT COM 0x4E2E (0x45C768): every running timer leaves the paused time out. */
+  resumeTimers(now: number): void {
+    if (!this.timersPaused) return;
+    this.timersPaused = false;
+    const elapsed = Math.trunc(now - this.timersPausedAt) >>> 0;
+    for (let n = 1; n <= 4; n++) if (this.timerRunning[n]) this.timerBase[n]! += elapsed;
+    this.timersPausedAt = 0;
   }
 
   /** 0x45CACC: the suspension ends; every running timer leaves it out. */

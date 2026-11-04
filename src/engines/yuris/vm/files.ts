@@ -8,6 +8,11 @@ export interface YurisFileHost {
   /** Whether the folder or an archive holds `path` (lower case, '\' separated). */
   exists(path: ByteString): boolean;
   read(path: ByteString): Promise<Uint8Array>;
+  /**
+   * The archive list 0x8725AC (`pac\*.ypf` in directory order, then `update1.ypf`..): each
+   * archive's entry names in table order, as their decoded bytes.
+   */
+  archiveNames(): readonly (readonly ByteString[])[];
 }
 
 /** File types of 0x440C68, by extension. */
@@ -109,6 +114,10 @@ export class YurisFiles {
 
   read(path: ByteString): Promise<Uint8Array> {
     return this.host.read(path);
+  }
+
+  archiveNames(): readonly (readonly ByteString[])[] {
+    return this.host.archiveNames();
   }
 }
 

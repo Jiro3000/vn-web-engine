@@ -224,6 +224,18 @@ export class YurisWindows {
   }
 
   /**
+   * WM_NCLBUTTONDOWN on the caption (0x45D48C) and WM_NCLBUTTONUP, WM_LBUTTONUP or
+   * WM_EXITSIZEMOVE (0x45D470) of the main window: with PRODUCT COM 0x4E2B set, the program
+   * suspends while the caption is held.
+   */
+  captionPress(pressed: boolean): void {
+    const s = this.m.system;
+    if (!s.suspendOnCaption) return;
+    if (pressed) s.suspend(this.m.now());
+    else if (s.suspended) s.resume(this.m.now());
+  }
+
+  /**
    * The per-frame activity check (0x41022A..0x410261): a minimised window is inactive. Without
    * BACKGROUNDEXEC the program then suspends while the main window is inactive and resumes
    * when it is active again (0x45CA80); with it, a pending suspension ends.
