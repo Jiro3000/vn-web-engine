@@ -1,0 +1,110 @@
+import {BrowserSpeakerBuffer} from './browser-speaker-buffer.js';
+import type {PcmBufferCommand} from './mutable-pcm-protocol.js';
+
+export interface LoopingSoundFormat {
+  channels: number;
+  sampleRate: number;
+  bitsPerSample: number;
+  byteLength: number;
+}
+
+/** Mutable DirectSound-style buffers consumed by the browser's real PCM device.
+ * flush() runs at a host frame boundary; synchronous cursor queries use the last
+ * acknowledged render position, never a wall-clock estimate. Commands are ordered
+ * even while the worklet is being created. */
+export class BrowserLoopingSoundDevice {
+  private readonly buffers = new Set<BrowserLoopingSoundBuffer>();
+  constructor(readonly context: AudioContext) {}
+  createSoundBuffer(format: LoopingSoundFormat): BrowserLoopingSoundBuffer {
+    if (![8, 16, 24].includes(format.bitsPerSample)) throw new RangeError('Unsupported PCM width');
+    const buffer = new BrowserLoopingSoundBuffer(this.context, format);
+    this.buffers.add(buffer);
+    return buffer;
+  }
+  async flush(): Promise<void> {
+    for (const buffer of this.buffers) {
+      await buffer.flush();
+      if (buffer.released) this.buffers.delete(buffer);
+    }
+  }
+  async dispose(): Promise<void> {
+    for (const buffer of this.buffers) buffer.release();
+    await this.flush();
+  }
+}
+
+export class BrowserLoopingSoundBuffer {
+  private readonly buffer: Promise<BrowserSpeakerBuffer>;
+  private pending: Promise<unknown>;
+  private cursor = 0;
+  private failure: unknown;
+  released = false;
+  constructor(context: AudioContext, format: LoopingSoundFormat) {
+    this.buffer = BrowserSpeakerBuffer.create(context, {
+      channels: format.channels,
+      sampleRate: format.sampleRate,
+      bits: format.bitsPerSample as 8 | 16 | 24,
+      byteLength: format.byteLength,
+    });
+    this.pending = this.buffer.then(async (b) => {
+      // DirectSound initializes allocated storage to PCM silence.
+      const bytes = new Uint8Array(format.byteLength);
+      if (format.bitsPerSample === 8) bytes.fill(128);
+      await b.command({
+        kind: 'write',
+        offset: 0,
+        bytes,
+        initialized: new Uint8Array(bytes.length).fill(1),
+      });
+    });
+    void this.pending.catch((error) => {
+      this.failure = error;
+    });
+  }
+  private command(command: PcmBufferCommand): void {
+    this.pending = this.pending.then(async () => (await this.buffer).command(command));
+    void this.pending.catch((error) => {
+      this.failure = error;
+    });
+  }
+  playCursor(): number {
+    if (this.failure) throw this.failure;
+    return this.cursor;
+  }
+  write(offset: number, bytes: Uint8Array): void {
+    this.command({
+      kind: 'write',
+      offset,
+      bytes: bytes.slice(),
+      initialized: new Uint8Array(bytes.length).fill(1),
+    });
+  }
+  play(): void {
+    this.command({kind: 'play', loop: true});
+  }
+  stop(): void {
+    this.command({kind: 'stop'});
+  }
+  setVolume(decibels: number): void {
+    this.command({kind: 'volume', decibels});
+  }
+  setPan(decibels: number): void {
+    this.command({kind: 'pan', decibels});
+  }
+  setFrequency(hz: number): void {
+    this.command({kind: 'frequency', hz});
+  }
+  release(): void {
+    if (this.released) return;
+    this.released = true;
+    this.pending = this.pending.then(async () => (await this.buffer).dispose());
+    void this.pending.catch((error) => {
+      this.failure = error;
+    });
+  }
+  async flush(): Promise<void> {
+    await this.pending;
+    if (!this.released)
+      this.cursor = (await (await this.buffer).command({kind: 'status'})).byteCursor;
+  }
+}
