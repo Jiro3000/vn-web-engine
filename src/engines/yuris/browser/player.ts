@@ -6,6 +6,7 @@ import {decodeCp932, encodeCp932} from '../../../text/cp932.js';
 import {BrowserMonochromeFont} from '../../../text/browser-monochrome-font.js';
 import {BrowserLoopingSoundDevice} from '../../../audio/browser-looping-sound.js';
 import {BrowserAudioContextHost} from '../../../audio/browser-audio-context-host.js';
+import {BrowserWindowsMenus} from '../../../platform/windows-menus.js';
 import {BrowserLegacyWindows} from '../../../platform/browser-legacy-windows.js';
 import {BrowserWindowsMessageBoxHost} from '../../../platform/windows-message-box.js';
 import {BrowserWindowsTextInput} from '../../../platform/windows-text-input.js';
@@ -35,6 +36,7 @@ export class YurisBrowserPlayer {
   readonly device = new BrowserLoopingSoundDevice(this.audio);
   readonly windows: BrowserLegacyWindows;
   readonly movie: BrowserFileMovie;
+  readonly menus: BrowserWindowsMenus;
   private readonly codecs = new LegacyImageCodec();
   private readonly fonts = new BrowserMonochromeFont((s, face) =>
     face === 'SimHei' ? new TextDecoder('gbk').decode(bytes(s)) : decode(s),
@@ -60,6 +62,7 @@ export class YurisBrowserPlayer {
       (e) => this.stopped(e),
     );
     this.windows = new BrowserLegacyWindows(root, decode, encode);
+    this.menus = new BrowserWindowsMenus(root, this.windows.elements);
     this.movie = new BrowserFileMovie(this.windows.elements[0]!, this.audio);
     const win = this.windows,
       codec = this.codecs,
@@ -85,6 +88,23 @@ export class YurisBrowserPlayer {
     const w = methods(win),
       f = methods(folder);
     this.host = {
+      menus: {
+        setWindowMenu: (no, items, select) => this.menus.setWindowMenu(no, items, select),
+        contextMenu: (items, x, y, select) => {
+          const rect = this.canvases[0]?.getBoundingClientRect();
+          this.menus.contextMenu(
+            items,
+            rect ? rect.left + (x / this.machine.screenWidth) * rect.width : x,
+            rect ? rect.top + (y / this.machine.screenHeight) * rect.height : y,
+            select,
+          );
+        },
+        setTray: (tray, select, activate) =>
+          this.menus.setTray(tray, select, () => {
+            this.windows.activate(0);
+            activate();
+          }),
+      },
       exists: (path) => folder.existsFile(path) || !!files.find(path),
       read: async (path) => (await folder.readFile(path)) ?? files.read(path),
       archiveNames: () => files.archives.map((a) => a.archive.entries.map((e) => e.key)),
@@ -286,7 +306,8 @@ export class YurisBrowserPlayer {
         if (
           !this.machine ||
           e.target instanceof HTMLInputElement ||
-          (e.target instanceof Element && e.target.closest('dialog[open]'))
+          (e.target instanceof Element &&
+            e.target.closest('dialog[open], [role=menu], [role=menuitem], [data-windows-tray]'))
         )
           return;
         const key = setWindowsVirtualKey(this.machine.input.keyboard, e, true);
@@ -415,6 +436,7 @@ export class YurisBrowserPlayer {
     this.audioHost.dispose();
     await this.audio.close();
     for (const target of this.targets) target?.dispose();
+    this.menus.dispose();
     this.windows.dispose();
     if (this.cursorUrl) URL.revokeObjectURL(this.cursorUrl);
   }

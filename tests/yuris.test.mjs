@@ -809,3 +809,169 @@ test('browser virtual keys keep both Ctrl sides and the aggregate held independe
   assert.equal(state[18], 128);
   assert.equal(state[1], 128);
 });
+
+test('YU-RIS menu commands build ordered snapshots, retain query precedence and dispatch LOWORD codes', async () => {
+  const {YurisMenus} = await import('../dist/engines/yuris/vm/menu.js');
+  const commands = new Map(),
+    values = new Map(),
+    ops = new Uint8Array(100),
+    calls = [];
+  let result,
+    type = 1;
+  const m = {
+    system: {names: ['W0', '', '', 'M0'], value84: 0n},
+    input: {cursorX: 23, cursorY: 41},
+    define: (id, fn) => commands.set(id, fn),
+    decode() {},
+    commandName: (id) => (id === 0x69 ? 'WINDOW' : 'MENU'),
+    variables: {get: () => ({type})},
+    setInt: (_id, _index, v) => {
+      if (type === 3) throw Error('Numeric query into a string');
+      result = v;
+    },
+    setString: (_id, _index, v) => {
+      result = v;
+    },
+    args: {
+      has: (id) => (values.has(id) ? id + 1 : 0),
+      text: (id) => values.get(id) ?? '',
+      int: (id) => values.get(id) ?? 0n,
+      op: ops,
+      variable: new Uint32Array(100).fill(1000),
+      variableIndex: new BigInt64Array(100),
+    },
+  };
+  const host = {
+    contextMenu: (...args) => calls.push(args),
+    setWindowMenu: (...args) => calls.push(args),
+    setTray() {},
+  };
+  const menus = new YurisMenus(m, host);
+  const run = (id, args) => {
+    values.clear();
+    for (const [k, v] of Object.entries(args)) values.set(+k, v);
+    return commands.get(id)();
+  };
+  run(0x3e, {0: 'Tools/', 1: 'Tools', 2: 10n});
+  run(0x3e, {0: 'Tools/B', 1: 'B', 2: 20n, 6: 2n});
+  run(0x3e, {0: 'Tools/A', 1: 'A', 2: 10n, 4: 0n, 5: 1n, 6: 0x112345678n});
+  run(0x3e, {0: 'Tools/Hidden', 1: 'Hidden', 2: 15n, 3: 0n});
+  run(0x3e, {0: 'Tools/Separator', 1: '', 2: 30n});
+  run(0x3f, {0: 'Tools/', 1: 1n});
+  const [items, x, y, select] = calls.at(-1);
+  assert.deepEqual(
+    items.map((x) => [x.label, x.enabled, x.checked, x.code]),
+    [
+      ['A', false, true, 0x12345678],
+      ['B', true, false, 2],
+      ['', false, false, 0],
+    ],
+  );
+  assert.deepEqual([x, y], [23, 41]);
+  select(items[0].code);
+  assert.equal(m.system.value84, 0x5678n);
+  run(0x3e, {0: 'Tools/A', 1: 'Changed', 3: 255n, 5: 254n});
+  assert.equal(items[0].label, 'A'); // SetMenu captures state; later mutations do not update it.
+  run(0x41, {0: 'out', 1: 'Tools/A', 4: 1n, 5: 1n, 8: 1n});
+  assert.equal(result, -1n);
+  run(0x41, {0: 'out', 1: 'Tools/A', 7: 1n});
+  assert.equal(result, -2n);
+  run(0x41, {0: 'out', 1: 'Tools/A', 8: 1n});
+  assert.equal(result, 0x112345678n);
+  type = 3;
+  run(0x41, {0: 'out', 1: 'Tools/A', 2: 1n});
+  assert.equal(result, 'Changed');
+  run(0x41, {0: 'out', 1: 'Missing', 2: 1n});
+  assert.equal(result, '');
+  type = 1;
+  run(0x41, {0: 'out', 1: 'Missing', 8: 1n});
+  assert.equal(result, 0n);
+  ops[3] = 1;
+  run(0x3e, {0: 'Tools/B', 2: 0x80000000n});
+  ops[3] = 0;
+  run(0x41, {0: 'out', 1: 'Tools/B', 4: 1n});
+  assert.equal(result, -2147483628n);
+  ops[3] = 2;
+  run(0x3e, {0: 'Tools/B', 2: 1n});
+  ops[3] = 0;
+  run(0x41, {0: 'out', 1: 'Tools/B', 4: 1n});
+  assert.equal(result, 1n);
+  assert.throws(
+    () => run(0x3e, {0: 'Missing', 2: 1n}),
+    (e) => e.code === 0x187a4,
+  );
+  assert.throws(
+    () => run(0x3e, {0: 'Missing', 1: 'New'}),
+    (e) => e.code === 0x18790,
+  );
+  menus.windowMenu(0, 'Tools/');
+  assert.equal(calls.at(-1)[1].length, 3);
+  menus.windowMenu(0, '');
+  assert.deepEqual(calls.at(-1)[1], []);
+  assert.throws(
+    () => menus.windowMenu(0, 'Missing/'),
+    (e) => e.code === 0x18b82,
+  );
+  run(0x40, {0: 'Tools/'});
+  run(0x41, {0: 'out', 1: 'Tools/A', 3: 1n});
+  assert.equal(result, 0n);
+});
+
+test('YU-RIS TRAY keeps icon ownership, menu snapshots and missing-layer early returns', async () => {
+  const {YurisMenus} = await import('../dist/engines/yuris/vm/menu.js');
+  const {YurisTree} = await import('../dist/engines/yuris/vm/nodes.js');
+  const commands = new Map(),
+    values = new Map(),
+    calls = [];
+  const m = {
+    system: {names: ['W0', '', '', 'M0'], value84: 0n},
+    windows: {windows: [{active: false}]},
+    layers: {tree: new YurisTree()},
+    define: (id, fn) => commands.set(id, fn),
+    decode() {},
+    commandName: () => 'MENU',
+    messageBox() {
+      throw new Error('Unexpected icon diagnostic');
+    },
+    args: {
+      has: (id) => (values.has(id) ? id + 1 : 0),
+      text: (id) => values.get(id) ?? '',
+      int: (id) => values.get(id) ?? 0n,
+      op: new Uint8Array(100),
+    },
+  };
+  const menus = new YurisMenus(m, {
+    setTray: (...args) => calls.push(args),
+    contextMenu() {},
+    setWindowMenu() {},
+  });
+  const run = (id, args) => {
+    values.clear();
+    for (const [k, v] of Object.entries(args)) values.set(+k, v);
+    return commands.get(id)();
+  };
+  run(0x3e, {0: 'Tray/', 1: 'Tray', 2: 1n});
+  run(0x3e, {0: 'Tray/Back', 1: 'Back', 2: 1n, 6: 1001n});
+  run(0x64, {0: 1n, 1: 'Caption', 2: 'Missing', 3: 'Tray/'});
+  assert.equal(calls.length, 0);
+  m.layers.tree.create('W0', true, 1n, {});
+  const pixels = new Uint8Array(16 * 16 * 4).fill(127);
+  m.layers.tree.create('W0/Icon', false, 1n, {width: 16, height: 16, pixels});
+  run(0x64, {0: 1n, 1: 'Caption', 2: 'Icon', 3: 'Tray/'});
+  const [tray, select, activate] = calls.at(-1);
+  assert.equal(tray.label, 'Caption');
+  assert.equal(tray.items[0].code, 1001);
+  assert.equal(tray.icon.width, 16);
+  assert.notEqual(tray.icon.pixels, pixels);
+  pixels.fill(0);
+  assert.equal(tray.icon.pixels[0], 127);
+  select(1001);
+  assert.equal(m.system.value84, 1001n);
+  activate();
+  assert.equal(m.windows.windows[0].active, true);
+  const count = calls.length;
+  run(0x64, {1: 'Later'});
+  assert.equal(calls.length, count);
+  run(0x64, {0: 0n});
+  assert.equal(calls.at(-1)[0], null);
+});

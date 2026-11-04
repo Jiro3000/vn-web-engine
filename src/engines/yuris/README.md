@@ -20,8 +20,16 @@ CGACT TEXT (0x427D0F) consumes FONT's monochrome glyph DIB and measured advance 
 
 MOVIE/MOVIEEND/MOVIEINFO (0x44A010/0x44A5FC/0x44A650) use physical folder files and OS media services, separately from YMV. The fixed native backend is DirectShow (0x59B790 = 1); its 4000·log10 volume conversion is preserved. Tasks continue during playback, while window composition/output pauses unless PRODUCT COM 0x1B enables it.
 
+MENU/MENUACT/MENUEND/MENUINFO (0x448F74..0x449570) maintain a separate M0 tree.
+Menu installation takes a snapshot in Z order: E hides entries, A disables them,
+CHECK marks them, empty NAME creates a separator, and groups with children create submenus.
+WM_COMMAND exposes the selected CODE's low word through system variable 0x84.
+WINDOW MENUID installs a window menu; TRAY (0x452FB4) retains its label, optional
+16x16 BGRA icon and independently installed menu snapshot.
+
 ## Host differences
 
+- Menus and the tray use page controls instead of OS chrome. The default application tray icon is represented by its label. Menu labels have dynamic storage rather than the native 0x105-byte allocation.
 - PRODUCT caption uses a dynamically sized string rather than a fixed native buffer.
 - GBK messages cross the host boundary already decoded.
 - LOAD integer/float writes clamp to the allocated destination.

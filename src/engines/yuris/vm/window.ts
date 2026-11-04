@@ -367,7 +367,10 @@ export class YurisWindows {
       cg.dirty = true;
       cg.clip.splice(0, 4, 0, 0, cg.width - 1, cg.height - 1);
     }
-    if (a.has(Arg.MenuId)) throw new Error('WINDOW MENUID is not implemented');
+    if (a.has(Arg.MenuId)) {
+      const result = m.menus.windowMenu(no, a.text(Arg.MenuId));
+      if (result) return result;
+    }
     if (a.has(Arg.RegionId)) throw new Error('WINDOW REGIONID is not implemented');
     if (a.has(Arg.DragId)) {
       const node = this.layer(a.text(Arg.DragId));

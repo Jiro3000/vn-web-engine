@@ -25,6 +25,8 @@ import {installMath3d} from './math3d.js';
 import {installYmv} from './ymv.js';
 import {installDialog, type YurisDialogHost} from './dialog.js';
 import {YurisMovie, type YurisMovieHost} from './movie.js';
+import {YurisMenus} from './menu.js';
+import type {WindowsMenusHost} from '../../../platform/windows-menus.js';
 import {STARTUP_SETTINGS_MISSING, YurisStartupSettings} from './startup.js';
 import {SYSTEM_VARIABLE_LIMIT, YurisType, YurisVariables} from './variables.js';
 import {installMath} from './math.js';
@@ -159,6 +161,7 @@ export interface YurisMachineHost
     YurisDialogHost,
     YurisMovieHost,
     YurisProductHost {
+  readonly menus: WindowsMenusHost;
   /** A fatal script error with its formatted `YSER` message, after the quit flag is set. */
   error(message: string, error: YurisError): void;
   /** `Sleep` of the frame pacing 0x4109A8. */
@@ -208,6 +211,7 @@ export class YurisMachine {
   readonly fonts: YurisFonts;
   readonly sounds: YurisSounds;
   readonly movie: YurisMovie;
+  readonly menus: YurisMenus;
   private readonly handlers: (YurisCommandHandler | undefined)[] = [];
   private readonly loaded = new Map<number, LoadedScript>();
   private current!: LoadedScript;
@@ -257,6 +261,7 @@ export class YurisMachine {
       project.config.height || 480,
     );
     this.windows.install();
+    this.menus = new YurisMenus(this, host.menus);
     this.movie = new YurisMovie(this, host, host);
     this.fonts = new YurisFonts(host);
     installFonts(this, this.fonts);
