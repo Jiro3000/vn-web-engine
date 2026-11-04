@@ -4,6 +4,7 @@ import {YurisError} from './errors.js';
 import type {YurisMachine} from './machine.js';
 import {sizeBicubic, sizeBilinear, sizeLanczos, sizeNearest, sizeSupersampled} from './resize.js';
 import {drawCgText} from './glyph.js';
+import {rotateCg} from './rotation.js';
 
 /** CGACT argument ids (`ysc.ybn`). */
 const enum Act {
@@ -219,6 +220,19 @@ export function cgAct(layers: YurisLayers, m: YurisMachine): number {
   };
   const region = (op: Op, mode: number): number =>
     regionOp(layers, op, destination, node, p, extra !== 0, mode);
+  const rotation = (): number => {
+    // 0x428F4E: rotation rejects any explicit X/Y/X2/Y2, even whole-image bounds.
+    if ([Act.X, Act.Y, Act.X2, Act.Y2].some((id) => a.has(id)))
+      throw new YurisError(0x18ba2, [layers.commandName(), m.argName(Act.Rotation)]);
+    return rotateCg(
+      layers,
+      node,
+      destination,
+      extra !== 0,
+      set,
+      (low(a.int(Act.Rotation)) + 10) & 255,
+    );
+  };
   const masksDestination = (id: number) => {
     if (a.int(id) >= 2n && destination?.payload) destination.payload.masked = 1;
   };
@@ -238,7 +252,7 @@ export function cgAct(layers: YurisLayers, m: YurisMachine): number {
     [Act.Size3, () => size(Act.Size3, 0x1e)],
     [Act.Size4, () => size(Act.Size4, 0x28)],
     [Act.Size5, () => size(Act.Size5, 0x32)],
-    [Act.Rotation, null],
+    [Act.Rotation, rotation],
     [Act.Rotation2, null],
     [Act.Saido, () => (setUpTo(0x100), region(Op.Saido, 0))],
     [Act.Meido, () => (setUpTo(0xffffff), region(Op.Meido, 0))],

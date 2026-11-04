@@ -680,3 +680,112 @@ test('CGACT TEXT retains native gradient rotations, whole-box rejection and righ
     [5, 5],
   ]);
 });
+
+test('CGACT ROTATION keeps native cardinal edges, buffer reuse, alias feedback and coordinate errors', () => {
+  const commands = new Map(),
+    values = new Map([
+      [29, 1n],
+      [9, 90n],
+    ]);
+  const m = {
+    instruction: {command: 2},
+    screenWidth: 16,
+    screenHeight: 16,
+    system: {names: ['']},
+    define: (id, fn) => commands.set(id, fn),
+    decode() {},
+    commandName: () => 'CGACT',
+    argName: () => 'ROTATION',
+    expression: {intOf: (_type, id) => values.get(id) ?? 0n},
+    args: {
+      has: (id) => (id === 0 || values.has(id) ? id + 1 : 0),
+      text: (id) => (id === 0 ? 'SOURCE' : 'DEST'),
+      int: (id) => values.get(id) ?? 0n,
+      type: [],
+      expression: Array.from({length: 73}, (_, i) => i - 1),
+    },
+  };
+  const layers = new YurisLayers(m, {}, {}),
+    source = new YurisCg(),
+    dest = new YurisCg();
+  layers.install();
+  source.allocate(4, 4);
+  dest.allocate(2, 8);
+  layers.tree.create('SOURCE', false, 1n, source);
+  const dnode = layers.tree.create('DEST', false, 2n, dest);
+  const reset = () => {
+    source.allocate(4, 4);
+    source.masked = 0;
+    for (let i = 0; i < 16; i++) source.pixels.set([i + 1, 44, 55, 201], i * 4);
+  };
+  const blue = (cg) => Array.from({length: 16}, (_, i) => cg.pixels[i * 4]);
+  reset();
+  commands.get(2)();
+  assert.deepEqual(blue(source), [0, 0, 0, 0, 4, 8, 12, 0, 3, 7, 11, 0, 2, 6, 10, 0]);
+  assert.equal(source.masked, 1);
+  reset();
+  values.set(29, 2n);
+  commands.get(2)();
+  assert.deepEqual(blue(source), [5, 9, 13, 0, 4, 8, 12, 0, 3, 7, 11, 0, 2, 6, 10, 0]);
+  reset();
+  values.set(29, 1n);
+  values.set(9, 180n);
+  values.set(1, 1n);
+  const buffer = dest.pixels;
+  commands.get(2)();
+  assert.deepEqual(
+    blue(dest),
+    Array.from({length: 16}, (_, i) => 16 - i),
+  );
+  assert.equal(dest.pixels, buffer);
+  assert.deepEqual([dest.width, dest.height, dest.masked], [2, 8, 0]);
+  reset();
+  dnode.payload = source;
+  commands.get(2)();
+  assert.deepEqual(blue(source), [16, 15, 14, 13, 12, 11, 10, 9, 9, 10, 11, 12, 13, 14, 15, 16]);
+  values.set(12, 0n);
+  assert.throws(
+    () => commands.get(2)(),
+    (error) => error.code === 0x18ba2,
+  );
+});
+
+test('ROTATION safe and preserve modes cover every quadrant and retain signed angle behavior', async () => {
+  const {rotateCg} = await import('../dist/engines/yuris/vm/rotation.js');
+  const source = new YurisCg(),
+    dest = new YurisCg();
+  source.allocate(32, 32);
+  dest.allocate(32, 32);
+  source.pixels.fill(111);
+  const src = {payload: source},
+    dst = {payload: dest},
+    layers = {markDirty() {}};
+  for (const angle of [30, 120, 210, 300]) {
+    dest.pixels.fill(77);
+    rotateCg(layers, src, dst, true, angle, 11);
+    for (let y = 0; y < 32; y++)
+      assert.deepEqual(
+        [...dest.pixels.subarray((y * 32 + 31) * 4, (y * 32 + 32) * 4)],
+        [0, 0, 0, 0],
+      );
+    dest.pixels.fill(77);
+    rotateCg(layers, src, dst, true, angle, 12);
+    for (let y = 0; y < 32; y++)
+      assert.deepEqual(
+        [...dest.pixels.subarray((y * 32 + 31) * 4, (y * 32 + 32) * 4)],
+        [77, 77, 77, 77],
+      );
+    assert.equal(dest.masked, 1);
+  }
+  dest.pixels.fill(77);
+  rotateCg(layers, src, dst, true, -30, 11);
+  assert.ok(dest.pixels.every((v) => v === 77));
+  rotateCg(layers, src, dst, true, 360000000, 11);
+  assert.deepEqual(dest.pixels, source.pixels);
+  assert.equal(dest.masked, source.masked);
+  source.width = 8193;
+  assert.throws(
+    () => rotateCg(layers, src, null, false, 0, 11),
+    (error) => error.code === 0x186aa && error.prefix === false,
+  );
+});

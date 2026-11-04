@@ -34,6 +34,7 @@ MOVIE/MOVIEEND/MOVIEINFO (0x44A010/0x44A5FC/0x44A650) use physical folder files 
 - CGACT TEXT bounds DIB and destination accesses to their allocated storage; invalid glyph sizes that divide by zero in the native rasterizer raise RangeError.
 - MATH3D uses JavaScript double precision instead of x87 80-bit intermediates.
 - GRADATION retains the native full-source stride for a cropped destination, but discards writes outside the allocated buffer instead of corrupting memory. Vertical ramps also discard rows outside the source height.
+- ROTATION discards accesses outside allocated pixel storage. Fresh output buffers start at zero instead of exposing native malloc contents in regions its worker leaves unwritten. Its trigonometric intermediates use JavaScript doubles instead of x87 extended precision.
 - YMV frame JPEGs are decrypted into owned copies rather than mutating the archive buffer.
 - JPEG decoding uses the browser codec instead of the native libjpeg build; numeric readback can differ, including one-level channel differences in grayscale alpha JPEGs.
 - The browser MOVIE host uses its installed media codecs and a child video element in the virtual window, rather than DirectShow filters or MCI. Codec availability, color conversion and scheduling follow the browser.
