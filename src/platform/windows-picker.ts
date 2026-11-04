@@ -1,15 +1,17 @@
 import {FileError, filePath, type FileSystem} from './filesystem.js';
 
 export interface WindowsFileDialogRequest {
-  readonly structureSize: 0x98;
+  readonly structureSize: 0x4c | 0x98;
   readonly owner: object;
   /** ANSI description/pattern pairs ending in a second NUL. */
   readonly filter: Uint8Array;
-  readonly filterIndex: 1;
-  readonly fileCapacity: 0x30c;
+  readonly filterIndex: 0 | 1;
+  readonly fileCapacity: number;
+  /** Initial lpstrFile contents; absent callers start with an empty edit. */
+  readonly filename?: Uint8Array;
   readonly initialDirectory: Uint8Array | null;
   readonly title: Uint8Array | null;
-  readonly defaultExtension: Uint8Array;
+  readonly defaultExtension: Uint8Array | null;
   readonly flags: number;
 }
 
@@ -203,6 +205,7 @@ export class BrowserWindowsDialogPicker implements WindowsFileDialogHost, Window
       filters,
       mode: save ? 'save' : 'open',
       fileCapacity: request.fileCapacity,
+      filename: request.filename ? this.options.decodeAnsi(stripNul(request.filename)) : '',
     });
     if (selected === null) return null;
     const encoded = this.options.encodeAnsi(selected);
@@ -225,6 +228,7 @@ export class BrowserWindowsDialogPicker implements WindowsFileDialogHost, Window
     filters: readonly PickerFilter[];
     mode: 'open' | 'save' | 'folder';
     fileCapacity: number;
+    filename?: string;
   }): Promise<string | null> {
     const {document, parent, files} = this.options;
     const previousFocus = document.activeElement as HTMLElement | null;
@@ -265,6 +269,7 @@ export class BrowserWindowsDialogPicker implements WindowsFileDialogHost, Window
     }
     const filename = document.createElement('input');
     filename.type = 'text';
+    filename.value = config.filename ?? '';
     filename.setAttribute('aria-label', 'File name');
     const feedback = document.createElement('p');
     feedback.setAttribute('role', 'status');

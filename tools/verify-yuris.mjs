@@ -5,11 +5,15 @@
  * `ysbin/*.ybn` is parsed. Only counts and failures are printed; no asset is written or
  * rendered. Run after `npm run build:runtime`:
  *
- *   node tools/verify-yuris.mjs "/path/to/game"
+ *   node tools/verify-yuris.mjs "/path/to/game" [--webp]
+ *
+ * --webp also decodes every WebP with the native color conversion and hashes BGRA.
  */
 import {readdir} from 'node:fs/promises';
 import {resolve} from 'node:path';
+import {createHash} from 'node:crypto';
 import {openSource} from './file-source.mjs';
+import {decodeWebp} from '../dist/formats/webp/webp.js';
 import {
   YpfArchive,
   YpfFileSystem,
@@ -20,6 +24,8 @@ import {
 const root = resolve(process.argv[2] ?? 'targetgame/yuris');
 const failures = [];
 const counts = {};
+const checkWebp = process.argv.includes('--webp');
+const webpHash = createHash('sha256');
 const count = (kind, n = 1) => (counts[kind] = (counts[kind] ?? 0) + n);
 
 const archives = [];
@@ -55,6 +61,17 @@ for (const {name, path} of archives) {
       }
     }
     count(`type ${entry.type}`);
+    if (checkWebp && entry.type === 10) {
+      try {
+        const bytes = entry.compression ? await archive.read(entry) : stored;
+        const image = decodeWebp(bytes, true);
+        count('decoded WebP');
+        count('WebP pixels', image.width * image.height);
+        webpHash.update(image.pixels);
+      } catch (error) {
+        failures.push(`${name}: WebP at ${entry.offset}: ${error.message}`);
+      }
+    }
   }
   console.log(
     `${name}: version ${archive.version}, ${archive.entries.length} entries, ${bytes} stored bytes`,
@@ -122,3 +139,4 @@ for (const failure of failures.slice(0, 40)) console.log(`  ${failure}`);
 process.exitCode = failures.length ? 1 : 0;
 
 for (const {archive} of opened) await archive.source.close();
+if (checkWebp) console.log('WebP BGRA SHA-256', webpHash.digest('hex'));

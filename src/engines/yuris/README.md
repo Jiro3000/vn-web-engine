@@ -10,7 +10,7 @@ YPF registration follows 0x464A3C, including ignoring files without an archive s
 
 ## Verification
 
-After `npm run build:runtime`, run `node tools/verify-yuris.mjs /path/to/installation` to check archive name/data hashes, inflation and all script tables. `node tools/verify-webp.mjs` requires `cwebp` and `dwebp` on PATH and compares synthetic lossless/lossy/alpha fixtures byte for byte. `tests/webp.test.mjs` checks small synthetic fixtures without external binaries. No verification needs to display game images.
+After `npm run build:runtime`, run `node tools/verify-yuris.mjs /path/to/installation` to check archive name/data hashes, inflation and all script tables. Add `--webp` to decode every archived WebP and print a combined BGRA hash. `node tools/verify-webp.mjs` requires `cwebp` and `dwebp` on PATH and compares synthetic lossless/lossy/alpha fixtures byte for byte. `tests/webp.test.mjs` checks small synthetic fixtures without external binaries. No verification needs to display game images.
 
 The shared WebP decoder emits straight BGRA and supports VP8L, VP8 and VP8X with ALPH. Its default color conversion matches modern libwebp, whose intermediate fixed-point products round differently from libwebp 0.4. YU-RIS hosts must pass `true` as `decodeWebp`'s second argument to select the native 14-bit scalar conversion (YSWBP.DLL 0x10021090 and related upsamplers). Animated WebP is rejected.
 
@@ -26,3 +26,11 @@ The shared WebP decoder emits straight BGRA and supports VP8L, VP8 and VP8X with
 - LOAD without FILE or MEM uses an empty filename.
 - The TEXT line buffer is not bounded to 0x1000 bytes.
 - MATH3D uses JavaScript double precision instead of x87 80-bit intermediates.
+
+## Browser player
+
+`yuris.html` opens a read-only folder selection and applies `updateN.ypf` after `pac/`. Browser saves use an IndexedDB overlay keyed by archive-index identity; the installed files are never written. `YurisBrowserPlayer` binds the VM to shared page windows, monochrome font rasterization, codecs, folder storage, registry, dialogs and mutable PCM output. Pointer coordinates are scaled from the displayed canvas to game pixels (0x403F2C).
+
+The existing CPU layer compositor feeds a WebGL presentation target. Sound buffers use the shared mutable PCM processor in an AudioWorklet (or the shared ScriptProcessor compatibility host). The browser frame boundary acknowledges buffer commands and reads the actual audio render cursor; synchronous VM cursor reads use that last acknowledgement. This can lag within a frame, unlike the native sound thread. Pitch changes alter sample consumption in the render processor.
+
+Browser windows live on a virtual desktop; fullscreen, activation, screen wake locks and process operations use the shared browser platform policy. Local Windows executables are never launched. The font provider offers CSS family aliases and uses browser fallback fonts where a native family is unavailable; glyphs therefore need not match Windows GDI. SimHei text uses GBK and the Japanese aliases use CP932. Browser image encoders may produce different compressed output and alpha rounding from native encoders. Invalid ONMOUSE window zero is mapped to the main window rather than reading before the native window pointer array.

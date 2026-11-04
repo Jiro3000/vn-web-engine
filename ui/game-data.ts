@@ -210,6 +210,14 @@ export async function knownGames(player: PlayerId): Promise<KnownGame[]> {
           ]),
         );
     }
+    case 'yuris':
+      return (stored ?? [])
+        .filter((n) => n.length === 2 && n[0] === 'yuris')
+        .map((namespace) =>
+          storedGame(namespace.join('/'), 'YU-RIS', [
+            {windows: 'C:', namespace, fold: (p) => p.toLowerCase(), inner: ''},
+          ]),
+        );
     case 'rscript': {
       // Reading the library only where it exists keeps listing from creating it.
       const games = holds(['library', 'rscript'])

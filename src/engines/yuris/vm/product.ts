@@ -18,8 +18,8 @@ export interface YurisProductHost {
   inputDialog(text: ByteString, limit: number): HostResult<ByteString | null>;
   /**
    * GetSaveFileNameA (0x45A8F8) titled "保存する場所を指定してください。" with one filter
-   * ("PNG File(*.png)" or "BMP File(*.bmp)") and OFN_EXPLORER | OFN_PATHMUSTEXIST |
-   * OFN_NOCHANGEDIR | OFN_OVERWRITEPROMPT | OFN_HIDEREADONLY | OFN_NOREADONLYRETURN. The
+   * ("PNG File(*.png)" or "BMP File(*.bmp)") and flags 0x180E (callers 0x45A2A2/0x45A307):
+   * OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR | OFN_OVERWRITEPROMPT | OFN_HIDEREADONLY. The
    * chosen path, null when the dialog was cancelled.
    */
   saveFileDialog(name: ByteString, type: 'png' | 'bmp'): HostResult<ByteString | null>;
