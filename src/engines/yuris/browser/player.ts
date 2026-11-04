@@ -8,6 +8,7 @@ import {BrowserLoopingSoundDevice} from '../../../audio/browser-looping-sound.js
 import {BrowserAudioContextHost} from '../../../audio/browser-audio-context-host.js';
 import {BrowserLegacyWindows} from '../../../platform/browser-legacy-windows.js';
 import {BrowserWindowsMessageBoxHost} from '../../../platform/windows-message-box.js';
+import {BrowserWindowsTextInput} from '../../../platform/windows-text-input.js';
 import {BrowserWindowsProcessHost} from '../../../platform/browser-windows-process.js';
 import {BrowserWindowsDialogPicker} from '../../../platform/windows-picker.js';
 import {StoredRegistry} from '../../../platform/registry.js';
@@ -15,6 +16,7 @@ import {MemoryStore} from '../../../platform/store.js';
 import {LegacyFolder} from '../../../platform/legacy-folder.js';
 import {LegacyImageCodec, swap} from '../../../graphics/legacy-image-codec.js';
 import {WebGLDrawTarget} from '../../../graphics/webgl-draw.js';
+import {BrowserFileMovie} from '../../../video/browser-file-movie.js';
 import type {TriangleImage} from '../../../graphics/triangle-draw.js';
 import type {YurisLayers} from '../vm/cg.js';
 
@@ -31,6 +33,7 @@ export class YurisBrowserPlayer {
   private readonly audioHost: BrowserAudioContextHost;
   readonly device = new BrowserLoopingSoundDevice(this.audio);
   readonly windows: BrowserLegacyWindows;
+  readonly movie: BrowserFileMovie;
   private readonly codecs = new LegacyImageCodec();
   private readonly fonts = new BrowserMonochromeFont((s, face) =>
     face === 'SimHei' ? new TextDecoder('gbk').decode(bytes(s)) : decode(s),
@@ -56,10 +59,12 @@ export class YurisBrowserPlayer {
       (e) => this.stopped(e),
     );
     this.windows = new BrowserLegacyWindows(root, decode, encode);
+    this.movie = new BrowserFileMovie(this.windows.elements[0]!, this.audio);
     const win = this.windows,
       codec = this.codecs,
       process = new BrowserWindowsProcessHost();
     const dialogs = new BrowserWindowsMessageBoxHost(root);
+    const textInput = new BrowserWindowsTextInput(root);
     const picker = new BrowserWindowsDialogPicker({
       document,
       parent: root,
@@ -250,6 +255,23 @@ export class YurisBrowserPlayer {
       messageBox: (text) => {
         void dialogs.messageBox(text, 'YU-RIS', 0);
       },
+      dialogMessage: (text, caption, type) =>
+        dialogs.messageBox(decode(text), decode(caption), type),
+      moviePlay: (data, rect, gain) => this.movie.play(data, rect, gain),
+      moviePosition: (rect) => this.movie.position(rect),
+      movieVolume: (gain) => this.movie.volume(gain),
+      moviePlaying: () => this.movie.isPlaying(),
+      movieStop: () => this.movie.stop(),
+      movieClose: () => this.movie.close(),
+      dialogInput: async (text, caption, initial, limit) =>
+        encode(
+          await textInput.show({
+            text: decode(text),
+            caption: decode(caption),
+            value: decode(initial),
+            limit,
+          }),
+        ),
       error: (message, error) => {
         throw new Error(`YU-RIS ${error.code.toString(16)}: ${message}`);
       },
@@ -260,7 +282,12 @@ export class YurisBrowserPlayer {
     document.addEventListener(
       'keydown',
       (e) => {
-        if (!this.machine || e.target instanceof HTMLInputElement) return;
+        if (
+          !this.machine ||
+          e.target instanceof HTMLInputElement ||
+          (e.target instanceof Element && e.target.closest('dialog[open]'))
+        )
+          return;
         this.machine.input.keyboard[e.keyCode] = 128;
         this.machine.input.keyDown(e.keyCode);
         e.preventDefault();
@@ -382,6 +409,7 @@ export class YurisBrowserPlayer {
   async dispose(): Promise<void> {
     this.running = false;
     this.abort.abort();
+    this.movie.close();
     await this.device.dispose();
     this.audioHost.dispose();
     await this.audio.close();

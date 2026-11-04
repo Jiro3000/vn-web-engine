@@ -242,7 +242,7 @@ export function cgAct(layers: YurisLayers, m: YurisMachine): number {
     [Act.Saido, () => (setUpTo(0x100), region(Op.Saido, 0))],
     [Act.Meido, () => (setUpTo(0xffffff), region(Op.Meido, 0))],
     [Act.Sepia, null],
-    [Act.Akarusa, null],
+    [Act.Akarusa, () => (setUpTo(0x100), region(Op.Akarusa, 0))],
     [Act.Mono, null],
     [Act.Vertical, null],
     [Act.Horizontal, null],
@@ -262,14 +262,31 @@ export function cgAct(layers: YurisLayers, m: YurisMachine): number {
     [Act.RectPaint, () => paint(Act.RectPaint, 1)],
     [Act.RectPaint2, () => paint(Act.RectPaint2, 2)],
     [Act.RectPaint3, () => paint(Act.RectPaint3, 3)],
-    [Act.Gradation, null],
+    [
+      Act.Gradation,
+      () => {
+        // 0x427C70 marks ID2 even when the worker's mode is unsupported.
+        if (destination?.payload) destination.payload.masked = 1;
+        return region(Op.Gradation, (low(a.int(Act.Gradation)) << 24) >> 24);
+      },
+    ],
     // 0x428E7B: BNO selects the text buffer and the tests go on.
     [Act.Bno, () => ((layers.textBuffer = low(a.int(Act.Bno))), NaN)],
     [Act.Text, null],
     [Act.Merge, () => merge(layers, node, destination, extra, x, y, false)],
     [Act.Merge2, () => merge(layers, node, destination, extra, x, y, true)],
-    [Act.Transition, null],
-    [Act.Transition2, null],
+    [
+      Act.Transition,
+      () => transition(layers, node, destination, others[1]!, extra, x, y, set, m.system.simd),
+    ],
+    // 0x427F47: TRANSITION2 checks for an extra ID, then returns without a blit.
+    [
+      Act.Transition2,
+      () => {
+        if (!extra) throw new YurisError(0x18bb2, [layers.commandName(), 'TRANSITION2']);
+        return 0;
+      },
+    ],
     [Act.Xor, null],
     [Act.And, null],
     [Act.Trim, null],
@@ -289,6 +306,66 @@ export function cgAct(layers: YurisLayers, m: YurisMachine): number {
   }
   // 0x428CD6: no operation resets the text buffer.
   layers.textBuffer = 0;
+  return 0;
+}
+
+/**
+ * 0x439DD4: interpolate ID and ID2 into the existing ID3 buffer, at X/Y.
+ * 0x406560 clips the whole first image against ID3; X2/Y2 are ignored.
+ * The byte worker selected by 0x403588 processes pairs of BGRA pixels with
+ * MMX (0x402FE0) or SSE integer average (0x402D7C); an odd final pixel uses
+ * the scalar tail. Alpha is interpolated as a fourth color byte.
+ */
+function transition(
+  layers: YurisLayers,
+  first: YurisCgNode,
+  second: YurisCgNode | null,
+  output: YurisCgNode | null,
+  extra: number,
+  x: number,
+  y: number,
+  set: number,
+  simd: boolean,
+): number {
+  if (!extra) throw new YurisError(0x18bb2, [layers.commandName(), 'TRANSITION']);
+  const a = first.payload,
+    b = second?.payload,
+    d = output?.payload;
+  if (!a || !b || !d) return 0;
+  d.masked = 1;
+  if (!a.pixels || !b.pixels || !d.pixels) return 0;
+  const sx = Math.max(0, -x),
+    sy = Math.max(0, -y),
+    dx = Math.max(0, x),
+    dy = Math.max(0, y);
+  const width = Math.min(a.width - sx, d.width - dx),
+    height = Math.min(a.height - sy, d.height - dy);
+  const weight = Math.min(set, 255) + 1;
+  const pairedBytes = (width >> 1) * 8,
+    result = new Uint8Array(8);
+  for (let row = 0; row < height; row++) {
+    const ai = ((sy + row) * a.width + sx) * 4,
+      bi = ((sy + row) * b.width + sx) * 4,
+      di = ((dy + row) * d.width + dx) * 4;
+    // Native MMX loads both input pixels before writing either one, including aliases.
+    for (let at = 0; at < width * 4; at += 8) {
+      const n = Math.min(8, width * 4 - at);
+      for (let c = 0; c < n; c++) {
+        const av = a.pixels[ai + at + c]!,
+          bv = b.pixels[bi + at + c]!;
+        if (at >= pairedBytes) result[c] = av + (((bv - av) * weight) >> 8);
+        else if (weight === 128) result[c] = simd ? (av + bv + 1) >> 1 : (av >> 1) + (bv >> 1);
+        else if (weight < 128)
+          result[c] = Math.max(0, Math.min(255, av + (((bv - av) * ((weight << 24) >> 16)) >> 16)));
+        else
+          result[c] = Math.max(
+            0,
+            Math.min(255, bv + (((av - bv) * (((256 - weight) << 24) >> 16)) >> 16)),
+          );
+      }
+      d.pixels.set(n === 8 ? result : result.subarray(0, n), di + at);
+    }
+  }
   return 0;
 }
 
@@ -581,6 +658,19 @@ function run(
     case Op.Copy2:
       copyRegion(to, from, p.x, p.y, p.x2, p.y2, tw, rw);
       return;
+    case Op.Akarusa:
+      // 0x42ED68: SET=128 is neutral. The alpha load is relative to the
+      // row's left edge rather than X, including when the region is cropped.
+      for (let y = p.y, row = 0; y <= p.y2; y++, row += rw * 4) {
+        for (let x = p.x; x <= p.x2; x++) {
+          const i = (y * tw + x) * 4,
+            o = row + (x - p.x) * 4;
+          for (let c = 0; c < 3; c++)
+            to[o + c] = Math.max(0, Math.min(255, from[i + c]! + p.set - 128));
+          to[o + 3] = from[(y * tw + x - p.x) * 4 + 3]!;
+        }
+      }
+      return;
     case Op.Meido:
       colourShift(to, rw, from, tw, p.x, p.y, p.x2, p.y2, p.set);
       return;
@@ -593,8 +683,53 @@ function run(
     case Op.RectPaint:
       rectPaint(to, s, p.x, p.y, p.x2, p.y2, tw, th, p.set, mode);
       return;
+    case Op.Gradation:
+      if (to !== from) to.set(from.subarray(0, to.length));
+      gradation(to, s, p, tw, th, mode);
+      return;
   }
   throw new Error(`CGACT region operation ${op} is not implemented`);
+}
+
+/**
+ * 0x42E5F0: alpha ramps. Mode 1 spans SET..SET2 horizontally over Y..Y2;
+ * mode 2 only visits rows SET..SET2, preserving the native asymmetric treatment
+ * of columns outside X..X2. Equal endpoints erase only the trailing columns.
+ * The native copy/worker uses the full source stride even for a cropped ID2;
+ * typed array bounds discard its out-of-allocation writes (see README).
+ */
+function gradation(
+  to: Uint8Array,
+  s: YurisCg,
+  p: ActParams,
+  width: number,
+  height: number,
+  mode: number,
+): void {
+  if (mode !== 1 && mode !== 2) return;
+  s.masked = 1;
+  const columns = s.width;
+  const start = Math.min(p.set, p.set2),
+    end = Math.max(p.set, p.set2),
+    reverse = p.set2 < p.set;
+  const x0 = Math.max(0, mode === 1 ? start : p.x),
+    x1 = Math.min(columns - 1, Math.max(-1, mode === 1 ? end : p.x2));
+  if (reverse ? (mode === 1 ? end : p.x2) < 0 : x0 >= columns) return;
+  const first = Math.max(0, mode === 1 ? p.y : start),
+    last = Math.min(height - 1, mode === 1 ? p.y2 : end);
+  for (let y = first; y <= last; y++) {
+    const row = y * width * 4;
+    if (reverse) for (let x = 0; x < Math.min(columns, x0); x++) to[row + x * 4 + 3] = 0;
+    if (start !== end) {
+      for (let x = x0; x <= x1; x++) {
+        const ramp = Math.trunc((((mode === 1 ? x : y) - start) * 255) / (end - start)) & 255;
+        const weight = mode === 1 ? (reverse ? ramp : 255 - ramp) : reverse ? 255 - ramp : ramp;
+        const i = row + x * 4 + 3;
+        if (i < to.length) to[i] = Math.trunc((to[i]! * weight) / 255);
+      }
+    }
+    if (!reverse) for (let x = x1 + 1; x < columns; x++) to[row + x * 4 + 3] = 0;
+  }
 }
 
 /**

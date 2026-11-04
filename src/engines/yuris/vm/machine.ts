@@ -22,6 +22,9 @@ import {installProduct, type YurisProductHost} from './product.js';
 import {installSave, type YurisSaveData} from './save.js';
 import {installText} from './text.js';
 import {installMath3d} from './math3d.js';
+import {installYmv} from './ymv.js';
+import {installDialog, type YurisDialogHost} from './dialog.js';
+import {YurisMovie, type YurisMovieHost} from './movie.js';
 import {STARTUP_SETTINGS_MISSING, YurisStartupSettings} from './startup.js';
 import {SYSTEM_VARIABLE_LIMIT, YurisType, YurisVariables} from './variables.js';
 import {installMath} from './math.js';
@@ -153,6 +156,8 @@ export interface YurisMachineHost
     YurisWindowHost,
     YurisFontHost,
     YurisSoundHost,
+    YurisDialogHost,
+    YurisMovieHost,
     YurisProductHost {
   /** A fatal script error with its formatted `YSER` message, after the quit flag is set. */
   error(message: string, error: YurisError): void;
@@ -202,6 +207,7 @@ export class YurisMachine {
   readonly saveData: YurisSaveData;
   readonly fonts: YurisFonts;
   readonly sounds: YurisSounds;
+  readonly movie: YurisMovie;
   private readonly handlers: (YurisCommandHandler | undefined)[] = [];
   private readonly loaded = new Map<number, LoadedScript>();
   private current!: LoadedScript;
@@ -237,6 +243,8 @@ export class YurisMachine {
     this.installCore();
     this.layers = new YurisLayers(this, this.files, host);
     this.layers.install();
+    installYmv(this, host);
+    installDialog(this, host);
     installFiles(this, host, host);
     this.input = new YurisInput(this.system, host);
     // 0x46C028: joyGetNumDevs at start-up.
@@ -249,6 +257,7 @@ export class YurisMachine {
       project.config.height || 480,
     );
     this.windows.install();
+    this.movie = new YurisMovie(this, host, host);
     this.fonts = new YurisFonts(host);
     installFonts(this, this.fonts);
     installTasks(this);
@@ -347,6 +356,7 @@ export class YurisMachine {
   async frame(): Promise<void> {
     // 0x41022A..0x410261, then the suspended main loop 0x45C970 (messages and 10 ms sleeps).
     this.windows.background();
+    this.movie.poll();
     while (this.system.suspended && !this.quit) {
       await this.host.sleep(10);
       this.windows.background();
@@ -369,7 +379,9 @@ export class YurisMachine {
     const wait = pacer.begin(this.host.now());
     if (wait > 0) await this.host.sleep(wait);
     pacer.end(this.host.now(), wait > 0);
-    if (!skipping) {
+    // 0x4042A9/0x404352: tasks keep running during the OS movie; window
+    // preparation/output is suppressed unless PRODUCT COM 0x1B enabled it.
+    if (!skipping && (!this.movie.playing || this.system.runDuringMovie)) {
       this.host.present?.(this.layers);
       pacer.countDrawn();
       this.layers.frameEnd();

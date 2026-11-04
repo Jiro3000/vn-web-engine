@@ -7,6 +7,7 @@ import {LookupMode, type YurisNode, YurisTree, resolveNodePath} from './nodes.js
 import {type ByteString, formatInt, i64} from './numbers.js';
 import {applyAtLeast, applyBounded, applyOp} from './operators.js';
 import {YurisType} from './variables.js';
+import type {Ymv} from '../../../formats/yuris/ymv.js';
 
 /** A decoded image: straight (not premultiplied) BGRA rows, `width * 4` bytes apart. */
 export interface YurisImage {
@@ -25,6 +26,8 @@ export interface YurisImageHost {
  * through CG RID; `references` counts them (+0x58).
  */
 export class YurisCg {
+  /** +0x108: animation attached by YMV, shared by CG RID references. */
+  ymv: Ymv | null = null;
   references = 1;
   /** +0x8: dirty marks since the last frame (0x41060C counts them, 0x410D30 clears them). */
   marks = 0;
@@ -713,6 +716,7 @@ export class YurisLayers {
     if (this.directBuffer === node) this.directBuffer = null;
     this.tree.remove(node);
     if (node.payload && --node.payload.references === 0) {
+      node.payload.ymv = null;
       node.payload.setPixels(null);
       node.payload.filtered = null;
     }
