@@ -29,6 +29,14 @@ export interface YurisWindowHost {
   setClientSize(no: number, width: number, height: number): void;
   /** GetClientRect. */
   clientSize(no: number): {readonly width: number; readonly height: number};
+  /**
+   * Whether the main window swallows SC_SCREENSAVE (SYSTEM SCREENSAVER, 0x45D76C): the screen
+   * saver cannot start while the program is in the foreground. Called at start-up and on
+   * every change.
+   */
+  blockScreenSaver(blocked: boolean): void;
+  /** GetDeviceCaps HORZRES, VERTRES and BITSPIXEL of the screen DC, read once at start-up (0x468EB0). */
+  desktop(): {readonly width: number; readonly height: number; readonly bitsPerPixel: number};
   /** SetWindowPos: 0 top, 1 topmost, 2 bottom, 3 behind the main window (0x457C0C). */
   setOrder(no: number, z: number): void;
   /** SetForegroundWindow. */
@@ -71,8 +79,9 @@ export class YurisWindow {
   }
 }
 
-/** WINDOW, WINDOWEND and WINDOWINFO command ids. */
-const WINDOW = 0x69,
+/** SYSTEM, WINDOW, WINDOWEND and WINDOWINFO command ids. */
+const SYSTEM = 0x5d,
+  WINDOW = 0x69,
   WINDOWEND = 0x6a,
   WINDOWINFO = 0x6b;
 
@@ -103,6 +112,14 @@ const enum Arg {
   RegionId,
   DragId,
   Resize,
+}
+
+const enum SystemArg {
+  ScreenSaver,
+  BackgroundExec,
+  Sx,
+  Sy,
+  TimeCount,
 }
 
 const enum Info {
@@ -154,9 +171,71 @@ export class YurisWindows {
   }
 
   install(): void {
+    this.host.blockScreenSaver(this.m.system.screenSaverBlocked !== 0);
+    this.m.define(SYSTEM, () => this.system());
     this.m.define(WINDOW, () => this.window());
     this.m.define(WINDOWEND, () => this.windowEnd());
     this.m.define(WINDOWINFO, () => this.windowInfo());
+  }
+
+  /**
+   * SYSTEM 0x44FD2C: SCREENSAVER, BACKGROUNDEXEC (taken only while the main window is
+   * active), the screen size SX and SY (both positive; the main window's +0xC and +0x10 and
+   * 0x8723BC/0x8723C0) and the timers' running flags TIMECOUNT..TIMECOUNT4.
+   *
+   * A full-screen or maximised display then recomputes its scaled area (0x412768), clears the
+   * window (0x450074) and, composed with Direct3D, resets the device (0x407660); the
+   * presenter does this from the new screen size.
+   */
+  private system(): number {
+    const m = this.m,
+      a = m.args,
+      s = m.system;
+    m.decode();
+    const byte = (arg: number) => Number(BigInt.asUintN(8, a.int(arg)));
+    const int = (arg: number) => (a.has(arg) ? Number(BigInt.asIntN(32, a.int(arg))) : 0);
+    if (a.has(SystemArg.ScreenSaver)) {
+      s.screenSaverBlocked = byte(SystemArg.ScreenSaver);
+      this.host.blockScreenSaver(s.screenSaverBlocked !== 0);
+    }
+    if (a.has(SystemArg.BackgroundExec) && this.windows[0]!.active)
+      s.backgroundExec = byte(SystemArg.BackgroundExec);
+    const width = int(SystemArg.Sx),
+      height = int(SystemArg.Sy);
+    if (width > 0 && height > 0) {
+      const main = this.windows[0]!;
+      main.width = width;
+      main.height = height;
+    }
+    for (let n = 1; n <= 4; n++) {
+      const arg = SystemArg.TimeCount + n - 1;
+      if (a.has(arg)) s.setTimerRunning(n, byte(arg), m.now());
+    }
+    return 0;
+  }
+
+  /**
+   * WM_ACTIVATE of window `no` (0x45D738): +0x2A8 follows the activation. The repaint of the
+   * window's layer set that follows (0x45EC98) is left to the presenter, whose canvas keeps
+   * its content.
+   */
+  activate(no: number, active: boolean): void {
+    this.windows[no]!.active = active;
+  }
+
+  /**
+   * The per-frame activity check (0x41022A..0x410261): a minimised window is inactive. Without
+   * BACKGROUNDEXEC the program then suspends while the main window is inactive and resumes
+   * when it is active again (0x45CA80); with it, a pending suspension ends.
+   */
+  background(): void {
+    const s = this.m.system,
+      now = this.m.now();
+    for (const w of this.windows) if (w.exists && w.active && this.host.minimized(w.no)) w.active = false;
+    const active = this.windows[0]!.active;
+    if (s.backgroundExec !== 0) s.suspended = false;
+    else if (!active) s.suspend(now);
+    else s.resume(now);
   }
 
   /**

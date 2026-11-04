@@ -266,7 +266,7 @@ export function cgAct(layers: YurisLayers, m: YurisMachine): number {
     [Act.Xor, null],
     [Act.And, null],
     [Act.Trim, null],
-    [Act.Resize, null],
+    [Act.Resize, () => resizeCanvas(m, layers, node, destination, extra !== 0, x, x2, y, y2)],
     [Act.Copy, () => copy(Act.Copy, Op.Copy)],
     [Act.Copy2, () => copy(Act.Copy2, Op.Copy2)],
     [Act.Swap, null],
@@ -354,6 +354,84 @@ function resize(
     layers.markDirty(node);
   }
   return 0;
+}
+
+/**
+ * 0x43A725: RESIZE grows (or, with negative values, crops) the source canvas by the margins
+ * X (left), X2 (right), Y (top) and Y2 (bottom); without the operation's coordinates they
+ * default to 0, 0 and the texture's last column and row, as for the other operations.
+ *
+ * The new buffer of (width + X + X2) x (height + Y + Y2) is filled with the colour at
+ * 0x59B770 (0x00808080, transparent grey), the source's displayed +0xC0 pixels are copied
+ * to (X, Y) by 0x43A988 and the buffer replaces the target: the destination when one is
+ * given, otherwise the source. The target becomes masked when any margin is positive and
+ * otherwise takes the source's mask flag. An empty result shows the message 0x879444.
+ */
+function resizeCanvas(
+  m: YurisMachine,
+  layers: YurisLayers,
+  src: YurisCgNode,
+  dst: YurisCgNode | null,
+  hasDestination: boolean,
+  left: number,
+  right: number,
+  top: number,
+  bottom: number,
+): number {
+  const s = src.payload!;
+  const node = hasDestination ? dst! : src,
+    t = node.payload!;
+  layers.markDirty(node);
+  const sw = s.width,
+    sh = s.height;
+  // The window in source coordinates: columns -X .. width - 1 + X2, rows -Y .. height - 1 + Y2.
+  const x0 = -left | 0,
+    y0 = -top | 0,
+    x1 = (right + sw - 1) | 0,
+    y1 = (bottom + sh - 1) | 0;
+  const width = (x1 - x0 + 1) | 0,
+    height = (y1 - y0 + 1) | 0;
+  if (width < 1 || height < 1) return m.messageBox('リサイズ後のサイズが不正です。');
+  const buffer = allocate(width, height);
+  new Uint32Array(buffer.buffer, buffer.byteOffset, width * height).fill(FILL_COLOUR);
+  t.masked = left > 0 || right > 0 || top > 0 || bottom > 0 ? 1 : s.masked;
+  const from = s.pixels;
+  if (from) copyWindow(buffer, width, from, sw, sh, x0, y0, x1, y1);
+  t.replace(buffer, width, height);
+  layers.markDirty(node);
+  return 0;
+}
+
+/** 0x59B770: the background of a RESIZE canvas, BGRA 80 80 80 00. */
+const FILL_COLOUR = 0x00808080;
+
+/**
+ * 0x43A988: copies the source rows and columns of the window (x0, y0)..(x1, y1) that lie
+ * inside the source; a negative start places the copy at (-x0, -y0) in the destination. An
+ * empty overlap copies nothing (the native memcpy would get a negative length).
+ */
+function copyWindow(
+  to: Uint8Array,
+  width: number,
+  from: Uint8Array,
+  sw: number,
+  sh: number,
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+): void {
+  const dx = x0 < 0 ? -x0 : 0,
+    sx = x0 < 0 ? 0 : x0,
+    dy = y0 < 0 ? -y0 : 0,
+    sy = y0 < 0 ? 0 : y0;
+  const bytes = (Math.min(x1, sw - 1) - sx + 1) * 4,
+    rows = Math.min(y1, sh - 1) - sy + 1;
+  if (bytes <= 0) return;
+  for (let r = 0; r < rows; r++) {
+    const at = ((sy + r) * sw + sx) * 4;
+    to.set(from.subarray(at, at + bytes), ((dy + r) * width + dx) * 4);
+  }
 }
 
 /**

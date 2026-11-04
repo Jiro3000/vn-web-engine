@@ -16,6 +16,7 @@ import {YurisFramePacer} from './pacing.js';
 import {YurisSystem, type YurisSystemHost} from './system.js';
 import {NESTING_LIMIT, YurisTask} from './task.js';
 import {SYSTEM_VARIABLE_LIMIT, YurisType, YurisVariables} from './variables.js';
+import {installMath} from './math.js';
 import {installVariableCommands} from './vars.js';
 import {type YurisWindowHost, YurisWindows} from './window.js';
 
@@ -190,6 +191,12 @@ export class YurisMachine {
     this.system = new YurisSystem(this.variables, project.commands.table, host);
     this.expression = new YurisExpression(this.variables, this.system);
     this.system.textCount = project.table.textCount;
+    this.system.startTimers(host.now());
+    // 0x468EB0: the desktop's size and colour depth.
+    const desktop = host.desktop();
+    this.system.desktopWidth = desktop.width;
+    this.system.desktopHeight = desktop.height;
+    this.system.bitsPerPixel = desktop.bitsPerPixel;
     this.files = new YurisFiles(host, project.config);
     this.installCore();
     this.layers = new YurisLayers(this, this.files, host);
@@ -228,6 +235,17 @@ export class YurisMachine {
     return machine;
   }
 
+  /** `timeGetTime()` in milliseconds. */
+  now(): number {
+    return this.host.now();
+  }
+
+  /** WM_ACTIVATE of window `no` (0x45D738); the input reads the keyboard only while active. */
+  activate(no: number, active: boolean): void {
+    this.windows.activate(no, active);
+    this.input.active = this.windows.windows.some((w) => w.exists && w.active);
+  }
+
   /** Installs a command handler. */
   define(command: number, handler: YurisCommandHandler): void {
     this.handlers[command] = handler;
@@ -262,6 +280,12 @@ export class YurisMachine {
    * windows are output and the frame's layer marks are cleared (0x410D30).
    */
   async frame(): Promise<void> {
+    // 0x41022A..0x410261, then the suspended main loop 0x45C970 (messages and 10 ms sleeps).
+    this.windows.background();
+    while (this.system.suspended && !this.quit) {
+      await this.host.sleep(10);
+      this.windows.background();
+    }
     this.input.poll(this.screenWidth, this.screenHeight);
     this.system.frames++;
     this.system.drawnFrames++;
@@ -530,6 +554,7 @@ export class YurisMachine {
     this.define(Command.Str, () => this.declare(YurisType.String));
     this.define(Command.Let, () => this.let());
     installVariableCommands(this);
+    installMath(this, this.host.now());
   }
 
   /** IF 0x4435B0: pushes the IF entry, then jumps to the next branch or IFEND when false. */

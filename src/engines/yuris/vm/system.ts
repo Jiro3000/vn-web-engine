@@ -48,6 +48,13 @@ export class YurisSystem implements YurisSystemValues {
   readonly timerBase = new Float64Array(5);
   readonly timerRunning = Uint8Array.of(1, 1, 1, 1, 1);
   readonly timerFrozen = new Float64Array(5);
+  /** 0x59B784 SCREENSAVER: the main window swallows SC_SCREENSAVE (0x45D76C). */
+  screenSaverBlocked = 1;
+  /** 0x59B73C BACKGROUNDEXEC: the program keeps running while its main window is inactive. */
+  backgroundExec = 1;
+  /** 0x87225C: the program is suspended in the background; 0x871F20: when it was suspended. */
+  suspended = false;
+  private suspendedAt = 0;
   /** 0x871F48 and 0x871F40: frame counters (0x6D, 0x6E). */
   frames = 0n;
   drawnFrames = 0n;
@@ -64,7 +71,7 @@ export class YurisSystem implements YurisSystemValues {
    */
   saveFolderKind = 0;
   value71 = 0;
-  bitsPerPixel = 32;
+  bitsPerPixel = 0;
   desktopWidth = 0;
   desktopHeight = 0;
   /** 0x8726B8..0x8726C4 (bytes), 0x872048, 0x872464 (YSTD text count). */
@@ -106,6 +113,43 @@ export class YurisSystem implements YurisSystemValues {
     private readonly host: YurisSystemHost,
   ) {
     this.keys = keyTable;
+  }
+
+  /** 0x468209: the four timers start with the program. */
+  startTimers(now: number): void {
+    this.timerBase.fill(now, 1);
+  }
+
+  /**
+   * SYSTEM TIMECOUNT..TIMECOUNT4 (0x44FE4C): 0 stops timer n at the current time, 1 restarts
+   * it. A restart adds the stopped time to the base of timer 1 (0x872374) whichever timer it
+   * is, so only timer 1 leaves out its pause; the others jump ahead by it.
+   */
+  setTimerRunning(n: number, value: number, now: number): void {
+    if (this.timerRunning[n] === 1 && value === 0) {
+      this.timerRunning[n] = 0;
+      this.timerFrozen[n] = now;
+    } else if (this.timerRunning[n] === 0 && value === 1) {
+      this.timerRunning[n] = 1;
+      this.timerBase[1]! += Math.trunc(now - this.timerFrozen[n]!) >>> 0;
+      this.timerFrozen[n] = 0;
+    }
+  }
+
+  /** 0x45CB64: the program enters the background suspension. */
+  suspend(now: number): void {
+    if (this.suspended) return;
+    this.suspended = true;
+    this.suspendedAt = now;
+  }
+
+  /** 0x45CACC: the suspension ends; every running timer leaves it out. */
+  resume(now: number): void {
+    if (!this.suspended) return;
+    this.suspended = false;
+    const elapsed = Math.trunc(now - this.suspendedAt) >>> 0;
+    for (let n = 1; n <= 4; n++) if (this.timerRunning[n]) this.timerBase[n]! += elapsed;
+    this.suspendedAt = 0;
   }
 
   private timer(n: number): bigint {
