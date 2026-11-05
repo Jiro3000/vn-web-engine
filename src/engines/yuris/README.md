@@ -54,7 +54,7 @@ WINDOW MENUID installs a window menu; TRAY (0x452FB4) retains its label, optiona
 
 `yuris.html` opens a read-only folder selection and applies `updateN.ypf` after `pac/`. Browser saves use an IndexedDB overlay keyed by archive-index identity; the installed files are never written. `YurisBrowserPlayer` binds the VM to shared page windows, monochrome font rasterization, codecs, folder storage, registry, dialogs and mutable PCM output. Pointer coordinates are scaled from the displayed canvas to game pixels (0x403F2C).
 
-The CPU layer compositor feeds a WebGL target. The presentation copies composed RGB as the native GDI path does (0x45ECF4), independently of each layer's alpha blend. PNG and WebP loaders retain the native alpha-blitter flag.
+The CPU layer compositor copies its composed BGRX window to an opaque Canvas 2D frame, matching the native GDI copy (0x45ECF4). PNG and WebP loaders retain the native alpha-blitter flag for layer composition.
 
 Game options connects the virtual main window to the shared fullscreen controls. True fullscreen uses browser user activation. Native fullscreen can fall back to a page-filling view until a player clicks Enter fullscreen.
 

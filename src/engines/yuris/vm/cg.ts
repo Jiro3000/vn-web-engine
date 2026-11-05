@@ -234,10 +234,7 @@ export class YurisLayers {
   readonly tree = new YurisTree<YurisCg>();
   /** 0x872018: a layer changed since the last composition. */
   redraw = false;
-  /**
-   * 0x871FF4: Direct3D composition, on when the renderer initialises. The browser composes
-   * with WebGL, so it stays on.
-   */
+  /** 0x871FF4: Keep the composition mode selected by native Direct3D initialization. */
   readonly direct = true;
   /** 0x5B8664: the text buffer CGACT TEXT draws with (set by BNO, 0x4039D0). */
   textBuffer = 0;

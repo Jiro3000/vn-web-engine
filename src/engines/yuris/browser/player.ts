@@ -22,21 +22,14 @@ import {StoredRegistry} from '../../../platform/registry.js';
 import {MemoryStore} from '../../../platform/store.js';
 import {LegacyFolder} from '../../../platform/legacy-folder.js';
 import {LegacyImageCodec, swap} from '../../../graphics/legacy-image-codec.js';
-import {WebGLDrawTarget} from '../../../graphics/webgl-draw.js';
 import {BrowserFileMovie} from '../../../video/browser-file-movie.js';
 import {setWindowsVirtualKey} from '../../../input/windows-virtual-keys.js';
-import type {BlendChannel} from '../../../graphics/blend.js';
-import type {TriangleImage} from '../../../graphics/triangle-draw.js';
 import type {YurisLayers} from '../vm/cg.js';
 
 const bytes = (s: string): Uint8Array => Uint8Array.from(s, (c) => c.charCodeAt(0));
 const decode = (s: string): string => decodeCp932(bytes(s));
 const encode = (s: string): string =>
   Array.from(encodeCp932(s), (c) => String.fromCharCode(c)).join('');
-
-// GDI output (0x45ECF4) copies the composed RGB with SRCCOPY. Alpha is used
-// inside the software compositor and does not blend the completed window again.
-const windowCopy: BlendChannel = {source: 'one', destination: 'zero', operation: 'add'};
 
 /** Let the browser copy a DOM text selection without feeding Ctrl-skip or C to the VM. */
 function copiesSelectedText(event: KeyboardEvent, root: HTMLElement): boolean {
@@ -70,9 +63,8 @@ export class YurisBrowserPlayer {
     face === 'SimHei' ? new TextDecoder('gbk').decode(bytes(s)) : decode(s),
   );
   private readonly registry = new StoredRegistry(new MemoryStore());
-  private readonly canvases: HTMLCanvasElement[] = [];
-  private readonly targets: WebGLDrawTarget[] = [];
-  private readonly images: (TriangleImage | undefined)[] = [];
+  private readonly contexts: CanvasRenderingContext2D[] = [];
+  private readonly frames: ImageData[] = [];
   private readonly abort = new AbortController();
   private cursorUrl = '';
   private host: YurisMachineHost;
@@ -128,7 +120,7 @@ export class YurisBrowserPlayer {
       menus: {
         setWindowMenu: (no, items, select) => this.menus.setWindowMenu(no, items, select),
         contextMenu: (items, x, y, select) => {
-          const rect = this.canvases[0]?.getBoundingClientRect();
+          const rect = this.contexts[0]?.canvas.getBoundingClientRect();
           this.menus.contextMenu(
             items,
             rect ? rect.left + (x / this.machine.screenWidth) * rect.width : x,
@@ -409,39 +401,33 @@ export class YurisBrowserPlayer {
       layers.composeSet(node);
       const dom = this.textPresentation.textMode === 'dom';
       const bitmap = dom ? yurisRasterBitmap(cg.pixels, cg.width, cg.height) : null;
-      let canvas = this.canvases[no],
-        target = this.targets[no];
-      if (!canvas) {
-        canvas = this.canvases[no] = document.createElement('canvas');
+      let context = this.contexts[no];
+      if (!context) {
+        const canvas = document.createElement('canvas');
         canvas.style.cssText = 'display:block;width:100%;height:100%;touch-action:none';
+        const created = canvas.getContext('2d', {alpha: false});
+        if (!created) throw new Error('Canvas 2D unavailable');
+        context = this.contexts[no] = created;
         this.windows.elements[no]?.append(canvas);
         this.bindPointer(canvas);
       }
-      if (!target || canvas.width !== cg.width || canvas.height !== cg.height) {
-        target?.dispose();
-        target = this.targets[no] = new WebGLDrawTarget(canvas, cg.width, cg.height);
+      const canvas = context.canvas;
+      let frame = this.frames[no];
+      if (!frame || frame.width !== cg.width || frame.height !== cg.height) {
+        canvas.width = cg.width;
+        canvas.height = cg.height;
+        frame = this.frames[no] = new ImageData(cg.width, cg.height);
       }
-      if (this.images[no]) target.invalidate(this.images[no]!);
-      const image = (this.images[no] = {
-        width: cg.width,
-        height: cg.height,
-        pixels: swap((bitmap ? rasterTextBitmap(bitmap).storage!.bytes : cg.pixels).slice()),
-      });
-      target.draw(
-        {
-          sprites: [
-            {
-              texture: 0,
-              source: {x: 0, y: 0, width: cg.width, height: cg.height},
-              destination: {x: 0, y: 0, width: cg.width, height: cg.height},
-              color: 0xffffff,
-              alpha: 255,
-              blendState: {color: windowCopy, alpha: windowCopy},
-            },
-          ],
-        },
-        () => image,
-      );
+      const pixels = bitmap ? rasterTextBitmap(bitmap).storage!.bytes : cg.pixels;
+      const rgba = frame.data;
+      // StretchDIBits with SRCCOPY (0x45ECF4) treats the composed window as BGRX.
+      for (let i = 0; i < rgba.length; i += 4) {
+        rgba[i] = pixels[i + 2]!;
+        rgba[i + 1] = pixels[i + 1]!;
+        rgba[i + 2] = pixels[i]!;
+        rgba[i + 3] = 255;
+      }
+      context.putImageData(frame, 0, 0);
       if (bitmap && textChanged)
         this.textPresentation.replace(canvas, () => visibleRasterText(bitmap));
     }
@@ -493,7 +479,6 @@ export class YurisBrowserPlayer {
     await this.device.dispose();
     this.audioHost.dispose();
     await this.audio.close();
-    for (const target of this.targets) target?.dispose();
     this.windows.dispose();
     if (this.cursorUrl) URL.revokeObjectURL(this.cursorUrl);
   }
