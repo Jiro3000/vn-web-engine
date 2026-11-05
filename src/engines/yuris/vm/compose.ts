@@ -1,4 +1,17 @@
-import {type BlendRule, blendRect, colourShift, ruleWeights, saturation} from './blend.js';
+import {
+  clearRasterTextPresentation,
+  withRasterText,
+  type RasterTextBitmap,
+} from '../../../text/raster-text.js';
+import {yurisRasterBitmap} from './raster-text.js';
+import {
+  type BlendRule,
+  type BlendSource,
+  blendRect,
+  colourShift,
+  ruleWeights,
+  saturation,
+} from './blend.js';
 import type {YurisCg, YurisCgNode} from './cg.js';
 import {YurisError} from './errors.js';
 
@@ -12,6 +25,7 @@ const FILTER_WIDTH = 0x2000;
 export interface ComposeHost {
   /** 0x871F48: the frame counter that stamps filtered copies. */
   readonly frame: bigint;
+  readonly rasterText?: boolean;
   /** 0x4573E8 against names[0], then the leaf lookup 0x40CA7D; null when not found. */
   ruleLayer(tid: string): YurisCgNode | null;
 }
@@ -70,6 +84,7 @@ export function compose(
   if (c[2]! > clip[2]) c[2] = clip[2];
   if (c[3]! > clip[3]) c[3] = clip[3];
   const area: Rect = [c[0]!, c[1]!, c[2]!, c[3]!];
+  if (area[0] > area[2] || area[1] > area[3]) return 0;
   const children = node.children;
   let start = children.length - 1;
   for (; start >= 0; start--) {
@@ -92,6 +107,17 @@ export function compose(
       const at = (y * group.width + area[0]) * 4;
       group.pixels.fill(0, at, at + (area[2] - area[0] + 1) * 4);
     }
+    if (host.rasterText)
+      clearRasterTextPresentation(
+        yurisRasterBitmap(
+          group.pixels,
+          group.width,
+          area[3] - area[1] + 1,
+          area[0],
+          area[1],
+          area[2] - area[0] + 1,
+        ),
+      );
   }
   for (let i = start; i < children.length; i++) {
     const childNode = children[i]!,
@@ -171,27 +197,76 @@ export function compose(
         ]);
       blendRule = {pixels: rule.pixels!, weights: ruleWeights(child.t, child.ta, child.a)};
     }
+    const source: BlendSource = {
+      pixels: child.pixels,
+      width: child.width,
+      mode: child.mode,
+      a: child.a,
+      masked: child.masked === 1,
+    };
+    if (host.rasterText) {
+      const bitmap = yurisRasterBitmap(
+        child.pixels,
+        child.width,
+        part.height,
+        part.sx,
+        part.sy,
+        part.width,
+      );
+      if (!childNode.group) bitmap.rasterTextFlow = childNode.name;
+      blendText(
+        yurisRasterBitmap(group.pixels, group.width, group.height),
+        bitmap,
+        source,
+        part,
+        blendRule,
+      );
+    } else {
+      blendRect(
+        group.pixels,
+        group.width,
+        part.dx,
+        part.dy,
+        source,
+        part.sx,
+        part.sy,
+        part.width,
+        part.height,
+        blendRule,
+      );
+    }
+  }
+  return 0;
+}
+
+const blendText = withRasterText(
+  (
+    target: RasterTextBitmap,
+    bitmap: RasterTextBitmap,
+    source: BlendSource,
+    part: ReturnType<typeof intersect>,
+    rule: BlendRule | null,
+  ): void =>
     blendRect(
-      group.pixels,
-      group.width,
+      target.storage!.bytes,
+      target.width,
       part.dx,
       part.dy,
-      {
-        pixels: child.pixels,
-        width: child.width,
-        mode: child.mode,
-        a: child.a,
-        masked: child.masked === 1,
-      },
+      {...source, pixels: bitmap.storage!.bytes},
       part.sx,
       part.sy,
       part.width,
       part.height,
-      blendRule,
-    );
-  }
-  return 0;
-}
+      rule,
+    ),
+  {
+    map: (x, y, args) => [x + args[3].dx, y + args[3].dy],
+    replace: ([, , source, , rule]) =>
+      !rule && !source.masked && source.mode === 0 && source.a === 256,
+    region: ([, , , part]) => ({x: part.dx, y: part.dy, width: part.width, height: part.height}),
+    opacity: ([, , source]) => source.a / 256,
+  },
+);
 
 /**
  * An MD or SD filter pass (0x4055C8..0x405DB7). The first pass of a frame filters the loaded

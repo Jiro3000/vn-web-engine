@@ -19,13 +19,26 @@ export class BrowserLegacyWindows {
     private readonly decode: (s: string) => string,
     private readonly encode: (s: string) => string,
     private readonly activated: (no: number, active: boolean) => void = () => {},
+    displayOptions?: {
+      root: HTMLElement;
+      changed: () => void;
+      report: (message: string) => void;
+    },
   ) {
     const main = document.createElement('div');
     main.style.cssText = 'position:relative;transform-origin:0 0';
     root.append(main);
     this.elements[0] = main;
     this.states[0] = {x: 0, y: 0, width: 1280, height: 720, minimized: false, caption: ''};
-    this.display = new BrowserWindowDisplayHost(root, root, main);
+    this.display = new BrowserWindowDisplayHost(
+      displayOptions?.root ?? root,
+      root,
+      main,
+      displayOptions?.changed,
+      displayOptions?.report,
+      main,
+      false, // The viewport is a fixed-size player surface.
+    );
   }
   createWindow(no: number, caption: string, width: number, height: number): boolean {
     if (!this.elements[no]) {

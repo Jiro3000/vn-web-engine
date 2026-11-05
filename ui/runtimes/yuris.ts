@@ -9,13 +9,20 @@ import type {CachedInstallation} from '../../src/platform/installation-cache.js'
 import type {InstallationSelection} from '../../src/platform/installation-picker.js';
 import {mountInstallationControls} from '../player/installation-controls.js';
 import {mountGameViewer} from '../player/game-viewer.js';
+import {mountFullscreenControls} from '../player/fullscreen.js';
 import {setRuntimeState} from '../player/runtime-state.js';
 import {rememberLastPlayed} from '../player/last-played.js';
 import {setYurisSaveStore} from './yuris-saves.js';
 const el = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const status = el('status'),
   play = el<HTMLButtonElement>('play'),
-  surface = el('yuris-surface');
+  surface = el('yuris-surface'),
+  fullscreen = el<HTMLButtonElement>('fullscreen'),
+  textMode = el<HTMLSelectElement>('text-mode');
+const selectedTextMode = () => (textMode.value === 'dom' ? 'dom' : 'native');
+textMode.onchange = () => currentPlayer?.setTextMode(selectedTextMode());
+let fullscreenControls: ReturnType<typeof mountFullscreenControls> | undefined;
+fullscreen.disabled = true;
 const {collapseOptions} = mountGameViewer('yuris');
 let busy = false,
   started = false,
@@ -36,6 +43,9 @@ function refresh(): void {
   controls.refresh();
 }
 async function load(selected: CachedInstallation): Promise<void> {
+  fullscreenControls?.destroy();
+  fullscreenControls = undefined;
+  fullscreen.disabled = true;
   await currentPlayer?.dispose();
   currentPlayer = null;
   installation?.store.close();
@@ -127,11 +137,23 @@ play.onclick = () => {
   if (!installation || busy || started) return;
   started = true;
   el('welcome').hidden = true;
-  currentPlayer = new YurisBrowserPlayer(surface, installation.files, installation.folder, stopped);
+  fullscreenControls?.destroy();
+  currentPlayer = new YurisBrowserPlayer(
+    surface,
+    installation.files,
+    installation.folder,
+    stopped,
+    undefined,
+    {root: el('display'), changed: () => fullscreenControls?.refresh(), report},
+  );
+  fullscreenControls = mountFullscreenControls(currentPlayer.windows.display);
+  fullscreen.disabled = false;
+  currentPlayer.setTextMode(selectedTextMode());
   refresh();
   void currentPlayer.start(installation.project).catch(stopped);
 };
 window.addEventListener('pagehide', () => {
+  fullscreenControls?.destroy();
   void currentPlayer?.dispose();
   installation?.store.close();
 });

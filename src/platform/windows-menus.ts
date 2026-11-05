@@ -1,3 +1,5 @@
+import {browserFullscreenElement} from './browser-fullscreen.js';
+
 /** Snapshots of Win32 menus at SetMenu / TrackPopupMenu / Shell_NotifyIcon boundaries. */
 export interface WindowsMenuItem {
   readonly label: string;
@@ -45,6 +47,16 @@ export class BrowserWindowsMenus implements WindowsMenusHost {
     private readonly root: HTMLElement,
     private readonly windows: readonly HTMLElement[],
   ) {
+    for (const event of ['fullscreenchange', 'webkitfullscreenchange'])
+      root.ownerDocument.addEventListener(
+        event,
+        () => {
+          const parent = this.portal();
+          for (const item of [this.popup, this.tray])
+            if (item && item.parentElement !== parent) parent.append(item);
+        },
+        {signal: this.abort.signal},
+      );
     root.ownerDocument.addEventListener(
       'pointerdown',
       (event) => {
@@ -92,7 +104,7 @@ export class BrowserWindowsMenus implements WindowsMenusHost {
     menu.style.cssText = `position:fixed;left:${x}px;top:${y}px;z-index:2147483647;display:flex;flex-direction:column;background:Canvas;color:CanvasText;border:1px solid;padding:4px;width:max-content;max-width:calc(100vw - 8px);max-height:calc(100vh - 8px);overflow:auto;box-sizing:border-box`;
     this.fill(menu, items, select);
     // OS popups are independent of the owner's clipping and remain inside the desktop.
-    this.root.ownerDocument.body.append(menu);
+    this.portal().append(menu);
     const view = this.root.ownerDocument.defaultView!,
       bounds = menu.getBoundingClientRect();
     menu.style.left = Math.max(4, Math.min(x, view.innerWidth - bounds.width - 4)) + 'px';
@@ -138,8 +150,13 @@ export class BrowserWindowsMenus implements WindowsMenusHost {
       c.getContext('2d')?.putImageData(new ImageData(data, width, height), 0, 0);
       button.prepend(c);
     }
-    this.root.ownerDocument.body.append(button);
+    this.portal().append(button);
     this.tray = button;
+  }
+  private portal(): Element {
+    const document = this.root.ownerDocument;
+    const fullscreen = browserFullscreenElement(document);
+    return fullscreen?.contains(this.root) ? fullscreen : document.body;
   }
   private fill(
     parent: HTMLElement,

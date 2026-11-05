@@ -56,6 +56,7 @@ export class BrowserWindowDisplayHost implements WindowDisplayHost {
     private readonly changed: () => void = () => {},
     private readonly report: (message: string) => void = () => {},
     readonly auxiliaryLayer: HTMLElement = windowElement,
+    private readonly resizeViewport = true,
   ) {
     this.document = root.ownerDocument;
     this.view = this.document.defaultView!;
@@ -173,7 +174,8 @@ export class BrowserWindowDisplayHost implements WindowDisplayHost {
         ? containScale
         : Math.min(containScale, 1 / ratio);
     this.scaleY = stretch ? availableHeight / height : this.scaleX;
-    this.viewport.style.height = this.expanded ? '' : `${height * this.scaleY}px`;
+    if (this.resizeViewport)
+      this.viewport.style.height = this.expanded ? '' : `${height * this.scaleY}px`;
     for (const element of new Set([this.windowElement, this.auxiliaryLayer])) {
       const style = element.style;
       style.width = `${width}px`;

@@ -559,6 +559,7 @@ export class YurisLayers {
     if (!cg) return 0;
     const host = {
       frame: this.machine.system.frames,
+      rasterText: this.machine.tracksRasterText,
       ruleLayer: (tid: ByteString) =>
         this.tree.lookup(resolveNodePath(this.machine.system.names[0]!, tid).path, LookupMode.Leaf),
     };
@@ -625,10 +626,14 @@ export class YurisLayers {
       this.machine.fail(new YurisError(0x186be, [this.commandName(), name]));
       return -1;
     }
-    const image = await this.images.decodeImage(
-      await this.files.read(file.path),
-      file.type,
-      file.path,
+    const data = await this.files.read(file.path);
+    const image = await this.images.decodeImage(data, file.type, file.path);
+    // 0x41A69C and YSPNG.DLL 0x10001014 select masked blitters for PNG color types
+    // 4 and 6 (IHDR), even when every alpha byte is zero or 255. WebP sets it at 0x418910.
+    const pngColorType = data[25];
+    cg.masked = Number(
+      file.type === YurisFileType.Webp ||
+        (file.type === YurisFileType.Png && (pngColorType === 4 || pngColorType === 6)),
     );
     cg.setPixels(image.pixels);
     cg.width = cg.textureWidth = image.width;

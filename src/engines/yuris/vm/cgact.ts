@@ -1,3 +1,10 @@
+import {
+  clearRasterTextPresentation,
+  copyRasterTextPresentation,
+  withRasterText,
+  type RasterTextBitmap,
+} from '../../../text/raster-text.js';
+import {recordAtlasGlyph, yurisRasterBitmap} from './raster-text.js';
 import {colourShift, saturation} from './blend.js';
 import {type YurisCgNode, YurisCg, type YurisLayers} from './cg.js';
 import {YurisError} from './errors.js';
@@ -295,8 +302,8 @@ export function cgAct(layers: YurisLayers, m: YurisMachine): number {
         return NaN;
       },
     ],
-    [Act.Merge, () => merge(layers, node, destination, extra, x, y, false)],
-    [Act.Merge2, () => merge(layers, node, destination, extra, x, y, true)],
+    [Act.Merge, () => merge(layers, m, node, destination, extra, x, y, false)],
+    [Act.Merge2, () => merge(layers, m, node, destination, extra, x, y, true)],
     [
       Act.Transition,
       () => transition(layers, node, destination, others[1]!, extra, x, y, set, m.system.simd),
@@ -400,6 +407,7 @@ function transition(
  */
 function merge(
   layers: YurisLayers,
+  m: YurisMachine,
   src: YurisCgNode,
   dst: YurisCgNode | null,
   extra: number,
@@ -419,40 +427,63 @@ function merge(
   const from = s.pixels,
     to = d.pixels;
   if (!from || !to) return 0;
-  const sx = Math.max(0, -x),
-    sy = Math.max(0, -y);
-  const width = Math.min(s.width - sx, d.width - Math.max(0, x));
-  const height = Math.min(s.height - sy, d.height - Math.max(0, y));
-  for (let row = 0; row < height; row++)
-    for (let col = 0; col < width; col++) {
-      const si = ((sy + row) * s.width + sx + col) * 4;
-      const di = ((Math.max(0, y) + row) * d.width + Math.max(0, x) + col) * 4;
-      let da = to[di + 3]!;
-      if (attenuateDestination) {
-        da = (da * d.a) >> 8;
-        to[di + 3] = da;
-      }
-      const sa = from[si + 3]!;
-      const overlap =
-        attenuateDestination && s.a !== 256 ? ((sa + 1) * da) >> 8 : Math.trunc((da * sa) / 255);
-      const alpha = da + (((sa - overlap) * s.a) >> 8);
-      to[di + 3] = alpha;
-      const sourceAlpha = from[si + 3]!; // May alias the just-written destination.
-      if (attenuateDestination && s.a !== 256) {
-        for (let c = 0; c < 3; c++)
-          to[di + c] =
-            to[di + c]! +
-            Math.trunc(
-              ((((from[si + c]! - to[di + c]!) * s.a) >> 8) * sourceAlpha) / ((alpha & 255) + 1),
-            );
-      } else {
-        const weight = (alpha & 255) === 0 ? 0 : Math.trunc((sourceAlpha * 256) / (alpha & 255));
-        for (let c = 0; c < 3; c++)
-          to[di + c] = to[di + c]! + (((from[si + c]! - to[di + c]!) * weight * s.a) >> 16);
-      }
-    }
+  const source = yurisRasterBitmap(from, s.width, s.height);
+  const target = yurisRasterBitmap(to, d.width, d.height);
+  recordAtlasGlyph(m, src.name, source);
+  mergeText(target, source, x, y, s.a, d.a, attenuateDestination);
   return 0;
 }
+
+const mergeText = withRasterText(
+  (
+    d: RasterTextBitmap,
+    s: RasterTextBitmap,
+    x: number,
+    y: number,
+    opacity: number,
+    destOpacity: number,
+    attenuateDestination: boolean,
+  ): void => {
+    const from = s.storage!.bytes,
+      to = d.storage!.bytes;
+    const sx = Math.max(0, -x),
+      sy = Math.max(0, -y);
+    const width = Math.min(s.width - sx, d.width - Math.max(0, x));
+    const height = Math.min(s.height - sy, d.height - Math.max(0, y));
+    for (let row = 0; row < height; row++)
+      for (let col = 0; col < width; col++) {
+        const si = ((sy + row) * s.width + sx + col) * 4;
+        const di = ((Math.max(0, y) + row) * d.width + Math.max(0, x) + col) * 4;
+        let da = to[di + 3]!;
+        if (attenuateDestination) {
+          da = (da * destOpacity) >> 8;
+          to[di + 3] = da;
+        }
+        const sa = from[si + 3]!;
+        const overlap =
+          attenuateDestination && opacity !== 256
+            ? ((sa + 1) * da) >> 8
+            : Math.trunc((da * sa) / 255);
+        const alpha = da + (((sa - overlap) * opacity) >> 8);
+        to[di + 3] = alpha;
+        const sourceAlpha = from[si + 3]!; // May alias the just-written destination.
+        if (attenuateDestination && opacity !== 256) {
+          for (let c = 0; c < 3; c++)
+            to[di + c] =
+              to[di + c]! +
+              Math.trunc(
+                ((((from[si + c]! - to[di + c]!) * opacity) >> 8) * sourceAlpha) /
+                  ((alpha & 255) + 1),
+              );
+        } else {
+          const weight = (alpha & 255) === 0 ? 0 : Math.trunc((sourceAlpha * 256) / (alpha & 255));
+          for (let c = 0; c < 3; c++)
+            to[di + c] = to[di + c]! + (((from[si + c]! - to[di + c]!) * weight * opacity) >> 16);
+        }
+      }
+  },
+  {map: (x, y, args) => [x + args[2], y + args[3]], opacity: (args) => args[4] / 256},
+);
 
 /** The region in hundredths of a pixel and the output size of the SIZE operations. */
 interface FineParams {
@@ -632,6 +663,8 @@ function regionOp(
   if (!hasDestination) {
     if (op === Op.Mono || op === Op.RectPaint || op === Op.Gradation) {
       run(op, from, from, s, p, tw, th, rw, rh, mode);
+      if (op === Op.RectPaint)
+        clearRasterTextPresentation(yurisRasterBitmap(from, tw, rh, p.x, p.y, rw));
       layers.markDirty(src);
       return 0;
     }
@@ -650,6 +683,11 @@ function regionOp(
   const buffer = allocate(rw, rh);
   if (op === Op.RectPaint) buffer.set(from.subarray(0, buffer.length));
   run(op, buffer, from, s, p, tw, th, rw, rh, mode);
+  if (op === Op.Copy || op === Op.Copy2)
+    copyRasterTextPresentation(
+      yurisRasterBitmap(buffer, rw, rh),
+      yurisRasterBitmap(from, tw, rh, p.x, p.y, rw),
+    );
   d.replace(buffer, rw, rh);
   layers.markDirty(dst);
   if (op === Op.Copy) copyProperties(s, d);

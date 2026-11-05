@@ -1,3 +1,9 @@
+import {
+  BrowserRasterTextPresentation,
+  type BrowserTextMode,
+} from '../../../text/browser-raster-text-presentation.js';
+import {rasterTextBitmap, visibleRasterText} from '../../../text/raster-text.js';
+import {yurisRasterBitmap} from '../vm/raster-text.js';
 import {YurisMachine, type YurisMachineHost} from '../vm/machine.js';
 import type {YurisProject} from '../../../formats/yuris/ybn.js';
 import type {YpfFileSystem} from '../../../formats/yuris/ypf.js';
@@ -19,6 +25,7 @@ import {LegacyImageCodec, swap} from '../../../graphics/legacy-image-codec.js';
 import {WebGLDrawTarget} from '../../../graphics/webgl-draw.js';
 import {BrowserFileMovie} from '../../../video/browser-file-movie.js';
 import {setWindowsVirtualKey} from '../../../input/windows-virtual-keys.js';
+import type {BlendChannel} from '../../../graphics/blend.js';
 import type {TriangleImage} from '../../../graphics/triangle-draw.js';
 import type {YurisLayers} from '../vm/cg.js';
 
@@ -26,6 +33,10 @@ const bytes = (s: string): Uint8Array => Uint8Array.from(s, (c) => c.charCodeAt(
 const decode = (s: string): string => decodeCp932(bytes(s));
 const encode = (s: string): string =>
   Array.from(encodeCp932(s), (c) => String.fromCharCode(c)).join('');
+
+// GDI output (0x45ECF4) copies the composed RGB with SRCCOPY. Alpha is used
+// inside the software compositor and does not blend the completed window again.
+const windowCopy: BlendChannel = {source: 'one', destination: 'zero', operation: 'add'};
 
 /** Browser bindings for the native VM. Folder writes stay in its virtual overlay. */
 export class YurisBrowserPlayer {
@@ -37,6 +48,8 @@ export class YurisBrowserPlayer {
   readonly windows: BrowserLegacyWindows;
   readonly movie: BrowserFileMovie;
   readonly menus: BrowserWindowsMenus;
+  private readonly textPresentation = new BrowserRasterTextPresentation();
+  private textModeChanged = false;
   private readonly codecs = new LegacyImageCodec();
   private readonly fonts = new BrowserMonochromeFont((s, face) =>
     face === 'SimHei' ? new TextDecoder('gbk').decode(bytes(s)) : decode(s),
@@ -54,6 +67,7 @@ export class YurisBrowserPlayer {
     readonly folder: LegacyFolder,
     readonly stopped: (error?: unknown) => void = () => {},
     readonly trace?: YurisMachineHost['trace'],
+    displayOptions?: ConstructorParameters<typeof BrowserLegacyWindows>[4],
   ) {
     this.audioHost = new BrowserAudioContextHost(
       this.audio,
@@ -63,9 +77,13 @@ export class YurisBrowserPlayer {
     );
     // Native WM_ACTIVATE (0x45D738): virtual ShowWindow/SetForegroundWindow events
     // update +0x2A8 before the next background/suspension check (0x41022A).
-    this.windows = new BrowserLegacyWindows(root, decode, encode, (no, active) => {
-      this.machine?.windows.activate(no, active);
-    });
+    this.windows = new BrowserLegacyWindows(
+      root,
+      decode,
+      encode,
+      (no, active) => this.machine?.windows.activate(no, active),
+      displayOptions,
+    );
     this.menus = new BrowserWindowsMenus(root, this.windows.elements);
     this.movie = new BrowserFileMovie(this.windows.elements[0]!, this.audio);
     const win = this.windows,
@@ -300,6 +318,7 @@ export class YurisBrowserPlayer {
       error: (message, error) => {
         throw new Error(`YU-RIS ${error.code.toString(16)}: ${message}`);
       },
+      rasterText: true,
       present: (layers) => this.present(layers),
       trace,
     };
@@ -311,7 +330,9 @@ export class YurisBrowserPlayer {
           !this.machine ||
           e.target instanceof HTMLInputElement ||
           (e.target instanceof Element &&
-            e.target.closest('dialog[open], [role=menu], [role=menuitem], [data-windows-tray]'))
+            e.target.closest(
+              'button, select, textarea, a, [contenteditable], dialog[open], [role=menu], [role=menuitem], [data-windows-tray]',
+            ))
         )
           return;
         const key = setWindowsVirtualKey(this.machine.input.keyboard, e, true);
@@ -356,12 +377,22 @@ export class YurisBrowserPlayer {
       this.stopped(e);
     }
   }
+  setTextMode(mode: BrowserTextMode): void {
+    if (mode === this.textPresentation.textMode) return;
+    this.textPresentation.setTextMode(mode);
+    this.textModeChanged = true;
+  }
   private present(layers: YurisLayers): void {
+    const forceText = this.textModeChanged;
+    this.textModeChanged = false;
     for (let no = 0; no < 4; no++) {
       const node = layers.windowLayers[no],
         cg = node?.payload;
       if (!node || !cg?.pixels) continue;
+      const textChanged = cg.dirty || forceText;
       layers.composeSet(node);
+      const dom = this.textPresentation.textMode === 'dom';
+      const bitmap = dom ? yurisRasterBitmap(cg.pixels, cg.width, cg.height) : null;
       let canvas = this.canvases[no],
         target = this.targets[no];
       if (!canvas) {
@@ -378,7 +409,7 @@ export class YurisBrowserPlayer {
       const image = (this.images[no] = {
         width: cg.width,
         height: cg.height,
-        pixels: swap(cg.pixels.slice()),
+        pixels: swap((bitmap ? rasterTextBitmap(bitmap).storage!.bytes : cg.pixels).slice()),
       });
       target.draw(
         {
@@ -389,11 +420,14 @@ export class YurisBrowserPlayer {
               destination: {x: 0, y: 0, width: cg.width, height: cg.height},
               color: 0xffffff,
               alpha: 255,
+              blendState: {color: windowCopy, alpha: windowCopy},
             },
           ],
         },
         () => image,
       );
+      if (bitmap && textChanged)
+        this.textPresentation.replace(canvas, () => visibleRasterText(bitmap));
     }
   }
   private bindPointer(canvas: HTMLCanvasElement): void {
@@ -438,6 +472,7 @@ export class YurisBrowserPlayer {
     this.running = false;
     this.abort.abort();
     this.menus.dispose();
+    this.textPresentation.dispose();
     this.movie.close();
     await this.device.dispose();
     this.audioHost.dispose();

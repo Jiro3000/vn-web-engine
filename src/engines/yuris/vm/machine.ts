@@ -168,6 +168,8 @@ export interface YurisMachineHost
   sleep(milliseconds: number): Promise<void>;
   /** `MessageBoxA` of 0x409070: a message the command shows before yielding. */
   messageBox(text: string): void;
+  /** Keep optional glyph provenance for browser presentation. */
+  readonly rasterText?: boolean;
   /** Called after every executed instruction when tracing. */
   trace?(task: YurisTask, position: number, instruction: YurisInstruction, script: number): void;
   /** The window output of a frame (0x404824, 0x40FCAC), before its marks are cleared. */
@@ -338,6 +340,10 @@ export class YurisMachine {
   /** The name of argument `id` of the running command (`ysc.ybn`). */
   argName(id: number): string {
     return this.project.commands.commands[this.instruction.command]?.args[id]?.name ?? `#${id}`;
+  }
+
+  get tracksRasterText(): boolean {
+    return this.host.rasterText === true;
   }
 
   get instruction(): YurisInstruction {

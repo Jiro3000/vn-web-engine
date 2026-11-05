@@ -35,6 +35,43 @@ test('YU-RIS button hit testing reads main window for ONMOUSE2=1', () => {
   assert.equal(result, -1n);
 });
 
+test('YU-RIS composes a transparent RGBA PNG over the background', async () => {
+  const commands = new Map();
+  const machine = {
+    screenWidth: 2,
+    screenHeight: 1,
+    system: {frames: 0n, names: ['W0']},
+    define: (id, fn) => commands.set(id, fn),
+    decode() {},
+    args: {
+      has: (id) => ([0, 6, 46].includes(id) ? 1 : 0),
+      text: (id) => (id === 0 ? 'OVERLAY' : 'overlay.png'),
+      int: () => 2n,
+      op: [0, 0],
+    },
+  };
+  const ihdr = new Uint8Array(26);
+  ihdr[25] = 6;
+  const layers = new YurisLayers(
+    machine,
+    {resolve: () => ({found: true, path: 'overlay.png', type: 2}), read: async () => ihdr},
+    {decodeImage: async () => ({width: 1, height: 1, pixels: Uint8Array.of(0, 0, 0, 0)})},
+  );
+  layers.install();
+  const screen = layers.windowLayers[0];
+  const background = new YurisCg();
+  background.allocate(2, 1);
+  background.pixels.fill(255);
+  layers.tree.create('W0/BACKGROUND', false, 1n, background);
+  layers.composeSet(screen);
+  layers.frameEnd();
+  assert.equal(await commands.get(1)(), 0);
+  assert.equal(layers.lookup('W0/OVERLAY', false).payload.masked, 1);
+  layers.composeSet(screen);
+  assert.ok(screen.payload.pixels[0] >= 254);
+  assert.equal(screen.payload.pixels[4], 255);
+});
+
 test('YU-RIS MERGE and MERGE2 preserve straight alpha with native integer rounding and clipping', () => {
   const commands = new Map();
   const values = new Map([

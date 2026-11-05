@@ -9,7 +9,7 @@
       id="yuris-surface"
       style="position:absolute;inset:0;overflow:hidden"
     ></div>{/snippet}
-  {#snippet textHelp()}Text is drawn using the game’s font settings. Click or press Enter to
-    continue.{/snippet}
+  {#snippet textHelp()}DOM text makes supported game text selectable. Click outside the text or
+    press Enter to continue.{/snippet}
   {#snippet saveFiles()}<SaveFiles runtime />{/snippet}
 </PlayerShell>
