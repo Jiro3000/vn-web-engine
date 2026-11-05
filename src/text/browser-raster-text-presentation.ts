@@ -42,7 +42,15 @@ export function mapRasterTextGlyphs(
   return glyphs.flatMap((glyph) => {
     const clipped = intersectRect(rect(glyph.clip), clip);
     return clipped
-      ? [{...glyph, ...rect(glyph), clip: clipped, size: glyph.size * Math.abs(scaleY)}]
+      ? [
+          {
+            ...glyph,
+            ...rect(glyph),
+            clip: clipped,
+            size: glyph.size * Math.abs(scaleY),
+            ...(glyph.pitch !== undefined ? {pitch: glyph.pitch * Math.abs(scaleX)} : {}),
+          },
+        ]
       : [];
   });
 }

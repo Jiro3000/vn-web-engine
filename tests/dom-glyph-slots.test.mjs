@@ -382,6 +382,27 @@ test('DOM slots retain exactly one Text node as glyphs reveal and slots disappea
     assert.match(rowText.style.cssText, /--text-wrap-shape:polygon/);
     layer.show({id: 'columns', explicitLines: true, vertical: true, glyphs: rows}, 1);
     assert.equal(layer.element.children.at(-1).children[0].children[0].data, '日\n本');
+    // Quotation marks are narrower in the browser font. Their appearance must not
+    // change the tracking of the already revealed part of a fixed-pitch raster slot.
+    layer.measure.measureText = (text) => ({
+      width: Array.from(text).reduce((width, c) => width + ('“”'.includes(c) ? 8 : 20), 0),
+    });
+    const dialogue = [
+      glyph('“', 0, 0, 0),
+      glyph('你', 0, 21, 0),
+      glyph('好', 0, 42, 0),
+      glyph('”', 0, 63, 0),
+    ];
+    const fixed = {id: 'dialogue', explicitLines: true, stretch: 1, pitch: 21};
+    layer.show({...fixed, glyphs: dialogue.slice(0, 1)}, 1);
+    const dialogueText = layer.element.children.at(-1).children[0],
+      dialogueNode = dialogueText.children[0];
+    for (let count = 1; count <= dialogue.length; count++) {
+      layer.show({...fixed, glyphs: dialogue.slice(0, count)}, 1);
+      assert.match(dialogueText.style.cssText, /letter-spacing:1px/);
+      assert.equal(dialogueText.children[0], dialogueNode);
+      assert.equal(dialogueNode.data, '“你好”'.slice(0, count));
+    }
     layer.retain(new Set());
     assert.equal(layer.buffers.size, 0);
     assert.equal(layer.element.children.length, 0);

@@ -31,7 +31,14 @@ export function rasterTextSlots(
   }
   // Runs with different faces or edges are separately styled text nodes.
   const style = (g: RasterTextGlyph) =>
-    JSON.stringify([g.family, g.weight, g.stretch, g.outline ?? null, g.shadows ?? null]);
+    JSON.stringify([
+      g.family,
+      g.weight,
+      g.stretch,
+      g.pitch ?? null,
+      g.outline ?? null,
+      g.shadows ?? null,
+    ]);
   const rows = new Map<string, RasterTextGlyph[]>();
   for (const g of unique.values()) {
     const key = JSON.stringify([
@@ -67,6 +74,7 @@ export function rasterTextSlots(
           bold: first.bold,
           weight: first.weight,
           stretch: first.stretch,
+          pitch: first.pitch,
         },
         family: first.family,
         style: style(first),

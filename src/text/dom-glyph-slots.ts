@@ -276,23 +276,43 @@ export class DomGlyphSlots {
     // row's glyph step anchors the pitch, as it anchors the fallback compression below.
     let spacing = 0;
     // Natural layout keeps the browser font's own advances.
-    const stretch = slot.vertical || natural ? undefined : slot.stretch;
+    const stretch = slot.vertical || natural ? undefined : slot.stretch,
+      pitch = stretch && stretch > 0 ? slot.pitch : undefined;
+    const reference = '国';
     if (stretch !== undefined && stretch > 0) {
-      const row = slot.glyphs.filter((g) => g.line === firstLine && g.text),
-        count = row.reduce((n, g) => n + Array.from(g.text!).length, 0);
-      if (row.length > 1 && count > 1 && browserWidths[0]) {
-        const pitch = (row.at(-1)!.x - row[0]!.x) / (count - Array.from(row.at(-1)!.text!).length);
-        spacing = Math.max(
-          pitch / stretch - browserWidths[0] / count,
-          -browserWidths[0] / count / 2,
-        );
+      if (pitch !== undefined) {
+        // A growing prefix can change its mix of narrow punctuation and full-width
+        // glyphs. Calibrate tracking against one full-width cell for every reveal step.
+        const width = this.measure.measureText(reference).width;
+        spacing = Math.max(pitch / stretch - width, -width / 2);
+      } else {
+        const row = slot.glyphs.filter((g) => g.line === firstLine && g.text),
+          count = row.reduce((n, g) => n + Array.from(g.text!).length, 0);
+        if (row.length > 1 && count > 1 && browserWidths[0]) {
+          const advance =
+            (row.at(-1)!.x - row[0]!.x) / (count - Array.from(row.at(-1)!.text!).length);
+          spacing = Math.max(
+            advance / stretch - browserWidths[0] / count,
+            -browserWidths[0] / count / 2,
+          );
+        }
       }
     }
     // Reader rules can change advances the canvas cannot see (letter or word spacing, font
     // features). Their rows are measured as laid out, so wrapping and fitting include them.
     const rules = styled && hasDomTextRules(custom);
+    const measuredRows =
+      rules &&
+      this.measureRows(
+        text,
+        pitch === undefined ? fullLines : [...fullLines, reference],
+        font,
+        spacing,
+        slot.vertical,
+      );
+    const referenceWidth = pitch !== undefined && measuredRows ? measuredRows.pop() : undefined;
     let widths =
-      (rules && this.measureRows(text, fullLines, font, spacing, slot.vertical)) ||
+      measuredRows ||
       browserWidths.map((width, line) => width + spacing * Array.from(fullLines[line]!).length);
     const fit = Math.min(
         1,
@@ -300,12 +320,13 @@ export class DomGlyphSlots {
           width ? [(lineBounds[line]!.right - lineBounds[line]!.left) / width] : [],
         ),
       ),
+      // Fit reader overrides against the same reference when the native pitch is fixed.
+      readerFit = pitch === undefined ? fit : referenceWidth ? pitch / referenceWidth : Infinity,
       scale = natural
         ? 1
         : stretch !== undefined && stretch > 0
-          ? // Reader rules can widen stretched rows past their native width; fit them again.
-            rules
-            ? Math.min(stretch, fit)
+          ? rules
+            ? Math.min(stretch, readerFit)
             : stretch
           : fit;
     const positioned = lineBounds.flatMap((row, line) =>

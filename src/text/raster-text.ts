@@ -29,6 +29,8 @@ export interface RasterTextGlyph extends Rect {
   weight: number;
   /** Native glyph width relative to `size`; advances beyond the glyph are spacing. */
   stretch: number;
+  /** Fixed advance of a full-width cell in bitmap pixels. */
+  pitch?: number;
   vertical: boolean;
   color: number;
   alpha: number;
@@ -41,6 +43,7 @@ export interface RasterTextStyle {
   bold?: boolean;
   weight?: number;
   stretch?: number;
+  pitch?: number;
   vertical?: boolean;
   decorative?: boolean;
   color?: number;
@@ -398,6 +401,7 @@ export function recordRasterText(
     bold: style.bold ?? weight >= 600,
     weight,
     stretch: style.stretch ?? 1,
+    ...(style.pitch !== undefined ? {pitch: style.pitch} : {}),
     vertical: style.vertical ?? false,
     color: style.color ?? 0xffffff,
     alpha: style.alpha ?? 255,
@@ -591,6 +595,9 @@ function finishOperation<T extends Kernel>(
         ...shifted(rect, ox, oy),
         clip: shifted(clip, ox, oy),
         size: glyph.size * (glyph.height ? rect.height / glyph.height : 1),
+        ...(glyph.pitch !== undefined
+          ? {pitch: glyph.pitch * (glyph.width ? rect.width / glyph.width : 1)}
+          : {}),
         alpha: glyph.alpha * alpha,
         color: options.color?.(glyph.color, args) ?? glyph.color,
       };

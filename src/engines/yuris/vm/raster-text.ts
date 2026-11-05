@@ -43,7 +43,12 @@ export function yurisRasterBitmap(
 
 const atlasMerge = new WeakMap<
   YurisMachine,
-  {script: number; position: number; returnPosition: number} | null
+  {
+    script: number;
+    position: number;
+    returnPosition: number;
+    dialogue: {script: number; returnPosition: number} | null;
+  } | null
 >();
 /** Presentation provenance for the standard atlas library's final CGACT MERGE.
  * The VM still performs 0x439A30 with the original pixels. The authored YBN
@@ -63,6 +68,7 @@ export function recordAtlasGlyph(
     const glyph = label('es.ZENKAKU.DRAW.ONE');
     const draw = label('es.SJISCODE.DRAW.ONE');
     const next = label('es.NOtoSJISCODE.GET');
+    const dialogue = label('es.TX.OUTPUT.ONE');
     location =
       glyph &&
       draw &&
@@ -71,7 +77,14 @@ export function recordAtlasGlyph(
       draw.script === next.script &&
       draw.position - glyph.position === 42 &&
       next.position - draw.position === 65
-        ? {script: draw.script, position: next.position - 2, returnPosition: glyph.position + 29}
+        ? {
+            script: draw.script,
+            position: next.position - 2,
+            returnPosition: glyph.position + 29,
+            dialogue: dialogue
+              ? {script: dialogue.script, returnPosition: dialogue.position + 83}
+              : null,
+          }
         : null;
     atlasMerge.set(m, location);
   }
@@ -93,8 +106,22 @@ export function recordAtlasGlyph(
   const text = chinese ? gbk.decode(bytes(raw)) : decodeCp932(bytes(raw));
   const size = int(2869);
   if (!text || size <= 0) return;
+  // es.TX.OUTPUT.ONE draws one glyph per button blit. The dialogue layout advances
+  // a full-width cell by its size plus the spacing in V@1173[36,19].
+  const dialogue = location.dialogue,
+    parent = m.task.frames[m.task.gosubDepth - 3];
+  let pitch = 0;
+  if (
+    dialogue &&
+    parent?.returnScript === dialogue.script &&
+    parent.returnPosition === dialogue.returnPosition
+  ) {
+    const settings = m.variables.get(1173);
+    pitch = size + Number(settings.ints?.[36 * (settings.dimensions[1] ?? 0) + 19] ?? 0n);
+  }
   recordRasterText(bitmap, text, {
     size,
+    ...(pitch > 0 ? {pitch} : {}),
     width: raw.length === 1 ? size / 2 : size,
     height: size,
     family: chinese ? '"Sarasa Gothic SC", "Noto Sans CJK SC", sans-serif' : 'serif',

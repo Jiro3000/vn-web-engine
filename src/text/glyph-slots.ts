@@ -55,6 +55,8 @@ export interface GlyphSlot {
    * horizontal scale and letter spacing reproduces the native advances.
    */
   stretch?: number;
+  /** Fixed advance of a full-width cell, independent of the visible text. */
+  pitch?: number;
   id: string;
   glyphs: readonly TextGlyph[];
   /**
