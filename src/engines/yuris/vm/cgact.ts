@@ -167,7 +167,6 @@ export function cgAct(layers: YurisLayers, m: YurisMachine): number {
     if (other.group) throw new YurisError(0x18bab, [layers.commandName(), other.path]);
     let otherNode = layers.lookup(other.path, false);
     if (!otherNode) otherNode = layers.tree.create(other.path, false, 1n, new YurisCg());
-    layers.markDirty(otherNode);
     others[k - 1] = otherNode;
   }
   const destination = others[0]!;
@@ -327,12 +326,25 @@ export function cgAct(layers: YurisLayers, m: YurisMachine): number {
     [Act.TexCopy, null],
     [Act.TexSsCopy, null],
   ];
+  const markDestinations = (id?: Act) => {
+    const cropped = id === Act.Merge || id === Act.Merge2;
+    for (let i = cropped ? 1 : 0; i < extra; i++) {
+      if (id === Act.Copy) layers.markDirty(others[i]!);
+      else layers.markPixelsChanged(others[i]!);
+    }
+  };
+  let marked = false;
   for (const [id, operation] of operations) {
     if (!a.has(id)) continue;
     if (!operation) throw new Error(`CGACT ${m.argName(id)} is not implemented`);
+    if (!marked || id === Act.Copy) {
+      markDestinations(id);
+      marked = true;
+    }
     const result = operation();
     if (!Number.isNaN(result)) return result;
   }
+  if (!marked) markDestinations();
   // 0x428CD6: no operation resets the text buffer.
   layers.textBuffer = 0;
   return 0;
@@ -423,12 +435,18 @@ function merge(
   const s = src.payload!,
     d = dst!.payload!;
   if (!attenuateDestination && s.a === 0) return 0;
+  if (d.masked !== 1) layers.markPixelsChanged(dst);
   d.masked = 1;
   const from = s.pixels,
     to = d.pixels;
   if (!from || !to) return 0;
   const source = yurisRasterBitmap(from, s.width, s.height);
   const target = yurisRasterBitmap(to, d.width, d.height);
+  const left = Math.max(x, 0),
+    top = Math.max(y, 0),
+    right = Math.min(x + s.width, d.width) - 1,
+    bottom = Math.min(y + s.height, d.height) - 1;
+  if (left <= right && top <= bottom) layers.markPixelsChanged(dst, [left, top, right, bottom]);
   recordAtlasGlyph(m, src.name, source);
   mergeText(target, source, x, y, s.a, d.a, attenuateDestination);
   return 0;
@@ -665,14 +683,14 @@ function regionOp(
       run(op, from, from, s, p, tw, th, rw, rh, mode);
       if (op === Op.RectPaint)
         clearRasterTextPresentation(yurisRasterBitmap(from, tw, rh, p.x, p.y, rw));
-      layers.markDirty(src);
+      layers.markPixelsChanged(src);
       return 0;
     }
     const buffer = allocate(rw, rh);
     run(op, buffer, from, s, p, tw, th, rw, rh, mode);
-    layers.markDirty(src);
+    layers.markPixelsChanged(src);
     s.replace(buffer, rw, rh);
-    layers.markDirty(src);
+    layers.markPixelsChanged(src);
     return 0;
   }
   const d = dst!.payload!;
@@ -689,8 +707,10 @@ function regionOp(
       yurisRasterBitmap(from, tw, rh, p.x, p.y, rw),
     );
   d.replace(buffer, rw, rh);
-  layers.markDirty(dst);
-  if (op === Op.Copy) copyProperties(s, d);
+  if (op === Op.Copy) {
+    layers.markDirty(dst);
+    copyProperties(s, d);
+  } else layers.markPixelsChanged(dst);
   d.masked = s.masked;
   return 0;
 }

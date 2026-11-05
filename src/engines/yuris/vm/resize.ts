@@ -199,6 +199,35 @@ function blendSse(
   }
 }
 
+const evenChannels = 0x00ff00ff;
+
+/** Horizontal products, two independent unsigned 16-bit channel lanes per word. */
+function horizontalRow(
+  result: Uint32Array,
+  source: Uint32Array,
+  row: number,
+  columns: Int32Array,
+  weights: Uint8Array,
+  left: number,
+  right: number,
+): void {
+  for (let x = left; x < right; x++) {
+    const at = row + columns[x]!,
+      a = source[at] ?? 0,
+      b = source[at + 1] ?? 0,
+      w = weights[x]!,
+      rest = 256 - w;
+    result[x * 2] = Math.imul(a & evenChannels, rest) + Math.imul(b & evenChannels, w);
+    result[x * 2 + 1] =
+      Math.imul((a >>> 8) & evenChannels, rest) + Math.imul((b >>> 8) & evenChannels, w);
+  }
+}
+
+const verticalMmx = (top: number, bottom: number, wy: number, iy: number): number =>
+  ((top >>> 8) * iy + (bottom >>> 8) * wy) >>> 8;
+const verticalSse = (top: number, bottom: number, wy: number, iy: number): number =>
+  ((top * iy) >>> 16) + ((bottom * wy) >>> 16);
+
 /**
  * SIZE2: bilinear scaling of the region FX..FX2, FY..FY2 (hundredths) to FSX/100 x FSY/100.
  *
@@ -240,6 +269,57 @@ export function sizeBilinear(
     return;
   }
   clearOutside(dst, width, height, top, bottom, left, right);
+  if (
+    top < bottom &&
+    left < right &&
+    dst.buffer !== src.buffer &&
+    ((src.byteOffset | dst.byteOffset | src.byteLength | dst.byteLength) & 3) === 0
+  ) {
+    const source = new Uint32Array(src.buffer, src.byteOffset, src.byteLength >>> 2),
+      output = new Uint32Array(dst.buffer, dst.byteOffset, dst.byteLength >>> 2);
+    let first = new Uint32Array(width * 2),
+      second = new Uint32Array(width * 2);
+    let firstY = NaN,
+      secondY = NaN;
+    const mix = simd ? verticalSse : verticalMmx;
+    for (let y = top; y < bottom; y++) {
+      const p = position(ay, y),
+        row = (p >> 8) + originY,
+        wy = p & 0xff;
+      if (row === secondY) {
+        [first, second] = [second, first];
+        [firstY, secondY] = [secondY, firstY];
+      }
+      if (row !== firstY) {
+        horizontalRow(first, source, row * stride + originX, columns, weights, left, right);
+        firstY = row;
+      }
+      const base = y * width;
+      if (wy === 0) {
+        for (let x = left; x < right; x++)
+          output[base + x] =
+            ((first[x * 2]! >>> 8) & evenChannels) | (first[x * 2 + 1]! & 0xff00ff00);
+        continue;
+      }
+      if (row + 1 !== secondY) {
+        horizontalRow(second, source, (row + 1) * stride + originX, columns, weights, left, right);
+        secondY = row + 1;
+      }
+      const iy = 256 - wy;
+      for (let x = left; x < right; x++) {
+        const evenTop = first[x * 2]!,
+          evenBottom = second[x * 2]!,
+          oddTop = first[x * 2 + 1]!,
+          oddBottom = second[x * 2 + 1]!;
+        output[base + x] =
+          mix(evenTop & 0xffff, evenBottom & 0xffff, wy, iy) |
+          (mix(oddTop & 0xffff, oddBottom & 0xffff, wy, iy) << 8) |
+          (mix(evenTop >>> 16, evenBottom >>> 16, wy, iy) << 16) |
+          (mix(oddTop >>> 16, oddBottom >>> 16, wy, iy) << 24);
+      }
+    }
+    return;
+  }
   const blend = simd ? blendSse : blendMmx;
   const pitch = stride * 4;
   for (let y = top; y < bottom; y++) {

@@ -32,6 +32,8 @@ export interface BlendRule {
 }
 
 let tables: Uint8Array[] | null = null;
+const littleEndian = new Uint8Array(Uint32Array.of(1).buffer)[0] === 1;
+const pairedChannels = 0x00ff00ff;
 
 /** 0x4686F9: trunc(c * x / 255) for c 0..256 and x -255..256 (0x60FE00, rows of 0x200). */
 function product(c: number, x: number): number {
@@ -139,12 +141,70 @@ export function blendRect(
   height: number,
   rule: BlendRule | null,
 ): void {
-  const f = blendTables()[src.mode] ?? blendTables()[0]!;
   const mode = src.mode,
     a = src.a;
   const s = src.pixels,
     r = rule?.pixels,
     w = rule?.weights;
+  if (
+    !rule &&
+    mode === 0 &&
+    s.buffer !== dst.buffer &&
+    width > 0 &&
+    height > 0 &&
+    sx >= 0 &&
+    sy >= 0 &&
+    dx >= 0 &&
+    dy >= 0 &&
+    sx + width <= src.width &&
+    dx + width <= dstWidth &&
+    ((sy + height - 1) * src.width + sx + width) * 4 <= s.length &&
+    ((dy + height - 1) * dstWidth + dx + width) * 4 <= dst.length
+  ) {
+    let si = sy * src.width + sx,
+      di = dy * dstWidth + dx;
+    if (!src.masked && a >= 0x100) {
+      // The mode-zero opaque blitter copies BGRA, including the fourth byte (0x412CF4).
+      if (width === src.width && width === dstWidth)
+        dst.set(s.subarray(si * 4, (si + width * height) * 4), di * 4);
+      else
+        for (let row = 0; row < height; row++, si += src.width, di += dstWidth)
+          dst.set(s.subarray(si * 4, (si + width) * 4), di * 4);
+      return;
+    }
+    if (littleEndian && ((s.byteOffset | dst.byteOffset) & 3) === 0 && a >= 0 && a <= 256) {
+      const source = new Uint32Array(s.buffer, s.byteOffset, s.byteLength >>> 2),
+        target = new Uint32Array(dst.buffer, dst.byteOffset, dst.byteLength >>> 2);
+      // (s * k + d * (256 - k)) >> 8 is the scalar difference formula. Two
+      // 16-bit lanes can share a multiply since each sum is at most 255 * 256.
+      const pair = (source: number, destination: number, k: number, rest: number) =>
+        Math.imul(source & pairedChannels, k) + Math.imul(destination & pairedChannels, rest);
+      if (src.masked) {
+        for (let row = 0; row < height; row++, si += src.width, di += dstWidth)
+          for (let x = 0; x < width; x++) {
+            const from = source[si + x]!,
+              to = target[di + x]!,
+              k = (((from >>> 24) * a) >> 8) + 1,
+              rest = 256 - k;
+            const br = (pair(from, to, k, rest) >>> 8) & pairedChannels;
+            const g = (((from >>> 8) & 255) * k + ((to >>> 8) & 255) * rest) & 0xff00;
+            target[di + x] = (to & 0xff000000) | br | g;
+          }
+      } else {
+        const rest = 256 - a;
+        for (let row = 0; row < height; row++, si += src.width, di += dstWidth)
+          for (let x = 0; x < width; x++) {
+            const from = source[si + x]!,
+              to = target[di + x]!;
+            const br = (pair(from, to, a, rest) >>> 8) & pairedChannels;
+            const ga = pair(from >>> 8, to >>> 8, a, rest) & 0xff00ff00;
+            target[di + x] = br | ga;
+          }
+      }
+      return;
+    }
+  }
+  const f = blendTables()[mode] ?? blendTables()[0]!;
   for (let row = 0; row < height; row++) {
     let di = ((dy + row) * dstWidth + dx) * 4;
     let si = ((sy + row) * src.width + sx) * 4;

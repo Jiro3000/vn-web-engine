@@ -65,6 +65,7 @@ export class YurisBrowserPlayer {
   private readonly registry = new StoredRegistry(new MemoryStore());
   private readonly contexts: CanvasRenderingContext2D[] = [];
   private readonly frames: ImageData[] = [];
+  private readonly frameSources: (Uint8Array | undefined)[] = [];
   private readonly abort = new AbortController();
   private cursorUrl = '';
   private host: YurisMachineHost;
@@ -396,9 +397,14 @@ export class YurisBrowserPlayer {
     for (let no = 0; no < 4; no++) {
       const node = layers.windowLayers[no],
         cg = node?.payload;
-      if (!node || !cg?.pixels) continue;
-      const textChanged = cg.dirty || forceText;
+      if (!node || !cg?.pixels) {
+        this.frameSources[no] = undefined;
+        continue;
+      }
       layers.composeSet(node);
+      const sourceChanged = this.frameSources[no] !== cg.pixels;
+      if (!cg.dirty && !forceText && !sourceChanged) continue;
+      this.frameSources[no] = cg.pixels;
       const dom = this.textPresentation.textMode === 'dom';
       const bitmap = dom ? yurisRasterBitmap(cg.pixels, cg.width, cg.height) : null;
       let context = this.contexts[no];
@@ -408,28 +414,54 @@ export class YurisBrowserPlayer {
         const created = canvas.getContext('2d', {alpha: false});
         if (!created) throw new Error('Canvas 2D unavailable');
         context = this.contexts[no] = created;
+        canvas.addEventListener(
+          'contextrestored',
+          () => {
+            this.frameSources[no] = undefined;
+          },
+          {signal: this.abort.signal},
+        );
         this.windows.elements[no]?.append(canvas);
         this.bindPointer(canvas);
       }
       const canvas = context.canvas;
       let frame = this.frames[no];
+      let fullUpload = forceText || sourceChanged;
       if (!frame || frame.width !== cg.width || frame.height !== cg.height) {
         canvas.width = cg.width;
         canvas.height = cg.height;
         frame = this.frames[no] = new ImageData(cg.width, cg.height);
+        fullUpload = true;
       }
       const pixels = bitmap ? rasterTextBitmap(bitmap).storage!.bytes : cg.pixels;
       const rgba = frame.data;
       // StretchDIBits with SRCCOPY (0x45ECF4) treats the composed window as BGRX.
-      for (let i = 0; i < rgba.length; i += 4) {
-        rgba[i] = pixels[i + 2]!;
-        rgba[i + 1] = pixels[i + 1]!;
-        rgba[i + 2] = pixels[i]!;
-        rgba[i + 3] = 255;
+      const source = new DataView(pixels.buffer, pixels.byteOffset, pixels.byteLength);
+      const output = new DataView(rgba.buffer, rgba.byteOffset, rgba.byteLength);
+      const [left, top, right, bottom] = fullUpload ? [0, 0, cg.width - 1, cg.height - 1] : cg.clip;
+      let first = cg.height,
+        last = -1;
+      const stride = cg.width * 4;
+      for (let y = top!; y <= bottom!; y++) {
+        let changed = 0;
+        const row = y * stride,
+          end = row + (right! + 1) * 4;
+        for (let i = row + left! * 4; i < end; i += 4) {
+          const bgra = source.getUint32(i, true);
+          const color =
+            0xff000000 | ((bgra & 0xff) << 16) | (bgra & 0xff00) | ((bgra >>> 16) & 0xff);
+          changed |= color ^ output.getUint32(i, true);
+          output.setUint32(i, color, true);
+        }
+        if (changed) {
+          if (first === cg.height) first = y;
+          last = y;
+        }
       }
-      context.putImageData(frame, 0, 0);
-      if (bitmap && textChanged)
-        this.textPresentation.replace(canvas, () => visibleRasterText(bitmap));
+      if (fullUpload) context.putImageData(frame, 0, 0);
+      else if (last >= first)
+        context.putImageData(frame, 0, 0, left!, first, right! - left! + 1, last - first + 1);
+      if (bitmap) this.textPresentation.replace(canvas, () => visibleRasterText(bitmap));
     }
   }
   private bindPointer(canvas: HTMLCanvasElement): void {

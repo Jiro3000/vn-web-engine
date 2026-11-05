@@ -1,5 +1,5 @@
 import {cgAct} from './cgact.js';
-import {compose} from './compose.js';
+import {compose, type Rect} from './compose.js';
 import {YurisError} from './errors.js';
 import {YurisFileKind, YurisFileType, type YurisFiles} from './files.js';
 import type {YurisMachine} from './machine.js';
@@ -232,6 +232,7 @@ const WINDOWS = 4;
  */
 export class YurisLayers {
   readonly tree = new YurisTree<YurisCg>();
+  private readonly ruleIds = new Set<ByteString>();
   /** 0x872018: a layer changed since the last composition. */
   redraw = false;
   /** 0x871FF4: Keep the composition mode selected by native Direct3D initialization. */
@@ -369,8 +370,12 @@ export class YurisLayers {
       }
     }
     if (a.has(Cg.Tid)) {
+      const previous = cg.tid;
       cg.tid = a.text(Cg.Tid);
       if (a.has(Cg.TidNo)) cg.tid += `.${formatInt(a.int(Cg.TidNo))}`;
+      if (cg.tid) this.ruleIds.add(cg.tid);
+      // The new rule may have been edited earlier in this pass while it was hidden.
+      if (cg.tid !== previous) changed = true;
     }
     const op = (id: number) => a.op[a.has(id)]!;
     const value = (id: number) => a.int(id);
@@ -642,10 +647,10 @@ export class YurisLayers {
    * 0x410550: marks the node's area in each enclosing layer set for recomposition. The area
    * starts as the node's buffer and moves by each node's position on the way up.
    */
-  markDirty(node: YurisCgNode | null): void {
+  markDirty(node: YurisCgNode | null, area?: Rect): void {
     const cg = node?.payload;
     if (!node || !cg) return;
-    const rect = [0, 0, cg.width - 1, cg.height - 1];
+    const rect = area ? [...area] : [0, 0, cg.width - 1, cg.height - 1];
     for (
       let child = node, set = node.parent;
       set && set !== this.tree.root;
@@ -659,6 +664,26 @@ export class YurisLayers {
       rect[3]! += y;
       if (set.payload) markArea(set.payload, rect);
     }
+  }
+
+  /** A pixel-only write to an invisible leaf cannot change its enclosing image.
+   * Retain the native mark for any potential TID source, even when it is hidden.
+   */
+  markPixelsChanged(node: YurisCgNode | null, area?: Rect): void {
+    const cg = node?.payload;
+    if (!node || !cg) return;
+    const hidden = !node.group && (cg.e === 0 || cg.a === 0);
+    if (hidden || area) {
+      // Namespaces may change before composition. A literal final name can only
+      // resolve to the same leaf name, while directory syntax stays conservative.
+      for (const id of this.ruleIds) {
+        if (id.endsWith(node.name) || id.endsWith('/') || id.endsWith(':')) {
+          this.markDirty(node);
+          return;
+        }
+      }
+    }
+    if (!hidden) this.markDirty(node, area);
   }
 
   /**

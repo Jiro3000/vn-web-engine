@@ -1,6 +1,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
+import {blendRect} from '../dist/engines/yuris/vm/blend.js';
 import {YurisCg, YurisLayers} from '../dist/engines/yuris/vm/cg.js';
+import {sizeBilinear} from '../dist/engines/yuris/vm/resize.js';
 
 test('YU-RIS button hit testing reads main window for ONMOUSE2=1', () => {
   const commands = new Map();
@@ -70,6 +72,85 @@ test('YU-RIS composes a transparent RGBA PNG over the background', async () => {
   layers.composeSet(screen);
   assert.ok(screen.payload.pixels[0] >= 254);
   assert.equal(screen.payload.pixels[4], 255);
+});
+
+test('YU-RIS hidden pixel updates mark composition when used as a transition rule', async () => {
+  const commands = new Map();
+  const machine = {
+    screenWidth: 8,
+    screenHeight: 8,
+    system: {frames: 0n, names: ['']},
+    define: (id, fn) => commands.set(id, fn),
+    decode() {},
+    args: {
+      has: (id) => (id === 0 || id === 51 ? 1 : 0),
+      text: (id) => (id === 0 ? 'W0/LAYER' : 'W0/RULE'),
+    },
+  };
+  const layers = new YurisLayers(machine, {}, {});
+  layers.install();
+  layers.tree.create('W0/LAYER', false, 1n, new YurisCg());
+  const hidden = new YurisCg();
+  hidden.e = 0;
+  const rule = layers.tree.create('W0/RULE', false, 2n, hidden);
+  const screen = layers.windowLayers[0].payload;
+  layers.frameEnd();
+  layers.markPixelsChanged(rule);
+  assert.equal(screen.dirty, false);
+  await commands.get(1)();
+  assert.equal(screen.dirty, true);
+  layers.frameEnd();
+  layers.markPixelsChanged(rule);
+  assert.equal(screen.dirty, true);
+});
+
+test('YU-RIS normal layer blits preserve cropped BGRA and native mask rounding', () => {
+  const pixels = Uint8Array.from({length: 6 * 4 * 4}, (_, i) => (i * 37 + 19) & 255);
+  for (const [i, alpha] of [0, 1, 128, 255].entries()) pixels[(7 + i) * 4 + 3] = alpha;
+  for (const [masked, a] of [
+    [false, 256],
+    [false, 157],
+    [true, 256],
+    [true, 157],
+  ]) {
+    const dst = Uint8Array.from({length: 7 * 4 * 4}, (_, i) => (i * 23 + 241) & 255);
+    const expected = dst.slice();
+    for (let y = 0; y < 2; y++) {
+      for (let x = 0; x < 4; x++) {
+        const from = ((y + 1) * 6 + x + 1) * 4,
+          to = (y * 7 + x + 2) * 4;
+        const weight = masked ? 1 + Math.floor((pixels[from + 3] * a) / 256) : a;
+        for (let c = 0; c < (masked ? 3 : 4); c++)
+          expected[to + c] += Math.floor(((pixels[from + c] - expected[to + c]) * weight) / 256);
+      }
+    }
+    blendRect(dst, 7, 2, 0, {pixels, width: 6, mode: 0, a, masked}, 1, 1, 4, 2, null);
+    assert.deepEqual(dst, expected);
+  }
+});
+
+test('YU-RIS packed bilinear resize matches both scalar rounding paths byte for byte', () => {
+  const stride = 7,
+    rows = 5;
+  const source = Uint8Array.from({length: stride * rows * 4}, (_, i) => (i * 73 + 191) & 255);
+  const unaligned = new Uint8Array(source.length + 1).subarray(1);
+  unaligned.set(source);
+  for (const simd of [false, true]) {
+    for (const [fx, fy, fx2, fy2, fsx, fsy] of [
+      [0, 0, 600, 400, 700, 500],
+      [21, 19, 592, 399, 400, 310],
+      [-150, -85, 776, 521, 930, 815],
+      [0, 40, 614, 468, 700, 850],
+      [500, 400, 700, 500, 300, 200],
+      [32, 55, 600, 430, 100, 100],
+    ]) {
+      const packed = new Uint8Array(Math.trunc(fsx / 100) * Math.trunc(fsy / 100) * 4).fill(133);
+      const scalar = packed.slice();
+      sizeBilinear(packed, source, stride, rows, fx, fy, fx2, fy2, fsx, fsy, simd);
+      sizeBilinear(scalar, unaligned, stride, rows, fx, fy, fx2, fy2, fsx, fsy, simd);
+      assert.deepEqual(packed, scalar);
+    }
+  }
 });
 
 test('YU-RIS MERGE and MERGE2 preserve straight alpha with native integer rounding and clipping', () => {
