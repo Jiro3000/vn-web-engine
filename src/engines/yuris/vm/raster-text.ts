@@ -1,4 +1,5 @@
 import {decodeCp932} from '../../../text/cp932.js';
+import {cloneBgraTarget} from '../../../graphics/bgra-effects-wasm.js';
 import {
   recordRasterText,
   type RasterTextBitmap,
@@ -15,7 +16,7 @@ function rasterStorage(bytes: Uint8Array): RasterTextStorage {
   if (!value) {
     value = {
       bytes,
-      cloneRange: (offset, length) => rasterStorage(bytes.slice(offset, offset + length)),
+      cloneRange: (offset, length) => rasterStorage(cloneBgraTarget(bytes, offset, length)),
     };
     storage.set(bytes, value);
   }

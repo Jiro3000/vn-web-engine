@@ -12,7 +12,12 @@ import {
   parseHex,
   strtod,
 } from './numbers.js';
-import {SYSTEM_VARIABLE_LIMIT, YurisType, type YurisVariables} from './variables.js';
+import {
+  SYSTEM_VARIABLE_LIMIT,
+  YurisType,
+  type YurisVariable,
+  type YurisVariables,
+} from './variables.js';
 
 /**
  * Values of system variables (ids below 1000). `index` and `indexHigh` are the two halves of
@@ -42,8 +47,8 @@ const enum Mode {
 const STACK = 0x400;
 /** Index nesting limit of the array frames at 0x7E1200. */
 const NESTING = 0x80;
-
-const OP = (c: string) => c.charCodeAt(0);
+const BYTE_LITERALS = Array.from({length: 256}, (_, i) => BigInt((i << 24) >> 24));
+const COMMON_INDEXES = Array.from({length: 512}, (_, i) => BigInt(i));
 
 /**
  * The YU-RIS expression evaluator (0x420ACC). Expression bytecode is a sequence of operator
@@ -59,7 +64,9 @@ export class YurisExpression {
   private top = 0;
   /** 0x7E11E5: open array index frames. */
   private depth = 0;
-  private readonly ints = new BigInt64Array(STACK);
+  // Keep signed bigint values on the stack so a pop can reuse the stored value.
+  // Arithmetic and numeric conversions wrap before pushing.
+  private readonly ints = new Array<bigint>(STACK).fill(0n);
   private readonly doubles = new Float64Array(STACK);
   /** 0x7E09E2: string slot per stack position. */
   private readonly slots = new Uint16Array(STACK);
@@ -72,7 +79,7 @@ export class YurisExpression {
   private readonly frameId = new Uint32Array(NESTING);
   private readonly framePrefix = new Int32Array(NESTING);
   /** 0x7DB998: index values collected by the last `)` (count 0x7DB993). */
-  private readonly indexes = new BigInt64Array(16);
+  private readonly indexes = new Array<bigint>(16).fill(0n);
   private indexCount = 0;
   /** Set by 0x46A634(0) while scripts load: variable reads only mark the result variable. */
   private constantCheck = false;
@@ -81,7 +88,11 @@ export class YurisExpression {
   /** 0x7DB980: the last variable an expression named. */
   lastId = 0;
   /** 0x7DB988: its flattened element index (64-bit). */
-  lastIndex = 0n;
+  private lastElement: number | bigint = 0;
+  get lastIndex(): bigint {
+    const index = this.lastElement;
+    return typeof index === 'number' ? (COMMON_INDEXES[index] ?? BigInt(index)) : index;
+  }
   /** 0x7DB991: set by `v`, a whole-variable reference. */
   wholeVariable = false;
   /** 0x7DB992: 1 for a '`' prefix, 2 for '#'; either makes reads push a reference. */
@@ -96,7 +107,10 @@ export class YurisExpression {
 
   /** The dimensions a declaration target named, collected by `)` in declaration mode. */
   get declaredDimensions(): number[] {
-    return Array.from(this.indexes.subarray(0, this.indexCount), (d) => Number(d & 0xffffffffn));
+    const dimensions = new Array<number>(this.indexCount);
+    for (let i = 0; i < dimensions.length; i++)
+      dimensions[i] = Number(this.indexes[i]! & 0xffffffffn);
+    return dimensions;
   }
 
   /** 0x420BDC (mode 1): int64 result. */
@@ -175,6 +189,13 @@ export class YurisExpression {
     for (let p = 0; p < bytes.length;) {
       const op = bytes[p]!,
         length = bytes[p + 1]! | (bytes[p + 2]! << 8);
+      if (op === 0x56 && length === 3) {
+        const next = this.indexedRead(bytes, p);
+        if (next !== p) {
+          p = next;
+          continue;
+        }
+      }
       const ok = this.step(op, bytes, p + 3, length);
       p += 3 + length;
       // A failing operator ends the evaluation without producing the string result.
@@ -196,82 +217,82 @@ export class YurisExpression {
   /** One operator; false stops the expression as a failing native handler does. */
   private step(op: number, bytes: Uint8Array, at: number, length: number): boolean {
     switch (op) {
-      case OP('M'):
+      case 0x4d: // M
         this.literal(bytes, at, length);
         return true;
-      case OP('H'):
+      case 0x48: // H
         if (this.constantCheck) return this.markVariable();
         this.variable(bytes, at);
         return true;
-      case OP('V'):
+      case 0x56: // V
         if (this.constantCheck) return this.markVariable();
         this.openIndex(bytes, at);
         return true;
-      case OP('v'):
+      case 0x76: // v
         if (this.constantCheck) return this.markVariable();
         this.reference(bytes, at);
         return true;
-      case OP(')'):
+      case 0x29: // )
         this.closeIndex();
         return true;
-      case OP('B'):
-        return this.push(BigInt(signed(bytes[at]!, 8)));
-      case OP('W'):
+      case 0x42: // B
+        return this.push(BYTE_LITERALS[bytes[at]! | 0]!);
+      case 0x57: // W
         return this.push(BigInt(signed(bytes[at]! | (bytes[at + 1]! << 8), 16)));
-      case OP('I'):
+      case 0x49: // I
         return this.push(BigInt(view(bytes).getInt32(at, true)));
-      case OP('L'):
+      case 0x4c: // L
         return this.push(view(bytes).getBigInt64(at, true));
-      case OP('F'):
+      case 0x46: // F
         return this.pushDouble(view(bytes).getFloat64(at, true));
-      case OP('R'):
+      case 0x52: // R
         return this.negate();
-      case OP('s'):
+      case 0x73: // s
         return this.toText();
-      case OP('i'):
+      case 0x69: // i
         return this.toNumber();
-      case OP('+'):
+      case 0x2b: // +
         return this.add();
-      case OP('='):
+      case 0x3d: // =
         return this.equality(true);
-      case OP('!'):
+      case 0x21: // !
         return this.equality(false);
-      case OP('<'):
+      case 0x3c: // <
         return this.compare((a, b) => a < b);
-      case OP('>'):
+      case 0x3e: // >
         return this.compare((a, b) => a > b);
-      case OP('Z'):
+      case 0x5a: // Z
         return this.compare((a, b) => a >= b);
-      case OP('S'):
+      case 0x53: // S
         return this.compare((a, b) => a <= b);
-      case OP('-'):
+      case 0x2d: // -
         return this.arithmetic(
           (a, b) => a - b,
           (a, b) => a - b,
         );
-      case OP('*'):
+      case 0x2a: // *
         return this.arithmetic(
           (a, b) => a * b,
           (a, b) => a * b,
         );
-      case OP('/'):
+      case 0x2f: // /
         return this.arithmetic(
           (a, b) => (b === 0 ? 0 : a / b),
           (a, b) => (b === 0n ? 0n : a / b),
         );
-      case OP('%'):
+      case 0x25: // %
         return this.integerOnly((a, b) => (b === 0n ? 0n : a % b));
-      case OP('A'):
+      case 0x41: // A
         return this.integerOnly((a, b) => a & b);
-      case OP('O'):
+      case 0x4f: // O
         return this.integerOnly((a, b) => a | b);
-      case OP('^'):
+      case 0x5e: // ^
         return this.integerOnly((a, b) => a ^ b);
-      case OP('&'):
+      case 0x26: // &
         return this.logical((a, b) => a && b);
-      case OP('|'):
+      case 0x7c: // |
         return this.logical((a, b) => a || b);
-      case OP(','):
+      case 0x2c: // ,
         return true;
     }
     // 0x423080, installed for every other operator byte.
@@ -335,7 +356,7 @@ export class YurisExpression {
     const sigil = bytes[at]!;
     this.prefix = (sigil === 0x60 ? 1 : 0) + (sigil === 0x23 ? 2 : 0);
     this.lastId = bytes[at + 1]! | (bytes[at + 2]! << 8);
-    this.lastIndex = 0n;
+    this.lastElement = 0;
     return this.lastId;
   }
 
@@ -344,7 +365,7 @@ export class YurisExpression {
     const id = this.setPrefixAndId(bytes, at);
     if (this.declaring && this.depth === 0) return;
     if (id >= this.variables.entries.length) throw new YurisError(0x1a5ea);
-    this.pushVariable(id, this.top, 0n);
+    this.pushVariable(id, this.variables.get(id), this.top, 0);
     this.top++;
   }
 
@@ -361,6 +382,64 @@ export class YurisExpression {
     this.slots[this.top] = 0;
     this.top++;
     this.depth++;
+  }
+
+  /** Fuse V, a scalar index, and ) for the ordinary one-dimensional access. */
+  private indexedRead(bytes: Uint8Array, p: number): number {
+    if (
+      (bytes[p + 3] !== 0x40 && bytes[p + 3] !== 0x24) ||
+      this.constantCheck ||
+      this.top >= 255 ||
+      this.depth >= NESTING ||
+      (this.declaring && this.depth === 0)
+    )
+      return p;
+    const id = bytes[p + 4]! | (bytes[p + 5]! << 8);
+    if (id < SYSTEM_VARIABLE_LIMIT) return p;
+    const target = this.variables.entries[id];
+    if (!target || target.dimensions.length !== 1) return p;
+    const kind = bytes[p + 6]!;
+    const close = p + (kind === 0x48 ? 12 : 10);
+    if (
+      bytes[close] !== 0x29 ||
+      bytes[close + 1] !== 1 ||
+      bytes[close + 2] !== 0 ||
+      close + 4 > bytes.length
+    )
+      return p;
+    let index: bigint;
+    if (kind === 0x48 && bytes[p + 7] === 3 && bytes[p + 8] === 0 && bytes[p + 9] === 0x40) {
+      const key = bytes[p + 10]! | (bytes[p + 11]! << 8);
+      const scalar = this.variables.entries[key];
+      if (scalar?.type !== YurisType.Int) return p;
+      if (key >= SYSTEM_VARIABLE_LIMIT && scalar.ints) index = scalar.ints[0] ?? 0n;
+      else if (key === 0x30) index = this.system.int(key, 0, 0);
+      else return p;
+    } else if (kind === 0x42 && bytes[p + 7] === 1 && bytes[p + 8] === 0)
+      index = BYTE_LITERALS[bytes[p + 9]!]!;
+    else return p;
+    const top = this.top;
+    this.frameBase[this.depth] = top;
+    this.frameId[this.depth] = id;
+    this.framePrefix[this.depth] = 0;
+    this.slots[top] = this.slots[top + 1] = 0;
+    this.ints[top] = 0n;
+    this.ints[top + 1] = index;
+    const element = Number(index);
+    if (element < 0 || element >= target.dimensions[0]!) {
+      this.depth++;
+      this.top += 2;
+      this.closeIndex();
+      return close + 4;
+    }
+    this.indexes[0] = index;
+    this.indexCount = 1;
+    this.lastId = id;
+    this.lastElement = element;
+    this.prefix = 0;
+    this.pushVariable(id, target, top, element);
+    this.top++;
+    return close + 4;
   }
 
   /** 'v' (0x421994): a whole-variable reference, used by LET re-initialisation. */
@@ -385,7 +464,8 @@ export class YurisExpression {
       base = this.frameBase[d]!;
     this.indexCount = 0;
     for (let p = base + 1; p < this.top; p++) {
-      this.indexes[this.indexCount++] = this.ints[p]!;
+      const index = this.indexCount++;
+      if (index < this.indexes.length) this.indexes[index] = this.ints[p]!;
       if (this.slots[p] !== 0) throw new YurisError(0x2710a);
     }
     const id = this.frameId[d]!;
@@ -393,25 +473,39 @@ export class YurisExpression {
     this.prefix = this.framePrefix[d]!;
     if (d === 0 && this.declaring) return;
     const n = this.indexCount;
-    let index: bigint;
+    const variable = this.variables.get(id);
+    let index: number | bigint;
     if (id === 0x32 || id === 0x33 || id === 0x34 || id === 0x46) {
       index = this.referenceIndex(n);
     } else {
-      const variable = this.variables.get(id);
-      for (let k = 0; k < n; k++)
-        if (unsigned32(BigInt(variable.dimensions[k] ?? 0) - 1n) < unsigned32(this.indexes[k]!))
-          throw new YurisError(0x1a202);
-      index = 0n;
-      let multiplier = 1n;
-      for (let k = variable.dimensions.length - 1; k >= 0; k--) {
-        index += multiplier * this.indexes[k]!;
-        multiplier *= BigInt(variable.dimensions[k]!);
+      const dimensions = variable.dimensions;
+      // Ordinary in-bounds indexes fit the allocated array and flatten exactly as numbers.
+      // The VM's low-dword validation and int64 wrap still apply to irregular operands.
+      let ordinary = n === dimensions.length;
+      let flattened = 0;
+      for (let k = 0; ordinary && k < n; k++) {
+        const element = Number(this.indexes[k]!);
+        const dimension = dimensions[k]!;
+        if (element >= 0 && element < dimension) flattened = flattened * dimension + element;
+        else ordinary = false;
       }
-      index = i64(index);
+      if (ordinary && Number.isSafeInteger(flattened)) index = flattened;
+      else {
+        for (let k = 0; k < n; k++)
+          if (unsigned32(BigInt(dimensions[k] ?? 0) - 1n) < unsigned32(this.indexes[k]!))
+            throw new YurisError(0x1a202);
+        index = 0n;
+        let multiplier = 1n;
+        for (let k = dimensions.length - 1; k >= 0; k--) {
+          index += multiplier * this.indexes[k]!;
+          multiplier *= BigInt(dimensions[k]!);
+        }
+        index = i64(index);
+      }
     }
-    this.lastIndex = index;
+    this.lastElement = index;
     this.top = base;
-    this.pushVariable(id, base, index);
+    this.pushVariable(id, variable, base, index);
     this.top++;
   }
 
@@ -446,58 +540,72 @@ export class YurisExpression {
    * with a prefix the reference `(id + indexHigh) << 32 | indexLow`. A variable without a
    * type pushes nothing; its stack position keeps its previous value.
    */
-  private pushVariable(id: number, position: number, index: bigint): void {
-    const floating = this.floating,
-      low = Number(index & 0xffffffffn),
-      high = Number(BigInt.asIntN(32, index >> 32n)),
-      element = lowSigned(index);
-    const variable = this.variables.get(id);
-    const setNumber = (int: bigint, double: number) => {
-      if (floating) this.doubles[position] = double;
-      else this.ints[position] = int;
+  private pushVariable(
+    id: number,
+    variable: YurisVariable,
+    position: number,
+    index: number | bigint,
+  ): void {
+    if (variable.type === YurisType.None) return;
+    const floating = this.floating;
+    if (this.prefix) {
+      const value = id < SYSTEM_VARIABLE_LIMIT ? 0n : i64((BigInt(id) << 32n) + BigInt(index));
+      if (floating) this.doubles[position] = Number(value);
+      else this.ints[position] = value;
       this.slots[position] = 0;
-    };
-    const ref = () => i64((BigInt(id + high) << 32n) | BigInt(low));
+      return;
+    }
     if (id < SYSTEM_VARIABLE_LIMIT) {
-      if (variable.type === YurisType.None) return;
-      if (variable.type === YurisType.String && !this.prefix) {
+      const low = typeof index === 'number' ? index >>> 0 : Number(BigInt.asUintN(32, index)),
+        high =
+          typeof index === 'number'
+            ? Math.floor(index / 0x100000000) | 0
+            : Number(BigInt.asIntN(32, index >> 32n));
+      if (variable.type === YurisType.String) {
         this.ints[position] = 0n;
         this.slots[position] = this.allocate(this.system.string(id, low, high));
-        return;
-      }
-      if (this.prefix) return setNumber(0n, 0);
-      if (variable.type === YurisType.Int) {
+      } else if (variable.type === YurisType.Int) {
         const value = this.system.int(id, low, high);
-        return setNumber(value, Number(value));
+        if (floating) this.doubles[position] = Number(value);
+        else this.ints[position] = value;
+        this.slots[position] = 0;
+      } else {
+        const value = this.system.float(id, low, high);
+        if (floating) this.doubles[position] = value;
+        else this.ints[position] = fistp(value);
+        this.slots[position] = 0;
       }
-      const value = this.system.float(id, low, high);
-      return setNumber(fistp(value), value);
+      return;
     }
+    const element = typeof index === 'number' ? index | 0 : lowSigned(index);
     switch (variable.type) {
       case YurisType.Int: {
-        if (this.prefix) return setNumber(ref(), Number(ref()));
         const value = variable.ints![element] ?? 0n;
-        return setNumber(value, Number(value));
+        if (floating) this.doubles[position] = Number(value);
+        else this.ints[position] = value;
+        this.slots[position] = 0;
+        break;
       }
       case YurisType.Float: {
-        if (this.prefix) return setNumber(ref(), Number(ref()));
         const value = variable.floats![element] ?? 0;
-        return setNumber(fistp(value), value);
+        if (floating) this.doubles[position] = value;
+        else this.ints[position] = fistp(value);
+        this.slots[position] = 0;
+        break;
       }
       case YurisType.String:
-        if (this.prefix) return setNumber(ref(), Number(ref()));
         this.ints[position] = 0n;
         this.slots[position] = this.allocate(
           variable.has(element) ? variable.strings![element]! : '',
         );
-        return;
+        break;
     }
   }
 
   private push(value: bigint): boolean {
     const position = this.top++;
     if (this.floating) this.doubles[position] = Number(value);
-    else this.ints[position] = i64(value);
+    else this.ints[position] = value;
     this.slots[position] = 0;
     return true;
   }

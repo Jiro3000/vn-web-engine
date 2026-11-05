@@ -239,6 +239,22 @@ export function snapshotRasterText(storage: RasterTextStorage): () => void {
 export function hasRasterText(bitmap: RasterTextBitmap): boolean {
   return !!bitmap.storage && planes.has(bitmap.storage);
 }
+/** Both planes receive the same draw in a region already cleared of text. */
+export function syncTextlessPixels(bitmap: RasterTextBitmap): void {
+  const original = bitmap.storage;
+  const plane = original && planes.get(original);
+  if (!plane) return;
+  const length = bitmap.width * bitmap.bytesPerPixel;
+  for (let y = 0, at = bitmap.offset; y < bitmap.height; y++, at += bitmap.stride)
+    plane.blank.bytes.set(original.bytes.subarray(at, at + length), at);
+}
+/** Forget glyphs in a region replaced by an opaque native draw. */
+export function clearRasterTextGlyphs(bitmap: RasterTextBitmap): void {
+  const plane = bitmap.storage && planes.get(bitmap.storage);
+  if (!plane) return;
+  const [x, y] = origin(bitmap, plane);
+  removeRegion(plane, shifted(bounds(bitmap), x, y));
+}
 /** Opaque later artwork can cover text without going through a text-specific
  * API. Compare the two presentation planes to exclude fully covered glyphs. */
 export function visibleRasterText(bitmap: RasterTextBitmap): RasterTextGlyph[] {

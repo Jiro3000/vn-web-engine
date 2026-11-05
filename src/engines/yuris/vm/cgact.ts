@@ -327,8 +327,8 @@ export function cgAct(layers: YurisLayers, m: YurisMachine): number {
     [Act.TexSsCopy, null],
   ];
   const markDestinations = (id?: Act) => {
-    const cropped = id === Act.Merge || id === Act.Merge2;
-    for (let i = cropped ? 1 : 0; i < extra; i++) {
+    const ownsDamage = id === Act.Merge || id === Act.Merge2 || (id !== undefined && isSize(id));
+    for (let i = ownsDamage ? 1 : 0; i < extra; i++) {
       if (id === Act.Copy) layers.markDirty(others[i]!);
       else layers.markPixelsChanged(others[i]!);
     }
@@ -341,6 +341,9 @@ export function cgAct(layers: YurisLayers, m: YurisMachine): number {
       markDestinations(id);
       marked = true;
     }
+    if (id === Act.Text || (extra === 0 && !isSize(id) && id !== Act.Bno)) cg.beginPixelWrite();
+    if (!isSize(id) && id !== Act.Bno && id !== Act.Text)
+      for (const other of others) other?.payload?.beginPixelWrite();
     const result = operation();
     if (!Number.isNaN(result)) return result;
   }
@@ -349,6 +352,16 @@ export function cgAct(layers: YurisLayers, m: YurisMachine): number {
   layers.textBuffer = 0;
   return 0;
 }
+
+const isSize = (id: Act): boolean => id >= Act.Size && id <= Act.Size5;
+
+interface ResizeResult {
+  input: WeakRef<Uint8Array>;
+  sourceRevision: number;
+  targetRevision: number;
+  geometry: readonly number[];
+}
+const resizeResults = new WeakMap<YurisCg, ResizeResult>();
 
 /**
  * 0x439DD4: interpolate ID and ID2 into the existing ID3 buffer, at X/Y.
@@ -374,7 +387,10 @@ function transition(
     d = output?.payload;
   if (!a || !b || !d) return 0;
   d.masked = 1;
-  if (!a.pixels || !b.pixels || !d.pixels) return 0;
+  const firstPixels = a.pixels,
+    secondPixels = b.pixels,
+    outputPixels = d.pixels;
+  if (!firstPixels || !secondPixels || !outputPixels) return 0;
   const sx = Math.max(0, -x),
     sy = Math.max(0, -y),
     dx = Math.max(0, x),
@@ -392,8 +408,8 @@ function transition(
     for (let at = 0; at < width * 4; at += 8) {
       const n = Math.min(8, width * 4 - at);
       for (let c = 0; c < n; c++) {
-        const av = a.pixels[ai + at + c]!,
-          bv = b.pixels[bi + at + c]!;
+        const av = firstPixels[ai + at + c]!,
+          bv = secondPixels[bi + at + c]!;
         if (at >= pairedBytes) result[c] = av + (((bv - av) * weight) >> 8);
         else if (weight === 128) result[c] = simd ? (av + bv + 1) >> 1 : (av >> 1) + (bv >> 1);
         else if (weight < 128)
@@ -404,7 +420,7 @@ function transition(
             Math.min(255, bv + (((av - bv) * (((256 - weight) << 24) >> 16)) >> 16)),
           );
       }
-      d.pixels.set(n === 8 ? result : result.subarray(0, n), di + at);
+      outputPixels.set(n === 8 ? result : result.subarray(0, n), di + at);
     }
   }
   return 0;
@@ -539,14 +555,6 @@ function resize(
   const s = src.payload!;
   const node = hasDestination ? dst! : src,
     t = node.payload!;
-  layers.markDirty(node);
-  let reuse = 0;
-  if (hasDestination && width === t.textureWidth && height === t.textureHeight) reuse = 1;
-  if (t.remalloc === 1 && hasDestination && width < t.textureWidth && height < t.textureHeight)
-    reuse = 2;
-  const buffer = reuse === 0 ? allocate(width, height) : dst!.payload!.source;
-  if (!buffer) return -1;
-  t.masked = s.masked;
   const tw = s.textureWidth,
     th = s.textureHeight;
   const px = Math.trunc(f.fx / 100),
@@ -554,10 +562,110 @@ function resize(
     px2 = Math.trunc(f.fx2 / 100),
     py2 = Math.trunc(f.fy2 / 100);
   const from = mode === 0x0a ? s.pixels : s.source;
+  const cacheable =
+    (mode === 0x0a || mode === 0x15) &&
+    hasDestination &&
+    s !== t &&
+    from &&
+    width * height >= 65536;
+  const geometry = !cacheable
+    ? null
+    : mode === 0x0a
+      ? [mode, tw, th, width, height, px, py, px2, py2]
+      : [mode, tw, th, f.fx, f.fy, f.fx2, f.fy2, f.fsx, f.fsy, Number(simd)];
+  const last = geometry && resizeResults.get(t);
+  if (
+    geometry &&
+    last &&
+    last.input.deref() === from &&
+    last.sourceRevision === s.pixelRevision &&
+    last.targetRevision === t.pixelRevision &&
+    t.textureWidth === width &&
+    t.textureHeight === height &&
+    t.masked === s.masked &&
+    last.geometry.length === geometry.length &&
+    geometry.every((value, i) => value === last.geometry[i])
+  )
+    return 0;
+  const remember = () => {
+    if (geometry && from)
+      resizeResults.set(t, {
+        input: new WeakRef(from),
+        sourceRevision: s.pixelRevision,
+        targetRevision: t.pixelRevision,
+        geometry,
+      });
+  };
+  let reuse = 0;
+  if (hasDestination && width === t.textureWidth && height === t.textureHeight) reuse = 1;
+  if (t.remalloc === 1 && hasDestination && width < t.textureWidth && height < t.textureHeight)
+    reuse = 2;
+  if (
+    mode === 0x15 &&
+    reuse !== 2 &&
+    hasDestination &&
+    s !== t &&
+    from &&
+    width * height >= 65536
+  ) {
+    if (reuse === 0) {
+      layers.markDirty(node);
+      t.replace(allocate(width, height), width, height);
+      layers.markDirty(node);
+    }
+    const revision = s.pixelRevision;
+    const deferred = t.deferPixelWrite(
+      s,
+      from,
+      (to, clip, output) =>
+        sizeBilinear(
+          to,
+          from,
+          tw,
+          th,
+          f.fx,
+          f.fy,
+          f.fx2,
+          f.fy2,
+          f.fsx,
+          f.fsy,
+          simd,
+          revision,
+          clip,
+          output,
+        ),
+      true,
+      {pixels: from, width: tw, height: th, revision, ...f, sse: simd},
+    );
+    if (deferred) {
+      t.masked = s.masked;
+      if (reuse === 1) layers.markCoveredPixelWrite(node);
+      remember();
+      return 0;
+    }
+  }
+  layers.markDirty(node);
+  const buffer = reuse === 0 ? allocate(width, height) : dst!.payload!.source;
+  if (!buffer) return -1;
+  t.masked = s.masked;
+  t.beginPixelWrite();
   if (from) {
     if (mode === 0x0a) sizeNearest(buffer, width, height, from, tw, th, px, py, px2, py2);
     else if (mode === 0x15)
-      sizeBilinear(buffer, from, tw, th, f.fx, f.fy, f.fx2, f.fy2, f.fsx, f.fsy, simd);
+      sizeBilinear(
+        buffer,
+        from,
+        tw,
+        th,
+        f.fx,
+        f.fy,
+        f.fx2,
+        f.fy2,
+        f.fsx,
+        f.fsy,
+        simd,
+        s.pixelRevision,
+      );
     else if (mode === 0x1f) sizeBicubic(buffer, width, height, from, tw, th, px, py, px2, py2);
     else if (mode === 0x29)
       sizeSupersampled(buffer, from, tw, th, f.fx, f.fy, f.fx2, f.fy2, f.fsx, f.fsy);
@@ -571,6 +679,7 @@ function resize(
     t.height = t.textureHeight = height;
     layers.markDirty(node);
   }
+  if (from && from.buffer !== buffer.buffer) remember();
   return 0;
 }
 

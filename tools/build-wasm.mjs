@@ -11,6 +11,12 @@ const target = await mkdtemp(join(tmpdir(), 'vn-web-wasm-'));
 try {
   const kernel = ['-C', 'target-feature=+simd128', '-C', 'link-arg=--export=__heap_base'];
   for (const [name, exported, destination, flags] of [
+    [
+      'bgra-effects',
+      'BGRA_EFFECTS_WASM_BINARY',
+      'src/graphics/bgra-effects-wasm-binary.ts',
+      kernel,
+    ],
     ['linear-rgb', 'LINEAR_RGB_WASM_BINARY', 'src/graphics/linear-rgb-wasm-binary.ts', kernel],
     [
       'outline-raster',

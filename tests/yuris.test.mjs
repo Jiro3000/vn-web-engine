@@ -2,7 +2,98 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {blendRect} from '../dist/engines/yuris/vm/blend.js';
 import {YurisCg, YurisLayers} from '../dist/engines/yuris/vm/cg.js';
+import {
+  applyCopyLoop,
+  applyInitializer,
+  copyLoop,
+  scanGuardLoop,
+  scanInactiveLoop,
+  scanInitializer,
+  skipGuardLoop,
+  skipInactiveLoop,
+} from '../dist/engines/yuris/vm/copy-loop.js';
+import {YurisExpression} from '../dist/engines/yuris/vm/expression.js';
 import {sizeBilinear} from '../dist/engines/yuris/vm/resize.js';
+import {bgraDisplayFrame} from '../dist/graphics/bgra-effects-wasm.js';
+import {YurisVariables} from '../dist/engines/yuris/vm/variables.js';
+
+test('YU-RIS image cache preserves byte changes and gives each layer its own pixels', async (t) => {
+  const {LegacyImageCodec} = await import('../dist/graphics/legacy-image-codec.js');
+  const codec = new LegacyImageCodec();
+  const decode = t.mock.method(codec, 'decode', async (data) => ({
+    width: 128,
+    height: 128,
+    pixels: new Uint8Array(128 * 128 * 4).fill(data[0]),
+  }));
+  const input = Uint8Array.of(31, 8, 13);
+  const first = await codec.decodeCached(input, 'image/webp', true, 'image.webp');
+  first.pixels[0] = 99;
+  const repeated = await codec.decodeCached(input, 'image/webp', true, 'image.webp');
+  assert.equal(repeated.pixels[0], 31);
+  assert.equal(decode.mock.callCount(), 1);
+  input[0] = 42;
+  const replacement = await codec.decodeCached(input, 'image/webp', true, 'image.webp');
+  assert.equal(replacement.pixels[0], 42);
+  assert.equal(decode.mock.callCount(), 2);
+});
+
+test('YU-RIS polls independent sound cursors together and uses acknowledged positions', async (t) => {
+  const {BrowserLoopingSoundDevice} = await import('../dist/audio/browser-looping-sound.js');
+  const {BrowserSpeakerBuffer} = await import('../dist/audio/browser-speaker-buffer.js');
+  const requests = [];
+  let next = 0;
+  t.mock.method(BrowserSpeakerBuffer, 'create', async () => {
+    const cursor = ++next * 10;
+    return {
+      command: async ({kind}) => {
+        if (kind !== 'status') return {playing: true, byteCursor: 0};
+        return new Promise((resolve) =>
+          requests.push(() => resolve({playing: true, byteCursor: cursor})),
+        );
+      },
+      async dispose() {},
+    };
+  });
+  const device = new BrowserLoopingSoundDevice({});
+  const format = {channels: 1, sampleRate: 22050, bitsPerSample: 16, byteLength: 32};
+  const first = device.createSoundBuffer(format),
+    second = device.createSoundBuffer(format);
+  const result = device.flush();
+  await new Promise(setImmediate);
+  assert.equal(requests.length, 2);
+  assert.deepEqual([first.playCursor(), second.playCursor()], [0, 0]);
+  for (const reply of requests) reply();
+  await result;
+  assert.deepEqual([first.playCursor(), second.playCursor()], [10, 20]);
+  await device.dispose();
+});
+
+test('YU-RIS expression reads retain int64 references and low-dword array validation', () => {
+  const variables = new YurisVariables(1010);
+  const expression = new YurisExpression(variables, {});
+  const id = 1001;
+  const value = -98765432123456789n;
+  variables.get(id).dimensions = [3, 4];
+  variables.allocateInt(id, 0n);
+  variables.get(id).ints[6] = value;
+  const token = (name, ...bytes) => [name.charCodeAt(0), bytes.length, 0, ...bytes];
+  const element = (prefix, ...firstIndex) =>
+    Uint8Array.of(
+      ...token('V', prefix, id & 255, id >>> 8),
+      ...firstIndex,
+      ...token('B', 2),
+      ...token(')'),
+    );
+  assert.equal(expression.int(element(0, ...token('B', 1))), value);
+  assert.equal(expression.float(element(0, ...token('B', 1))), Number(value));
+  const highIndex = token('L', 1, 0, 0, 0, 1, 0, 0, 0);
+  assert.equal(expression.int(element(0, ...highIndex)), value);
+  assert.equal(expression.int(element(0x60, ...highIndex)), (BigInt(id + 4) << 32n) | 6n);
+  assert.throws(
+    () => expression.int(element(0, ...token('B', 3))),
+    (error) => error.code === 0x1a202,
+  );
+});
 
 test('YU-RIS button hit testing reads main window for ONMOUSE2=1', () => {
   const commands = new Map();
@@ -104,6 +195,224 @@ test('YU-RIS hidden pixel updates mark composition when used as a transition rul
   assert.equal(screen.dirty, true);
 });
 
+test('YU-RIS deferred layer pixels survive source writes and are composited when exposed', () => {
+  const machine = {screenWidth: 2, screenHeight: 1, system: {frames: 0n, names: ['W0']}};
+  const layers = new YurisLayers(machine, {}, {});
+  const screen = layers.windowLayers[0];
+  const source = new YurisCg(),
+    destination = new YurisCg(),
+    cover = new YurisCg();
+  for (const cg of [source, destination, cover]) cg.allocate(2, 1);
+  source.pixels.fill(27);
+  cover.pixels.fill(56);
+  const lower = layers.tree.create('W0/LOWER', false, 1n, destination);
+  layers.tree.create('W0/COVER', false, 2n, cover);
+  layers.composeSet(screen);
+  layers.frameEnd();
+  const input = source.source;
+  let writes = 0;
+  const write = (target) => {
+    target.set(input);
+    writes++;
+  };
+  assert.equal(layers.isCovered(lower), true);
+  assert.equal(destination.deferPixelWrite(source, input, write), true);
+  assert.equal(destination.deferPixelWrite(source, input, write), true);
+  layers.markCoveredPixelWrite(lower);
+  layers.composeSet(screen);
+  assert.equal(writes, 0);
+  assert.equal(screen.payload.dirty, false);
+  source.beginPixelWrite();
+  input.fill(94);
+  assert.equal(writes, 1);
+  assert.equal(destination.pixels[0], 27);
+  assert.equal(destination.deferPixelWrite(source, input, write), true);
+  layers.markCoveredPixelWrite(lower);
+  cover.a = 0;
+  layers.composeSet(screen);
+  assert.equal(writes, 2);
+  assert.equal(screen.payload.pixels[0], 94);
+});
+
+test('YU-RIS bulk array loops preserve the final iteration and validate before writing', async () => {
+  const {YurisVariables} = await import('../dist/engines/yuris/vm/variables.js');
+  const token = (op, ...payload) => ({op: op.charCodeAt(0), payload: Uint8Array.of(...payload)});
+  const ref = (op, id) => token(op, 0x40, id & 255, id >>> 8);
+  const indexed = (id) => [ref('V', id), ref('H', 48), token(')', 0)];
+  const assignment = (target, source) => ({
+    command: 0x35,
+    args: [
+      {op: 0, type: 1, tokens: indexed(target)},
+      {op: 0, type: 1, tokens: source},
+    ],
+  });
+  const plan = copyLoop(
+    [
+      assignment(1001, [token('B', 255)]),
+      assignment(1002, [ref('V', 1002), ref('H', 48), ref('H', 1003), token('+'), token(')', 0)]),
+      {command: 0x3a},
+    ],
+    0,
+    2,
+  );
+  assert.ok(plan);
+  const variables = new YurisVariables(1003);
+  variables.allocateInt(48, 0n);
+  for (const id of [1001, 1002]) {
+    variables.get(id).dimensions = [10];
+    variables.allocateInt(id, 0n);
+  }
+  const fill = variables.get(1001).ints,
+    shifted = variables.get(1002).ints;
+  shifted.set(BigInt64Array.from({length: 10}, (_, index) => BigInt(index)));
+  variables.allocateInt(1003, 6n);
+  assert.equal(applyCopyLoop(plan, variables, 5), false);
+  assert.deepEqual([...fill], Array(10).fill(0n));
+  variables.allocateInt(1003, 2n);
+  assert.equal(applyCopyLoop(plan, variables, 5), true);
+  assert.deepEqual([...fill], [0n, -1n, -1n, -1n, -1n, 0n, 0n, 0n, 0n, 0n]);
+  assert.deepEqual([...shifted], [0n, 3n, 4n, 5n, 6n, 5n, 6n, 7n, 8n, 9n]);
+  const condition = [
+    ...indexed(1002),
+    token('B', 6),
+    token('='),
+    ref('H', 1003),
+    token('B', 2),
+    token('='),
+    token('&'),
+  ];
+  const guard = scanGuardLoop(
+    [
+      {command: 0x2c, args: [{type: 1, tokens: condition}, {size: 0}, {size: 2}]},
+      assignment(1001, [token('B', 255)]),
+      {command: 0x30},
+      {command: 0x3a},
+    ],
+    0,
+    3,
+  );
+  assert.ok(guard);
+  assert.equal(skipGuardLoop(guard, variables, 1, 9), 3);
+  assert.equal(skipGuardLoop(guard, variables, 4, 9), 4);
+  assert.equal(skipGuardLoop(guard, variables, 7, 9), 9);
+  const letScalar = (id, source, op = 0) => ({
+    command: 0x35,
+    args: [
+      {op, type: 1, tokens: [ref('H', id)]},
+      {op: 0, type: 1, tokens: source},
+    ],
+  });
+  const ifTokens = (tokens, end) => ({
+    command: 0x2c,
+    args: [{type: 1, tokens}, {size: 0}, {size: end}],
+  });
+  const wrapped = scanGuardLoop(
+    [
+      letScalar(1004, [ref('H', 1005), ref('H', 48), token('B', 1), token('-'), token('+')]),
+      ifTokens([ref('H', 1004), ref('H', 1006), token('>')], 3),
+      letScalar(1004, [ref('H', 1006)], 2),
+      {command: 0x30},
+      ifTokens([ref('V', 1002), ref('H', 1004), token(')', 0), token('B', 6), token('=')], 6),
+      assignment(1001, [token('B', 255)]),
+      {command: 0x30},
+      {command: 0x3a},
+    ],
+    0,
+    7,
+  );
+  assert.ok(wrapped);
+  const more = new YurisVariables(1006);
+  more.allocateInt(48, 0n);
+  more.entries[1002] = variables.entries[1002];
+  more.allocateInt(1004, 0n);
+  more.allocateInt(1005, 8n);
+  more.allocateInt(1006, 9n);
+  assert.equal(skipGuardLoop(wrapped, more, 1, 9), 5);
+  const above = scanGuardLoop(
+    [
+      ifTokens([...indexed(1002), token('B', 6), token('>')], 2),
+      assignment(1001, [token('B', 255)]),
+      {command: 0x30},
+      {command: 0x3a},
+    ],
+    0,
+    3,
+  );
+  assert.ok(above);
+  assert.equal(skipGuardLoop(above, variables, 1, 9), 6);
+  const mapped = [ref('V', 1002), ref('H', 1004), token(')', 0)];
+  const inactive = scanInactiveLoop(
+    [
+      letScalar(1004, [token('B', 1)], 1),
+      ifTokens([ref('H', 1004), ref('H', 1006), token('>')], 3),
+      {command: 0x38, args: []},
+      {command: 0x30},
+      letScalar(1005, mapped),
+      ifTokens([ref('H', 1003)], 7),
+      assignment(1001, [token('B', 255)]),
+      {command: 0x30},
+      ifTokens([...mapped, token('B', 7), token('=')], 10),
+      assignment(1001, [token('B', 255)]),
+      {command: 0x30},
+      {command: 0x3a},
+    ],
+    0,
+    11,
+  );
+  assert.ok(inactive);
+  more.allocateInt(1003, 1n);
+  assert.equal(skipInactiveLoop(inactive, more), 0);
+  assert.equal(more.entries[1004].ints[0], 0n);
+  more.allocateInt(1003, 0n);
+  assert.equal(skipInactiveLoop(inactive, more), 5);
+  assert.equal(more.entries[1004].ints[0], 5n);
+  assert.equal(more.entries[1005].ints[0], 8n);
+  const initializer = scanInitializer(
+    [
+      {
+        command: 0x2b,
+        extra: 8,
+        args: [{id: 0}, {id: 1, type: 1, tokens: [ref('H', 48)]}],
+      },
+      {command: 0x3a},
+      {
+        command: 0x32,
+        args: [
+          {tokens: [ref('H', 1004)]},
+          {type: 1, tokens: [ref('V', 53), token('B', 1), token(')', 0)]},
+        ],
+      },
+      {
+        command: 0x35,
+        args: [
+          {op: 0, type: 1, tokens: [ref('V', 1002), ref('H', 1004), token(')', 0)]},
+          {type: 1, tokens: [token('B', 253)]},
+        ],
+      },
+      {
+        command: 0x35,
+        args: [
+          {op: 0, type: 3, tokens: [token('V', 0x24, 233, 3), ref('H', 1004), token(')', 0)]},
+          {type: 3, tokens: [token('M', 34, 34)]},
+        ],
+      },
+      {command: 0x4f, extra: 0, args: []},
+    ],
+    0,
+    1,
+    2,
+  );
+  assert.ok(initializer);
+  more.allocateInt(53, 0n);
+  assert.equal(applyInitializer(initializer, more, 5), false);
+  assert.equal(shifted[1], 3n);
+  more.get(1001).dimensions = [10];
+  more.allocateString(1001, 's');
+  assert.equal(applyInitializer(initializer, more, 5), true);
+  assert.deepEqual([...shifted.slice(0, 6)], [0n, -3n, -3n, -3n, -3n, 5n]);
+  assert.deepEqual(more.get(1001).strings.slice(0, 6), ['s', '', '', '', '', 's']);
+});
+
 test('YU-RIS normal layer blits preserve cropped BGRA and native mask rounding', () => {
   const pixels = Uint8Array.from({length: 6 * 4 * 4}, (_, i) => (i * 37 + 19) & 255);
   for (const [i, alpha] of [0, 1, 128, 255].entries()) pixels[(7 + i) * 4 + 3] = alpha;
@@ -129,7 +438,7 @@ test('YU-RIS normal layer blits preserve cropped BGRA and native mask rounding',
   }
 });
 
-test('YU-RIS packed bilinear resize matches both scalar rounding paths byte for byte', () => {
+test('YU-RIS accelerated bilinear resize matches both scalar rounding paths byte for byte', () => {
   const stride = 7,
     rows = 5;
   const source = Uint8Array.from({length: stride * rows * 4}, (_, i) => (i * 73 + 191) & 255);
@@ -150,6 +459,227 @@ test('YU-RIS packed bilinear resize matches both scalar rounding paths byte for 
       sizeBilinear(scalar, unaligned, stride, rows, fx, fy, fx2, fy2, fsx, fsy, simd);
       assert.deepEqual(packed, scalar);
     }
+  }
+});
+
+test('YU-RIS large BGRA blits and bilinear crops preserve scalar results', () => {
+  const stride = 306,
+    rows = 289,
+    width = 257,
+    height = 257;
+  const source = Uint8Array.from(
+    {length: stride * rows * 4},
+    (_, i) => (Math.imul(i, 71) ^ (i >>> 6)) & 255,
+  );
+  const unaligned = new Uint8Array(source.length + 2).subarray(1);
+  unaligned.set(source);
+  for (const simd of [false, true]) {
+    const fast = new Uint8Array(width * height * 4);
+    const slow = fast.slice();
+    sizeBilinear(fast, source, stride, rows, 23, 59, 30025, 28074, width * 100, height * 100, simd);
+    sizeBilinear(
+      slow,
+      unaligned,
+      stride,
+      rows,
+      23,
+      59,
+      30025,
+      28074,
+      width * 100,
+      height * 100,
+      simd,
+    );
+    assert.deepEqual(fast, slow);
+    const partial = new Uint8Array(fast.length).fill(177);
+    const expected = partial.slice();
+    const clip = [18, 23, 51, 62];
+    for (let y = clip[1]; y <= clip[3]; y++) {
+      const from = (y * width + clip[0]) * 4;
+      expected.set(fast.subarray(from, (y * width + clip[2] + 1) * 4), from);
+    }
+    sizeBilinear(
+      partial,
+      source,
+      stride,
+      rows,
+      23,
+      59,
+      30025,
+      28074,
+      width * 100,
+      height * 100,
+      simd,
+      undefined,
+      clip,
+    );
+    assert.deepEqual(partial, expected);
+    const targetWidth = width + 11;
+    const direct = new Uint8Array(targetWidth * (height + 5) * 4).fill(177);
+    const output = {stride: targetWidth, x: 5, y: 3};
+    const copied = sizeBilinear(
+      direct,
+      source,
+      stride,
+      rows,
+      23,
+      59,
+      30025,
+      28074,
+      width * 100,
+      height * 100,
+      simd,
+      undefined,
+      [0, 0, width - 1, height - 1],
+      output,
+    );
+    const wanted = new Uint8Array(direct.length).fill(177);
+    if (copied)
+      for (let y = 0; y < height; y++)
+        wanted.set(
+          fast.subarray(y * width * 4, (y + 1) * width * 4),
+          ((y + 3) * targetWidth + 5) * 4,
+        );
+    assert.deepEqual(direct, wanted);
+  }
+  for (const [fy, revision] of [
+    [59, 1],
+    [189, 1],
+    [244, 1],
+    [51, 2],
+    [377, 2],
+    [511, 2],
+  ]) {
+    if (fy === 51) {
+      source.fill(54, 0, stride * 12 * 4);
+      unaligned.set(source);
+    }
+    const fast = new Uint8Array(width * height * 4);
+    const slow = fast.slice();
+    sizeBilinear(
+      fast,
+      source,
+      stride,
+      rows,
+      23,
+      fy,
+      30025,
+      28074,
+      width * 100,
+      height * 100,
+      true,
+      revision,
+    );
+    sizeBilinear(
+      slow,
+      unaligned,
+      stride,
+      rows,
+      23,
+      fy,
+      30025,
+      28074,
+      width * 100,
+      height * 100,
+      true,
+    );
+    assert.deepEqual(fast, slow);
+  }
+  for (const masked of [false, true]) {
+    const fast = new Uint8Array((width + 1) * height * 4).fill(171),
+      slow = fast.slice();
+    const opacity = 157;
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const i = ((y + 1) * stride + x + 2) * 4,
+          d = (y * (width + 1) + x + 1) * 4;
+        const w = masked ? 1 + ((source[i + 3] * opacity) >> 8) : opacity;
+        for (let c = 0; c < (masked ? 3 : 4); c++)
+          slow[d + c] += ((source[i + c] - slow[d + c]) * w) >> 8;
+      }
+    }
+    blendRect(
+      fast,
+      width + 1,
+      1,
+      0,
+      {pixels: source, width: stride, mode: 0, a: opacity, masked},
+      2,
+      1,
+      width,
+      height,
+      null,
+    );
+    assert.deepEqual(fast, slow);
+  }
+  const weights = Int32Array.from({length: 256}, (_, i) => i * 2 - 254);
+  const pixels = Uint8Array.from(source, (value, i) => value ^ (i & 255));
+  for (const masked of [false, true]) {
+    for (const a of [157, 256]) {
+      const fast = new Uint8Array((width + 1) * height * 4).fill(171);
+      const both = new Uint8Array(fast.length + source.length);
+      const slow = both.subarray(0, fast.length);
+      const sameBufferSource = both.subarray(fast.length);
+      slow.set(fast);
+      sameBufferSource.set(source);
+      const rule = {pixels, weights};
+      blendRect(
+        fast,
+        width + 1,
+        1,
+        0,
+        {pixels: source, width: stride, mode: 0, a, masked},
+        2,
+        1,
+        width,
+        height,
+        rule,
+      );
+      blendRect(
+        slow,
+        width + 1,
+        1,
+        0,
+        {pixels: sameBufferSource, width: stride, mode: 0, a, masked},
+        2,
+        1,
+        width,
+        height,
+        rule,
+      );
+      assert.deepEqual(fast, slow);
+      const surface = new YurisCg();
+      surface.allocate(width + 1, height, true);
+      const resident = surface.pixels.fill(171);
+      blendRect(
+        resident,
+        width + 1,
+        1,
+        0,
+        {pixels: source, width: stride, mode: 0, a, masked},
+        2,
+        1,
+        width,
+        height,
+        rule,
+      );
+      assert.deepEqual(resident, slow);
+    }
+  }
+  const surface = new YurisCg();
+  surface.allocate(width, height, true);
+  const display = bgraDisplayFrame(surface.pixels, width, height);
+  if (display) {
+    surface.pixels.set([12, 34, 56, 78], (width + 1) * 4);
+    assert.equal(display.update(1, 1, 7, 2), 1 | (2 << 16));
+    assert.deepEqual(
+      [...display.pixels.subarray((width + 1) * 4, (width + 2) * 4)],
+      [56, 34, 12, 255],
+    );
+    assert.equal(display.update(1, 1, 7, 2), 0);
+    assert.equal(display.pixels[3], 0);
+    surface.pixels[(2 * width + 7) * 4] = 32;
+    assert.equal(display.update(1, 1, 7, 2), 2 | (2 << 16));
   }
 });
 

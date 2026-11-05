@@ -1,3 +1,6 @@
+import {bilinearBgra} from '../../../graphics/bgra-effects-wasm.js';
+import type {Rect} from './compose.js';
+
 /**
  * The CGACT SIZE family: scaling a region of a layer into a new buffer of FSX/100 x FSY/100
  * pixels (0x4344C8 and its workers).
@@ -128,6 +131,28 @@ export function sizeNearest(
   clearOutside(dst, width, height, top, bottom, left, right);
   const out = new Uint32Array(dst.buffer, dst.byteOffset, dst.byteLength >> 2);
   const from = new Uint32Array(src.buffer, src.byteOffset, src.byteLength >> 2);
+  if (
+    dst.buffer !== src.buffer &&
+    width <= 0x7fff &&
+    x1 - x0 + 1 === width &&
+    left < right &&
+    top < bottom
+  ) {
+    const count = right - left;
+    if (
+      from.length >= stride * rows &&
+      out.length >= width * height &&
+      y0 >= 0 &&
+      y1 >= y0 &&
+      y1 < rows
+    ) {
+      for (let y = top; y < bottom; y++) {
+        const start = (lines[y]! + y0) * stride + x0 + left;
+        out.set(from.subarray(start, start + count), y * width + left);
+      }
+      return;
+    }
+  }
   for (let y = top; y < bottom; y++) {
     const row = (lines[y]! + y0) * stride + x0;
     for (let x = left, o = y * width + left; x < right; x++, o++)
@@ -158,6 +183,27 @@ function bilinearAxis(start: number, end: number, size: number): BilinearAxis {
 
 const position = (axis: BilinearAxis, i: number): number =>
   (mulDiv(axis.span, axis.base + i * 0x100, axis.divisor) + axis.add) | 0;
+
+/** SIZE2 coordinate and weight tables for integer graphics backends. */
+export function bilinearCoordinates(
+  start: number,
+  end: number,
+  size: number,
+  sourceSize: number,
+  sharpen: boolean,
+): Int32Array {
+  const count = div(size, 100);
+  const axis = bilinearAxis(start, end, size);
+  const origin = div(start, 100);
+  const coordinates = new Int32Array(count * 2);
+  const [first, last] = validRange(count, (i) => (position(axis, i) >> 8) + origin, sourceSize);
+  for (let i = 0; i < count; i++) {
+    const fixed = position(axis, i);
+    coordinates[i * 2] = i < first || i >= last ? -1 : (fixed >> 8) + origin;
+    coordinates[i * 2 + 1] = sharpen ? SHARPEN[fixed & 255]! : fixed & 255;
+  }
+  return coordinates;
+}
 
 /** One BGRA pixel of the 2x2 blend, as the MMX bodies of 0x46145C and 0x41FD88 compute it. */
 function blendMmx(
@@ -248,7 +294,10 @@ export function sizeBilinear(
   fsx: number,
   fsy: number,
   simd: boolean,
-): void {
+  sourceRevision?: number,
+  clip?: Rect,
+  destination?: {stride: number; x: number; y: number},
+): boolean | void {
   const width = div(fsx, 100),
     height = div(fsy, 100);
   const ax = bilinearAxis(fx, fx2, fsx),
@@ -262,13 +311,61 @@ export function sizeBilinear(
   }
   const originX = div(fx, 100),
     originY = div(fy, 100);
-  const [top, bottom] = validRange(height, (i) => (position(ay, i) >> 8) + originY, rows);
-  const [left, right] = validRange(width, (i) => columns[i]! + originX, stride);
-  if (simd && !(top < bottom && left < right)) {
+  const rowPositions = new Int32Array(Math.max(height, 0));
+  for (let y = 0; y < height; y++) rowPositions[y] = position(ay, y);
+  let [top, bottom] = validRange(height, (i) => (rowPositions[i]! >> 8) + originY, rows);
+  let [left, right] = validRange(width, (i) => columns[i]! + originX, stride);
+  if (
+    destination &&
+    (!clip || clip[0] < left || clip[1] < top || clip[2] >= right || clip[3] >= bottom)
+  )
+    return false;
+  if (clip) {
+    const [firstX, firstY, lastX, lastY] = clip;
+    top = Math.max(top, firstY);
+    left = Math.max(left, firstX);
+    bottom = Math.min(bottom, lastY + 1);
+    right = Math.min(right, lastX + 1);
+    for (let y = firstY; !destination && y <= lastY; y++) {
+      const row = y * width;
+      if (y < top || y >= bottom || left >= right) clear(dst, row + firstX, row + lastX + 1);
+      else {
+        clear(dst, row + firstX, row + left);
+        clear(dst, row + right, row + lastX + 1);
+      }
+    }
+  } else if (simd && !(top < bottom && left < right)) {
     clear(dst, 0, width * height);
     return;
-  }
-  clearOutside(dst, width, height, top, bottom, left, right);
+  } else clearOutside(dst, width, height, top, bottom, left, right);
+  if (
+    top < bottom &&
+    left < right &&
+    dst.buffer !== src.buffer &&
+    (src.byteLength & 3) === 0 &&
+    bilinearBgra(
+      src,
+      stride,
+      rows,
+      dst,
+      width,
+      left,
+      top,
+      right,
+      bottom,
+      originX,
+      originY,
+      columns,
+      weights,
+      rowPositions,
+      simd,
+      sourceRevision,
+      sourceRevision === undefined ? undefined : [fx, fx2, fsx],
+      destination,
+    )
+  )
+    return true;
+  if (destination) return false;
   if (
     top < bottom &&
     left < right &&
@@ -283,7 +380,7 @@ export function sizeBilinear(
       secondY = NaN;
     const mix = simd ? verticalSse : verticalMmx;
     for (let y = top; y < bottom; y++) {
-      const p = position(ay, y),
+      const p = rowPositions[y]!,
         row = (p >> 8) + originY,
         wy = p & 0xff;
       if (row === secondY) {
@@ -323,7 +420,7 @@ export function sizeBilinear(
   const blend = simd ? blendSse : blendMmx;
   const pitch = stride * 4;
   for (let y = top; y < bottom; y++) {
-    const p = position(ay, y);
+    const p = rowPositions[y]!;
     const row = originY * pitch + (p >> 8) * pitch + originX * 4,
       wy = p & 0xff;
     for (let x = left, o = (y * width + left) * 4; x < right; x++, o += 4) {

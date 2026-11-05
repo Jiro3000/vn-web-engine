@@ -22,10 +22,15 @@ export class BrowserLoopingSoundDevice {
     return buffer;
   }
   async flush(): Promise<void> {
-    for (const buffer of this.buffers) {
-      await buffer.flush();
-      if (buffer.released) this.buffers.delete(buffer);
-    }
+    // Buffers have independent processor ports. Keep each port's command order
+    // while collecting cursor acknowledgements for the same host frame together.
+    const results = await Promise.allSettled(
+      Array.from(this.buffers, async (buffer) => {
+        await buffer.flush();
+        if (buffer.released) this.buffers.delete(buffer);
+      }),
+    );
+    for (const result of results) if (result.status === 'rejected') throw result.reason;
   }
   async dispose(): Promise<void> {
     for (const buffer of this.buffers) buffer.release();

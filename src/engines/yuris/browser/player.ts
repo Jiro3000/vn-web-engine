@@ -22,14 +22,47 @@ import {StoredRegistry} from '../../../platform/registry.js';
 import {MemoryStore} from '../../../platform/store.js';
 import {LegacyFolder} from '../../../platform/legacy-folder.js';
 import {LegacyImageCodec, swap} from '../../../graphics/legacy-image-codec.js';
+import {bgraDisplayFrame} from '../../../graphics/bgra-effects-wasm.js';
 import {BrowserFileMovie} from '../../../video/browser-file-movie.js';
 import {setWindowsVirtualKey} from '../../../input/windows-virtual-keys.js';
-import type {YurisLayers} from '../vm/cg.js';
+import type {YurisCgNode, YurisLayers} from '../vm/cg.js';
+import {YurisIntegerWindow} from './integer-window.js';
 
 const bytes = (s: string): Uint8Array => Uint8Array.from(s, (c) => c.charCodeAt(0));
 const decode = (s: string): string => decodeCp932(bytes(s));
 const encode = (s: string): string =>
   Array.from(encodeCp932(s), (c) => String.fromCharCode(c)).join('');
+
+/** StretchDIBits with SRCCOPY (0x45ECF4) treats the composed window as BGRX. */
+function updateBgrx(
+  pixels: Uint8Array,
+  frame: ImageData,
+  left: number,
+  top: number,
+  right: number,
+  bottom: number,
+): number {
+  const rgba = frame.data;
+  const source = new Uint32Array(pixels.buffer, pixels.byteOffset, frame.width * frame.height);
+  const output = new Uint32Array(rgba.buffer, rgba.byteOffset, frame.width * frame.height);
+  let first = 0,
+    last = 0;
+  for (let y = top; y <= bottom; y++) {
+    let changed = 0;
+    const row = y * frame.width;
+    for (let i = row + left; i <= row + right; i++) {
+      const bgra = source[i]!;
+      const color = 0xff000000 | ((bgra & 255) << 16) | (bgra & 0xff00) | ((bgra >>> 16) & 255);
+      changed |= color ^ output[i]!;
+      output[i] = color;
+    }
+    if (changed) {
+      last = y - top + 1;
+      if (first === 0) first = last;
+    }
+  }
+  return first | (last << 16);
+}
 
 /** Let the browser copy a DOM text selection without feeding Ctrl-skip or C to the VM. */
 function copiesSelectedText(event: KeyboardEvent, root: HTMLElement): boolean {
@@ -65,7 +98,19 @@ export class YurisBrowserPlayer {
   private readonly registry = new StoredRegistry(new MemoryStore());
   private readonly contexts: CanvasRenderingContext2D[] = [];
   private readonly frames: ImageData[] = [];
+  private readonly fallbackFrames: ImageData[] = [];
+  private readonly packedFrames = new WeakMap<
+    Uint8Array,
+    {
+      frame: ImageData;
+      update: NonNullable<ReturnType<typeof bgraDisplayFrame>>['update'];
+    } | null
+  >();
   private readonly frameSources: (Uint8Array | undefined)[] = [];
+  private readonly integerWindow = new YurisIntegerWindow();
+  /** The differential harness can force the software path for comparison. */
+  useIntegerWindow = true;
+  private lastIntegerWindow?: YurisCgNode;
   private readonly abort = new AbortController();
   private cursorUrl = '';
   private host: YurisMachineHost;
@@ -138,8 +183,8 @@ export class YurisBrowserPlayer {
       exists: (path) => folder.existsFile(path) || !!files.find(path),
       read: async (path) => (await folder.readFile(path)) ?? files.read(path),
       archiveNames: () => files.archives.map((a) => a.archive.entries.map((e) => e.key)),
-      decodeImage: (data, type) =>
-        codec.decode(
+      decodeImage: (data, type, path) =>
+        codec.decodeCached(
           data,
           (
             {
@@ -151,6 +196,7 @@ export class YurisBrowserPlayer {
             } as Record<number, string>
           )[type] ?? 'application/octet-stream',
           true,
+          path,
         ),
       encodeImage: codec.encode.bind(codec),
       now: () => performance.now(),
@@ -397,16 +443,11 @@ export class YurisBrowserPlayer {
     for (let no = 0; no < 4; no++) {
       const node = layers.windowLayers[no],
         cg = node?.payload;
-      if (!node || !cg?.pixels) {
+      if (!node || !cg?.hasPixels) {
         this.frameSources[no] = undefined;
         continue;
       }
-      layers.composeSet(node);
-      const sourceChanged = this.frameSources[no] !== cg.pixels;
-      if (!cg.dirty && !forceText && !sourceChanged) continue;
-      this.frameSources[no] = cg.pixels;
       const dom = this.textPresentation.textMode === 'dom';
-      const bitmap = dom ? yurisRasterBitmap(cg.pixels, cg.width, cg.height) : null;
       let context = this.contexts[no];
       if (!context) {
         const canvas = document.createElement('canvas');
@@ -418,6 +459,7 @@ export class YurisBrowserPlayer {
           'contextrestored',
           () => {
             this.frameSources[no] = undefined;
+            if (no === 0) this.lastIntegerWindow = undefined;
           },
           {signal: this.abort.signal},
         );
@@ -425,42 +467,75 @@ export class YurisBrowserPlayer {
         this.bindPointer(canvas);
       }
       const canvas = context.canvas;
-      let frame = this.frames[no];
+      if (no === 0 && this.useIntegerWindow) {
+        layers.flushDamage();
+        if (
+          this.lastIntegerWindow === node &&
+          !cg.dirty &&
+          !forceText &&
+          canvas.width === cg.width &&
+          canvas.height === cg.height
+        )
+          continue;
+        if (canvas.width !== cg.width) canvas.width = cg.width;
+        if (canvas.height !== cg.height) canvas.height = cg.height;
+        const glyphs = this.integerWindow.render(
+          layers,
+          node,
+          context,
+          dom,
+          this.lastIntegerWindow === node,
+        );
+        if (glyphs) {
+          this.lastIntegerWindow = node;
+          this.frameSources[no] = undefined;
+          if (dom) this.textPresentation.replace(canvas, () => glyphs);
+          continue;
+        }
+      }
+      if (no === 0) this.lastIntegerWindow = undefined;
+      layers.composeSet(node);
+      const raw = cg.pixels!;
+      const sourceChanged = this.frameSources[no] !== raw;
+      if (!cg.dirty && !forceText && !sourceChanged) continue;
+      this.frameSources[no] = raw;
+      const bitmap = dom ? yurisRasterBitmap(raw, cg.width, cg.height) : null;
+      const pixels = bitmap ? rasterTextBitmap(bitmap).storage!.bytes : raw;
+      let packed = this.packedFrames.get(pixels);
+      if (packed === undefined) {
+        const conversion = bgraDisplayFrame(pixels, cg.width, cg.height);
+        packed = conversion
+          ? {
+              frame: new ImageData(conversion.pixels, cg.width, cg.height),
+              update: conversion.update,
+            }
+          : null;
+        this.packedFrames.set(pixels, packed);
+      }
+      let frame = packed?.frame ?? this.fallbackFrames[no];
       let fullUpload = forceText || sourceChanged;
       if (!frame || frame.width !== cg.width || frame.height !== cg.height) {
+        frame = this.fallbackFrames[no] = new ImageData(cg.width, cg.height);
+        packed = null;
+      }
+      if (canvas.width !== cg.width || canvas.height !== cg.height) {
         canvas.width = cg.width;
         canvas.height = cg.height;
-        frame = this.frames[no] = new ImageData(cg.width, cg.height);
         fullUpload = true;
       }
-      const pixels = bitmap ? rasterTextBitmap(bitmap).storage!.bytes : cg.pixels;
-      const rgba = frame.data;
-      // StretchDIBits with SRCCOPY (0x45ECF4) treats the composed window as BGRX.
-      const source = new DataView(pixels.buffer, pixels.byteOffset, pixels.byteLength);
-      const output = new DataView(rgba.buffer, rgba.byteOffset, rgba.byteLength);
-      const [left, top, right, bottom] = fullUpload ? [0, 0, cg.width - 1, cg.height - 1] : cg.clip;
-      let first = cg.height,
-        last = -1;
-      const stride = cg.width * 4;
-      for (let y = top!; y <= bottom!; y++) {
-        let changed = 0;
-        const row = y * stride,
-          end = row + (right! + 1) * 4;
-        for (let i = row + left! * 4; i < end; i += 4) {
-          const bgra = source.getUint32(i, true);
-          const color =
-            0xff000000 | ((bgra & 0xff) << 16) | (bgra & 0xff00) | ((bgra >>> 16) & 0xff);
-          changed |= color ^ output.getUint32(i, true);
-          output.setUint32(i, color, true);
-        }
-        if (changed) {
-          if (first === cg.height) first = y;
-          last = y;
-        }
+      if (this.frames[no] !== frame) {
+        this.frames[no] = frame;
+        fullUpload = true;
       }
+      const [left, top, right, bottom] = fullUpload ? [0, 0, cg.width - 1, cg.height - 1] : cg.clip;
+      const width = right! - left! + 1;
+      const rows = packed
+        ? packed.update(left!, top!, width, bottom! - top! + 1)
+        : updateBgrx(pixels, frame, left!, top!, right!, bottom!);
+      const first = top! + (rows & 0xffff) - 1;
+      const last = top! + (rows >>> 16) - 1;
       if (fullUpload) context.putImageData(frame, 0, 0);
-      else if (last >= first)
-        context.putImageData(frame, 0, 0, left!, first, right! - left! + 1, last - first + 1);
+      else if (rows) context.putImageData(frame, 0, 0, left!, first, width, last - first + 1);
       if (bitmap) this.textPresentation.replace(canvas, () => visibleRasterText(bitmap));
     }
   }
@@ -507,6 +582,7 @@ export class YurisBrowserPlayer {
     this.abort.abort();
     this.menus.dispose();
     this.textPresentation.dispose();
+    this.integerWindow.dispose();
     this.movie.close();
     await this.device.dispose();
     this.audioHost.dispose();

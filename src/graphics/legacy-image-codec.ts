@@ -3,14 +3,73 @@ import {decodeWebp} from '../formats/webp/webp.js';
 import {decodeBmp} from '../formats/bmp.js';
 import {BrowserGdiImageCodec} from './browser-gdi-image.js';
 
+interface DecodedImage {
+  width: number;
+  height: number;
+  pixels: Uint8Array;
+}
+
+const IMAGE_CACHE_BYTES = 96 * 1024 * 1024;
+
+function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  if ((a.byteOffset | b.byteOffset | a.length) & 3) {
+    for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  } else {
+    const aa = new Uint32Array(a.buffer, a.byteOffset, a.length >>> 2);
+    const bb = new Uint32Array(b.buffer, b.byteOffset, b.length >>> 2);
+    for (let i = 0; i < aa.length; i++) if (aa[i] !== bb[i]) return false;
+  }
+  return true;
+}
+
 /** Straight BGRA codec boundary for legacy engines. */
 export class LegacyImageCodec {
   private readonly gdi = new BrowserGdiImageCodec();
-  async decode(
+  private readonly recent = new Map<
+    string,
+    {encoded: Uint8Array; image: DecodedImage; size: number}
+  >();
+  private recentBytes = 0;
+
+  /** Repeated loads share only the immutable decode. The script owns each returned buffer. */
+  async decodeCached(
     bytes: Uint8Array,
     mime: string,
-    legacyWebpColor = false,
-  ): Promise<{width: number; height: number; pixels: Uint8Array}> {
+    legacyWebpColor: boolean,
+    path: string,
+  ): Promise<DecodedImage> {
+    const key = `${Number(legacyWebpColor)}:${mime}:${path}`;
+    const existing = this.recent.get(key);
+    if (existing && sameBytes(bytes, existing.encoded)) {
+      this.recent.delete(key);
+      this.recent.set(key, existing);
+      return {...existing.image, pixels: existing.image.pixels.slice()};
+    }
+    const image = await this.decode(bytes, mime, legacyWebpColor);
+    const previous = this.recent.get(key);
+    if (previous) {
+      this.recent.delete(key);
+      this.recentBytes -= previous.size;
+    }
+    const size = bytes.length + image.pixels.length;
+    if (size >= 65536 && size <= IMAGE_CACHE_BYTES) {
+      for (const [old, item] of this.recent) {
+        if (this.recentBytes + size <= IMAGE_CACHE_BYTES) break;
+        this.recent.delete(old);
+        this.recentBytes -= item.size;
+      }
+      this.recent.set(key, {
+        encoded: bytes.slice(),
+        image: {...image, pixels: image.pixels.slice()},
+        size,
+      });
+      this.recentBytes += size;
+    }
+    return image;
+  }
+
+  async decode(bytes: Uint8Array, mime: string, legacyWebpColor = false): Promise<DecodedImage> {
     if (mime === 'image/webp') return decodeWebp(bytes, legacyWebpColor);
     if (mime === 'image/png') {
       const d = await decodePng(bytes);

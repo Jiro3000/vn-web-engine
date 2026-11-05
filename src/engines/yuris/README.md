@@ -54,7 +54,9 @@ WINDOW MENUID installs a window menu; TRAY (0x452FB4) retains its label, optiona
 
 `yuris.html` opens a read-only folder selection and applies `updateN.ypf` after `pac/`. Browser saves use an IndexedDB overlay keyed by archive-index identity; the installed files are never written. `YurisBrowserPlayer` binds the VM to shared page windows, monochrome font rasterization, codecs, folder storage, registry, dialogs and mutable PCM output. Pointer coordinates are scaled from the displayed canvas to game pixels (0x403F2C).
 
-The CPU layer compositor copies its composed BGRX window to an opaque Canvas 2D frame, matching the native GDI copy (0x45ECF4). PNG and WebP loaders retain the native alpha-blitter flag for layer composition.
+The browser can compose the main window with integer WebGL2 textures for supported flat mode-0 layers, rule transitions and SIZE2 scaling. Script pixel access materializes the native BGRA window on demand. Unsupported layer trees and unavailable hardware rendering use the software compositor. Both paths present an opaque BGRX window through Canvas 2D, matching the native GDI copy (0x45ECF4). PNG and WebP loaders retain the native alpha-blitter flag for layer composition.
+
+Large software blends and SIZE2 can use WebAssembly SIMD with the native integer rounding. The compositor can evaluate an unchanged source layer's pending SIZE2 transform for only the damaged rectangle. Script pixel reads still resolve the full image. The VM can batch validated in-bounds array initialization and forward shifts and skip empty iterations of array guards. Full instruction tracing uses the interpreter for loops without a range-aware observer.
 
 Game options connects the virtual main window to the shared fullscreen controls. True fullscreen uses browser user activation. Native fullscreen can fall back to a page-filling view until a player clicks Enter fullscreen.
 

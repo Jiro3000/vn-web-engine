@@ -1,5 +1,8 @@
 import {
+  clearRasterTextGlyphs,
   clearRasterTextPresentation,
+  hasRasterText,
+  syncTextlessPixels,
   withRasterText,
   type RasterTextBitmap,
 } from '../../../text/raster-text.js';
@@ -74,7 +77,7 @@ export function compose(
   clip: Rect,
 ): number {
   const group = node.payload;
-  if (!group?.pixels) return 0;
+  if (!group?.hasPixels) return 0;
   // +0xA8 is 1 - ECX; both calls pass ECX = 1.
   group.masked = 0;
   if (!group.dirty) return 0;
@@ -101,23 +104,42 @@ export function compose(
     )
       break;
   }
+  const base = children[start];
+  if (
+    area[0] === 0 &&
+    area[1] === 0 &&
+    area[2] === group.width - 1 &&
+    area[3] === group.height - 1 &&
+    (!base || (!base.group && !base.payload!.tex && base.payload!.hasPixels))
+  ) {
+    // A clear or a full opaque leaf overwrites the entire previous window.
+    group.replaceWindowReadback();
+  }
+  group.beginPixelWrite();
+  const pixels = group.pixels!;
+  const target = host.rasterText ? yurisRasterBitmap(pixels, group.width, group.height) : null;
+  const damage = target
+    ? yurisRasterBitmap(
+        pixels,
+        group.width,
+        area[3] - area[1] + 1,
+        area[0],
+        area[1],
+        area[2] - area[0] + 1,
+      )
+    : null;
+  let textless = target !== null && !hasRasterText(target);
+  let syncTextless = false;
   if (start < 0) {
     start = 0;
     for (let y = area[1]; y <= area[3]; y++) {
       const at = (y * group.width + area[0]) * 4;
-      group.pixels.fill(0, at, at + (area[2] - area[0] + 1) * 4);
+      pixels.fill(0, at, at + (area[2] - area[0] + 1) * 4);
     }
-    if (host.rasterText)
-      clearRasterTextPresentation(
-        yurisRasterBitmap(
-          group.pixels,
-          group.width,
-          area[3] - area[1] + 1,
-          area[0],
-          area[1],
-          area[2] - area[0] + 1,
-        ),
-      );
+    if (damage) {
+      clearRasterTextPresentation(damage);
+      textless = true;
+    }
   }
   for (let i = start; i < children.length; i++) {
     const childNode = children[i]!,
@@ -149,7 +171,7 @@ export function compose(
       ruleNode = host.ruleLayer(child.tid);
       rule = ruleNode?.payload ?? null;
     }
-    if (!child.pixels) continue;
+    if (!child.hasPixels) continue;
     if (
       child.md !== 0x808080 &&
       filter(host, child, (to, from) =>
@@ -197,16 +219,39 @@ export function compose(
         ]);
       blendRule = {pixels: rule.pixels!, weights: ruleWeights(child.t, child.ta, child.a)};
     }
+    if (
+      !blendRule &&
+      child.mode === 0 &&
+      child.a === 256 &&
+      child.masked === 0 &&
+      part.width * part.height >= 65536 &&
+      part.width === area[2] - area[0] + 1 &&
+      part.height === area[3] - area[1] + 1 &&
+      child.drawPendingTo(
+        pixels,
+        group.width,
+        [part.sx, part.sy, part.sx + part.width - 1, part.sy + part.height - 1],
+        part.dx,
+        part.dy,
+      )
+    ) {
+      if (damage) {
+        clearRasterTextGlyphs(damage);
+        textless = syncTextless = true;
+      }
+      continue;
+    }
+    const sourcePixels = child.pixelsForRect(part.sx, part.sy, part.width, part.height)!;
     const source: BlendSource = {
-      pixels: child.pixels,
+      pixels: sourcePixels,
       width: child.width,
       mode: child.mode,
       a: child.a,
       masked: child.masked === 1,
     };
-    if (host.rasterText) {
+    if (target && damage) {
       const bitmap = yurisRasterBitmap(
-        child.pixels,
+        sourcePixels,
         child.width,
         part.height,
         part.sx,
@@ -214,28 +259,37 @@ export function compose(
         part.width,
       );
       if (!childNode.group) bitmap.rasterTextFlow = childNode.name;
-      blendText(
-        yurisRasterBitmap(group.pixels, group.width, group.height),
-        bitmap,
-        source,
-        part,
-        blendRule,
-      );
-    } else {
-      blendRect(
-        group.pixels,
-        group.width,
-        part.dx,
-        part.dy,
-        source,
-        part.sx,
-        part.sy,
-        part.width,
-        part.height,
-        blendRule,
-      );
+      const carriesText = hasRasterText(bitmap);
+      if (!textless || carriesText) {
+        if (syncTextless) syncTextlessPixels(damage);
+        syncTextless = false;
+        blendText(target, bitmap, source, part, blendRule);
+        textless =
+          !carriesText &&
+          !blendRule &&
+          !source.masked &&
+          source.mode === 0 &&
+          source.a === 256 &&
+          part.width === damage.width &&
+          part.height === damage.height;
+        continue;
+      }
+      syncTextless = true;
     }
+    blendRect(
+      pixels,
+      group.width,
+      part.dx,
+      part.dy,
+      source,
+      part.sx,
+      part.sy,
+      part.width,
+      part.height,
+      blendRule,
+    );
   }
+  if (syncTextless && damage) syncTextlessPixels(damage);
   return 0;
 }
 
@@ -285,7 +339,7 @@ function filter(
   if (!from) return -1;
   apply(copy, from);
   cg.filtered = copy;
-  cg.pixels = copy;
+  cg.setFilteredPixels(copy);
   cg.filterFrame = host.frame;
   return 0;
 }

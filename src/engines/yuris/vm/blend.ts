@@ -1,3 +1,5 @@
+import {blendBgra} from '../../../graphics/bgra-effects-wasm.js';
+
 /**
  * Software layer blending of the CPU compositor (0x404A51) and the filters it applies.
  *
@@ -147,7 +149,6 @@ export function blendRect(
     r = rule?.pixels,
     w = rule?.weights;
   if (
-    !rule &&
     mode === 0 &&
     s.buffer !== dst.buffer &&
     width > 0 &&
@@ -163,7 +164,7 @@ export function blendRect(
   ) {
     let si = sy * src.width + sx,
       di = dy * dstWidth + dx;
-    if (!src.masked && a >= 0x100) {
+    if (!rule && !src.masked && a >= 0x100) {
       // The mode-zero opaque blitter copies BGRA, including the fourth byte (0x412CF4).
       if (width === src.width && width === dstWidth)
         dst.set(s.subarray(si * 4, (si + width * height) * 4), di * 4);
@@ -172,7 +173,38 @@ export function blendRect(
           dst.set(s.subarray(si * 4, (si + width) * 4), di * 4);
       return;
     }
-    if (littleEndian && ((s.byteOffset | dst.byteOffset) & 3) === 0 && a >= 0 && a <= 256) {
+    const validRule =
+      !rule ||
+      (rule.pixels.buffer !== dst.buffer &&
+        rule.pixels.length >= ((sy + height - 1) * src.width + sx + width) * 4 &&
+        rule.weights.length === 256 &&
+        !rule.weights.some((weight) => weight > 256));
+    if (
+      a >= 0 &&
+      a <= 256 &&
+      validRule &&
+      blendBgra(
+        s,
+        si,
+        src.width,
+        dst,
+        di,
+        dstWidth,
+        width,
+        height,
+        a,
+        src.masked,
+        rule ?? undefined,
+      )
+    )
+      return;
+    if (
+      !rule &&
+      littleEndian &&
+      ((s.byteOffset | dst.byteOffset) & 3) === 0 &&
+      a >= 0 &&
+      a <= 256
+    ) {
       const source = new Uint32Array(s.buffer, s.byteOffset, s.byteLength >>> 2),
         target = new Uint32Array(dst.buffer, dst.byteOffset, dst.byteLength >>> 2);
       // (s * k + d * (256 - k)) >> 8 is the scalar difference formula. Two

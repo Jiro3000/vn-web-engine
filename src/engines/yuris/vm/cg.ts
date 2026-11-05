@@ -7,7 +7,10 @@ import {LookupMode, type YurisNode, YurisTree, resolveNodePath} from './nodes.js
 import {type ByteString, formatInt, i64} from './numbers.js';
 import {applyAtLeast, applyBounded, applyOp} from './operators.js';
 import {YurisType} from './variables.js';
+import {allocateBgraTarget} from '../../../graphics/bgra-effects-wasm.js';
 import type {Ymv} from '../../../formats/yuris/ymv.js';
+import {hasRasterText} from '../../../text/raster-text.js';
+import {yurisRasterBitmap} from './raster-text.js';
 
 /** A decoded image: straight (not premultiplied) BGRA rows, `width * 4` bytes apart. */
 export interface YurisImage {
@@ -20,6 +23,12 @@ export interface YurisImage {
 export interface YurisImageHost {
   decodeImage(bytes: Uint8Array, type: YurisFileType, path: ByteString): Promise<YurisImage>;
 }
+
+type PixelWriter = (
+  pixels: Uint8Array,
+  clip?: Rect,
+  output?: {stride: number; x: number; y: number},
+) => boolean | void;
 
 /**
  * A layer object (0x690 bytes, initialised by 0x46BEC8). Several nodes share one object
@@ -67,9 +76,73 @@ export class YurisCg {
    * +0xC0: the pixels the compositor reads and a layer set's composition writes, straight
    * BGRA; null until a buffer exists. It is `source` or, after an MD or SD pass, `filtered`.
    */
-  pixels: Uint8Array | null = null;
-  /** +0xD0: the loaded or allocated buffer, the input of the MD and SD filters. */
-  source: Uint8Array | null = null;
+  private displayedPixels: Uint8Array | null = null;
+  private inputPixels: Uint8Array | null = null;
+  private pendingPixels?: {
+    source: YurisCg;
+    write: (clip?: Rect) => void;
+    draw?: PixelWriter;
+    scale?: DeferredScale;
+  };
+  private windowReadback?: () => void;
+  private pixelReaders?: Set<YurisCg>;
+  get pixels(): Uint8Array | null {
+    this.syncWindowPixels();
+    if (this.pendingPixels) this.resolvePixels();
+    return this.displayedPixels;
+  }
+  get source(): Uint8Array | null {
+    this.syncWindowPixels();
+    if (this.pendingPixels) this.resolvePixels();
+    return this.inputPixels;
+  }
+  get hasPixels(): boolean {
+    return this.displayedPixels !== null;
+  }
+  get deferredScale(): DeferredScale | undefined {
+    const source = this.displayedPixels;
+    return source && !hasRasterText(yurisRasterBitmap(source, this.width, this.height))
+      ? this.pendingPixels?.scale
+      : undefined;
+  }
+
+  /** The window renderer owns pixels outside the CPU text strip until a read. */
+  deferWindowReadback(read: () => void): void {
+    this.windowReadback = read;
+    this.pixelRevision++;
+  }
+
+  replaceWindowReadback(): Uint8Array | null {
+    this.windowReadback = undefined;
+    return this.displayedPixels;
+  }
+
+  private syncWindowPixels(): void {
+    const read = this.windowReadback;
+    if (!read) return;
+    this.windowReadback = undefined;
+    read();
+  }
+  pixelsForRect(x: number, y: number, width: number, height: number): Uint8Array | null {
+    if (this.pendingPixels) {
+      if (x === 0 && y === 0 && width === this.width && height === this.height)
+        this.resolvePixels();
+      else this.pendingPixels.write([x, y, x + width - 1, y + height - 1]);
+    }
+    return this.displayedPixels;
+  }
+  drawPendingTo(pixels: Uint8Array, stride: number, clip: Rect, x: number, y: number): boolean {
+    const draw = this.pendingPixels?.draw;
+    const source = this.displayedPixels;
+    return (
+      !!draw &&
+      !!source &&
+      !hasRasterText(yurisRasterBitmap(source, this.width, this.height)) &&
+      draw(pixels, clip, {stride, x, y}) === true
+    );
+  }
+  /** Invalidates derived pixel data after in-place writes. */
+  pixelRevision = 0;
   /** +0xE0, +0xE8: the filtered copy and the frame (0x871F48) of its last filter pass. */
   filtered: Uint8Array | null = null;
   filterFrame = 0n;
@@ -96,10 +169,11 @@ export class YurisCg {
   f = 0;
 
   /** 0x4259A8 / CG SX, SY on a layer set: a zeroed buffer clipped to its size. */
-  allocate(width: number, height: number): void {
+  allocate(width: number, height: number, compositing = false): void {
     this.width = this.textureWidth = width;
     this.height = this.textureHeight = height;
-    this.setPixels(new Uint8Array(width * height * 4));
+    const length = width * height * 4;
+    this.setPixels((compositing ? allocateBgraTarget(length) : null) ?? new Uint8Array(length));
     this.dirty = true;
     this.clip[0] = this.clip[1] = 0;
     this.clip[2] = width - 1;
@@ -115,7 +189,64 @@ export class YurisCg {
 
   /** A new buffer replaces both +0xD0 and +0xC0. */
   setPixels(pixels: Uint8Array | null): void {
-    this.pixels = this.source = pixels;
+    this.resolveReaders();
+    this.cancelPixelWrite();
+    this.windowReadback = undefined;
+    this.displayedPixels = this.inputPixels = pixels;
+    this.pixelRevision++;
+  }
+
+  /** 0x405DB7 selects the filtered buffer for reads of +0xC0. */
+  setFilteredPixels(pixels: Uint8Array): void {
+    this.displayedPixels = pixels;
+    this.pixelRevision++;
+  }
+
+  /** Preserve deferred consumers before changing the buffer they captured. */
+  beginPixelWrite(): void {
+    this.syncWindowPixels();
+    this.resolvePixels();
+    this.resolveReaders();
+    this.pixelRevision++;
+  }
+
+  /** Overwriting a deferred result need only retain its newest transform. */
+  deferPixelWrite(
+    source: YurisCg,
+    from: Uint8Array,
+    write: PixelWriter,
+    direct = false,
+    scale?: DeferredScale,
+  ): boolean {
+    const target = this.inputPixels;
+    if (!target || target !== this.displayedPixels || from.buffer === target.buffer) return false;
+    this.resolveReaders();
+    this.cancelPixelWrite();
+    this.pixelRevision++;
+    this.pendingPixels = {
+      source,
+      write: (clip) => write(target, clip),
+      draw: direct ? write : undefined,
+      scale,
+    };
+    (source.pixelReaders ??= new Set()).add(this);
+    return true;
+  }
+
+  private resolveReaders(): void {
+    if (this.pixelReaders) for (const reader of this.pixelReaders) reader.resolvePixels();
+  }
+
+  private cancelPixelWrite(): void {
+    this.pendingPixels?.source.pixelReaders?.delete(this);
+    this.pendingPixels = undefined;
+  }
+
+  private resolvePixels(): void {
+    const pending = this.pendingPixels;
+    if (!pending) return;
+    this.cancelPixelWrite();
+    pending.write();
   }
 
   /** 0x434440: a new buffer and size; the filtered copy is dropped. */
@@ -129,6 +260,20 @@ export class YurisCg {
 }
 
 export type YurisCgNode = YurisNode<YurisCg>;
+
+export interface DeferredScale {
+  readonly pixels: Uint8Array;
+  readonly width: number;
+  readonly height: number;
+  readonly revision: number;
+  readonly fx: number;
+  readonly fy: number;
+  readonly fx2: number;
+  readonly fy2: number;
+  readonly fsx: number;
+  readonly fsy: number;
+  readonly sse: boolean;
+}
 
 /** CG argument ids (`ysc.ybn`). */
 const enum Cg {
@@ -233,6 +378,8 @@ const WINDOWS = 4;
 export class YurisLayers {
   readonly tree = new YurisTree<YurisCg>();
   private readonly ruleIds = new Set<ByteString>();
+  private readonly opacityDamage = new Map<YurisCgNode, number>();
+  private readonly coveredPixelDamage = new Set<YurisCgNode>();
   /** 0x872018: a layer changed since the last composition. */
   redraw = false;
   /** 0x871FF4: Keep the composition mode selected by native Direct3D initialization. */
@@ -256,7 +403,7 @@ export class YurisLayers {
     root.height = root.textureHeight = height;
     this.tree.root.payload = root;
     const screen = new YurisCg();
-    screen.allocate(width, height);
+    screen.allocate(width, height, true);
     this.windowLayers[0] = this.tree.create('W0', true, 1n, screen);
   }
 
@@ -291,7 +438,7 @@ export class YurisLayers {
    * CG 0x423860: creates a layer (FILE, or RID to share another layer's object) or a layer set
    * (SX, SY and Z), then changes the given properties in their native order.
    */
-  private async cg(): Promise<number> {
+  private cg(): number | Promise<number> {
     const m = this.machine,
       a = m.args;
     m.decode();
@@ -336,23 +483,38 @@ export class YurisLayers {
         if (sx === -1n || sy === -1n || z === -1n) return 0;
         node = this.tree.create(path, true, z);
         cg = node.payload = new YurisCg();
-        cg.allocate(Number(sx & 0xffffffffn) | 0, Number(sy & 0xffffffffn) | 0);
+        cg.allocate(Number(sx & 0xffffffffn) | 0, Number(sy & 0xffffffffn) | 0, true);
         this.markSet(node);
       }
     }
     if (!cg) return 0;
-    // Each change first marks the area the node covers before it (0x410550, or 0x425E74 for
-    // a layer set); the final mark adds the area after the change.
-    const touch = () => (group ? this.markSet(node) : this.markDirty(node));
-    if (file) {
-      if (group) throw new YurisError(0x18ba0, [this.commandName()]);
-      this.markDirty(node);
-      if ((await this.load(cg, a.text(Cg.File))) !== 0) {
+    if (!file) return this.updateCg(node, cg, group, sx, sy, false, changed);
+    if (group) throw new YurisError(0x18ba0, [this.commandName()]);
+    this.markDirty(node);
+    const layer = cg;
+    return this.load(layer, a.text(Cg.File)).then((result) => {
+      if (result !== 0) {
         m.quit = true;
         return -1;
       }
-      changed = true;
-    }
+      return this.updateCg(node, layer, group, sx, sy, true, true);
+    });
+  }
+
+  private updateCg(
+    node: YurisCgNode,
+    cg: YurisCg,
+    group: boolean,
+    sx: bigint,
+    sy: bigint,
+    file: boolean,
+    changed: boolean,
+  ): number {
+    const m = this.machine,
+      a = m.args;
+    // Each change first marks the area the node covers before it (0x410550, or 0x425E74 for
+    // a layer set); the final mark adds the area after the change.
+    const touch = () => (group ? this.markSet(node) : this.markDirty(node));
     if (a.has(Cg.Mid) && a.text(Cg.Mid)) {
       const mask = this.lookup(
         resolveNodePath(m.system.names[0]!, a.text(Cg.Mid)).path,
@@ -365,6 +527,7 @@ export class YurisLayers {
         }
         const to = cg.pixels!,
           from = mask.pixels!;
+        cg.beginPixelWrite();
         for (let i = 0; i < cg.width * cg.height; i++) to[i * 4 + 3] = from[i * 4]!;
         cg.masked = 1;
       }
@@ -389,9 +552,16 @@ export class YurisLayers {
     if (a.has(Cg.A)) {
       const next = (bounded(Cg.A, cg.a, 0n, 256n) << 16) >> 16;
       if (next !== cg.a) {
-        touch();
+        if (cg.references > 1) {
+          touch();
+          changed = true;
+        } else {
+          const previous = this.opacityDamage.get(node) ?? cg.a;
+          if (next === previous) this.opacityDamage.delete(node);
+          else this.opacityDamage.set(node, previous);
+          this.redraw = true;
+        }
         cg.a = next;
-        changed = true;
       }
     }
     if (a.has(Cg.X)) {
@@ -550,22 +720,39 @@ export class YurisLayers {
   private reallocate(node: YurisCgNode): void {
     const cg = node.payload!;
     if (cg.width > 0x2000) throw new YurisError(0x186aa, [cg.width, cg.height]);
-    cg.allocate(cg.width, cg.height);
+    cg.allocate(cg.width, cg.height, true);
     this.markSet(node);
     if (this.composeSet(node) < 0) this.machine.quit = true;
   }
 
-  /** 0x425DF4: composes a layer set's whole buffer (0x404A51 with window -1). */
-  composeSet(node: YurisCgNode): number {
-    const cg = node.payload;
-    if (!cg) return 0;
-    const host = {
+  flushDamage(): void {
+    for (const changed of this.coveredPixelDamage)
+      if (!this.isCovered(changed)) this.markDirty(changed);
+    this.coveredPixelDamage.clear();
+    // Commands can temporarily hide a sprite while updating its buffer. Only the
+    // opacity at the next composition can damage the pixels already on screen.
+    for (const changed of this.opacityDamage.keys()) {
+      if (changed.group) this.markSet(changed);
+      else this.markDirty(changed);
+    }
+    this.opacityDamage.clear();
+  }
+
+  compositionHost() {
+    return {
       frame: this.machine.system.frames,
       rasterText: this.machine.tracksRasterText,
       ruleLayer: (tid: ByteString) =>
         this.tree.lookup(resolveNodePath(this.machine.system.names[0]!, tid).path, LookupMode.Leaf),
     };
-    return compose(host, node, 0, 0, [0, 0, cg.width - 1, cg.height - 1]);
+  }
+
+  /** 0x425DF4: composes a layer set's whole buffer (0x404A51 with window -1). */
+  composeSet(node: YurisCgNode): number {
+    this.flushDamage();
+    const cg = node.payload;
+    if (!cg) return 0;
+    return compose(this.compositionHost(), node, 0, 0, [0, 0, cg.width - 1, cg.height - 1]);
   }
 
   /**
@@ -672,7 +859,8 @@ export class YurisLayers {
   markPixelsChanged(node: YurisCgNode | null, area?: Rect): void {
     const cg = node?.payload;
     if (!node || !cg) return;
-    const hidden = !node.group && (cg.e === 0 || cg.a === 0);
+    const hidden =
+      !node.group && (cg.e === 0 || (cg.a === 0 && (this.opacityDamage.get(node) ?? 0) === 0));
     if (hidden || area) {
       // Namespaces may change before composition. A literal final name can only
       // resolve to the same leaf name, while directory syntax stays conservative.
@@ -684,6 +872,43 @@ export class YurisLayers {
       }
     }
     if (!hidden) this.markDirty(node, area);
+  }
+
+  /** Same-sized writes underneath an opaque sibling cannot affect the enclosing buffer. */
+  isCovered(node: YurisCgNode): boolean {
+    const cg = node.payload;
+    if (!cg || node.group || cg.references !== 1 || !node.parent) return false;
+    // A hidden layer can still supply TID weights to a visible sibling.
+    for (const id of this.ruleIds)
+      if (id.endsWith(node.name) || id.endsWith('/') || id.endsWith(':')) return false;
+    const siblings = node.parent.children;
+    for (let i = siblings.length - 1; i >= 0; i--) {
+      const above = siblings[i]!;
+      if (above === node) break;
+      const p = above.payload;
+      if (
+        p?.hasPixels &&
+        p.references === 1 &&
+        !above.group &&
+        p.e === 1 &&
+        p.a === 256 &&
+        !p.masked &&
+        p.mode === 0 &&
+        !p.tex &&
+        (!p.tid || p.t === 256) &&
+        p.x <= cg.x &&
+        p.y <= cg.y &&
+        p.x + BigInt(p.width) >= cg.x + BigInt(cg.width) &&
+        p.y + BigInt(p.height) >= cg.y + BigInt(cg.height)
+      )
+        return true;
+    }
+    return false;
+  }
+
+  /** Recheck the opaque cover after the script has finished updating layer state. */
+  markCoveredPixelWrite(node: YurisCgNode): void {
+    this.coveredPixelDamage.add(node);
   }
 
   /**
@@ -738,6 +963,8 @@ export class YurisLayers {
   /** 0x43B220 then 0x43B264: children first, then the node itself. */
   private remove(node: YurisCgNode): void {
     for (const child of [...node.children]) this.remove(child);
+    this.opacityDamage.delete(node);
+    this.coveredPixelDamage.delete(node);
     for (let w = 0; w < WINDOWS; w++)
       if (this.windowLayers[w] === node) this.windowLayers[w] = null;
     if (this.directBuffer === node) this.directBuffer = null;
