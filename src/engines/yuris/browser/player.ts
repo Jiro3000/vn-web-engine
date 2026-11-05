@@ -38,6 +38,21 @@ const encode = (s: string): string =>
 // inside the software compositor and does not blend the completed window again.
 const windowCopy: BlendChannel = {source: 'one', destination: 'zero', operation: 'add'};
 
+/** Let the browser copy a DOM text selection without feeding Ctrl-skip or C to the VM. */
+function copiesSelectedText(event: KeyboardEvent, root: HTMLElement): boolean {
+  if (!event.ctrlKey && !event.metaKey) return false;
+  const key = event.key.toLowerCase();
+  if (key !== 'c' && key !== 'control' && key !== 'meta') return false;
+  const selection = root.ownerDocument.getSelection();
+  if (!selection || selection.isCollapsed) return false;
+  const isGameText = (node: Node | null): boolean => {
+    const element = node instanceof Element ? node : node?.parentElement;
+    const text = element?.closest('[data-game-text]');
+    return !!text && root.contains(text);
+  };
+  return isGameText(selection.anchorNode) && isGameText(selection.focusNode);
+}
+
 /** Browser bindings for the native VM. Folder writes stay in its virtual overlay. */
 export class YurisBrowserPlayer {
   machine!: YurisMachine;
@@ -328,6 +343,7 @@ export class YurisBrowserPlayer {
       (e) => {
         if (
           !this.machine ||
+          copiesSelectedText(e, root) ||
           e.target instanceof HTMLInputElement ||
           (e.target instanceof Element &&
             e.target.closest(
