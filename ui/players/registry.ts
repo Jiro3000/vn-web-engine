@@ -1,3 +1,4 @@
+import {isYurisInstallation} from '../../src/engines/yuris/installation-markers.js';
 import type {Component} from 'svelte';
 import type {InstallationRecognizer} from '../../src/platform/installation-detection.js';
 import {isBurikoInstallation} from '../../src/engines/buriko/installation-markers.js';
@@ -6,7 +7,7 @@ import {isRScriptInstallation} from '../../src/engines/rscript/installation-mark
 import {isArtemisInstallation} from '../../src/engines/artemis/installation-markers.js';
 
 /** Players the library offers: an engine for all of its titles, or one title. */
-export type PlayerId = 'buriko' | 'chaos-head-noah' | 'rscript' | 'artemis';
+export type PlayerId = 'buriko' | 'chaos-head-noah' | 'rscript' | 'artemis' | 'yuris';
 
 export interface PlayerEntry {
   readonly id: PlayerId;
@@ -32,6 +33,20 @@ export interface PlayerEntry {
 }
 
 export const PLAYERS: readonly PlayerEntry[] = [
+  {
+    id: 'yuris',
+    title: 'YU-RIS',
+    engine: 'YU-RIS',
+    summary: 'YU-RIS visual novels',
+    engineName: 'YU-RIS',
+    initials: 'YU',
+    route: './yuris.html',
+    explorerRoute: null,
+    installationKey: 'yuris',
+    installationFiles: 'game files',
+    recognize: isYurisInstallation,
+    saveFiles: () => import('./yuris/SaveFiles.svelte'),
+  },
   {
     id: 'buriko',
     title: 'BGI / Ethornell',

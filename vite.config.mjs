@@ -30,6 +30,7 @@ export default defineConfig(({mode}) => {
           'noah.html',
           'rscript.html',
           'artemis.html',
+          'yuris.html',
           'assets.html',
           'buriko-assets.html',
         ],

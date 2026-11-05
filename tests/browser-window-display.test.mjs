@@ -232,3 +232,52 @@ test('window activation follows page focus and visibility', () => {
   view.dispatchEvent(new Event('blur'));
   assert.deepEqual(changes, [false, true, false, true]);
 });
+
+test('legacy virtual windows retain iconic state while hidden and report restoration before activation', async () => {
+  const {BrowserLegacyWindows} = await import('../dist/platform/browser-legacy-windows.js');
+  const s = fixture(),
+    events = [];
+  Object.assign(s.root, {style: {}, clientWidth: 960, clientHeight: 720, append() {}});
+  s.document.createElement = () => ({
+    style: {},
+    hidden: false,
+    focus() {},
+    remove() {},
+    getBoundingClientRect: () => ({left: 32, top: 140}),
+  });
+  const previous = Object.getOwnPropertyDescriptor(globalThis, 'document');
+  Object.defineProperty(globalThis, 'document', {value: s.document, configurable: true});
+  let host;
+  try {
+    host = new BrowserLegacyWindows(
+      s.root,
+      (value) => value,
+      (value) => value,
+      (no, active) => events.push([no, active]),
+    );
+    host.showWindow(0, 'minimize');
+    host.showWindow(0, 'hide');
+    assert.equal(host.minimized(0), true);
+    assert.equal(host.elements[0].hidden, true);
+    host.showWindow(0, 'show');
+    assert.equal(host.minimized(0), true);
+    assert.equal(host.elements[0].hidden, true);
+    host.showWindow(0, 'restore');
+    assert.equal(host.minimized(0), false);
+    assert.equal(host.elements[0].hidden, false);
+    host.showWindow(0, 'hide');
+    host.activate(0); // SetForegroundWindow cannot activate a hidden owner.
+    assert.equal(host.minimized(0), false);
+    host.showWindow(0, 'show');
+    host.activate(0);
+    assert.deepEqual(
+      events,
+      [false, false, false, true, false, true, true].map((active) => [0, active]),
+    );
+  } finally {
+    host?.dispose();
+    s.host.dispose();
+    if (previous) Object.defineProperty(globalThis, 'document', previous);
+    else delete globalThis.document;
+  }
+});
