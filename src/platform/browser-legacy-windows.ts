@@ -18,6 +18,7 @@ export class BrowserLegacyWindows {
     readonly root: HTMLElement,
     private readonly decode: (s: string) => string,
     private readonly encode: (s: string) => string,
+    private readonly activated: (no: number, active: boolean) => void = () => {},
   ) {
     const main = document.createElement('div');
     main.style.cssText = 'position:relative;transform-origin:0 0';
@@ -40,8 +41,12 @@ export class BrowserLegacyWindows {
   showWindow(no: number, state: 'hide' | 'show' | 'minimize' | 'restore'): void {
     const e = this.elements[no];
     if (!e) return;
-    e.hidden = state === 'hide' || state === 'minimize';
-    this.states[no]!.minimized = state === 'minimize';
+    const window = this.states[no]!;
+    // SW_HIDE and SW_SHOW preserve WS_MINIMIZE; only restoration clears it.
+    if (state === 'minimize') window.minimized = true;
+    else if (state === 'restore') window.minimized = false;
+    e.hidden = state === 'hide' || window.minimized;
+    this.activated(no, !e.hidden);
   }
   setCaption(no: number, caption: string): void {
     this.states[no]!.caption = caption;
@@ -92,6 +97,8 @@ export class BrowserLegacyWindows {
   }
   activate(no: number): void {
     this.elements[no]?.focus();
+    if (this.elements[no] && !this.elements[no]!.hidden && !this.states[no]!.minimized)
+      this.activated(no, true);
   }
   setFrame(no: number, maximizeBox: boolean, resizable: boolean): void {
     this.elements[no]?.toggleAttribute('data-resizable', resizable);

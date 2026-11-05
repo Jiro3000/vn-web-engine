@@ -24,6 +24,9 @@ MENU/MENUACT/MENUEND/MENUINFO (0x448F74..0x449570) maintain a separate M0 tree.
 Menu installation takes a snapshot in Z order: E hides entries, A disables them,
 CHECK marks them, empty NAME creates a separator, and groups with children create submenus.
 WM_COMMAND exposes the selected CODE's low word through system variable 0x84.
+Popup menus remain inside the browser viewport and outside the owner's clipping.
+Virtual hide/show preserves a minimized window's iconic state; restoration delivers
+activation before the VM's foreground suspension check (0x45D738 / 0x41022A).
 WINDOW MENUID installs a window menu; TRAY (0x452FB4) retains its label, optional
 16x16 BGRA icon and independently installed menu snapshot.
 

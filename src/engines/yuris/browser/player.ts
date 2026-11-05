@@ -61,7 +61,11 @@ export class YurisBrowserPlayer {
       () => {},
       (e) => this.stopped(e),
     );
-    this.windows = new BrowserLegacyWindows(root, decode, encode);
+    // Native WM_ACTIVATE (0x45D738): virtual ShowWindow/SetForegroundWindow events
+    // update +0x2A8 before the next background/suspension check (0x41022A).
+    this.windows = new BrowserLegacyWindows(root, decode, encode, (no, active) => {
+      this.machine?.windows.activate(no, active);
+    });
     this.menus = new BrowserWindowsMenus(root, this.windows.elements);
     this.movie = new BrowserFileMovie(this.windows.elements[0]!, this.audio);
     const win = this.windows,
@@ -433,12 +437,12 @@ export class YurisBrowserPlayer {
   async dispose(): Promise<void> {
     this.running = false;
     this.abort.abort();
+    this.menus.dispose();
     this.movie.close();
     await this.device.dispose();
     this.audioHost.dispose();
     await this.audio.close();
     for (const target of this.targets) target?.dispose();
-    this.menus.dispose();
     this.windows.dispose();
     if (this.cursorUrl) URL.revokeObjectURL(this.cursorUrl);
   }

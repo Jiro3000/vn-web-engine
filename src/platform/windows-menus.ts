@@ -89,9 +89,14 @@ export class BrowserWindowsMenus implements WindowsMenusHost {
     const menu = this.root.ownerDocument.createElement('div');
     menu.setAttribute('role', 'menu');
     menu.tabIndex = -1;
-    menu.style.cssText = `position:fixed;left:${x}px;top:${y}px;z-index:2147483647;display:flex;flex-direction:column;background:Canvas;color:CanvasText;border:1px solid;padding:4px`;
+    menu.style.cssText = `position:fixed;left:${x}px;top:${y}px;z-index:2147483647;display:flex;flex-direction:column;background:Canvas;color:CanvasText;border:1px solid;padding:4px;width:max-content;max-width:calc(100vw - 8px);max-height:calc(100vh - 8px);overflow:auto;box-sizing:border-box`;
     this.fill(menu, items, select);
-    this.root.append(menu);
+    // OS popups are independent of the owner's clipping and remain inside the desktop.
+    this.root.ownerDocument.body.append(menu);
+    const view = this.root.ownerDocument.defaultView!,
+      bounds = menu.getBoundingClientRect();
+    menu.style.left = Math.max(4, Math.min(x, view.innerWidth - bounds.width - 4)) + 'px';
+    menu.style.top = Math.max(4, Math.min(y, view.innerHeight - bounds.height - 4)) + 'px';
     this.popup = menu;
     this.popupSelect = select;
     this.closed = new Promise((resolve) => {
@@ -133,7 +138,7 @@ export class BrowserWindowsMenus implements WindowsMenusHost {
       c.getContext('2d')?.putImageData(new ImageData(data, width, height), 0, 0);
       button.prepend(c);
     }
-    this.root.append(button);
+    this.root.ownerDocument.body.append(button);
     this.tray = button;
   }
   private fill(
@@ -148,6 +153,8 @@ export class BrowserWindowsMenus implements WindowsMenusHost {
       }
       const button = this.root.ownerDocument.createElement('button');
       button.type = 'button';
+      button.style.cssText =
+        'max-width:100%;white-space:normal;overflow-wrap:anywhere;text-align:left';
       button.textContent = (item.checked ? '✓ ' : '') + item.label.replace(/&(.)/g, '$1');
       button.disabled = !item.enabled;
       button.setAttribute('role', 'menuitem');
