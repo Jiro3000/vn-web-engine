@@ -395,7 +395,8 @@ export class YurisExpression {
     )
       return p;
     const id = bytes[p + 4]! | (bytes[p + 5]! << 8);
-    if (id < SYSTEM_VARIABLE_LIMIT) return p;
+    // The four reference arrays flatten against the referenced variable instead.
+    if (id === 0x32 || id === 0x33 || id === 0x34 || id === 0x46) return p;
     const target = this.variables.entries[id];
     if (!target || target.dimensions.length !== 1) return p;
     const kind = bytes[p + 6]!;

@@ -222,12 +222,13 @@ export class IntegerWindowGl {
     return {texture, framebuffer};
   }
 
+  acceptsSize(width: number, height: number): boolean {
+    return width > 0 && height > 0 && width <= this.maxSize && height <= this.maxSize;
+  }
+
   accepts(image: IntegerImage): boolean {
     return (
-      image.width > 0 &&
-      image.height > 0 &&
-      image.width <= this.maxSize &&
-      image.height <= this.maxSize &&
+      this.acceptsSize(image.width, image.height) &&
       image.pixels.byteLength >= image.width * image.height * 4
     );
   }
@@ -371,13 +372,22 @@ export class IntegerWindowGl {
     gl.disable(gl.SCISSOR_TEST);
   }
 
-  show(context: CanvasRenderingContext2D): void {
+  show(context: CanvasRenderingContext2D, region?: IntegerRegion): void {
     const gl = this.gl;
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.useProgram(this.programs[1]);
     this.bind(0, this.targets[this.front]!.texture);
-    gl.drawArrays(gl.TRIANGLES, 0, 3);
-    context.drawImage(this.canvas, 0, 0);
+    if (region) {
+      const {left, top, width, height} = region;
+      gl.enable(gl.SCISSOR_TEST);
+      gl.scissor(left, this.canvas.height - top - height, width, height);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      gl.disable(gl.SCISSOR_TEST);
+      context.drawImage(this.canvas, left, top, width, height, left, top, width, height);
+    } else {
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      context.drawImage(this.canvas, 0, 0);
+    }
     const fence = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
     if (fence) this.fences.push(fence);
     this.peakQueue = Math.max(this.peakQueue, this.fences.length);

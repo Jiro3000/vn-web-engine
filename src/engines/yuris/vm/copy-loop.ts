@@ -2,12 +2,13 @@ import type {YurisInstruction, YurisToken} from '../../../formats/yuris/ybn.js';
 import {SYSTEM_VARIABLE_LIMIT, YurisType, type YurisVariables} from './variables.js';
 
 const LET = 0x35;
+const LOOP = 0x37;
 const LOOPEND = 0x3a;
 const COUNTER = 0x30;
 const IF = 0x2c;
 const IFEND = 0x30;
 
-type Assignment = {target: number} & ({value: bigint} | {offset: number});
+type Assignment = {target: number; first: number} & ({value: bigint} | {offset: number});
 
 function variable(token: YurisToken | undefined, operator: number, sigil = 0x40): number {
   if (token?.op !== operator || token.payload[0] !== sigil) return -1;
@@ -45,17 +46,21 @@ export function copyLoop(
     if (left!.op !== 0 || left!.type !== 1 || right!.type !== 1) return null;
     const a = left!.tokens,
       b = right!.tokens;
-    if (!a || !b || a.length !== 3 || variable(a[1], 0x48) !== COUNTER || a[2]!.op !== 0x29)
+    if (!a || !b) return null;
+    const leftRead = counterRead(a, 0, COUNTER);
+    if (!leftRead || leftRead.next !== a.length || leftRead.read.type !== YurisType.Int)
       return null;
-    const target = variable(a[0], 0x56);
-    if (target < SYSTEM_VARIABLE_LIMIT || targets.has(target)) return null;
+    const {id: target, offset: base} = leftRead.read;
+    const first = 1 + base;
+    if (first < 0 || targets.has(target)) return null;
     targets.add(target);
     if (b.length === 1) {
       const value = integer(b[0]!);
       if (value === undefined) return null;
-      assignments.push({target, value});
+      assignments.push({target, first, value});
     } else {
       if (
+        first !== 1 ||
         b.length !== 5 ||
         variable(b[0], 0x56) !== target ||
         variable(b[1], 0x48) !== COUNTER ||
@@ -65,7 +70,7 @@ export function copyLoop(
         return null;
       const offset = variable(b[2], 0x48);
       if (offset < SYSTEM_VARIABLE_LIMIT) return null;
-      assignments.push({target, offset});
+      assignments.push({target, first, offset});
     }
   }
   return assignments.some((a) => 'offset' in a && targets.has(a.offset)) ? null : assignments;
@@ -78,23 +83,37 @@ export function applyCopyLoop(
   limit: number,
 ): boolean {
   if (variables.entries[COUNTER]?.type !== YurisType.Int) return false;
-  const operations: {values: BigInt64Array; value: bigint; offset: number | null}[] = [];
+  const operations: {
+    values: BigInt64Array;
+    first: number;
+    end: number;
+    value: bigint;
+    offset: number | null;
+  }[] = [];
   const buffers = new Set<ArrayBufferLike>();
   for (const assignment of assignments) {
     const variable = variables.entries[assignment.target];
     const values = variable?.ints;
+    const end = assignment.first + limit - 1;
     if (
       variable?.type !== YurisType.Int ||
       variable.dimensions.length !== 1 ||
       !values ||
-      limit >= variable.dimensions[0]! ||
-      limit >= variable.count ||
-      limit >= values.length ||
+      end >= variable.dimensions[0]! ||
+      end >= variable.count ||
+      end >= values.length ||
       buffers.has(values.buffer)
     )
       return false;
     buffers.add(values.buffer);
-    if ('value' in assignment) operations.push({values, value: assignment.value, offset: null});
+    if ('value' in assignment)
+      operations.push({
+        values,
+        first: assignment.first,
+        end,
+        value: assignment.value,
+        offset: null,
+      });
     else {
       const scalar = variables.entries[assignment.offset];
       const offset = scalar?.ints?.[0];
@@ -106,12 +125,12 @@ export function applyCopyLoop(
         offset >= BigInt(Math.min(values.length, variable.dimensions[0]!) - limit)
       )
         return false;
-      operations.push({values, value: 0n, offset: Number(offset)});
+      operations.push({values, first: assignment.first, end, value: 0n, offset: Number(offset)});
     }
   }
-  for (const {values, value, offset} of operations) {
-    if (offset === null) values.fill(value, 1, limit);
-    else values.copyWithin(1, 1 + offset, limit + offset);
+  for (const {values, first, end, value, offset} of operations) {
+    if (offset === null) values.fill(value, first, end);
+    else values.copyWithin(first, first + offset, end + offset);
   }
   return true;
 }
@@ -124,13 +143,18 @@ interface VariableRead {
 interface CounterRead extends VariableRead {
   readonly offset: number;
 }
+interface IndexedGuardRead extends CounterRead {
+  readonly index: VariableRead;
+}
 export interface GuardLoop {
   readonly primary: CounterRead;
-  readonly value: bigint | VariableRead;
+  readonly value: bigint | VariableRead | IndexedGuardRead;
+  readonly alternatives?: readonly (bigint | VariableRead)[];
   readonly operator: number;
   readonly arrays: readonly CounterRead[];
   readonly scalars: readonly VariableRead[];
   readonly order?: {index: number; base: number; length: number};
+  readonly cursor?: number;
 }
 
 function guardVariable(token: YurisToken | undefined, operator: number): VariableRead | null {
@@ -206,6 +230,15 @@ function wrappedOrder(instructions: readonly YurisInstruction[], start: number) 
   return {index, base, length};
 }
 
+function counterAlias(instruction: YurisInstruction | undefined) {
+  const assignment = scalarAssignment(instruction, 0);
+  if (!assignment || variable(assignment.tokens[0], 0x48) !== COUNTER) return null;
+  const {tokens, id} = assignment;
+  if (tokens.length === 1) return {id, offset: 0};
+  if (tokens.length !== 3 || tokens[1]!.op !== 0x42 || tokens[2]!.op !== 0x2d) return null;
+  return {id, offset: -Number(integer(tokens[1]!)!)};
+}
+
 /** The first IF guards the whole loop body and starts with an array comparison.
  * Any remaining clause must be a pure, independent predicate combined with AND.
  */
@@ -215,7 +248,8 @@ export function scanGuardLoop(
   end: number,
 ): GuardLoop | null {
   const order = wrappedOrder(instructions, start);
-  const branch = instructions[start + (order ? 4 : 0)];
+  const alias = order ? null : counterAlias(instructions[start]);
+  const branch = instructions[start + (order ? 4 : alias ? 1 : 0)];
   if (
     branch?.command !== IF ||
     branch.args.length !== 3 ||
@@ -228,28 +262,83 @@ export function scanGuardLoop(
   const condition = branch.args[0]!;
   const tokens = condition.tokens;
   if (condition.type !== 1 || !tokens || tokens.length > 128) return null;
-  const index = order?.index ?? COUNTER;
-  const first = counterRead(tokens, 0, index);
+  const index = order?.index ?? alias?.id ?? COUNTER;
+  const readAt = (at: number) => {
+    const item = counterRead(tokens, at, index);
+    return item && alias
+      ? {next: item.next, read: {...item.read, offset: item.read.offset + alias.offset}}
+      : item;
+  };
+  const forward = readAt(0);
+  const first = forward ?? readAt(1);
   if (!first) return null;
-  const operator = tokens[first.next + 1]?.op;
+  const subscript = forward ? guardVariable(tokens[first.next + 1], 0x48) : null;
+  const indexed =
+    subscript?.type === YurisType.Int && subscript.id !== index
+      ? counterRead(tokens, first.next, subscript.id)
+      : null;
+  const operatorAt = indexed?.next ?? first.next + Number(!!forward);
+  const operator = tokens[operatorAt]?.op;
   if (
     operator === undefined ||
     (operator !== 0x3d &&
       operator !== 0x21 &&
-      (first.read.type !== YurisType.Int || ![0x3c, 0x3e, 0x5a, 0x53].includes(operator)))
+      (!forward ||
+        first.read.type !== YurisType.Int ||
+        ![0x3c, 0x3e, 0x5a, 0x53].includes(operator)))
   )
     return null;
-  const operand = tokens[first.next]!;
+  const operand = tokens[forward ? first.next : 0]!;
   const scalarValue = guardVariable(operand, 0x48);
-  const value = scalarValue ?? integer(operand);
-  if (value === undefined || (scalarValue?.type ?? YurisType.Int) !== first.read.type) return null;
+  const indexedValue = indexed && subscript ? {...indexed.read, index: subscript} : null;
+  const value = indexedValue ?? scalarValue ?? integer(operand);
+  if (
+    value === undefined ||
+    (typeof value === 'bigint' ? YurisType.Int : value.type) !== first.read.type
+  )
+    return null;
   const arrays = [first.read];
   const scalars: VariableRead[] = scalarValue ? [scalarValue] : [];
-  let p = first.next + 2;
+  let p = operatorAt + 1;
+  if (p < tokens.length && tokens.at(-1)!.op === 0x7c && operator === 0x3d) {
+    // A left-associated OR of equality tests on the same element is a membership scan.
+    const alternatives: (bigint | VariableRead)[] = [];
+    while (p < tokens.length) {
+      const item = readAt(p);
+      if (
+        !item ||
+        item.read.id !== first.read.id ||
+        item.read.offset !== first.read.offset ||
+        item.read.type !== first.read.type ||
+        tokens[item.next + 1]?.op !== 0x3d ||
+        tokens[item.next + 2]?.op !== 0x7c
+      )
+        return null;
+      const token = tokens[item.next]!;
+      const variable = guardVariable(token, 0x48);
+      const alternative = variable ?? integer(token);
+      if (alternative === undefined || (variable?.type ?? YurisType.Int) !== first.read.type)
+        return null;
+      if (variable) scalars.push(variable);
+      alternatives.push(alternative);
+      p = item.next + 3;
+    }
+    if (scalars.some((scalar) => scalar.id === index)) return null;
+    return {
+      primary: first.read,
+      value,
+      alternatives,
+      operator,
+      arrays,
+      scalars,
+      order: order ?? undefined,
+      cursor: alias?.id,
+    };
+  }
   if (p !== tokens.length && tokens.at(-1)!.op !== 0x26) return null;
   const stack: Comparable[] = [];
   while (p < tokens.length - 1) {
-    const array = counterRead(tokens, p, index);
+    const array = readAt(p);
     const scalar = guardVariable(tokens[p], 0x48);
     const token = tokens[p]!;
     if (array) {
@@ -266,15 +355,27 @@ export function scanGuardLoop(
       const right = stack.pop(),
         left = stack.pop();
       if (left === undefined || left !== right) return null;
-      if (token.op !== 0x3d && ((token.op !== 0x26 && token.op !== 0x7c) || left !== YurisType.Int))
+      if (
+        token.op !== 0x3d &&
+        token.op !== 0x21 &&
+        (left !== YurisType.Int || ![0x26, 0x7c, 0x3c, 0x3e, 0x5a, 0x53].includes(token.op))
+      )
         return null;
       stack.push(YurisType.Int);
     }
     p++;
   }
   if (p < tokens.length && (stack.length !== 1 || stack[0] !== YurisType.Int)) return null;
-  if (order && scalars.some((scalar) => scalar.id === order.index)) return null;
-  return {primary: first.read, value, operator, arrays, scalars, order: order ?? undefined};
+  if (scalars.some((scalar) => scalar.id === index)) return null;
+  return {
+    primary: first.read,
+    value,
+    operator,
+    arrays,
+    scalars,
+    order: order ?? undefined,
+    cursor: alias?.id,
+  };
 }
 
 function comparable(variables: YurisVariables, {id, type}: VariableRead) {
@@ -291,6 +392,11 @@ export function skipGuardLoop(
   last: number,
 ): number {
   if (first >= last || variables.entries[COUNTER]?.type !== YurisType.Int) return first;
+  if (plan.cursor !== undefined) {
+    const cursor = variables.entries[plan.cursor];
+    if (cursor?.type !== YurisType.Int || cursor.dimensions.length !== 0 || !cursor.ints)
+      return first;
+  }
   let base = 1;
   if (plan.order) {
     const valueOf = (id: number) => {
@@ -327,14 +433,40 @@ export function skipGuardLoop(
   for (const read of plan.scalars) if (comparable(variables, read)?.[0] === undefined) return first;
   const {offset} = plan.primary;
   const values = comparable(variables, plan.primary)!;
-  const expected =
-    typeof plan.value === 'bigint' ? plan.value : comparable(variables, plan.value)![0];
+  const operand = plan.value;
+  let expected: bigint | string | undefined;
+  if (typeof operand === 'bigint') expected = operand;
+  else if ('index' in operand) {
+    const index = variables.entries[operand.index.id];
+    const offset =
+      index?.type === YurisType.Int && index.dimensions.length === 0 ? index.ints?.[0] : undefined;
+    const array = variables.entries[operand.id];
+    const storage = comparable(variables, operand);
+    if (offset === undefined || array?.dimensions.length !== 1 || !storage) return first;
+    const at = offset + BigInt(operand.offset);
+    if (at < 0n || at >= BigInt(Math.min(array.count, array.dimensions[0]!, storage.length)))
+      return first;
+    expected = storage[Number(at)];
+  } else expected = comparable(variables, operand)?.[0];
+  if (expected === undefined) return first;
   if (plan.operator === 0x3d) {
-    const find = (from: number, count: number) => {
+    const findSingle = (from: number, count: number, key: bigint | string) => {
       if (values instanceof BigInt64Array)
-        return values.subarray(from, from + count).indexOf(expected as bigint);
-      const found = values.indexOf(expected as string, from);
+        return values.subarray(from, from + count).indexOf(key as bigint);
+      const found = values.indexOf(key as string, from);
       return found >= from && found < from + count ? found - from : -1;
+    };
+    const find = (from: number, count: number) => {
+      let best = findSingle(from, count, expected);
+      if (plan.alternatives)
+        for (const alternative of plan.alternatives) {
+          if (best === 0) break;
+          const key =
+            typeof alternative === 'bigint' ? alternative : comparable(variables, alternative)![0]!;
+          const match = findSingle(from, best < 0 ? count : best, key);
+          if (match >= 0) best = match;
+        }
+      return best;
     };
     const start = base + first - 1;
     const index = start <= last ? start : start - last;
@@ -386,6 +518,126 @@ function scalarAssignment(instruction: YurisInstruction | undefined, op: number)
     return null;
   const id = variable(left!.tokens[0], 0x48);
   return id >= SYSTEM_VARIABLE_LIMIT && right!.tokens ? {id, tokens: right!.tokens} : null;
+}
+
+interface RowShift {
+  readonly row: number;
+  readonly highest: number;
+  readonly columns: number;
+  readonly targets: readonly VariableRead[];
+}
+
+function rowElement(tokens: readonly YurisToken[] | null, row: number, previous: boolean) {
+  if (!tokens || tokens.length !== (previous ? 9 : 7)) return null;
+  const array = guardVariable(tokens[0], 0x56);
+  if (!array || variable(tokens[1], 0x48) !== row) return null;
+  if (previous && (integer(tokens[2]!) !== 1n || tokens[3]!.op !== 0x2d)) return null;
+  const start = previous ? 4 : 2;
+  return tokens[start]!.op === 0x2c &&
+    variable(tokens[start + 1], 0x48) === COUNTER &&
+    integer(tokens[start + 2]!) === 1n &&
+    tokens[start + 3]!.op === 0x2d &&
+    tokens[start + 4]!.op === 0x29
+    ? array
+    : null;
+}
+
+/** A descending outer LOOP and a complete inner row copy implement a backward array shift. */
+export function scanRowShift(
+  instructions: readonly YurisInstruction[],
+  start: number,
+  end: number,
+): RowShift | null {
+  if (end - start < 4 || end - start > 32 || instructions[end]?.command !== LOOPEND) return null;
+  const row = scalarAssignment(instructions[start], 0);
+  const inner = instructions[start + 1];
+  if (
+    row?.tokens.length !== 5 ||
+    variable(row.tokens[1], 0x48) !== COUNTER ||
+    integer(row.tokens[2]!) !== 1n ||
+    row.tokens[3]!.op !== 0x2d ||
+    row.tokens[4]!.op !== 0x2d ||
+    inner?.command !== LOOP ||
+    inner.args.length !== 2 ||
+    inner.args[0]!.type !== 1 ||
+    inner.args[0]!.tokens?.length !== 1 ||
+    inner.args[1]!.size !== end - 1 ||
+    instructions[end - 1]?.command !== LOOPEND
+  )
+    return null;
+  const highest = Number(integer(row.tokens[0]!));
+  const columns = Number(integer(inner.args[0]!.tokens[0]!));
+  if (
+    !Number.isSafeInteger(highest) ||
+    highest < 1 ||
+    !Number.isSafeInteger(columns) ||
+    columns < 1
+  )
+    return null;
+  const targets: VariableRead[] = [];
+  for (let i = start + 2; i < end - 1; i++) {
+    const instruction = instructions[i]!;
+    if (instruction.command !== LET || instruction.args.length !== 2) return null;
+    const [left, right] = instruction.args;
+    if (left!.op !== 0 || ![1, 3].includes(left!.type) || right!.type !== left!.type) return null;
+    const target = rowElement(left!.tokens, row.id, false);
+    const source = rowElement(right!.tokens, row.id, true);
+    if (
+      !target ||
+      !source ||
+      source.id !== target.id ||
+      source.type !== target.type ||
+      target.id === row.id ||
+      targets.some(({id}) => id === target.id)
+    )
+      return null;
+    if (left!.type !== (target.type === YurisType.Int ? 1 : 3)) return null;
+    targets.push(target);
+  }
+  return {row: row.id, highest, columns, targets};
+}
+
+export function applyRowShift(plan: RowShift, variables: YurisVariables, limit: number): boolean {
+  const {highest, columns} = plan;
+  const last = highest - limit + 1;
+  const row = variables.entries[plan.row];
+  if (
+    last < 1 ||
+    variables.entries[COUNTER]?.type !== YurisType.Int ||
+    row?.type !== YurisType.Int ||
+    row.dimensions.length !== 0 ||
+    row.ints?.[0] === undefined
+  )
+    return false;
+  const storage: (BigInt64Array | string[])[] = [];
+  const buffers = new Set<ArrayBufferLike | string[]>([row.ints.buffer]);
+  for (const target of plan.targets) {
+    const variable = variables.entries[target.id];
+    const data = comparable(variables, target);
+    const required = (highest + 1) * columns;
+    if (
+      !data ||
+      variable?.dimensions.length !== 2 ||
+      variable.dimensions[0]! <= highest ||
+      variable.dimensions[1] !== columns ||
+      required > variable.count ||
+      required > data.length
+    )
+      return false;
+    const buffer = data instanceof BigInt64Array ? data.buffer : data;
+    if (buffers.has(buffer)) return false;
+    if (Array.isArray(data)) {
+      // An expression string terminates at its first NUL.
+      for (let i = last * columns; i < highest * columns; i++)
+        if (data[i] === undefined || data[i]!.includes('\0')) return false;
+    }
+    buffers.add(buffer);
+    storage.push(data);
+  }
+  // The ordinary final row preserves the expression, LOOP and scratch-variable state.
+  for (const data of storage)
+    data.copyWithin((last + 1) * columns, last * columns, highest * columns);
+  return true;
 }
 
 function unbranchedIf(instructions: readonly YurisInstruction[], at: number, last: number) {

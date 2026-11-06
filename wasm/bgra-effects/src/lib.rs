@@ -138,6 +138,58 @@ unsafe fn normal_blend_span(
     }
 }
 
+/// YU-RIS 0x402FE0/0x402D7C. The staged first image becomes the output.
+#[no_mangle]
+pub unsafe extern "C" fn transition_bgra(
+    first: *mut u32,
+    second: *const u32,
+    width: usize,
+    height: usize,
+    weight: u32,
+    sse: u32,
+) {
+    if weight != 128 {
+        normal_blend_span(second, first, width * height, weight, 0);
+        return;
+    }
+    for row in 0..height {
+        let a = first.add(row * width);
+        let b = second.add(row * width);
+        let mut x = 0;
+        while x + 4 <= width {
+            let left = v128_load(a.add(x).cast());
+            let right = v128_load(b.add(x).cast());
+            let mixed = if sse != 0 {
+                u8x16_avgr(left, right)
+            } else {
+                u8x16_add(u8x16_shr(left, 1), u8x16_shr(right, 1))
+            };
+            v128_store(a.add(x).cast(), mixed);
+            x += 4;
+        }
+        while x < width {
+            let left = *a.add(x);
+            let right = *b.add(x);
+            let tail = (width & 1) != 0 && x + 1 == width;
+            let mut mixed = 0;
+            for shift in (0..32).step_by(8) {
+                let l = (left >> shift) & 255;
+                let r = (right >> shift) & 255;
+                let value = if tail {
+                    (l + r) >> 1
+                } else if sse != 0 {
+                    (l + r + 1) >> 1
+                } else {
+                    (l >> 1) + (r >> 1)
+                };
+                mixed |= value << shift;
+            }
+            *a.add(x) = mixed;
+            x += 1;
+        }
+    }
+}
+
 #[inline]
 fn rule_weights(a: u16, b: u16) -> v128 {
     u16x8(a, a, a, a, b, b, b, b)

@@ -11,10 +11,12 @@ import {
   type InactiveLoop,
   applyCopyLoop,
   applyInitializer,
+  applyRowShift,
   copyLoop,
   scanGuardLoop,
   scanInactiveLoop,
   scanInitializer,
+  scanRowShift,
   skipGuardLoop,
   skipInactiveLoop,
 } from './copy-loop.js';
@@ -230,6 +232,7 @@ export class YurisMachine {
   readonly menus: YurisMenus;
   private readonly handlers: (YurisCommandHandler | undefined)[] = [];
   private readonly letHandler = () => this.let();
+  private readonly loopHandler = () => this.loop();
   private readonly loopEndHandler = () => this.loopEnd();
   private readonly ifHandler = () => this.if();
   private readonly ifEndHandler = () => this.ifEnd();
@@ -241,6 +244,7 @@ export class YurisMachine {
     ReturnType<typeof scanInitializer>
   >();
   private readonly copyLoops = new WeakMap<YurisInstruction, ReturnType<typeof copyLoop>>();
+  private readonly rowShifts = new WeakMap<YurisInstruction, ReturnType<typeof scanRowShift>>();
   private readonly guardLoops = new WeakMap<YurisInstruction, GuardLoop | null>();
   private readonly inactiveLoops = new WeakMap<YurisInstruction, InactiveLoop | null>();
   private readonly activeScans = new WeakMap<
@@ -712,7 +716,7 @@ export class YurisMachine {
     this.define(Command.IfEnd, this.ifEndHandler);
     this.define(Command.IfBreak, () => this.ifBreak(false));
     this.define(Command.IfContinue, () => this.ifBreak(true));
-    this.define(Command.Loop, () => this.loop());
+    this.define(Command.Loop, this.loopHandler);
     this.define(Command.LoopEnd, this.loopEndHandler);
     this.define(Command.LoopBreak, () => this.loopBreak(true));
     this.define(Command.LoopContinue, () => this.loopBreak(false));
@@ -838,6 +842,20 @@ export class YurisMachine {
       if (copy && applyCopyLoop(copy, this.variables, Number(entry.limit))) {
         entry.counter = entry.limit;
         return;
+      }
+      if (
+        this.task.loopDepth + 1 < NESTING_LIMIT &&
+        this.handlers[Command.Loop] === this.loopHandler
+      ) {
+        let shift = this.rowShifts.get(instruction);
+        if (shift === undefined) {
+          shift = scanRowShift(instructions, entry.start, entry.end);
+          this.rowShifts.set(instruction, shift);
+        }
+        if (shift && applyRowShift(shift, this.variables, Number(entry.limit))) {
+          entry.counter = entry.limit;
+          return;
+        }
       }
       if (
         this.task.gosubDepth < 0x3f &&

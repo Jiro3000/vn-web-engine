@@ -231,6 +231,7 @@ export class YurisIntegerWindow {
         masked: d.masked === 1,
       };
       if (pending) {
+        if (!renderer.acceptsSize(d.width, d.height)) return null;
         if (pixels.length !== pending.width * pending.height * 4) return null;
         layer.scale = {
           columns: this.columns(pending),
@@ -274,7 +275,7 @@ export class YurisIntegerWindow {
     const blank = rasterTextBitmap(bitmap).storage!.bytes;
     const display = dom ? blank : pixels;
     renderer.render(draws, damage);
-    renderer.show(context);
+    renderer.show(context, damage);
     this.drawn++;
     cg.deferWindowReadback(() => {
       this.readbacks++;

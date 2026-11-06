@@ -51,8 +51,17 @@ async function load(selected: CachedInstallation): Promise<void> {
   installation?.store.close();
   installation = null;
   const sources = new Map<string, ByteSource>();
-  for (const file of selected.files)
-    sources.set(file.path.replaceAll('\\', '/').replace(/^\/+/, '').toLowerCase(), file.source);
+  for (const file of selected.files) {
+    const path = file.path.replaceAll('\\', '/').replace(/^\/+/, '').toLowerCase();
+    const source = file.source;
+    // The VM jumps between short voices and dispersed image entries in large YPFs.
+    sources.set(
+      path,
+      path.endsWith('.ypf') && source instanceof BlobSource
+        ? new BlobSource(source.blob, 256 * 1024)
+        : source,
+    );
+  }
   const archives = [];
   for (const [path, source] of [...sources]
     .filter(([p]) => /^pac\/[^/]+\.ypf$/.test(p))

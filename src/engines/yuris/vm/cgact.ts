@@ -12,6 +12,7 @@ import type {YurisMachine} from './machine.js';
 import {sizeBicubic, sizeBilinear, sizeLanczos, sizeNearest, sizeSupersampled} from './resize.js';
 import {drawCgText} from './glyph.js';
 import {rotateCg} from './rotation.js';
+import {transitionBgra} from '../../../graphics/bgra-effects-wasm.js';
 
 /** CGACT argument ids (`ysc.ybn`). */
 const enum Act {
@@ -398,6 +399,18 @@ function transition(
   const width = Math.min(a.width - sx, d.width - dx),
     height = Math.min(a.height - sy, d.height - dy);
   const weight = Math.min(set, 255) + 1;
+  if (
+    transitionBgra(
+      {bytes: firstPixels, offset: (sy * a.width + sx) * 4, stride: a.width * 4},
+      {bytes: secondPixels, offset: (sy * b.width + sx) * 4, stride: b.width * 4},
+      {bytes: outputPixels, offset: (dy * d.width + dx) * 4, stride: d.width * 4},
+      width,
+      height,
+      weight,
+      simd,
+    )
+  )
+    return 0;
   const pairedBytes = (width >> 1) * 8,
     result = new Uint8Array(8);
   for (let row = 0; row < height; row++) {

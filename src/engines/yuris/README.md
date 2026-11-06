@@ -56,11 +56,15 @@ WINDOW MENUID installs a window menu; TRAY (0x452FB4) retains its label, optiona
 
 The browser can compose the main window with integer WebGL2 textures for supported flat mode-0 layers, rule transitions and SIZE2 scaling. Script pixel access materializes the native BGRA window on demand. Unsupported layer trees and unavailable hardware rendering use the software compositor. Both paths present an opaque BGRX window through Canvas 2D, matching the native GDI copy (0x45ECF4). PNG and WebP loaders retain the native alpha-blitter flag for layer composition.
 
+CGCASH (0x43E0C8, loader 0x417DDC) queues PNG and WebP decodes on shared browser workers. The decoded cache reserves space for upcoming images separately from repeated foreground loads. Each layer receives mutable pixels of its own, and the loader verifies the encoded bytes before reusing a decode. The browser uses byte budgets for eviction rather than the native per-priority cache buckets.
+
 Large software blends and SIZE2 can use WebAssembly SIMD with the native integer rounding. The compositor can evaluate an unchanged source layer's pending SIZE2 transform for only the damaged rectangle. Script pixel reads still resolve the full image. The VM can batch validated in-bounds array initialization and forward shifts and skip empty iterations of array guards. Full instruction tracing uses the interpreter for loops without a range-aware observer.
 
 Game options connects the virtual main window to the shared fullscreen controls. True fullscreen uses browser user activation. Native fullscreen can fall back to a page-filling view until a player clicks Enter fullscreen.
 
 DOM text uses the shared selectable glyph presentation for the standard `es.SJISCODE.DRAW.ONE` atlas library layout. Glyph provenance follows CGACT merges and copies into the display. The Sarasa Gothic SC atlas family carries GBK bytes through the same library. The native BGRA buffers remain available to saves and readbacks, while the DOM view presents a separate textless plane. Browser font shape and the effects of the native atlas passes are approximate. Image-only glyphs and independent CGACT TEXT rasterizers remain in the bitmap. Sound buffers use the shared mutable PCM processor in an AudioWorklet (or the shared ScriptProcessor compatibility host). The browser frame boundary acknowledges buffer commands and reads the actual audio render cursor; synchronous VM cursor reads use that last acknowledgement. This can lag within a frame, unlike the native sound thread. Pitch changes alter sample consumption in the render processor.
+
+Long Ogg sounds open from the worker's Vorbis headers and begin playback once the first required half-buffer is ready. The worker decodes the remaining PCM in order. Each fill waits for the samples it reads, including when a script seeks ahead (0x41CCDC, 0x41DEC0).
 
 Atlas dialogue from `es.TX.OUTPUT.ONE` supplies the configured full-width advance to DOM text. Browser tracking stays fixed as glyphs are revealed, with punctuation shaped by the browser font.
 

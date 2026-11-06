@@ -1,4 +1,5 @@
 import {decodeVorbis} from '../../../audio/vorbis-decoder.js';
+import {openVorbisPcm16, vorbisPcm16, type VorbisPcm16} from '../../../audio/vorbis-pcm16.js';
 import {YurisError} from './errors.js';
 import {YurisFileKind, YurisFileType, type YurisFiles} from './files.js';
 import type {YurisMachine} from './machine.js';
@@ -91,14 +92,6 @@ export interface YurisSoundHost {
   createSoundBuffer(format: YurisSoundFormat): YurisSoundBuffer | null;
 }
 
-/** Decoded Ogg Vorbis: interleaved 16-bit little-endian PCM, as `ov_read` produces it. */
-interface OggPcm {
-  readonly bytes: Uint8Array;
-  readonly frames: number;
-  readonly sampleRate: number;
-  readonly channels: number;
-}
-
 const enum SoundType {
   None = 0,
   Ogg = 1,
@@ -161,7 +154,7 @@ export class YurisSound {
   /** +0x168, +0x1A8: the file. */
   file: Uint8Array | null = null;
   /** The decoded Ogg file; it lives as long as `file`. */
-  ogg: OggPcm | null = null;
+  ogg: VorbisPcm16 | null = null;
   /** +0x16C: the half being prepared (half + 0x1000 bytes); +0x170: what overflowed it. */
   decode: Uint8Array | null = null;
   overflow: Uint8Array | null = null;
@@ -655,13 +648,16 @@ export class YurisSounds {
    */
   private async openOgg(s: YurisSound): Promise<number> {
     if (!s.ogg) {
-      let pcm;
       try {
-        pcm = await decodeVorbis(s.file!);
+        const file = s.file!;
+        if (file.byteLength >= 256 * 1024) s.ogg = await openVorbisPcm16(file).catch(() => null);
+        if (!s.ogg) {
+          const pcm = await decodeVorbis(file);
+          s.ogg = vorbisPcm16(pcm.planes, pcm.frames, pcm.sampleRate);
+        }
       } catch {
         return -0x406;
       }
-      s.ogg = quantize(pcm.planes, pcm.frames, pcm.sampleRate);
     }
     const ogg = s.ogg;
     s.total = round((ogg.frames / ogg.sampleRate) * 1000);
@@ -766,6 +762,7 @@ export class YurisSounds {
   private release(s: YurisSound): void {
     this.releaseBuffer(s);
     s.file = null;
+    s.ogg?.close?.();
     s.ogg = null;
     s.start = s.restart = 0;
   }
@@ -811,7 +808,7 @@ export class YurisSounds {
         s.position = s.decoded;
         s.half = 1;
         s.writeOffset = 0;
-        if (this.fill(s) < 0) return;
+        if ((await this.fill(s)) < 0) return;
         this.silence(node);
         this.applyPan(s, s.pan);
         if (!s.buffer) return;
@@ -944,7 +941,7 @@ export class YurisSounds {
     s.position = s.decoded;
     s.half = 1;
     s.writeOffset = 0;
-    if (this.fill(s) < 0) return;
+    if ((await this.fill(s)) < 0) return;
     this.setVolumeOf(node, s.fadeTo);
     this.applyPan(s, s.pan);
     this.applyPitch(s, s.pitch);
@@ -1010,7 +1007,7 @@ export class YurisSounds {
    * count as the end). At the end the sound pads the half with silence when this was its last
    * play, and otherwise seeks to RESTART and records the wrap for the position update.
    */
-  private fill(s: YurisSound): number {
+  private async fill(s: YurisSound): Promise<number> {
     const decode = s.decode,
       overflow = s.overflow;
     if (!decode || !overflow) return -1;
@@ -1033,6 +1030,12 @@ export class YurisSounds {
         n = i32(endBytes - (written + s.decoded));
         n -= n % s.blockAlign;
       } else n = 0x1000;
+      const ogg = s.ogg;
+      if (ogg?.waitForFrames && s.type === SoundType.Ogg && n >= 0x20) {
+        const end = Math.min(ogg.frames, s.readPosition + Math.floor(n / s.blockAlign));
+        const pending = ogg.waitForFrames(end);
+        if (pending && !(await pending)) return -0x406;
+      }
       const got =
         s.type === SoundType.Ogg && n < 0x20 ? 0 : n <= 0 ? 0 : this.readPcm(s, decode, filled, n);
       filled += got;
@@ -1087,7 +1090,7 @@ export class YurisSounds {
     }
     this.fades(this.tree.root);
     this.positions(this.tree.root);
-    this.refills(this.tree.root);
+    await this.refills(this.tree.root);
   }
 
   /** 0x41D944: volume fades, frozen while paused or muted. */
@@ -1181,7 +1184,7 @@ export class YurisSounds {
   }
 
   /** 0x41DBF4: a half is refilled once the play cursor has moved into the other half. */
-  private refills(group: SoundNode): void {
+  private async refills(group: SoundNode): Promise<void> {
     for (const node of [...group.children]) {
       const s = node.payload;
       if (s && s.state > State.Idle) {
@@ -1197,31 +1200,11 @@ export class YurisSounds {
           if (next !== 0) {
             s.half = next;
             s.writeOffset = next === 1 ? 0 : half;
-            this.fill(s);
+            await this.fill(s);
           }
         }
       }
-      if (node.group) this.refills(node);
+      if (node.group) await this.refills(node);
     }
   }
-}
-
-/** `ov_read` quantisation (vorbisfile, 16-bit little-endian signed): fistp of x·32768, clamped. */
-function quantize(planes: readonly Float32Array[], frames: number, sampleRate: number): OggPcm {
-  const channels = planes.length,
-    out = new Int16Array(frames * channels);
-  for (let c = 0; c < channels; c++) {
-    const plane = planes[c]!;
-    for (let i = 0, o = c; i < frames; i++, o += channels) {
-      const x = Math.fround(plane[i]! * 32768);
-      let v = Math.round(x);
-      if (v - x === 0.5 && (v & 1) !== 0) v -= 1;
-      out[o] = v > 32767 ? 32767 : v < -32768 ? -32768 : v;
-    }
-  }
-  const bytes = new Uint8Array(out.buffer);
-  if (new Uint8Array(new Uint16Array([1]).buffer)[0] !== 1) {
-    for (let i = 0; i < bytes.length; i += 2) [bytes[i], bytes[i + 1]] = [bytes[i + 1]!, bytes[i]!];
-  }
-  return {bytes, frames, sampleRate, channels};
 }

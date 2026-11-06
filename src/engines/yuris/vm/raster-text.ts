@@ -7,6 +7,8 @@ import {
 } from '../../../text/raster-text.js';
 import type {YurisMachine} from './machine.js';
 
+export const YURIS_SC_ATLAS_FAMILY = '"Sarasa Gothic SC", "Noto Sans CJK SC", sans-serif';
+
 const storage = new WeakMap<Uint8Array, RasterTextStorage>();
 const gbk = new TextDecoder('gbk');
 const bytes = (raw: string) => Uint8Array.from(raw, (byte) => byte.charCodeAt(0));
@@ -125,7 +127,7 @@ export function recordAtlasGlyph(
     ...(pitch > 0 ? {pitch} : {}),
     width: raw.length === 1 ? size / 2 : size,
     height: size,
-    family: chinese ? '"Sarasa Gothic SC", "Noto Sans CJK SC", sans-serif' : 'serif',
+    family: chinese ? YURIS_SC_ATLAS_FAMILY : 'serif',
     bold: chinese && atlas.includes('_太'),
     color: int(2867) & 0xffffff,
   });

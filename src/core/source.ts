@@ -24,7 +24,12 @@ interface ReadAheadWindow {
 const windows: ReadAheadWindow[] = [];
 export class BlobSource implements ByteSource {
   readonly size: number;
-  constructor(readonly blob: Blob) {
+  constructor(
+    readonly blob: Blob,
+    private readonly readAheadBytes = READ_AHEAD_BYTES,
+  ) {
+    if (!Number.isSafeInteger(readAheadBytes) || readAheadBytes < 0)
+      throw new RangeError('Read-ahead size must be a nonnegative integer');
     this.size = blob.size;
   }
   async read(offset: number, length: number, signal?: AbortSignal): Promise<Uint8Array> {
@@ -32,8 +37,8 @@ export class BlobSource implements ByteSource {
     signal?.throwIfAborted();
     if (!length) return new Uint8Array();
     if (
-      length >= READ_AHEAD_BYTES ||
-      this.size <= READ_AHEAD_BYTES ||
+      length >= this.readAheadBytes ||
+      this.size <= this.readAheadBytes ||
       typeof File === 'undefined' ||
       !(this.blob instanceof File)
     )
@@ -43,7 +48,7 @@ export class BlobSource implements ByteSource {
     );
     if (window) windows.splice(windows.indexOf(window), 1);
     else {
-      const end = Math.min(this.size, offset + READ_AHEAD_BYTES),
+      const end = Math.min(this.size, offset + this.readAheadBytes),
         created: ReadAheadWindow = {
           blob: this.blob,
           offset,

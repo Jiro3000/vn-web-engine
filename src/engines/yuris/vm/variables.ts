@@ -63,6 +63,15 @@ export class YurisVariables {
   /** 0x46A558: re-types as int64 and fills every element. */
   allocateInt(id: number, value: bigint): void {
     const variable = this.get(id);
+    if (
+      variable.type === YurisType.Int &&
+      variable.dimensions.length === 0 &&
+      variable.ints?.length === 1
+    ) {
+      variable.count = 1;
+      variable.ints[0] = value;
+      return;
+    }
     variable.type = YurisType.Int;
     this.size(variable);
     variable.ints = new BigInt64Array(variable.count).fill(value);
@@ -71,6 +80,15 @@ export class YurisVariables {
   /** 0x46A478: re-types as double and fills every element. */
   allocateFloat(id: number, value: number): void {
     const variable = this.get(id);
+    if (
+      variable.type === YurisType.Float &&
+      variable.dimensions.length === 0 &&
+      variable.floats?.length === 1
+    ) {
+      variable.count = 1;
+      variable.floats[0] = value;
+      return;
+    }
     variable.type = YurisType.Float;
     this.size(variable);
     variable.floats = new Float64Array(variable.count).fill(value);
@@ -79,6 +97,15 @@ export class YurisVariables {
   /** 0x46A2CC: re-types as string and fills every element. */
   allocateString(id: number, value: ByteString): void {
     const variable = this.get(id);
+    if (
+      variable.type === YurisType.String &&
+      variable.dimensions.length === 0 &&
+      variable.strings?.length === 1
+    ) {
+      variable.count = 1;
+      variable.strings[0] = value;
+      return;
+    }
     variable.type = YurisType.String;
     this.size(variable);
     variable.strings = new Array<ByteString>(variable.count).fill(value);

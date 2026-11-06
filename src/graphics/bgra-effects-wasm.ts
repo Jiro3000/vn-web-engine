@@ -20,6 +20,14 @@ interface BgraEffects extends WebAssembly.Exports {
     opacity: number,
     masked: number,
   ) => void;
+  transition_bgra: (
+    first: number,
+    second: number,
+    width: number,
+    height: number,
+    weight: number,
+    sse: number,
+  ) => void;
   rule_blend: (
     source: number,
     destination: number,
@@ -185,6 +193,47 @@ function unpack(
   else
     for (let i = 0; i < source.length; i += rowBytes, start += stride)
       target.set(source.subarray(i, i + rowBytes), start);
+}
+
+interface BgraRegion {
+  bytes: Uint8Array;
+  offset: number;
+  stride: number;
+}
+
+/** Stage disjoint transition inputs, preserving the paired midpoint and odd scalar tail. */
+export function transitionBgra(
+  first: BgraRegion,
+  second: BgraRegion,
+  target: BgraRegion,
+  width: number,
+  height: number,
+  weight: number,
+  sse: boolean,
+): boolean {
+  if (
+    width <= 0 ||
+    height <= 0 ||
+    width * height < MIN_PIXELS ||
+    weight < 1 ||
+    weight > 256 ||
+    target.bytes.buffer === first.bytes.buffer ||
+    target.bytes.buffer === second.bytes.buffer
+  )
+    return false;
+  const row = width * 4;
+  for (const {bytes, offset, stride} of [first, second, target])
+    if (offset < 0 || offset + (height - 1) * stride + row > bytes.length) return false;
+  const length = row * height;
+  const stage = workspace(blendMemory, [length, length]);
+  if (!stage) return false;
+  const [a, b] = stage.offsets as [number, number];
+  const out = new Uint8Array(stage.buffer, a, length);
+  pack(out, first.bytes, first.offset, first.stride, row);
+  pack(new Uint8Array(stage.buffer, b, length), second.bytes, second.offset, second.stride, row);
+  stage.kernel.transition_bgra(a, b, width, height, weight, Number(sse));
+  unpack(target.bytes, out, target.offset, target.stride, row);
+  return true;
 }
 
 /** Accelerate a validated, nonaliased normal layer blend with the native fixed-point weights. */

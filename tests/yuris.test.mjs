@@ -5,17 +5,56 @@ import {YurisCg, YurisLayers} from '../dist/engines/yuris/vm/cg.js';
 import {
   applyCopyLoop,
   applyInitializer,
+  applyRowShift,
   copyLoop,
   scanGuardLoop,
   scanInactiveLoop,
   scanInitializer,
+  scanRowShift,
   skipGuardLoop,
   skipInactiveLoop,
 } from '../dist/engines/yuris/vm/copy-loop.js';
 import {YurisExpression} from '../dist/engines/yuris/vm/expression.js';
 import {sizeBilinear} from '../dist/engines/yuris/vm/resize.js';
-import {bgraDisplayFrame} from '../dist/graphics/bgra-effects-wasm.js';
+import {bgraDisplayFrame, transitionBgra} from '../dist/graphics/bgra-effects-wasm.js';
 import {YurisVariables} from '../dist/engines/yuris/vm/variables.js';
+
+test('YU-RIS SIMD transition retains paired midpoint and odd-tail rounding', () => {
+  const width = 513,
+    height = 128;
+  const stride = (width + 1) * 4;
+  const first = Uint8Array.from({length: stride * height}, (_, i) => (i * 31 + 1) & 255);
+  const second = Uint8Array.from({length: stride * height}, (_, i) => (i * 17 + 1) & 255);
+  const output = new Uint8Array(stride * height);
+  const region = (bytes) => ({bytes, offset: 4, stride});
+  for (const [weight, sse] of [
+    [37, true],
+    [128, false],
+    [128, true],
+    [177, false],
+    [256, true],
+  ]) {
+    assert.equal(
+      transitionBgra(region(first), region(second), region(output), width, height, weight, sse),
+      true,
+    );
+    const expected = new Uint8Array(stride * height);
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width * 4; x++) {
+        const i = y * stride + 4 + x;
+        const a = first[i],
+          b = second[i];
+        expected[i] =
+          weight !== 128 || x >= (width - 1) * 4
+            ? a + (((b - a) * weight) >> 8)
+            : sse
+              ? (a + b + 1) >> 1
+              : (a >> 1) + (b >> 1);
+      }
+    }
+    assert.deepEqual(output, expected);
+  }
+});
 
 test('YU-RIS image cache preserves byte changes and gives each layer its own pixels', async (t) => {
   const {LegacyImageCodec} = await import('../dist/graphics/legacy-image-codec.js');
@@ -93,6 +132,22 @@ test('YU-RIS expression reads retain int64 references and low-dword array valida
     () => expression.int(element(0, ...token('B', 3))),
     (error) => error.code === 0x1a202,
   );
+  const parameter = 0x35;
+  variables.get(parameter).dimensions = [16];
+  variables.allocateInt(parameter, 0n);
+  const system = new YurisExpression(variables, {
+    int(id, index, high) {
+      assert.deepEqual([id, index, high], [parameter, 2, 0]);
+      return value;
+    },
+  });
+  const paramRead = Uint8Array.of(
+    ...token('V', 0x40, parameter, 0),
+    ...token('B', 2),
+    ...token(')', 0),
+  );
+  assert.equal(system.int(paramRead), value);
+  assert.equal(system.lastIndex, 2n);
 });
 
 test('YU-RIS button hit testing reads main window for ONMOUSE2=1', () => {
@@ -306,6 +361,56 @@ test('YU-RIS bulk array loops preserve the final iteration and validate before w
     command: 0x2c,
     args: [{type: 1, tokens}, {size: 0}, {size: end}],
   });
+  const rowElement = (id, sigil, previous) => [
+    token('V', sigil, id & 255, id >>> 8),
+    ref('H', 1003),
+    ...(previous ? [token('B', 1), token('-')] : []),
+    token(','),
+    ref('H', 48),
+    token('B', 1),
+    token('-'),
+    token(')', 0),
+  ];
+  const rowAssignment = (id, sigil, type) => ({
+    command: 0x35,
+    args: [
+      {op: 0, type, tokens: rowElement(id, sigil, false)},
+      {op: 0, type, tokens: rowElement(id, sigil, true)},
+    ],
+  });
+  const rowShift = scanRowShift(
+    [
+      letScalar(1003, [token('B', 4), ref('H', 48), token('B', 1), token('-'), token('-')]),
+      {command: 0x37, args: [{type: 1, tokens: [token('B', 2)]}, {size: 4}]},
+      rowAssignment(1001, 0x40, 1),
+      rowAssignment(1002, 0x24, 3),
+      {command: 0x3a},
+      {command: 0x3a},
+    ],
+    0,
+    5,
+  );
+  assert.ok(rowShift);
+  const rows = new YurisVariables(1003);
+  rows.allocateInt(48, 0n);
+  rows.allocateInt(1003, 0n);
+  rows.get(1001).dimensions = [5, 2];
+  rows.get(1002).dimensions = [5, 2];
+  rows.allocateInt(1001, 0n);
+  rows.allocateString(1002, '');
+  const rowInts = rows.get(1001).ints,
+    rowStrings = rows.get(1002).strings;
+  for (let i = 0; i < 10; i++) {
+    rowInts[i] = BigInt(i);
+    rowStrings[i] = String(i);
+  }
+  rowStrings[4] = 'a\0b';
+  assert.equal(applyRowShift(rowShift, rows, 4), false);
+  assert.equal(rowInts[9], 9n);
+  rowStrings[4] = '4';
+  assert.equal(applyRowShift(rowShift, rows, 4), true);
+  assert.deepEqual([...rowInts], [0n, 1n, 2n, 3n, 2n, 3n, 4n, 5n, 6n, 7n]);
+  assert.deepEqual(rowStrings, ['0', '1', '2', '3', '2', '3', '4', '5', '6', '7']);
   const wrapped = scanGuardLoop(
     [
       letScalar(1004, [ref('H', 1005), ref('H', 48), token('B', 1), token('-'), token('+')]),
@@ -328,6 +433,31 @@ test('YU-RIS bulk array loops preserve the final iteration and validate before w
   more.allocateInt(1005, 8n);
   more.allocateInt(1006, 9n);
   assert.equal(skipGuardLoop(wrapped, more, 1, 9), 5);
+  const reversed = scanGuardLoop(
+    [
+      ifTokens([token('B', 6), ...indexed(1002), token('=')], 2),
+      assignment(1001, [token('B', 255)]),
+      {command: 0x30},
+      {command: 0x3a},
+    ],
+    0,
+    3,
+  );
+  assert.ok(reversed);
+  assert.equal(skipGuardLoop(reversed, variables, 1, 9), 3);
+  const alias = scanGuardLoop(
+    [
+      letScalar(1004, [ref('H', 48), token('B', 1), token('-')]),
+      ifTokens([ref('V', 1002), ref('H', 1004), token(')', 0), token('B', 6), token('=')], 3),
+      assignment(1001, [token('B', 255)]),
+      {command: 0x30},
+      {command: 0x3a},
+    ],
+    0,
+    4,
+  );
+  assert.ok(alias);
+  assert.equal(skipGuardLoop(alias, more, 1, 9), 4);
   const above = scanGuardLoop(
     [
       ifTokens([...indexed(1002), token('B', 6), token('>')], 2),
@@ -340,6 +470,47 @@ test('YU-RIS bulk array loops preserve the final iteration and validate before w
   );
   assert.ok(above);
   assert.equal(skipGuardLoop(above, variables, 1, 9), 6);
+  const indexedGuard = scanGuardLoop(
+    [
+      ifTokens([...indexed(1002), ref('V', 1002), ref('H', 1003), token(')', 0), token('=')], 2),
+      assignment(1001, [token('B', 255)]),
+      {command: 0x30},
+      {command: 0x3a},
+    ],
+    0,
+    3,
+  );
+  assert.ok(indexedGuard);
+  variables.allocateInt(1003, 4n);
+  assert.equal(skipGuardLoop(indexedGuard, variables, 1, 9), 3);
+  variables.allocateInt(1003, 9n);
+  assert.equal(skipGuardLoop(indexedGuard, variables, 1, 9), 8);
+  variables.allocateInt(1003, 10n);
+  assert.equal(skipGuardLoop(indexedGuard, variables, 1, 9), 1);
+  variables.allocateInt(1003, 2n);
+  const membership = scanGuardLoop(
+    [
+      ifTokens(
+        [
+          ...indexed(1002),
+          token('B', 8),
+          token('='),
+          ...indexed(1002),
+          token('B', 5),
+          token('='),
+          token('|'),
+        ],
+        2,
+      ),
+      assignment(1001, [token('B', 255)]),
+      {command: 0x30},
+      {command: 0x3a},
+    ],
+    0,
+    3,
+  );
+  assert.ok(membership);
+  assert.equal(skipGuardLoop(membership, variables, 1, 9), 2);
   const mapped = [ref('V', 1002), ref('H', 1004), token(')', 0)];
   const inactive = scanInactiveLoop(
     [

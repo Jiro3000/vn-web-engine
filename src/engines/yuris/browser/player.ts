@@ -3,11 +3,12 @@ import {
   type BrowserTextMode,
 } from '../../../text/browser-raster-text-presentation.js';
 import {rasterTextBitmap, visibleRasterText} from '../../../text/raster-text.js';
-import {yurisRasterBitmap} from '../vm/raster-text.js';
+import {YURIS_SC_ATLAS_FAMILY, yurisRasterBitmap} from '../vm/raster-text.js';
+import {domTextFamily, getDomTextStyle} from '../../../text/dom-text-style.js';
 import {YurisMachine, type YurisMachineHost} from '../vm/machine.js';
 import type {YurisProject} from '../../../formats/yuris/ybn.js';
 import type {YpfFileSystem} from '../../../formats/yuris/ypf.js';
-import {YurisFileType} from '../vm/files.js';
+import {YurisFileKind, YurisFileType} from '../vm/files.js';
 import {decodeCp932, encodeCp932} from '../../../text/cp932.js';
 import {BrowserMonochromeFont} from '../../../text/browser-monochrome-font.js';
 import {BrowserLoopingSoundDevice} from '../../../audio/browser-looping-sound.js';
@@ -32,6 +33,15 @@ const bytes = (s: string): Uint8Array => Uint8Array.from(s, (c) => c.charCodeAt(
 const decode = (s: string): string => decodeCp932(bytes(s));
 const encode = (s: string): string =>
   Array.from(encodeCp932(s), (c) => String.fromCharCode(c)).join('');
+
+const imageMime: Readonly<Partial<Record<YurisFileType, string>>> = {
+  [YurisFileType.Png]: 'image/png',
+  [YurisFileType.Webp]: 'image/webp',
+  [YurisFileType.Bmp]: 'image/bmp',
+  [YurisFileType.Jpg]: 'image/jpeg',
+  [YurisFileType.Gif]: 'image/gif',
+};
+const PRELOADED_ARCHIVE_BYTES = 32 * 1024 * 1024;
 
 /** StretchDIBits with SRCCOPY (0x45ECF4) treats the composed window as BGRX. */
 function updateBgrx(
@@ -91,7 +101,12 @@ export class YurisBrowserPlayer {
   readonly menus: BrowserWindowsMenus;
   private readonly textPresentation = new BrowserRasterTextPresentation();
   private textModeChanged = false;
+  private domFontsReady = false;
   private readonly codecs = new LegacyImageCodec();
+  private readonly preloadQueue = new Map<string, string>();
+  private readonly preloading = new Set<string>();
+  private readonly preloadedArchiveFiles = new Map<string, Uint8Array>();
+  private preloadedArchiveBytes = 0;
   private readonly fonts = new BrowserMonochromeFont((s, face) =>
     face === 'SimHei' ? new TextDecoder('gbk').decode(bytes(s)) : decode(s),
   );
@@ -181,23 +196,10 @@ export class YurisBrowserPlayer {
           }),
       },
       exists: (path) => folder.existsFile(path) || !!files.find(path),
-      read: async (path) => (await folder.readFile(path)) ?? files.read(path),
+      read: (path) => this.readAsset(path),
       archiveNames: () => files.archives.map((a) => a.archive.entries.map((e) => e.key)),
       decodeImage: (data, type, path) =>
-        codec.decodeCached(
-          data,
-          (
-            {
-              [YurisFileType.Png]: 'image/png',
-              [YurisFileType.Webp]: 'image/webp',
-              [YurisFileType.Bmp]: 'image/bmp',
-              [YurisFileType.Jpg]: 'image/jpeg',
-              [YurisFileType.Gif]: 'image/gif',
-            } as Record<number, string>
-          )[type] ?? 'application/octet-stream',
-          true,
-          path,
-        ),
+        codec.decodeCached(data, imageMime[type] ?? 'application/octet-stream', true, path),
       encodeImage: codec.encode.bind(codec),
       now: () => performance.now(),
       sleep: (ms) => process.sleep(ms),
@@ -287,7 +289,7 @@ export class YurisBrowserPlayer {
         );
       },
       findExecutable: () => '',
-      preload: () => {},
+      preload: (name) => this.preloadImage(name),
       inputDialog: async (text, limit) => {
         const value = window.prompt(decode(text), decode(text));
         return value === null ? null : encode(value.slice(0, limit));
@@ -418,6 +420,57 @@ export class YurisBrowserPlayer {
     this.running = true;
     void this.loop();
   }
+  private async readAsset(path: string, preload = false): Promise<Uint8Array> {
+    // Loose files and their save overlay retain precedence over the mounted archive.
+    const loose = await this.folder.readFile(path);
+    if (loose) return loose;
+    const cached = this.preloadedArchiveFiles.get(path);
+    if (cached) {
+      if (!preload) {
+        this.preloadedArchiveFiles.delete(path);
+        this.preloadedArchiveBytes -= cached.length;
+      }
+      return cached;
+    }
+    const bytes = await this.files.read(path);
+    if (preload && bytes.length <= PRELOADED_ARCHIVE_BYTES && !this.abort.signal.aborted) {
+      for (const [old, contents] of this.preloadedArchiveFiles) {
+        if (this.preloadedArchiveBytes + bytes.length <= PRELOADED_ARCHIVE_BYTES) break;
+        this.preloadedArchiveFiles.delete(old);
+        this.preloadedArchiveBytes -= contents.length;
+      }
+      this.preloadedArchiveFiles.set(path, bytes.slice());
+      this.preloadedArchiveBytes += bytes.length;
+    }
+    return bytes;
+  }
+  /** 0x417DDC/0x417EFD: the CGCASH queue resolves and decodes images away from the VM. */
+  private preloadImage(name: string): void {
+    if (typeof Worker === 'undefined' || this.preloadQueue.size >= 1024) return;
+    const file = this.machine.files.resolve(name, YurisFileKind.Image);
+    if (!file.found || (file.type !== YurisFileType.Png && file.type !== YurisFileType.Webp))
+      return;
+    if (!this.preloading.has(file.path)) this.preloadQueue.set(file.path, imageMime[file.type]!);
+    this.drainPreloadQueue();
+  }
+  private drainPreloadQueue(): void {
+    while (this.preloading.size < 2 && !this.abort.signal.aborted) {
+      const next = this.preloadQueue.entries().next();
+      if (next.done) return;
+      const [path, mime] = next.value;
+      this.preloadQueue.delete(path);
+      this.preloading.add(path);
+      void this.readAsset(path, true)
+        .then((data) => this.codecs.preload(data, mime, path))
+        .catch(() => {
+          // The foreground loader retains its original error handling and reads current bytes.
+        })
+        .finally(() => {
+          this.preloading.delete(path);
+          this.drainPreloadQueue();
+        });
+    }
+  }
   private async loop(): Promise<void> {
     try {
       while (this.running && !this.machine.quit) {
@@ -434,6 +487,22 @@ export class YurisBrowserPlayer {
   }
   setTextMode(mode: BrowserTextMode): void {
     if (mode === this.textPresentation.textMode) return;
+    if (mode === 'dom' && !this.domFontsReady) {
+      this.domFontsReady = true;
+      // Resolve system fallback faces when enabling DOM text, before the first dialogue.
+      const measure = this.root.ownerDocument.createElement('canvas').getContext('2d');
+      if (measure) {
+        const style = getDomTextStyle();
+        measure.fontKerning = 'none';
+        for (const face of [YURIS_SC_ATLAS_FAMILY, 'serif']) {
+          const family = style.enabled ? domTextFamily(style, face) : face;
+          for (const weight of ['normal', 'bold']) {
+            measure.font = `${weight} 32px ${family}`;
+            measure.measureText('国日本語，。！“”');
+          }
+        }
+      }
+    }
     this.textPresentation.setTextMode(mode);
     this.textModeChanged = true;
   }
@@ -580,6 +649,9 @@ export class YurisBrowserPlayer {
   async dispose(): Promise<void> {
     this.running = false;
     this.abort.abort();
+    this.preloadQueue.clear();
+    this.preloadedArchiveFiles.clear();
+    this.preloadedArchiveBytes = 0;
     this.menus.dispose();
     this.textPresentation.dispose();
     this.integerWindow.dispose();

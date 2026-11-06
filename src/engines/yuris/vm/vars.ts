@@ -10,20 +10,38 @@ import {
   parseHex,
   strtod,
 } from './numbers.js';
-import {
-  asciiLower,
-  asciiUpper,
-  charCount,
-  charLength,
-  mbsCase,
-  toFullWidth,
-  toHalfWidth,
-} from './sjis.js';
+import {asciiLower, asciiUpper, charLength, mbsCase, toFullWidth, toHalfWidth} from './sjis.js';
 import {YurisType} from './variables.js';
 
 /** VARACT and VARINFO command ids. */
 const VARACT = 0x66,
   VARINFO = 0x67;
+
+interface CharacterOffsets {
+  text: ByteString;
+  offsets: Uint32Array;
+  count: number;
+}
+
+// VARINFO LENGTH and VARACT COPY often inspect the same immutable string repeatedly.
+const lastCharacterOffsets = new WeakMap<YurisMachine, CharacterOffsets>();
+
+function characterOffsets(machine: YurisMachine, text: ByteString): CharacterOffsets {
+  let cached = lastCharacterOffsets.get(machine);
+  if (cached?.text === text) return cached;
+  const offsets =
+    cached && cached.offsets.length > text.length
+      ? cached.offsets
+      : new Uint32Array(text.length + 1);
+  let count = 0;
+  for (let i = 0; i < text.length;) {
+    i += charLength(text.charCodeAt(i));
+    offsets[++count] = i;
+  }
+  cached = {text, offsets, count};
+  lastCharacterOffsets.set(machine, cached);
+  return cached;
+}
 
 /** VARINFO argument ids (`ysc.ybn`). */
 const enum Info {
@@ -103,7 +121,10 @@ function varInfo(machine: YurisMachine): number {
     if (a.has(id)) return (store(BigInt(variable.dimensions[id - Info.DimSize] ?? 0)), 0);
   if (a.has(Info.Length)) {
     if (variable.type !== YurisType.String) throw new YurisError(0x1a6bc);
-    return (store(BigInt(charCount(machine.getString(set.id, set.index)))), 0);
+    return (
+      store(BigInt(characterOffsets(machine, machine.getString(set.id, set.index)).count)),
+      0
+    );
   }
   if (a.has(Info.Search)) store(search(machine, set.id));
   if (a.has(Info.StrFirst) && variable.type === YurisType.String) {
@@ -175,15 +196,24 @@ function charRange(
   position: number,
   range: number,
 ): [number, number] {
-  const pos = machine.args.int(Act.Pos),
-    length = machine.args.int(Act.Length);
+  // Each loop either advances through this bounded string or raises at its end.
+  const pos = Number(machine.args.int(Act.Pos)),
+    length = Number(machine.args.int(Act.Length));
+  const cached = lastCharacterOffsets.get(machine);
+  if (cached?.text === text) {
+    const first = Math.max(0, pos - 1);
+    if (first > 0 && first >= cached.count) throw new YurisError(position);
+    const last = first + Math.max(0, length);
+    if (last > cached.count) throw new YurisError(range);
+    return [cached.offsets[first]!, cached.offsets[last]!];
+  }
   let start = 0;
-  for (let k = 1n; k < pos; k++) {
+  for (let k = 1; k < pos; k++) {
     start += charLength(text.charCodeAt(start));
     if (start >= text.length) throw new YurisError(position);
   }
   let end = start;
-  for (let k = 0n; k < length; k++) {
+  for (let k = 0; k < length; k++) {
     if (end >= text.length) throw new YurisError(range);
     end += charLength(text.charCodeAt(end));
   }

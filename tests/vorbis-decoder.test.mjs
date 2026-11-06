@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {test} from 'node:test';
 import {decodeVorbis} from '../dist/audio/vorbis-decoder.js';
+import {decodeVorbisChunks} from '../dist/audio/vorbis-codec.js';
+import {openVorbisPcm16, vorbisPcm16} from '../dist/audio/vorbis-pcm16.js';
 import {createBurikoWaveStatic} from '../dist/engines/buriko/native/audio/wave-static.js';
 import {
   BurikoSpeakerContext,
@@ -9,6 +11,47 @@ import {
 } from '../dist/engines/buriko/native/audio/speaker.js';
 import {BurikoSpeakerModel} from '../dist/engines/buriko/native/audio/speaker-model.js';
 import {BurikoMemorySpeakerBackend} from '../dist/engines/buriko/native/audio/speaker-backend.js';
+
+test('streamed signed PCM waits for the requested prefix and trims the EOS overlap', async () => {
+  const encoded = new Uint8Array(
+    await readFile(new URL('./fixtures/audio/vorbis-boundaries.ogg', import.meta.url)),
+  );
+  const decoded = await decodeVorbis(encoded);
+  const expected = vorbisPcm16(decoded.planes, decoded.frames, decoded.sampleRate);
+  const original = globalThis.Worker;
+  let worker;
+  let done;
+  const messages = [];
+  globalThis.Worker = class {
+    constructor() {
+      worker = this;
+    }
+    postMessage({bytes}) {
+      done = decodeVorbisChunks(bytes, 1024, 1024, {
+        onOpen: (open) => this.onmessage({data: {kind: 'open', open}}),
+        onChunk: (planes, frames) => messages.push({kind: 'chunk', planes, frames}),
+      });
+    }
+    terminate() {}
+  };
+  let pcm;
+  try {
+    pcm = await openVorbisPcm16(encoded);
+    assert.equal(pcm.frames, expected.frames);
+    assert.equal(pcm.channels, expected.channels);
+    assert.equal(pcm.sampleRate, expected.sampleRate);
+    const pending = pcm.waitForFrames(pcm.frames);
+    assert.ok(pending instanceof Promise);
+    await done;
+    for (const data of messages) worker.onmessage({data});
+    assert.equal(await pending, true);
+    assert.equal(pcm.waitForFrames(pcm.frames), undefined);
+    assert.deepEqual(pcm.bytes, expected.bytes);
+  } finally {
+    pcm?.close();
+    globalThis.Worker = original;
+  }
+});
 
 test('Vorbis first-page synchronization is opt-in, bounded and skips bad-CRC candidates without changing PCM', async () => {
   const {decodeVorbisFile, VorbisDecodeError} = await import('../dist/audio/vorbis-codec.js');

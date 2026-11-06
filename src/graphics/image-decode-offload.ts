@@ -3,7 +3,8 @@ import {WorkerPool} from '../platform/worker-pool.js';
 import {beginRuntimeSpan} from '../platform/runtime-performance.js';
 
 /** Named formats use pure byte decoders; MIME types use the browser-owned codec. */
-export type ImageDecodeFormat = 'png' | 'artemis-psd' | 'opaque-jpeg' | 'image/webp' | 'image/jpeg';
+export type ImageDecodeFormat =
+  'png' | 'artemis-psd' | 'opaque-jpeg' | 'legacy-webp' | 'image/webp' | 'image/jpeg';
 
 export interface ImageDecodeRequest {
   readonly format: ImageDecodeFormat;
