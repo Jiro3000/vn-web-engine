@@ -295,17 +295,43 @@ export async function decodePng(
         ((alpha?.[i] ?? 255) << 24);
     }
     const words = new Uint32Array(pixels.buffer);
+    const indexedWords = width % 4 === 0 ? new Uint32Array(indices.buffer) : undefined;
+    const input = new DataView(raw.buffer, raw.byteOffset, raw.byteLength);
+    const rowWords = width / 4;
     let previous = new Uint8Array(width);
     for (let y = 0; y < height; y++) {
       const filter = raw[cursor++]!;
       if (filter > 4) throw new Error(`Invalid PNG filter ${filter}`);
       const start = y * width;
       const row = indices.subarray(start, start + width);
-      unfilter(filter, raw, cursor, row, previous, 1);
-      for (let x = 0; x < width; x++) {
-        const color = colors[row[x]!];
-        if (color === undefined) throw new Error('PNG palette index out of range');
-        words[start + x] = color;
+      if (indexedWords && filter === 1) {
+        let left = 0;
+        const dst = y * rowWords;
+        for (let x = 0; x < rowWords; x++) {
+          const value = input.getUint32(cursor + x * 4, true);
+          // Four inclusive byte sums, then the last decoded byte of the previous word.
+          const adjacent = add8(value, value << 8);
+          const current = add8(add8(adjacent, adjacent << 16), left * 0x01010101);
+          indexedWords[dst + x] = current;
+          left = current >>> 24;
+        }
+      } else if (indexedWords && filter === 2 && y > 0) {
+        const dst = y * rowWords,
+          up = dst - rowWords;
+        for (let x = 0; x < rowWords; x++)
+          indexedWords[dst + x] = add8(
+            input.getUint32(cursor + x * 4, true),
+            indexedWords[up + x]!,
+          );
+      } else unfilter(filter, raw, cursor, row, previous, 1);
+      if (colors.length === 256) {
+        for (let x = 0; x < width; x++) words[start + x] = colors[row[x]!]!;
+      } else {
+        for (let x = 0; x < width; x++) {
+          const color = colors[row[x]!];
+          if (color === undefined) throw new Error('PNG palette index out of range');
+          words[start + x] = color;
+        }
       }
       previous = row;
       cursor += width;

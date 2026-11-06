@@ -10,7 +10,7 @@ const IFEND = 0x30;
 const ELSE = 0x0b;
 const IFBLEND = 0x2d;
 
-type Assignment = {target: number; first: number} & ({value: bigint} | {offset: number});
+type Assignment = {target: number; first: number} & ({value: bigint | string} | {offset: number});
 
 function variable(token: YurisToken | undefined, operator: number, sigil = 0x40): number {
   if (token?.op !== operator || token.payload[0] !== sigil) return -1;
@@ -32,6 +32,10 @@ function integer(token: YurisToken): bigint | undefined {
   }
 }
 
+function emptyString(token: YurisToken): boolean {
+  return token.op === 0x4d && token.payload.length === 2 && token.payload[0] === token.payload[1];
+}
+
 /** Recognize a pure LOOP (0x445DC4) consisting of constant fills or forward array shifts. */
 export function copyLoop(
   instructions: readonly YurisInstruction[],
@@ -45,23 +49,29 @@ export function copyLoop(
     const instruction = instructions[i]!;
     if (instruction.command !== LET || instruction.args.length !== 2) return null;
     const [left, right] = instruction.args;
-    if (left!.op !== 0 || left!.type !== 1 || right!.type !== 1) return null;
+    const strings = left!.type === 3;
+    if (left!.op !== 0 || (!strings && left!.type !== 1) || right!.type !== left!.type) return null;
     const a = left!.tokens,
       b = right!.tokens;
     if (!a || !b) return null;
     const leftRead = counterRead(a, 0, COUNTER);
-    if (!leftRead || leftRead.next !== a.length || leftRead.read.type !== YurisType.Int)
+    if (
+      !leftRead ||
+      leftRead.next !== a.length ||
+      leftRead.read.type !== (strings ? YurisType.String : YurisType.Int)
+    )
       return null;
     const {id: target, offset: base} = leftRead.read;
     const first = 1 + base;
     if (first < 0 || targets.has(target)) return null;
     targets.add(target);
     if (b.length === 1) {
-      const value = integer(b[0]!);
+      const value = strings ? (emptyString(b[0]!) ? '' : undefined) : integer(b[0]!);
       if (value === undefined) return null;
       assignments.push({target, first, value});
     } else {
       if (
+        strings ||
         first !== 1 ||
         b.length !== 5 ||
         variable(b[0], 0x56) !== target ||
@@ -86,28 +96,31 @@ export function applyCopyLoop(
 ): boolean {
   if (variables.entries[COUNTER]?.type !== YurisType.Int) return false;
   const operations: {
-    values: BigInt64Array;
+    values: BigInt64Array | string[];
     first: number;
     end: number;
-    value: bigint;
+    value: bigint | string;
     offset: number | null;
   }[] = [];
-  const buffers = new Set<ArrayBufferLike>();
+  const buffers = new Set<object>();
   for (const assignment of assignments) {
     const variable = variables.entries[assignment.target];
-    const values = variable?.ints;
+    const strings = 'value' in assignment && typeof assignment.value === 'string';
+    const values = strings ? variable?.strings : variable?.ints;
+    const storage = values instanceof BigInt64Array ? values.buffer : values;
     const end = assignment.first + limit - 1;
     if (
-      variable?.type !== YurisType.Int ||
+      variable?.type !== (strings ? YurisType.String : YurisType.Int) ||
       variable.dimensions.length !== 1 ||
       !values ||
       end >= variable.dimensions[0]! ||
       end >= variable.count ||
       end >= values.length ||
-      buffers.has(values.buffer)
+      !storage ||
+      buffers.has(storage)
     )
       return false;
-    buffers.add(values.buffer);
+    buffers.add(storage);
     if ('value' in assignment)
       operations.push({
         values,
@@ -131,8 +144,10 @@ export function applyCopyLoop(
     }
   }
   for (const {values, first, end, value, offset} of operations) {
-    if (offset === null) values.fill(value, first, end);
-    else values.copyWithin(first, first + offset, end + offset);
+    if (offset === null) {
+      if (typeof value === 'string') (values as string[]).fill(value, first, end);
+      else (values as BigInt64Array).fill(value, first, end);
+    } else values.copyWithin(first, first + offset, end + offset);
   }
   return true;
 }
@@ -158,6 +173,7 @@ export interface GuardLoop {
   readonly order?: {index: number; base: number; length: number};
   readonly cursor?: number;
   readonly branchDepth?: number;
+  readonly nested?: GuardLoop;
 }
 
 function guardVariable(token: YurisToken | undefined, operator: number): VariableRead | null {
@@ -250,6 +266,16 @@ export function scanGuardLoop(
   start: number,
   end: number,
 ): GuardLoop | null {
+  if (instructions[end]?.command !== LOOPEND) return null;
+  return scanGuardBranch(instructions, start, end, 3);
+}
+
+function scanGuardBranch(
+  instructions: readonly YurisInstruction[],
+  start: number,
+  end: number,
+  remaining: number,
+): GuardLoop | null {
   const order = wrappedOrder(instructions, start);
   const alias = order ? null : counterAlias(instructions[start]);
   const branch = instructions[start + (order ? 4 : alias ? 1 : 0)];
@@ -257,8 +283,7 @@ export function scanGuardLoop(
     branch?.command !== IF ||
     branch.args.length !== 3 ||
     branch.args[2]!.size !== end - 1 ||
-    instructions[end - 1]?.command !== IFEND ||
-    instructions[end]?.command !== LOOPEND
+    instructions[end - 1]?.command !== IFEND
   )
     return null;
   if (branch.args[1]!.size !== 0)
@@ -371,6 +396,13 @@ export function scanGuardLoop(
   }
   if (p < tokens.length && (stack.length !== 1 || stack[0] !== YurisType.Int)) return null;
   if (scalars.some((scalar) => scalar.id === index)) return null;
+  // Every path through the outer body goes through the inner IF when its
+  // IFEND directly precedes the outer IFEND.
+  const nested =
+    !order && !alias && remaining && instructions[start + 1]?.command === IF
+      ? scanGuardBranch(instructions, start + 1, end - 1, remaining - 1)
+      : null;
+  const consecutive = nested && !nested.order && nested.cursor === undefined ? nested : undefined;
   return {
     primary: first.read,
     value,
@@ -379,6 +411,8 @@ export function scanGuardLoop(
     scalars,
     order: order ?? undefined,
     cursor: alias?.id,
+    nested: consecutive,
+    branchDepth: consecutive ? 1 + (consecutive.branchDepth ?? 1) : undefined,
   };
 }
 
@@ -509,10 +543,30 @@ export function skipGuardLoop(
   last: number,
 ): number {
   if (first >= last || variables.entries[COUNTER]?.type !== YurisType.Int) return first;
+  return scanGuardCandidates(plan, variables, first, last) ?? first;
+}
+
+function scanGuardCandidates(
+  plan: GuardLoop,
+  variables: YurisVariables,
+  first: number,
+  last: number,
+): number | undefined {
+  const outer = scanGuardCandidate(plan, variables, first, last);
+  if (outer === undefined || outer === last || !plan.nested) return outer;
+  return Math.max(outer, scanGuardCandidates(plan.nested, variables, first, last) ?? first);
+}
+
+function scanGuardCandidate(
+  plan: GuardLoop,
+  variables: YurisVariables,
+  first: number,
+  last: number,
+): number | undefined {
   if (plan.cursor !== undefined) {
     const cursor = variables.entries[plan.cursor];
     if (cursor?.type !== YurisType.Int || cursor.dimensions.length !== 0 || !cursor.ints)
-      return first;
+      return undefined;
   }
   let base = 1;
   if (plan.order) {
@@ -530,7 +584,7 @@ export function skipGuardLoop(
       valueOf(plan.order.length) !== BigInt(last) ||
       valueOf(plan.order.index) === undefined
     )
-      return first;
+      return undefined;
     base = Number(start);
   }
   for (const read of plan.arrays) {
@@ -545,9 +599,10 @@ export function skipGuardLoop(
       last + offset >= variable.count ||
       last + offset >= values.length
     )
-      return first;
+      return undefined;
   }
-  for (const read of plan.scalars) if (comparable(variables, read)?.[0] === undefined) return first;
+  for (const read of plan.scalars)
+    if (comparable(variables, read)?.[0] === undefined) return undefined;
   const {offset} = plan.primary;
   const values = comparable(variables, plan.primary)!;
   const operand = plan.value;
@@ -559,13 +614,13 @@ export function skipGuardLoop(
       index?.type === YurisType.Int && index.dimensions.length === 0 ? index.ints?.[0] : undefined;
     const array = variables.entries[operand.id];
     const storage = comparable(variables, operand);
-    if (offset === undefined || array?.dimensions.length !== 1 || !storage) return first;
+    if (offset === undefined || array?.dimensions.length !== 1 || !storage) return undefined;
     const at = offset + BigInt(operand.offset);
     if (at < 0n || at >= BigInt(Math.min(array.count, array.dimensions[0]!, storage.length)))
-      return first;
+      return undefined;
     expected = storage[Number(at)];
   } else expected = comparable(variables, operand)?.[0];
-  if (expected === undefined) return first;
+  if (expected === undefined) return undefined;
   if (plan.operator === 0x3d) {
     const findSingle = (from: number, count: number, key: bigint | string) => {
       if (values instanceof BigInt64Array)
@@ -957,13 +1012,7 @@ export function scanInitializer(
     if (id < SYSTEM_VARIABLE_LIMIT || id === index || targets.has(id)) return null;
     targets.add(id);
     const token = b[0]!;
-    if (
-      left!.type === 3 &&
-      right!.type === 3 &&
-      token.op === 0x4d &&
-      token.payload.length === 2 &&
-      token.payload[0] === token.payload[1]
-    ) {
+    if (left!.type === 3 && right!.type === 3 && emptyString(token)) {
       fills.push({id, type: YurisType.String, value: ''});
     } else if ((left!.type === 1 || left!.type === 2) && right!.type === 1) {
       const value = integer(token);

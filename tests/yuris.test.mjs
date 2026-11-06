@@ -64,16 +64,20 @@ test('YU-RIS image cache preserves byte changes and gives each layer its own pix
     height: 128,
     pixels: new Uint8Array(128 * 128 * 4).fill(data[0]),
   }));
-  const input = Uint8Array.of(31, 8, 13);
+  const input = Uint8Array.of(31, 8, 13, 0, 7);
   const first = await codec.decodeCached(input, 'image/webp', true, 'image.webp');
   first.pixels[0] = 99;
+  await codec.preload(input, 'image/webp', 'image.webp');
   const repeated = await codec.decodeCached(input, 'image/webp', true, 'image.webp');
   assert.equal(repeated.pixels[0], 31);
   assert.equal(decode.mock.callCount(), 1);
+  input[4] = 8;
+  await codec.decodeCached(input, 'image/webp', true, 'image.webp');
+  assert.equal(decode.mock.callCount(), 2);
   input[0] = 42;
   const replacement = await codec.decodeCached(input, 'image/webp', true, 'image.webp');
   assert.equal(replacement.pixels[0], 42);
-  assert.equal(decode.mock.callCount(), 2);
+  assert.equal(decode.mock.callCount(), 3);
 });
 
 test('YU-RIS polls independent sound cursors together and uses acknowledged positions', async (t) => {
@@ -350,6 +354,38 @@ test('YU-RIS bulk array loops preserve the final iteration and validate before w
   assert.equal(skipGuardLoop(guard, variables, 1, 9), 3);
   assert.equal(skipGuardLoop(guard, variables, 4, 9), 4);
   assert.equal(skipGuardLoop(guard, variables, 7, 9), 9);
+  const clearStrings = copyLoop(
+    [
+      {
+        command: 0x35,
+        args: [
+          {
+            op: 0,
+            type: 3,
+            tokens: [
+              token('V', 0x24, 0xe9, 3),
+              ref('H', 48),
+              token('B', 1),
+              token('-'),
+              token(')', 0),
+            ],
+          },
+          {op: 0, type: 3, tokens: [token('M', 34, 34)]},
+        ],
+      },
+      {command: 0x3a},
+    ],
+    0,
+    1,
+  );
+  assert.ok(clearStrings);
+  const strings = new YurisVariables(1001);
+  strings.allocateInt(48, 0n);
+  strings.get(1001).dimensions = [5];
+  strings.allocateString(1001, 'keep');
+  assert.equal(applyCopyLoop(clearStrings, strings, 6), false);
+  assert.equal(applyCopyLoop(clearStrings, strings, 4), true);
+  assert.deepEqual(strings.get(1001).strings, ['', '', '', 'keep', 'keep']);
   const letScalar = (id, source, op = 0) => ({
     command: 0x35,
     args: [
@@ -361,6 +397,20 @@ test('YU-RIS bulk array loops preserve the final iteration and validate before w
     command: 0x2c,
     args: [{type: 1, tokens}, {size: 0}, {size: end}],
   });
+  const nested = scanGuardLoop(
+    [
+      ifTokens([...indexed(1002), token('B', 0), token('>')], 4),
+      ifTokens([...indexed(1002), token('B', 8), token('=')], 3),
+      assignment(1001, [token('B', 255)]),
+      {command: 0x30},
+      {command: 0x30},
+      {command: 0x3a},
+    ],
+    0,
+    5,
+  );
+  assert.equal(nested?.branchDepth, 2);
+  assert.equal(skipGuardLoop(nested, variables, 1, 9), 7);
   const rowElement = (id, sigil, previous) => [
     token('V', sigil, id & 255, id >>> 8),
     ref('H', 1003),
@@ -1445,6 +1495,33 @@ test('CGACT TEXT shares the measured DIB, reproduces mono backgrounds and AA str
   values.delete(66);
   values.delete(11);
   assert.equal(commands.get(2)(), -1);
+  values.delete(64);
+  const before = source.pixels.slice();
+  values.set(1, 1n);
+  values.set(57, 1n);
+  values.set(12, 2n);
+  values.set(13, 1n);
+  values.set(14, 4n);
+  values.set(15, 2n);
+  assert.equal(commands.get(2)(), 0);
+  assert.deepEqual(source.pixels, before);
+  assert.deepEqual([dest.width, dest.height], [3, 2]);
+  for (let y = 0; y < 2; y++) {
+    for (let x = 0; x < 3; x++) {
+      const at = ((y + 1) * 8 + x + 2) * 4;
+      const out = (y * 3 + x) * 4;
+      assert.deepEqual(
+        [...dest.pixels.subarray(out, out + 4)],
+        [255 - before[at], 255 - before[at + 1], 255 - before[at + 2], before[at + 3]],
+      );
+    }
+  }
+  values.clear();
+  values.set(60, 1n);
+  values.set(9, 0x80112233n);
+  assert.equal(commands.get(2)(), 0);
+  assert.deepEqual([...source.pixels], Array(64).fill([0x33, 0x22, 0x11, 0x80]).flat());
+  assert.equal(source.masked, 1);
 });
 
 test('CGACT TEXT retains native gradient rotations, whole-box rejection and right/up/center/down/left stroke order', async () => {
@@ -1762,6 +1839,54 @@ test('YU-RIS menu commands build ordered snapshots, retain query precedence and 
   run(0x40, {0: 'Tools/'});
   run(0x41, {0: 'out', 1: 'Tools/A', 3: 1n});
   assert.equal(result, 0n);
+});
+
+test('YU-RIS numbered opacity updates stay inside the selected layer set and range', () => {
+  const layers = new YurisLayers(
+    {screenWidth: 16, screenHeight: 16, system: {names: ['W0']}},
+    {},
+    {},
+  );
+  const leaf = (path) => {
+    const cg = new YurisCg();
+    cg.allocate(2, 2);
+    layers.tree.create(path, false, 1n, cg);
+    return cg;
+  };
+  const inside = leaf('W0/SPR101');
+  const outside = leaf('W0/SPR103');
+  const other = leaf('SPR101');
+  inside.lint2 = 123n;
+  assert.equal(layers.readLint2('SPR101'), 123n);
+  assert.equal(layers.readLint2('SPR102'), 0n);
+  layers.clearOpacityRange('SPR', 101, 2);
+  assert.deepEqual([inside.a, outside.a, other.a], [0, 256, 256]);
+  assert.equal(layers.redraw, true);
+});
+
+test('YU-RIS node paths preserve navigation, spaces and multibyte separators', async () => {
+  const {YurisTree, resolveNodePath} = await import('../dist/engines/yuris/vm/nodes.js');
+  assert.deepEqual(resolveNodePath('ROOT', 'images/button/'), {
+    path: 'ROOT/images/button',
+    group: true,
+  });
+  assert.deepEqual(resolveNodePath('ROOT', 'images/./button/'), {
+    path: 'ROOT/images/button',
+    group: true,
+  });
+  assert.deepEqual(resolveNodePath('ROOT', 'plain label'), {
+    path: 'ROOT/plain label',
+    group: false,
+  });
+  assert.throws(
+    () => resolveNodePath('ROOT', 'images/plain label'),
+    (e) => e.code === 0x18792,
+  );
+  const tree = new YurisTree();
+  tree.create('ROOT', true, 1n);
+  const path = resolveNodePath('ROOT', '\x81/button').path;
+  const leaf = tree.create(path, false, 1n);
+  assert.equal(tree.lookup(path, 0), leaf);
 });
 
 test('YU-RIS TRAY keeps icon ownership, menu snapshots and missing-layer early returns', async () => {

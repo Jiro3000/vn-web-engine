@@ -50,9 +50,12 @@ import {characterOffsets, installVariableCommands} from './vars.js';
 import {
   scanArrayRanges,
   scanCharacterSearch,
+  scanIntQuery,
   scanLexerRun,
+  scanOpacityLoop,
   scanStringSlice,
   type LexerRun,
+  type IntQuery,
 } from './library-fast-paths.js';
 import {type YurisWindowHost, YurisWindows} from './window.js';
 
@@ -66,6 +69,8 @@ export type YurisCommandHandler = (machine: YurisMachine) => number | Promise<nu
 /** Command ids of the core handlers (`ysc.ybn` order). */
 export const enum Command {
   Alias = 0x00,
+  Cg = 0x01,
+  CgInfo = 0x04,
   DebugList = 0x09,
   Else = 0x0b,
   End = 0x0d,
@@ -257,6 +262,9 @@ export class YurisMachine {
   private readonly strHandler = () => this.declare(YurisType.String);
   private readonly nativeVarInfo: YurisCommandHandler | undefined;
   private readonly nativeVarAct: YurisCommandHandler | undefined;
+  private readonly nativeCg: YurisCommandHandler | undefined;
+  private readonly nativeCgInfo: YurisCommandHandler | undefined;
+  private readonly intQueries = new WeakMap<YurisInstruction, IntQuery | null>();
   private readonly arrayRanges = new WeakMap<
     YurisInstruction,
     ReturnType<typeof scanArrayRanges>
@@ -272,6 +280,10 @@ export class YurisMachine {
   private readonly copyLoops = new WeakMap<YurisInstruction, ReturnType<typeof copyLoop>>();
   private readonly rowShifts = new WeakMap<YurisInstruction, ReturnType<typeof scanRowShift>>();
   private readonly guardLoops = new WeakMap<YurisInstruction, GuardLoop | null>();
+  private readonly opacityLoops = new WeakMap<
+    YurisInstruction,
+    ReturnType<typeof scanOpacityLoop>
+  >();
   private readonly inactiveLoops = new WeakMap<YurisInstruction, InactiveLoop | null>();
   private readonly lexerRuns = new WeakMap<YurisInstruction, LexerScan | null>();
   private readonly characterSearches = new WeakMap<
@@ -318,6 +330,8 @@ export class YurisMachine {
     this.nativeVarAct = this.handlers[0x66];
     this.layers = new YurisLayers(this, this.files, host);
     this.layers.install();
+    this.nativeCg = this.handlers[Command.Cg];
+    this.nativeCgInfo = this.handlers[Command.CgInfo];
     installYmv(this, host);
     installDialog(this, host);
     installFiles(this, host, host);
@@ -555,8 +569,9 @@ export class YurisMachine {
 
   /** 0x4511C1: first use of a script resolves constant labels and initialises its variables. */
   load(index: number): void {
-    if (this.loaded.has(index)) {
-      this.current = this.loaded.get(index)!;
+    const cached = this.loaded.get(index);
+    if (cached) {
+      this.current = cached;
       return;
     }
     const script = this.scripts.get(index);
@@ -618,11 +633,9 @@ export class YurisMachine {
   /** Moves the task to a label's script position, loading the script when it changes. */
   private enter(script: number, position: number): void {
     this.task.position = position;
-    if (this.task.script !== script) {
-      this.task.script = script;
-      this.load(script);
-    }
-    this.current = this.loaded.get(script)!;
+    if (this.task.script === script && this.current.index === script) return;
+    this.task.script = script;
+    this.load(script);
   }
 
   /**
@@ -857,7 +870,14 @@ export class YurisMachine {
       this.batchCharacterSearch(entry)
     ) {
       return 0;
-    } else if (entry.limit === -1n || (entry.limit >= 64n && entry.limit <= 4_000_000n))
+    } else if (
+      entry.limit === -1n ||
+      (entry.limit <= 4_000_000n &&
+        (entry.limit >= 64n ||
+          (entry.limit >= 16n &&
+            entry.end - entry.start <= 4 &&
+            this.current.script.instructions[entry.start]?.command === Command.Let)))
+    )
       this.batchLoop(entry);
     return 0;
   }
@@ -943,6 +963,17 @@ export class YurisMachine {
     const instruction = this.instruction;
     const instructions = this.current.script.instructions;
     if (entry.limit !== -1n) {
+      if (entry.end === entry.start + 1 && instructions[entry.start]?.command === Command.Cg) {
+        let opacity = this.opacityLoops.get(instruction);
+        if (opacity === undefined) {
+          opacity = scanOpacityLoop(instructions, entry.start, this.project.commands);
+          this.opacityLoops.set(instruction, opacity);
+        }
+        if (opacity && this.batchOpacityLoop(opacity, entry)) {
+          entry.counter = entry.limit;
+          return;
+        }
+      }
       let copy = this.copyLoops.get(instruction);
       if (copy === undefined) {
         copy = copyLoop(instructions, entry.start, entry.end);
@@ -952,6 +983,7 @@ export class YurisMachine {
         entry.counter = entry.limit;
         return;
       }
+      if (entry.limit < 64n) return;
       if (
         this.task.loopDepth + 1 < NESTING_LIMIT &&
         this.handlers[Command.Loop] === this.loopHandler
@@ -1032,6 +1064,35 @@ export class YurisMachine {
     }
   }
 
+  private batchOpacityLoop(
+    plan: NonNullable<ReturnType<typeof scanOpacityLoop>>,
+    entry: YurisLoopEntry,
+  ): boolean {
+    const entries = this.variables.entries;
+    const name = entries[plan.prefix],
+      sprite = entries[plan.sprite];
+    const prefix = name?.strings?.[0];
+    const first = Number(sprite?.ints?.[0]) * 100 + 1;
+    const count = Number(entry.limit) - 1;
+    if (
+      count > 4096 ||
+      this.handlers[Command.Cg] !== this.nativeCg ||
+      this.errorFlags[Command.Cg] !== 0 ||
+      name?.type !== YurisType.String ||
+      !name.has(0) ||
+      sprite?.type !== YurisType.Int ||
+      entries[48]?.type !== YurisType.Int ||
+      prefix === undefined ||
+      /[^A-Za-z0-9_]/.test(prefix) ||
+      prefix.length + 18 >= STRING_CAPACITY ||
+      !Number.isSafeInteger(first) ||
+      !Number.isSafeInteger(first + count)
+    )
+      return false;
+    this.layers.clearOpacityRange(prefix, first, count);
+    return true;
+  }
+
   /** LOOPEND 0x4460AC: counts the iteration and repeats until the counter reaches the limit. */
   private loopEnd(): number {
     const task = this.task;
@@ -1046,6 +1107,7 @@ export class YurisMachine {
       return 0;
     }
     entry.counter = i64(entry.counter + 1n);
+    task.position = entry.start;
     const scan = this.activeScans.get(entry);
     if (
       scan?.script === task.script &&
@@ -1060,13 +1122,12 @@ export class YurisMachine {
           entry.counter + BigInt(skipInactiveLoop(scan.inactive, this.variables)),
         );
       else if ('lexer' in scan)
-        entry.counter = i64(entry.counter + BigInt(this.skipLexerRun(scan.lexer, entry.ifDepth)));
+        entry.counter = i64(entry.counter + BigInt(this.advanceLexer(scan.lexer, entry)));
       else if (this.canSkipBranches(scan.guard, entry.ifDepth))
         entry.counter = BigInt(
           skipGuardLoop(scan.guard, this.variables, Number(entry.counter), Number(entry.limit)),
         );
     }
-    task.position = entry.start;
     task.ifDepth = entry.ifDepth;
     return 0;
   }
@@ -1092,7 +1153,7 @@ export class YurisMachine {
     return {run, calleeScript: callee.script, calleePosition: callee.position};
   }
 
-  private skipLexerRun(scan: LexerScan, ifDepth: number): number {
+  private advanceLexer(scan: LexerScan, entry: YurisLoopEntry): number {
     const {run, calleeScript, calleePosition} = scan;
     const variables = this.variables.entries;
     const cursor = variables[run.cursor],
@@ -1101,16 +1162,10 @@ export class YurisMachine {
     if (
       state?.type !== YurisType.Int ||
       state.dimensions.length !== 0 ||
-      !(
-        phase === 22 ||
-        (run.spaces && (phase === 31 || phase === 32)) ||
-        (run.comments && phase === 99) ||
-        (run.word && phase >= 91 && phase <= 96)
-      ) ||
       cursor?.type !== YurisType.Int ||
       cursor.dimensions.length !== 0 ||
       !cursor.ints ||
-      ifDepth + 3 >= NESTING_LIMIT ||
+      entry.ifDepth + 3 >= NESTING_LIMIT ||
       this.task.gosubDepth >= 0x3f ||
       !this.loaded.has(calleeScript) ||
       !this.canBatchLoop(calleeScript, calleePosition, calleePosition + 13) ||
@@ -1162,8 +1217,8 @@ export class YurisMachine {
     const from = Number(cursor.ints[0]) - 1;
     if (from < 0 || from >= offsets.count || count.ints?.[0] !== BigInt(offsets.count)) return 0;
     let to = from;
-    if (phase >= 91 && phase <= 96) {
-      const word = run.word!;
+    if (run.word && phase >= 91 && phase <= 96) {
+      const word = run.word;
       const high = variables[word.high],
         low = variables[word.low];
       const result = variables[word.result];
@@ -1186,7 +1241,11 @@ export class YurisMachine {
         if (hi === undefined || lo === undefined || i64(hi + lo) === 0n) break;
         to++;
       }
-    } else {
+    } else if (
+      phase === 22 ||
+      (run.spaces && (phase === 31 || phase === 32)) ||
+      (run.comments && phase === 99)
+    ) {
       const single = phase === 31 ? 32 : 9;
       while (to < offsets.count) {
         const byte = source.charCodeAt(offsets.offsets[to]!);
@@ -1206,6 +1265,17 @@ export class YurisMachine {
     }
     const skipped = Math.max(0, to - from - 1);
     if (skipped) cursor.ints[0] = BigInt(from + skipped + 1);
+    const at = from + skipped;
+    if (at + 1 < offsets.count) {
+      // The following in-bounds _strmid overwrites the first call's scratch
+      // locals and parameter/result frame. Keep that call in the interpreter.
+      this.setString(
+        run.scratch[0]!,
+        0n,
+        source.slice(offsets.offsets[at], offsets.offsets[at + 1]),
+      );
+      this.task.position = entry.start + 5;
+    }
     return skipped;
   }
 
@@ -1321,8 +1391,69 @@ export class YurisMachine {
     this.enter(label.script, label.position);
     const command = this.current.script.instructions[label.position]?.command;
     if (command === Command.Str) this.foldStringSlice(frame.returnScript, label.position);
-    else if (command === Command.Int) this.foldArrayRanges(frame.returnScript, label.position);
+    else if (command === Command.Int) {
+      const next = this.current.script.instructions[label.position + 1]?.command;
+      if (next === Command.CgInfo || next === 0x67)
+        this.foldIntQuery(frame.returnScript, label.position);
+      else this.foldArrayRanges(frame.returnScript, label.position);
+    }
     return 0;
+  }
+
+  private foldIntQuery(caller: number, entry: number): void {
+    const instructions = this.current.script.instructions;
+    const first = instructions[entry]!;
+    let query = this.intQueries.get(first);
+    if (query === undefined) {
+      query = scanIntQuery(instructions, entry, this.project.commands);
+      this.intQueries.set(first, query);
+    }
+    if (
+      !query ||
+      this.handlers[Command.Int] !== this.intHandler ||
+      !this.canBatchLoop(caller, this.position, this.position) ||
+      !this.canBatchLoop(this.task.script, entry, entry + 2)
+    )
+      return;
+    const entries = this.variables.entries;
+    const strings = entries[55],
+      result = entries[query.result];
+    if (
+      !result ||
+      strings?.type !== YurisType.String ||
+      strings.dimensions.length !== 1 ||
+      strings.dimensions[0]! < 2 ||
+      !strings.has(1)
+    )
+      return;
+    const text = this.system.string(55, 1, 0);
+    let value: bigint;
+    if (query.kind === 'length') {
+      if (this.handlers[0x67] !== this.nativeVarInfo) return;
+      value = BigInt(characterOffsets(this, text).count);
+    } else {
+      const ints = entries[53],
+        separator = entries[query.separator];
+      const join = separator?.strings?.[0];
+      if (
+        this.handlers[Command.CgInfo] !== this.nativeCgInfo ||
+        ints?.type !== YurisType.Int ||
+        ints.dimensions.length !== 1 ||
+        ints.dimensions[0]! < 3 ||
+        separator?.type !== YurisType.String ||
+        join === undefined ||
+        text.includes('\0') ||
+        join.includes('\0') ||
+        text.length + join.length + 30 >= STRING_CAPACITY
+      )
+        return;
+      const id = text + join + 'BT.OFF=' + this.system.int(53, 2, 0) + '=1';
+      if (id.includes(' ')) return;
+      value = this.layers.readLint2(id);
+    }
+    if (result.dimensions.length) result.dimensions = [];
+    this.variables.allocateInt(query.result, value);
+    this.task.position = entry + 2;
   }
 
   private foldStringSlice(caller: number, entry: number): void {
@@ -1367,7 +1498,9 @@ export class YurisMachine {
     const start = this.system.int(53, 2, 0);
     const length = this.system.int(53, 3, 0);
     if (start <= 0n || length <= 0n) return;
-    const count = BigInt(characterOffsets(this, this.system.string(55, 1, 0)).count);
+    const source = this.system.string(55, 1, 0);
+    const chars = characterOffsets(this, source);
+    const count = BigInt(chars.count);
     if (start > count) return;
 
     const {result, start: startId, length: lengthId, count: countId} = slice;
@@ -1379,6 +1512,24 @@ export class YurisMachine {
     this.variables.allocateInt(startId, start);
     this.variables.allocateInt(lengthId, length);
     this.variables.allocateInt(countId, count);
+    if (
+      length === 1n &&
+      this.handlers[0x66] === this.nativeVarAct &&
+      this.handlers[Command.IfEnd] === this.ifEndHandler
+    ) {
+      // For a single in-bounds character the clamp is false. VARACT COPY
+      // (0x45353C) uses these same CP932 offsets and the native string setter.
+      const offset = Number(start) - 1;
+      this.setString(result, 0n, source.slice(chars.offsets[offset], chars.offsets[offset + 1]));
+      for (let i = 0; i < 3; i++) {
+        const closed = task.ifEntry(task.ifDepth + i);
+        closed.position = entry + 5 + i;
+        closed.loopDepth = task.loopDepth;
+        closed.end = 0;
+      }
+      task.position = entry + 13;
+      return;
+    }
     const outer = task.ifEntry(task.ifDepth++);
     outer.position = entry + 5;
     outer.loopDepth = task.loopDepth;

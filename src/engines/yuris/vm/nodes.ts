@@ -77,8 +77,15 @@ export const enum LookupMode {
   Any = 2,
 }
 
+const NON_ASCII = /[^\x00-\x7f]/;
+
 /** Splits at '/', stepping over double-byte characters (lead byte table 0x59B0C0). */
 function components(path: ByteString): {dirs: ByteString[]; last: ByteString} {
+  if (!path.includes('/')) return {dirs: [], last: path};
+  if (!NON_ASCII.test(path)) {
+    const dirs = path.split('/');
+    return {dirs, last: dirs.pop()!};
+  }
   const dirs: ByteString[] = [];
   let start = 0;
   for (let i = 0; i < path.length;) {
@@ -150,9 +157,12 @@ export class YurisTree<T> {
 
 /** The bytes 0x667EE0 marks as path syntax: '.', '/' and ':'. */
 const PATH_SYNTAX = /[./:]/;
+const RELATIVE_COMPONENT = /(?:^|\/)\.\.?\//;
 
 /** Whether `text` contains path syntax outside double-byte characters. */
 function hasSyntax(text: ByteString): boolean {
+  if (!PATH_SYNTAX.test(text)) return false;
+  if (!NON_ASCII.test(text)) return true;
   for (let i = 0; i < text.length;) {
     const c = text.charCodeAt(i);
     if (PATH_SYNTAX.test(text[i]!)) return true;
@@ -184,6 +194,12 @@ export function resolveNodePath(
     source += id.charCodeAt(0) === 0x2f ? id.slice(1) : id;
   }
   if (!source) return {path: '', group: false};
+  if (!NON_ASCII.test(source) && !RELATIVE_COMPONENT.test(source)) {
+    if (!spaces && source.includes(' ')) throw new YurisError(0x18792, [source]);
+    return source.endsWith('/')
+      ? {path: source.slice(0, -1), group: true}
+      : {path: source, group: false};
+  }
   const out: number[] = [];
   let i = 0;
   while (i < source.length) {

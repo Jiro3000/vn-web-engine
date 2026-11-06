@@ -744,6 +744,7 @@ function resizeCanvas(
 
 /** 0x59B770: the background of a RESIZE canvas, BGRA 80 80 80 00. */
 const FILL_COLOUR = 0x00808080;
+const LITTLE_ENDIAN = new Uint8Array(Uint32Array.of(1).buffer)[0] === 1;
 
 /**
  * 0x43A988: copies the source rows and columns of the window (x0, y0)..(x1, y1) that lie
@@ -948,6 +949,26 @@ function invert(
   x1: number,
   y1: number,
 ): void {
+  if (
+    LITTLE_ENDIAN &&
+    ((to.byteOffset | from.byteOffset | to.byteLength | from.byteLength) & 3) === 0 &&
+    x0 >= 0 &&
+    x0 <= x1 &&
+    x1 < fromWidth &&
+    y0 >= 0 &&
+    y0 <= y1 &&
+    (y1 * fromWidth + x1 + 1) * 4 <= from.byteLength &&
+    x1 - x0 + 1 <= toWidth &&
+    ((y1 - y0) * toWidth + x1 - x0 + 1) * 4 <= to.byteLength
+  ) {
+    const source = new Uint32Array(from.buffer, from.byteOffset, from.byteLength / 4);
+    const destination = new Uint32Array(to.buffer, to.byteOffset, to.byteLength / 4);
+    for (let y = y0, row = 0; y <= y1; y++, row += toWidth) {
+      const start = y * fromWidth + x0;
+      for (let x = 0; x <= x1 - x0; x++) destination[row + x] = source[start + x]! ^ 0xffffff;
+    }
+    return;
+  }
   for (let y = y0, row = 0; y <= y1; y++, row += toWidth * 4)
     for (let x = x0; x <= x1; x++) {
       const i = (y * fromWidth + x) * 4,
@@ -998,6 +1019,23 @@ function rectPaint(
   const whole = width === x1 - x0 + 1 && height === y1 - y0 + 1;
   if (mode === 2) s.masked = (colour & 0xff) === 0xff && whole ? 0 : 1;
   if (mode === 3) s.masked = (colour & 0xff000000) === (0xff000000 | 0) && whole ? 0 : 1;
+  if (
+    mode !== 2 &&
+    LITTLE_ENDIAN &&
+    ((to.byteOffset | to.byteLength) & 3) === 0 &&
+    x0 >= 0 &&
+    x0 <= x1 &&
+    x1 < width &&
+    y0 >= 0 &&
+    y0 <= y1 &&
+    (y1 * width + x1 + 1) * 4 <= to.byteLength
+  ) {
+    const pixels = new Uint32Array(to.buffer, to.byteOffset, to.byteLength / 4);
+    const pixel = mode === 1 ? colour | 0xff000000 : colour;
+    if (x0 === 0 && x1 === width - 1) pixels.fill(pixel, y0 * width, (y1 + 1) * width);
+    else for (let y = y0; y <= y1; y++) pixels.fill(pixel, y * width + x0, y * width + x1 + 1);
+    return;
+  }
   const b = colour & 0xff,
     g = (colour >>> 8) & 0xff,
     r = (colour >>> 16) & 0xff,

@@ -416,6 +416,38 @@ export class YurisLayers {
     m.define(CGACT, () => cgAct(this, m));
   }
 
+  /** The CG A setter of 0x423860, including damage for shared payloads. */
+  private changeOpacity(node: YurisCgNode, cg: YurisCg, next: number): boolean {
+    if (next === cg.a) return false;
+    const shared = cg.references > 1;
+    if (shared) {
+      if (node.group) this.markSet(node);
+      else this.markDirty(node);
+    } else {
+      const previous = this.opacityDamage.get(node) ?? cg.a;
+      if (next === previous) this.opacityDamage.delete(node);
+      else this.opacityDamage.set(node, previous);
+      this.redraw = true;
+    }
+    cg.a = next;
+    return shared;
+  }
+
+  clearOpacityRange(prefix: ByteString, first: number, count: number): void {
+    const namespace = this.machine.system.names[0]!;
+    const parent = namespace ? this.tree.lookup(namespace, LookupMode.Group) : this.tree.root;
+    if (parent) {
+      for (let i = 0; i < count; i++) {
+        const node = parent.child(prefix + (first + i), LookupMode.Leaf);
+        const cg = node?.payload;
+        if (node && cg && this.changeOpacity(node, cg, 0)) {
+          this.redraw = true;
+          this.markDirty(node);
+        }
+      }
+    }
+  }
+
   /** ID with ".IDNO" (`_i64toa` base 10), resolved against the layer namespace (id 0x80). */
   target(idArg: number, idNoArg: number): {path: ByteString; group: boolean} {
     const a = this.machine.args;
@@ -428,6 +460,12 @@ export class YurisLayers {
 
   lookup(path: ByteString, group: boolean): YurisCgNode | null {
     return this.tree.lookup(path, group ? LookupMode.Group : LookupMode.Leaf);
+  }
+
+  /** The single CGINFO LINT2 query of 0x43B448. */
+  readLint2(id: ByteString): bigint {
+    const {path, group} = resolveNodePath(this.machine.system.names[0]!, id);
+    return this.lookup(path, group)?.payload?.lint2 ?? 0n;
   }
 
   commandName(): string {
@@ -551,18 +589,7 @@ export class YurisLayers {
     }
     if (a.has(Cg.A)) {
       const next = (bounded(Cg.A, cg.a, 0n, 256n) << 16) >> 16;
-      if (next !== cg.a) {
-        if (cg.references > 1) {
-          touch();
-          changed = true;
-        } else {
-          const previous = this.opacityDamage.get(node) ?? cg.a;
-          if (next === previous) this.opacityDamage.delete(node);
-          else this.opacityDamage.set(node, previous);
-          this.redraw = true;
-        }
-        cg.a = next;
-      }
+      changed = this.changeOpacity(node, cg, next) || changed;
     }
     if (a.has(Cg.X)) {
       const x = applyOp(op(Cg.X), cg.x, value(Cg.X));

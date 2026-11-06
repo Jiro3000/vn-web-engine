@@ -24,6 +24,7 @@ export interface IntegerLayer extends IntegerRegion {
   y: number;
   alpha: number;
   masked: boolean;
+  additive?: boolean;
 }
 
 const vertex = `#version 300 es
@@ -43,7 +44,7 @@ const blend =
 uniform usampler2D image, base, ruleImage;
 uniform isampler2D weights, columns, rows;
 uniform ivec2 origin;
-uniform int opacity, masked, ruled, scaled;
+uniform int opacity, blendKind, ruled, scaled;
 layout(location=0) out uvec4 color;
 uvec4 sourceAt(ivec2 p) {
   ivec2 size = textureSize(image, 0);
@@ -68,21 +69,25 @@ uvec4 source(ivec2 p) {
 void main() {
   ivec2 p = ivec2(gl_FragCoord.xy), at = p - origin;
   uvec4 s = source(at);
-  if (ruled == 0 && masked == 0 && opacity == 256) { color = s; return; }
+  if (ruled == 0 && blendKind == 0 && opacity == 256) { color = s; return; }
   uvec4 d = texelFetch(base, p, 0);
+  if (blendKind == 2) {
+    color = min(uvec4(255u), d + ((s * uint(opacity)) >> 8u));
+    return;
+  }
   if (ruled != 0) {
     int k = texelFetch(weights, ivec2(int(texelFetch(ruleImage, at, 0).r), 0), 0).r;
     if (k <= 1) { color = d; return; }
     ivec3 delta = ivec3(s.rgb) - ivec3(d.rgb);
     ivec3 v;
-    if (masked != 0) v = (delta * (int(s.a) * k)) >> 16;
+    if (blendKind == 1) v = (delta * (int(s.a) * k)) >> 16;
     else if (opacity == 256) v = -(((-delta) * k) >> 8);
     else v = (delta * k) >> 8;
     color = uvec4(ivec3(d.rgb) + v, d.a);
   } else {
-    uint k = masked == 0 ? uint(opacity) : ((s.a * uint(opacity)) >> 8u) + 1u;
+    uint k = blendKind == 0 ? uint(opacity) : ((s.a * uint(opacity)) >> 8u) + 1u;
     color = (s * k + d * (256u - k)) >> 8u;
-    if (masked != 0) color.a = d.a;
+    if (blendKind == 1) color.a = d.a;
   }
 }`;
 const present =
@@ -149,7 +154,7 @@ export class IntegerWindowGl {
     this.programs = [this.program(blend), this.program(present)];
     gl.useProgram(this.programs[0]);
     this.uniforms = Object.fromEntries(
-      ['origin', 'opacity', 'masked', 'ruled', 'scaled'].map((name) => [
+      ['origin', 'opacity', 'blendKind', 'ruled', 'scaled'].map((name) => [
         name,
         gl.getUniformLocation(this.programs[0], name),
       ]),
@@ -345,7 +350,7 @@ export class IntegerWindowGl {
       const u = this.uniforms;
       gl.uniform2i(u.origin!, layer.x, layer.y);
       gl.uniform1i(u.opacity!, layer.alpha);
-      gl.uniform1i(u.masked!, Number(layer.masked));
+      gl.uniform1i(u.blendKind!, layer.additive ? 2 : Number(layer.masked));
       gl.uniform1i(u.ruled!, Number(!!layer.rule));
       gl.uniform1i(u.scaled!, layer.scale ? (layer.scale.sse ? 1 : 2) : 0);
       gl.bindFramebuffer(gl.FRAMEBUFFER, next.framebuffer);

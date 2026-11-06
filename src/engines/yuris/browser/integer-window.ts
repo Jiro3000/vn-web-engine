@@ -169,8 +169,12 @@ export class YurisIntegerWindow {
       const right = Math.min(width, x + d.width),
         bottom = Math.min(height, y + d.height);
       if (right <= left || bottom <= top) continue;
-      if (d.mode !== 0 || d.a < 0 || d.a > 256 || d.md !== 0x808080 || d.sd !== 0x80) return null;
+      const additive = d.mode === 1;
+      if ((d.mode !== 0 && !additive) || d.a < 0 || d.a > 256 || d.md !== 0x808080 || d.sd !== 0x80)
+        return null;
       const pending = d.deferredScale;
+      // The native unmasked additive blitters (0x401124/0x668100) include alpha.
+      if (additive && (d.masked || pending || (d.tid && d.t <= 255))) return null;
       const pixels = pending?.pixels ?? d.pixels!;
       let image = pending ?? {
         pixels,
@@ -229,6 +233,7 @@ export class YurisIntegerWindow {
         height: bottom - top,
         alpha: d.a,
         masked: d.masked === 1,
+        additive,
       };
       if (pending) {
         if (!renderer.acceptsSize(d.width, d.height)) return null;

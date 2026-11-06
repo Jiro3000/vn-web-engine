@@ -146,6 +146,40 @@ export interface CharacterSearch {
   readonly scratch: number;
 }
 
+/** CG prefix + decimal(sprite * 100 + counter), A=0 (YSTB175:169/174). */
+export function scanOpacityLoop(
+  code: readonly YurisInstruction[],
+  at: number,
+  commands: YurisCommandSet,
+): {prefix: number; sprite: number} | null {
+  const prefix = local(code[at]),
+    sprite = local(code[at], 0, 10);
+  if (Math.min(prefix, sprite) < 1000 || prefix === sprite) return null;
+  const one = int(1);
+  const id =
+    scalar(prefix, true) +
+    one +
+    scalar(sprite) +
+    int(100) +
+    op('*') +
+    op('+') +
+    scalar(48) +
+    op('+') +
+    one +
+    op('-') +
+    op('s') +
+    op('+');
+  const matches = matchAt(code, at);
+  if (
+    !matches(0, 0x01, 0, [0, 3, id], [3, 1, int(0)]) ||
+    !matches(1, 0x3a, 0) ||
+    !hasSpec(commands, 0x01, 0, 1, 0) ||
+    !hasSpec(commands, 0x01, 3, 0, 12)
+  )
+    return null;
+  return {prefix, sprite};
+}
+
 /** A bounded forward search implemented as VARACT COPY, equality and LOOPBREAK. */
 export function scanCharacterSearch(
   code: readonly YurisInstruction[],
@@ -197,6 +231,60 @@ export interface ArrayRanges {
   readonly value: number;
   readonly result: number;
   readonly arrays: readonly [number, number, number, number];
+}
+
+export type IntQuery =
+  | {readonly kind: 'length'; readonly result: number}
+  | {readonly kind: 'lint2'; readonly result: number; readonly separator: number};
+
+/** Scalar wrappers for VARINFO LENGTH (0x455464) and CGINFO LINT2 (0x43B448). */
+export function scanIntQuery(
+  code: readonly YurisInstruction[],
+  at: number,
+  commands: YurisCommandSet,
+): IntQuery | null {
+  const result = local(code[at]);
+  const r = scalar(result);
+  const p = param(55, 1, true);
+  const matches = matchAt(code, at);
+  if (
+    result < 1000 ||
+    !matches(0, 0x32, 0, [0, 3, r], [0, 1, '4c08000000000000000000']) ||
+    !matches(2, 0x4f, 8, [0, 1, r]) ||
+    !hasSpec(commands, 0x32, 0, 3, 0) ||
+    !hasSpec(commands, 0x4f, 0, 0, 0)
+  )
+    return null;
+  if (
+    matches(1, 0x67, 0, [13, 1, int(1)], [0, 3, p], [1, 1, r]) &&
+    hasSpec(commands, 0x67, 13, 0, 3) &&
+    hasSpec(commands, 0x67, 0, 0, 0) &&
+    hasSpec(commands, 0x67, 1, 0, 0)
+  )
+    return {kind: 'length', result};
+  const separator = local(code[at + 1], 0, 14);
+  const add = op('+');
+  const id =
+    p +
+    scalar(separator, true) +
+    add +
+    '4d09002242542e4f46463d22' +
+    add +
+    param(53, 2) +
+    op('s') +
+    add +
+    '4d0400223d3122' +
+    add;
+  if (
+    separator < 1000 ||
+    separator === result ||
+    !matches(1, 4, 0, [0, 3, id], [27, 1, int(1)], [33, 1, r]) ||
+    !hasSpec(commands, 4, 0, 1, 0) ||
+    !hasSpec(commands, 4, 27, 0, 1) ||
+    !hasSpec(commands, 4, 33, 0, 0)
+  )
+    return null;
+  return {kind: 'lint2', result, separator};
 }
 
 /** Two inclusive integer ranges drawn from four one-dimensional tables. */

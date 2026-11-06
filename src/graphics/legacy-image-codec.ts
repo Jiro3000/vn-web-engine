@@ -12,6 +12,7 @@ interface DecodedImage {
 
 const IMAGE_CACHE_BYTES = 96 * 1024 * 1024;
 const PRELOAD_CACHE_BYTES = 128 * 1024 * 1024;
+const PRELOAD_WEBP_BYTES = 56 * 1024 * 1024;
 const littleEndian = new Uint8Array(new Uint32Array([1]).buffer)[0] === 1;
 
 interface CachedImage {
@@ -48,13 +49,15 @@ class ImageCache {
 
 function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
   if (a.length !== b.length) return false;
-  if ((a.byteOffset | b.byteOffset | a.length) & 3) {
-    for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
-  } else {
+  if (a === b) return true;
+  let tail = 0;
+  if (((a.byteOffset | b.byteOffset) & 3) === 0) {
     const aa = new Uint32Array(a.buffer, a.byteOffset, a.length >>> 2);
     const bb = new Uint32Array(b.buffer, b.byteOffset, b.length >>> 2);
     for (let i = 0; i < aa.length; i++) if (aa[i] !== bb[i]) return false;
+    tail = aa.length * 4;
   }
+  for (let i = tail; i < a.length; i++) if (a[i] !== b[i]) return false;
   return true;
 }
 
@@ -63,7 +66,9 @@ export class LegacyImageCodec {
   private readonly gdi = new BrowserGdiImageCodec();
   private readonly recent = new ImageCache(IMAGE_CACHE_BYTES);
   // Unrelated foreground decodes cannot evict art queued for a future script line.
-  private readonly prepared = new ImageCache(PRELOAD_CACHE_BYTES);
+  private readonly prepared = new ImageCache(PRELOAD_CACHE_BYTES - PRELOAD_WEBP_BYTES);
+  // The more expensive legacy WebP decodes survive bursts of PNG sprite preloads.
+  private readonly preparedWebp = new ImageCache(PRELOAD_WEBP_BYTES);
   private readonly warming = new Map<string, {encoded: Uint8Array; ready: Promise<void>}>();
 
   private key(mime: string, legacyWebpColor: boolean, path: string): string {
@@ -73,10 +78,11 @@ export class LegacyImageCodec {
   /** Preload the exact PNG or legacy WebP decode while the caller is doing other work. */
   async preload(bytes: Uint8Array, mime: string, path: string): Promise<void> {
     const key = this.key(mime, true, path);
-    const existing = this.prepared.entries.get(key) ?? this.recent.entries.get(key);
+    const cache = mime === 'image/webp' ? this.preparedWebp : this.prepared;
+    const existing = cache.entries.get(key) ?? this.recent.entries.get(key);
     if (existing && sameBytes(bytes, existing.encoded)) {
       this.recent.take(key);
-      this.prepared.put(key, existing);
+      cache.put(key, existing);
       return;
     }
     const pending = this.warming.get(key);
@@ -91,7 +97,7 @@ export class LegacyImageCodec {
           : await decodeImageOffThread(encoded, 'legacy-webp');
       if (!decoded) return;
       const pixels = format === 'png' ? swap(decoded.pixels) : decoded.pixels;
-      this.prepared.put(key, {
+      cache.put(key, {
         encoded,
         image: {width: decoded.width, height: decoded.height, pixels},
         size: encoded.length + pixels.length,
@@ -113,14 +119,17 @@ export class LegacyImageCodec {
     path: string,
   ): Promise<DecodedImage> {
     const key = this.key(mime, legacyWebpColor, path);
+    const cache = mime === 'image/webp' ? this.preparedWebp : this.prepared;
     const pending = this.warming.get(key);
     if (pending && sameBytes(bytes, pending.encoded)) await pending.ready.catch(() => {});
-    const prepared = this.prepared.entries.get(key);
-    const existing =
-      prepared && sameBytes(bytes, prepared.encoded)
-        ? this.prepared.take(key)
-        : this.recent.take(key);
-    if (existing && (existing === prepared || sameBytes(bytes, existing.encoded))) {
+    const prepared = cache.entries.get(key);
+    if (prepared && sameBytes(bytes, prepared.encoded)) {
+      // Keep explicitly queued art insulated from foreground decode churn after use.
+      cache.put(key, prepared);
+      return {...prepared.image, pixels: prepared.image.pixels.slice()};
+    }
+    const existing = this.recent.take(key);
+    if (existing && sameBytes(bytes, existing.encoded)) {
       this.recent.put(key, existing);
       return {...existing.image, pixels: existing.image.pixels.slice()};
     }
