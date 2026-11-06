@@ -13,6 +13,7 @@ import {sizeBicubic, sizeBilinear, sizeLanczos, sizeNearest, sizeSupersampled} f
 import {drawCgText} from './glyph.js';
 import {rotateCg} from './rotation.js';
 import {transitionBgra} from '../../../graphics/bgra-effects-wasm.js';
+import type {YurisInstruction} from '../../../formats/yuris/ybn.js';
 
 /** CGACT argument ids (`ysc.ybn`). */
 const enum Act {
@@ -252,81 +253,62 @@ export function cgAct(layers: YurisLayers, m: YurisMachine): number {
     masksDestination(id);
     return region(Op.RectPaint, mode);
   };
-  // The tests of 0x426DAB..0x4281B6 in order; null marks an operation not reproduced yet.
-  const operations: [Act, (() => number) | null][] = [
-    [Act.Size, () => size(Act.Size, 0x0a)],
-    [Act.Size2, () => size(Act.Size2, 0x14)],
-    [Act.Size3, () => size(Act.Size3, 0x1e)],
-    [Act.Size4, () => size(Act.Size4, 0x28)],
-    [Act.Size5, () => size(Act.Size5, 0x32)],
-    [Act.Rotation, rotation],
-    [Act.Rotation2, null],
-    [Act.Saido, () => (setUpTo(0x100), region(Op.Saido, 0))],
-    [Act.Meido, () => (setUpTo(0xffffff), region(Op.Meido, 0))],
-    [Act.Sepia, null],
-    [Act.Akarusa, () => (setUpTo(0x100), region(Op.Akarusa, 0))],
-    [Act.Mono, null],
-    [Act.Vertical, null],
-    [Act.Horizontal, null],
-    [Act.Mosaic, null],
-    [Act.Blur, null],
-    [Act.Blur2, null],
-    [Act.Blur3, null],
-    [Act.Blur4, null],
-    [Act.Blur5, null],
-    [Act.Blur6, null],
-    [Act.Diffusion, null],
-    [Act.Raster, null],
-    [Act.Raster2, null],
-    [Act.Raster3, null],
-    [Act.Whirlpool, null],
-    [Act.Reverse, () => (setUpTo(1), region(Op.Reverse, 0))],
-    [Act.RectPaint, () => paint(Act.RectPaint, 1)],
-    [Act.RectPaint2, () => paint(Act.RectPaint2, 2)],
-    [Act.RectPaint3, () => paint(Act.RectPaint3, 3)],
-    [
-      Act.Gradation,
-      () => {
+  const execute = (id: Act): number => {
+    switch (id) {
+      case Act.Size:
+      case Act.Size2:
+      case Act.Size3:
+      case Act.Size4:
+      case Act.Size5:
+        return size(id, (id - Act.Size + 1) * 10);
+      case Act.Rotation:
+        return rotation();
+      case Act.Saido:
+        setUpTo(0x100);
+        return region(Op.Saido, 0);
+      case Act.Meido:
+        setUpTo(0xffffff);
+        return region(Op.Meido, 0);
+      case Act.Akarusa:
+        setUpTo(0x100);
+        return region(Op.Akarusa, 0);
+      case Act.Reverse:
+        setUpTo(1);
+        return region(Op.Reverse, 0);
+      case Act.RectPaint:
+      case Act.RectPaint2:
+      case Act.RectPaint3:
+        return paint(id, id - Act.RectPaint + 1);
+      case Act.Gradation:
         // 0x427C70 marks ID2 even when the worker's mode is unsupported.
         if (destination?.payload) destination.payload.masked = 1;
         return region(Op.Gradation, (low(a.int(Act.Gradation)) << 24) >> 24);
-      },
-    ],
-    // 0x428E7B: BNO selects the text buffer and the tests go on.
-    [Act.Bno, () => ((layers.textBuffer = low(a.int(Act.Bno))), NaN)],
-    [
-      Act.Text,
-      () => {
+      case Act.Bno:
+        // 0x428E7B: BNO selects the text buffer and the tests go on.
+        layers.textBuffer = low(a.int(Act.Bno));
+        return NaN;
+      case Act.Text:
         if (!a.has(Act.SetStr)) return -1;
         drawCgText(layers, m.fonts, node, a.text(Act.SetStr), x, y, set);
         return NaN;
-      },
-    ],
-    [Act.Merge, () => merge(layers, m, node, destination, extra, x, y, false)],
-    [Act.Merge2, () => merge(layers, m, node, destination, extra, x, y, true)],
-    [
-      Act.Transition,
-      () => transition(layers, node, destination, others[1]!, extra, x, y, set, m.system.simd),
-    ],
-    // 0x427F47: TRANSITION2 checks for an extra ID, then returns without a blit.
-    [
-      Act.Transition2,
-      () => {
+      case Act.Merge:
+      case Act.Merge2:
+        return merge(layers, m, node, destination, extra, x, y, id === Act.Merge2);
+      case Act.Transition:
+        return transition(layers, node, destination, others[1]!, extra, x, y, set, m.system.simd);
+      case Act.Transition2:
+        // 0x427F47: TRANSITION2 checks for an extra ID, then returns without a blit.
         if (!extra) throw new YurisError(0x18bb2, [layers.commandName(), 'TRANSITION2']);
         return 0;
-      },
-    ],
-    [Act.Xor, null],
-    [Act.And, null],
-    [Act.Trim, null],
-    [Act.Resize, () => resizeCanvas(m, layers, node, destination, extra !== 0, x, x2, y, y2)],
-    [Act.Copy, () => copy(Act.Copy, Op.Copy)],
-    [Act.Copy2, () => copy(Act.Copy2, Op.Copy2)],
-    [Act.Swap, null],
-    [Act.Swap2, null],
-    [Act.TexCopy, null],
-    [Act.TexSsCopy, null],
-  ];
+      case Act.Resize:
+        return resizeCanvas(m, layers, node, destination, extra !== 0, x, x2, y, y2);
+      case Act.Copy:
+      case Act.Copy2:
+        return copy(id, id === Act.Copy ? Op.Copy : Op.Copy2);
+      default:
+        throw new Error(`CGACT ${m.argName(id)} is not implemented`);
+    }
+  };
   const markDestinations = (id?: Act) => {
     const ownsDamage = id === Act.Merge || id === Act.Merge2 || (id !== undefined && isSize(id));
     for (let i = ownsDamage ? 1 : 0; i < extra; i++) {
@@ -335,9 +317,14 @@ export function cgAct(layers: YurisLayers, m: YurisMachine): number {
     }
   };
   let marked = false;
-  for (const [id, operation] of operations) {
-    if (!a.has(id)) continue;
-    if (!operation) throw new Error(`CGACT ${m.argName(id)} is not implemented`);
+  const instruction = m.instruction;
+  let operations = instruction && OPERATION_PLANS.get(instruction);
+  if (!operations) {
+    operations = OPERATION_ORDER.filter((id) => a.has(id));
+    if (instruction) OPERATION_PLANS.set(instruction, operations);
+  }
+  for (const id of operations) {
+    if (UNIMPLEMENTED.has(id)) throw new Error(`CGACT ${m.argName(id)} is not implemented`);
     if (!marked || id === Act.Copy) {
       markDestinations(id);
       marked = true;
@@ -345,7 +332,7 @@ export function cgAct(layers: YurisLayers, m: YurisMachine): number {
     if (id === Act.Text || (extra === 0 && !isSize(id) && id !== Act.Bno)) cg.beginPixelWrite();
     if (!isSize(id) && id !== Act.Bno && id !== Act.Text)
       for (const other of others) other?.payload?.beginPixelWrite();
-    const result = operation();
+    const result = execute(id);
     if (!Number.isNaN(result)) return result;
   }
   if (!marked) markDestinations();
@@ -353,6 +340,84 @@ export function cgAct(layers: YurisLayers, m: YurisMachine): number {
   layers.textBuffer = 0;
   return 0;
 }
+
+// Argument precedence of 0x426DAB..0x4281B6.
+const OPERATION_ORDER = [
+  Act.Size,
+  Act.Size2,
+  Act.Size3,
+  Act.Size4,
+  Act.Size5,
+  Act.Rotation,
+  Act.Rotation2,
+  Act.Saido,
+  Act.Meido,
+  Act.Sepia,
+  Act.Akarusa,
+  Act.Mono,
+  Act.Vertical,
+  Act.Horizontal,
+  Act.Mosaic,
+  Act.Blur,
+  Act.Blur2,
+  Act.Blur3,
+  Act.Blur4,
+  Act.Blur5,
+  Act.Blur6,
+  Act.Diffusion,
+  Act.Raster,
+  Act.Raster2,
+  Act.Raster3,
+  Act.Whirlpool,
+  Act.Reverse,
+  Act.RectPaint,
+  Act.RectPaint2,
+  Act.RectPaint3,
+  Act.Gradation,
+  Act.Bno,
+  Act.Text,
+  Act.Merge,
+  Act.Merge2,
+  Act.Transition,
+  Act.Transition2,
+  Act.Xor,
+  Act.And,
+  Act.Trim,
+  Act.Resize,
+  Act.Copy,
+  Act.Copy2,
+  Act.Swap,
+  Act.Swap2,
+  Act.TexCopy,
+  Act.TexSsCopy,
+];
+const UNIMPLEMENTED = new Set<Act>([
+  Act.Rotation2,
+  Act.Sepia,
+  Act.Mono,
+  Act.Vertical,
+  Act.Horizontal,
+  Act.Mosaic,
+  Act.Blur,
+  Act.Blur2,
+  Act.Blur3,
+  Act.Blur4,
+  Act.Blur5,
+  Act.Blur6,
+  Act.Diffusion,
+  Act.Raster,
+  Act.Raster2,
+  Act.Raster3,
+  Act.Whirlpool,
+  Act.Xor,
+  Act.And,
+  Act.Trim,
+  Act.Swap,
+  Act.Swap2,
+  Act.TexCopy,
+  Act.TexSsCopy,
+]);
+const OPERATION_PLANS = new WeakMap<YurisInstruction, readonly Act[]>();
 
 const isSize = (id: Act): boolean => id >= Act.Size && id <= Act.Size5;
 

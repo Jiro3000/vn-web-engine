@@ -11,14 +11,45 @@ interface DecodedImage {
 }
 
 const IMAGE_CACHE_BYTES = 96 * 1024 * 1024;
-const PRELOAD_CACHE_BYTES = 128 * 1024 * 1024;
+const PRELOAD_CACHE_BYTES = 160 * 1024 * 1024;
 const PRELOAD_WEBP_BYTES = 56 * 1024 * 1024;
+const PRELOAD_LARGE_PNG_BYTES = 68 * 1024 * 1024;
+const LARGE_PNG_BYTES = 2 * 1024 * 1024;
 const littleEndian = new Uint8Array(new Uint32Array([1]).buffer)[0] === 1;
 
 interface CachedImage {
   encoded: Uint8Array;
-  image: DecodedImage;
+  image: DecodedImage | {width: number; height: number; word: number};
   size: number;
+}
+
+function cacheImage(encoded: Uint8Array, image: DecodedImage, copy: boolean): CachedImage {
+  const {width, height, pixels} = image;
+  if (
+    pixels.length >= 65536 &&
+    ((pixels.byteOffset | pixels.byteLength) & 3) === 0 &&
+    pixels.length === width * height * 4
+  ) {
+    const words = new Uint32Array(pixels.buffer, pixels.byteOffset, pixels.length / 4);
+    const word = words[0]!;
+    let i = 1;
+    while (i < words.length && words[i] === word) i++;
+    if (i === words.length)
+      return {encoded, image: {width, height, word}, size: encoded.length + 4};
+  }
+  return {
+    encoded,
+    image: {width, height, pixels: copy ? pixels.slice() : pixels},
+    size: encoded.length + pixels.length,
+  };
+}
+
+function copyCached(image: CachedImage['image']): DecodedImage {
+  const {width, height} = image;
+  if ('pixels' in image) return {width, height, pixels: image.pixels.slice()};
+  const words = new Uint32Array(width * height);
+  if (image.word !== 0) words.fill(image.word);
+  return {width, height, pixels: new Uint8Array(words.buffer)};
 }
 
 class ImageCache {
@@ -66,19 +97,28 @@ export class LegacyImageCodec {
   private readonly gdi = new BrowserGdiImageCodec();
   private readonly recent = new ImageCache(IMAGE_CACHE_BYTES);
   // Unrelated foreground decodes cannot evict art queued for a future script line.
-  private readonly prepared = new ImageCache(PRELOAD_CACHE_BYTES - PRELOAD_WEBP_BYTES);
+  private readonly prepared = new ImageCache(
+    PRELOAD_CACHE_BYTES - PRELOAD_WEBP_BYTES - PRELOAD_LARGE_PNG_BYTES,
+  );
   // The more expensive legacy WebP decodes survive bursts of PNG sprite preloads.
   private readonly preparedWebp = new ImageCache(PRELOAD_WEBP_BYTES);
+  private readonly preparedLargePng = new ImageCache(PRELOAD_LARGE_PNG_BYTES);
   private readonly warming = new Map<string, {encoded: Uint8Array; ready: Promise<void>}>();
 
   private key(mime: string, legacyWebpColor: boolean, path: string): string {
     return `${Number(legacyWebpColor)}:${mime}:${path}`;
   }
 
+  private preparedFor(mime: string, byteLength: number): ImageCache {
+    if (mime === 'image/webp') return this.preparedWebp;
+    if (mime === 'image/png' && byteLength >= LARGE_PNG_BYTES) return this.preparedLargePng;
+    return this.prepared;
+  }
+
   /** Preload the exact PNG or legacy WebP decode while the caller is doing other work. */
   async preload(bytes: Uint8Array, mime: string, path: string): Promise<void> {
     const key = this.key(mime, true, path);
-    const cache = mime === 'image/webp' ? this.preparedWebp : this.prepared;
+    const cache = this.preparedFor(mime, bytes.length);
     const existing = cache.entries.get(key) ?? this.recent.entries.get(key);
     if (existing && sameBytes(bytes, existing.encoded)) {
       this.recent.take(key);
@@ -97,11 +137,10 @@ export class LegacyImageCodec {
           : await decodeImageOffThread(encoded, 'legacy-webp');
       if (!decoded) return;
       const pixels = format === 'png' ? swap(decoded.pixels) : decoded.pixels;
-      cache.put(key, {
-        encoded,
-        image: {width: decoded.width, height: decoded.height, pixels},
-        size: encoded.length + pixels.length,
-      });
+      cache.put(
+        key,
+        cacheImage(encoded, {width: decoded.width, height: decoded.height, pixels}, false),
+      );
     })();
     this.warming.set(key, {encoded, ready});
     try {
@@ -119,28 +158,24 @@ export class LegacyImageCodec {
     path: string,
   ): Promise<DecodedImage> {
     const key = this.key(mime, legacyWebpColor, path);
-    const cache = mime === 'image/webp' ? this.preparedWebp : this.prepared;
+    const cache = this.preparedFor(mime, bytes.length);
     const pending = this.warming.get(key);
     if (pending && sameBytes(bytes, pending.encoded)) await pending.ready.catch(() => {});
     const prepared = cache.entries.get(key);
     if (prepared && sameBytes(bytes, prepared.encoded)) {
       // Keep explicitly queued art insulated from foreground decode churn after use.
       cache.put(key, prepared);
-      return {...prepared.image, pixels: prepared.image.pixels.slice()};
+      return copyCached(prepared.image);
     }
     const existing = this.recent.take(key);
     if (existing && sameBytes(bytes, existing.encoded)) {
       this.recent.put(key, existing);
-      return {...existing.image, pixels: existing.image.pixels.slice()};
+      return copyCached(existing.image);
     }
     const image = await this.decode(bytes, mime, legacyWebpColor);
     const size = bytes.length + image.pixels.length;
     if (size >= 65536 && size <= IMAGE_CACHE_BYTES) {
-      this.recent.put(key, {
-        encoded: bytes.slice(),
-        image: {...image, pixels: image.pixels.slice()},
-        size,
-      });
+      this.recent.put(key, cacheImage(bytes.slice(), image, true));
     }
     return image;
   }

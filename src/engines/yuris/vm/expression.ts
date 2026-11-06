@@ -106,7 +106,8 @@ export class YurisExpression {
   ) {}
 
   /** The dimensions a declaration target named, collected by `)` in declaration mode. */
-  get declaredDimensions(): number[] {
+  declaredDimensions(previous: number[]): number[] {
+    if (this.indexCount === 0 && previous.length === 0) return previous;
     const dimensions = new Array<number>(this.indexCount);
     for (let i = 0; i < dimensions.length; i++)
       dimensions[i] = Number(this.indexes[i]! & 0xffffffffn);
@@ -186,6 +187,10 @@ export class YurisExpression {
     this.prefix = 0;
     this.wholeVariable = false;
     this.slots[0] = 0;
+    if (bytes.length === 4 && bytes[0] === 0x42 && bytes[1] === 1 && bytes[2] === 0) {
+      this.push(BYTE_LITERALS[bytes[3]!]!);
+      return '';
+    }
     for (let p = 0; p < bytes.length;) {
       const op = bytes[p]!,
         length = bytes[p + 1]! | (bytes[p + 2]! << 8);
@@ -311,12 +316,26 @@ export class YurisExpression {
     return slot;
   }
 
+  private readonly literals = new WeakMap<Uint8Array, {payload: Uint8Array; text: ByteString}>();
+
   /**
    * 'M' (0x420CB8): a string literal. The payload's first byte is the delimiter; `\\`, `\n`
    * and `\t` are escapes, a backslash before any other byte is dropped, and a lead byte
    * copies two bytes.
    */
   private literal(bytes: Uint8Array, at: number, length: number): void {
+    const cacheable = at === 3 && length === bytes.length - at && length >= 5 && length <= 128;
+    if (cacheable) {
+      const cached = this.literals.get(bytes);
+      if (cached) {
+        let i = at;
+        while (i < bytes.length && bytes[i] === cached.payload[i - at]) i++;
+        if (i === bytes.length) {
+          this.pushLiteral(cached.text);
+          return;
+        }
+      }
+    }
     const delimiter = bytes[at]!,
       end = at + length;
     let p = at + 1,
@@ -346,6 +365,11 @@ export class YurisExpression {
       }
       if (p >= end) break;
     }
+    if (cacheable) this.literals.set(bytes, {payload: Uint8Array.from(bytes.subarray(at)), text});
+    this.pushLiteral(text);
+  }
+
+  private pushLiteral(text: ByteString): void {
     const position = this.top;
     this.ints[position] = 0n;
     this.slots[position] = this.allocate(text);
@@ -365,7 +389,16 @@ export class YurisExpression {
     const id = this.setPrefixAndId(bytes, at);
     if (this.declaring && this.depth === 0) return;
     if (id >= this.variables.entries.length) throw new YurisError(0x1a5ea);
-    this.pushVariable(id, this.variables.get(id), this.top, 0);
+    const variable = this.variables.get(id);
+    if (
+      id >= SYSTEM_VARIABLE_LIMIT &&
+      !this.prefix &&
+      variable.type === YurisType.Int &&
+      !this.floating
+    ) {
+      this.ints[this.top] = variable.ints![0] ?? 0n;
+      this.slots[this.top] = 0;
+    } else this.pushVariable(id, variable, this.top, 0);
     this.top++;
   }
 
@@ -384,7 +417,7 @@ export class YurisExpression {
     this.depth++;
   }
 
-  /** Fuse V, a scalar index, and ) for the ordinary one-dimensional access. */
+  /** Fuse an ordinary V read with a scalar index and optional constant column. */
   private indexedRead(bytes: Uint8Array, p: number): number {
     if (
       (bytes[p + 3] !== 0x40 && bytes[p + 3] !== 0x24) ||
@@ -398,9 +431,26 @@ export class YurisExpression {
     // The four reference arrays flatten against the referenced variable instead.
     if (id === 0x32 || id === 0x33 || id === 0x34 || id === 0x46) return p;
     const target = this.variables.entries[id];
-    if (!target || target.dimensions.length !== 1) return p;
+    if (!target) return p;
+    const dimensions = target.dimensions;
+    if (dimensions.length !== 1 && dimensions.length !== 2) return p;
     const kind = bytes[p + 6]!;
-    const close = p + (kind === 0x48 ? 12 : 10);
+    let close = p + (kind === 0x48 ? 12 : 10);
+    let column: bigint | undefined;
+    if (dimensions.length === 2) {
+      if (
+        bytes[close] !== 0x2c ||
+        bytes[close + 1] !== 0 ||
+        bytes[close + 2] !== 0 ||
+        bytes[close + 3] !== 0x42 ||
+        bytes[close + 4] !== 1 ||
+        bytes[close + 5] !== 0
+      )
+        return p;
+      column = BYTE_LITERALS[bytes[close + 6]!];
+      if (column === undefined || column < 0n || Number(column) >= dimensions[1]!) return p;
+      close += 7;
+    }
     if (
       bytes[close] !== 0x29 ||
       bytes[close + 1] !== 1 ||
@@ -419,6 +469,8 @@ export class YurisExpression {
     } else if (kind === 0x42 && bytes[p + 7] === 1 && bytes[p + 8] === 0)
       index = BYTE_LITERALS[bytes[p + 9]!]!;
     else return p;
+    let element = Number(index);
+    if (column !== undefined && (element < 0 || element >= dimensions[0]!)) return p;
     const top = this.top;
     this.frameBase[this.depth] = top;
     this.frameId[this.depth] = id;
@@ -426,8 +478,7 @@ export class YurisExpression {
     this.slots[top] = this.slots[top + 1] = 0;
     this.ints[top] = 0n;
     this.ints[top + 1] = index;
-    const element = Number(index);
-    if (element < 0 || element >= target.dimensions[0]!) {
+    if (element < 0 || element >= dimensions[0]!) {
       this.depth++;
       this.top += 2;
       this.closeIndex();
@@ -435,10 +486,18 @@ export class YurisExpression {
     }
     this.indexes[0] = index;
     this.indexCount = 1;
+    if (column !== undefined) {
+      this.ints[top + 2] = this.indexes[1] = column;
+      this.slots[top + 2] = 0;
+      this.indexCount = 2;
+      element = element * dimensions[1]! + Number(column);
+    }
     this.lastId = id;
     this.lastElement = element;
     this.prefix = 0;
-    this.pushVariable(id, target, top, element);
+    if (id >= SYSTEM_VARIABLE_LIMIT && target.type === YurisType.Int && !this.floating)
+      this.ints[top] = target.ints![element] ?? 0n;
+    else this.pushVariable(id, target, top, element);
     this.top++;
     return close + 4;
   }

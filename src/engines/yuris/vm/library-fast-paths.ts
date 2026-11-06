@@ -138,6 +138,7 @@ export interface LexerRun {
   readonly word: {readonly high: number; readonly low: number; readonly result: number} | null;
   readonly spaces: boolean;
   readonly comments: boolean;
+  readonly initial: Uint8Array | null;
 }
 
 export interface CharacterSearch {
@@ -452,6 +453,55 @@ export function scanLexerRun(
     ) &&
     condition(213, 222, equals(result, 0)) &&
     matches(222, 0x30, 0);
+  // The leading state classifier is an IF/ELSE chain with one state assignment per arm.
+  const branches = [
+    {lo: 48, hi: 57, extra: 45, state: 91},
+    {lo: 65, hi: 90, state: 92},
+    {lo: 97, hi: 122, state: 93},
+    {lo: 94, hi: 94, state: 93},
+    {lo: 39, hi: 39, state: 93},
+    {lo: 95, hi: 95, state: 94},
+    {lo: 46, hi: 46, state: 95},
+    {lo: 129, hi: 254, state: 96, high: true},
+    {lo: 34, hi: 34, state: 22},
+    {lo: 32, hi: 32, state: 31},
+    {lo: 9, hi: 9, state: 32},
+  ];
+  const number = (n: number) => (n <= 127 ? int(n) : '570200' + word(n));
+  const classify =
+    code[at + 45]?.command === 0x0b &&
+    matches(177, 0x30, 0) &&
+    matches(178, 0x35, 0, [0, 1, c, 1], [0, 1, int(1)]) &&
+    matches(179, 0x2d, 0) &&
+    branches.every(({lo, hi, extra, state, high: useHigh}, i) => {
+      const value = useHigh ? scalar(high) : ch;
+      let test =
+        lo === hi
+          ? equals(value, lo)
+          : value + number(lo) + op('Z') + value + number(hi) + op('S') + op('&');
+      if (extra !== undefined) test += equals(value, extra) + op('|');
+      const position = 12 + i * 3;
+      return (
+        matches(
+          position,
+          i === 0 ? 0x2c : 0x0b,
+          0,
+          [0, 1, test],
+          [0, 0, at + position + 3],
+          [0, 0, i === 0 ? at + 177 : 0],
+        ) &&
+        matches(position + 1, 0x35, 0, [0, 1, s], [0, 1, int(state)]) &&
+        matches(position + 2, 0x2d, 0)
+      );
+    });
+  const initial = classify ? new Uint8Array(65536).fill(45) : null;
+  if (initial) {
+    for (const [i, {lo, hi, extra, high: useHigh}] of branches.entries()) {
+      const position = 13 + i * 3;
+      initial.fill(position, useHigh ? lo << 8 : lo, useHigh ? (hi + 1) << 8 : hi + 1);
+      if (extra !== undefined) initial[extra] = position;
+    }
+  }
   return {
     text,
     cursor,
@@ -460,6 +510,7 @@ export function scanLexerRun(
     scratch,
     spaces,
     comments,
+    initial,
     word: wordRun ? {high: highTable, low: lowTable, result: wordResult} : null,
   };
 }

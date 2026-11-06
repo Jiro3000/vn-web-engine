@@ -591,6 +591,20 @@ export class YurisLayers {
       const next = (bounded(Cg.A, cg.a, 0n, 256n) << 16) >> 16;
       changed = this.changeOpacity(node, cg, next) || changed;
     }
+    if (
+      a.count <= 4 &&
+      a.count ===
+        Number(!!a.has(Cg.Id)) +
+          Number(!!a.has(Cg.IdNo)) +
+          Number(!!a.has(Cg.A)) +
+          Number(!!a.has(Cg.E))
+    ) {
+      if (changed) {
+        this.redraw = true;
+        touch();
+      }
+      return 0;
+    }
     if (a.has(Cg.X)) {
       const x = applyOp(op(Cg.X), cg.x, value(Cg.X));
       if (x !== cg.x) {

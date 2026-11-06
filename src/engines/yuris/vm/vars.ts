@@ -143,11 +143,14 @@ function varInfo(machine: YurisMachine): number {
     store(found);
   }
   if (a.has(Info.SjisCode)) {
-    const text = machine.getString(set.id, set.index);
-    const c = text.charCodeAt(0) || 0;
-    store(BigInt(c !== 0 && isLeadByte(c) ? (c << 8) + (text.charCodeAt(1) || 0) : c));
+    store(BigInt(sjisCode(machine.getString(set.id, set.index))));
   }
   return 0;
+}
+
+export function sjisCode(text: ByteString): number {
+  const first = text.charCodeAt(0) || 0;
+  return isLeadByte(first) ? (first << 8) + (text.charCodeAt(1) || 0) : first;
 }
 
 /**

@@ -120,6 +120,11 @@ test('YU-RIS expression reads retain int64 references and low-dword array valida
   variables.allocateInt(id, 0n);
   variables.get(id).ints[6] = value;
   const token = (name, ...bytes) => [name.charCodeAt(0), bytes.length, 0, ...bytes];
+  const literal = Uint8Array.from(token('M', 34, 65, 66, 67, 34));
+  assert.equal(expression.string(literal), 'ABC');
+  assert.equal(expression.string(literal), 'ABC');
+  literal[4] = 68;
+  assert.equal(expression.string(literal), 'DBC');
   const element = (prefix, ...firstIndex) =>
     Uint8Array.of(
       ...token('V', prefix, id & 255, id >>> 8),
@@ -129,6 +134,18 @@ test('YU-RIS expression reads retain int64 references and low-dword array valida
     );
   assert.equal(expression.int(element(0, ...token('B', 1))), value);
   assert.equal(expression.float(element(0, ...token('B', 1))), Number(value));
+  const row = 1002;
+  variables.allocateInt(row, 1n);
+  const matrixRead = Uint8Array.of(
+    ...token('V', 0x40, id & 255, id >>> 8),
+    ...token('H', 0x40, row & 255, row >>> 8),
+    ...token(','),
+    ...token('B', 2),
+    ...token(')', 0),
+  );
+  assert.equal(expression.int(matrixRead), value);
+  assert.equal(expression.float(matrixRead), Number(value));
+  assert.equal(expression.lastIndex, 6n);
   const highIndex = token('L', 1, 0, 0, 0, 1, 0, 0, 0);
   assert.equal(expression.int(element(0, ...highIndex)), value);
   assert.equal(expression.int(element(0x60, ...highIndex)), (BigInt(id + 4) << 32n) | 6n);

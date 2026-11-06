@@ -46,7 +46,7 @@ import {SYSTEM_VARIABLE_LIMIT, YurisType, YurisVariables} from './variables.js';
 import {installMath} from './math.js';
 import {type YurisFontHost, YurisFonts, installFonts} from './font.js';
 import {type YurisSoundHost, YurisSounds} from './sound.js';
-import {characterOffsets, installVariableCommands} from './vars.js';
+import {characterOffsets, installVariableCommands, sjisCode} from './vars.js';
 import {
   scanArrayRanges,
   scanCharacterSearch,
@@ -56,6 +56,7 @@ import {
   scanStringSlice,
   type LexerRun,
   type IntQuery,
+  type StringSlicePrelude,
 } from './library-fast-paths.js';
 import {type YurisWindowHost, YurisWindows} from './window.js';
 
@@ -175,6 +176,7 @@ interface LoadedScript {
 
 interface LexerScan {
   readonly run: LexerRun;
+  readonly slice: StringSlicePrelude;
   readonly calleeScript: number;
   readonly calleePosition: number;
 }
@@ -670,7 +672,7 @@ export class YurisMachine {
       } else if (kind === 2) {
         a.expression[i] = arg.expression;
       }
-      this.check(spec?.check ?? 0, a.value[i]!, declared.name, spec?.name ?? '');
+      if (spec?.check) this.check(spec.check, a.value[i]!, declared.name, spec.name);
     }
   }
 
@@ -875,8 +877,9 @@ export class YurisMachine {
       (entry.limit <= 4_000_000n &&
         (entry.limit >= 64n ||
           (entry.limit >= 16n &&
-            entry.end - entry.start <= 4 &&
-            this.current.script.instructions[entry.start]?.command === Command.Let)))
+            (this.current.script.instructions[entry.start]?.command === Command.If ||
+              (entry.end - entry.start <= 4 &&
+                this.current.script.instructions[entry.start]?.command === Command.Let)))))
     )
       this.batchLoop(entry);
     return 0;
@@ -983,8 +986,8 @@ export class YurisMachine {
         entry.counter = entry.limit;
         return;
       }
-      if (entry.limit < 64n) return;
       if (
+        entry.limit >= 64n &&
         this.task.loopDepth + 1 < NESTING_LIMIT &&
         this.handlers[Command.Loop] === this.loopHandler
       ) {
@@ -999,6 +1002,7 @@ export class YurisMachine {
         }
       }
       if (
+        entry.limit >= 64n &&
         this.task.gosubDepth < 0x3f &&
         this.handlers[Command.Gosub] === this.gosubHandler &&
         this.handlers[Command.Return] === this.returnHandler &&
@@ -1108,6 +1112,7 @@ export class YurisMachine {
     }
     entry.counter = i64(entry.counter + 1n);
     task.position = entry.start;
+    task.ifDepth = entry.ifDepth;
     const scan = this.activeScans.get(entry);
     if (
       scan?.script === task.script &&
@@ -1128,7 +1133,6 @@ export class YurisMachine {
           skipGuardLoop(scan.guard, this.variables, Number(entry.counter), Number(entry.limit)),
         );
     }
-    task.ifDepth = entry.ifDepth;
     return 0;
   }
 
@@ -1148,9 +1152,13 @@ export class YurisMachine {
       used.add(run.word.low);
       used.add(run.word.result);
     }
-    if ([slice.result, slice.start, slice.length, slice.count].some((id) => used.has(id)))
+    if (
+      [slice.result, slice.start, slice.length, slice.count].some(
+        (id) => used.has(id) || !this.variables.entries[id],
+      )
+    )
       return null;
-    return {run, calleeScript: callee.script, calleePosition: callee.position};
+    return {run, slice, calleeScript: callee.script, calleePosition: callee.position};
   }
 
   private advanceLexer(scan: LexerScan, entry: YurisLoopEntry): number {
@@ -1267,16 +1275,80 @@ export class YurisMachine {
     if (skipped) cursor.ints[0] = BigInt(from + skipped + 1);
     const at = from + skipped;
     if (at + 1 < offsets.count) {
-      // The following in-bounds _strmid overwrites the first call's scratch
-      // locals and parameter/result frame. Keep that call in the interpreter.
-      this.setString(
-        run.scratch[0]!,
-        0n,
-        source.slice(offsets.offsets[at], offsets.offsets[at + 1]),
+      const current = source.slice(offsets.offsets[at], offsets.offsets[at + 1]);
+      const next = source.slice(offsets.offsets[at + 1], offsets.offsets[at + 2]);
+      this.setLexerLookahead(
+        scan,
+        entry,
+        source,
+        current,
+        next,
+        BigInt(at + 2),
+        BigInt(offsets.count),
       );
-      this.task.position = entry.start + 5;
     }
     return skipped;
+  }
+
+  /** The second _strmid overwrites the scratch left by the first. */
+  private setLexerLookahead(
+    scan: LexerScan,
+    entry: YurisLoopEntry,
+    source: ByteString,
+    current: ByteString,
+    result: ByteString,
+    start: bigint,
+    count: bigint,
+  ): void {
+    const task = this.task;
+    const callee = task.frameAt(task.gosubDepth + 1);
+    const caller = task.frame;
+    // GOSUB 0x442C84 with extra 0x218 and RETURN 0x44B7DC with extra 0x200.
+    const params = callee.flags[0]!;
+    params[0] = 3;
+    params[1] = 0;
+    params[2] = params[3] = 1;
+    callee.flags[1]![0] = 0;
+    callee.flags[2]![0] = callee.flags[2]![1] = 1;
+    const ints = callee.ints[0]!;
+    ints[1] = 0n;
+    ints[2] = start;
+    ints[3] = 1n;
+    callee.strings[0]![1] = source;
+    caller.returnPosition = entry.start + 6;
+    caller.returnScript = task.script;
+    caller.returnLine = this.current.script.lines[entry.start + 5] ?? 0;
+    caller.ifDepth = entry.ifDepth;
+    caller.loopDepth = task.loopDepth;
+    caller.flags[3]![0] = 0;
+    caller.flags[4]![0] = 0;
+    caller.flags[5]![0] = caller.flags[5]![1] = 1;
+    caller.strings[1]![1] = result;
+    this.writeSliceScratch(scan.slice, start, 1n, count);
+    this.setString(scan.slice.result, 0n, result);
+    this.closeSliceIfs(scan.calleePosition, entry.ifDepth);
+    const scratch = scan.run.scratch;
+    const entries = this.variables.entries;
+    this.setString(scratch[0]!, 0n, current);
+    this.setString(scratch[1]!, 0n, result);
+    const code = sjisCode(current);
+    entries[scratch[2]!]!.ints![0] = BigInt(code);
+    entries[scratch[3]!]!.ints![0] = BigInt(sjisCode(result));
+    entries[scratch[4]!]!.ints![0] = BigInt(code >>> 8);
+    entries[scratch[5]!]!.ints![0] = BigInt(code & 255);
+    task.position = entry.start + 11;
+    const initial = scan.run.initial;
+    if (initial && entries[scan.run.state]!.ints![0] === 0n) {
+      const outer = task.ifEntry(task.ifDepth++);
+      outer.position = entry.start + 11;
+      outer.loopDepth = task.loopDepth;
+      outer.end = entry.start + 240;
+      const inner = task.ifEntry(task.ifDepth++);
+      inner.position = entry.start + 12;
+      inner.loopDepth = task.loopDepth;
+      inner.end = entry.start + 177;
+      task.position = entry.start + initial[code]!;
+    }
   }
 
   private canBatchLoop(script: number, first: number, last: number): boolean {
@@ -1503,15 +1575,7 @@ export class YurisMachine {
     const count = BigInt(chars.count);
     if (start > count) return;
 
-    const {result, start: startId, length: lengthId, count: countId} = slice;
-    for (const id of [result, startId, lengthId, countId]) {
-      const variable = variables[id]!;
-      if (variable.dimensions.length) variable.dimensions = [];
-    }
-    this.variables.allocateString(result, '');
-    this.variables.allocateInt(startId, start);
-    this.variables.allocateInt(lengthId, length);
-    this.variables.allocateInt(countId, count);
+    this.writeSliceScratch(slice, start, length, count);
     if (
       length === 1n &&
       this.handlers[0x66] === this.nativeVarAct &&
@@ -1520,13 +1584,12 @@ export class YurisMachine {
       // For a single in-bounds character the clamp is false. VARACT COPY
       // (0x45353C) uses these same CP932 offsets and the native string setter.
       const offset = Number(start) - 1;
-      this.setString(result, 0n, source.slice(chars.offsets[offset], chars.offsets[offset + 1]));
-      for (let i = 0; i < 3; i++) {
-        const closed = task.ifEntry(task.ifDepth + i);
-        closed.position = entry + 5 + i;
-        closed.loopDepth = task.loopDepth;
-        closed.end = 0;
-      }
+      this.setString(
+        slice.result,
+        0n,
+        source.slice(chars.offsets[offset], chars.offsets[offset + 1]),
+      );
+      this.closeSliceIfs(entry, task.ifDepth);
       task.position = entry + 13;
       return;
     }
@@ -1539,6 +1602,33 @@ export class YurisMachine {
     inner.loopDepth = task.loopDepth;
     inner.end = entry + 11;
     task.position = entry + 7;
+  }
+
+  private writeSliceScratch(
+    slice: StringSlicePrelude,
+    start: bigint,
+    length: bigint,
+    count: bigint,
+  ): void {
+    const entries = this.variables.entries;
+    for (const id of [slice.result, slice.start, slice.length, slice.count]) {
+      const variable = entries[id]!;
+      if (variable.dimensions.length) variable.dimensions = [];
+    }
+    this.variables.allocateString(slice.result, '');
+    this.variables.allocateInt(slice.start, start);
+    this.variables.allocateInt(slice.length, length);
+    this.variables.allocateInt(slice.count, count);
+  }
+
+  private closeSliceIfs(entry: number, depth: number): void {
+    const task = this.task;
+    for (let i = 0; i < 3; i++) {
+      const closed = task.ifEntry(depth + i);
+      closed.position = entry + 5 + i;
+      closed.loopDepth = task.loopDepth;
+      closed.end = 0;
+    }
   }
 
   private foldArrayRanges(caller: number, entry: number): void {
@@ -1694,7 +1784,7 @@ export class YurisMachine {
     }
     const id = e.lastId;
     const variable = this.variables.get(id);
-    variable.dimensions = e.declaredDimensions;
+    variable.dimensions = e.declaredDimensions(variable.dimensions);
     if (type === YurisType.Int)
       this.variables.allocateInt(id, value ? e.intOf(value.type, value.expression) : 0n);
     else if (type === YurisType.Float)
