@@ -182,7 +182,10 @@ export class BrowserRasterText {
   private readonly resize: ResizeObserver;
   private width = 0;
   private height = 0;
-  constructor(readonly canvas: HTMLCanvasElement) {
+  constructor(
+    readonly canvas: HTMLCanvasElement,
+    private readonly isInteractiveFlow?: (flow: string) => boolean,
+  ) {
     const parent = canvas.parentElement;
     if (!parent) throw new Error('DOM text requires an attached presentation canvas');
     this.text = new DomGlyphSlots(parent);
@@ -237,8 +240,11 @@ export class BrowserRasterText {
       followers = rasterTextFollowers(slots.map(({slot}) => slot)),
       markers = new Set(followers.map(([follower]) => follower));
     for (const {slot, family} of slots) {
+      const flow = slot.glyphs[0]?.flow;
+      if (flow !== undefined && this.isInteractiveFlow)
+        slot.interactive = this.isInteractiveFlow(flow);
       const classes = [
-        ...(slot.glyphs[0]?.flow !== undefined ? ['game-text-overlay'] : []),
+        ...(flow !== undefined ? ['game-text-overlay'] : []),
         ...(markers.has(slot.id) ? ['game-text-marker'] : []),
       ];
       this.text.show(classes.length ? {...slot, classes} : slot, 1, family, false);

@@ -32,6 +32,7 @@ WINDOW MENUID installs a window menu; TRAY (0x452FB4) retains its label, optiona
 
 ## Host differences
 
+- The bilingual scenario library can receive `VO2`, `VO3` and `VO4` cues embedded at the start of the quoted Japanese `ML.TEXT` argument. Scenario loading moves these cues before `ML.TEXT` so the regular voice macros handle them in either language. The archived bytes and source line numbers stay intact.
 - Menus and the tray use page controls instead of OS chrome. The default application tray icon is represented by its label. Menu labels have dynamic storage rather than the native 0x105-byte allocation.
 - PRODUCT caption uses a dynamically sized string rather than a fixed native buffer.
 - GBK messages cross the host boundary already decoded.

@@ -2,6 +2,7 @@ import type {YurisMachine} from './machine.js';
 import {YurisError} from './errors.js';
 import {windowsPath} from './fileact.js';
 import {cString, isLeadByte} from './numbers.js';
+import {YurisScenarioText} from './scenario-text.js';
 
 const TEXT = 0x62,
   TEXTINFO = 0x63;
@@ -14,7 +15,15 @@ const enum Arg {
 }
 
 export function installText(m: YurisMachine): void {
-  m.define(TEXT, () => text(m));
+  const label = (name: string) => m.project.labels.labels[m.label(new TextEncoder().encode(name))];
+  const scenario = label('es.SCENARIO.LOAD');
+  const bilingual = label('es.ScenarioMacro.ML.TEXT');
+  m.define(TEXT, () =>
+    text(
+      m,
+      !!bilingual && m.task.script === scenario?.script && m.position === scenario.position + 1,
+    ),
+  );
   // TEXTINFO 0x452F94 only decodes its arguments.
   m.define(TEXTINFO, () => {
     m.decode();
@@ -26,7 +35,7 @@ export function installText(m: YurisMachine): void {
  * TEXT 0x452C4C. FILE reads a text file through 0x40BC29 into the string array LET, one line
  * per element from element 0. CLEAR=1 empties the message text buffers (0x46A1CC).
  */
-async function text(m: YurisMachine): Promise<number> {
+async function text(m: YurisMachine, scenario: boolean): Promise<number> {
   const a = m.args;
   m.decode();
   const fileSlot = a.has(Arg.File);
@@ -42,7 +51,7 @@ async function text(m: YurisMachine): Promise<number> {
     } catch {
       throw new YurisError(0x1964a, [name], false);
     }
-    splitLines(m, id, bytes);
+    splitLines(m, id, bytes, scenario ? new YurisScenarioText() : undefined);
   }
   const clearSlot = a.has(Arg.Clear);
   if (clearSlot && a.int(Arg.Clear) === 1n) {
@@ -61,7 +70,12 @@ async function text(m: YurisMachine): Promise<number> {
  * an empty string follow at the next two indices; 0x45BDE4 drops out-of-range writes. Lines
  * are built in a C string buffer, so an embedded NUL ends what is stored.
  */
-function splitLines(m: YurisMachine, id: number, bytes: Uint8Array): void {
+function splitLines(
+  m: YurisMachine,
+  id: number,
+  bytes: Uint8Array,
+  scenario?: YurisScenarioText,
+): void {
   const size = bytes.length + 2,
     data = new Uint8Array(size);
   data.set(bytes);
@@ -75,7 +89,8 @@ function splitLines(m: YurisMachine, id: number, bytes: Uint8Array): void {
     const byte = data[i]!;
     if (byte === 0x0d || byte === 0x0a) {
       if (line >= bound) break;
-      m.setString(id, line, cString(current) + '\r');
+      const value = cString(current);
+      m.setString(id, line, (scenario?.normalize(value) ?? value) + '\r');
       i += byte === 0x0d && data[i + 1] === 0x0a ? 2 : 1;
       line++;
       current = '';

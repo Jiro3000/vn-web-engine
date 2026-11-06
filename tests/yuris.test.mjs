@@ -1964,3 +1964,49 @@ test('YU-RIS TRAY keeps icon ownership, menu snapshots and missing-layer early r
   run(0x64, {0: 0n});
   assert.equal(calls.at(-1)[0], null);
 });
+
+test('YU-RIS scenario loading restores voice commands embedded in Japanese ML.TEXT', async () => {
+  const {installText} = await import('../dist/engines/yuris/vm/text.js');
+  const voice = String.raw`\VO2(CUE_B)\VO3(CUE_C)\VO4()`;
+  const text = String.raw`\X30` + '\x81\x5c' + 'text';
+  const original = String.raw`\VO(CUE_A)\ML.TEXT("first","` + voice + text + '")';
+  const repaired = String.raw`\VO(CUE_A)` + voice + String.raw`\ML.TEXT("first","` + text + '")';
+  const midText = String.raw`\ML.TEXT("first","literal \VO2(CUE_D)")`;
+  const lines = [original, '// ' + original, '/*', original, '*/ ' + original, midText];
+  const handlers = new Map();
+  const stored = [];
+  const m = {
+    project: {
+      labels: {
+        labels: [
+          {script: 5, position: 7},
+          {script: 6, position: 0},
+        ],
+      },
+    },
+    label: (name) =>
+      ['es.SCENARIO.LOAD', 'es.ScenarioMacro.ML.TEXT'].indexOf(Buffer.from(name).toString()),
+    task: {script: 5},
+    position: 8,
+    define: (id, fn) => handlers.set(id, fn),
+    decode() {},
+    args: {has: (id) => (id < 2 ? id + 1 : 0), variable: [0, 0, 42], text: () => 'scene.txt'},
+    files: {exists: () => true, read: async () => Buffer.from(lines.join('\r\n'), 'latin1')},
+    variables: {get: () => ({dimensions: [16]})},
+    setString: (id, index, value) => {
+      assert.equal(id, 42);
+      stored[Number(index)] = value;
+    },
+  };
+  installText(m);
+  await handlers.get(0x62)();
+  assert.deepEqual(
+    stored,
+    [repaired, lines[1], lines[2], original, '*/ ' + repaired, midText]
+      .map((line) => line + '\r')
+      .concat('', ''),
+  );
+  m.position++;
+  await handlers.get(0x62)();
+  assert.deepEqual(stored, lines.map((line) => line + '\r').concat('', ''));
+});

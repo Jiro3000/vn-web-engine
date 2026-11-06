@@ -94,6 +94,7 @@ export class BrowserRasterTextPresentation {
     if (this.mode === 'dom')
       for (const [canvas, value] of this.presentations) this.render(canvas, value);
   });
+  constructor(private readonly isInteractiveFlow?: (flow: string) => boolean) {}
   get textMode(): BrowserTextMode {
     return this.mode;
   }
@@ -207,7 +208,7 @@ export class BrowserRasterTextPresentation {
       }
       const finishOverlay = beginRuntimeSpan('text.presentation.overlay');
       try {
-        value.overlay ??= new BrowserRasterText(canvas);
+        value.overlay ??= new BrowserRasterText(canvas, this.isInteractiveFlow);
         value.overlay.show(frame, glyphs, value.width, value.height);
       } finally {
         finishOverlay?.({glyphs: glyphs.length});

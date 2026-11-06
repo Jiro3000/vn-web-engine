@@ -99,7 +99,10 @@ export class YurisBrowserPlayer {
   readonly windows: BrowserLegacyWindows;
   readonly movie: BrowserFileMovie;
   readonly menus: BrowserWindowsMenus;
-  private readonly textPresentation = new BrowserRasterTextPresentation();
+  // The es.SEL library draws option labels over its canvas hit targets.
+  private readonly textPresentation = new BrowserRasterTextPresentation(
+    (flow) => !flow.startsWith('ES.SEL.'),
+  );
   private textModeChanged = false;
   private domFontsReady = false;
   private readonly codecs = new LegacyImageCodec();
