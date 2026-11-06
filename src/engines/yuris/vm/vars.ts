@@ -26,7 +26,7 @@ interface CharacterOffsets {
 // VARINFO LENGTH and VARACT COPY often inspect the same immutable string repeatedly.
 const lastCharacterOffsets = new WeakMap<YurisMachine, CharacterOffsets>();
 
-function characterOffsets(machine: YurisMachine, text: ByteString): CharacterOffsets {
+export function characterOffsets(machine: YurisMachine, text: ByteString): CharacterOffsets {
   let cached = lastCharacterOffsets.get(machine);
   if (cached?.text === text) return cached;
   const offsets =

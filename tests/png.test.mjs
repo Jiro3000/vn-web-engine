@@ -62,6 +62,21 @@ test('PNG palette/sub-byte expansion and transparent grayscale/RGB samples', asy
     }),
   );
   assert.deepEqual([...indexed.pixels], [255, 0, 0, 0, 0, 0, 255, 128, 255, 0, 0, 0]);
+  const indexed8 = await decodePng(
+    png({
+      width: 3,
+      height: 2,
+      type: 3,
+      depth: 8,
+      extras: [palette, alpha],
+      raw: Buffer.from([0, 0, 1, 0, 2, 1, 255, 1]),
+    }),
+  );
+  assert.deepEqual([...indexed8.indices], [0, 1, 0, 1, 0, 1]);
+  assert.deepEqual(
+    [...indexed8.pixels],
+    [255, 0, 0, 0, 0, 0, 255, 128, 255, 0, 0, 0, 0, 0, 255, 128, 255, 0, 0, 0, 0, 0, 255, 128],
+  );
   const gray = await decodePng(
     png({
       width: 4,

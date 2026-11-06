@@ -282,6 +282,36 @@ export async function decodePng(
     ? new DataView(alpha.buffer, alpha.byteOffset, alpha.length)
     : undefined;
   let cursor = 0;
+  if (littleEndian && !interlace && depth === 8 && type === 3 && palette && indices) {
+    // Indexed 8-bit scanlines already have one byte per output pixel. Keep the
+    // unfiltered indices and expand through a packed RGBA palette in one pass.
+    const colors = new Uint32Array(palette.length / 3);
+    for (let i = 0; i < colors.length; i++) {
+      const p = i * 3;
+      colors[i] =
+        palette[p]! |
+        (palette[p + 1]! << 8) |
+        (palette[p + 2]! << 16) |
+        ((alpha?.[i] ?? 255) << 24);
+    }
+    const words = new Uint32Array(pixels.buffer);
+    let previous = new Uint8Array(width);
+    for (let y = 0; y < height; y++) {
+      const filter = raw[cursor++]!;
+      if (filter > 4) throw new Error(`Invalid PNG filter ${filter}`);
+      const start = y * width;
+      const row = indices.subarray(start, start + width);
+      unfilter(filter, raw, cursor, row, previous, 1);
+      for (let x = 0; x < width; x++) {
+        const color = colors[row[x]!];
+        if (color === undefined) throw new Error('PNG palette index out of range');
+        words[start + x] = color;
+      }
+      previous = row;
+      cursor += width;
+    }
+    return {width, height, colorType: type, bitDepth: depth, pixels, indices};
+  }
   if (littleEndian && !interlace && depth === 8 && (type === 6 || (type === 2 && !transparent))) {
     const words = new Int32Array(pixels.buffer, pixels.byteOffset, width * height),
       stride = width * channels;

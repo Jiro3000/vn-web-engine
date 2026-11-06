@@ -1,4 +1,4 @@
-import type {YurisInstruction, YurisToken} from '../../../formats/yuris/ybn.js';
+import type {YurisArgument, YurisInstruction, YurisToken} from '../../../formats/yuris/ybn.js';
 import {SYSTEM_VARIABLE_LIMIT, YurisType, type YurisVariables} from './variables.js';
 
 const LET = 0x35;
@@ -7,6 +7,8 @@ const LOOPEND = 0x3a;
 const COUNTER = 0x30;
 const IF = 0x2c;
 const IFEND = 0x30;
+const ELSE = 0x0b;
+const IFBLEND = 0x2d;
 
 type Assignment = {target: number; first: number} & ({value: bigint} | {offset: number});
 
@@ -155,6 +157,7 @@ export interface GuardLoop {
   readonly scalars: readonly VariableRead[];
   readonly order?: {index: number; base: number; length: number};
   readonly cursor?: number;
+  readonly branchDepth?: number;
 }
 
 function guardVariable(token: YurisToken | undefined, operator: number): VariableRead | null {
@@ -253,12 +256,13 @@ export function scanGuardLoop(
   if (
     branch?.command !== IF ||
     branch.args.length !== 3 ||
-    branch.args[1]!.size !== 0 ||
     branch.args[2]!.size !== end - 1 ||
     instructions[end - 1]?.command !== IFEND ||
     instructions[end]?.command !== LOOPEND
   )
     return null;
+  if (branch.args[1]!.size !== 0)
+    return order || alias ? null : scanBranchedGuard(instructions, start, end - 1);
   const condition = branch.args[0]!;
   const tokens = condition.tokens;
   if (condition.type !== 1 || !tokens || tokens.length > 128) return null;
@@ -376,6 +380,119 @@ export function scanGuardLoop(
     order: order ?? undefined,
     cursor: alias?.id,
   };
+}
+
+/** A rejected IF/ELSE chain reaches IFEND without executing any arm. */
+function scanBranchedGuard(
+  instructions: readonly YurisInstruction[],
+  start: number,
+  end: number,
+): GuardLoop | null {
+  const arrays: CounterRead[] = [];
+  const scalars: VariableRead[] = [];
+  const keys: (bigint | VariableRead)[] = [];
+  type Key = (typeof keys)[number];
+  let primary: CounterRead | undefined;
+
+  const predicate = (argument: YurisArgument | undefined): Key[] | null => {
+    const tokens = argument?.tokens;
+    if (argument?.type !== 1 || !tokens || tokens.length > 128) return null;
+    type Term = {operand: Key; array?: CounterRead} | {keys: Key[] | null};
+    const stack: Term[] = [];
+    for (let i = 0; i < tokens.length;) {
+      const array = counterRead(tokens, i, COUNTER);
+      if (array) {
+        arrays.push(array.read);
+        stack.push({operand: array.read, array: array.read});
+        i = array.next;
+        continue;
+      }
+      const token = tokens[i++]!;
+      const scalar = guardVariable(token, 0x48);
+      const value = scalar ?? integer(token);
+      if (value !== undefined) {
+        if (scalar) scalars.push(scalar);
+        stack.push({operand: value});
+        continue;
+      }
+      const right = stack.pop(),
+        left = stack.pop();
+      if (!left || !right) return null;
+      if (token.op === 0x3d && 'operand' in left && 'operand' in right) {
+        const type = (key: Key) => (typeof key === 'bigint' ? YurisType.Int : key.type);
+        if (type(left.operand) !== type(right.operand)) return null;
+        if (!!left.array === !!right.array) {
+          stack.push({keys: null});
+          continue;
+        }
+        const array = left.array ?? right.array!;
+        if (
+          primary &&
+          (primary.id !== array.id ||
+            primary.offset !== array.offset ||
+            primary.type !== array.type)
+        )
+          return null;
+        primary = array;
+        stack.push({keys: [left.array ? right.operand : left.operand]});
+      } else if ('keys' in left && 'keys' in right && token.op === 0x26) {
+        stack.push({keys: left.keys ?? right.keys});
+      } else if ('keys' in left && 'keys' in right && token.op === 0x7c) {
+        stack.push({keys: left.keys && right.keys ? [...left.keys, ...right.keys] : null});
+      } else return null;
+    }
+    const result = stack[0];
+    return stack.length === 1 && result && 'keys' in result ? result.keys : null;
+  };
+
+  let at = start;
+  let stop = end;
+  let conditional = IF;
+  let depth = 1;
+  for (let arms = 0; arms < 8; arms++) {
+    const branch = instructions[at];
+    if (
+      branch?.command !== conditional ||
+      branch.args.length !== 3 ||
+      branch.args[2]!.size !== (conditional === IF ? stop : 0)
+    )
+      return null;
+    const candidates = predicate(branch.args[0]);
+    if (!candidates) return null;
+    keys.push(...candidates);
+    const next = branch.args[1]!.size;
+    if (next === 0) {
+      if (!primary || keys.length === 0 || keys.length > 16) return null;
+      return {
+        primary,
+        value: keys[0]!,
+        alternatives: keys.slice(1),
+        operator: 0x3d,
+        arrays,
+        scalars,
+        branchDepth: depth,
+      };
+    }
+    if (
+      next <= at + 1 ||
+      next >= stop ||
+      instructions[next - 1]?.command !== IFBLEND ||
+      instructions[next]?.command !== ELSE
+    )
+      return null;
+    if (instructions[next]!.args.length === 0) {
+      // A plain ELSE containing exactly one nested IF and its closing IFEND.
+      at = next + 1;
+      stop--;
+      depth++;
+      if (instructions[stop]?.command !== IFEND) return null;
+      conditional = IF;
+    } else {
+      at = next;
+      conditional = ELSE;
+    }
+  }
+  return null;
 }
 
 function comparable(variables: YurisVariables, {id, type}: VariableRead) {

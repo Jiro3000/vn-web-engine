@@ -25,7 +25,7 @@ import {YurisExpression} from './expression.js';
 import {type YurisFolderHost, type YurisImageEncoder, installFiles} from './fileact.js';
 import {type YurisFileHost, YurisFiles} from './files.js';
 import {type YurisInputHost, YurisInput, installInput} from './input.js';
-import {type ByteString, STRING_CAPACITY, fistp, i64} from './numbers.js';
+import {type ByteString, STRING_CAPACITY, fistp, i64, isLeadByte} from './numbers.js';
 import {asciiLower} from './sjis.js';
 import {YurisFramePacer} from './pacing.js';
 import {YurisSystem, type YurisSystemHost} from './system.js';
@@ -46,7 +46,14 @@ import {SYSTEM_VARIABLE_LIMIT, YurisType, YurisVariables} from './variables.js';
 import {installMath} from './math.js';
 import {type YurisFontHost, YurisFonts, installFonts} from './font.js';
 import {type YurisSoundHost, YurisSounds} from './sound.js';
-import {installVariableCommands} from './vars.js';
+import {characterOffsets, installVariableCommands} from './vars.js';
+import {
+  scanArrayRanges,
+  scanCharacterSearch,
+  scanLexerRun,
+  scanStringSlice,
+  type LexerRun,
+} from './library-fast-paths.js';
 import {type YurisWindowHost, YurisWindows} from './window.js';
 
 /**
@@ -161,6 +168,12 @@ interface LoadedScript {
   readonly gosubLabel: Uint16Array;
 }
 
+interface LexerScan {
+  readonly run: LexerRun;
+  readonly calleeScript: number;
+  readonly calleePosition: number;
+}
+
 export interface YurisMachineHost
   extends
     YurisSystemHost,
@@ -235,10 +248,23 @@ export class YurisMachine {
   private readonly loopHandler = () => this.loop();
   private readonly loopEndHandler = () => this.loopEnd();
   private readonly ifHandler = () => this.if();
+  private readonly elseHandler = () => this.else();
+  private readonly ifBlendHandler = () => this.ifBlend();
   private readonly ifEndHandler = () => this.ifEnd();
   private readonly gosubHandler = () => this.gosub();
   private readonly returnHandler = () => this.return();
   private readonly intHandler = () => this.declare(YurisType.Int);
+  private readonly strHandler = () => this.declare(YurisType.String);
+  private readonly nativeVarInfo: YurisCommandHandler | undefined;
+  private readonly nativeVarAct: YurisCommandHandler | undefined;
+  private readonly arrayRanges = new WeakMap<
+    YurisInstruction,
+    ReturnType<typeof scanArrayRanges>
+  >();
+  private readonly stringSlices = new WeakMap<
+    YurisInstruction,
+    ReturnType<typeof scanStringSlice>
+  >();
   private readonly initializerLoops = new WeakMap<
     YurisInstruction,
     ReturnType<typeof scanInitializer>
@@ -247,9 +273,14 @@ export class YurisMachine {
   private readonly rowShifts = new WeakMap<YurisInstruction, ReturnType<typeof scanRowShift>>();
   private readonly guardLoops = new WeakMap<YurisInstruction, GuardLoop | null>();
   private readonly inactiveLoops = new WeakMap<YurisInstruction, InactiveLoop | null>();
+  private readonly lexerRuns = new WeakMap<YurisInstruction, LexerScan | null>();
+  private readonly characterSearches = new WeakMap<
+    YurisInstruction,
+    ReturnType<typeof scanCharacterSearch>
+  >();
   private readonly activeScans = new WeakMap<
     YurisLoopEntry,
-    {script: number} & ({guard: GuardLoop} | {inactive: InactiveLoop})
+    {script: number} & ({guard: GuardLoop} | {inactive: InactiveLoop} | {lexer: LexerScan})
   >();
   private readonly loaded = new Map<number, LoadedScript>();
   private current!: LoadedScript;
@@ -283,6 +314,8 @@ export class YurisMachine {
       ? 1
       : 0;
     this.installCore();
+    this.nativeVarInfo = this.handlers[0x67];
+    this.nativeVarAct = this.handlers[0x66];
     this.layers = new YurisLayers(this, this.files, host);
     this.layers.install();
     installYmv(this, host);
@@ -711,8 +744,8 @@ export class YurisMachine {
     this.define(Command.LabelInfo, () => this.labelInfo());
     this.define(Command.Fps, () => this.fps());
     this.define(Command.If, this.ifHandler);
-    this.define(Command.Else, () => this.else());
-    this.define(Command.IfBlend, () => this.ifBlend());
+    this.define(Command.Else, this.elseHandler);
+    this.define(Command.IfBlend, this.ifBlendHandler);
     this.define(Command.IfEnd, this.ifEndHandler);
     this.define(Command.IfBreak, () => this.ifBreak(false));
     this.define(Command.IfContinue, () => this.ifBreak(true));
@@ -727,7 +760,7 @@ export class YurisMachine {
     this.define(Command.End, () => this.end());
     this.define(Command.Int, this.intHandler);
     this.define(Command.Flt, () => this.declare(YurisType.Float));
-    this.define(Command.Str, () => this.declare(YurisType.String));
+    this.define(Command.Str, this.strHandler);
     this.define(Command.Let, this.letHandler);
     installVariableCommands(this);
     installMath(this, this.host.now());
@@ -818,9 +851,85 @@ export class YurisMachine {
     if (entry.limit === 0n) {
       entry.counter = 0n;
       task.position = entry.end;
+    } else if (
+      entry.limit > 2n &&
+      entry.end === entry.start + 5 &&
+      this.batchCharacterSearch(entry)
+    ) {
+      return 0;
     } else if (entry.limit === -1n || (entry.limit >= 64n && entry.limit <= 4_000_000n))
       this.batchLoop(entry);
     return 0;
+  }
+
+  private batchCharacterSearch(entry: YurisLoopEntry): boolean {
+    const instruction = this.instruction;
+    let search = this.characterSearches.get(instruction);
+    if (search === undefined) {
+      search = scanCharacterSearch(
+        this.current.script.instructions,
+        entry.start,
+        entry.end,
+        this.project.commands,
+      );
+      this.characterSearches.set(instruction, search);
+    }
+    if (
+      !search ||
+      entry.ifDepth + 1 >= NESTING_LIMIT ||
+      this.handlers[0x66] !== this.nativeVarAct ||
+      this.handlers[Command.If] !== this.ifHandler ||
+      this.handlers[Command.IfEnd] !== this.ifEndHandler ||
+      this.handlers[Command.LoopEnd] !== this.loopEndHandler ||
+      !this.canBatchLoop(this.task.script, this.position, entry.end)
+    )
+      return false;
+    const variables = this.variables.entries;
+    const strings = variables[55],
+      counter = variables[48];
+    const cursor = variables[search.cursor],
+      length = variables[search.length];
+    const scratch = variables[search.scratch];
+    if (
+      strings?.type !== YurisType.String ||
+      strings.dimensions.length !== 1 ||
+      strings.dimensions[0]! < 3 ||
+      !strings.has(1) ||
+      counter?.type !== YurisType.Int ||
+      cursor?.type !== YurisType.Int ||
+      cursor.ints?.[0] === undefined ||
+      length?.type !== YurisType.Int ||
+      length.ints?.[0] !== 1n ||
+      scratch?.type !== YurisType.String ||
+      scratch.dimensions.length !== 0 ||
+      !scratch.has(0)
+    )
+      return false;
+    const source = this.system.string(55, 1, 0);
+    const needle = this.system.string(55, 2, 0);
+    if (!needle || needle.length > 2 || needle.includes('\0') || source.includes('\0'))
+      return false;
+    const {count, offsets} = characterOffsets(this, source);
+    const first = Number(cursor.ints[0]);
+    const limit = Number(entry.limit);
+    if (
+      !Number.isSafeInteger(first) ||
+      first < 0 ||
+      limit > count - first ||
+      offsets[first + limit]! > source.length
+    )
+      return false;
+    const end = first + limit;
+    let at = first;
+    while (
+      at < end &&
+      (offsets[at + 1]! - offsets[at]! !== needle.length ||
+        !source.startsWith(needle, offsets[at]!))
+    )
+      at++;
+    // Re-run the last rejected iteration, or the sole matching iteration if it is first.
+    entry.counter = BigInt(Math.max(1, Math.min(limit, at - first)));
+    return true;
   }
 
   private batchLoop(entry: YurisLoopEntry): void {
@@ -890,6 +999,17 @@ export class YurisMachine {
     )
       return;
     if (entry.limit === -1n) {
+      if (entry.end - entry.start === 241) {
+        let lexer = this.lexerRuns.get(instruction);
+        if (lexer === undefined) {
+          lexer = this.findLexerScan(entry);
+          this.lexerRuns.set(instruction, lexer);
+        }
+        if (lexer) {
+          this.activeScans.set(entry, {script, lexer});
+          return;
+        }
+      }
       let inactive = this.inactiveLoops.get(instruction);
       if (inactive === undefined) {
         inactive = scanInactiveLoop(instructions, entry.start, entry.end);
@@ -905,7 +1025,7 @@ export class YurisMachine {
         guard = scanGuardLoop(instructions, entry.start, entry.end);
         this.guardLoops.set(instruction, guard);
       }
-      if (guard) {
+      if (guard && this.canSkipBranches(guard, entry.ifDepth)) {
         this.activeScans.set(entry, {script, guard});
         entry.counter = BigInt(skipGuardLoop(guard, this.variables, 1, Number(entry.limit)));
       }
@@ -939,7 +1059,9 @@ export class YurisMachine {
         entry.counter = i64(
           entry.counter + BigInt(skipInactiveLoop(scan.inactive, this.variables)),
         );
-      else
+      else if ('lexer' in scan)
+        entry.counter = i64(entry.counter + BigInt(this.skipLexerRun(scan.lexer, entry.ifDepth)));
+      else if (this.canSkipBranches(scan.guard, entry.ifDepth))
         entry.counter = BigInt(
           skipGuardLoop(scan.guard, this.variables, Number(entry.counter), Number(entry.limit)),
         );
@@ -949,8 +1071,155 @@ export class YurisMachine {
     return 0;
   }
 
+  private findLexerScan(entry: YurisLoopEntry): LexerScan | null {
+    const {start, end} = entry;
+    const run = scanLexerRun(this.current.script.instructions, start, end, this.project.commands);
+    const target = this.current.gosubLabel[start + 3];
+    if (!run || !target || target !== this.current.gosubLabel[start + 5]) return null;
+    const callee = this.project.labels.labels[target];
+    const code = callee && this.scripts.get(callee.script)?.instructions;
+    if (!code) return null;
+    const slice = scanStringSlice(code, callee.position, this.project.commands);
+    if (!slice) return null;
+    const used = new Set([run.text, run.cursor, run.count, run.state, ...run.scratch]);
+    if (run.word) {
+      used.add(run.word.high);
+      used.add(run.word.low);
+      used.add(run.word.result);
+    }
+    if ([slice.result, slice.start, slice.length, slice.count].some((id) => used.has(id)))
+      return null;
+    return {run, calleeScript: callee.script, calleePosition: callee.position};
+  }
+
+  private skipLexerRun(scan: LexerScan, ifDepth: number): number {
+    const {run, calleeScript, calleePosition} = scan;
+    const variables = this.variables.entries;
+    const cursor = variables[run.cursor],
+      state = variables[run.state];
+    const phase = Number(state?.ints?.[0]);
+    if (
+      state?.type !== YurisType.Int ||
+      state.dimensions.length !== 0 ||
+      !(
+        phase === 22 ||
+        (run.spaces && (phase === 31 || phase === 32)) ||
+        (run.comments && phase === 99) ||
+        (run.word && phase >= 91 && phase <= 96)
+      ) ||
+      cursor?.type !== YurisType.Int ||
+      cursor.dimensions.length !== 0 ||
+      !cursor.ints ||
+      ifDepth + 3 >= NESTING_LIMIT ||
+      this.task.gosubDepth >= 0x3f ||
+      !this.loaded.has(calleeScript) ||
+      !this.canBatchLoop(calleeScript, calleePosition, calleePosition + 13) ||
+      this.handlers[Command.Else] !== this.elseHandler ||
+      this.handlers[Command.IfBlend] !== this.ifBlendHandler ||
+      this.handlers[Command.Gosub] !== this.gosubHandler ||
+      this.handlers[Command.Return] !== this.returnHandler ||
+      this.handlers[Command.Str] !== this.strHandler ||
+      this.handlers[Command.Int] !== this.intHandler ||
+      this.handlers[0x66] !== this.nativeVarAct ||
+      this.handlers[0x67] !== this.nativeVarInfo
+    )
+      return 0;
+    const text = variables[run.text],
+      count = variables[run.count];
+    const result = variables[62],
+      ints = variables[53],
+      strings = variables[55];
+    if (
+      text?.type !== YurisType.String ||
+      text.dimensions.length !== 0 ||
+      !text.has(0) ||
+      count?.type !== YurisType.Int ||
+      count.dimensions.length !== 0 ||
+      result?.type !== YurisType.String ||
+      result.dimensions.length !== 1 ||
+      result.dimensions[0]! < 2 ||
+      ints?.type !== YurisType.Int ||
+      ints.dimensions.length !== 1 ||
+      ints.dimensions[0]! < 4 ||
+      strings?.type !== YurisType.String ||
+      strings.dimensions.length !== 1 ||
+      strings.dimensions[0]! < 2 ||
+      !strings.has(1)
+    )
+      return 0;
+    for (let i = 0; i < run.scratch.length; i++) {
+      const scratch = variables[run.scratch[i]!];
+      if (
+        scratch?.type !== (i < 2 ? YurisType.String : YurisType.Int) ||
+        scratch.dimensions.length !== 0 ||
+        !scratch.has(0)
+      )
+        return 0;
+    }
+    const source = text.strings?.[0];
+    if (source === undefined || source.includes('\0')) return 0;
+    const offsets = characterOffsets(this, source);
+    const from = Number(cursor.ints[0]) - 1;
+    if (from < 0 || from >= offsets.count || count.ints?.[0] !== BigInt(offsets.count)) return 0;
+    let to = from;
+    if (phase >= 91 && phase <= 96) {
+      const word = run.word!;
+      const high = variables[word.high],
+        low = variables[word.low];
+      const result = variables[word.result];
+      if (
+        high?.type !== YurisType.Int ||
+        high.dimensions.length !== 1 ||
+        low?.type !== YurisType.Int ||
+        low.dimensions.length !== 1 ||
+        result?.type !== YurisType.Int ||
+        result.dimensions.length !== 0 ||
+        !result.has(0)
+      )
+        return 0;
+      while (to < offsets.count) {
+        const at = offsets.offsets[to]!;
+        const byte = source.charCodeAt(at);
+        const lead = isLeadByte(byte);
+        const hi = high.ints?.[lead ? byte : 0];
+        const lo = low.ints?.[lead ? 0 : byte];
+        if (hi === undefined || lo === undefined || i64(hi + lo) === 0n) break;
+        to++;
+      }
+    } else {
+      const single = phase === 31 ? 32 : 9;
+      while (to < offsets.count) {
+        const byte = source.charCodeAt(offsets.offsets[to]!);
+        if (
+          phase === 22
+            ? byte === 34 || byte === 13
+            : phase === 99
+              ? byte === 13 ||
+                (byte === 42 &&
+                  to + 1 < offsets.count &&
+                  source.charCodeAt(offsets.offsets[to + 1]!) === 47)
+              : byte !== single
+        )
+          break;
+        to++;
+      }
+    }
+    const skipped = Math.max(0, to - from - 1);
+    if (skipped) cursor.ints[0] = BigInt(from + skipped + 1);
+    return skipped;
+  }
+
   private canBatchLoop(script: number, first: number, last: number): boolean {
     return !this.host.trace || this.host.traceRange?.(script, first, last) === false;
+  }
+
+  private canSkipBranches(guard: GuardLoop, depth: number): boolean {
+    return (
+      guard.branchDepth === undefined ||
+      (depth + guard.branchDepth < NESTING_LIMIT &&
+        this.handlers[Command.Else] === this.elseHandler &&
+        this.handlers[Command.IfBlend] === this.ifBlendHandler)
+    );
   }
 
   /** LOOPBREAK 0x445F60 and LOOPCONTINUE 0x446018: jump to the LV-th enclosing LOOPEND. */
@@ -1050,7 +1319,143 @@ export class YurisMachine {
     frame.loopDepth = task.loopDepth;
     task.gosubDepth++;
     this.enter(label.script, label.position);
+    const command = this.current.script.instructions[label.position]?.command;
+    if (command === Command.Str) this.foldStringSlice(frame.returnScript, label.position);
+    else if (command === Command.Int) this.foldArrayRanges(frame.returnScript, label.position);
     return 0;
+  }
+
+  private foldStringSlice(caller: number, entry: number): void {
+    const instructions = this.current.script.instructions;
+    const first = instructions[entry];
+    if (first?.command !== Command.Str) return;
+    let slice = this.stringSlices.get(first);
+    if (slice === undefined) {
+      slice = scanStringSlice(instructions, entry, this.project.commands);
+      this.stringSlices.set(first, slice);
+    }
+    const task = this.task;
+    if (
+      !slice ||
+      task.ifDepth + 3 >= NESTING_LIMIT ||
+      this.handlers[Command.Str] !== this.strHandler ||
+      this.handlers[Command.Int] !== this.intHandler ||
+      this.handlers[Command.If] !== this.ifHandler ||
+      this.handlers[0x67] !== this.nativeVarInfo ||
+      !this.canBatchLoop(caller, this.position, this.position) ||
+      !this.canBatchLoop(task.script, entry, entry + 13)
+    )
+      return;
+
+    const variables = this.variables.entries;
+    const ints = variables[53],
+      strings = variables[55];
+    if (
+      ints?.type !== YurisType.Int ||
+      ints.dimensions.length !== 1 ||
+      ints.dimensions[0]! < 4 ||
+      strings?.type !== YurisType.String ||
+      strings.dimensions.length !== 1 ||
+      strings.dimensions[0]! < 2 ||
+      !strings.has(1) ||
+      !variables[slice.result] ||
+      !variables[slice.start] ||
+      !variables[slice.length] ||
+      !variables[slice.count]
+    )
+      return;
+    const start = this.system.int(53, 2, 0);
+    const length = this.system.int(53, 3, 0);
+    if (start <= 0n || length <= 0n) return;
+    const count = BigInt(characterOffsets(this, this.system.string(55, 1, 0)).count);
+    if (start > count) return;
+
+    const {result, start: startId, length: lengthId, count: countId} = slice;
+    for (const id of [result, startId, lengthId, countId]) {
+      const variable = variables[id]!;
+      if (variable.dimensions.length) variable.dimensions = [];
+    }
+    this.variables.allocateString(result, '');
+    this.variables.allocateInt(startId, start);
+    this.variables.allocateInt(lengthId, length);
+    this.variables.allocateInt(countId, count);
+    const outer = task.ifEntry(task.ifDepth++);
+    outer.position = entry + 5;
+    outer.loopDepth = task.loopDepth;
+    outer.end = entry + 12;
+    const inner = task.ifEntry(task.ifDepth++);
+    inner.position = entry + 6;
+    inner.loopDepth = task.loopDepth;
+    inner.end = entry + 11;
+    task.position = entry + 7;
+  }
+
+  private foldArrayRanges(caller: number, entry: number): void {
+    const instructions = this.current.script.instructions;
+    const first = instructions[entry]!;
+    let ranges = this.arrayRanges.get(first);
+    if (ranges === undefined) {
+      ranges = scanArrayRanges(instructions, entry, this.project.commands);
+      this.arrayRanges.set(first, ranges);
+    }
+    const task = this.task;
+    if (
+      !ranges ||
+      task.ifDepth + 1 >= NESTING_LIMIT ||
+      this.handlers[Command.Int] !== this.intHandler ||
+      this.handlers[Command.If] !== this.ifHandler ||
+      this.handlers[Command.IfEnd] !== this.ifEndHandler ||
+      this.handlers[Command.IfBlend] !== this.ifBlendHandler ||
+      this.handlers[Command.Else] !== this.elseHandler ||
+      this.handlers[Command.Let] !== this.letHandler ||
+      !this.canBatchLoop(caller, this.position, this.position) ||
+      !this.canBatchLoop(task.script, entry, entry + 9)
+    )
+      return;
+
+    const variables = this.variables.entries;
+    const params = variables[53];
+    if (
+      params?.type !== YurisType.Int ||
+      params.dimensions.length !== 1 ||
+      params.dimensions[0]! < 3
+    )
+      return;
+    const index = this.system.int(53, 1, 0);
+    const value = this.system.int(53, 2, 0);
+    const element = Number(index);
+    if (element < 0 || element > 0x7fffffff) return;
+    const [lo0, hi0, lo1, hi1] = ranges.arrays;
+    const lo = variables[lo0],
+      hi = variables[hi0],
+      nextLo = variables[lo1],
+      nextHi = variables[hi1];
+    if (!lo || !hi || !nextLo || !nextHi) return;
+    for (const array of [lo, hi, nextLo, nextHi])
+      if (
+        array.type !== YurisType.Int ||
+        array.dimensions.length !== 1 ||
+        array.dimensions[0]! <= element ||
+        array.ints?.[element] === undefined
+      )
+        return;
+    if (!variables[ranges.index] || !variables[ranges.value] || !variables[ranges.result]) return;
+
+    const inside =
+      (lo.ints![element]! <= value && value <= hi.ints![element]!) ||
+      (nextLo.ints![element]! <= value && value <= nextHi.ints![element]!);
+    for (const id of [ranges.index, ranges.value, ranges.result]) {
+      const variable = variables[id]!;
+      if (variable.dimensions.length) variable.dimensions = [];
+    }
+    this.variables.allocateInt(ranges.index, index);
+    this.variables.allocateInt(ranges.value, value);
+    this.variables.allocateInt(ranges.result, inside ? 1n : 0n);
+    const branch = task.ifEntry(task.ifDepth);
+    branch.position = entry + 3;
+    branch.loopDepth = task.loopDepth;
+    branch.end = 0;
+    task.position = entry + 9;
   }
 
   /**

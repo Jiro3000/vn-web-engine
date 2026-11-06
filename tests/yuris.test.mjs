@@ -511,6 +511,34 @@ test('YU-RIS bulk array loops preserve the final iteration and validate before w
   );
   assert.ok(membership);
   assert.equal(skipGuardLoop(membership, variables, 1, 9), 2);
+  const arms = [
+    {
+      command: 0x2c,
+      args: [
+        {type: 1, tokens: [...indexed(1002), token('B', 8), token('=')]},
+        {size: 3},
+        {size: 5},
+      ],
+    },
+    assignment(1001, [token('B', 255)]),
+    {command: 0x2d, args: []},
+    {
+      command: 0x0b,
+      args: [
+        {type: 1, tokens: [...indexed(1002), token('B', 5), token('=')]},
+        {size: 0},
+        {size: 0},
+      ],
+    },
+    assignment(1001, [token('B', 254)]),
+    {command: 0x30},
+    {command: 0x3a},
+  ];
+  const branched = scanGuardLoop(arms, 0, 6);
+  assert.equal(branched?.branchDepth, 1);
+  assert.equal(skipGuardLoop(branched, variables, 1, 9), 2);
+  arms[3] = {...arms[3], args: []};
+  assert.equal(scanGuardLoop(arms, 0, 6), null);
   const mapped = [ref('V', 1002), ref('H', 1004), token(')', 0)];
   const inactive = scanInactiveLoop(
     [
