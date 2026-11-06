@@ -48,14 +48,14 @@ WINDOW MENUID installs a window menu; TRAY (0x452FB4) retains its label, optiona
 - GRADATION retains the native full-source stride for a cropped destination, but discards writes outside the allocated buffer instead of corrupting memory. Vertical ramps also discard rows outside the source height.
 - ROTATION discards accesses outside allocated pixel storage. Fresh output buffers start at zero instead of exposing native malloc contents in regions its worker leaves unwritten. Its trigonometric intermediates use JavaScript doubles instead of x87 extended precision.
 - YMV frame JPEGs are decrypted into owned copies rather than mutating the archive buffer.
-- JPEG decoding uses the browser codec instead of the native libjpeg build; numeric readback can differ, including one-level channel differences in grayscale alpha JPEGs.
+- YMV can decode color and alpha JPEG pairs in browser workers and prepares a bounded window of upcoming frames. JPEG decoding uses the browser codec instead of the native libjpeg build; numeric readback can differ, including one-level channel differences in grayscale alpha JPEGs.
 - The browser MOVIE host uses its installed media codecs and a child video element in the virtual window, rather than DirectShow filters or MCI. Codec availability, color conversion and scheduling follow the browser.
 
 ## Browser player
 
 `yuris.html` opens a read-only folder selection and applies `updateN.ypf` after `pac/`. Browser saves use an IndexedDB overlay keyed by archive-index identity; the installed files are never written. `YurisBrowserPlayer` binds the VM to shared page windows, monochrome font rasterization, codecs, folder storage, registry, dialogs and mutable PCM output. Pointer coordinates are scaled from the displayed canvas to game pixels (0x403F2C).
 
-The browser can compose the main window with integer WebGL2 textures for supported flat mode-0 layers, rule transitions, SIZE2 scaling and unmasked additive layers. Script pixel access materializes the native BGRA window on demand. Unsupported layer trees and unavailable hardware rendering use the software compositor. Both paths present an opaque BGRX window through Canvas 2D, matching the native GDI copy (0x45ECF4). PNG and WebP loaders retain the native alpha-blitter flag for layer composition.
+The browser can compose the main window with integer WebGL2 textures for supported flat mode-0 layers, rule transitions, SIZE2 scaling and unruled additive layers. Script pixel access materializes the native BGRA window on demand. Unsupported layer trees and unavailable hardware rendering use the software compositor. Both paths present an opaque BGRX window through Canvas 2D, matching the native GDI copy (0x45ECF4). PNG and WebP loaders retain the native alpha-blitter flag for layer composition.
 
 CGCASH (0x43E0C8, loader 0x417DDC) queues PNG and WebP decodes on shared browser workers. Its prepared cache has a 160 MiB budget, partitioned into 56 MiB for WebP, 68 MiB for PNG files with at least 2 MiB of encoded data, and 36 MiB for smaller PNG files. A separate 96 MiB cache handles foreground decodes. Each layer receives mutable pixels of its own, and the loader verifies the encoded bytes before reusing a decode. The cache stores uniform decoded buffers as a single packed pixel.
 

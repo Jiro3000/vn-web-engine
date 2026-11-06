@@ -37,14 +37,18 @@ export function installYmv(m: YurisMachine, images: YurisImageHost): void {
       // 0x458B68/0x458C10: decode color JPEG into the layer; JPEG dimensions
       // drive any reallocation. 0x459174 copies grayscale JPEG samples to A.
       const movie = cg.ymv,
-        frame = movie.frame(Number(BigInt.asIntN(32, a.int(3))));
-      const color = await images.decodeImage(frame.color, YurisFileType.Jpg, '');
-      if (movie.alphaMode !== 0 && frame.alpha) {
-        const alpha = await images.decodeImage(frame.alpha, YurisFileType.Jpg, '');
-        if (alpha.width !== color.width || alpha.height !== color.height)
-          throw new Error('YMV: alpha JPEG dimensions differ from color');
-        for (let i = 0; i < color.width * color.height; i++)
-          color.pixels[i * 4 + 3] = alpha.pixels[i * 4]!;
+        index = Number(BigInt.asIntN(32, a.int(3)));
+      let color = await images.decodeYmvFrame?.(movie, index);
+      if (!color) {
+        const frame = movie.frame(index);
+        color = await images.decodeImage(frame.color, YurisFileType.Jpg, '');
+        if (movie.alphaMode !== 0 && frame.alpha) {
+          const alpha = await images.decodeImage(frame.alpha, YurisFileType.Jpg, '');
+          if (alpha.width !== color.width || alpha.height !== color.height)
+            throw new Error('YMV: alpha JPEG dimensions differ from color');
+          for (let i = 0; i < color.width * color.height; i++)
+            color.pixels[i * 4 + 3] = alpha.pixels[i * 4]!;
+        }
       }
       m.layers.markDirty(node);
       cg.replace(color.pixels, color.width, color.height);

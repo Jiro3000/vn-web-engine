@@ -173,8 +173,9 @@ export class YurisIntegerWindow {
       if ((d.mode !== 0 && !additive) || d.a < 0 || d.a > 256 || d.md !== 0x808080 || d.sd !== 0x80)
         return null;
       const pending = d.deferredScale;
-      // The native unmasked additive blitters (0x401124/0x668100) include alpha.
-      if (additive && (d.masked || pending || (d.tid && d.t <= 255))) return null;
+      // Unruled additive layers preserve alpha when masked (0x4011E4) and
+      // add into it when unmasked (0x401124). SIZE2 samples feed either blend.
+      if (additive && d.tid && d.t <= 255) return null;
       const pixels = pending?.pixels ?? d.pixels!;
       let image = pending ?? {
         pixels,

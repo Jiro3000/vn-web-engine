@@ -75,6 +75,18 @@ void main() {
     color = min(uvec4(255u), d + ((s * uint(opacity)) >> 8u));
     return;
   }
+  if (blendKind == 3) {
+    // YU-RIS 0x4011E4 scales the source at partial opacity. The full-opacity
+    // table blitter instead scales the saturated difference (0x668100).
+    uvec3 rgb;
+    if (opacity == 256) rgb = d.rgb + ((min(s.rgb, 255u - d.rgb) * (s.a + 1u)) >> 8u);
+    else {
+      uint k = (s.a * uint(opacity)) >> 8u;
+      rgb = min(uvec3(255u), d.rgb + ((s.rgb * k) >> 8u));
+    }
+    color = uvec4(rgb, d.a);
+    return;
+  }
   if (ruled != 0) {
     int k = texelFetch(weights, ivec2(int(texelFetch(ruleImage, at, 0).r), 0), 0).r;
     if (k <= 1) { color = d; return; }
@@ -350,7 +362,7 @@ export class IntegerWindowGl {
       const u = this.uniforms;
       gl.uniform2i(u.origin!, layer.x, layer.y);
       gl.uniform1i(u.opacity!, layer.alpha);
-      gl.uniform1i(u.blendKind!, layer.additive ? 2 : Number(layer.masked));
+      gl.uniform1i(u.blendKind!, (layer.additive ? 2 : 0) + Number(layer.masked));
       gl.uniform1i(u.ruled!, Number(!!layer.rule));
       gl.uniform1i(u.scaled!, layer.scale ? (layer.scale.sse ? 1 : 2) : 0);
       gl.bindFramebuffer(gl.FRAMEBUFFER, next.framebuffer);

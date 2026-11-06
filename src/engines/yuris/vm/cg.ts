@@ -22,6 +22,7 @@ export interface YurisImage {
 /** Image decoding for CG FILE (the decoders 0x40BF6C, 0x40BF10, 0x40BE98, 0x41C150). */
 export interface YurisImageHost {
   decodeImage(bytes: Uint8Array, type: YurisFileType, path: ByteString): Promise<YurisImage>;
+  decodeYmvFrame?(movie: Ymv, index: number): Promise<YurisImage | undefined>;
 }
 
 type PixelWriter = (

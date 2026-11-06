@@ -28,6 +28,7 @@ import {BrowserFileMovie} from '../../../video/browser-file-movie.js';
 import {setWindowsVirtualKey} from '../../../input/windows-virtual-keys.js';
 import type {YurisCgNode, YurisLayers} from '../vm/cg.js';
 import {YurisIntegerWindow} from './integer-window.js';
+import {BrowserYmvDecoder} from './ymv-decode.js';
 
 const bytes = (s: string): Uint8Array => Uint8Array.from(s, (c) => c.charCodeAt(0));
 const decode = (s: string): string => decodeCp932(bytes(s));
@@ -106,6 +107,7 @@ export class YurisBrowserPlayer {
   private textModeChanged = false;
   private domFontsReady = false;
   private readonly codecs = new LegacyImageCodec();
+  private readonly ymvDecoder = new BrowserYmvDecoder();
   private readonly preloadQueue = new Map<string, string>();
   private readonly preloading = new Set<string>();
   private readonly preloadedArchiveFiles = new Map<string, Uint8Array>();
@@ -203,6 +205,7 @@ export class YurisBrowserPlayer {
       archiveNames: () => files.archives.map((a) => a.archive.entries.map((e) => e.key)),
       decodeImage: (data, type, path) =>
         codec.decodeCached(data, imageMime[type] ?? 'application/octet-stream', true, path),
+      decodeYmvFrame: (movie, frame) => this.ymvDecoder.decode(movie, frame),
       encodeImage: codec.encode.bind(codec),
       now: () => performance.now(),
       sleep: (ms) => process.sleep(ms),
@@ -658,6 +661,7 @@ export class YurisBrowserPlayer {
     this.menus.dispose();
     this.textPresentation.dispose();
     this.integerWindow.dispose();
+    this.ymvDecoder.dispose();
     this.movie.close();
     await this.device.dispose();
     this.audioHost.dispose();

@@ -18,7 +18,8 @@ export async function decodeBrowserImage(
       context = canvas.getContext('2d', {willReadFrequently: true});
     if (!context) throw new Error('Image readback context unavailable');
     context.drawImage(bitmap, 0, 0);
-    const pixels = new Uint8Array(context.getImageData(0, 0, bitmap.width, bitmap.height).data);
+    const {data} = context.getImageData(0, 0, bitmap.width, bitmap.height);
+    const pixels = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
     let opaque = true;
     for (let i = 3; i < pixels.length; i += 4)
       if (pixels[i] !== 255) {
