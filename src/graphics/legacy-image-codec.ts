@@ -66,13 +66,28 @@ class ImageCache {
     return existing;
   }
 
-  put(key: string, entry: CachedImage): void {
+  put(key: string, entry: CachedImage, priority?: ReadonlySet<string>): void {
     this.take(key);
     if (entry.size > this.limit) return;
+    if (this.used + entry.size > this.limit && priority?.size && !priority.has(key)) {
+      let available = this.limit - this.used;
+      for (const [old, value] of this.entries) {
+        if (!priority.has(old)) available += value.size;
+        if (available >= entry.size) break;
+      }
+      if (available < entry.size) return;
+    }
     for (const old of this.entries.keys()) {
       if (this.used + entry.size <= this.limit) break;
-      this.take(old);
+      if (!priority?.has(old)) this.take(old);
     }
+    if (priority?.has(key)) {
+      for (const old of this.entries.keys()) {
+        if (this.used + entry.size <= this.limit) break;
+        this.take(old);
+      }
+    }
+    if (this.used + entry.size > this.limit) return;
     this.entries.set(key, entry);
     this.used += entry.size;
   }
@@ -103,7 +118,15 @@ export class LegacyImageCodec {
   // The more expensive legacy WebP decodes survive bursts of PNG sprite preloads.
   private readonly preparedWebp = new ImageCache(PRELOAD_WEBP_BYTES);
   private readonly preparedLargePng = new ImageCache(PRELOAD_LARGE_PNG_BYTES);
-  private readonly warming = new Map<string, {encoded: Uint8Array; ready: Promise<void>}>();
+  private nextClick = new Set<string>();
+  private readonly warming = new Map<
+    string,
+    {encoded: Uint8Array; ready: Promise<void>; urgent: boolean}
+  >();
+
+  prioritizePng(paths: ReadonlySet<string>): void {
+    this.nextClick = new Set(Array.from(paths, (path) => this.key('image/png', true, path)));
+  }
 
   private key(mime: string, legacyWebpColor: boolean, path: string): string {
     return `${Number(legacyWebpColor)}:${mime}:${path}`;
@@ -122,7 +145,7 @@ export class LegacyImageCodec {
     const existing = cache.entries.get(key) ?? this.recent.entries.get(key);
     if (existing && sameBytes(bytes, existing.encoded)) {
       this.recent.take(key);
-      cache.put(key, existing);
+      cache.put(key, existing, this.nextClick);
       return;
     }
     const pending = this.warming.get(key);
@@ -140,9 +163,10 @@ export class LegacyImageCodec {
       cache.put(
         key,
         cacheImage(encoded, {width: decoded.width, height: decoded.height, pixels}, false),
+        this.nextClick,
       );
     })();
-    this.warming.set(key, {encoded, ready});
+    this.warming.set(key, {encoded, ready, urgent: this.nextClick.has(key)});
     try {
       await ready;
     } finally {
@@ -160,11 +184,12 @@ export class LegacyImageCodec {
     const key = this.key(mime, legacyWebpColor, path);
     const cache = this.preparedFor(mime, bytes.length);
     const pending = this.warming.get(key);
-    if (pending && sameBytes(bytes, pending.encoded)) await pending.ready.catch(() => {});
+    if (pending && !pending.urgent && !this.nextClick.has(key) && sameBytes(bytes, pending.encoded))
+      await pending.ready.catch(() => {});
     const prepared = cache.entries.get(key);
     if (prepared && sameBytes(bytes, prepared.encoded)) {
       // Keep explicitly queued art insulated from foreground decode churn after use.
-      cache.put(key, prepared);
+      cache.put(key, prepared, this.nextClick);
       return copyCached(prepared.image);
     }
     const existing = this.recent.take(key);

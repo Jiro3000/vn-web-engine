@@ -2010,3 +2010,44 @@ test('YU-RIS scenario loading restores voice commands embedded in Japanese ML.TE
   await handlers.get(0x62)();
   assert.deepEqual(stored, lines.map((line) => line + '\r').concat('', ''));
 });
+
+test('YU-RIS lookahead reads PNG hints through one dialogue and stops at choices', async () => {
+  const {YurisSceneLookahead} = await import('../dist/engines/yuris/vm/scene-lookahead.js');
+  const entries = [];
+  const source = [
+    String.raw`\ML.TEXT("first","quoted \SEL.GO()")`,
+    String.raw`\T(T_ABC_1A0100,250)`,
+    String.raw`\ML.S(A,ev/name,250)`,
+    String.raw`\ML.TEXT("second","second")`,
+    String.raw`\S(B,ev/unknown,250)`,
+    String.raw`\SEL.GO()`,
+    String.raw`\ML.TEXT("third","third")`,
+  ];
+  for (const [id, ints] of [
+    [1157, [1n]],
+    [3039, [1n]],
+    [3040, [0n]],
+    [2930, [2n]],
+    [2931, [2n, 5n]],
+    [1176, new BigInt64Array(256)],
+  ])
+    entries[id] = {ints, dimensions: [256, 1]};
+  entries[3038] = {strings: ['scenario.txt']};
+  entries[2899] = {strings: source};
+  entries[2932] = {strings: ['cg/stand/m_050/irrelevant', 'cg/ev/unknown']};
+  let time = 0;
+  const lookahead = new YurisSceneLookahead({variables: {entries}, now: () => time});
+  lookahead.observeImage('cg\\stand\\m_040\\t_abc\\t_abc_1a\\t_abc_1a0100.png');
+  assert.equal(lookahead.update(), undefined);
+  time = 61;
+  assert.deepEqual(lookahead.update(), [
+    'cg/stand/m_040/T_ABC/T_ABC_1A/T_ABC_1A0100',
+    'cg/ev/name_c',
+  ]);
+  assert.equal(lookahead.update(), undefined);
+  entries[3039].ints[0] = 4n;
+  entries[3040].ints[0] = 3n;
+  assert.deepEqual(lookahead.update(), []);
+  assert.equal(entries[3039].ints[0], 4n);
+  assert.equal(source.length, 7);
+});

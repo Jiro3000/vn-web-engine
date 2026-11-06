@@ -29,6 +29,7 @@ import {setWindowsVirtualKey} from '../../../input/windows-virtual-keys.js';
 import type {YurisCgNode, YurisLayers} from '../vm/cg.js';
 import {YurisIntegerWindow} from './integer-window.js';
 import {BrowserYmvDecoder} from './ymv-decode.js';
+import {YurisSceneLookahead} from '../vm/scene-lookahead.js';
 
 const bytes = (s: string): Uint8Array => Uint8Array.from(s, (c) => c.charCodeAt(0));
 const decode = (s: string): string => decodeCp932(bytes(s));
@@ -109,6 +110,8 @@ export class YurisBrowserPlayer {
   private readonly codecs = new LegacyImageCodec();
   private readonly ymvDecoder = new BrowserYmvDecoder();
   private readonly preloadQueue = new Map<string, string>();
+  private nextPngQueue = new Set<string>();
+  private lookahead?: YurisSceneLookahead;
   private readonly preloading = new Set<string>();
   private readonly preloadedArchiveFiles = new Map<string, Uint8Array>();
   private preloadedArchiveBytes = 0;
@@ -203,8 +206,11 @@ export class YurisBrowserPlayer {
       exists: (path) => folder.existsFile(path) || !!files.find(path),
       read: (path) => this.readAsset(path),
       archiveNames: () => files.archives.map((a) => a.archive.entries.map((e) => e.key)),
-      decodeImage: (data, type, path) =>
-        codec.decodeCached(data, imageMime[type] ?? 'application/octet-stream', true, path),
+      decodeImage: (data, type, path) => {
+        if (type === YurisFileType.Png) this.lookahead?.observeImage(path);
+        if (this.nextPngQueue.delete(path)) this.preloadQueue.delete(path);
+        return codec.decodeCached(data, imageMime[type] ?? 'application/octet-stream', true, path);
+      },
       decodeYmvFrame: (movie, frame) => this.ymvDecoder.decode(movie, frame),
       encodeImage: codec.encode.bind(codec),
       now: () => performance.now(),
@@ -423,6 +429,8 @@ export class YurisBrowserPlayer {
   async start(project: YurisProject): Promise<void> {
     await this.audioHost.resume();
     this.machine = await YurisMachine.create(project, this.host);
+    if (typeof Worker !== 'undefined')
+      this.lookahead = await YurisSceneLookahead.create(this.machine);
     this.running = true;
     void this.loop();
   }
@@ -459,11 +467,24 @@ export class YurisBrowserPlayer {
     if (!this.preloading.has(file.path)) this.preloadQueue.set(file.path, imageMime[file.type]!);
     this.drainPreloadQueue();
   }
+  private prioritizeNextClick(names: readonly string[]): void {
+    const paths = new Set<string>();
+    for (const name of names) {
+      const file = this.machine.files.resolve(name, YurisFileKind.Image);
+      if (file.found && file.type === YurisFileType.Png) paths.add(file.path);
+    }
+    this.codecs.prioritizePng(paths);
+    this.nextPngQueue = new Set([...paths].filter((path) => !this.preloading.has(path)));
+    this.drainPreloadQueue();
+  }
   private drainPreloadQueue(): void {
     while (this.preloading.size < 2 && !this.abort.signal.aborted) {
-      const next = this.preloadQueue.entries().next();
-      if (next.done) return;
-      const [path, mime] = next.value;
+      const urgent = this.nextPngQueue.values().next().value;
+      const next = urgent === undefined ? this.preloadQueue.entries().next().value : undefined;
+      const path = urgent ?? next?.[0];
+      if (path === undefined) return;
+      const mime = next?.[1] ?? 'image/png';
+      this.nextPngQueue.delete(path);
       this.preloadQueue.delete(path);
       this.preloading.add(path);
       void this.readAsset(path, true)
@@ -484,6 +505,8 @@ export class YurisBrowserPlayer {
         if (!this.running) break;
         await this.device.flush();
         await this.machine.frame();
+        const next = this.machine.system.preloadEnabled ? this.lookahead?.update() : undefined;
+        if (next) this.prioritizeNextClick(next);
       }
       if (this.running) this.stopped();
     } catch (e) {
@@ -656,6 +679,7 @@ export class YurisBrowserPlayer {
     this.running = false;
     this.abort.abort();
     this.preloadQueue.clear();
+    this.nextPngQueue.clear();
     this.preloadedArchiveFiles.clear();
     this.preloadedArchiveBytes = 0;
     this.menus.dispose();
