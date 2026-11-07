@@ -172,3 +172,147 @@ test('YSWBM ordinals return the native results', async () => {
   assert.equal(dll.end(), 0);
   assert.equal(dll.end(), -1);
 });
+
+test('Ogg Opus PCM streams in order with the pre-skip and end trim, or falls back to the whole file', async () => {
+  const {readOggOpus, openOpusPcm16} = await import('../dist/audio/opus-pcm16.js');
+  const page = (flags, granule, packets, sequence) => {
+    const lacing = [];
+    for (const p of packets) {
+      let n = p.length;
+      for (; n >= 255; n -= 255) lacing.push(255);
+      lacing.push(n);
+    }
+    const body = packets.reduce((a, p) => a + p.length, 0);
+    const out = new Uint8Array(27 + lacing.length + body);
+    const view = new DataView(out.buffer);
+    out.set(bytes('OggS'), 0);
+    out[5] = flags;
+    view.setBigInt64(6, BigInt(granule), true);
+    view.setUint32(14, 7, true);
+    view.setUint32(18, sequence, true);
+    out[26] = lacing.length;
+    out.set(lacing, 27);
+    let at = 27 + lacing.length;
+    for (const p of packets) out.set(p, (at += p.length) - p.length);
+    return out;
+  };
+  const opusFile = (gain = 0) => {
+    const head = new Uint8Array(19);
+    head.set(bytes('OpusHead'));
+    head[8] = 1;
+    head[9] = 2;
+    head[10] = 312 & 255;
+    head[11] = 312 >> 8;
+    new DataView(head.buffer).setUint32(12, 48000, true);
+    head[16] = gain;
+    const tags = new Uint8Array(16);
+    tags.set(bytes('OpusTags'));
+    // CELT fullband 20 ms (config 31), one frame: 960 samples each.
+    const audio = Array.from({length: 5}, (_, i) => Uint8Array.of(0xf8, i));
+    const pages = [
+      page(2, 0, [head], 0),
+      page(0, 0, [tags], 1),
+      page(0, 2880, audio.slice(0, 3), 2),
+      page(4, 4700, audio.slice(3), 3),
+    ];
+    const file = new Uint8Array(pages.reduce((a, p) => a + p.length, 0));
+    let at = 0;
+    for (const p of pages) file.set(p, (at += p.length) - p.length);
+    return file;
+  };
+  const value = (index, channel) => index - 2000 + channel * 3;
+  const saved = {
+    AudioDecoder: globalThis.AudioDecoder,
+    EncodedAudioChunk: globalThis.EncodedAudioChunk,
+    OfflineAudioContext: globalThis.OfflineAudioContext,
+  };
+  let failDecoder = false;
+  const configured = [];
+  globalThis.EncodedAudioChunk = class {
+    constructor(init) {
+      Object.assign(this, init);
+    }
+  };
+  globalThis.AudioDecoder = class extends EventTarget {
+    decodeQueueSize = 0;
+    state = 'unconfigured';
+    position = 0;
+    pending = Promise.resolve();
+    constructor({output, error}) {
+      super();
+      this.output = output;
+      this.error = error;
+    }
+    configure(config) {
+      configured.push(config);
+      this.state = 'configured';
+    }
+    decode() {
+      const at = this.position;
+      this.position += 960;
+      this.pending = this.pending.then(() => {
+        if (failDecoder && at > 0) return this.error(new Error('decode'));
+        this.output({
+          numberOfFrames: 960,
+          numberOfChannels: 2,
+          sampleRate: 48000,
+          copyTo: (plane, {planeIndex}) => {
+            for (let i = 0; i < 960; i++) plane[i] = value(at + i, planeIndex) / 32768;
+          },
+          close() {},
+        });
+      });
+    }
+    flush() {
+      return this.pending;
+    }
+    close() {
+      this.state = 'closed';
+    }
+  };
+  let wholeDecodes = 0;
+  globalThis.OfflineAudioContext = class {
+    async decodeAudioData() {
+      wholeDecodes++;
+      const planes = [0, 1].map((c) =>
+        Float32Array.from({length: 4388}, (_, i) => value(i + 312, c) / 32768),
+      );
+      return {numberOfChannels: 2, length: 4388, getChannelData: (c) => planes[c]};
+    }
+  };
+  const expectPcm = (pcm) => {
+    const samples = new Int16Array(pcm.bytes.buffer);
+    for (let i = 0; i < pcm.frames; i++)
+      for (let c = 0; c < 2; c++) assert.equal(samples[i * 2 + c], value(i + 312, c));
+  };
+  try {
+    const file = opusFile();
+    const info = readOggOpus(file);
+    assert.deepEqual(info, {links: 1, channels: 2, preSkip: 312, frames: 4388});
+    const pcm = openOpusPcm16(file, info);
+    assert.equal(pcm.frames, 4388);
+    // The first block (960 decoded samples less the pre-skip) is enough for an early read.
+    assert.equal(await pcm.waitForFrames(600), true);
+    assert.equal(pcm.waitForFrames(600), undefined);
+    assert.equal(await pcm.waitForFrames(4388), true);
+    expectPcm(pcm);
+    assert.equal(wholeDecodes, 0);
+    assert.equal(configured.at(-1).description, undefined);
+
+    failDecoder = true;
+    const fallback = openOpusPcm16(file, info);
+    assert.equal(await fallback.waitForFrames(4388), true);
+    expectPcm(fallback);
+    assert.equal(wholeDecodes, 1);
+    failDecoder = false;
+
+    // An output gain is left to the browser's whole-file decoder.
+    const decodes = configured.length;
+    const gained = openOpusPcm16(opusFile(1), info);
+    assert.equal(await gained.waitForFrames(1), true);
+    assert.equal(configured.length, decodes);
+    assert.equal(wholeDecodes, 2);
+  } finally {
+    Object.assign(globalThis, saved);
+  }
+});

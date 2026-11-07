@@ -2251,6 +2251,152 @@ test('YU-RIS stand forecast names SPLZ scale reloads and the sprites before the 
   ]);
 });
 
+test('YU-RIS lookahead treats plain text lines as dialogue', async () => {
+  const {YurisSceneLookahead} = await import('../dist/engines/yuris/vm/scene-lookahead.js');
+  const entries = [];
+  const source = [
+    String.raw`\VO(ab0001)first`,
+    String.raw`\SP.GO(A,ev,1,2)`,
+    String.raw`\VO(ab0002)second`,
+    String.raw`\GO(label)`,
+    String.raw`third`,
+  ];
+  for (const [id, ints] of [
+    [1157, [1n]],
+    [3039, [1n]],
+    [3040, [0n]],
+    [2930, [2n]],
+    [2931, [2n, 5n]],
+  ])
+    entries[id] = {ints, dimensions: [1]};
+  entries[3038] = {strings: ['scenario.txt']};
+  entries[2899] = {strings: source};
+  entries[2932] = {strings: ['cg/bg/near', 'cg/bg/far']};
+  let time = 0;
+  const lookahead = new YurisSceneLookahead({variables: {entries}, now: () => time});
+  lookahead.linearNames = new Set(['VO', 'SP.GO']);
+  lookahead.update();
+  time = 61;
+  assert.deepEqual(lookahead.update(), ['cg/bg/near']);
+  assert.deepEqual(lookahead.nextVoices, ['ab0002']);
+  // A jump before the next dialogue leaves it to the normal loader.
+  entries[3039].ints[0] = 3n;
+  entries[3040].ints[0] = 2n;
+  assert.deepEqual(lookahead.update(), []);
+});
+
+test('YU-RIS lookahead locates the scenario library variables in its routines', async () => {
+  const {YurisSceneLookahead} = await import('../dist/engines/yuris/vm/scene-lookahead.js');
+  // Library routines with a numbering other than the default one.
+  const id = (op, n) => ({op, payload: Uint8Array.of(op === 0x48 ? 0x40 : 0x24, n & 255, n >> 8)});
+  const H = (n) => id(0x48, n),
+    V = (n) => id(0x56, n),
+    lit = (n) => ({op: 0x49, payload: new Uint8Array(new Int32Array([n]).buffer)}),
+    op = (c) => ({op: c.charCodeAt(0), payload: new Uint8Array()});
+  const ins = (...args) => ({
+    command: 0,
+    extra: 0,
+    args: args.map((tokens) => ({id: 0, type: 1, tokens})),
+  });
+  const pad = (n) => Array.from({length: n}, () => ins());
+  const parser = [
+    ...pad(4),
+    ins([H(1100)]),
+    ...pad(11),
+    ins([H(1200)]),
+    ...pad(3),
+    ins([H(3015)], [H(3014)]),
+    ...pad(9),
+    ins([{op: 0x4d, payload: new TextEncoder().encode('"es.SCENARIO.LOAD"')}], [V(2875), H(3014)]),
+    ins([H(3013)], [{op: 0x4d, payload: new TextEncoder().encode('"$filename"')}]),
+  ];
+  const cash = [
+    ...pad(2),
+    ins([H(2906), lit(8192), op('<')]),
+    ins([V(2907), H(2906)]),
+    ins([V(2908), H(2906)]),
+  ];
+  const trdef = [...pad(3), ins([V(2488)]), ...pad(2), ins([V(2489)])];
+  const splz = [
+    ...pad(3),
+    ins([H(5397), lit(1), op('+')]),
+    ...pad(1),
+    ins([V(5279), H(6162), V(5290), H(6162), V(5316), H(6162), V(5372), H(6162)]),
+    ins([H(6163)], [V(5361), H(6162)]),
+    ...pad(1),
+    ins([H(6163), lit(13000), op('Z'), H(6163), lit(99999), op('<'), op('&')]),
+    ins(),
+    ins([V(5372), H(6162)], [lit(66)]),
+  ];
+  const reload = [...pad(6), ins([H(6164)], [V(5283), H(6164)])];
+  const ymv = [...pad(9), ins([V(5534), lit(6), V(5283), H(6125)])];
+  const LET = 1,
+    GOSUB = 2;
+  const call = (name) => ({
+    command: GOSUB,
+    extra: 0,
+    args: [{id: 0, type: 3, tokens: [{op: 0x4d, payload: new TextEncoder().encode(`"${name}"`)}]}],
+  });
+  const routines = {
+    'es.ScenarioMacro.SP.GO': [call('es.SP.SET')],
+    'es.SP.SET': [{...ins([H(5000)], [lit(1)]), command: LET}],
+    'es.ScenarioMacro.GO': [call('es.Scenario.JumpLabel')],
+    'es.Scenario.JumpLabel': [{...ins([H(3014)], [lit(1)]), command: LET}],
+    'es.ScenarioMacro.SEL': [call('ES.SEL')],
+    'ES.SEL': [ins()],
+    'es.SCENARIO.PARSER': parser,
+    'es.CASH.ADD.MAIN': cash,
+    'es.TRDEF': trdef,
+    'es.SP.CHK.SPLZ': splz,
+    'es.SP.RELOAD': reload,
+    'es.L.YMV.INIT': ymv,
+  };
+  const names = Object.keys(routines);
+  const machine = {
+    label: (name) => names.indexOf(new TextDecoder().decode(name)),
+    project: {
+      commands: {commands: [{name: 'X'}, {name: 'LET'}, {name: 'GOSUB'}]},
+      labels: {
+        labels: names.map((name, script) => ({
+          script,
+          position: 0,
+          name: new TextEncoder().encode(name),
+        })),
+      },
+      script: async (script) => ({instructions: routines[names[script]]}),
+    },
+  };
+  const lookahead = await YurisSceneLookahead.create(machine);
+  assert.deepEqual(lookahead.v, {
+    waiting: 1100,
+    stopped: 1200,
+    line: 3015,
+    cursor: 3014,
+    source: 2875,
+    file: 3013,
+    cashCount: 2906,
+    cashLines: 2907,
+    cashPaths: 2908,
+    rules: 2488,
+    ruleImages: 2489,
+    slots: 5397,
+    kind: 5279,
+    hidden: 5290,
+    alpha: 5316,
+    folder: 5372,
+    size: 5361,
+    sprite: 5283,
+    movieFolder: 5534,
+  });
+  assert.deepEqual(lookahead.scaleBands, [{low: 13000, high: 99999, scale: 66}]);
+  // Macros that reach a cursor write or the choice routines end the forecast scan.
+  await lookahead.macrosRead;
+  assert.deepEqual([...lookahead.linearNames], ['SP.GO']);
+  // A parser whose source read does not index by its cursor is not this library.
+  parser[30] = ins([V(2875), H(9999)]);
+  assert.equal(await YurisSceneLookahead.create(machine), undefined);
+});
+
 test('YU-RIS SIZE5 matches the Lanczos-2 taps of 0x434A14', () => {
   // Reference: per-tap reads with mirrored indices, zero outside the buffer and 32-bit sums.
   const sinc = (x) => (x === 0 ? 1 : Math.sin(x * Math.PI) / (x * Math.PI));

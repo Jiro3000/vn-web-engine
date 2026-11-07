@@ -18,7 +18,7 @@ import {decodeCp932, encodeCp932} from '../../../text/cp932.js';
 import {BrowserMonochromeFont} from '../../../text/browser-monochrome-font.js';
 import {BrowserLoopingSoundDevice} from '../../../audio/browser-looping-sound.js';
 import {BrowserAudioContextHost} from '../../../audio/browser-audio-context-host.js';
-import {prefetchVorbisPcm16} from '../../../audio/vorbis-prefetch.js';
+import {prefetchOggPcm16} from '../../../audio/vorbis-prefetch.js';
 import {BrowserWindowsMenus} from '../../../platform/windows-menus.js';
 import {BrowserLegacyWindows} from '../../../platform/browser-legacy-windows.js';
 import {BrowserWindowsMessageBoxHost} from '../../../platform/windows-message-box.js';
@@ -550,7 +550,7 @@ export class YurisBrowserPlayer {
    * while the parser executes a line with a VO cue gives the folder and extension.
    */
   private observeVoiceRead(path: string): void {
-    if (this.voiceTemplate || !this.lookahead || !/\.ogg$/i.test(path)) return;
+    if (this.voiceTemplate || !this.lookahead || !/\.(?:ogg|opus)$/i.test(path)) return;
     const lower = path.toLowerCase();
     for (const cue of this.lookahead.currentVoices()) {
       const at = lower.lastIndexOf(cue.toLowerCase());
@@ -565,7 +565,7 @@ export class YurisBrowserPlayer {
             : name === cue.toUpperCase()
               ? (c: string) => c.toUpperCase()
               : undefined;
-      if (at > 0 && casing && /[\\/]$/.test(prefix) && /^\.ogg$/i.test(suffix)) {
+      if (at > 0 && casing && /[\\/]$/.test(prefix) && /^\.(?:ogg|opus)$/i.test(suffix)) {
         this.voiceTemplate = [prefix, suffix, casing];
         return;
       }
@@ -601,7 +601,7 @@ export class YurisBrowserPlayer {
     if (this.prefetchedVoices.size >= 64) this.prefetchedVoices.clear();
     this.prefetchedVoices.add(path);
     void this.readAsset(path, true)
-      .then((bytes) => prefetchVorbisPcm16(bytes))
+      .then((bytes) => prefetchOggPcm16(bytes))
       .catch(() => {
         // A missing guess leaves the voice to the normal loader.
       });

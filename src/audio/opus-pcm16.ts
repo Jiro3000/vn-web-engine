@@ -1,5 +1,10 @@
-import {OGG_FIRST_PAGE, isOggPageStart, readOggPage} from '../formats/ogg/page.js';
-import type {VorbisPcm16} from './vorbis-pcm16.js';
+import {
+  OGG_FIRST_PAGE,
+  OggPacketAssembler,
+  isOggPageStart,
+  readOggPage,
+} from '../formats/ogg/page.js';
+import {interleavePcm16, type VorbisPcm16} from './vorbis-pcm16.js';
 
 /** Opus always decodes at 48 kHz (`op_read`). */
 export const OPUS_SAMPLE_RATE = 48000;
@@ -123,58 +128,237 @@ function opusDecoder(): OfflineAudioContext | null {
   return decoder;
 }
 
-/** Signed 16-bit quantisation, round half to even and clamped. */
-function interleave(out: Int16Array, buffer: AudioBuffer, frames: number): void {
-  const channels = Math.min(buffer.numberOfChannels, out.length / Math.max(frames, 1));
-  for (let channel = 0; channel < channels; channel++) {
-    const plane = buffer.getChannelData(channel);
-    const count = Math.min(frames, plane.length);
-    for (let i = 0, o = channel; i < count; i++, o += channels) {
-      const x = Math.fround(plane[i]! * 32768);
-      let value = Math.round(x);
-      if (value - x === 0.5 && (value & 1) !== 0) value -= 1;
-      out[o] = value > 32767 ? 32767 : value < -32768 ? -32768 : value;
+/** The OpusHead packet and the audio packets of the first link, in stream order. */
+function opusPackets(bytes: Uint8Array): {head: Uint8Array; packets: Uint8Array[]} | null {
+  const assembler = new OggPacketAssembler();
+  const packets: Uint8Array[] = [];
+  let serial = -1;
+  for (let offset = 0; offset < bytes.length;) {
+    if (!isOggPageStart(bytes, offset)) {
+      offset++;
+      continue;
     }
+    const page = readOggPage(bytes, offset);
+    if (!page) break;
+    offset += page.bytes.length;
+    if (serial === -1) {
+      const body = page.bytes.subarray(page.bodyOffset);
+      if (
+        !(page.flags & OGG_FIRST_PAGE) ||
+        String.fromCharCode(...body.subarray(0, 8)) !== 'OpusHead'
+      )
+        continue;
+      serial = page.serial;
+    } else if (page.serial !== serial) continue;
+    else if (page.flags & OGG_FIRST_PAGE) break;
+    packets.push(...assembler.push(page));
   }
+  // OpusHead, OpusTags, then audio.
+  if (packets.length < 2) return null;
+  return {head: packets[0]!, packets: packets.slice(2)};
+}
+
+/** Decodes requested ahead of the decoder's output. */
+const OPUS_QUEUE = 32;
+
+/**
+ * Feeds the packets of a mono or stereo stream (channel mapping family 0, no output gain) to
+ * a WebCodecs `AudioDecoder` (libopus, the decoder opusfile wraps) in order and calls `output`
+ * with each decoded block's planes and its position in decoded samples, the pre-skip
+ * included. Resolves true when the stream has been flushed, false when the decoder failed or
+ * is unavailable.
+ */
+function decodeOpusStream(
+  packets: readonly Uint8Array[],
+  channels: number,
+  output: (planes: Float32Array[], at: number, frames: number) => void,
+  cancelled: () => boolean,
+): Promise<boolean> {
+  if (typeof AudioDecoder === 'undefined' || typeof EncodedAudioChunk === 'undefined')
+    return Promise.resolve(false);
+  return new Promise<boolean>((resolve) => {
+    let position = 0;
+    let next = 0;
+    let timestamp = 0;
+    let settled = false;
+    const planes = Array.from({length: channels}, () => new Float32Array(5760));
+    const settle = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      if (codec.state !== 'closed') codec.close();
+      resolve(ok);
+    };
+    const codec = new AudioDecoder({
+      output(data) {
+        try {
+          if (settled || cancelled()) return;
+          const frames = data.numberOfFrames;
+          if (data.numberOfChannels !== channels || data.sampleRate !== OPUS_SAMPLE_RATE)
+            return settle(false);
+          for (let c = 0; c < channels; c++) {
+            if (planes[c]!.length < frames) planes[c] = new Float32Array(frames);
+            data.copyTo(planes[c]!, {planeIndex: c, format: 'f32-planar'});
+          }
+          output(planes, position, frames);
+          position += frames;
+        } catch {
+          settle(false);
+        } finally {
+          data.close();
+        }
+      },
+      error: () => settle(false),
+    });
+    const feed = () => {
+      if (settled) return;
+      if (cancelled()) return settle(true);
+      try {
+        while (next < packets.length && codec.decodeQueueSize < OPUS_QUEUE) {
+          const packet = packets[next++]!;
+          codec.decode(
+            new EncodedAudioChunk({
+              type: 'key',
+              timestamp: Math.round((timestamp * 1e6) / OPUS_SAMPLE_RATE),
+              data: packet,
+            }),
+          );
+          timestamp += opusPacketSamples(packet);
+        }
+        if (next === packets.length) {
+          next++;
+          codec.flush().then(
+            () => settle(true),
+            () => settle(false),
+          );
+        }
+      } catch {
+        settle(false);
+      }
+    };
+    try {
+      // Without a description the decoder keeps the pre-skip; the caller trims it.
+      codec.configure({codec: 'opus', sampleRate: OPUS_SAMPLE_RATE, numberOfChannels: channels});
+    } catch {
+      return settle(false);
+    }
+    codec.addEventListener('dequeue', feed);
+    feed();
+  });
 }
 
 /**
- * Opens an Ogg Opus file as 16-bit PCM of `info.frames` frames. The browser's decoder
- * (`decodeAudioData` at 48 kHz, which applies the pre-skip and end trim) fills the buffer
- * after it opens; `waitForFrames` holds readers until then. Without a browser decoder the
- * PCM stays silent at its full length.
+ * Opens an Ogg Opus file as 16-bit PCM of `info.frames` frames, opusfile's `op_read` range:
+ * decoded samples from the pre-skip on, cut at the final granule. A WebCodecs `AudioDecoder`
+ * fills the buffer in order and `waitForFrames` holds a reader only until its frames are
+ * decoded. Without one, or when it fails, the browser's `decodeAudioData` at 48 kHz (which
+ * applies the same trims) fills the whole buffer first. Without a browser decoder the PCM
+ * stays silent at its full length.
  */
 export function openOpusPcm16(bytes: Uint8Array, info: OggOpusInfo): VorbisPcm16 {
   const frames = Math.max(0, info.frames);
   const channels = Math.max(1, info.channels);
   const pcm = new Uint8Array(frames * channels * 2);
   const context = opusDecoder();
+  const packets = context && frames > 0 ? opusPackets(bytes) : null;
+  // OpusHead: channel count at 9, output gain at 16, mapping family at 18 (RFC 7845 5.1).
+  const head = packets?.head;
+  const stream =
+    head &&
+    head.length >= 19 &&
+    head[9] === channels &&
+    channels <= 2 &&
+    head[16] === 0 &&
+    head[17] === 0 &&
+    head[18] === 0
+      ? packets
+      : null;
   if (!context || frames === 0) return {bytes: pcm, frames, sampleRate: OPUS_SAMPLE_RATE, channels};
-  let done = false;
+  let written = 0;
+  let finished = false;
   let closed = false;
-  const ready = context
-    .decodeAudioData(bytes.slice().buffer)
-    .then((buffer) => {
+  let notify!: () => void;
+  const next = () => new Promise<void>((resolve) => (notify = resolve));
+  let changed = next();
+  const wake = () => {
+    notify();
+    changed = next();
+  };
+  const wait = async (end: number): Promise<boolean> => {
+    while (written < end && !finished) await changed;
+    // A file the browser cannot decode plays as silence of its native length.
+    return true;
+  };
+  const whole = async () => {
+    try {
+      const buffer = await context.decodeAudioData(bytes.slice().buffer);
       if (closed) return;
-      const samples = new Int16Array(pcm.buffer, 0, frames * channels);
-      interleave(samples, buffer, frames);
-      if (new Uint8Array(new Uint16Array([1]).buffer)[0] !== 1)
-        for (let i = 0; i < pcm.length; i += 2) [pcm[i], pcm[i + 1]] = [pcm[i + 1]!, pcm[i]!];
-    })
-    .catch(() => {
-      // A file the browser cannot decode plays as silence of its native length.
-    })
-    .finally(() => {
-      done = true;
-    });
+      const planes = Array.from({length: Math.min(channels, buffer.numberOfChannels)}, (_, c) =>
+        buffer.getChannelData(c),
+      );
+      const count = Math.min(frames, buffer.length);
+      if (planes.length === channels) interleavePcm16(pcm, 0, planes, count);
+      else interleaveSome(pcm, planes, channels, count);
+    } catch {
+      // Silence of the native length.
+    }
+  };
+  void (async () => {
+    const skip = info.preSkip;
+    const streamed =
+      stream &&
+      (await decodeOpusStream(
+        stream.packets,
+        channels,
+        (planes, at, count) => {
+          // Decoded sample `at` is PCM frame `at - preSkip`; only the next frames in order
+          // are written, so a reader never sees a gap.
+          const from = Math.max(at, skip + written),
+            to = Math.min(at + count, skip + frames);
+          if (to <= from || from !== skip + written) return;
+          interleavePcm16(
+            pcm,
+            written * channels * 2,
+            planes.map((plane) => plane.subarray(from - at, to - at)),
+            to - from,
+          );
+          written = to - skip;
+          wake();
+        },
+        () => closed,
+      ));
+    if (!streamed && !closed) {
+      written = 0;
+      await whole();
+    }
+    finished = true;
+    written = frames;
+    wake();
+  })();
   return {
     bytes: pcm,
     frames,
     sampleRate: OPUS_SAMPLE_RATE,
     channels,
-    waitForFrames: () => (done ? undefined : ready.then(() => true)),
+    waitForFrames: (end) => (finished || written >= end ? undefined : wait(end)),
     close: () => {
       closed = true;
     },
   };
+}
+
+/** The decoded planes when the browser returned fewer channels than the OpusHead names. */
+function interleaveSome(
+  pcm: Uint8Array,
+  planes: readonly Float32Array[],
+  channels: number,
+  frames: number,
+): void {
+  const one = new Uint8Array(frames * 2);
+  for (let c = 0; c < planes.length; c++) {
+    interleavePcm16(one, 0, [planes[c]!], frames);
+    for (let i = 0; i < frames; i++) {
+      pcm[(i * channels + c) * 2] = one[i * 2]!;
+      pcm[(i * channels + c) * 2 + 1] = one[i * 2 + 1]!;
+    }
+  }
 }

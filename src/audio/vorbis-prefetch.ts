@@ -1,8 +1,9 @@
+import {openOpusPcm16, readOggOpus} from './opus-pcm16.js';
 import {openVorbisPcm16, type VorbisPcm16} from './vorbis-pcm16.js';
 
 /** Speculative decodes kept for files a player expects to open soon. */
 const LIMIT = 4;
-const entries: {bytes: Uint8Array; pcm: Promise<VorbisPcm16 | null>}[] = [];
+const entries: {bytes: Uint8Array; opus: boolean; pcm: Promise<VorbisPcm16 | null>}[] = [];
 
 function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
   if (a === b) return true;
@@ -20,19 +21,39 @@ function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
 }
 
 /**
- * Starts decoding `bytes` on a stream worker so that a later `openVorbisPcm16` of the same
- * contents finds its prefix decoded. The oldest unclaimed decode is cancelled past the limit.
+ * Starts decoding `bytes`, an Ogg Vorbis file on a stream worker or a single-link Ogg Opus
+ * file with the browser's decoder, so that a later open of the same contents finds its prefix
+ * decoded. The oldest unclaimed decode is cancelled past the limit.
  */
-export function prefetchVorbisPcm16(bytes: Uint8Array): void {
+export function prefetchOggPcm16(bytes: Uint8Array): void {
   if (typeof Worker === 'undefined' || entries.some((e) => sameBytes(e.bytes, bytes))) return;
-  entries.push({bytes, pcm: openVorbisPcm16(bytes).catch(() => null)});
+  const opus = readOggOpus(bytes);
+  if (opus && (opus.links !== 1 || opus.channels === 0 || opus.frames < 0)) return;
+  entries.push({
+    bytes,
+    opus: !!opus,
+    pcm: opus
+      ? Promise.resolve(openOpusPcm16(bytes, opus))
+      : openVorbisPcm16(bytes).catch(() => null),
+  });
   while (entries.length > LIMIT) void entries.shift()!.pcm.then((pcm) => pcm?.close?.());
+}
+
+function take(bytes: Uint8Array, opus: boolean): Promise<VorbisPcm16 | null> | undefined {
+  const index = entries.findIndex((e) => e.opus === opus && sameBytes(e.bytes, bytes));
+  return index < 0 ? undefined : entries.splice(index, 1)[0]!.pcm;
+}
+
+/** The prefetched Opus decode of these contents, which the caller then owns, or undefined. */
+export function takePrefetchedOpusPcm16(
+  bytes: Uint8Array,
+): Promise<VorbisPcm16 | null> | undefined {
+  return take(bytes, true);
 }
 
 /** The prefetched decode of these contents, which the caller then owns, or undefined. */
 export function takePrefetchedVorbisPcm16(
   bytes: Uint8Array,
 ): Promise<VorbisPcm16 | null> | undefined {
-  const index = entries.findIndex((e) => sameBytes(e.bytes, bytes));
-  return index < 0 ? undefined : entries.splice(index, 1)[0]!.pcm;
+  return take(bytes, false);
 }

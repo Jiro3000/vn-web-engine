@@ -12,8 +12,11 @@ export interface VorbisPcm16 {
 
 const littleEndian = new Uint8Array(new Uint16Array([1]).buffer)[0] === 1;
 
-/** vorbisfile's signed 16-bit little-endian ov_read quantisation. */
-function interleave(
+/**
+ * vorbisfile's signed 16-bit little-endian ov_read quantisation (round half to even, clamped)
+ * of `frames` frames of `planes` into `bytes` at byte offset `at`.
+ */
+export function interleavePcm16(
   bytes: Uint8Array,
   at: number,
   planes: readonly Float32Array[],
@@ -42,7 +45,7 @@ export function vorbisPcm16(
 ): VorbisPcm16 {
   const channels = planes.length;
   const bytes = new Uint8Array(frames * channels * 2);
-  interleave(bytes, 0, planes, frames);
+  interleavePcm16(bytes, 0, planes, frames);
   return {bytes, frames, sampleRate, channels};
 }
 
@@ -92,7 +95,7 @@ export async function openVorbisPcm16(encoded: Uint8Array): Promise<VorbisPcm16 
     onChunk(planes, frames) {
       if (!pcm) return;
       const count = Math.min(frames, pcm.frames - written);
-      interleave(pcm.bytes, written * pcm.channels * 2, planes, count);
+      interleavePcm16(pcm.bytes, written * pcm.channels * 2, planes, count);
       written += count;
       wake();
     },

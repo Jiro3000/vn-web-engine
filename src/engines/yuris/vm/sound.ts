@@ -1,6 +1,9 @@
 import {decodeVorbis} from '../../../audio/vorbis-decoder.js';
 import {openVorbisPcm16, vorbisPcm16, type VorbisPcm16} from '../../../audio/vorbis-pcm16.js';
-import {takePrefetchedVorbisPcm16} from '../../../audio/vorbis-prefetch.js';
+import {
+  takePrefetchedOpusPcm16,
+  takePrefetchedVorbisPcm16,
+} from '../../../audio/vorbis-prefetch.js';
 import {OPUS_SAMPLE_RATE, openOpusPcm16, readOggOpus} from '../../../audio/opus-pcm16.js';
 import {YurisError} from './errors.js';
 import {YurisFileKind, YurisFileType, type YurisFiles} from './files.js';
@@ -654,14 +657,16 @@ export class YurisSounds {
    * `op_pcm_total` fails with -0xFD7. The length is trunc(total · 1000 / 48000) ms and becomes
    * END; the codec byte is 2 and the format 48 kHz 16-bit with the head's channels.
    */
-  private openOpus(s: YurisSound): number {
+  private async openOpus(s: YurisSound): Promise<number> {
     if (!s.ogg) {
       const info = readOggOpus(s.file!);
       if (!info) return -0xfbe;
       if (info.links !== 1) return -0xfcd;
       if (info.channels === 0) return -0xfd2;
       if (info.frames < 0) return -0xfd7;
-      s.ogg = openOpusPcm16(s.file!, info);
+      // A voice the player read ahead may already be decoding.
+      const ahead = takePrefetchedOpusPcm16(s.file!);
+      s.ogg = (ahead && (await ahead)) ?? openOpusPcm16(s.file!, info);
     }
     const pcm = s.ogg;
     s.total = Math.trunc((pcm.frames * 1000) / OPUS_SAMPLE_RATE);
