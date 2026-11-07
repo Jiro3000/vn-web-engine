@@ -336,35 +336,7 @@ export class YurisExpression {
         }
       }
     }
-    const delimiter = bytes[at]!,
-      end = at + length;
-    let p = at + 1,
-      text = '';
-    let c = p < end ? bytes[p]! : delimiter;
-    while (c !== delimiter) {
-      if (c === 0x5c) {
-        p++;
-        c = bytes[p]!;
-        if (c === 0x5c) {
-          text += '\\';
-          c = bytes[++p]!;
-        } else if (c === 0x6e) {
-          text += '\n';
-          c = bytes[++p]!;
-        } else if (c === 0x74) {
-          text += '\t';
-          c = bytes[++p]!;
-        }
-      } else if (isLeadByte(c)) {
-        text += String.fromCharCode(c, bytes[p + 1]!);
-        p += 2;
-        c = bytes[p]!;
-      } else {
-        text += String.fromCharCode(c);
-        c = bytes[++p]!;
-      }
-      if (p >= end) break;
-    }
+    const text = decodeLiteral(bytes, at, length);
     if (cacheable) this.literals.set(bytes, {payload: Uint8Array.from(bytes.subarray(at)), text});
     this.pushLiteral(text);
   }
@@ -827,6 +799,44 @@ const bitOr = (a: bigint, b: bigint) => a | b;
 const bitXor = (a: bigint, b: bigint) => a ^ b;
 const both = (a: boolean, b: boolean) => a && b;
 const either = (a: boolean, b: boolean) => a || b;
+
+/**
+ * The payload of an 'M' literal (0x420CB8): the first byte is the delimiter; `\\`, `\n` and
+ * `\t` are escapes, a backslash before any other byte is dropped, and a lead byte copies two
+ * bytes.
+ */
+export function decodeLiteral(bytes: Uint8Array, at: number, length: number): ByteString {
+  const delimiter = bytes[at]!,
+    end = at + length;
+  let p = at + 1,
+    text = '';
+  let c = p < end ? bytes[p]! : delimiter;
+  while (c !== delimiter) {
+    if (c === 0x5c) {
+      p++;
+      c = bytes[p]!;
+      if (c === 0x5c) {
+        text += '\\';
+        c = bytes[++p]!;
+      } else if (c === 0x6e) {
+        text += '\n';
+        c = bytes[++p]!;
+      } else if (c === 0x74) {
+        text += '\t';
+        c = bytes[++p]!;
+      }
+    } else if (isLeadByte(c)) {
+      text += String.fromCharCode(c, bytes[p + 1]!);
+      p += 2;
+      c = bytes[p]!;
+    } else {
+      text += String.fromCharCode(c);
+      c = bytes[++p]!;
+    }
+    if (p >= end) break;
+  }
+  return text;
+}
 
 function signed(value: number, bits: number): number {
   const shift = 32 - bits;

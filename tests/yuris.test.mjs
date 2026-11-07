@@ -2165,3 +2165,88 @@ test('YU-RIS SAVE MEM 99999 stores every current memory slot after slot replacem
   await save();
   assert.deepEqual(await slots(), [first[0], [7, [4, 4]]]);
 });
+
+test('YU-RIS compiled regions follow IF/ELSE branches and return to the interpreter at failing guards', async () => {
+  const {compileRegion} = await import('../dist/engines/yuris/vm/region-compiler.js');
+  const {YurisTask} = await import('../dist/engines/yuris/vm/task.js');
+  const token = (name, ...bytes) => [name.charCodeAt(0), bytes.length, 0, ...bytes];
+  const ref = (name, id) => token(name, 0x40, id & 255, id >>> 8);
+  const arg = (bytes, op = 0, type = 1) => ({
+    id: 0,
+    type,
+    op,
+    size: bytes.length,
+    offset: 0,
+    tokens: null,
+    expression: Uint8Array.from(bytes),
+  });
+  const jump = (size) => ({
+    id: 0,
+    type: 0,
+    op: 0,
+    size,
+    offset: 0,
+    tokens: null,
+    expression: new Uint8Array(),
+  });
+  const commands = {if: 1, else: 2, ifBlend: 3, ifEnd: 4, int: 5, str: 6, let: 7};
+  const at = (command, ...args) => ({command, args, extra: 0});
+  const string = (text) => token('M', 34, ...[...text].map((c) => c.charCodeAt(0)), 34);
+  const instructions = [
+    at(1, arg([...ref('H', 1001), ...token('B', 1), ...token('>')]), jump(3), jump(5)),
+    at(7, arg(ref('H', 1002), 1), arg(token('B', 5))),
+    at(3),
+    at(2),
+    at(
+      7,
+      arg([...ref('V', 1003), ...ref('H', 1001), ...token(')', 0)]),
+      arg([...token('B', 7), ...token('B', 3), ...token('*')]),
+    ),
+    at(4),
+    at(7, arg(ref('H', 1002), 4), arg(token('B', 0))),
+    at(6, arg(ref('H', 1004), 0, 3), arg([...string('ab'), ...string('cd'), ...token('+')], 0, 3)),
+    at(7, arg(ref('H', 1004), 1, 3), arg(string('e'), 0, 3)),
+  ];
+  const setup = (first) => {
+    const variables = new YurisVariables(1004);
+    variables.allocateInt(1001, first);
+    variables.allocateInt(1002, 0n);
+    variables.get(1003).dimensions = [3];
+    variables.allocateInt(1003, 0n);
+    variables.allocateString(1004, '');
+    const compiled = compileRegion(
+      {instructions, variables, system: {}, commands, eligible: () => true},
+      0,
+      instructions.length - 1,
+    );
+    assert.equal(compiled.last, instructions.length - 1);
+    return {variables, region: compiled.region, task: new YurisTask()};
+  };
+  const ints = (variables, id) => [...variables.get(id).ints];
+
+  let {variables, region, task} = setup(2n);
+  assert.equal(region(task, 0), instructions.length);
+  assert.deepEqual([ints(variables, 1002), ints(variables, 1003)], [[5n], [0n, 0n, 0n]]);
+  assert.equal(variables.get(1004).strings[0], 'abcde');
+  assert.equal(task.ifDepth, 0);
+
+  ({variables, region, task} = setup(1n));
+  assert.equal(region(task, 0), instructions.length);
+  assert.deepEqual([ints(variables, 1002), ints(variables, 1003)], [[0n], [0n, 21n, 0n]]);
+
+  // An out-of-bounds element stops before the LET; the IF entry it pushed stays.
+  ({variables, region, task} = setup(-1n));
+  assert.equal(region(task, 0), 4);
+  assert.equal(task.ifDepth, 1);
+  assert.deepEqual(ints(variables, 1003), [0n, 0n, 0n]);
+
+  // A variable whose type changed after compilation stops before the instruction that reads it.
+  ({variables, region, task} = setup(2n));
+  variables.allocateString(1002, 'x');
+  assert.equal(region(task, 0), 1);
+  assert.equal(variables.get(1002).strings[0], 'x');
+  // Entering inside the region runs from that position.
+  ({variables, region, task} = setup(2n));
+  assert.equal(region(task, 7), instructions.length);
+  assert.equal(variables.get(1004).strings[0], 'abcde');
+});

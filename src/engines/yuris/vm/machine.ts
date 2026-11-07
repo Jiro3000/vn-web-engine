@@ -60,6 +60,7 @@ import {
   type StringSlicePrelude,
 } from './library-fast-paths.js';
 import {type YurisWindowHost, YurisWindows} from './window.js';
+import {type CompiledRegion, type RegionSource, compileRegion} from './region-compiler.js';
 
 /**
  * A command handler (table at 0x78B040, filled by 0x4635A8). It returns 0 to continue with
@@ -102,6 +103,18 @@ export const enum Command {
   Str = 0x5c,
   Wait = 0x68,
 }
+
+/** Commands a compiled region may contain (region-compiler.ts). */
+const REGION_COMMAND_NUMBERS = {
+  if: Command.If,
+  else: Command.Else,
+  ifBlend: Command.IfBlend,
+  ifEnd: Command.IfEnd,
+  int: Command.Int,
+  str: Command.Str,
+  let: Command.Let,
+} as const;
+const REGION_COMMANDS = new Set<number>(Object.values(REGION_COMMAND_NUMBERS));
 
 /** Minimum and maximum of the decoder range checks 3..0x17 (tables 0x59B5C0 / 0x59B620). */
 const RANGES: readonly (readonly [number, number])[] = [
@@ -174,6 +187,11 @@ interface LoadedScript {
   readonly goLabel: Int32Array;
   /** GOSUB label index stored in the label argument's type/op bytes, 0 for a runtime lookup. */
   readonly gosubLabel: Uint16Array;
+  /** Compiled control-flow and variable code covering each position (region-compiler.ts). */
+  readonly regions: (CompiledRegion | undefined)[];
+  /** Interpreted runs of each position, and the compile attempts started there. */
+  readonly heat: Uint8Array;
+  readonly attempts: Uint8Array;
 }
 
 interface LexerScan {
@@ -418,6 +436,61 @@ export class YurisMachine {
   /** Installs a command handler. */
   define(command: number, handler: YurisCommandHandler): void {
     this.handlers[command] = handler;
+    // Compiled code stands for the native handlers it replaced.
+    if (REGION_COMMANDS.has(command))
+      for (const loaded of this.loaded.values()) loaded.regions.fill(undefined);
+  }
+
+  /**
+   * Compiles the control-flow and variable instructions from `position` on once they run
+   * often (region-compiler.ts); each position starts at most four compilations, so code whose
+   * guards keep failing returns to the interpreter for good.
+   */
+  private compileRegionAt(loaded: LoadedScript, position: number): void {
+    if (loaded.attempts[position]! >= 4) return;
+    loaded.attempts[position]!++;
+    const instructions = loaded.script.instructions;
+    const source: RegionSource = {
+      instructions,
+      variables: this.variables,
+      system: this.system,
+      commands: REGION_COMMAND_NUMBERS,
+      eligible: (p) => this.regionEligible(loaded, p),
+    };
+    const compiled = compileRegion(source, position, instructions.length - 1);
+    if (!compiled) return;
+    for (let p = position; p <= compiled.last; p++) loaded.regions[p] = compiled.region;
+  }
+
+  private regionEligible(loaded: LoadedScript, position: number): boolean {
+    const instruction = loaded.script.instructions[position];
+    if (!instruction) return false;
+    const command = instruction.command;
+    const native =
+      command === Command.If
+        ? this.ifHandler
+        : command === Command.Else
+          ? this.elseHandler
+          : command === Command.IfBlend
+            ? this.ifBlendHandler
+            : command === Command.IfEnd
+              ? this.ifEndHandler
+              : command === Command.Int
+                ? this.intHandler
+                : command === Command.Str
+                  ? this.strHandler
+                  : command === Command.Let
+                    ? this.letHandler
+                    : undefined;
+    if (!native || this.handlers[command] !== native) return false;
+    if (!this.canBatchLoop(loaded.index, position, position)) return false;
+    if (command === Command.Int || command === Command.Str) {
+      // INT and STR run the decoder 0x4253C9 first; its range checks must not apply.
+      const declared = this.project.commands.commands[command];
+      if (!declared) return false;
+      for (const arg of instruction.args) if (declared.args[arg.id]?.check) return false;
+    }
+    return true;
   }
 
   /** The command names of `ysc.ybn`. */
@@ -536,8 +609,23 @@ export class YurisMachine {
         this.select(task);
       const position = (this.position = task.position);
       const script = task.script;
+      const loaded = this.current;
+      const region = loaded.regions[position];
+      if (region !== undefined) {
+        const next = region(task, position);
+        if (next !== position) {
+          task.position = next;
+          continue;
+        }
+      }
       task.position = position + 1;
-      const instruction = this.current.script.instructions[position];
+      const instruction = loaded.script.instructions[position];
+      if (
+        instruction &&
+        REGION_COMMANDS.has(instruction.command) &&
+        ++loaded.heat[position]! === 16
+      )
+        this.compileRegionAt(loaded, position);
       try {
         if (!instruction) throw new YurisError(0xdbbd2);
         const handler = this.handlers[instruction.command];
@@ -587,6 +675,9 @@ export class YurisMachine {
       script,
       goLabel: new Int32Array(count).fill(-1),
       gosubLabel: new Uint16Array(count),
+      regions: new Array<CompiledRegion | undefined>(count),
+      heat: new Uint8Array(count),
+      attempts: new Uint8Array(count),
     };
     script.instructions.forEach((instruction, i) => {
       if (instruction.command === Command.Go) {
