@@ -8,9 +8,31 @@ Addresses in source comments are virtual addresses in `hajiron.exe`, SHA-256 `fe
 
 YPF registration follows 0x464A3C, including ignoring files without an archive signature and overlaying update archives. YBN readers live in `src/formats/yuris`. VM code lives in `vm`; shared codecs and browser/OS services live outside the engine.
 
+## YBN version 500
+
+Projects whose YBN tables carry version 500 run the behavior of the version 500 build, Relirium.exe SHA-256 `3454f9b48c19443ad4046b22d0188f0dc888cb01089f4ecefd251b40bc06759e`. Comments name its addresses as "Relirium.exe 0x…" and its libraries by name (YSOPS.DLL, YSOGG.DLL, YSWBM.DLL). The VM and most command handlers are the same code at relocated addresses. The version-specific parts are:
+
+- YSCF (0x49333C) has a 16-byte image search order, an 8-byte sound order and settings, thread mode and caption at shifted offsets. System variable 0x6C reads the YBN version (0x478560).
+- The resolver (0x46FB20) knows bmp, png, jpg, gif, ydg, webp, jxl, qoi and avif images (order codes 1-9) and wav, ogg and opus sounds (codes 1-3).
+- YPF data hashes are xxHash32 with seed 0 (0x44D548), not MurmurHash2; the archive version is 500 in both builds. After a failing hash or inflate, the native tries a 1 KiB-block XOR parity record stored after the entry (0x44D190); intact archives never reach it, and the browser reader neither checks hashes nor repairs entries.
+- YDG images (`src/formats/yuris/ydg.ts`, loader 0x4499FC) stack up to 16 strips, each a WebP (libwebp in the EXE) or QOI (`src/formats/qoi.ts`, reference `qoi.h` at 0x44C664) image; JPEG XL strips (YSJXL.DLL) are decoded only when the host supplies a decoder. YDG and QOI loads always set the masked-blitter flag; PNG loads also set it for a tRNS chunk (spng_get_trns, 0x44B1BC).
+- Opus sounds use YSOPS.DLL (opusfile): codec byte 2, 48 kHz 16-bit, length trunc(op_pcm_total · 1000 / 48000) ms, and `op_read` is passed the frame count as its sample count, so a read near END takes at most n / (2 · channels²) frames and an empty read ends the play. Ogg Vorbis moved to YSOGG.DLL with the old behavior.
+- MATH RND draws from xoshiro128++ (0x476424), seeded at start-up (0x499024, 0x49D0FC) through a MurmurHash3-finalizer split of one 32-bit seed (0x492634).
+- PRODUCT (0x488B00) drops COM 10, 0x21, 0x24 and 0x25, sets LET to 0 for COM 3, ignores COM 0x3E9/0x3EA without YSOHC.dll and adds the YSWBM.DLL WebM COMs. MOVIEEND (0x47A8D8) also paints a black 1280x720 rectangle on the main window (0x47A930).
+- YSWBM.DLL (`vm/yswbm.ts`; nestegg, libvpx 1.15.2, libyuv) backs PRODUCT COM 0x5DC1 (ordinal 1: `fopen` of PSTR in the game folder, first video track, VP8 or VP9 only; any failure returns -1 and shows `YSWEBM_PRELOAD Error. ret = -1`), 0x5DC2 (ordinal 2: the next shown frame into the buffer of the layer PSTR names, rows `width · 4` bytes apart; LET receives 0, 1 at the end of the stream, -1 without a stream; the layer's area is then marked), 0x5DC3/0x5DC4 (ordinals 3 and 4: last packet time and segment duration in ms into 0x893740/0x893748) and 0x5DC9 (ordinal 5: close). The scenario library decodes up to 16 frames per call to catch up with the playing sound's TIME at 30 frames per second. The shared `src/video/webm-video.ts` demuxes with `src/formats/webm.ts`, decodes through WebCodecs and converts with libyuv's BT.601 constants (`src/video/libyuv.ts`).
+- WINDOW (0x485750) remembers each window's last Z (bytes 0x5CB0DC, initially -1) and calls SetWindowPos only when Z changes.
+- Scripts load on first use (0x480769). A script listed in `yst_list.ybn` but missing from the archives only fails when a task reaches it.
+
+Divergences of the version 500 path:
+
+- Opus decoding uses the browser's `decodeAudioData` at 48 kHz instead of libopus/opusfile; the PCM length and every timing use opusfile's granule arithmetic (`readOggOpus`), but sample values can differ (no opusfile dither). Without a browser decoder (Node), Opus sounds play silence of the native length.
+- The xoshiro128++ seed uses only the host time; the browser has no thread or process ids or performance-counter words to mix in.
+- JPEG XL and AVIF standalone images use the browser's image codecs where available; this build's JPEG XL strips inside YDG have no decoder and leave their rows empty.
+- WebM frames come from the browser's WebCodecs `VideoDecoder` instead of libvpx; the YUV to BGRA conversion is libyuv's fixed-point arithmetic. Chunks are fed a few packets ahead of the reader. Without a decoder (Node), each shown frame counts with the layer's pixels left as they are. A PSTR naming no layer reads as a null buffer (-2) instead of the native null dereference, and writes stop at the end of the layer's buffer.
+
 ## Verification
 
-After `npm run build:runtime`, run `node tools/verify-yuris.mjs /path/to/installation` to check archive name/data hashes, inflation and all script tables. Add `--webp` to decode every archived WebP and print a combined BGRA hash. `node tools/verify-webp.mjs` requires `cwebp` and `dwebp` on PATH and compares synthetic lossless/lossy/alpha fixtures byte for byte. `tests/webp.test.mjs` checks small synthetic fixtures without external binaries. No verification needs to display game images.
+After `npm run build:runtime`, run `node tools/verify-yuris.mjs /path/to/installation` to check archive name/data hashes, inflation and all script tables. Add `--webp` to decode every archived WebP and print a combined BGRA hash, `--ydg` to decode every YDG image (failing on any strip that does not decode) and `--opus` to check every Ogg Opus file's head, link count and length. The data hash algorithm follows the project's YBN version. `node tools/verify-webp.mjs` requires `cwebp` and `dwebp` on PATH and compares synthetic lossless/lossy/alpha fixtures byte for byte. `tests/webp.test.mjs` checks small synthetic fixtures without external binaries. No verification needs to display game images.
 
 The shared WebP decoder emits straight BGRA and supports VP8L, VP8 and VP8X with ALPH. Its default color conversion matches modern libwebp, whose intermediate fixed-point products round differently from libwebp 0.4. YU-RIS hosts must pass `true` as `decodeWebp`'s second argument to select the native 14-bit scalar conversion (YSWBP.DLL 0x10021090 and related upsamplers). Animated WebP is rejected.
 

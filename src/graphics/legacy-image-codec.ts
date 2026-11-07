@@ -1,6 +1,8 @@
 import {decodePng} from '../formats/png/decode.js';
 import {decodeWebp} from '../formats/webp/webp.js';
 import {decodeBmp} from '../formats/bmp.js';
+import {decodeQoi} from '../formats/qoi.js';
+import {decodeYdg} from '../formats/yuris/ydg.js';
 import {BrowserGdiImageCodec} from './browser-gdi-image.js';
 import {decodeImageOffThread} from './image-decode-offload.js';
 import {swapRedBlueInPlace} from './pixel-order.js';
@@ -10,6 +12,10 @@ interface DecodedImage {
   height: number;
   pixels: Uint8Array;
 }
+
+/** MIME types of the byte decoders without a registered type: YU-RIS YDG and QOI. */
+export const YDG_MIME = 'image/x-yuris-ydg';
+export const QOI_MIME = 'image/x-qoi';
 
 const IMAGE_CACHE_BYTES = 96 * 1024 * 1024;
 const PRELOAD_CACHE_BYTES = 160 * 1024 * 1024;
@@ -124,8 +130,9 @@ export class LegacyImageCodec {
     {encoded: Uint8Array; ready: Promise<void>; urgent: boolean}
   >();
 
-  prioritizePng(paths: ReadonlySet<string>): void {
-    this.nextClick = new Set(Array.from(paths, (path) => this.key('image/png', true, path)));
+  /** Keeps the decodes of `images` (path to MIME type) for the next click. */
+  prioritize(images: ReadonlyMap<string, string>): void {
+    this.nextClick = new Set(Array.from(images, ([path, mime]) => this.key(mime, true, path)));
   }
 
   private key(mime: string, legacyWebpColor: boolean, path: string): string {
@@ -134,11 +141,15 @@ export class LegacyImageCodec {
 
   private preparedFor(mime: string, byteLength: number): ImageCache {
     if (mime === 'image/webp') return this.preparedWebp;
-    if (mime === 'image/png' && byteLength >= LARGE_PNG_BYTES) return this.preparedLargePng;
+    if (
+      (mime === 'image/png' || mime === YDG_MIME || mime === QOI_MIME) &&
+      byteLength >= LARGE_PNG_BYTES
+    )
+      return this.preparedLargePng;
     return this.prepared;
   }
 
-  /** Preload the exact PNG or legacy WebP decode while the caller is doing other work. */
+  /** Preload the exact PNG, YDG, QOI or legacy WebP decode while the caller is doing other work. */
   async preload(bytes: Uint8Array, mime: string, path: string): Promise<void> {
     const key = this.key(mime, true, path);
     const cache = this.preparedFor(mime, bytes.length);
@@ -150,14 +161,23 @@ export class LegacyImageCodec {
     }
     const pending = this.warming.get(key);
     if (pending) return pending.ready;
-    const format = mime === 'image/webp' ? 'legacy-webp' : mime === 'image/png' ? 'png' : null;
+    const format =
+      mime === 'image/webp'
+        ? 'legacy-webp'
+        : mime === 'image/png'
+          ? 'png'
+          : mime === YDG_MIME
+            ? 'yuris-ydg'
+            : mime === QOI_MIME
+              ? 'qoi'
+              : null;
     if (!format) return;
     const encoded = bytes.slice();
     const ready = (async () => {
       const decoded =
         format === 'png'
           ? await decodeImageOffThread(encoded, 'png', undefined, 'bgra')
-          : await decodeImageOffThread(encoded, 'legacy-webp');
+          : await decodeImageOffThread(encoded, format);
       if (!decoded) return;
       // The worker returns PNG pixels already in BGRA order.
       const pixels = decoded.pixels;
@@ -208,6 +228,8 @@ export class LegacyImageCodec {
 
   async decode(bytes: Uint8Array, mime: string, legacyWebpColor = false): Promise<DecodedImage> {
     if (mime === 'image/webp') return decodeWebp(bytes, legacyWebpColor);
+    if (mime === YDG_MIME) return decodeYdg(bytes);
+    if (mime === QOI_MIME) return decodeQoi(bytes);
     if (mime === 'image/png') {
       const d = await decodePng(bytes);
       return {...d, pixels: swap(d.pixels)};

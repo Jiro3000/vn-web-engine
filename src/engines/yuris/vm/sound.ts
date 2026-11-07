@@ -1,6 +1,7 @@
 import {decodeVorbis} from '../../../audio/vorbis-decoder.js';
 import {openVorbisPcm16, vorbisPcm16, type VorbisPcm16} from '../../../audio/vorbis-pcm16.js';
 import {takePrefetchedVorbisPcm16} from '../../../audio/vorbis-prefetch.js';
+import {OPUS_SAMPLE_RATE, openOpusPcm16, readOggOpus} from '../../../audio/opus-pcm16.js';
 import {YurisError} from './errors.js';
 import {YurisFileKind, YurisFileType, type YurisFiles} from './files.js';
 import type {YurisMachine} from './machine.js';
@@ -97,6 +98,8 @@ const enum SoundType {
   None = 0,
   Ogg = 1,
   Wav = 2,
+  /** Version 500 (Relirium.exe SOUND, file type 12): decoded by YSOPS.DLL. */
+  Opus = 3,
 }
 
 const enum State {
@@ -111,11 +114,11 @@ const enum State {
 export class YurisSound {
   /** +0: the file name. */
   name: ByteString = '';
-  /** +0x105: 1 Ogg, 2 WAV. */
+  /** +0x105: 1 Ogg, 2 WAV, 3 Opus. */
   type = SoundType.None;
   /** +0x106 (a signed byte). */
   enabled = 1;
-  /** +0x107: 0 PCM WAV, 1 Ogg, 2 ACM WAV. */
+  /** +0x107: 0 PCM WAV, 1 Ogg, 2 ACM WAV or Opus (YSOPS.DLL 0x10008F56). */
   codec = 0;
   /** +0x108. */
   state = State.Idle;
@@ -154,7 +157,7 @@ export class YurisSound {
   fadeDone = 0;
   /** +0x168, +0x1A8: the file. */
   file: Uint8Array | null = null;
-  /** The decoded Ogg file; it lives as long as `file`. */
+  /** The decoded Ogg or Opus file; it lives as long as `file`. */
   ogg: VorbisPcm16 | null = null;
   /** +0x16C: the half being prepared (half + 0x1000 bytes); +0x170: what overflowed it. */
   decode: Uint8Array | null = null;
@@ -323,6 +326,7 @@ export class YurisSounds {
       if (!resolved.found) return 0;
       if (resolved.type === YurisFileType.Wav) s.type = SoundType.Wav;
       else if (resolved.type === YurisFileType.Ogg) s.type = SoundType.Ogg;
+      else if (resolved.type === YurisFileType.Opus) s.type = SoundType.Opus;
       else throw new YurisError(0x186be, [m.commandName(SOUND), name]);
       await this.load(node, resolved.path);
     }
@@ -640,7 +644,37 @@ export class YurisSounds {
     if (this.device === 0) return 0;
     if (s.type === SoundType.Ogg) return this.openOgg(s);
     if (s.type === SoundType.Wav) return this.openWav(s);
+    if (s.type === SoundType.Opus) return this.openOpus(s);
     return 0;
+  }
+
+  /**
+   * YSOPS.DLL Load (ordinal 2, 0x10008F56): `op_open_callbacks` over the file (-0xFBE), which
+   * must be seekable (-0xFC8) with one link (-0xFCD) and an OpusHead (-0xFD2); a negative
+   * `op_pcm_total` fails with -0xFD7. The length is trunc(total · 1000 / 48000) ms and becomes
+   * END; the codec byte is 2 and the format 48 kHz 16-bit with the head's channels.
+   */
+  private openOpus(s: YurisSound): number {
+    if (!s.ogg) {
+      const info = readOggOpus(s.file!);
+      if (!info) return -0xfbe;
+      if (info.links !== 1) return -0xfcd;
+      if (info.channels === 0) return -0xfd2;
+      if (info.frames < 0) return -0xfd7;
+      s.ogg = openOpusPcm16(s.file!, info);
+    }
+    const pcm = s.ogg;
+    s.total = Math.trunc((pcm.frames * 1000) / OPUS_SAMPLE_RATE);
+    s.end = i32(s.total);
+    s.codec = 2;
+    return this.format(
+      s,
+      OPUS_SAMPLE_RATE,
+      pcm.channels,
+      pcm.channels * 96000,
+      pcm.channels * 2,
+      16,
+    );
   }
 
   /**
@@ -969,6 +1003,13 @@ export class YurisSounds {
     }
     s.decoded = i32(div(ms * perSecond, 1000));
     if (ms < 0) ms = 0;
+    if (s.type === SoundType.Opus) {
+      // YSOPS.DLL SetPos 0x10008CBB: `op_pcm_seek` to trunc(ms · 48000 / 1000).
+      const frame = Math.trunc((ms * OPUS_SAMPLE_RATE) / 1000);
+      if (frame > s.ogg!.frames) return -0x139c;
+      s.readPosition = frame;
+      return 0;
+    }
     if (s.type === SoundType.Ogg) {
       const ogg = s.ogg!;
       const seconds = ms / 1000;
@@ -984,10 +1025,16 @@ export class YurisSounds {
 
   /** `ov_read` / the WAV copy: up to `n` bytes at the decoder position into `out`. */
   private readPcm(s: YurisSound, out: Uint8Array, at: number, n: number): number {
-    if (s.type === SoundType.Ogg) {
+    if (s.type === SoundType.Ogg || s.type === SoundType.Opus) {
       const ogg = s.ogg!,
         frame = ogg.channels * 2;
-      const frames = Math.min(Math.floor(n / frame), ogg.frames - s.readPosition);
+      // YSOPS.DLL 0x1000883F passes `op_read` the frame count as its sample count, so a read
+      // holds at most n / (2 · channels²) frames; 0 counts as the end of the stream.
+      const limit =
+        s.type === SoundType.Opus
+          ? Math.floor(Math.floor(n / frame) / ogg.channels)
+          : Math.floor(n / frame);
+      const frames = Math.min(limit, ogg.frames - s.readPosition);
       if (frames <= 0) return 0;
       const from = s.readPosition * frame;
       out.set(ogg.bytes.subarray(from, from + frames * frame), at);
@@ -1034,7 +1081,7 @@ export class YurisSounds {
         n -= n % s.blockAlign;
       } else n = 0x1000;
       const ogg = s.ogg;
-      if (ogg?.waitForFrames && s.type === SoundType.Ogg && n >= 0x20) {
+      if (ogg?.waitForFrames && s.type !== SoundType.Wav && n >= 0x20) {
         const end = Math.min(ogg.frames, s.readPosition + Math.floor(n / s.blockAlign));
         const pending = ogg.waitForFrames(end);
         if (pending && !(await pending)) return -0x406;
@@ -1053,7 +1100,8 @@ export class YurisSounds {
       s.wrapEnd = s.end;
       s.wrapRestart = s.restart;
       if (s.end <= s.restart) s.restart = 0;
-      if (this.seek(s, s.restart) < 0) return -0x7e4;
+      const sought = this.seek(s, s.restart);
+      if (sought < 0) return s.type === SoundType.Opus ? sought : -0x7e4;
       written = 0;
     }
     s.decoded += written;

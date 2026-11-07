@@ -4,6 +4,9 @@ import {YurisFileKind} from './files.js';
 import type {YurisMachine} from './machine.js';
 import {type ByteString, isLeadByte} from './numbers.js';
 import {asciiLower} from './sjis.js';
+import {resolveNodePath} from './nodes.js';
+import {Yswbm} from './yswbm.js';
+import {YBN_VERSION_500} from '../../../formats/yuris/ybn.js';
 import type {YurisWindowHost} from './window.js';
 
 type HostResult<T> = T | Promise<T>;
@@ -101,6 +104,11 @@ class YurisProduct {
   private inputAccepted = 0;
   /** 0x59B088: the debug log has not written its session header yet. */
   private logFresh = true;
+  /** YSWBM.DLL, loaded at startup (0x495E24) next to the executable's `enginedll` folder. */
+  private readonly webm = new Yswbm();
+  /** 0x893740 and 0x893748: the last results of COM 0x5DC3 and 0x5DC4. */
+  webmTime = 0n;
+  webmDuration = 0n;
 
   constructor(
     private readonly m: YurisMachine,
@@ -139,9 +147,22 @@ class YurisProduct {
     const host = this.host,
       s = m.system;
     if (com < 0n || com > 0xffffffffn) return 0;
+    const v500 = m.project.config.version === YBN_VERSION_500;
+    // Version 500 (Relirium.exe PRODUCT 0x488B00) drops COM 10, 0x21, 0x24 and 0x25, adds COM
+    // 3, 0x3E9/0x3EA (YSOHC.dll ordinals 2 and 3, only when that library loads) and the
+    // YSWBM.DLL WebM decoder COM 0x5DC1..0x5DC4 and 0x5DC9.
+    if (v500 && (com === 10n || com === 0x21n || com === 0x24n || com === 0x25n)) return 0;
+    if (!v500 && (com === 3n || (com >= 0x5dc1n && com <= 0x5dc9n))) return 0;
     switch (Number(com)) {
       case 1:
         setInt(VERSION);
+        break;
+      case 3:
+        setInt(0n);
+        break;
+      case 0x3e9:
+      case 0x3ea:
+        // The browser cannot load YSOHC.dll; natively both do nothing when it is missing.
         break;
       case 2:
         m.messageBox(decode('= ' + pstr));
@@ -306,6 +327,40 @@ class YurisProduct {
       case 0x5227:
         setString(host.windowsDirectory());
         break;
+      case 0x5dc1: {
+        // YSWEBM_PRELOAD: ordinal 1 with PSTR as the `fopen` path (relative to the game
+        // folder, never an archive entry); a failure only shows a message (0x4399EC).
+        const result = this.webm.preload(await this.folder.readFile(backslashes(pstr)));
+        // 0x4399EC: a system-modal message box; the script continues.
+        if (result !== 0) m.messageBox(`YSWEBM_PRELOAD Error. ret = ${result}`);
+        break;
+      }
+      case 0x5dc2: {
+        // PSTR names the layer (0x466F34 from the current namespace, 0x43D3F9); ordinal 2
+        // writes the next frame into its buffer +0xC0, LET receives the result and the
+        // layer's area is marked (0x440DD0). PINT is not passed on.
+        const {path, group} = resolveNodePath(s.names[0]!, pstr);
+        const node = m.layers.lookup(path, group);
+        const cg = node?.payload;
+        // Natively a missing layer dereferences null; here the DLL sees no buffer.
+        if (cg) cg.beginPixelWrite();
+        const result = await this.webm.decode(cg?.pixels ?? null);
+        if (cg) cg.pixelRevision++;
+        setInt(BigInt(result));
+        m.layers.markDirty(node);
+        break;
+      }
+      case 0x5dc3:
+        this.webmTime = BigInt.asIntN(32, this.webm.time());
+        break;
+      case 0x5dc4:
+        this.webmDuration = BigInt.asIntN(32, this.webm.duration());
+        break;
+      case 0x5dc9: {
+        const result = this.webm.end();
+        if (result !== 0) m.messageBox(`YSWEBM_END Error. ret = ${result}`);
+        break;
+      }
     }
     return 0;
   }

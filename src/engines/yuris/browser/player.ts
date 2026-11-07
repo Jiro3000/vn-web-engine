@@ -24,7 +24,7 @@ import {BrowserWindowsDialogPicker} from '../../../platform/windows-picker.js';
 import {StoredRegistry} from '../../../platform/registry.js';
 import {MemoryStore} from '../../../platform/store.js';
 import {LegacyFolder} from '../../../platform/legacy-folder.js';
-import {LegacyImageCodec, swap} from '../../../graphics/legacy-image-codec.js';
+import {LegacyImageCodec, QOI_MIME, YDG_MIME, swap} from '../../../graphics/legacy-image-codec.js';
 import {bgraDisplayFrame} from '../../../graphics/bgra-effects-wasm.js';
 import {BrowserFileMovie} from '../../../video/browser-file-movie.js';
 import {setWindowsVirtualKey} from '../../../input/windows-virtual-keys.js';
@@ -44,7 +44,20 @@ const imageMime: Readonly<Partial<Record<YurisFileType, string>>> = {
   [YurisFileType.Bmp]: 'image/bmp',
   [YurisFileType.Jpg]: 'image/jpeg',
   [YurisFileType.Gif]: 'image/gif',
+  [YurisFileType.Ydg]: YDG_MIME,
+  [YurisFileType.Qoi]: QOI_MIME,
+  [YurisFileType.Avif]: 'image/avif',
+  [YurisFileType.Jxl]: 'image/jxl',
 };
+/** Images whose decodes are worth starting on a worker ahead of the script. */
+const preloadable = (type: YurisFileType): boolean =>
+  type === YurisFileType.Png ||
+  type === YurisFileType.Webp ||
+  type === YurisFileType.Ydg ||
+  type === YurisFileType.Qoi;
+/** Images the next-click forecast tracks: the sprites and frames a click shows. */
+const frameImage = (type: YurisFileType): boolean =>
+  type === YurisFileType.Png || type === YurisFileType.Ydg || type === YurisFileType.Qoi;
 const PRELOADED_ARCHIVE_BYTES = 32 * 1024 * 1024;
 
 /** StretchDIBits with SRCCOPY (0x45ECF4) treats the composed window as BGRX. */
@@ -112,7 +125,7 @@ export class YurisBrowserPlayer {
   private readonly codecs = new LegacyImageCodec();
   private readonly ymvDecoder = new BrowserYmvDecoder();
   private readonly preloadQueue = new Map<string, string>();
-  private nextPngQueue = new Set<string>();
+  private nextClickQueue = new Map<string, string>();
   /**
    * The folder and extension around a VO cue in the voice path, and how the script cased the
    * cue, learned from a real read.
@@ -227,8 +240,8 @@ export class YurisBrowserPlayer {
       readProgressive: (path) => this.readProgressiveAsset(path),
       archiveNames: () => files.archives.map((a) => a.archive.entries.map((e) => e.key)),
       decodeImage: (data, type, path) => {
-        if (type === YurisFileType.Png) this.lookahead?.observeImage(path);
-        if (this.nextPngQueue.delete(path)) this.preloadQueue.delete(path);
+        if (frameImage(type)) this.lookahead?.observeImage(path);
+        if (this.nextClickQueue.delete(path)) this.preloadQueue.delete(path);
         return codec.decodeCached(data, imageMime[type] ?? 'application/octet-stream', true, path);
       },
       decodeYmvFrame: (movie, frame) => this.ymvDecoder.decode(movie, frame),
@@ -394,6 +407,12 @@ export class YurisBrowserPlayer {
       moviePlaying: () => this.movie.isPlaying(),
       movieStop: () => this.movie.stop(),
       movieClose: () => this.movie.close(),
+      movieFillBlack: (width, height) => {
+        const context = this.contexts[0];
+        if (!context) return;
+        context.fillStyle = '#000';
+        context.fillRect(0, 0, width, height);
+      },
       dialogInput: async (text, caption, initial, limit) =>
         encode(
           await textInput.show({
@@ -508,19 +527,18 @@ export class YurisBrowserPlayer {
   private preloadImage(name: string): void {
     if (typeof Worker === 'undefined' || this.preloadQueue.size >= 1024) return;
     const file = this.machine.files.resolve(name, YurisFileKind.Image);
-    if (!file.found || (file.type !== YurisFileType.Png && file.type !== YurisFileType.Webp))
-      return;
+    if (!file.found || !preloadable(file.type)) return;
     if (!this.preloading.has(file.path)) this.preloadQueue.set(file.path, imageMime[file.type]!);
     this.drainPreloadQueue();
   }
   private prioritizeNextClick(names: readonly string[]): void {
-    const paths = new Set<string>();
+    const images = new Map<string, string>();
     for (const name of names) {
       const file = this.machine.files.resolve(name, YurisFileKind.Image);
-      if (file.found && file.type === YurisFileType.Png) paths.add(file.path);
+      if (file.found && frameImage(file.type)) images.set(file.path, imageMime[file.type]!);
     }
-    this.codecs.prioritizePng(paths);
-    this.nextPngQueue = new Set([...paths].filter((path) => !this.preloading.has(path)));
+    this.codecs.prioritize(images);
+    this.nextClickQueue = new Map([...images].filter(([path]) => !this.preloading.has(path)));
     this.drainPreloadQueue();
   }
   /**
@@ -591,20 +609,19 @@ export class YurisBrowserPlayer {
   private decodeAhead(name: string, reading: string): void {
     if (typeof Worker === 'undefined' || this.preloading.size >= 8) return;
     const file = this.machine.files.resolve(name, YurisFileKind.Image);
-    if (!file.found || file.type !== YurisFileType.Png || file.path === reading) return;
+    if (!file.found || !frameImage(file.type) || file.path === reading) return;
     if (this.preloading.has(file.path)) return;
-    this.nextPngQueue.delete(file.path);
+    this.nextClickQueue.delete(file.path);
     this.preloadQueue.delete(file.path);
     this.startPreload(file.path, imageMime[file.type]!);
   }
   private drainPreloadQueue(): void {
     while (this.preloading.size < 2 && !this.abort.signal.aborted) {
-      const urgent = this.nextPngQueue.values().next().value;
-      const next = urgent === undefined ? this.preloadQueue.entries().next().value : undefined;
-      const path = urgent ?? next?.[0];
-      if (path === undefined) return;
-      const mime = next?.[1] ?? 'image/png';
-      this.nextPngQueue.delete(path);
+      const urgent = this.nextClickQueue.entries().next().value;
+      const next = urgent ?? this.preloadQueue.entries().next().value;
+      if (next === undefined) return;
+      const [path, mime] = next;
+      this.nextClickQueue.delete(path);
       this.preloadQueue.delete(path);
       this.startPreload(path, mime);
     }
@@ -808,7 +825,7 @@ export class YurisBrowserPlayer {
     this.running = false;
     this.abort.abort();
     this.preloadQueue.clear();
-    this.nextPngQueue.clear();
+    this.nextClickQueue.clear();
     this.preloadedArchiveFiles.clear();
     this.preloadedArchiveBytes = 0;
     this.menus.dispose();

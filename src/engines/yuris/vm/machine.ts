@@ -4,6 +4,7 @@ import {
   type YurisProject,
   type YurisScript,
   findYurisLabel,
+  yurisScriptPath,
 } from '../../../formats/yuris/ybn.js';
 import {YurisLayers, type YurisImageHost} from './cg.js';
 import {
@@ -342,7 +343,12 @@ export class YurisMachine {
     settings: YurisStartupSettings,
   ) {
     this.variables = new YurisVariables(project.table.variableCount);
-    this.system = new YurisSystem(this.variables, project.commands.table, host);
+    this.system = new YurisSystem(
+      this.variables,
+      project.commands.table,
+      host,
+      project.config.version,
+    );
     this.expression = new YurisExpression(this.variables, this.system);
     this.system.textCount = project.table.textCount;
     this.system.settings = settings;
@@ -410,7 +416,11 @@ export class YurisMachine {
       throw new Error(STARTUP_SETTINGS_MISSING);
     }
     const scripts = new Map<number, YurisScript>();
-    for (const file of project.files) scripts.set(file.index, await project.script(file.index));
+    // The native reads each script on its first use (0x480769 in the version 500 build); a
+    // listed script that no archive holds fails only when a task reaches it (0xDBBD2 here).
+    for (const file of project.files)
+      if (host.exists(asciiLower(yurisScriptPath(file.index))))
+        scripts.set(file.index, await project.script(file.index));
     const machine = new YurisMachine(project, scripts, host, YurisStartupSettings.read(file));
     machine.variables.initialize(project.variables, -1, (bytes) =>
       machine.expression.string(bytes),
@@ -933,7 +943,7 @@ export class YurisMachine {
     this.define(Command.Str, this.strHandler);
     this.define(Command.Let, this.letHandler);
     installVariableCommands(this);
-    installMath(this, this.host.now());
+    installMath(this, this.host.now(), this.project.config.version);
   }
 
   /** IF 0x4435B0: pushes the IF entry, then jumps to the next branch or IFEND when false. */

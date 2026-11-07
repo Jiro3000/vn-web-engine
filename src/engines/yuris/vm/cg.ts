@@ -1,7 +1,8 @@
+import {YBN_VERSION_500} from '../../../formats/yuris/ybn.js';
 import {cgAct} from './cgact.js';
 import {compose, type Rect} from './compose.js';
 import {YurisError} from './errors.js';
-import {YurisFileKind, YurisFileType, type YurisFiles} from './files.js';
+import {YurisFileKind, YurisFileType, type YurisFiles, isSoundFileType} from './files.js';
 import type {YurisMachine} from './machine.js';
 import {LookupMode, type YurisNode, YurisTree, resolveNodePath} from './nodes.js';
 import {type ByteString, formatInt, i64} from './numbers.js';
@@ -855,23 +856,13 @@ export class YurisLayers {
       return 0;
     }
     cg.masked = 0;
-    if (
-      file.type === YurisFileType.None ||
-      file.type === YurisFileType.Wav ||
-      file.type === YurisFileType.Ogg
-    ) {
+    if (file.type === YurisFileType.None || isSoundFileType(file.type)) {
       this.machine.fail(new YurisError(0x186be, [this.commandName(), name]));
       return -1;
     }
     const data = await this.files.read(file.path);
     const image = await this.images.decodeImage(data, file.type, file.path);
-    // 0x41A69C and YSPNG.DLL 0x10001014 select masked blitters for PNG color types
-    // 4 and 6 (IHDR), even when every alpha byte is zero or 255. WebP sets it at 0x418910.
-    const pngColorType = data[25];
-    cg.masked = Number(
-      file.type === YurisFileType.Webp ||
-        (file.type === YurisFileType.Png && (pngColorType === 4 || pngColorType === 6)),
-    );
+    cg.masked = Number(maskedImage(file.type, data, this.files.version));
     cg.setPixels(image.pixels);
     cg.width = cg.textureWidth = image.width;
     cg.height = cg.textureHeight = image.height;
@@ -1214,4 +1205,50 @@ function trim(cg: YurisCg, threshold: number, side: number): bigint {
       return BigInt(right);
   }
   return 0n;
+}
+
+/**
+ * Whether an image load selects the masked blitters (cg+0xA8). 0x41A69C and YSPNG.DLL
+ * 0x10001014 set it for PNG color types 4 and 6 (IHDR), even when every alpha byte is zero or
+ * 255; WebP sets it at 0x418910. Version 500 (Relirium.exe loader thread 0x448F80) also sets it
+ * for a PNG with a tRNS chunk (0x44B1BC, spng_get_trns 0x426F3C), and always for YDG
+ * (0x4499FC) and QOI (0x449438).
+ */
+function maskedImage(type: YurisFileType, data: Uint8Array, version: number): boolean {
+  switch (type) {
+    case YurisFileType.Webp:
+    case YurisFileType.Ydg:
+    case YurisFileType.Qoi:
+      return true;
+    case YurisFileType.Png:
+      return (
+        data[25] === 4 ||
+        data[25] === 6 ||
+        (version === YBN_VERSION_500 && pngHasChunk(data, 'tRNS'))
+      );
+    default:
+      return false;
+  }
+}
+
+/** Whether a PNG has `tag` before its first IDAT chunk. */
+function pngHasChunk(data: Uint8Array, tag: string): boolean {
+  for (let offset = 8; offset + 8 <= data.length;) {
+    const length =
+      ((data[offset]! << 24) |
+        (data[offset + 1]! << 16) |
+        (data[offset + 2]! << 8) |
+        data[offset + 3]!) >>>
+      0;
+    const name = String.fromCharCode(
+      data[offset + 4]!,
+      data[offset + 5]!,
+      data[offset + 6]!,
+      data[offset + 7]!,
+    );
+    if (name === tag) return true;
+    if (name === 'IDAT') return false;
+    offset += 12 + length;
+  }
+  return false;
 }

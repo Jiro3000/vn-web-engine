@@ -1,3 +1,4 @@
+import {YBN_VERSION} from '../../../formats/yuris/ybn.js';
 import {YurisStartupSettings} from './startup.js';
 import {YurisError} from './errors.js';
 import type {YurisSystemValues} from './expression.js';
@@ -132,6 +133,8 @@ export class YurisSystem implements YurisSystemValues {
     private readonly variables: YurisVariables,
     keyTable: Uint8Array,
     private readonly host: YurisSystemHost,
+    /** The YBN version, read back as system variable 0x6C (0x448280; Relirium.exe 0x478560). */
+    private readonly version: number = YBN_VERSION,
   ) {
     this.keys = keyTable;
   }
@@ -263,7 +266,7 @@ export class YurisSystem implements YurisSystemValues {
         return BigInt(variable ? variable.type : 0);
       }
       case 0x6c:
-        return 0x22bn;
+        return BigInt(this.version);
       case 0x6d:
         return this.frames;
       case 0x6e:

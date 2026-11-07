@@ -3,6 +3,7 @@ import type {YurisMachine} from './machine.js';
 import {windowsPath, type YurisFolderHost} from './fileact.js';
 import {YurisError} from './errors.js';
 import {fistp} from './numbers.js';
+import {YBN_VERSION_500} from '../../../formats/yuris/ybn.js';
 
 export interface YurisMovieHost {
   moviePlay(data: Uint8Array, rect: FileMovieRect, gain: number): Promise<void>;
@@ -11,6 +12,8 @@ export interface YurisMovieHost {
   moviePlaying(): boolean;
   movieStop(): void;
   movieClose(): void;
+  /** FillRect of the main window's client area from (0, 0) with a black brush (GDI). */
+  movieFillBlack?(width: number, height: number): void;
 }
 
 /** MOVIE 0x44A010, MOVIEEND 0x44A5FC, MOVIEINFO 0x44A650. */
@@ -39,6 +42,9 @@ export class YurisMovie {
       this.file = null;
       this.playing = false;
       this.volume = 256;
+      // Version 500 (Relirium.exe MOVIEEND 0x47A8D8) then paints 0x47A930: a black
+      // 1280x720 FillRect on the main window's DC, shown until the next window present.
+      if (m.project.config.version === YBN_VERSION_500) host.movieFillBlack?.(0x500, 0x2d0);
       return 0;
     });
     m.define(0x48, () => this.info());

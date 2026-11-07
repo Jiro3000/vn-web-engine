@@ -5,19 +5,24 @@
  * `ysbin/*.ybn` is parsed. Only counts and failures are printed; no asset is written or
  * rendered. Run after `npm run build:runtime`:
  *
- *   node tools/verify-yuris.mjs "/path/to/game" [--webp]
+ *   node tools/verify-yuris.mjs "/path/to/game" [--webp] [--ydg] [--opus]
  *
  * --webp also decodes every WebP with the native color conversion and hashes BGRA.
+ * --ydg decodes every YDG image (version 500) and hashes its BGRA.
+ * --opus reads every Ogg Opus file's head, link count and PCM length.
  */
 import {readdir} from 'node:fs/promises';
 import {resolve} from 'node:path';
 import {createHash} from 'node:crypto';
 import {openSource} from './file-source.mjs';
 import {decodeWebp} from '../dist/formats/webp/webp.js';
+import {decodeYdg, ydgHeader, isYdg} from '../dist/formats/yuris/ydg.js';
+import {readOggOpus} from '../dist/audio/opus-pcm16.js';
 import {
   YpfArchive,
   YpfFileSystem,
   ypfDataMatches,
+  YPF_DATA_XXHASH32,
   ypfNameMatches,
 } from '../dist/formats/yuris/ypf.js';
 
@@ -26,6 +31,9 @@ const failures = [];
 const counts = {};
 const checkWebp = process.argv.includes('--webp');
 const webpHash = createHash('sha256');
+const checkYdg = process.argv.includes('--ydg');
+const ydgHash = createHash('sha256');
+const checkOpus = process.argv.includes('--opus');
 const count = (kind, n = 1) => (counts[kind] = (counts[kind] ?? 0) + n);
 
 const archives = [];
@@ -43,15 +51,27 @@ for (const {name, path} of archives) {
     await source.close();
     continue;
   }
-  const archive = await YpfArchive.open(source);
-  opened.push({name, archive});
+  opened.push({name, archive: await YpfArchive.open(source)});
+}
+const files = new YpfFileSystem(opened);
+console.log(`file system: ${files.size} files`);
+
+const ybn = await import('../dist/formats/yuris/ybn.js');
+const read = (name) => files.read(name);
+const project = await ybn.loadYurisProject(read);
+// The data hash is the engine build's: MurmurHash2 before YBN version 500, xxHash32 from it.
+const dataHash = project.config.version === ybn.YBN_VERSION_500 ? YPF_DATA_XXHASH32 : 'murmur2';
+console.log(`project: YBN version ${project.config.version}, data hash ${dataHash}`);
+
+for (const {name, archive} of opened) {
   let bytes = 0;
   for (const entry of archive.entries) {
     count('entries');
     if (!ypfNameMatches(entry)) failures.push(`${name}: name hash of entry ${entry.offset}`);
     const stored = await archive.readStored(entry);
     bytes += stored.length;
-    if (!ypfDataMatches(entry, stored)) failures.push(`${name}: data hash at ${entry.offset}`);
+    if (!ypfDataMatches(entry, stored, dataHash))
+      failures.push(`${name}: data hash at ${entry.offset}`);
     if (entry.compression) {
       try {
         await archive.read(entry);
@@ -61,7 +81,37 @@ for (const {name, path} of archives) {
       }
     }
     count(`type ${entry.type}`);
-    if (checkWebp && entry.type === 10) {
+    const lower = String(entry.name).toLowerCase();
+    if (checkYdg && lower.endsWith('.ydg')) {
+      try {
+        const bytes = entry.compression ? await archive.read(entry) : stored;
+        if (!isYdg(bytes)) throw new Error('bad signature');
+        const header = ydgHeader(bytes);
+        const rows = header.strips.reduce((sum, strip) => sum + strip.rows, 0);
+        if (rows !== header.height)
+          throw new Error(`strips cover ${rows} of ${header.height} rows`);
+        for (const strip of header.strips) count(`YDG strip codec ${strip.codec}`);
+        const image = decodeYdg(bytes);
+        if (image.failedStrips) throw new Error(`${image.failedStrips} strips failed to decode`);
+        count('decoded YDG');
+        count('YDG pixels', image.width * image.height);
+        ydgHash.update(image.pixels);
+      } catch (error) {
+        failures.push(`${name}: YDG at ${entry.offset}: ${error.message}`);
+      }
+    }
+    if (checkOpus && lower.endsWith('.opus')) {
+      const bytes = entry.compression ? await archive.read(entry) : stored;
+      const info = readOggOpus(bytes);
+      if (!info || info.links !== 1 || info.channels === 0 || info.frames < 0)
+        failures.push(`${name}: Opus at ${entry.offset}: ${JSON.stringify(info)}`);
+      else {
+        count('Opus files');
+        count(`Opus ${info.channels} channels`);
+        count('Opus frames', info.frames);
+      }
+    }
+    if (checkWebp && lower.endsWith('.webp')) {
       try {
         const bytes = entry.compression ? await archive.read(entry) : stored;
         const image = decodeWebp(bytes, true);
@@ -77,12 +127,7 @@ for (const {name, path} of archives) {
     `${name}: version ${archive.version}, ${archive.entries.length} entries, ${bytes} stored bytes`,
   );
 }
-const files = new YpfFileSystem(opened);
-console.log(`file system: ${files.size} files`);
 
-const ybn = await import('../dist/formats/yuris/ybn.js');
-const read = (name) => files.read(name);
-const project = await ybn.loadYurisProject(read);
 count('commands', project.commands.commands.length);
 count('labels', project.labels.labels.length);
 count('variable declarations', project.variables.length);
@@ -140,3 +185,4 @@ process.exitCode = failures.length ? 1 : 0;
 
 for (const {archive} of opened) await archive.source.close();
 if (checkWebp) console.log('WebP BGRA SHA-256', webpHash.digest('hex'));
+if (checkYdg) console.log('YDG BGRA SHA-256', ydgHash.digest('hex'));

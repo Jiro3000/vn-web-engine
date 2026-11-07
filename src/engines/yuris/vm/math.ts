@@ -1,4 +1,6 @@
 import {Mt19937} from '../../../core/mt19937.js';
+import {Xoshiro128pp} from '../../../core/xoshiro128.js';
+import {YBN_VERSION_500} from '../../../formats/yuris/ybn.js';
 import type {YurisMachine} from './machine.js';
 import {type ByteString, atoi64} from './numbers.js';
 
@@ -53,13 +55,17 @@ const UNARY: readonly [Arg, (x: number) => number][] = [
  * HASH and CALC, which store ints (0x45BEE4). The functions are the C runtime's; JavaScript's
  * `Math` may differ from them in the last bit.
  */
-export function installMath(m: YurisMachine, seed: number): void {
-  // 0x4686E4: the generator is seeded with timeGetTime() at start-up (0x46C544).
-  const random = new Mt19937(seed);
+export function installMath(m: YurisMachine, seed: number, version: number): void {
+  // 0x4686E4: the generator is seeded with timeGetTime() at start-up (0x46C544). Version 500
+  // (Relirium.exe 0x49D0FC, called from the start-up 0x499024 with state 0x894180) seeds
+  // xoshiro128++ from timeGetTime() ^ the thread and process ids ^ both QueryPerformanceCounter
+  // words through 0x492634; the browser has no ids or counter, so only the time contributes.
+  const random: {next(): number} =
+    version === YBN_VERSION_500 ? Xoshiro128pp.fromSeed(seed >>> 0) : new Mt19937(seed);
   m.define(MATH, () => math(m, random));
 }
 
-function math(m: YurisMachine, random: Mt19937): number {
+function math(m: YurisMachine, random: {next(): number}): number {
   const a = m.args,
     e = m.expression;
   m.decode();
@@ -95,7 +101,8 @@ function math(m: YurisMachine, random: Mt19937): number {
   if (a.has(Arg.Log10)) return putFloat(Math.log10(float())); // 0x471204
   if (a.has(Arg.Pow)) return putFloat(Math.pow(float(), float2())); // 0x470A59
   if (a.has(Arg.Rnd)) {
-    // 0x446444: lowest + the next MT19937 output modulo the 64-bit span (_allrem 0x471130).
+    // 0x446444: lowest + the next MT19937 output modulo the 64-bit span (_allrem 0x471130);
+    // version 500 (Relirium.exe 0x476424) takes the next xoshiro128++ output, inlined.
     let low = e.intOf(type, a.expression[set]!),
       high = e.intOf(type2, a.expression[set2]!);
     if (high < low) [low, high] = [high, low];

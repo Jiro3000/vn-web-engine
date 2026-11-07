@@ -7,6 +7,7 @@ import {
   zlibUncompressProgressive,
 } from '../zlib.js';
 import {murmurHash2} from './murmur.js';
+import {xxHash32} from '../../core/xxhash32.js';
 
 /**
  * YU-RIS `YPF` archives. Addresses refer to `hajiron.exe` (see the engine README).
@@ -153,9 +154,21 @@ export class YpfArchive {
   }
 }
 
-/** Whether the stored bytes match the index's data hash. */
-export function ypfDataMatches(entry: YpfEntry, stored: Uint8Array): boolean {
-  return murmurHash2(stored) === entry.dataHash;
+/** The data hash of the engines that read version 500 YBN projects: xxHash32, seed 0. */
+export const YPF_DATA_XXHASH32 = 'xxhash32';
+
+/**
+ * Whether the stored bytes match the index's data hash. `hajiron.exe` (0x41BCA8) hashes them
+ * with MurmurHash2; the YBN version 500 build (Relirium.exe 0x44CCD8 / 0x44D190) with
+ * xxHash32 (0x44D548). Both builds write the same archive version, so the caller passes the
+ * engine's algorithm.
+ */
+export function ypfDataMatches(
+  entry: YpfEntry,
+  stored: Uint8Array,
+  hash: 'murmur2' | typeof YPF_DATA_XXHASH32 = 'murmur2',
+): boolean {
+  return (hash === 'murmur2' ? murmurHash2(stored) : xxHash32(stored)) === entry.dataHash;
 }
 
 /** Whether the index's name hash is the hash of the stored name. */

@@ -37,15 +37,32 @@ export function ybnSignature(bytes: Uint8Array): YbnSignature {
   throw new Error('Unknown YBN signature');
 }
 
-/** The script format version every loader of this executable accepts (YSTD checks it). */
+/**
+ * The script format version of each supported executable build; every loader checks it (YSTD:
+ * `hajiron.exe` 0x463C60 requires 0x22B, `Relirium.exe` 0x493118 requires 500). The two builds
+ * share the YBN layouts except `YSCF` (see parseYscf).
+ */
+export const YBN_VERSIONS: readonly number[] = [500, 0x22b];
+
+/** The version of `hajiron.exe`, whose addresses the engine sources cite. */
 export const YBN_VERSION = 0x22b;
+
+/** The version of the `Relirium.exe` build (SHA-256 3454f9b4…), the YDG/Opus generation. */
+export const YBN_VERSION_500 = 500;
 
 function header(bytes: Uint8Array, signature: YbnSignature): ByteView {
   const view = new ByteView(bytes, {littleEndian: true});
   if (ybnSignature(bytes) !== signature) throw new Error(`Not a ${signature} file`);
   const version = view.u32(4);
-  if (version !== YBN_VERSION) throw new Error(`${signature}: unsupported version ${version}`);
+  if (!YBN_VERSIONS.includes(version))
+    throw new Error(`${signature}: unsupported version ${version}`);
   return view;
+}
+
+/** The YBN format version of a script file. */
+export function ybnVersion(bytes: Uint8Array): number {
+  ybnSignature(bytes);
+  return new ByteView(bytes, {littleEndian: true}).u32(4);
 }
 
 /** A command argument as declared in `ysc.ybn`. */
@@ -295,25 +312,44 @@ export function parseYsvr(bytes: Uint8Array): readonly YurisVariableDeclaration[
 }
 
 export interface YurisConfig {
+  /** The YBN version of the project; it selects the executable build's tables. */
+  readonly version: number;
   /** Screen size; 0x463E84 accepts 0x80..0x2000 by 0x10..0x2000, or 0 by 0 for the default. */
   readonly width: number;
   readonly height: number;
   /** The byte stored at 0x18 of the screen state. */
   readonly screenMode: number;
-  /** Eight bytes copied to 0x872318 and four to 0x872320. */
+  /**
+   * The image and sound extension search orders: eight bytes copied to 0x872318 and four to
+   * 0x872320 (version 500: sixteen bytes to 0x893C54 and eight to 0x893C64).
+   */
   readonly reserved: Uint8Array;
   readonly reserved2: Uint8Array;
   /** 0 or 1, stored at 0x872314. */
   readonly threadMode: number;
-  /** Seven settings stored as bytes at 0x8722C4, 0x8722FC, 0x872300, 0x8722D4, 0x872304, 0x872308, 0x87230C (file order). */
+  /**
+   * Seven settings stored as bytes at 0x8722C4, 0x8722FC, 0x872300, 0x8722D4, 0x872304,
+   * 0x872308, 0x87230C, in this order whatever the file order of the version.
+   */
   readonly settings: readonly number[];
   /** Window caption bytes (at most 0x80); an empty caption becomes a space. */
   readonly caption: Uint8Array;
 }
 
-/** `YSCF` (0x463E84). */
+/**
+ * `YSCF` (0x463E84; version 500: Relirium.exe 0x49333C). Version 0x22B: size at 0x10, mode
+ * byte 0x18, orders at 0x1C (8) and 0x24 (4), thread mode 0x28, settings 0x2C..0x44, caption
+ * u16 length 0x4C. Version 500 widens the orders to 0x1C (16) and 0x2C (8) and moves the
+ * thread mode to 0x34, the settings to 0x38..0x50 and the caption to 0x58. Its file order
+ * of settings stores 0x893C00, 0x893C10, 0x893C38, 0x893C3C, 0x893C40, 0x893C44, 0x893C48;
+ * their readers match 0x8722C4, 0x8722D4 (the sound setting that the system variable reader
+ * 0x448280 / Relirium 0x478560 reports), 0x8722FC and 0x872300 (window styles, Relirium
+ * 0x4869B8), 0x872304, 0x872308 and 0x87230C.
+ */
 export function parseYscf(bytes: Uint8Array): YurisConfig {
   const view = header(bytes, 'YSCF');
+  const version = view.u32(4);
+  const v500 = version === YBN_VERSION_500;
   const width = view.i32(0x10),
     height = view.i32(0x14);
   // Zero by zero keeps the executable's default size; anything else must be in range.
@@ -322,21 +358,26 @@ export function parseYscf(bytes: Uint8Array): YurisConfig {
     ((width - 0x80) >>> 0 > 0x1f80 || (height - 0x10) >>> 0 > 0x1ff0)
   )
     throw new Error('YSCF: screen size out of range');
-  const threadMode = view.i32(0x28);
+  const threadMode = view.i32(v500 ? 0x34 : 0x28);
   if (threadMode < 0 || threadMode > 1) throw new Error('YSCF: invalid thread mode');
-  const length = view.u16(0x4c);
-  const caption = view.range(0x4e, length);
+  const captionAt = v500 ? 0x58 : 0x4c;
+  const length = view.u16(captionAt);
+  const caption = view.range(captionAt + 2, length);
   const zero = caption.indexOf(0);
   const text = zero < 0 ? caption : caption.subarray(0, zero);
   if (text.length > 0x80) throw new Error('YSCF: caption too long');
+  const settings = v500
+    ? [0x38, 0x40, 0x44, 0x3c, 0x48, 0x4c, 0x50]
+    : [0x2c, 0x30, 0x34, 0x38, 0x3c, 0x40, 0x44];
   return {
+    version,
     width,
     height,
     screenMode: view.u8(0x18),
-    reserved: view.range(0x1c, 8),
-    reserved2: view.range(0x24, 4),
+    reserved: view.range(0x1c, v500 ? 16 : 8),
+    reserved2: view.range(v500 ? 0x2c : 0x24, v500 ? 8 : 4),
     threadMode,
-    settings: [0x2c, 0x30, 0x34, 0x38, 0x3c, 0x40, 0x44].map((o) => view.i32(o)),
+    settings: settings.map((o) => view.i32(o)),
     caption: text.length ? text : Uint8Array.of(0x20),
   };
 }

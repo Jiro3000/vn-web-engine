@@ -1,4 +1,5 @@
 import type {YurisCgNode} from './cg.js';
+import {YBN_VERSION_500} from '../../../formats/yuris/ybn.js';
 import {YurisError} from './errors.js';
 import type {YurisMachine} from './machine.js';
 import {resolveNodePath} from './nodes.js';
@@ -156,6 +157,11 @@ export class YurisWindows {
   maximizeBox = true;
   /** 0x872284..0x87228C: the layer whose area drags the main window (WINDOW DRAGID). */
   dragLayer: YurisCgNode | null = null;
+  /**
+   * Version 500 (Relirium.exe 0x485750): the last Z of each window (bytes 0x5CB0DC, -1 in the
+   * image and never reset); SetWindowPos runs only when Z differs from it.
+   */
+  private readonly orders = new Int8Array(8).fill(-1);
 
   constructor(
     private readonly m: YurisMachine,
@@ -335,7 +341,14 @@ export class YurisWindows {
       const z = a.int(Arg.Z);
       if (id === 0n && z === 3n)
         throw new YurisError(0x18bbe, [m.commandName(m.instruction.command), 'Z', '3']);
-      if (w.exists && z >= 0n && z <= 3n) host.setOrder(no, Number(z));
+      if (!w.exists) {
+        // Nothing is ordered before the window exists.
+      } else if (m.project.config.version !== YBN_VERSION_500) {
+        if (z >= 0n && z <= 3n) host.setOrder(no, Number(z));
+      } else if (z !== BigInt(this.orders[no & 7]!)) {
+        this.orders[no & 7] = Number(BigInt.asIntN(8, z));
+        if (z >= 0n && z <= 3n) host.setOrder(no, Number(z));
+      }
     }
     if (a.has(Arg.MaxMode)) w.maxMode = (low(Arg.MaxMode) << 24) >> 24;
     if (a.has(Arg.MinMode)) w.minMode = (low(Arg.MinMode) << 24) >> 24;
