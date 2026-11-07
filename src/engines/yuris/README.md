@@ -39,7 +39,7 @@ WINDOW MENUID installs a window menu; TRAY (0x452FB4) retains its label, optiona
 - LOAD integer/float writes clamp to the allocated destination.
 - Snappy and zlib output is compatible but does not reproduce native compressed bytes.
 - Serialized layer structs contain zeros except for the sizes.
-- Memory snapshots omit a native zlib allocation bound.
+- Memory snapshots omit a native zlib allocation bound. Unchanged memory slots reuse their previously compressed bytes, and the remaining slots compress concurrently.
 - Host write failures propagate instead of raising native error 0x18EFC.
 - LOAD without FILE or MEM uses an empty filename.
 - The TEXT line buffer is not bounded to 0x1000 bytes.
@@ -55,7 +55,7 @@ WINDOW MENUID installs a window menu; TRAY (0x452FB4) retains its label, optiona
 
 `yuris.html` opens a read-only folder selection and applies `updateN.ypf` after `pac/`. Browser saves use an IndexedDB overlay keyed by archive-index identity; the installed files are never written. `YurisBrowserPlayer` binds the VM to shared page windows, monochrome font rasterization, codecs, folder storage, registry, dialogs and mutable PCM output. Pointer coordinates are scaled from the displayed canvas to game pixels (0x403F2C).
 
-The browser can compose the main window with integer WebGL2 textures for supported flat mode-0 layers, rule transitions, SIZE2 scaling and unruled additive layers. Script pixel access materializes the native BGRA window on demand. Unsupported layer trees and unavailable hardware rendering use the software compositor. Both paths present an opaque BGRX window through Canvas 2D, matching the native GDI copy (0x45ECF4). PNG and WebP loaders retain the native alpha-blitter flag for layer composition.
+The browser can compose the main window with integer WebGL2 textures for supported flat mode-0 layers, rule transitions, SIZE2 scaling and unruled additive layers. Script pixel access materializes the native BGRA window on demand. Unsupported layer trees and unavailable hardware rendering use the software compositor. The WebGL queue is bounded at two frames; when a long script task fills it, the player blocks on the queued GPU work instead of recomposing on the CPU. Both paths present an opaque BGRX window through Canvas 2D, matching the native GDI copy (0x45ECF4). PNG and WebP loaders retain the native alpha-blitter flag for layer composition.
 
 CGCASH (0x43E0C8, loader 0x417DDC) queues PNG and WebP decodes on shared browser workers. Its prepared cache has a 160 MiB budget, partitioned into 56 MiB for WebP, 68 MiB for PNG files with at least 2 MiB of encoded data, and 36 MiB for smaller PNG files. A separate 96 MiB cache handles foreground decodes. Each layer receives mutable pixels of its own, and the loader verifies the encoded bytes before reusing a decode. The cache stores uniform decoded buffers as a single packed pixel. After the standard scenario parser has waited for a click for 60 ms, the browser prioritizes PNG hints through the next dialogue in the same prepared-cache budget. It reads the library’s forecast, literal multilingual and portrait paths, and the last observed sprite resolution. Choices, jumps and unknown macros stop the scan. A speculative decode in progress does not delay a foreground miss.
 

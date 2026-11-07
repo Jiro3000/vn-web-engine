@@ -612,26 +612,140 @@ export function sizeLanczos(
   const middle = new Uint8Array(Math.max(width, 0) * Math.max(rows, 0) * 4);
   // Horizontal pass: rows of the source to rows of `middle`.
   const horizontal = lanczosTaps(stride, width);
-  resample(
-    middle,
-    src,
-    rows,
-    width,
-    horizontal,
-    (line, k) => (line * stride + mirror(k, stride)) * 4,
-    (line, i) => (line * width + i) * 4,
-  );
+  const columns = mirroredTaps(horizontal, width, stride);
+  if (columns && src.length >= rows * stride * 4)
+    lanczosRows(middle, src, rows, stride, width, horizontal.weights, columns);
+  else
+    resample(
+      middle,
+      src,
+      rows,
+      width,
+      horizontal,
+      (line, k) => (line * stride + mirror(k, stride)) * 4,
+      (line, i) => (line * width + i) * 4,
+    );
   // Vertical pass: columns of `middle` to the output.
   const vertical = lanczosTaps(rows, height);
-  resample(
-    dst,
-    middle,
-    width,
-    height,
-    vertical,
-    (column, k) => (mirror(k, rows) * width + column) * 4,
-    (column, i) => (i * width + column) * 4,
-  );
+  const lines = mirroredTaps(vertical, height, rows);
+  if (lines) lanczosColumns(dst, middle, width, height, vertical.weights, lines);
+  else
+    resample(
+      dst,
+      middle,
+      width,
+      height,
+      vertical,
+      (column, k) => (mirror(k, rows) * width + column) * 4,
+      (column, i) => (i * width + column) * 4,
+    );
+}
+
+/**
+ * The mirrored sample index of every tap of outputs 0..count-1, or null when a tap mirrors
+ * outside 0..n-1. Those reads cross into a neighbouring line or past the buffer, which only
+ * the generic pass reproduces.
+ */
+function mirroredTaps(
+  taps: {first: Int32Array; weights: Int32Array[]},
+  count: number,
+  n: number,
+): Int32Array[] | null {
+  const samples: Int32Array[] = [];
+  for (let i = 0; i < count; i++) {
+    const lo = taps.first[i]!,
+      w = taps.weights[i]!,
+      at = new Int32Array(w.length);
+    for (let t = 0; t < w.length; t++) {
+      const m = mirror(lo + t, n);
+      if (m < 0 || m >= n) return null;
+      at[t] = m;
+    }
+    samples.push(at);
+  }
+  return samples;
+}
+
+/** Stores one output pixel of `resample`: the sums over 1 plus the weights, clamped. */
+function storeLanczos(
+  to: Uint8Array,
+  o: number,
+  b: number,
+  g: number,
+  r: number,
+  a: number,
+  total: number,
+): void {
+  to[o] = Math.min(Math.max(div(b, total), 0), 0xff);
+  to[o + 1] = Math.min(Math.max(div(g, total), 0), 0xff);
+  to[o + 2] = Math.min(Math.max(div(r, total), 0), 0xff);
+  let alpha = div(a, total);
+  if (alpha > 0xfc) alpha = 0xff;
+  to[o + 3] = Math.min(Math.max(alpha, 0), 0xff);
+}
+
+/**
+ * The horizontal pass of `resample` with in-range taps. Each sum wraps to 32 bits after every
+ * tap, as the Int32Array accumulator of the generic pass does.
+ */
+function lanczosRows(
+  to: Uint8Array,
+  from: Uint8Array,
+  rows: number,
+  stride: number,
+  width: number,
+  weights: Int32Array[],
+  samples: Int32Array[],
+): void {
+  for (let line = 0, o = 0; line < rows; line++) {
+    const base = line * stride * 4;
+    for (let i = 0; i < width; i++, o += 4) {
+      const w = weights[i]!,
+        m = samples[i]!;
+      let b = 0,
+        g = 0,
+        r = 0,
+        a = 0,
+        total = 1;
+      for (let t = 0; t < w.length; t++) {
+        const p = base + m[t]! * 4,
+          k = w[t]!;
+        b = (b + from[p]! * k) | 0;
+        g = (g + from[p + 1]! * k) | 0;
+        r = (r + from[p + 2]! * k) | 0;
+        a = (a + from[p + 3]! * k) | 0;
+        total += k;
+      }
+      storeLanczos(to, o, b, g, r, a, total);
+    }
+  }
+}
+
+/** The vertical pass of `resample` with in-range taps, one output row at a time. */
+function lanczosColumns(
+  to: Uint8Array,
+  from: Uint8Array,
+  width: number,
+  height: number,
+  weights: Int32Array[],
+  samples: Int32Array[],
+): void {
+  const pitch = width * 4,
+    sums = new Int32Array(pitch);
+  for (let i = 0; i < height; i++) {
+    const w = weights[i]!,
+      m = samples[i]!;
+    sums.fill(0);
+    let total = 1;
+    for (let t = 0; t < w.length; t++) {
+      const row = m[t]! * pitch,
+        k = w[t]!;
+      for (let j = 0; j < pitch; j++) sums[j] = sums[j]! + from[row + j]! * k;
+      total += k;
+    }
+    for (let j = 0, o = i * pitch; j < pitch; j += 4)
+      storeLanczos(to, o + j, sums[j]!, sums[j + 1]!, sums[j + 2]!, sums[j + 3]!, total);
+  }
 }
 
 /** One pass of 0x434A14: `lines` independent lines of `count` outputs each. */

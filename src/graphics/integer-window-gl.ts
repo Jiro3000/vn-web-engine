@@ -300,7 +300,12 @@ export class IntegerWindowGl {
     this.boundTables[unit] = table;
   }
 
-  /** A pending fence lets callers avoid growing the GPU queue without bound. */
+  /**
+   * Bounds the GPU queue at two frames. WebGL sync objects only signal between tasks, so a
+   * full queue inside one long task (a save, a large resample) is drained with gl.finish():
+   * that blocks for the queued GPU work, which is far cheaper than recomposing the whole
+   * window on the CPU. Returns false only when the context is lost or a wait fails.
+   */
   ready(): boolean {
     const gl = this.gl;
     if (gl.isContextLost()) return false;
@@ -312,7 +317,9 @@ export class IntegerWindowGl {
     }
     if (this.fences.length < 2) return true;
     this.queueWaits++;
-    return false;
+    gl.finish();
+    for (const fence of this.fences.splice(0)) gl.deleteSync(fence);
+    return !gl.isContextLost();
   }
 
   render(layers: readonly IntegerLayer[], region?: IntegerRegion): void {

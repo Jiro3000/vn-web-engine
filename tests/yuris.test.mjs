@@ -15,7 +15,7 @@ import {
   skipInactiveLoop,
 } from '../dist/engines/yuris/vm/copy-loop.js';
 import {YurisExpression} from '../dist/engines/yuris/vm/expression.js';
-import {sizeBilinear} from '../dist/engines/yuris/vm/resize.js';
+import {sizeBilinear, sizeLanczos} from '../dist/engines/yuris/vm/resize.js';
 import {bgraDisplayFrame, transitionBgra} from '../dist/graphics/bgra-effects-wasm.js';
 import {YurisVariables} from '../dist/engines/yuris/vm/variables.js';
 
@@ -2050,4 +2050,118 @@ test('YU-RIS lookahead reads PNG hints through one dialogue and stops at choices
   assert.deepEqual(lookahead.update(), []);
   assert.equal(entries[3039].ints[0], 4n);
   assert.equal(source.length, 7);
+});
+
+test('YU-RIS SIZE5 matches the Lanczos-2 taps of 0x434A14', () => {
+  // Reference: per-tap reads with mirrored indices, zero outside the buffer and 32-bit sums.
+  const sinc = (x) => (x === 0 ? 1 : Math.sin(x * Math.PI) / (x * Math.PI));
+  const kernel = (x) => (Math.abs(x) < 2 ? sinc(Math.abs(x)) * sinc(Math.abs(x) * 0.5) : 0);
+  const mirror = (k, n) => (k >= n ? n * 2 - k - 1 : Math.abs(k));
+  const pass = (to, from, lines, count, n, read, write) => {
+    const scale = n === 1 ? count : (count - 1) / (n - 1);
+    for (let line = 0; line < lines; line++)
+      for (let i = 0; i < count; i++) {
+        const c = i / scale,
+          lo = Math.floor(c - 2 / scale),
+          hi = Math.ceil(c + 2 / scale);
+        const sum = new Int32Array(4);
+        let total = 1;
+        for (let k = lo; k <= hi; k++) {
+          const w = Math.trunc(kernel((c - k) * scale) * scale * 65536),
+            at = read(line, k);
+          for (let ch = 0; ch < 4; ch++) sum[ch] += (from[at + ch] ?? 0) * w;
+          total += w;
+        }
+        for (let ch = 0; ch < 4; ch++) {
+          let v = Math.trunc(sum[ch] / total) | 0;
+          if (ch === 3 && v > 0xfc) v = 0xff;
+          to[write(line, i) + ch] = Math.min(Math.max(v, 0), 0xff);
+        }
+      }
+  };
+  const reference = (width, height, src, stride, rows) => {
+    const middle = new Uint8Array(width * rows * 4),
+      out = new Uint8Array(width * height * 4);
+    pass(
+      middle,
+      src,
+      rows,
+      width,
+      stride,
+      (l, k) => (l * stride + mirror(k, stride)) * 4,
+      (l, i) => (l * width + i) * 4,
+    );
+    pass(
+      out,
+      middle,
+      width,
+      height,
+      rows,
+      (c, k) => (mirror(k, rows) * width + c) * 4,
+      (c, i) => (i * width + c) * 4,
+    );
+    return out;
+  };
+  let seed = 0x5eed;
+  const random = () => (seed = (Math.imul(seed, 1103515245) + 12345) >>> 0) >>> 24;
+  for (const [stride, rows, width, height, extra] of [
+    [97, 61, 23, 13, 0],
+    [7, 5, 19, 13, 0],
+    [64, 9, 16, 21, 0],
+    [4, 3, 2, 2, 16],
+    [5, 40, 3, 6, 0],
+  ]) {
+    const src = new Uint8Array(stride * rows * 4 + extra);
+    for (let i = 0; i < src.length; i++) src[i] = i % 4 === 3 && random() & 1 ? 0xff : random();
+    const out = new Uint8Array(width * height * 4);
+    sizeLanczos(out, width, height, src, stride, rows);
+    assert.deepEqual(
+      out,
+      reference(width, height, src, stride, rows),
+      `${stride}x${rows} to ${width}x${height}`,
+    );
+  }
+});
+
+test('YU-RIS SAVE MEM 99999 stores every current memory slot after slot replacement', async () => {
+  const {installSave} = await import('../dist/engines/yuris/vm/save.js');
+  const {zlibUncompress} = await import('../dist/formats/zlib.js');
+  const handlers = new Map(),
+    values = new Map([[1, 99999n]]);
+  const machine = {
+    define: (id, fn) => handlers.set(id, fn),
+    decode() {},
+    messageBox: () => assert.fail('compression failed'),
+    args: {has: (id) => (values.has(id) ? id + 1 : 0), int: (id) => values.get(id)},
+  };
+  const data = installSave(machine, {});
+  const save = handlers.get(0x56);
+  const slots = async () => {
+    const block = data.blocks.get(0x400),
+      view = new DataView(block.buffer, block.byteOffset, block.length),
+      out = [];
+    let at = 12;
+    for (let n = 0; n < 500; n++) {
+      const length = view.getUint32(at, true),
+        stored = view.getUint32(at + 4, true);
+      at += 8;
+      if (length) out.push([n, [...(await zlibUncompress(block.subarray(at, at + stored)))]]);
+      at += stored;
+    }
+    return out;
+  };
+  data.slots.set(0, Uint8Array.of(1, 2, 3));
+  data.slots.set(7, new Uint8Array(4096).fill(9));
+  data.slots.set(499, Uint8Array.of(5));
+  await save();
+  const first = await slots();
+  assert.deepEqual(
+    first.map(([n]) => n),
+    [0, 7, 499],
+  );
+  data.blocks.clear();
+  data.slots.set(7, Uint8Array.of(4, 4));
+  data.slots.delete(499);
+  await save();
+  assert.deepEqual(await slots(), [first[0], [7, [4, 4]]]);
 });

@@ -92,6 +92,23 @@ export class YurisSaveData {
   readonly blocks = new Map<number, Uint8Array>();
   /** 0x866F60 / 0x867F20: the bytes written to memory slot n (0..499). */
   readonly slots = new Map<number, Uint8Array>();
+  /**
+   * The stored (compressed) bytes of a memory slot buffer. Compression starts when SAVE MEM n
+   * writes the slot, so SAVE MEM 99999 only waits for slots it has not finished.
+   */
+  readonly packedSlots = new WeakMap<Uint8Array, Uint8Array | Promise<Uint8Array>>();
+
+  /** SAVE MEM n (0x44BAB4) and LOAD DNO 0x400: stores slot n and begins compressing it. */
+  storeSlot(n: number, slot: Uint8Array, stored?: Uint8Array): void {
+    this.slots.set(n, slot);
+    if (stored) this.packedSlots.set(slot, stored);
+    else if (slot.length) {
+      const packed = compress(slot, SNAPPY_MEMORY);
+      // A failure is reported by the snapshot that awaits it.
+      packed.catch(() => {});
+      this.packedSlots.set(slot, packed);
+    }
+  }
 
   /** 0x469CF0: -1 frees every block, n frees block n + 1. */
   free(n: number): void {
@@ -317,25 +334,34 @@ async function memorySnapshot(m: YurisMachine, data: YurisSaveData): Promise<num
     stored = 0;
   for (let n = 0; n < SLOTS; n++) raw += 8 + (data.slots.get(n)?.length ?? 0);
   w.u32(raw);
+  // Slots are replaced, never written in place, so a slot's stored bytes are reused until
+  // SAVE MEM n or LOAD replaces it.
+  const packed: (Uint8Array | Promise<Uint8Array> | undefined)[] = [];
   for (let n = 0; n < SLOTS; n++) {
-    const slot = data.slots.get(n) ?? new Uint8Array(0);
-    if (slot.length === 0) {
+    const slot = data.slots.get(n);
+    if (slot?.length) packed[n] = data.packedSlots.get(slot) ?? compress(slot, SNAPPY_MEMORY);
+  }
+  let results: (Uint8Array | undefined)[];
+  try {
+    results = await Promise.all(packed);
+  } catch {
+    m.messageBox(COMPRESS_ERROR);
+    return 0;
+  }
+  for (let n = 0; n < SLOTS; n++) {
+    const slot = data.slots.get(n),
+      bytes = results[n];
+    if (!slot?.length || !bytes) {
       w.u32(0);
       w.u32(0);
       stored += 8;
       continue;
     }
-    let packed: Uint8Array;
-    try {
-      packed = await compress(slot, SNAPPY_MEMORY);
-    } catch {
-      m.messageBox(COMPRESS_ERROR);
-      return 0;
-    }
+    data.packedSlots.set(slot, bytes);
     w.u32(slot.length);
-    w.u32(packed.length);
-    w.bytes(packed);
-    stored += 8 + packed.length;
+    w.u32(bytes.length);
+    w.bytes(bytes);
+    stored += 8 + bytes.length;
   }
   w.setU32(4, stored);
   data.blocks.set(BLOCKS, w.result());
@@ -441,7 +467,7 @@ async function save(
   if (a.has(Arg.Dno)) await buildBlock(m, data, low(a.int(Arg.Dno)), cg);
   if (mem !== -1) {
     // Blocks 1..0x3FE go to the slot (0x3FF and the snapshot 0x400 never do).
-    data.slots.set(mem, writeBlocks(data, BLOCKS - 2));
+    data.storeSlot(mem, writeBlocks(data, BLOCKS - 2));
     data.free(-1);
     return 0;
   }
@@ -691,7 +717,8 @@ async function restoreMemory(
         slot = null;
       }
     if (!slot) return m.messageBox(SNAPPY_MEMORY ? 'Uncompress Status Error 4.' : 'Load Error.');
-    data.slots.set(n, slot.subarray(0, length));
+    const restored = slot.subarray(0, length);
+    data.storeSlot(n, restored, restored.length === slot.length ? stored.slice() : undefined);
   }
   return 0;
 }
