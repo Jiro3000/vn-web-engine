@@ -3,7 +3,11 @@ import {
   type BrowserTextMode,
 } from '../../../text/browser-raster-text-presentation.js';
 import {rasterTextBitmap, visibleRasterText} from '../../../text/raster-text.js';
-import {YURIS_SC_ATLAS_FAMILY, yurisRasterBitmap} from '../vm/raster-text.js';
+import {
+  YURIS_JP_ATLAS_FAMILY,
+  YURIS_SC_ATLAS_FAMILY,
+  yurisRasterBitmap,
+} from '../vm/raster-text.js';
 import {domTextFamily, getDomTextStyle} from '../../../text/dom-text-style.js';
 import {YurisMachine, type YurisMachineHost} from '../vm/machine.js';
 import type {YurisProject} from '../../../formats/yuris/ybn.js';
@@ -669,7 +673,7 @@ export class YurisBrowserPlayer {
       if (measure) {
         const style = getDomTextStyle();
         measure.fontKerning = 'none';
-        for (const face of [YURIS_SC_ATLAS_FAMILY, 'serif']) {
+        for (const face of [YURIS_SC_ATLAS_FAMILY, YURIS_JP_ATLAS_FAMILY, 'serif']) {
           const family = style.enabled ? domTextFamily(style, face) : face;
           for (const weight of ['normal', 'bold']) {
             measure.font = `${weight} 32px ${family}`;

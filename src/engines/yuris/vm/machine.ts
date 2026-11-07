@@ -573,6 +573,11 @@ export class YurisMachine {
     return this.project.commands.commands[this.instruction.command]?.args[id]?.name ?? `#${id}`;
   }
 
+  /** The decoded instructions of script `index`, for structural analysis of library routines. */
+  scriptInstructions(index: number): readonly YurisInstruction[] | undefined {
+    return this.scripts.get(index)?.instructions;
+  }
+
   get tracksRasterText(): boolean {
     return this.host.rasterText === true;
   }
