@@ -129,6 +129,82 @@ export function scanStringSlice(
   return {result, start, length, count};
 }
 
+export interface StringEdge {
+  readonly result: number;
+  readonly length: number;
+  readonly count: number;
+  /** COPY POS=count-length+1 (the right edge) instead of POS=1. */
+  readonly right: boolean;
+}
+
+/**
+ * Recognize the library's left/right substring routines: STR result, INT length=@53[2],
+ * IF length>0 { INT count; VARINFO LENGTH (0x455464); IF count>0 { IF length>count
+ * { LET length=count } VARACT COPY (0x45353C) POS=1 or count-length+1 } }, RETURN result.
+ */
+export function scanStringEdge(
+  code: readonly YurisInstruction[],
+  at: number,
+  commands: YurisCommandSet,
+): StringEdge | null {
+  const result = local(code[at]);
+  const length = local(code[at + 1]);
+  const count = local(code[at + 3]);
+  const ids = [result, length, count];
+  if (ids.some((id) => id < 1000) || new Set(ids).size !== ids.length) return null;
+  // DECLARE evaluates its target only for the variable id, whatever the argument type.
+  const declared = (position: number) => code[at + position]?.args[0]?.type ?? -1;
+  if (![0, 1, 3].every((position) => declared(position) === 1 || declared(position) === 3))
+    return null;
+
+  const matches = matchAt(code, at);
+  const r = scalar(result, true),
+    l = scalar(length),
+    n = scalar(count);
+  const one = int(1),
+    zero = int(0),
+    p = param(55, 1, true);
+  const condition = (position: number, end: number, test: string) =>
+    matches(position, 0x2c, 0, [0, 1, test], [0, 0, 0], [0, 0, at + end]);
+  const copy = (position: string) =>
+    matches(9, 0x66, 0, [3, 1, one], [0, 3, p], [1, 3, r], [4, 1, position], [5, 1, l]);
+  if (
+    !matches(0, 0x5c, 0, [0, declared(0), r], [0, 3, '4d02002222']) ||
+    !matches(1, 0x32, 0, [0, declared(1), l], [0, 1, param(53, 2)]) ||
+    !condition(2, 11, l + zero + op('>')) ||
+    !matches(3, 0x32, 0, [0, declared(3), n], [0, 1, '4c08000000000000000000']) ||
+    !matches(4, 0x67, 0, [13, 1, one], [0, 3, p], [1, 1, n]) ||
+    !condition(5, 10, n + zero + op('>')) ||
+    !condition(6, 8, l + n + op('>')) ||
+    !matches(7, 0x35, 0, [0, 1, l], [0, 1, n]) ||
+    !matches(8, 0x30, 0) ||
+    !matches(10, 0x30, 0) ||
+    !matches(11, 0x30, 0) ||
+    !matches(12, 0x4f, 0x200, [32, 3, r])
+  )
+    return null;
+  const right = copy(n + l + op('-') + one + op('+'));
+  if (!right && !copy(one)) return null;
+
+  const spec = (command: number, arg: number, kind: number, check: number) =>
+    hasSpec(commands, command, arg, kind, check);
+  if (
+    !spec(0x5c, 0, 3, 0) ||
+    !spec(0x32, 0, 3, 0) ||
+    !spec(0x67, 13, 0, 3) ||
+    !spec(0x67, 0, 0, 0) ||
+    !spec(0x67, 1, 0, 0) ||
+    !spec(0x66, 3, 0, 3) ||
+    !spec(0x66, 0, 0, 0) ||
+    !spec(0x66, 1, 0, 0) ||
+    !spec(0x66, 4, 0, 2) ||
+    !spec(0x66, 5, 0, 2) ||
+    !spec(0x4f, 32, 1, 0)
+  )
+    return null;
+  return {result, length, count, right};
+}
+
 export interface LexerRun {
   readonly text: number;
   readonly cursor: number;

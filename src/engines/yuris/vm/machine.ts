@@ -54,6 +54,7 @@ import {
   scanLexerRun,
   scanOpacityLoop,
   scanStringSlice,
+  scanStringEdge,
   type LexerRun,
   type IntQuery,
   type StringSlicePrelude,
@@ -150,7 +151,8 @@ export class YurisArguments {
   readonly variable = new Uint32Array(101);
   readonly variableIndex = new Array<bigint>(101).fill(0n);
   readonly whole = new Uint8Array(101);
-  readonly records: YurisArgument[] = [];
+  /** The arguments of the last decoded instruction; only their slots are set. */
+  records: readonly YurisArgument[] = [];
 
   /** Slot of argument `id`, 0 when the instruction does not carry it. */
   has(id: number): number {
@@ -275,6 +277,7 @@ export class YurisMachine {
     YurisInstruction,
     ReturnType<typeof scanStringSlice>
   >();
+  private readonly stringEdges = new WeakMap<YurisInstruction, ReturnType<typeof scanStringEdge>>();
   private readonly initializerLoops = new WeakMap<
     YurisInstruction,
     ReturnType<typeof scanInitializer>
@@ -652,10 +655,9 @@ export class YurisMachine {
     // Only the previous instruction's ids are set: clearing them empties every slot.
     for (let i = 0; i < a.records.length; i++) a.slot[a.records[i]!.id] = 0;
     a.count = instruction.args.length;
-    a.records.length = 0;
+    a.records = instruction.args;
     for (let i = 1; i <= a.count; i++) {
       const arg = instruction.args[i - 1]!;
-      a.records.push(arg);
       a.id[i] = arg.id;
       a.type[i] = arg.type;
       a.op[i] = arg.op;
@@ -1538,9 +1540,9 @@ export class YurisMachine {
       slice = scanStringSlice(instructions, entry, this.project.commands);
       this.stringSlices.set(first, slice);
     }
+    if (!slice) return this.foldStringEdge(caller, entry);
     const task = this.task;
     if (
-      !slice ||
       task.ifDepth + 3 >= NESTING_LIMIT ||
       this.handlers[Command.Str] !== this.strHandler ||
       this.handlers[Command.Int] !== this.intHandler ||
@@ -1603,6 +1605,85 @@ export class YurisMachine {
     inner.loopDepth = task.loopDepth;
     inner.end = entry + 11;
     task.position = entry + 7;
+  }
+
+  /**
+   * Run es._strleft / es._strright to their RETURN: the declarations, VARINFO LENGTH
+   * (0x455464), the clamp and VARACT COPY (0x45353C) over the same CP932 character offsets.
+   * Each executed IF leaves its entry at its depth with end 0 after the matching IFEND.
+   */
+  private foldStringEdge(caller: number, entry: number): void {
+    const instructions = this.current.script.instructions;
+    const first = instructions[entry]!;
+    let edge = this.stringEdges.get(first);
+    if (edge === undefined) {
+      edge = scanStringEdge(instructions, entry, this.project.commands);
+      this.stringEdges.set(first, edge);
+    }
+    const task = this.task;
+    if (
+      !edge ||
+      task.ifDepth + 3 >= NESTING_LIMIT ||
+      this.handlers[Command.Str] !== this.strHandler ||
+      this.handlers[Command.Int] !== this.intHandler ||
+      this.handlers[Command.If] !== this.ifHandler ||
+      this.handlers[Command.IfEnd] !== this.ifEndHandler ||
+      this.handlers[Command.Let] !== this.letHandler ||
+      this.handlers[0x67] !== this.nativeVarInfo ||
+      this.handlers[0x66] !== this.nativeVarAct ||
+      !this.canBatchLoop(caller, this.position, this.position) ||
+      !this.canBatchLoop(task.script, entry, entry + 12)
+    )
+      return;
+    const variables = this.variables.entries;
+    const ints = variables[53],
+      strings = variables[55];
+    if (
+      ints?.type !== YurisType.Int ||
+      ints.dimensions.length !== 1 ||
+      ints.dimensions[0]! < 3 ||
+      strings?.type !== YurisType.String ||
+      strings.dimensions.length !== 1 ||
+      strings.dimensions[0]! < 2 ||
+      !strings.has(1) ||
+      !variables[edge.result] ||
+      !variables[edge.length] ||
+      !variables[edge.count]
+    )
+      return;
+    for (const id of [edge.result, edge.length]) {
+      const variable = variables[id]!;
+      if (variable.dimensions.length) variable.dimensions = [];
+    }
+    let length = this.system.int(53, 2, 0);
+    this.variables.allocateString(edge.result, '');
+    this.variables.allocateInt(edge.length, length);
+    const depth = task.ifDepth;
+    const close = (level: number, position: number) => {
+      const closed = task.ifEntry(depth + level);
+      closed.position = entry + position;
+      closed.loopDepth = task.loopDepth;
+      closed.end = 0;
+    };
+    close(0, 2);
+    task.position = entry + 12;
+    if (length <= 0n) return;
+    const count = variables[edge.count]!;
+    if (count.dimensions.length) count.dimensions = [];
+    const source = this.system.string(55, 1, 0);
+    const chars = characterOffsets(this, source);
+    const total = BigInt(chars.count);
+    this.variables.allocateInt(edge.count, total);
+    close(1, 5);
+    if (total <= 0n) return;
+    close(2, 6);
+    if (length > total) this.variables.allocateInt(edge.length, (length = total));
+    const from = edge.right ? chars.count - Number(length) : 0;
+    this.setString(
+      edge.result,
+      0n,
+      source.slice(chars.offsets[from], chars.offsets[from + Number(length)]),
+    );
   }
 
   private writeSliceScratch(

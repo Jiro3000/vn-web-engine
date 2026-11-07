@@ -191,6 +191,15 @@ export class YurisExpression {
       this.push(BYTE_LITERALS[bytes[3]!]!);
       return '';
     }
+    if (this.constantCheck) {
+      // The load-time label check runs the operators themselves.
+    } else if (this.declaring) {
+      // A scalar declaration target only names its variable (0x420EC4 returns early).
+      if (bytes.length === 6 && bytes[0] === 0x48 && bytes[1] === 3 && bytes[2] === 0) {
+        this.setPrefixAndId(bytes, 3);
+        return '';
+      }
+    }
     for (let p = 0; p < bytes.length;) {
       const op = bytes[p]!,
         length = bytes[p + 1]! | (bytes[p + 2]! << 8);
@@ -263,40 +272,31 @@ export class YurisExpression {
       case 0x21: // !
         return this.equality(false);
       case 0x3c: // <
-        return this.compare((a, b) => a < b);
+        return this.compare(less);
       case 0x3e: // >
-        return this.compare((a, b) => a > b);
+        return this.compare(greater);
       case 0x5a: // Z
-        return this.compare((a, b) => a >= b);
+        return this.compare(atLeast);
       case 0x53: // S
-        return this.compare((a, b) => a <= b);
+        return this.compare(atMost);
       case 0x2d: // -
-        return this.arithmetic(
-          (a, b) => a - b,
-          (a, b) => a - b,
-        );
+        return this.arithmetic(subtractDouble, subtractInt);
       case 0x2a: // *
-        return this.arithmetic(
-          (a, b) => a * b,
-          (a, b) => a * b,
-        );
+        return this.arithmetic(multiplyDouble, multiplyInt);
       case 0x2f: // /
-        return this.arithmetic(
-          (a, b) => (b === 0 ? 0 : a / b),
-          (a, b) => (b === 0n ? 0n : a / b),
-        );
+        return this.arithmetic(divideDouble, divideInt);
       case 0x25: // %
-        return this.integerOnly((a, b) => (b === 0n ? 0n : a % b));
+        return this.integerOnly(remainder);
       case 0x41: // A
-        return this.integerOnly((a, b) => a & b);
+        return this.integerOnly(bitAnd);
       case 0x4f: // O
-        return this.integerOnly((a, b) => a | b);
+        return this.integerOnly(bitOr);
       case 0x5e: // ^
-        return this.integerOnly((a, b) => a ^ b);
+        return this.integerOnly(bitXor);
       case 0x26: // &
-        return this.logical((a, b) => a && b);
+        return this.logical(both);
       case 0x7c: // |
-        return this.logical((a, b) => a || b);
+        return this.logical(either);
       case 0x2c: // ,
         return true;
     }
@@ -808,6 +808,25 @@ export class YurisExpression {
     return true;
   }
 }
+
+// Operator callbacks, shared so an evaluation does not allocate closures.
+type Comparable = number | bigint;
+const less = (a: Comparable, b: Comparable) => a < b;
+const greater = (a: Comparable, b: Comparable) => a > b;
+const atLeast = (a: Comparable, b: Comparable) => a >= b;
+const atMost = (a: Comparable, b: Comparable) => a <= b;
+const subtractDouble = (a: number, b: number) => a - b;
+const subtractInt = (a: bigint, b: bigint) => a - b;
+const multiplyDouble = (a: number, b: number) => a * b;
+const multiplyInt = (a: bigint, b: bigint) => a * b;
+const divideDouble = (a: number, b: number) => (b === 0 ? 0 : a / b);
+const divideInt = (a: bigint, b: bigint) => (b === 0n ? 0n : a / b);
+const remainder = (a: bigint, b: bigint) => (b === 0n ? 0n : a % b);
+const bitAnd = (a: bigint, b: bigint) => a & b;
+const bitOr = (a: bigint, b: bigint) => a | b;
+const bitXor = (a: bigint, b: bigint) => a ^ b;
+const both = (a: boolean, b: boolean) => a && b;
+const either = (a: boolean, b: boolean) => a || b;
 
 function signed(value: number, bits: number): number {
   const shift = 32 - bits;
