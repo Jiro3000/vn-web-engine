@@ -1425,10 +1425,12 @@ test('YU-RIS MOVIE uses physical files, native volume, resize notifications and 
     playing = false,
     request,
     stored,
-    gain;
+    gain,
+    filled = [];
   const m = {
     define: (id, fn) => commands.set(id, fn),
     decode() {},
+    project: {config: {version: 0x22b}},
     windows: {windows: [{width: 640, height: 480}]},
     system: {string68: ''},
     setInt: (id, index, value) => {
@@ -1462,6 +1464,7 @@ test('YU-RIS MOVIE uses physical files, native volume, resize notifications and 
       moviePosition: (rect) => (request.rect = rect),
       movieStop: () => (playing = false),
       movieClose: () => (playing = false),
+      movieFillBlack: (width, height) => filled.push([width, height]),
     },
   );
   await commands.get(70)();
@@ -1502,6 +1505,11 @@ test('YU-RIS MOVIE uses physical files, native volume, resize notifications and 
   await commands.get(72)();
   assert.equal(stored, 0n);
   await commands.get(71)();
+  // Only version 500 paints the black 1280x720 rectangle after MOVIEEND (0x47A930).
+  assert.deepEqual(filled, []);
+  m.project.config.version = 500;
+  await commands.get(71)();
+  assert.deepEqual(filled, [[1280, 720]]);
   values.clear();
   values.set(5, 1n);
   values.set(7, 0n);
