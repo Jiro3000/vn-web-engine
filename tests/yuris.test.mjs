@@ -2017,6 +2017,7 @@ test('YU-RIS lookahead reads PNG hints through one dialogue and stops at choices
   const source = [
     String.raw`\ML.TEXT("first","quoted \SEL.GO()")`,
     String.raw`\T(T_ABC_1A0100,250)`,
+    String.raw`\S.MV(A,MV01,250)`,
     String.raw`\ML.S(A,ev/name,250)`,
     String.raw`\ML.TEXT("second","second")`,
     String.raw`\S(B,ev/unknown,250)`,
@@ -2028,13 +2029,14 @@ test('YU-RIS lookahead reads PNG hints through one dialogue and stops at choices
     [3039, [1n]],
     [3040, [0n]],
     [2930, [2n]],
-    [2931, [2n, 5n]],
+    [2931, [2n, 6n]],
     [1176, new BigInt64Array(256)],
   ])
     entries[id] = {ints, dimensions: [256, 1]};
   entries[3038] = {strings: ['scenario.txt']};
   entries[2899] = {strings: source};
   entries[2932] = {strings: ['cg/stand/m_050/irrelevant', 'cg/ev/unknown']};
+  entries[5491] = {strings: ['', '', '', '', '', '', 'pac/']};
   let time = 0;
   const lookahead = new YurisSceneLookahead({variables: {entries}, now: () => time});
   lookahead.observeImage('cg\\stand\\m_040\\t_abc\\t_abc_1a\\t_abc_1a0100.png');
@@ -2044,12 +2046,60 @@ test('YU-RIS lookahead reads PNG hints through one dialogue and stops at choices
     'cg/stand/m_040/T_ABC/T_ABC_1A/T_ABC_1A0100',
     'cg/ev/name_c',
   ]);
+  assert.deepEqual(lookahead.nextMovies, ['pac\\mv01.ymv']);
   assert.equal(lookahead.update(), undefined);
-  entries[3039].ints[0] = 4n;
-  entries[3040].ints[0] = 3n;
+  entries[3039].ints[0] = 5n;
+  entries[3040].ints[0] = 4n;
   assert.deepEqual(lookahead.update(), []);
-  assert.equal(entries[3039].ints[0], 4n);
-  assert.equal(source.length, 7);
+  assert.deepEqual(lookahead.nextMovies, []);
+  assert.equal(entries[3039].ints[0], 5n);
+  assert.equal(source.length, 8);
+});
+
+test('YU-RIS stand forecast names SPLZ scale reloads and the sprites before the next dialogue', async () => {
+  const {YurisSceneLookahead} = await import('../dist/engines/yuris/vm/scene-lookahead.js');
+  const entries = [];
+  const ints = (...values) => ({ints: BigInt64Array.from(values)});
+  entries[5354] = ints(2n);
+  entries[5236] = ints(5n, 5n, 5n);
+  entries[5247] = ints(0n, 0n, 0n);
+  entries[5273] = ints(256n, 256n, 100n);
+  entries[5329] = ints(50n, 66n, 50n);
+  entries[5318] = {floats: Float64Array.of(14000, 14500, 14000)};
+  entries[5240] = {strings: ['A_HEL_1A1600', 'B_HIN_1C1400', 'C_HAR_1C1600']};
+  entries[3040] = ints(0n);
+  entries[2899] = {
+    strings: [
+      String.raw`\T(D_TIE_1B0700, 500, 828, 400, 250)`,
+      String.raw`\FACE(B_HIN_1B1900)`,
+      String.raw`\ML.TEXT("a","a")`,
+      String.raw`\T(E_XYZ_1A0100, 500)`,
+    ],
+  };
+  const system = {passes: 7};
+  const bands = [
+    {low: 13000, high: 99999, scale: 66},
+    {low: 8000, high: 11000, scale: 50},
+  ];
+  const lookahead = new YurisSceneLookahead({variables: {entries}, system}, false, bands);
+  // Slot 0 moves to m_066; slot 1 already uses it and slot 2 is not drawn opaque enough.
+  assert.deepEqual(lookahead.standForecast('cg\\stand\\m_066\\c_har\\c_har_1c\\c_har_1c0100.png'), [
+    'cg/stand/m_066/A_HEL/A_HEL_1A/A_HEL_1A0100',
+    'cg/stand/m_066/A_HEL/A_HEL_1A/A_HEL_1A1600',
+    'cg/stand/m_066/D_TIE/D_TIE_1B/D_TIE_1B0100',
+    'cg/stand/m_066/D_TIE/D_TIE_1B/D_TIE_1B0700',
+    'cg/face/B_HIN/B_HIN_1B/B_HIN_1B0100',
+    'cg/face/B_HIN/B_HIN_1B/B_HIN_1B1900',
+  ]);
+  // One forecast per pass and folder; other images give none.
+  assert.deepEqual(lookahead.standForecast('cg\\stand\\m_066\\x.png'), []);
+  assert.deepEqual(lookahead.standForecast('cg\\bg\\bg01.png'), []);
+  system.passes++;
+  entries[5318].floats[0] = 9000;
+  assert.deepEqual(lookahead.standForecast('cg\\stand\\m_050\\x.png').slice(0, 2), [
+    'cg/stand/m_050/D_TIE/D_TIE_1B/D_TIE_1B0100',
+    'cg/stand/m_050/D_TIE/D_TIE_1B/D_TIE_1B0700',
+  ]);
 });
 
 test('YU-RIS SIZE5 matches the Lanczos-2 taps of 0x434A14', () => {

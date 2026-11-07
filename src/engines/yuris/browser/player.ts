@@ -213,6 +213,8 @@ export class YurisBrowserPlayer {
       exists: (path) => folder.existsFile(path) || !!files.find(path),
       read: (path) => {
         this.observeVoiceRead(path);
+        if (this.lookahead && this.machine.system.preloadEnabled)
+          for (const name of this.lookahead.standForecast(path)) this.decodeAhead(name, path);
         return this.readAsset(path);
       },
       archiveNames: () => files.archives.map((a) => a.archive.entries.map((e) => e.key)),
@@ -513,6 +515,13 @@ export class YurisBrowserPlayer {
       }
     }
   }
+  /** Reads an archive file the next dialogue opens, such as an S.MV movie, ahead of time. */
+  private prefetchArchiveFile(path: string): void {
+    if (this.preloadedArchiveFiles.has(path) || !this.files.find(path)) return;
+    void this.readAsset(path, true).catch(() => {
+      // A missing guess leaves the file to the normal loader.
+    });
+  }
   /** Reads and starts decoding the next dialogue's voice while the current one is read. */
   private prefetchVoice(path: string): void {
     if (this.prefetchedVoices.has(path) || this.abort.signal.aborted) return;
@@ -524,6 +533,19 @@ export class YurisBrowserPlayer {
         // A missing guess leaves the voice to the normal loader.
       });
   }
+  /**
+   * Starts an image the VM is about to load later in the same pass, beside the foreground
+   * decode of `reading`, instead of waiting for a queue slot.
+   */
+  private decodeAhead(name: string, reading: string): void {
+    if (typeof Worker === 'undefined' || this.preloading.size >= 8) return;
+    const file = this.machine.files.resolve(name, YurisFileKind.Image);
+    if (!file.found || file.type !== YurisFileType.Png || file.path === reading) return;
+    if (this.preloading.has(file.path)) return;
+    this.nextPngQueue.delete(file.path);
+    this.preloadQueue.delete(file.path);
+    this.startPreload(file.path, imageMime[file.type]!);
+  }
   private drainPreloadQueue(): void {
     while (this.preloading.size < 2 && !this.abort.signal.aborted) {
       const urgent = this.nextPngQueue.values().next().value;
@@ -533,17 +555,20 @@ export class YurisBrowserPlayer {
       const mime = next?.[1] ?? 'image/png';
       this.nextPngQueue.delete(path);
       this.preloadQueue.delete(path);
-      this.preloading.add(path);
-      void this.readAsset(path, true)
-        .then((data) => this.codecs.preload(data, mime, path))
-        .catch(() => {
-          // The foreground loader retains its original error handling and reads current bytes.
-        })
-        .finally(() => {
-          this.preloading.delete(path);
-          this.drainPreloadQueue();
-        });
+      this.startPreload(path, mime);
     }
+  }
+  private startPreload(path: string, mime: string): void {
+    this.preloading.add(path);
+    void this.readAsset(path, true)
+      .then((data) => this.codecs.preload(data, mime, path))
+      .catch(() => {
+        // The foreground loader retains its original error handling and reads current bytes.
+      })
+      .finally(() => {
+        this.preloading.delete(path);
+        this.drainPreloadQueue();
+      });
   }
   private async loop(): Promise<void> {
     try {
@@ -554,6 +579,7 @@ export class YurisBrowserPlayer {
         await this.machine.frame();
         const next = this.machine.system.preloadEnabled ? this.lookahead?.update() : undefined;
         if (next) this.prioritizeNextClick(next);
+        if (next) for (const movie of this.lookahead!.nextMovies) this.prefetchArchiveFile(movie);
         if (next && this.voiceTemplate)
           for (const cue of this.lookahead!.nextVoices)
             this.prefetchVoice(
