@@ -35,7 +35,7 @@ export class BrowserFileMovie {
         : data[0] === 0 && data[1] === 0 && data[2] === 1 && data[3] === 186
           ? 'video/mpeg'
           : 'application/octet-stream';
-    this.url = URL.createObjectURL(new Blob([data.slice().buffer], {type: mime}));
+    this.url = URL.createObjectURL(new Blob([data as Uint8Array<ArrayBuffer>], {type: mime}));
     video.src = this.url;
     video.addEventListener('ended', () => {
       if (this.video === video) {
@@ -53,13 +53,30 @@ export class BrowserFileMovie {
     this.audio.connect(this.context.destination);
     this.position(rect);
     this.volume(gain);
+    // Opening resolves once the media is parsed, as a DirectShow graph is built (YU-RIS
+    // VMR9PlayMovie: the file source, splitter and renderer connect, then
+    // IMediaControl::Run returns without waiting for the first frame). A later playback
+    // failure ends the movie like an error event.
     try {
-      await video.play();
-      this.playing = true;
+      await new Promise<void>((resolve, reject) => {
+        if (video.readyState >= HTMLMediaElement.HAVE_METADATA) return resolve();
+        video.addEventListener('loadedmetadata', () => resolve(), {once: true});
+        video.addEventListener('error', () => reject(video.error ?? new Error('movie error')), {
+          once: true,
+        });
+      });
     } catch (error) {
-      this.close();
+      if (this.video === video) this.close();
       throw error;
     }
+    if (this.video !== video) return;
+    this.playing = true;
+    video.play().catch(() => {
+      if (this.video === video) {
+        this.playing = false;
+        video.hidden = true;
+      }
+    });
   }
 
   position(rect: FileMovieRect): void {

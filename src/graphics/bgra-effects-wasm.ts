@@ -57,6 +57,8 @@ interface BgraEffects extends WebAssembly.Exports {
 }
 
 const MIN_PIXELS = 65536;
+/** Bytes of each image staged per transition band. */
+const TRANSITION_BAND = 128 * 1024;
 const MAX_SCRATCH = 128 * 1024 * 1024;
 const page = 65536;
 interface ScratchOwner {
@@ -224,15 +226,27 @@ export function transitionBgra(
   const row = width * 4;
   for (const {bytes, offset, stride} of [first, second, target])
     if (offset < 0 || offset + (height - 1) * stride + row > bytes.length) return false;
-  const length = row * height;
-  const stage = workspace(blendMemory, [length, length]);
+  // Pixels are independent within a row, so bands of whole rows keep the staged copies in
+  // cache instead of streaming every image through linear memory twice.
+  const rows = Math.min(height, Math.max(1, Math.floor(TRANSITION_BAND / row)));
+  const stage = workspace(blendMemory, [row * rows, row * rows]);
   if (!stage) return false;
   const [a, b] = stage.offsets as [number, number];
-  const out = new Uint8Array(stage.buffer, a, length);
-  pack(out, first.bytes, first.offset, first.stride, row);
-  pack(new Uint8Array(stage.buffer, b, length), second.bytes, second.offset, second.stride, row);
-  stage.kernel.transition_bgra(a, b, width, height, weight, Number(sse));
-  unpack(target.bytes, out, target.offset, target.stride, row);
+  for (let top = 0; top < height; top += rows) {
+    const count = Math.min(rows, height - top),
+      length = row * count;
+    const out = new Uint8Array(stage.buffer, a, length);
+    pack(out, first.bytes, first.offset + top * first.stride, first.stride, row);
+    pack(
+      new Uint8Array(stage.buffer, b, length),
+      second.bytes,
+      second.offset + top * second.stride,
+      second.stride,
+      row,
+    );
+    stage.kernel.transition_bgra(a, b, width, count, weight, Number(sse));
+    unpack(target.bytes, out, target.offset + top * target.stride, target.stride, row);
+  }
   return true;
 }
 

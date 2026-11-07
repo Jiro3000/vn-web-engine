@@ -562,10 +562,30 @@ const mergeText = withRasterText(
       sy = Math.max(0, -y);
     const width = Math.min(s.width - sx, d.width - Math.max(0, x));
     const height = Math.min(s.height - sy, d.height - Math.max(0, y));
+    // Without attenuation a transparent source pixel leaves the destination unchanged, and an
+    // opaque one at full opacity replaces it (alpha 255, weight 256): the same bytes the
+    // general arithmetic below produces.
+    const words =
+      !attenuateDestination &&
+      ((from.byteOffset | to.byteOffset) & 3) === 0 &&
+      from.buffer !== to.buffer
+        ? [
+            new Uint32Array(from.buffer, from.byteOffset, from.byteLength >>> 2),
+            new Uint32Array(to.buffer, to.byteOffset, to.byteLength >>> 2),
+          ]
+        : null;
     for (let row = 0; row < height; row++)
       for (let col = 0; col < width; col++) {
         const si = ((sy + row) * s.width + sx + col) * 4;
         const di = ((Math.max(0, y) + row) * d.width + Math.max(0, x) + col) * 4;
+        if (words) {
+          const sa = from[si + 3]!;
+          if (sa === 0) continue;
+          if (sa === 255 && opacity === 256) {
+            words[1]![di >>> 2] = words[0]![si >>> 2]!;
+            continue;
+          }
+        }
         let da = to[di + 3]!;
         if (attenuateDestination) {
           da = (da * destOpacity) >> 8;
@@ -798,10 +818,22 @@ function resizeCanvas(
     height = (y1 - y0 + 1) | 0;
   if (width < 1 || height < 1) return m.messageBox('リサイズ後のサイズが不正です。');
   const buffer = allocate(width, height);
-  new Uint32Array(buffer.buffer, buffer.byteOffset, width * height).fill(FILL_COLOUR);
   t.masked = left > 0 || right > 0 || top > 0 || bottom > 0 ? 1 : s.masked;
   const from = s.pixels;
-  if (from) copyWindow(buffer, width, from, sw, sh, x0, y0, x1, y1);
+  // Only the texels outside the copied rectangle keep the fill colour.
+  const copied = from ? copyWindow(buffer, width, from, sw, sh, x0, y0, x1, y1) : null;
+  const fill = new Uint32Array(buffer.buffer, buffer.byteOffset, width * height);
+  if (!copied) fill.fill(FILL_COLOUR);
+  else {
+    const [cx, cy, cw, ch] = copied;
+    fill.fill(FILL_COLOUR, 0, cy * width);
+    if (cx > 0 || cx + cw < width)
+      for (let r = cy; r < cy + ch; r++) {
+        fill.fill(FILL_COLOUR, r * width, r * width + cx);
+        fill.fill(FILL_COLOUR, r * width + cx + cw, (r + 1) * width);
+      }
+    fill.fill(FILL_COLOUR, (cy + ch) * width);
+  }
   t.replace(buffer, width, height);
   layers.markDirty(node);
   return 0;
@@ -814,7 +846,8 @@ const LITTLE_ENDIAN = new Uint8Array(Uint32Array.of(1).buffer)[0] === 1;
 /**
  * 0x43A988: copies the source rows and columns of the window (x0, y0)..(x1, y1) that lie
  * inside the source; a negative start places the copy at (-x0, -y0) in the destination. An
- * empty overlap copies nothing (the native memcpy would get a negative length).
+ * empty overlap copies nothing (the native memcpy would get a negative length). Returns the
+ * destination rectangle (x, y, width, height) that was written, or null.
  */
 function copyWindow(
   to: Uint8Array,
@@ -826,18 +859,19 @@ function copyWindow(
   y0: number,
   x1: number,
   y1: number,
-): void {
+): [number, number, number, number] | null {
   const dx = x0 < 0 ? -x0 : 0,
     sx = x0 < 0 ? 0 : x0,
     dy = y0 < 0 ? -y0 : 0,
     sy = y0 < 0 ? 0 : y0;
   const bytes = (Math.min(x1, sw - 1) - sx + 1) * 4,
     rows = Math.min(y1, sh - 1) - sy + 1;
-  if (bytes <= 0) return;
+  if (bytes <= 0 || rows <= 0) return null;
   for (let r = 0; r < rows; r++) {
     const at = ((sy + r) * sw + sx) * 4;
     to.set(from.subarray(at, at + bytes), ((dy + r) * width + dx) * 4);
   }
+  return [dx, dy, bytes >> 2, rows];
 }
 
 /**

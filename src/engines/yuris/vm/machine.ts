@@ -649,7 +649,8 @@ export class YurisMachine {
     const a = this.args,
       instruction = this.instruction,
       declared = this.project.commands.commands[instruction.command]!;
-    a.slot.fill(0);
+    // Only the previous instruction's ids are set: clearing them empties every slot.
+    for (let i = 0; i < a.records.length; i++) a.slot[a.records[i]!.id] = 0;
     a.count = instruction.args.length;
     a.records.length = 0;
     for (let i = 1; i <= a.count; i++) {

@@ -65,16 +65,31 @@ export function snappyUncompress(input: Uint8Array): Uint8Array | null {
 }
 
 /** A Snappy stream that decodes to `input`. */
+/**
+ * The match table shared by every call. Entries hold `base + position`; an entry below the
+ * current call's base is empty, so the table is not cleared per call.
+ */
+const matchTable = new Int32Array(1 << 14);
+let matchBase = 0;
+
 export function snappyCompress(input: Uint8Array): Uint8Array {
-  const out: number[] = [];
+  // Snappy's MaxCompressedLength bound.
+  const out = new Uint8Array(32 + input.length + Math.ceil(input.length / 6));
+  let o = 0;
   for (let n = input.length; ; n = Math.floor(n / 128)) {
     if (n < 0x80) {
-      out.push(n);
+      out[o++] = n;
       break;
     }
-    out.push((n & 0x7f) | 0x80);
+    out[o++] = (n & 0x7f) | 0x80;
   }
-  const table = new Int32Array(1 << 14).fill(-1);
+  const table = matchTable;
+  if (matchBase + input.length + 1 > 0x7fff0000) {
+    table.fill(0);
+    matchBase = 0;
+  }
+  const base = matchBase + 1;
+  matchBase = base + input.length;
   const hash = (i: number): number =>
     (Math.imul(
       input[i]! | (input[i + 1]! << 8) | (input[i + 2]! << 16) | (input[i + 3]! << 24),
@@ -87,10 +102,17 @@ export function snappyCompress(input: Uint8Array): Uint8Array {
   const emitLiteral = (end: number): void => {
     for (let start = literal; start < end;) {
       const n = Math.min(end - start, 0x10000);
-      if (n <= 60) out.push((n - 1) << 2);
-      else if (n <= 0x100) out.push(60 << 2, n - 1);
-      else out.push(61 << 2, (n - 1) & 0xff, (n - 1) >>> 8);
-      for (let k = 0; k < n; k++) out.push(input[start + k]!);
+      if (n <= 60) out[o++] = (n - 1) << 2;
+      else if (n <= 0x100) {
+        out[o++] = 60 << 2;
+        out[o++] = n - 1;
+      } else {
+        out[o++] = 61 << 2;
+        out[o++] = (n - 1) & 0xff;
+        out[o++] = (n - 1) >>> 8;
+      }
+      out.set(input.subarray(start, start + n), o);
+      o += n;
       start += n;
     }
   };
@@ -98,16 +120,21 @@ export function snappyCompress(input: Uint8Array): Uint8Array {
     while (n > 0) {
       // Keep at least 4 bytes for a final tag-1 copy when the rest is short.
       const take = n > 64 ? (n - 64 < 4 ? 60 : 64) : n;
-      if (take >= 4 && take <= 11 && offset < 2048)
-        out.push(1 | ((take - 4) << 2) | ((offset >>> 8) << 5), offset & 0xff);
-      else out.push(2 | ((take - 1) << 2), offset & 0xff, offset >>> 8);
+      if (take >= 4 && take <= 11 && offset < 2048) {
+        out[o++] = 1 | ((take - 4) << 2) | ((offset >>> 8) << 5);
+        out[o++] = offset & 0xff;
+      } else {
+        out[o++] = 2 | ((take - 1) << 2);
+        out[o++] = offset & 0xff;
+        out[o++] = offset >>> 8;
+      }
       n -= take;
     }
   };
   while (i + 4 <= input.length) {
     const h = hash(i),
-      candidate = table[h]!;
-    table[h] = i;
+      candidate = table[h]! - base;
+    table[h] = base + i;
     if (
       candidate >= 0 &&
       i - candidate <= 0xffff &&
@@ -125,5 +152,5 @@ export function snappyCompress(input: Uint8Array): Uint8Array {
     } else i++;
   }
   emitLiteral(input.length);
-  return Uint8Array.from(out);
+  return out.slice(0, o);
 }

@@ -18,3 +18,23 @@ export function swapRedBlue(
   }
   return output;
 }
+
+const littleEndian = new Uint8Array(new Uint32Array([1]).buffer)[0] === 1;
+
+/** Swaps bytes 0 and 2 of every texel in place (RGBA to BGRA or back), a word at a time. */
+export function swapRedBlueInPlace(pixels: Uint8Array): Uint8Array {
+  if (littleEndian && ((pixels.byteOffset | pixels.byteLength) & 3) === 0) {
+    const words = new Uint32Array(pixels.buffer, pixels.byteOffset, pixels.byteLength / 4);
+    for (let i = 0; i < words.length; i++) {
+      const color = words[i]!;
+      words[i] = (color & 0xff00ff00) | ((color & 255) << 16) | ((color >>> 16) & 255);
+    }
+    return pixels;
+  }
+  for (let i = 0; i + 3 < pixels.length; i += 4) {
+    const b = pixels[i]!;
+    pixels[i] = pixels[i + 2]!;
+    pixels[i + 2] = b;
+  }
+  return pixels;
+}

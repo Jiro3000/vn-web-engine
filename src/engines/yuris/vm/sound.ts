@@ -1,5 +1,6 @@
 import {decodeVorbis} from '../../../audio/vorbis-decoder.js';
 import {openVorbisPcm16, vorbisPcm16, type VorbisPcm16} from '../../../audio/vorbis-pcm16.js';
+import {takePrefetchedVorbisPcm16} from '../../../audio/vorbis-prefetch.js';
 import {YurisError} from './errors.js';
 import {YurisFileKind, YurisFileType, type YurisFiles} from './files.js';
 import type {YurisMachine} from './machine.js';
@@ -649,8 +650,10 @@ export class YurisSounds {
   private async openOgg(s: YurisSound): Promise<number> {
     if (!s.ogg) {
       try {
+        // The PCM is filled by a worker while the first half plays; 0x41DEC0 waits for the
+        // prefix it reads. A whole-file decode before PLAY delayed voice lines by its length.
         const file = s.file!;
-        if (file.byteLength >= 256 * 1024) s.ogg = await openVorbisPcm16(file).catch(() => null);
+        s.ogg = await (takePrefetchedVorbisPcm16(file) ?? openVorbisPcm16(file).catch(() => null));
         if (!s.ogg) {
           const pcm = await decodeVorbis(file);
           s.ogg = vorbisPcm16(pcm.planes, pcm.frames, pcm.sampleRate);

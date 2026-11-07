@@ -822,15 +822,21 @@ export class YurisLayers {
    */
   private resize(cg: YurisCg, width: number, height: number): void {
     const pixels = new Uint8Array(Math.max(width, 0) * Math.max(height, 0) * 4);
-    for (let i = 3; i < pixels.length; i += 4) pixels[i] = 0xff;
-    const columns = Math.min(width, cg.width),
-      rows = Math.min(height, cg.height);
-    if (cg.pixels)
-      for (let y = 0; y < rows; y++)
-        pixels.set(
-          cg.pixels.subarray(y * cg.width * 4, (y * cg.width + columns) * 4),
-          y * width * 4,
-        );
+    const columns = Math.max(Math.min(width, cg.width), 0),
+      rows = cg.pixels ? Math.max(Math.min(height, cg.height), 0) : 0;
+    // Opaque black outside the copied top-left part; the copy overwrites the rest.
+    const black = (from: number, to: number): void => {
+      if (LITTLE_ENDIAN) new Uint32Array(pixels.buffer, from * 4, to - from).fill(0xff000000);
+      else for (let i = from * 4 + 3; i < to * 4; i += 4) pixels[i] = 0xff;
+    };
+    for (let y = 0; y < rows; y++) {
+      pixels.set(
+        cg.pixels!.subarray(y * cg.width * 4, (y * cg.width + columns) * 4),
+        y * width * 4,
+      );
+      if (columns < width) black(y * width + columns, (y + 1) * width);
+    }
+    if (rows < height && width > 0) black(rows * width, height * width);
     cg.replace(pixels, width, height);
   }
 
@@ -1127,6 +1133,7 @@ export class YurisLayers {
 
 /** The rectangle of 0x41060C that matches nothing (-999999999 in every field). */
 const NO_AREA = -999999999;
+const LITTLE_ENDIAN = new Uint8Array(Uint32Array.of(1).buffer)[0] === 1;
 
 /**
  * 0x41060C: clips `rect` (changed in place) to the layer set's buffer and joins it to the area

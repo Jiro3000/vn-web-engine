@@ -3,6 +3,7 @@ import {decodeWebp} from '../formats/webp/webp.js';
 import {decodeBmp} from '../formats/bmp.js';
 import {BrowserGdiImageCodec} from './browser-gdi-image.js';
 import {decodeImageOffThread} from './image-decode-offload.js';
+import {swapRedBlueInPlace} from './pixel-order.js';
 
 interface DecodedImage {
   width: number;
@@ -15,7 +16,6 @@ const PRELOAD_CACHE_BYTES = 160 * 1024 * 1024;
 const PRELOAD_WEBP_BYTES = 56 * 1024 * 1024;
 const PRELOAD_LARGE_PNG_BYTES = 68 * 1024 * 1024;
 const LARGE_PNG_BYTES = 2 * 1024 * 1024;
-const littleEndian = new Uint8Array(new Uint32Array([1]).buffer)[0] === 1;
 
 interface CachedImage {
   encoded: Uint8Array;
@@ -156,10 +156,11 @@ export class LegacyImageCodec {
     const ready = (async () => {
       const decoded =
         format === 'png'
-          ? await decodeImageOffThread(encoded, 'png')
+          ? await decodeImageOffThread(encoded, 'png', undefined, 'bgra')
           : await decodeImageOffThread(encoded, 'legacy-webp');
       if (!decoded) return;
-      const pixels = format === 'png' ? swap(decoded.pixels) : decoded.pixels;
+      // The worker returns PNG pixels already in BGRA order.
+      const pixels = decoded.pixels;
       cache.put(
         key,
         cacheImage(encoded, {width: decoded.width, height: decoded.height, pixels}, false),
@@ -257,19 +258,5 @@ export class LegacyImageCodec {
     return new Uint8Array(await blob.arrayBuffer());
   }
 }
-export function swap(pixels: Uint8Array): Uint8Array {
-  if (littleEndian && ((pixels.byteOffset | pixels.byteLength) & 3) === 0) {
-    const words = new Uint32Array(pixels.buffer, pixels.byteOffset, pixels.byteLength / 4);
-    for (let i = 0; i < words.length; i++) {
-      const color = words[i]!;
-      words[i] = (color & 0xff00ff00) | ((color & 255) << 16) | ((color >>> 16) & 255);
-    }
-    return pixels;
-  }
-  for (let i = 0; i < pixels.length; i += 4) {
-    const b = pixels[i]!;
-    pixels[i] = pixels[i + 2]!;
-    pixels[i + 2] = b;
-  }
-  return pixels;
-}
+/** RGBA to BGRA in place. */
+export const swap = swapRedBlueInPlace;

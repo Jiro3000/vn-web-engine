@@ -576,6 +576,26 @@ function beginOperation<T extends Kernel>(
   const plane = ensure(destination);
   return plane ? {destination, plane, sources, captured} : null;
 }
+/** Identity of a placed glyph: damage strips and repeated overlay draws may carry it again. */
+function placement(g: RasterTextGlyph): string {
+  return `${g.id},${g.flow === undefined ? '' : 's' + g.flow.length + ':' + g.flow},${g.x},${g.y},${g.clip.x},${g.clip.y},${g.clip.width},${g.clip.height}`;
+}
+
+/**
+ * Appends `added` in order, each replacing every glyph already at its placement: the plane
+ * keeps its other glyphs in order, then the last of the added glyphs at each placement.
+ */
+function placeGlyphs(plane: Plane, added: readonly RasterTextGlyph[]): void {
+  const last = new Map<string, number>();
+  added.forEach((g, i) => last.set(placement(g), i));
+  let count = 0;
+  for (const g of plane.glyphs) if (!last.has(placement(g))) plane.glyphs[count++] = g;
+  added.forEach((g, i) => {
+    if (last.get(placement(g)) === i) plane.glyphs[count++] = g;
+  });
+  plane.glyphs.length = count;
+}
+
 function finishOperation<T extends Kernel>(
   {destination, plane, sources, captured}: Operation,
   options: RasterTextOperationOptions<T>,
@@ -599,6 +619,7 @@ function finishOperation<T extends Kernel>(
     removeRegion(plane, shifted(region, ox, oy));
   }
   const alpha = options.opacity?.(args) ?? 1;
+  const added: RasterTextGlyph[] = [];
   if (alpha > 0)
     for (const glyph of captured) {
       if (!(glyph.alpha * alpha > 0)) continue;
@@ -617,23 +638,9 @@ function finishOperation<T extends Kernel>(
         alpha: glyph.alpha * alpha,
         color: options.color?.(glyph.color, args) ?? glyph.color,
       };
-      // Damage strips and repeated overlay draws may carry the same glyph.
-      let count = 0;
-      for (const g of plane.glyphs)
-        if (
-          g.id !== item.id ||
-          g.flow !== item.flow ||
-          g.x !== item.x ||
-          g.y !== item.y ||
-          g.clip.x !== item.clip.x ||
-          g.clip.y !== item.clip.y ||
-          g.clip.width !== item.clip.width ||
-          g.clip.height !== item.clip.height
-        )
-          plane.glyphs[count++] = g;
-      plane.glyphs[count++] = item;
-      plane.glyphs.length = count;
+      added.push(item);
     }
+  if (added.length) placeGlyphs(plane, added);
   if (
     options.clear &&
     destination.storage &&

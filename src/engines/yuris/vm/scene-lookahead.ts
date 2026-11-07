@@ -39,6 +39,8 @@ export class YurisSceneLookahead {
   private language = -1;
   private standScale = '';
   private waitingSince?: number;
+  /** The VO cues of the lines up to the next dialogue, as of the last forecast. */
+  nextVoices: readonly string[] = [];
 
   observeImage(path: string): void {
     const scale = /^cg\\stand\\(m_[0-9]+)\\/.exec(path)?.[1];
@@ -87,6 +89,14 @@ export class YurisSceneLookahead {
     }
   }
 
+  /** The VO cues of the line the scenario parser is executing (H@3040). */
+  currentVoices(): string[] {
+    const vars = this.machine.variables.entries;
+    const source = vars[2899]?.strings,
+      line = Number(vars[3040]?.ints?.[0] ?? -1n);
+    return source && line >= 0 ? voices(macros(source[line] ?? '') ?? []) : [];
+  }
+
   /** Undefined means that the previous priority window still applies. */
   update(): readonly string[] | undefined {
     const vars = this.machine.variables.entries;
@@ -120,6 +130,7 @@ export class YurisSceneLookahead {
     this.line = line;
     this.source = source;
     this.language = language;
+    this.nextVoices = [];
     // The parser records the lexed line in H@3040 before H@3039
     // advances to the next line (YSTB61:118, 140).
     if (!source || !file || line < 0 || (cursor !== line && cursor !== line + 1)) return [];
@@ -134,13 +145,16 @@ export class YurisSceneLookahead {
     )
       return [];
     const assets = new Set<string>();
+    const cues: string[] = [];
     let standScale = this.standScale;
     for (let next = line + 1; next <= line + 64 && next < source.length; next++) {
       const tags = macros(source[next] ?? '');
       if (!tags) return [];
+      cues.push(...voices(tags));
       for (const [tag, args] of tags) {
         if (tag === 'ML.TEXT') {
           if (tags.at(-1)?.[0] !== 'ML.TEXT') return [];
+          this.nextVoices = cues;
           const count = Number(vars[2930]?.ints?.[0] ?? 0n);
           const lines = vars[2931]?.ints,
             paths = vars[2932]?.strings;
@@ -198,6 +212,20 @@ export class YurisSceneLookahead {
     }
     return [];
   }
+}
+
+/** The cue (first argument) of each VO tag, when it is a plain name. */
+function voices(tags: readonly [string, string][]): string[] {
+  const cues: string[] = [];
+  for (const [tag, args] of tags) {
+    if (!/^VO[0-9]*$/.test(tag)) continue;
+    const cue = args
+      .split(',')[0]!
+      .trim()
+      .replace(/^"(.*)"$/, '$1');
+    if (/^[A-Za-z0-9_]{4,}$/.test(cue)) cues.push(cue);
+  }
+  return cues;
 }
 
 function macros(line: string): [string, string][] | undefined {

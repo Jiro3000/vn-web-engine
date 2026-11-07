@@ -206,7 +206,9 @@ class ByteWriter {
 }
 
 function bytesOf(text: ByteString): Uint8Array {
-  return Uint8Array.from(text, (c) => c.charCodeAt(0) & 0xff);
+  const bytes = new Uint8Array(text.length);
+  for (let i = 0; i < text.length; i++) bytes[i] = text.charCodeAt(i);
+  return bytes;
 }
 
 function textOf(data: Uint8Array): ByteString {
@@ -286,15 +288,16 @@ async function compress(data: Uint8Array, snappy: boolean): Promise<Uint8Array> 
   return snappy ? snappyCompress(data) : zlibCompress(data);
 }
 
-/** 0x44CF61 without a layer: a variable record. */
-async function variableRecord(
+/** 0x44CF61 without a layer: a variable record (synchronous when Snappy compresses it). */
+function variableRecord(
   m: YurisMachine,
   id: number,
   index: bigint,
   whole: boolean,
-): Promise<Uint8Array> {
+): Uint8Array | Promise<Uint8Array> {
   const raw = serializeVariable(m, id, index, whole);
-  return record(Kind.Variable, id, raw.length, await compress(raw, SNAPPY_VARIABLES));
+  if (SNAPPY_VARIABLES) return record(Kind.Variable, id, raw.length, snappyCompress(raw));
+  return zlibCompress(raw).then((stored) => record(Kind.Variable, id, raw.length, stored));
 }
 
 /**
@@ -381,47 +384,53 @@ function groupOf(m: YurisMachine): {category: number; type: number} | null {
   return category === 0 ? null : {category, type};
 }
 
-/** SAVE DNO: the block for one element, a whole variable, a layer or a group. */
-async function buildBlock(
+/**
+ * SAVE DNO: the block for one element, a whole variable, a layer or a group. Variable blocks
+ * are built synchronously when their records are; a layer block is compressed asynchronously.
+ */
+function buildBlock(
   m: YurisMachine,
   data: YurisSaveData,
   dno: number,
   cg: YurisCg | null,
-): Promise<void> {
+): void | Promise<void> {
   const a = m.args;
   if (data.blocks.get(dno)?.length)
     throw new YurisError(0x18f1a, [commandName(m), m.argName(Arg.Dno), dno]);
   const group = groupOf(m);
   if (!group) {
-    if (cg) data.blocks.set(dno, await layerRecord(cg));
-    else {
-      const slot = a.has(Arg.Set);
-      data.blocks.set(
-        dno,
-        await variableRecord(m, a.variable[slot]!, a.variableIndex[slot]!, a.whole[slot] === 1),
-      );
-    }
+    if (cg) return layerRecord(cg).then((block) => void data.blocks.set(dno, block));
+    const slot = a.has(Arg.Set);
+    const block = variableRecord(m, a.variable[slot]!, a.variableIndex[slot]!, a.whole[slot] === 1);
+    if (block instanceof Uint8Array) data.blocks.set(dno, block);
+    else return block.then((b) => void data.blocks.set(dno, b));
     return;
   }
-  const records: Uint8Array[] = [];
-  let total = 0,
-    raw = 0;
+  // Every record is serialized now; only the compression may finish later.
+  const entries: (Uint8Array | Promise<Uint8Array>)[] = [];
   for (let id = 0; id < m.variables.entries.length; id++) {
     const variable = m.variables.entries[id]!;
     if (variable.flags !== group.category || variable.type !== group.type) continue;
-    const entry = await variableRecord(m, id, 0n, true);
-    records.push(entry);
-    total += entry.length;
-    raw += new DataView(entry.buffer).getUint32(8, true) + 0xc;
+    entries.push(variableRecord(m, id, 0n, true));
   }
-  const w = new ByteWriter();
-  w.u8(Kind.Group);
-  w.u8(1);
-  w.u16(0);
-  w.u32(total);
-  w.u32(raw);
-  for (const entry of records) w.bytes(entry);
-  data.blocks.set(dno, w.result());
+  const finish = (records: readonly Uint8Array[]): void => {
+    let total = 0,
+      raw = 0;
+    for (const entry of records) {
+      total += entry.length;
+      raw += new DataView(entry.buffer, entry.byteOffset).getUint32(8, true) + 0xc;
+    }
+    const w = new ByteWriter();
+    w.u8(Kind.Group);
+    w.u8(1);
+    w.u16(0);
+    w.u32(total);
+    w.u32(raw);
+    for (const entry of records) w.bytes(entry);
+    data.blocks.set(dno, w.result());
+  };
+  if (entries.every((e) => e instanceof Uint8Array)) finish(entries as Uint8Array[]);
+  else return Promise.all(entries).then(finish);
 }
 
 /** The file image of the blocks 1..`last` in DNO order, as a new save file or memory slot. */
@@ -444,11 +453,11 @@ function writeBlocks(data: YurisSaveData, last: number): Uint8Array {
   return w.result();
 }
 
-async function save(
+function save(
   m: YurisMachine,
   folder: YurisFolderHost,
   data: YurisSaveData,
-): Promise<number> {
+): number | Promise<number> {
   const a = m.args;
   m.decode();
   let cg: YurisCg | null = null;
@@ -464,7 +473,21 @@ async function save(
     mem = low(a.int(Arg.Mem));
     if (mem === SNAPSHOT) return memorySnapshot(m, data);
   }
-  if (a.has(Arg.Dno)) await buildBlock(m, data, low(a.int(Arg.Dno)), cg);
+  // Variable blocks and memory slots complete within the command; only layer compression and
+  // file I/O continue asynchronously.
+  const built = a.has(Arg.Dno) ? buildBlock(m, data, low(a.int(Arg.Dno)), cg) : undefined;
+  return built
+    ? built.then(() => store(m, folder, data, mem, path))
+    : store(m, folder, data, mem, path);
+}
+
+function store(
+  m: YurisMachine,
+  folder: YurisFolderHost,
+  data: YurisSaveData,
+  mem: number,
+  path: ByteString | null,
+): number | Promise<number> {
   if (mem !== -1) {
     // Blocks 1..0x3FE go to the slot (0x3FF and the snapshot 0x400 never do).
     data.storeSlot(mem, writeBlocks(data, BLOCKS - 2));
@@ -472,6 +495,15 @@ async function save(
     return 0;
   }
   if (path === null) return 0;
+  return saveFile(m, folder, data, path);
+}
+
+async function saveFile(
+  m: YurisMachine,
+  folder: YurisFolderHost,
+  data: YurisSaveData,
+  path: ByteString,
+): Promise<number> {
   const existing = await folder.readFile(path);
   if (!existing) {
     // 0x44DE10: the save folder is created, then the file is written ("wb").

@@ -13,6 +13,7 @@ import {decodeCp932, encodeCp932} from '../../../text/cp932.js';
 import {BrowserMonochromeFont} from '../../../text/browser-monochrome-font.js';
 import {BrowserLoopingSoundDevice} from '../../../audio/browser-looping-sound.js';
 import {BrowserAudioContextHost} from '../../../audio/browser-audio-context-host.js';
+import {prefetchVorbisPcm16} from '../../../audio/vorbis-prefetch.js';
 import {BrowserWindowsMenus} from '../../../platform/windows-menus.js';
 import {BrowserLegacyWindows} from '../../../platform/browser-legacy-windows.js';
 import {BrowserWindowsMessageBoxHost} from '../../../platform/windows-message-box.js';
@@ -111,6 +112,12 @@ export class YurisBrowserPlayer {
   private readonly ymvDecoder = new BrowserYmvDecoder();
   private readonly preloadQueue = new Map<string, string>();
   private nextPngQueue = new Set<string>();
+  /**
+   * The folder and extension around a VO cue in the voice path, and how the script cased the
+   * cue, learned from a real read.
+   */
+  private voiceTemplate?: readonly [string, string, (cue: string) => string];
+  private readonly prefetchedVoices = new Set<string>();
   private lookahead?: YurisSceneLookahead;
   private readonly preloading = new Set<string>();
   private readonly preloadedArchiveFiles = new Map<string, Uint8Array>();
@@ -204,7 +211,10 @@ export class YurisBrowserPlayer {
           }),
       },
       exists: (path) => folder.existsFile(path) || !!files.find(path),
-      read: (path) => this.readAsset(path),
+      read: (path) => {
+        this.observeVoiceRead(path);
+        return this.readAsset(path);
+      },
       archiveNames: () => files.archives.map((a) => a.archive.entries.map((e) => e.key)),
       decodeImage: (data, type, path) => {
         if (type === YurisFileType.Png) this.lookahead?.observeImage(path);
@@ -477,6 +487,43 @@ export class YurisBrowserPlayer {
     this.nextPngQueue = new Set([...paths].filter((path) => !this.preloading.has(path)));
     this.drainPreloadQueue();
   }
+  /**
+   * The scenario macros name voices by cue; the script builds the path. The first Ogg read
+   * while the parser executes a line with a VO cue gives the folder and extension.
+   */
+  private observeVoiceRead(path: string): void {
+    if (this.voiceTemplate || !this.lookahead || !/\.ogg$/i.test(path)) return;
+    const lower = path.toLowerCase();
+    for (const cue of this.lookahead.currentVoices()) {
+      const at = lower.lastIndexOf(cue.toLowerCase());
+      const prefix = path.slice(0, at),
+        suffix = path.slice(at + cue.length);
+      const name = path.slice(at, at + cue.length);
+      const casing =
+        name === cue
+          ? (c: string) => c
+          : name === cue.toLowerCase()
+            ? (c: string) => c.toLowerCase()
+            : name === cue.toUpperCase()
+              ? (c: string) => c.toUpperCase()
+              : undefined;
+      if (at > 0 && casing && /[\\/]$/.test(prefix) && /^\.ogg$/i.test(suffix)) {
+        this.voiceTemplate = [prefix, suffix, casing];
+        return;
+      }
+    }
+  }
+  /** Reads and starts decoding the next dialogue's voice while the current one is read. */
+  private prefetchVoice(path: string): void {
+    if (this.prefetchedVoices.has(path) || this.abort.signal.aborted) return;
+    if (this.prefetchedVoices.size >= 64) this.prefetchedVoices.clear();
+    this.prefetchedVoices.add(path);
+    void this.readAsset(path, true)
+      .then((bytes) => prefetchVorbisPcm16(bytes))
+      .catch(() => {
+        // A missing guess leaves the voice to the normal loader.
+      });
+  }
   private drainPreloadQueue(): void {
     while (this.preloading.size < 2 && !this.abort.signal.aborted) {
       const urgent = this.nextPngQueue.values().next().value;
@@ -507,6 +554,11 @@ export class YurisBrowserPlayer {
         await this.machine.frame();
         const next = this.machine.system.preloadEnabled ? this.lookahead?.update() : undefined;
         if (next) this.prioritizeNextClick(next);
+        if (next && this.voiceTemplate)
+          for (const cue of this.lookahead!.nextVoices)
+            this.prefetchVoice(
+              this.voiceTemplate[0] + this.voiceTemplate[2](cue) + this.voiceTemplate[1],
+            );
       }
       if (this.running) this.stopped();
     } catch (e) {
