@@ -83,6 +83,8 @@ const PURE_INTS = new Set([
 const PURE_STRINGS = new Set([
   0xc, 0x37, 0x3e, 0x45, 0x67, 0x68, 0x69, 0x6a, 0x6b, 0x7a, 0x7b, 0x7d, 0x80, 0x81, 0x82, 0x83,
 ]);
+/** Float system variables whose reads only return state (0x448110): pi, frame values, task floats. */
+const PURE_FLOATS = new Set([0xa, 0x36, 0x3d, 0x44]);
 /** Ids whose first index is a reference to another variable (0x421A4C). */
 const REFERENCE_ARRAYS = new Set([0x32, 0x33, 0x34, 0x46]);
 
@@ -443,6 +445,11 @@ function compileExpression(
           ? 'task.loopDepth === 0 ? 0n : task.loops[task.loopDepth - 1].counter'
           : `S.int(${id}, ${index}, 0)`;
       return real ? num(`Number(${code})`) : int(code);
+    }
+    if (variable.type === YurisType.Float && PURE_FLOATS.has(id)) {
+      out.guard(`${v}.type !== ${YurisType.Float}`);
+      const code = `S.float(${id}, ${index}, 0)`;
+      return real ? num(code) : int(`F(${code})`);
     }
     if (variable.type === YurisType.String && PURE_STRINGS.has(id)) {
       out.guard(`${v}.type !== ${YurisType.String}`);

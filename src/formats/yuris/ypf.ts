@@ -1,6 +1,11 @@
 import {ByteView, checkRange} from '../../core/binary.js';
 import type {ByteSource} from '../../core/source.js';
-import {zlibUncompress} from '../zlib.js';
+import {
+  type ProgressiveBytes,
+  completeBytes,
+  zlibUncompress,
+  zlibUncompressProgressive,
+} from '../zlib.js';
 import {murmurHash2} from './murmur.js';
 
 /**
@@ -134,6 +139,18 @@ export class YpfArchive {
       throw new Error(`${entry.name}: inflated ${bytes.length} bytes, expected ${entry.size}`);
     return bytes;
   }
+
+  /** The contents of `entry`, readable from the start while a compressed entry inflates. */
+  async readProgressive(entry: YpfEntry): Promise<ProgressiveBytes> {
+    if (entry.compression === 0) return completeBytes(await this.readStored(entry));
+    if (entry.compression !== 1)
+      throw new Error(`${entry.name}: unknown YPF compression ${entry.compression}`);
+    return zlibUncompressProgressive(
+      (offset, length) => this.source.read(entry.offset + offset, length),
+      entry.storedSize,
+      entry.size,
+    );
+  }
 }
 
 /** Whether the stored bytes match the index's data hash. */
@@ -185,6 +202,11 @@ export class YpfFileSystem {
     const ref = this.find(name);
     if (!ref) throw new Error(`File not found: ${shiftJis.decode(byteStringBytes(name))}`);
     return ref.archive.read(ref.entry);
+  }
+  async readProgressive(name: string): Promise<ProgressiveBytes> {
+    const ref = this.find(name);
+    if (!ref) throw new Error(`File not found: ${shiftJis.decode(byteStringBytes(name))}`);
+    return ref.archive.readProgressive(ref.entry);
   }
 }
 

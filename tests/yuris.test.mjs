@@ -1077,6 +1077,72 @@ test('YMV decrypts independently indexed JPEG pairs without mutating input and c
   assert.throws(() => new Ymv(truncated));
 });
 
+test('YMV opens from a progressively inflated archive entry and waits for each frame', async () => {
+  const {Ymv} = await import('../dist/formats/yuris/ymv.js');
+  const {zlibCompress, zlibUncompressProgressive} = await import('../dist/formats/zlib.js');
+  // Two frames; the second JPEG pair lies far past the first chunk of stored bytes.
+  const count = 2,
+    table = 32 + count * 12,
+    far = 300000,
+    data = new Uint8Array(far + 8),
+    v = new DataView(data.buffer);
+  data.set([89, 83, 77, 86]);
+  for (const [o, n] of [
+    [8, count],
+    [12, 0],
+    [16, 2],
+    [20, 2],
+    [24, 30],
+    [32, table],
+    [36, far],
+    [40, 4],
+    [44, 8],
+    [48, 0],
+    [52, 0],
+  ])
+    v.setUint32(o, n, true);
+  for (let i = 0; i < 4; i++) data[table + i] = [255, 216, 255, 217][i] ^ (16 + i);
+  for (let i = 0; i < 8; i++) data[far + i] = (i + 1) ^ (16 + (i & 15));
+  for (let i = table + 4; i < far; i++) data[i] = (i * 2654435761) >>> 24;
+  const stored = await zlibCompress(data);
+  const requests = [];
+  let release;
+  const gate = new Promise((resolve) => (release = resolve));
+  const read = async (offset, length) => {
+    requests.push(offset);
+    if (offset > 0) await gate;
+    return stored.slice(offset, offset + length);
+  };
+  const source = zlibUncompressProgressive(read, stored.length, data.length, 1024);
+  const movie = await Ymv.open(source);
+  await movie.ready(0);
+  assert.deepEqual([...movie.frame(0).color], [255, 216, 255, 217]);
+  let second = false;
+  const waiting = movie.ready(1).then(() => (second = true));
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(second, false);
+  release();
+  await waiting;
+  assert.deepEqual([...movie.frame(1).color], [1, 2, 3, 4, 5, 6, 7, 8]);
+  assert.deepEqual(source.bytes, data);
+  assert.ok(requests.length > 1);
+
+  const broken = zlibUncompressProgressive(
+    async (offset, length) => stored.slice(offset, offset + length),
+    stored.length,
+    data.length + 1,
+  );
+  await assert.rejects(broken.until(data.length + 1), /inflated/);
+  const corrupt = stored.slice();
+  corrupt.fill(0xff, 2, 64);
+  const bad = zlibUncompressProgressive(
+    async (offset, length) => corrupt.slice(offset, offset + length),
+    corrupt.length,
+    data.length,
+  );
+  await assert.rejects(bad.until(data.length));
+});
+
 test('YU-RIS GRADATION preserves horizontal endpoint rounding and native vertical edge behavior', () => {
   const commands = new Map(),
     values = new Map([
@@ -1223,9 +1289,9 @@ test('YMV commands attach shared movie state, clamp frames, compose alpha and re
     instruction: {command: 109},
     commandName: () => 'YMV',
     files: {
-      read: async (name) => {
+      readProgressive: async (name) => {
         assert.equal(name, 'fixture.ymv');
-        return data;
+        return {bytes: data, until: async () => {}};
       },
     },
     setInt: (id, index, value) => {
@@ -2494,6 +2560,7 @@ test('YU-RIS compiled regions evaluate float declarations, assignments and resul
     return: 13,
   };
   const at = (command, args = [], extra = 0) => ({command, args, extra});
+  const result = [...ref('V', 0x3d), ...token('B', 1), ...token(')', 0)];
   const instructions = [
     at(14, [arg(ref('H', 1001)), arg(double(1.5), 1, 0, 2)]),
     // Element assignments use float mode whatever the type: 1.5 * (1.5 + 2).
@@ -2512,6 +2579,10 @@ test('YU-RIS compiled regions evaluate float declarations, assignments and resul
     at(7, [arg(ref('H', 1004)), arg(token('B', 1))]),
     at(4),
     at(14, [arg(ref('H', 1005)), arg(token('B', 3), 1)]),
+    // System float 0x3D (frame results, 0x448110) in float mode and through FISTP.
+    at(7, [arg(ref('H', 1003)), arg([...result, ...token('B', 2), ...token('*')])]),
+    // 8 += FISTP(2.5) rounds half to even.
+    at(7, [arg(ref('H', 1002), 0, 1), arg(result)]),
     at(13, [arg([...ref('H', 1001), ...token('B', 2), ...token('*')], 16)], 0x4000),
   ];
   const variables = new YurisVariables(1005);
@@ -2520,6 +2591,8 @@ test('YU-RIS compiled regions evaluate float declarations, assignments and resul
   variables.allocateFloat(1003, 0);
   variables.allocateInt(1004, 0n);
   variables.allocateInt(1005, 9n);
+  variables.get(0x3d).dimensions = [4];
+  variables.allocateFloat(0x3d, 0);
   const task = new YurisTask();
   task.gosubDepth = 1;
   task.frameAt(0).returnPosition = 42;
@@ -2527,7 +2600,7 @@ test('YU-RIS compiled regions evaluate float declarations, assignments and resul
     {
       instructions,
       variables,
-      system: {},
+      system: {float: (id, index) => (id === 0x3d && index === 1 ? 2.5 : 0)},
       commands,
       script: 0,
       lines: instructions.map((_, i) => i + 100),
@@ -2547,8 +2620,8 @@ test('YU-RIS compiled regions evaluate float declarations, assignments and resul
   assert.equal(compiled.last, instructions.length - 1);
   assert.equal(compiled.region(task, 0), 42);
   assert.equal(variables.get(1001).floats[0], 5.25);
-  assert.equal(variables.get(1002).ints[0], 8n);
-  assert.equal(variables.get(1003).floats[0], 7);
+  assert.equal(variables.get(1002).ints[0], 10n);
+  assert.equal(variables.get(1003).floats[0], 5);
   assert.equal(variables.get(1004).ints[0], 1n);
   assert.deepEqual([variables.get(1005).type, variables.get(1005).floats[0]], [2, 3]);
   assert.deepEqual(

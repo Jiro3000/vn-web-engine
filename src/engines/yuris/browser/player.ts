@@ -8,6 +8,7 @@ import {domTextFamily, getDomTextStyle} from '../../../text/dom-text-style.js';
 import {YurisMachine, type YurisMachineHost} from '../vm/machine.js';
 import type {YurisProject} from '../../../formats/yuris/ybn.js';
 import type {YpfFileSystem} from '../../../formats/yuris/ypf.js';
+import {type ProgressiveBytes, completeBytes} from '../../../formats/zlib.js';
 import {YurisFileKind, YurisFileType} from '../vm/files.js';
 import {decodeCp932, encodeCp932} from '../../../text/cp932.js';
 import {BrowserMonochromeFont} from '../../../text/browser-monochrome-font.js';
@@ -122,6 +123,12 @@ export class YurisBrowserPlayer {
   private readonly preloading = new Set<string>();
   private readonly preloadedArchiveFiles = new Map<string, Uint8Array>();
   private preloadedArchiveBytes = 0;
+  /** Archive files read ahead progressively (S.MV movies), with their inflated sizes. */
+  private readonly progressiveArchiveFiles = new Map<
+    string,
+    {readonly bytes: Promise<ProgressiveBytes>; readonly size: number}
+  >();
+  private progressiveArchiveBytes = 0;
   private readonly fonts = new BrowserMonochromeFont((s, face) =>
     face === 'SimHei' ? new TextDecoder('gbk').decode(bytes(s)) : decode(s),
   );
@@ -217,6 +224,7 @@ export class YurisBrowserPlayer {
           for (const name of this.lookahead.standForecast(path)) this.decodeAhead(name, path);
         return this.readAsset(path);
       },
+      readProgressive: (path) => this.readProgressiveAsset(path),
       archiveNames: () => files.archives.map((a) => a.archive.entries.map((e) => e.key)),
       decodeImage: (data, type, path) => {
         if (type === YurisFileType.Png) this.lookahead?.observeImage(path);
@@ -458,6 +466,12 @@ export class YurisBrowserPlayer {
       }
       return cached;
     }
+    const progressive = this.claimProgressive(path);
+    if (progressive) {
+      const file = await progressive;
+      await file.until(file.bytes.length);
+      return file.bytes;
+    }
     const bytes = await this.files.read(path);
     if (preload && bytes.length <= PRELOADED_ARCHIVE_BYTES && !this.abort.signal.aborted) {
       for (const [old, contents] of this.preloadedArchiveFiles) {
@@ -469,6 +483,26 @@ export class YurisBrowserPlayer {
       this.preloadedArchiveBytes += bytes.length;
     }
     return bytes;
+  }
+  /** Like `readAsset`, but readable from the start while an archived file inflates. */
+  private async readProgressiveAsset(path: string): Promise<ProgressiveBytes> {
+    const loose = await this.folder.readFile(path);
+    if (loose) return completeBytes(loose);
+    const cached = this.preloadedArchiveFiles.get(path);
+    if (cached) {
+      this.preloadedArchiveFiles.delete(path);
+      this.preloadedArchiveBytes -= cached.length;
+      return completeBytes(cached);
+    }
+    return this.claimProgressive(path) ?? this.files.readProgressive(path);
+  }
+  /** A progressive read ahead of `path`, which the caller then owns. */
+  private claimProgressive(path: string): Promise<ProgressiveBytes> | undefined {
+    const ahead = this.progressiveArchiveFiles.get(path);
+    if (!ahead) return undefined;
+    this.progressiveArchiveFiles.delete(path);
+    this.progressiveArchiveBytes -= ahead.size;
+    return ahead.bytes;
   }
   /** 0x417DDC/0x417EFD: the CGCASH queue resolves and decodes images away from the VM. */
   private preloadImage(name: string): void {
@@ -517,10 +551,27 @@ export class YurisBrowserPlayer {
   }
   /** Reads an archive file the next dialogue opens, such as an S.MV movie, ahead of time. */
   private prefetchArchiveFile(path: string): void {
-    if (this.preloadedArchiveFiles.has(path) || !this.files.find(path)) return;
-    void this.readAsset(path, true).catch(() => {
-      // A missing guess leaves the file to the normal loader.
+    const ref = this.files.find(path);
+    if (
+      !ref ||
+      this.abort.signal.aborted ||
+      this.preloadedArchiveFiles.has(path) ||
+      this.progressiveArchiveFiles.has(path) ||
+      ref.entry.size > PRELOADED_ARCHIVE_BYTES
+    )
+      return;
+    for (const [old, ahead] of this.progressiveArchiveFiles) {
+      if (this.progressiveArchiveBytes + ref.entry.size <= PRELOADED_ARCHIVE_BYTES) break;
+      this.progressiveArchiveFiles.delete(old);
+      this.progressiveArchiveBytes -= ahead.size;
+    }
+    // The movie inflates while the dialogue is read; the loader claims the partial stream.
+    const bytes = this.files.readProgressive(path);
+    bytes.catch(() => {
+      // A failed read reaches the loader that claims it, which raises the native error.
     });
+    this.progressiveArchiveFiles.set(path, {bytes, size: ref.entry.size});
+    this.progressiveArchiveBytes += ref.entry.size;
   }
   /** Reads and starts decoding the next dialogue's voice while the current one is read. */
   private prefetchVoice(path: string): void {

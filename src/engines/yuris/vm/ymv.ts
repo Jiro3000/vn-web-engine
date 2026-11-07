@@ -9,6 +9,9 @@ const YMV = 0x6d,
   YMVEND = 0x6e,
   YMVINFO = 0x6f;
 
+/** The file each movie was opened from, for errors of its progressive read. */
+const names = new WeakMap<Ymv, string>();
+
 /** 0x45886C / 0x459274 / 0x4593AC; YMV lifetime belongs to the shared CG object (+0x108). */
 export function installYmv(m: YurisMachine, images: YurisImageHost): void {
   const target = (): YurisCgNode => {
@@ -25,19 +28,27 @@ export function installYmv(m: YurisMachine, images: YurisImageHost): void {
     const a = m.args;
     if (a.has(2)) {
       const name = windowsPath(a.text(2));
-      let data: Uint8Array;
+      // The browser host inflates the archived file progressively; native 0x45886C reads it
+      // whole. A read that fails later raises the same open error at the frame that needs it.
+      let movie: Ymv;
       try {
-        data = await m.files.read(name);
+        movie = await Ymv.open(await m.files.readProgressive(name));
       } catch {
         throw new YurisError(0x1964a, [name]);
       }
-      cg.ymv = new Ymv(data);
+      names.set(movie, name);
+      cg.ymv = movie;
     }
     if (a.has(3) && cg.ymv) {
       // 0x458B68/0x458C10: decode color JPEG into the layer; JPEG dimensions
       // drive any reallocation. 0x459174 copies grayscale JPEG samples to A.
       const movie = cg.ymv,
         index = Number(BigInt.asIntN(32, a.int(3)));
+      try {
+        await movie.ready(index);
+      } catch {
+        throw new YurisError(0x1964a, [names.get(movie) ?? '']);
+      }
       let color = await images.decodeYmvFrame?.(movie, index);
       if (!color) {
         const frame = movie.frame(index);

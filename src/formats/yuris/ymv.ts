@@ -1,4 +1,5 @@
 import {ByteView, checkRange} from '../../core/binary.js';
+import type {ProgressiveBytes} from '../zlib.js';
 
 /** JPEG frame pairs in YSMV, read by hajiron.exe 0x458A24. */
 export class Ymv {
@@ -10,7 +11,14 @@ export class Ymv {
   private readonly offsets: Uint32Array;
   private readonly colors: Uint32Array;
   private readonly alphas: Uint32Array;
-  constructor(private readonly data: Uint8Array) {
+  /**
+   * `data` holds the whole file; `until`, when given, resolves once a prefix of it has been
+   * written, and frames are read only after `ready`.
+   */
+  constructor(
+    private readonly data: Uint8Array,
+    private readonly until?: (end: number) => Promise<void>,
+  ) {
     const v = new ByteView(data, {littleEndian: true});
     v.check(0, 32);
     if (v.u32(0) !== 0x564d5359) throw new Error('YMV: invalid YSMV signature');
@@ -33,6 +41,24 @@ export class Ymv {
       this.alphas[i] = alpha;
     }
   }
+  /** Opens a movie whose bytes are still arriving once its header and frame table have. */
+  static async open(source: ProgressiveBytes): Promise<Ymv> {
+    const {bytes, until} = source;
+    await until(Math.min(32, bytes.length));
+    if (bytes.length >= 32) {
+      const count = new ByteView(bytes, {littleEndian: true}).u32(8);
+      await until(Math.min(32 + count * 12, bytes.length));
+    }
+    return new Ymv(bytes, until);
+  }
+
+  /** Waits until `frame(index)` can read its JPEG pair. */
+  async ready(index: number): Promise<void> {
+    if (!this.until || this.count === 0) return;
+    index = Math.max(0, Math.min(this.count - 1, index));
+    await this.until(this.offsets[index]! + this.colors[index]! + this.alphas[index]!);
+  }
+
   /** Native FRAME clamps to 0..NUM-1; each JPEG resets the XOR position to zero. */
   frame(index: number): {index: number; color: Uint8Array; alpha: Uint8Array | null} {
     if (this.count === 0) throw new Error('YMV: no frames');

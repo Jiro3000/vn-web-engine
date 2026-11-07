@@ -43,6 +43,7 @@ export class BrowserYmvDecoder {
   }
 
   private async submit(movie: Ymv, index: number): Promise<YurisImage | undefined> {
+    await movie.ready(index);
     const {color, alpha: mask} = movie.frame(index);
     const alpha = movie.alphaMode !== 0 ? mask : null;
     // Ymv.frame owns its decrypted buffers, which can be transferred directly.

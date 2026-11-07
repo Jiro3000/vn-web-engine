@@ -1,4 +1,5 @@
 import type {YurisConfig} from '../../../formats/yuris/ybn.js';
+import {type ProgressiveBytes, completeBytes} from '../../../formats/zlib.js';
 import {resolveNodePath} from './nodes.js';
 import {type ByteString, isLeadByte} from './numbers.js';
 import {asciiLower} from './sjis.js';
@@ -8,6 +9,8 @@ export interface YurisFileHost {
   /** Whether the folder or an archive holds `path` (lower case, '\' separated). */
   exists(path: ByteString): boolean;
   read(path: ByteString): Promise<Uint8Array>;
+  /** Like `read`, but readable from the start before the whole file is available. */
+  readProgressive?(path: ByteString): Promise<ProgressiveBytes>;
   /**
    * The archive list 0x8725AC (`pac\*.ypf` in directory order, then `update1.ypf`..): each
    * archive's entry names in table order, as their decoded bytes.
@@ -124,6 +127,12 @@ export class YurisFiles {
 
   read(path: ByteString): Promise<Uint8Array> {
     return this.host.read(path);
+  }
+
+  async readProgressive(path: ByteString): Promise<ProgressiveBytes> {
+    return this.host.readProgressive
+      ? this.host.readProgressive(path)
+      : completeBytes(await this.host.read(path));
   }
 
   archiveNames(): readonly (readonly ByteString[])[] {
