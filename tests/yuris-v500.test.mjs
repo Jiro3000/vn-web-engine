@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {xxHash32} from '../dist/core/xxhash32.js';
 import {Xoshiro128pp} from '../dist/core/xoshiro128.js';
 import {decodeQoi} from '../dist/formats/qoi.js';
-import {decodeYdg} from '../dist/formats/yuris/ydg.js';
+import {decodeYdg, decodeYdgConcurrently} from '../dist/formats/yuris/ydg.js';
 import {parseWebm} from '../dist/formats/webm.js';
 import {yuvToArgb} from '../dist/video/libyuv.js';
 import {Yswbm} from '../dist/engines/yuris/vm/yswbm.js';
@@ -42,7 +42,7 @@ test('QOI decodes to BGRA', () => {
   assert.deepEqual([...image.pixels], [3, 2, 1, 4, 7, 6, 5, 8]);
 });
 
-test('YDG stacks its strips and counts the ones it cannot decode', () => {
+test('YDG stacks its strips and counts the ones it cannot decode', async () => {
   const top = qoi(2, 1, [
     [10, 20, 30, 255],
     [40, 50, 60, 255],
@@ -66,11 +66,21 @@ test('YDG stacks its strips and counts the ones it cannot decode', () => {
   strip(0, header.length, top.length, 0);
   strip(1, 0, 0, 3);
   strip(2, header.length + top.length, bottom.length, 0);
-  const image = decodeYdg(Uint8Array.from([...header, ...top, ...bottom]));
+  const file = Uint8Array.from([...header, ...top, ...bottom]);
+  const image = decodeYdg(file);
   assert.equal(image.failedStrips, 1);
   assert.deepEqual([...image.pixels.subarray(0, 8)], [30, 20, 10, 255, 60, 50, 40, 255]);
   assert.deepEqual([...image.pixels.subarray(8, 16)], [0, 0, 0, 0, 0, 0, 0, 0]);
   assert.deepEqual([...image.pixels.subarray(16, 24)], [1, 1, 1, 1, 2, 2, 2, 2]);
+  // Concurrent strips stack the same way; a strip the worker declines decodes in-thread.
+  const codecs = [];
+  const concurrent = await decodeYdgConcurrently(file, async (codec, data) => {
+    codecs.push(codec);
+    return codecs.length === 1 ? decodeQoi(data).pixels : null;
+  });
+  assert.deepEqual(codecs, [0, 0]);
+  assert.equal(concurrent.failedStrips, 1);
+  assert.deepEqual(concurrent.pixels, image.pixels);
 });
 
 test('libyuv BT.601 conversion matches the reference values', () => {

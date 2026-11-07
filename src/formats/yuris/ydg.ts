@@ -79,33 +79,81 @@ export function ydgHeader(data: Uint8Array): {
   return {width, height, strips};
 }
 
+type StripDecoder = (
+  strip: Uint8Array,
+) => {width: number; height: number; pixels: Uint8Array} | null;
+
+/** One strip's own BGRA pixels, or null when the decode failed or no decoder handles it. */
+function decodeStrip(codec: number, bytes: Uint8Array, jxl?: StripDecoder): Uint8Array | null {
+  try {
+    if (codec === YdgCodec.Webp) return decodeWebp(bytes).pixels;
+    if (codec === YdgCodec.Qoi) return decodeQoi(bytes).pixels;
+    if (codec === YdgCodec.Jxl) return jxl?.(bytes)?.pixels ?? null;
+  } catch {
+    // The native shows a message box and stops this strip.
+  }
+  return null;
+}
+
+function stackStrips(
+  data: Uint8Array,
+  decode: (strip: YdgStrip, bytes: Uint8Array) => Uint8Array | null,
+): YdgImage;
+function stackStrips(
+  data: Uint8Array,
+  decode: (strip: YdgStrip, bytes: Uint8Array) => Promise<Uint8Array | null>,
+): Promise<YdgImage>;
+function stackStrips(
+  data: Uint8Array,
+  decode: (strip: YdgStrip, bytes: Uint8Array) => Uint8Array | null | Promise<Uint8Array | null>,
+): YdgImage | Promise<YdgImage> {
+  // A bad signature only shows "File Check Error." (0x4399EC); the native decodes on.
+  const {width, height, strips} = ydgHeader(data);
+  const pixels = new Uint8Array(width * height * 4);
+  const used = strips.filter(
+    (strip) => strip.row * width * 4 < pixels.length && strip.codec !== YdgCodec.None,
+  );
+  const results = used.map((strip) =>
+    decode(strip, data.subarray(strip.offset, strip.offset + strip.size)),
+  );
+  const finish = (decoded: readonly (Uint8Array | null)[]): YdgImage => {
+    let failedStrips = 0;
+    decoded.forEach((strip, i) => {
+      const start = used[i]!.row * width * 4;
+      if (strip) pixels.set(strip.subarray(0, pixels.length - start), start);
+      else failedStrips++;
+    });
+    return {width, height, pixels, failedStrips};
+  };
+  return results.some((result) => result instanceof Promise)
+    ? Promise.all(results).then(finish)
+    : finish(results as (Uint8Array | null)[]);
+}
+
 /**
  * Decodes a YDG image. `jxl` decodes a JPEG XL strip to BGRA when the host has a decoder
  * (the native calls YSJXL.DLL only when it is loaded, 0x893EAC). A failing strip decode
  * leaves its rows as they are, like the native message box and early stop.
  */
-export function decodeYdg(
+export function decodeYdg(data: Uint8Array, jxl?: StripDecoder): YdgImage {
+  return stackStrips(data, (strip, bytes) => decodeStrip(strip.codec, bytes, jxl));
+}
+
+/**
+ * Decodes the strips concurrently, as the native strip workers 0x44C370 do. `offThread`
+ * resolves a strip's pixels, or null to decode it in this thread instead (which reports a
+ * failed strip as `decodeYdg` does).
+ */
+export function decodeYdgConcurrently(
   data: Uint8Array,
-  jxl?: (strip: Uint8Array) => {width: number; height: number; pixels: Uint8Array} | null,
-): YdgImage {
-  // A bad signature only shows "File Check Error." (0x4399EC); the native decodes on.
-  const {width, height, strips} = ydgHeader(data);
-  const pixels = new Uint8Array(width * height * 4);
-  let failedStrips = 0;
-  for (const strip of strips) {
-    const start = strip.row * width * 4;
-    if (start >= pixels.length || strip.codec === YdgCodec.None) continue;
-    const bytes = data.subarray(strip.offset, strip.offset + strip.size);
-    let decoded: Uint8Array | null = null;
-    try {
-      if (strip.codec === YdgCodec.Webp) decoded = decodeWebp(bytes).pixels;
-      else if (strip.codec === YdgCodec.Qoi) decoded = decodeQoi(bytes).pixels;
-      else if (strip.codec === YdgCodec.Jxl) decoded = jxl?.(bytes)?.pixels ?? null;
-    } catch {
-      decoded = null;
-    }
-    if (decoded) pixels.set(decoded.subarray(0, pixels.length - start), start);
-    else failedStrips++;
-  }
-  return {width, height, pixels, failedStrips};
+  offThread: (codec: number, strip: Uint8Array) => Promise<Uint8Array | null>,
+  jxl?: StripDecoder,
+): Promise<YdgImage> {
+  return stackStrips(data, async (strip, bytes) => {
+    const pixels =
+      strip.codec === YdgCodec.Webp || strip.codec === YdgCodec.Qoi
+        ? await offThread(strip.codec, bytes).catch(() => null)
+        : null;
+    return pixels ?? decodeStrip(strip.codec, bytes, jxl);
+  });
 }

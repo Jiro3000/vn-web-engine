@@ -39,6 +39,17 @@ interface BgraEffects extends WebAssembly.Exports {
     opacity: number,
     masked: number,
   ) => void;
+  table_blend: (
+    source: number,
+    destination: number,
+    table: number,
+    width: number,
+    height: number,
+    stride: number,
+    opacity: number,
+    masked: number,
+    mode: number,
+  ) => void;
   bilinear: (
     source: number,
     count: number,
@@ -57,6 +68,8 @@ interface BgraEffects extends WebAssembly.Exports {
 }
 
 const MIN_PIXELS = 65536;
+/** A resident target needs no staging, so smaller blends already gain from the kernel. */
+const RESIDENT_MIN_PIXELS = 1024;
 /** Bytes of each image staged per transition band. */
 const TRANSITION_BAND = 128 * 1024;
 const MAX_SCRATCH = 128 * 1024 * 1024;
@@ -265,10 +278,10 @@ export function blendBgra(
   rule?: {readonly pixels: Uint8Array; readonly weights: Int32Array},
 ): boolean {
   const pixels = width * height;
-  if (pixels < MIN_PIXELS) return false;
+  const resident = residentTargets.get(target);
+  if (pixels < (resident ? RESIDENT_MIN_PIXELS : MIN_PIXELS)) return false;
   const length = pixels * 4,
     rowBytes = width * 4;
-  const resident = residentTargets.get(target);
   const stage =
     resident ?? workspace(blendMemory, rule ? [length, length, length, 1024] : [length, length]);
   if (!stage) return false;
@@ -300,6 +313,54 @@ export function blendBgra(
     );
   } else
     stage.kernel.normal_blend(input, destination, width, height, stride, opacity, Number(masked));
+  if (staged) unpack(target, staged, di * 4, targetWidth * 4, rowBytes);
+  return true;
+}
+
+/**
+ * A validated, nonaliased layer blend through a per-channel function table
+ * (`table[source * 256 + destination]`, 65536 bytes) without a rule. Mode 1 below full
+ * opacity is the saturated scaled sum and mode 8 truncates its alpha product toward zero.
+ */
+export function tableBlendBgra(
+  source: Uint8Array,
+  si: number,
+  sourceWidth: number,
+  target: Uint8Array,
+  di: number,
+  targetWidth: number,
+  width: number,
+  height: number,
+  opacity: number,
+  masked: boolean,
+  mode: number,
+  table: Uint8Array,
+): boolean {
+  const pixels = width * height;
+  const resident = residentTargets.get(target);
+  if (pixels < (resident ? RESIDENT_MIN_PIXELS : MIN_PIXELS) || table.length !== 0x10000)
+    return false;
+  const length = pixels * 4,
+    rowBytes = width * 4;
+  // A resident target's rule scratch (at least 256 KiB) holds the table.
+  const stage = resident ?? workspace(blendMemory, [length, length, 0x10000]);
+  if (!stage) return false;
+  const [input, output, tableInput] = stage.offsets as [number, number, number];
+  const staged = resident ? null : new Uint8Array(stage.buffer, output, length);
+  pack(new Uint8Array(stage.buffer, input, length), source, si * 4, sourceWidth * 4, rowBytes);
+  if (staged) pack(staged, target, di * 4, targetWidth * 4, rowBytes);
+  new Uint8Array(stage.buffer, tableInput, 0x10000).set(table);
+  stage.kernel.table_blend(
+    input,
+    resident ? output + di * 4 : output,
+    tableInput,
+    width,
+    height,
+    resident ? targetWidth : width,
+    opacity,
+    Number(masked),
+    mode,
+  );
   if (staged) unpack(target, staged, di * 4, targetWidth * 4, rowBytes);
   return true;
 }

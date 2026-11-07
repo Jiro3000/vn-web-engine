@@ -1,4 +1,4 @@
-import {blendBgra} from '../../../graphics/bgra-effects-wasm.js';
+import {blendBgra, tableBlendBgra} from '../../../graphics/bgra-effects-wasm.js';
 
 /**
  * Software layer blending of the CPU compositor (0x404A51) and the filters it applies.
@@ -148,6 +148,38 @@ export function blendRect(
   const s = src.pixels,
     r = rule?.pixels,
     w = rule?.weights;
+  if (
+    mode !== 0 &&
+    !rule &&
+    a >= 0 &&
+    a <= 256 &&
+    s.buffer !== dst.buffer &&
+    width > 0 &&
+    height > 0 &&
+    sx >= 0 &&
+    sy >= 0 &&
+    dx >= 0 &&
+    dy >= 0 &&
+    sx + width <= src.width &&
+    dx + width <= dstWidth &&
+    ((sy + height - 1) * src.width + sx + width) * 4 <= s.length &&
+    ((dy + height - 1) * dstWidth + dx + width) * 4 <= dst.length &&
+    tableBlendBgra(
+      s,
+      sy * src.width + sx,
+      src.width,
+      dst,
+      dy * dstWidth + dx,
+      dstWidth,
+      width,
+      height,
+      a,
+      src.masked,
+      mode,
+      blendTables()[mode] ?? blendTables()[0]!,
+    )
+  )
+    return;
   if (
     mode === 0 &&
     s.buffer !== dst.buffer &&

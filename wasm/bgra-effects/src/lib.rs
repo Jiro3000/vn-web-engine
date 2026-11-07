@@ -513,3 +513,147 @@ pub unsafe extern "C" fn bilinear(
         }
     }
 }
+
+/// The CPU compositor's MODE blitters without a rule (0x789A00 and 0x789AA0 tables). `table`
+/// holds F(source, destination) at `source * 256 + destination` (0x4626FC). Masked layers
+/// keep the destination alpha; unmasked ones blend all four bytes.
+#[no_mangle]
+pub unsafe extern "C" fn table_blend(
+    source: *const u8,
+    destination: *mut u8,
+    table: *const u8,
+    width: usize,
+    height: usize,
+    stride: usize,
+    opacity: u32,
+    masked: u32,
+    mode: u32,
+) {
+    if width == stride {
+        table_blend_span(source, destination, table, width * height, opacity, masked, mode);
+    } else {
+        for row in 0..height {
+            table_blend_span(
+                source.add(row * width * 4),
+                destination.add(row * stride * 4),
+                table,
+                width,
+                opacity,
+                masked,
+                mode,
+            );
+        }
+    }
+}
+
+/// Exact trunc(x / 255) for 0 <= x <= 65025 in u16 lanes.
+#[inline]
+fn div255(x: v128) -> v128 {
+    u16x8_shr(u16x8_add(u16x8_add(x, u16x8_splat(1)), u16x8_shr(x, 8)), 8)
+}
+
+/// Per-lane weights of four masked pixels as two u16x8 halves.
+#[inline]
+fn masked_weights(s: v128, opacity: u32, mode: u32) -> (v128, v128) {
+    let alpha = i8x16_shuffle::<3, 3, 3, 3, 7, 7, 7, 7, 11, 11, 11, 11, 15, 15, 15, 15>(s, s);
+    let a = u16x8_splat(opacity as u16);
+    let weight = |sa: v128| {
+        if opacity >= 256 {
+            u16x8_add(sa, u16x8_splat(1))
+        } else if mode == 1 {
+            u16x8_shr(u16x8_mul(sa, a), 8)
+        } else {
+            u16x8_shr(u16x8_add(u16x8_mul(sa, a), a), 8)
+        }
+    };
+    (
+        weight(u16x8_extend_low_u8x16(alpha)),
+        weight(u16x8_extend_high_u8x16(alpha)),
+    )
+}
+
+unsafe fn table_blend_span(
+    s: *const u8,
+    d: *mut u8,
+    f: *const u8,
+    pixels: usize,
+    opacity: u32,
+    masked: u32,
+    mode: u32,
+) {
+    let a = opacity as i32;
+    if masked == 0 {
+        let n = pixels * 4;
+        for i in 0..n {
+            let from = *s.add(i) as i32;
+            let to = *d.add(i) as i32;
+            *d.add(i) = if a >= 256 {
+                *f.add(((from as usize) << 8) | to as usize)
+            } else if mode == 1 {
+                // 0x401124.
+                (to + ((from * a) >> 8)).min(255) as u8
+            } else {
+                let diff = *f.add(((from as usize) << 8) | to as usize) as i32 - to;
+                // 0x413EE0 truncates toward zero; the others shift.
+                if mode == 8 {
+                    (to + (a * diff) / 256) as u8
+                } else {
+                    (to + ((diff * a) >> 8)) as u8
+                }
+            };
+        }
+        return;
+    }
+    let rgb = u32x4_splat(0x00ffffff);
+    let mut i = 0;
+    if mode == 5 || (mode == 1 && a < 256) {
+        while i + 4 <= pixels {
+            let sv = v128_load(s.add(i * 4).cast());
+            let dv = v128_load(d.add(i * 4).cast());
+            let (wl, wh) = masked_weights(sv, opacity, mode);
+            let lane = |s16: v128, d16: v128, k: v128| {
+                if mode == 1 {
+                    // 0x4011E4: d + (s * k >> 8), saturated.
+                    u16x8_shr(u16x8_mul(s16, k), 8)
+                } else {
+                    // Screen: F - d = s - trunc(s * d / 255) >= 0.
+                    let step = u16x8_sub(s16, div255(u16x8_mul(s16, d16)));
+                    u16x8_shr(u16x8_mul(step, k), 8)
+                }
+            };
+            let add = u8x16_narrow_i16x8(
+                lane(u16x8_extend_low_u8x16(sv), u16x8_extend_low_u8x16(dv), wl),
+                lane(u16x8_extend_high_u8x16(sv), u16x8_extend_high_u8x16(dv), wh),
+            );
+            let out = u8x16_add_sat(dv, add);
+            v128_store(d.add(i * 4).cast(), v128_bitselect(out, dv, rgb));
+            i += 4;
+        }
+    }
+    while i < pixels {
+        let p = i * 4;
+        let sa = *s.add(p + 3) as i32;
+        if mode == 1 && a < 256 {
+            let k = (sa * a) >> 8;
+            for c in 0..3 {
+                let to = *d.add(p + c) as i32;
+                *d.add(p + c) = (to + ((*s.add(p + c) as i32 * k) >> 8)).min(255) as u8;
+            }
+        } else {
+            let k = if a >= 256 {
+                sa + 1
+            } else if mode == 0 {
+                ((sa * a) >> 8) + 1
+            } else {
+                (sa * a + a) >> 8
+            };
+            for c in 0..3 {
+                let to = *d.add(p + c) as i32;
+                let from = *s.add(p + c) as usize;
+                let diff = *f.add((from << 8) | to as usize) as i32 - to;
+                *d.add(p + c) = (to + ((diff * k) >> 8)) as u8;
+            }
+        }
+        i += 1;
+    }
+}

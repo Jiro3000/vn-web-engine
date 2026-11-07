@@ -19,8 +19,8 @@ serveWorkerPool<ImageDecodeRequest, ImageDecodeResponse>(async ({format, bytes, 
         ? decodeArtemisPsd(bytes)
         : format === 'opaque-jpeg'
           ? await decodeOpaqueJpeg(bytes)
-          : format === 'legacy-webp'
-            ? decodeWebp(bytes, true)
+          : format === 'legacy-webp' || format === 'webp'
+            ? decodeWebp(bytes, format === 'legacy-webp')
             : format === 'yuris-ydg'
               ? decodeYdg(bytes)
               : format === 'qoi'

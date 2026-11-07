@@ -2,10 +2,19 @@ import {decodePng} from '../formats/png/decode.js';
 import {decodeWebp} from '../formats/webp/webp.js';
 import {decodeBmp} from '../formats/bmp.js';
 import {decodeQoi} from '../formats/qoi.js';
-import {decodeYdg} from '../formats/yuris/ydg.js';
+import {decodeYdgConcurrently} from '../formats/yuris/ydg.js';
 import {BrowserGdiImageCodec} from './browser-gdi-image.js';
 import {decodeImageOffThread} from './image-decode-offload.js';
 import {swapRedBlueInPlace} from './pixel-order.js';
+
+/** Each YDG strip decodes on its own worker; without workers it decodes in this thread. */
+const decodeYdgStrips = (bytes: Uint8Array) =>
+  decodeYdgConcurrently(
+    bytes,
+    async (codec, strip) =>
+      // Strip codec 0 is QOI, 2 WebP.
+      (await decodeImageOffThread(strip, codec === 0 ? 'qoi' : 'webp'))?.pixels ?? null,
+  );
 
 interface DecodedImage {
   width: number;
@@ -177,7 +186,9 @@ export class LegacyImageCodec {
       const decoded =
         format === 'png'
           ? await decodeImageOffThread(encoded, 'png', undefined, 'bgra')
-          : await decodeImageOffThread(encoded, format);
+          : format === 'yuris-ydg'
+            ? await decodeYdgStrips(encoded)
+            : await decodeImageOffThread(encoded, format);
       if (!decoded) return;
       // The worker returns PNG pixels already in BGRA order.
       const pixels = decoded.pixels;
@@ -228,7 +239,7 @@ export class LegacyImageCodec {
 
   async decode(bytes: Uint8Array, mime: string, legacyWebpColor = false): Promise<DecodedImage> {
     if (mime === 'image/webp') return decodeWebp(bytes, legacyWebpColor);
-    if (mime === YDG_MIME) return decodeYdg(bytes);
+    if (mime === YDG_MIME) return decodeYdgStrips(bytes);
     if (mime === QOI_MIME) return decodeQoi(bytes);
     if (mime === 'image/png') {
       const d = await decodePng(bytes);

@@ -8,6 +8,7 @@ export type ImageDecodeFormat =
   | 'artemis-psd'
   | 'opaque-jpeg'
   | 'legacy-webp'
+  | 'webp'
   | 'yuris-ydg'
   | 'qoi'
   | 'image/webp'

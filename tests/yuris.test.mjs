@@ -949,6 +949,81 @@ test('YU-RIS large BGRA blits and bilinear crops preserve scalar results', () =>
   }
 });
 
+test('YU-RIS large MODE blends match the scalar blitters for every mode and opacity path', () => {
+  const stride = 300,
+    width = 263,
+    height = 257;
+  const source = Uint8Array.from(
+    {length: stride * (height + 2) * 4},
+    (_, i) => (Math.imul(i, 0x9e3779b1) >>> 13) & 255,
+  );
+  const base = Uint8Array.from(
+    {length: (width + 3) * (height + 1) * 4},
+    (_, i) => (Math.imul(i + 7, 0x85ebca6b) >>> 11) & 255,
+  );
+  for (let mode = 1; mode < 19; mode++)
+    for (const masked of [false, true])
+      for (const a of [0, 1, 97, 255, 256]) {
+        const fast = base.slice();
+        // A destination sharing the source's buffer takes the scalar blitter.
+        const both = new Uint8Array(base.length + source.length);
+        const slow = both.subarray(0, base.length);
+        slow.set(base);
+        both.subarray(base.length).set(source);
+        const blend = (dst, pixels) =>
+          blendRect(
+            dst,
+            width + 3,
+            2,
+            1,
+            {pixels, width: stride, mode, a, masked},
+            3,
+            2,
+            width,
+            height,
+            null,
+          );
+        blend(fast, source);
+        blend(slow, both.subarray(base.length));
+        assert.deepEqual(fast, slow, `mode ${mode} masked ${masked} a ${a}`);
+      }
+  // A resident compositor target blends in place, small blits included.
+  const surface = new YurisCg();
+  surface.allocate(width + 3, height + 1, true);
+  for (const [mode, masked, w, h] of [
+    [1, true, width, height],
+    [5, true, width, height],
+    [0, true, 40, 30],
+    [0, false, 40, 30],
+    [5, true, 40, 30],
+    [3, false, 40, 30],
+  ]) {
+    surface.pixels.set(base);
+    const slow = base.slice();
+    const both = new Uint8Array(base.length + source.length);
+    both.subarray(base.length).set(source);
+    both.subarray(0, base.length).set(base);
+    for (const [dst, pixels] of [
+      [surface.pixels, source],
+      [both.subarray(0, base.length), both.subarray(base.length)],
+    ])
+      blendRect(
+        dst,
+        width + 3,
+        2,
+        1,
+        {pixels, width: stride, mode, a: 159, masked},
+        3,
+        2,
+        w,
+        h,
+        null,
+      );
+    slow.set(both.subarray(0, base.length));
+    assert.deepEqual(surface.pixels, slow, `resident mode ${mode} ${w}x${h}`);
+  }
+});
+
 test('YU-RIS MERGE and MERGE2 preserve straight alpha with native integer rounding and clipping', () => {
   const commands = new Map();
   const values = new Map([
