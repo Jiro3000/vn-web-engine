@@ -2282,6 +2282,50 @@ test('YU-RIS SAVE MEM 99999 stores every current memory slot after slot replacem
   assert.deepEqual(await slots(), [first[0], [7, [4, 4]]]);
 });
 
+test('YU-RIS SAVE variable blocks follow the current variable data', async () => {
+  const {installSave} = await import('../dist/engines/yuris/vm/save.js');
+  const {YurisVariables} = await import('../dist/engines/yuris/vm/variables.js');
+  const machineFor = (variables) => {
+    const handlers = new Map(),
+      values = new Map([[2, 1n]]);
+    const machine = {
+      define: (id, fn) => handlers.set(id, fn),
+      decode() {},
+      messageBox: () => assert.fail('compression failed'),
+      variables,
+      getInt: (id, index) => variables.get(id).ints[Number(index)],
+      args: {
+        // Argument slots (0 is absent): DNO in slot 1, SET (a whole variable) in slot 2.
+        has: (id) => (id === 2 ? 1 : id === 3 ? 2 : 0),
+        int: (id) => values.get(id),
+        variable: [0, 0, 1001],
+        variableIndex: [0n, 0n, 0n],
+        whole: [0, 0, 1],
+      },
+    };
+    const data = installSave(machine, {});
+    return {data, save: handlers.get(0x56)};
+  };
+  const variables = new YurisVariables(1001);
+  variables.get(1001).dimensions = [64];
+  variables.allocateInt(1001, 7n);
+  const {data, save} = machineFor(variables);
+  const block = async () => {
+    data.blocks.clear();
+    await save();
+    return [...data.blocks.get(1)];
+  };
+  const first = await block();
+  variables.get(1001).ints[5] = 9n;
+  const changed = await block();
+  assert.notDeepEqual(changed, first);
+  const fresh = machineFor(variables);
+  await fresh.save();
+  assert.deepEqual(changed, [...fresh.data.blocks.get(1)]);
+  variables.get(1001).ints[5] = 7n;
+  assert.deepEqual(await block(), first);
+});
+
 test('YU-RIS compiled regions follow IF/ELSE branches and return to the interpreter at failing guards', async () => {
   const {compileRegion} = await import('../dist/engines/yuris/vm/region-compiler.js');
   const {YurisTask} = await import('../dist/engines/yuris/vm/task.js');

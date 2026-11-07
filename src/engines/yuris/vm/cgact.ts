@@ -566,6 +566,7 @@ const mergeText = withRasterText(
     // opaque one at full opacity replaces it (alpha 255, weight 256): the same bytes the
     // general arithmetic below produces.
     const words =
+      LITTLE_ENDIAN &&
       !attenuateDestination &&
       ((from.byteOffset | to.byteOffset) & 3) === 0 &&
       from.buffer !== to.buffer
@@ -574,45 +575,59 @@ const mergeText = withRasterText(
             new Uint32Array(to.buffer, to.byteOffset, to.byteLength >>> 2),
           ]
         : null;
-    for (let row = 0; row < height; row++)
-      for (let col = 0; col < width; col++) {
-        const si = ((sy + row) * s.width + sx + col) * 4;
-        const di = ((Math.max(0, y) + row) * d.width + Math.max(0, x) + col) * 4;
-        if (words) {
-          const sa = from[si + 3]!;
+    const dx = Math.max(0, x),
+      dy = Math.max(0, y);
+    for (let row = 0; row < height; row++) {
+      const sourceRow = ((sy + row) * s.width + sx) * 4,
+        targetRow = ((dy + row) * d.width + dx) * 4;
+      if (words) {
+        // Word indexes of the row; transparent pixels are skipped and opaque ones copied.
+        const [source, target] = words as [Uint32Array, Uint32Array];
+        const sw = sourceRow >>> 2,
+          tw = targetRow >>> 2;
+        for (let col = 0; col < width; col++) {
+          const pixel = source[sw + col]!,
+            sa = pixel >>> 24;
           if (sa === 0) continue;
           if (sa === 255 && opacity === 256) {
-            words[1]![di >>> 2] = words[0]![si >>> 2]!;
+            target[tw + col] = pixel;
             continue;
           }
+          blendPixel(to, from, targetRow + col * 4, sourceRow + col * 4);
         }
-        let da = to[di + 3]!;
-        if (attenuateDestination) {
-          da = (da * destOpacity) >> 8;
-          to[di + 3] = da;
-        }
-        const sa = from[si + 3]!;
-        const overlap =
-          attenuateDestination && opacity !== 256
-            ? ((sa + 1) * da) >> 8
-            : Math.trunc((da * sa) / 255);
-        const alpha = da + (((sa - overlap) * opacity) >> 8);
-        to[di + 3] = alpha;
-        const sourceAlpha = from[si + 3]!; // May alias the just-written destination.
-        if (attenuateDestination && opacity !== 256) {
-          for (let c = 0; c < 3; c++)
-            to[di + c] =
-              to[di + c]! +
-              Math.trunc(
-                ((((from[si + c]! - to[di + c]!) * opacity) >> 8) * sourceAlpha) /
-                  ((alpha & 255) + 1),
-              );
-        } else {
-          const weight = (alpha & 255) === 0 ? 0 : Math.trunc((sourceAlpha * 256) / (alpha & 255));
-          for (let c = 0; c < 3; c++)
-            to[di + c] = to[di + c]! + (((from[si + c]! - to[di + c]!) * weight * opacity) >> 16);
-        }
+      } else
+        for (let col = 0; col < width; col++)
+          blendPixel(to, from, targetRow + col * 4, sourceRow + col * 4);
+    }
+
+    function blendPixel(to: Uint8Array, from: Uint8Array, di: number, si: number): void {
+      let da = to[di + 3]!;
+      if (attenuateDestination) {
+        da = (da * destOpacity) >> 8;
+        to[di + 3] = da;
       }
+      const sa = from[si + 3]!;
+      const overlap =
+        attenuateDestination && opacity !== 256
+          ? ((sa + 1) * da) >> 8
+          : Math.trunc((da * sa) / 255);
+      const alpha = da + (((sa - overlap) * opacity) >> 8);
+      to[di + 3] = alpha;
+      const sourceAlpha = from[si + 3]!; // May alias the just-written destination.
+      if (attenuateDestination && opacity !== 256) {
+        for (let c = 0; c < 3; c++)
+          to[di + c] =
+            to[di + c]! +
+            Math.trunc(
+              ((((from[si + c]! - to[di + c]!) * opacity) >> 8) * sourceAlpha) /
+                ((alpha & 255) + 1),
+            );
+      } else {
+        const weight = (alpha & 255) === 0 ? 0 : Math.trunc((sourceAlpha * 256) / (alpha & 255));
+        for (let c = 0; c < 3; c++)
+          to[di + c] = to[di + c]! + (((from[si + c]! - to[di + c]!) * weight * opacity) >> 16);
+      }
+    }
   },
   {map: (x, y, args) => [x + args[2], y + args[3]], opacity: (args) => args[4] / 256},
 );

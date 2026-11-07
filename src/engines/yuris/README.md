@@ -37,7 +37,7 @@ WINDOW MENUID installs a window menu; TRAY (0x452FB4) retains its label, optiona
 - PRODUCT caption uses a dynamically sized string rather than a fixed native buffer.
 - GBK messages cross the host boundary already decoded.
 - LOAD integer/float writes clamp to the allocated destination.
-- Snappy and zlib output is compatible but does not reproduce native compressed bytes.
+- Snappy and zlib output is compatible but does not reproduce native compressed bytes. A variable record whose uncompressed bytes match the previous record of that variable reuses its stored bytes instead of compressing again.
 - Serialized layer structs contain zeros except for the sizes.
 - Memory snapshots omit a native zlib allocation bound. Unchanged memory slots reuse their previously compressed bytes, and the remaining slots compress concurrently.
 - Host write failures propagate instead of raising native error 0x18EFC.

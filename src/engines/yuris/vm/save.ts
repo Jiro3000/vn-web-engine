@@ -296,8 +296,42 @@ function variableRecord(
   whole: boolean,
 ): Uint8Array | Promise<Uint8Array> {
   const raw = serializeVariable(m, id, index, whole);
-  if (SNAPPY_VARIABLES) return record(Kind.Variable, id, raw.length, snappyCompress(raw));
-  return zlibCompress(raw).then((stored) => record(Kind.Variable, id, raw.length, stored));
+  // A record depends only on the variable id and its uncompressed bytes, so unchanged data
+  // reuses the record built last time instead of compressing it again.
+  let records = variableRecords.get(m);
+  if (!records) variableRecords.set(m, (records = new Map()));
+  const key = id * 2 + (whole ? 1 : 0),
+    cached = records.get(key);
+  if (cached && sameBytes(cached.raw, raw)) return cached.record;
+  const remember = (block: Uint8Array): Uint8Array => {
+    records.set(key, {raw, record: block});
+    return block;
+  };
+  if (SNAPPY_VARIABLES) return remember(record(Kind.Variable, id, raw.length, snappyCompress(raw)));
+  return zlibCompress(raw).then((stored) =>
+    remember(record(Kind.Variable, id, raw.length, stored)),
+  );
+}
+
+/** The last record built per variable (id * 2, plus 1 for a whole variable) and its input. */
+const variableRecords = new WeakMap<
+  YurisMachine,
+  Map<number, {readonly raw: Uint8Array; readonly record: Uint8Array}>
+>();
+
+function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
+  const length = a.length;
+  if (length !== b.length) return false;
+  let i = 0;
+  if (((a.byteOffset | b.byteOffset) & 3) === 0) {
+    const words = length >>> 2,
+      x = new Uint32Array(a.buffer, a.byteOffset, words),
+      y = new Uint32Array(b.buffer, b.byteOffset, words);
+    for (; i < words; i++) if (x[i] !== y[i]) return false;
+    i = words << 2;
+  }
+  for (; i < length; i++) if (a[i] !== b[i]) return false;
+  return true;
 }
 
 /**
