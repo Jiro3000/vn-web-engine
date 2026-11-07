@@ -1,7 +1,7 @@
 import type {YurisArgument, YurisInstruction} from '../../../formats/yuris/ybn.js';
 import {decodeLiteral, type YurisSystemValues} from './expression.js';
 import {STRING_CAPACITY, fistp} from './numbers.js';
-import {NESTING_LIMIT, type YurisTask} from './task.js';
+import {NESTING_LIMIT, type YurisLoopEntry, type YurisTask} from './task.js';
 import {SYSTEM_VARIABLE_LIMIT, YurisType, type YurisVariables} from './variables.js';
 
 /**
@@ -20,6 +20,27 @@ export interface RegionCommands {
   readonly int: number;
   readonly str: number;
   readonly let: number;
+  readonly loop: number;
+  readonly loopEnd: number;
+  readonly loopBreak: number;
+  readonly loopContinue: number;
+  readonly gosub: number;
+  readonly return: number;
+}
+
+/** Interpreter services that compiled control transfers use. */
+export interface RegionHooks {
+  /** Continues `task` at `position` of `script`, loading the script on first use (0x4511C1). */
+  enter(script: number, position: number): void;
+  /** Whether an interpreter fast path tracks the iterations of the loop entry. */
+  scanned(entry: YurisLoopEntry): boolean;
+  /** Drops the fast path state of a loop entry that a new LOOP reuses. */
+  forget(entry: YurisLoopEntry): void;
+  /**
+   * After a GOSUB from `position` of `caller` entered `entry`: the interpreter's folds of
+   * recognized library entries, which may run the callee to its RETURN.
+   */
+  called(caller: number, position: number, entry: number): void;
 }
 
 export interface RegionSource {
@@ -27,6 +48,19 @@ export interface RegionSource {
   readonly variables: YurisVariables;
   readonly system: YurisSystemValues;
   readonly commands: RegionCommands;
+  readonly hooks: RegionHooks;
+  /** The script index and its source lines. */
+  readonly script: number;
+  readonly lines: ArrayLike<number>;
+  /**
+   * The YSCM decoder kind of argument `id` of `command` (0 number, 1 string, 2 expression,
+   * other kinds unevaluated), or -1 when the decoder applies a range check to it.
+   */
+  argKind(command: number, id: number): number;
+  /**
+   * The constant label of the GOSUB at `position` when its script is loaded; null otherwise.
+   */
+  gosubTarget(position: number): {readonly script: number; readonly position: number} | null;
   /**
    * Whether the instruction may run without its handler: the handler is the native one, the
    * decoder's checks of its arguments cannot fail and no trace observer reads its state.
@@ -401,8 +435,9 @@ function compileInstruction(
       // 0x43D710
       out.guard('task.ifDepth === 0');
       if (args.length === 0) return true;
+      // The handler reads the condition and the jump; a third argument is unused.
       const [condition, next] = args;
-      if (args.length !== 2 || !condition!.expression || isFloat(condition!)) return false;
+      if (args.length < 2 || !condition!.expression || isFloat(condition!)) return false;
       const value = compileExpression(condition!.expression, 'int', source, out);
       if (value === null) return false;
       const target = next!.size !== 0 ? String(next!.size) : 'task.ifs[task.ifDepth - 1].end';
@@ -497,8 +532,167 @@ function compileInstruction(
       }
       return false;
     }
+    case c.loop: {
+      // LOOP 0x445DC4. Counts the interpreter batches (0, -1, 16 and more, the 5-instruction
+      // character search) stay with it.
+      const [count, end] = args;
+      if (args.length !== 2 || !count!.expression || isFloat(count!)) return false;
+      // The decoder's own evaluation of either argument has no effect besides its result.
+      if (source.argKind(c.loop, count!.id) < 0 || source.argKind(c.loop, end!.id) < 0)
+        return false;
+      const value = compileExpression(count!.expression, 'int', source, out);
+      if (value === null) return false;
+      const limit = out.value(value);
+      const start = position + 1;
+      out.guard(
+        `${limit} === -1n || ${limit} >= 16n || ${end!.size === start + 5 ? `${limit} > 2n || ` : ''}task.loopDepth + 1 >= ${NESTING_LIMIT}`,
+      );
+      out.lines.push(
+        'const e = task.loopEntry(task.loopDepth);',
+        'H.forget(e);',
+        `e.start = ${start}; e.ifDepth = task.ifDepth; e.limit = ${limit}; e.end = ${end!.size}; e.counter = 1n;`,
+        'task.loopDepth++;',
+        `if (${limit} === 0n) { e.counter = 0n; ${jump(end!.size)} }`,
+      );
+      return true;
+    }
+    case c.loopEnd: {
+      // LOOPEND 0x4460AC; entries an interpreter scan skips through stay with it.
+      if (args.length !== 0) return false;
+      out.guard('task.loopDepth === 0');
+      out.lines.push('const e = task.loops[task.loopDepth - 1];');
+      out.guard('H.scanned(e)');
+      out.lines.push(
+        'if (e.limit !== -1n && e.counter >= e.limit) { task.loopDepth--; e.counter = 0n; e.limit = 0n; e.start = 0; }',
+        'else { e.counter = BigInt.asIntN(64, e.counter + 1n); task.ifDepth = e.ifDepth; pc = e.start; continue; }',
+      );
+      return true;
+    }
+    case c.loopBreak:
+    case c.loopContinue: {
+      // LOOPBREAK 0x445F60 / LOOPCONTINUE 0x446018: the LV-th enclosing loop's LOOPEND.
+      const leave = instruction.command === c.loopBreak;
+      if (args.some((arg) => arg.id !== 0) || args.length > 1) return false;
+      let levels = '1n';
+      if (args.length === 1) {
+        if (source.argKind(instruction.command, 0) !== 0) return false;
+        if (!args[0]!.expression || isFloat(args[0]!)) return false;
+        const value = compileExpression(args[0]!.expression, 'int', source, out);
+        if (value === null) return false;
+        levels = out.value(value);
+      }
+      out.lines.push(
+        `if (${levels} >= 1n) {`,
+        `const depth = task.loopDepth - Number(${levels}) + 1;`,
+      );
+      out.guard('depth <= 0');
+      out.lines.push(
+        'task.loopDepth = depth;',
+        'const e = task.loops[depth - 1];',
+        'task.ifDepth = e.ifDepth;',
+        ...(leave ? ['e.counter = 0n; e.limit = 0n;'] : []),
+        'pc = e.end; continue;',
+        '}',
+      );
+      return true;
+    }
+    case c.gosub: {
+      // GOSUB 0x442C84 to a constant label: PINT/PSTR of the callee frame, the return state of
+      // the caller's frame, then the callee's script continues.
+      const target = source.gosubTarget(position);
+      if (!target || (target.script === source.script && target.position === position))
+        return false;
+      const values = evaluate();
+      if (!values) return false;
+      const extra = instruction.extra;
+      const ints = (extra & 0xff) >> 3,
+        floats = (((extra & 7) * 4 + (extra >> 14)) << 24) >> 24,
+        strings = (extra >> 9) & 0x1f;
+      const ids = new Set(args.map((arg) => arg.id));
+      for (let i = 1; i <= floats; i++) if (ids.has(16 + i)) return false;
+      out.guard('task.gosubDepth === 0x3f');
+      out.lines.push(
+        'const d = task.gosubDepth;',
+        'const callee = task.frameAt(d + 1);',
+        `callee.flags[0][0] = ${ints}; callee.flags[1][0] = ${floats}; callee.flags[2][0] = ${strings};`,
+      );
+      if (args.length !== 1 || !ids.has(0)) {
+        for (let i = 1; i <= ints; i++)
+          out.lines.push(
+            `callee.ints[0][${i}] = ${values.get(i) ?? '0n'}; callee.flags[0][${i}] = ${values.has(i) ? 1 : 0};`,
+          );
+        for (let i = 1; i <= floats; i++)
+          out.lines.push(`callee.floats[0][${i}] = 0; callee.flags[1][${i}] = 0;`);
+        for (let i = 1; i <= strings; i++)
+          out.lines.push(
+            `callee.strings[0][${i}] = ${values.get(32 + i) ?? `callee.strings[0][${i}] === null ? null : ''`}; callee.flags[2][${i}] = ${values.has(32 + i) ? 1 : 0};`,
+          );
+      }
+      out.lines.push(
+        'const f = task.frameAt(d);',
+        `f.returnPosition = ${position + 1}; f.returnScript = ${source.script}; f.returnLine = ${source.lines[position] ?? 0};`,
+        'f.ifDepth = task.ifDepth; f.loopDepth = task.loopDepth;',
+        'task.gosubDepth = d + 1;',
+        `H.enter(${target.script}, ${target.position});`,
+        `H.called(${source.script}, ${position}, ${target.position});`,
+        'return task.position;',
+      );
+      return true;
+    }
+    case c.return: {
+      // RETURN 0x44B7DC inside a call: RINT/RSTR of the caller's frame, then the caller resumes.
+      const values = evaluate();
+      if (!values) return false;
+      const extra = instruction.extra;
+      const ints = (extra & 0xff) >> 3,
+        floats = (((extra & 7) * 4 + (extra >> 14)) << 24) >> 24,
+        strings = (extra >> 9) & 0x1f;
+      for (let i = 1; i <= floats; i++) if (args.some((arg) => arg.id === 15 + i)) return false;
+      out.guard('task.gosubDepth === 0');
+      out.lines.push(
+        'const d = task.gosubDepth;',
+        'const caller = task.frameAt(d - 1);',
+        `caller.flags[3][0] = ${ints}; caller.flags[4][0] = ${floats}; caller.flags[5][0] = ${strings};`,
+      );
+      if (args.length !== 0) {
+        for (let i = 1; i <= ints; i++)
+          out.lines.push(
+            `caller.ints[1][${i}] = ${values.get(i - 1) ?? '0n'}; caller.flags[3][${i}] = ${values.has(i - 1) ? 1 : 0};`,
+          );
+        for (let i = 1; i <= floats; i++)
+          out.lines.push(`caller.floats[1][${i}] = 0; caller.flags[4][${i}] = 0;`);
+        for (let i = 1; i <= strings; i++)
+          out.lines.push(
+            `caller.strings[1][${i}] = ${values.get(31 + i) ?? `caller.strings[1][${i}] === null ? null : ''`}; caller.flags[5][${i}] = ${values.has(31 + i) ? 1 : 0};`,
+          );
+      }
+      out.lines.push(
+        'task.gosubDepth = d - 1;',
+        'H.enter(caller.returnScript, caller.returnPosition);',
+        'return caller.returnPosition;',
+      );
+      return true;
+    }
   }
   return false;
+
+  /**
+   * The decoder 0x4253C9 / 0x4430C5 for every argument: numbers and strings by their YSCM
+   * kind, keyed by argument id; null when one does not compile or has a range check.
+   */
+  function evaluate(): Map<number, string> | null {
+    const values = new Map<number, string>();
+    for (const arg of args) {
+      const kind = source.argKind(instruction.command, arg.id);
+      if (kind < 0) return null;
+      if (kind !== 0 && kind !== 1) continue;
+      if (!arg.expression || (kind === 0 && isFloat(arg))) return null;
+      const value = compileExpression(arg.expression, kind === 0 ? 'int' : 'str', source, out);
+      if (value === null) return null;
+      values.set(arg.id, out.value(value));
+    }
+    return values;
+  }
 }
 
 /** Int assignment operators of LET (0x872AF0): `=`, `+=`, `-=`, `*=`, `/=`, `%=`, `&=`, `|=`, `^=`. */
@@ -561,13 +755,14 @@ export function compileRegion(
     '};',
   ].join('\n');
   // eslint-disable-next-line @typescript-eslint/no-implied-eval
-  const factory = new Function('V', 'S', 'A', body) as (
+  const factory = new Function('V', 'S', 'A', 'H', body) as (
     v: YurisVariables['entries'],
     s: YurisSystemValues,
     a: YurisVariables,
+    h: RegionHooks,
   ) => CompiledRegion;
   return {
-    region: factory(source.variables.entries, source.system, source.variables),
+    region: factory(source.variables.entries, source.system, source.variables, source.hooks),
     last: end,
   };
 }

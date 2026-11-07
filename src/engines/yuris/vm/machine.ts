@@ -60,7 +60,12 @@ import {
   type StringSlicePrelude,
 } from './library-fast-paths.js';
 import {type YurisWindowHost, YurisWindows} from './window.js';
-import {type CompiledRegion, type RegionSource, compileRegion} from './region-compiler.js';
+import {
+  type CompiledRegion,
+  type RegionHooks,
+  type RegionSource,
+  compileRegion,
+} from './region-compiler.js';
 
 /**
  * A command handler (table at 0x78B040, filled by 0x4635A8). It returns 0 to continue with
@@ -113,6 +118,12 @@ const REGION_COMMAND_NUMBERS = {
   int: Command.Int,
   str: Command.Str,
   let: Command.Let,
+  loop: Command.Loop,
+  loopEnd: Command.LoopEnd,
+  loopBreak: Command.LoopBreak,
+  loopContinue: Command.LoopContinue,
+  gosub: Command.Gosub,
+  return: Command.Return,
 } as const;
 const REGION_COMMANDS = new Set<number>(Object.values(REGION_COMMAND_NUMBERS));
 
@@ -274,6 +285,8 @@ export class YurisMachine {
   private readonly letHandler = () => this.let();
   private readonly loopHandler = () => this.loop();
   private readonly loopEndHandler = () => this.loopEnd();
+  private readonly loopBreakHandler = () => this.loopBreak(true);
+  private readonly loopContinueHandler = () => this.loopBreak(false);
   private readonly ifHandler = () => this.if();
   private readonly elseHandler = () => this.else();
   private readonly ifBlendHandler = () => this.ifBlend();
@@ -455,11 +468,42 @@ export class YurisMachine {
       variables: this.variables,
       system: this.system,
       commands: REGION_COMMAND_NUMBERS,
+      hooks: this.regionHooks,
+      script: loaded.index,
+      lines: loaded.script.lines,
+      argKind: (command, id) => {
+        const spec = this.project.commands.commands[command]?.args[id];
+        return spec?.check ? -1 : (spec?.kind ?? 3);
+      },
+      gosubTarget: (p) => this.gosubTarget(loaded, p),
       eligible: (p) => this.regionEligible(loaded, p),
     };
     const compiled = compileRegion(source, position, instructions.length - 1);
     if (!compiled) return;
     for (let p = position; p <= compiled.last; p++) loaded.regions[p] = compiled.region;
+  }
+
+  private readonly regionHooks: RegionHooks = {
+    enter: (script, position) => this.enter(script, position),
+    scanned: (entry) => this.activeScans.has(entry),
+    forget: (entry) => this.activeScans.delete(entry),
+    called: (caller, position, entry) => {
+      this.position = position;
+      this.foldCall(caller, entry);
+    },
+  };
+
+  /** A GOSUB's constant callee in a loaded script. */
+  private gosubTarget(
+    loaded: LoadedScript,
+    position: number,
+  ): {script: number; position: number} | null {
+    const index = loaded.gosubLabel[position]!;
+    if (index === 0) return null;
+    const label = this.project.labels.labels[index];
+    const callee = label && this.loaded.get(label.script);
+    if (!label || !callee) return null;
+    return {script: label.script, position: label.position};
   }
 
   private regionEligible(loaded: LoadedScript, position: number): boolean {
@@ -481,7 +525,19 @@ export class YurisMachine {
                   ? this.strHandler
                   : command === Command.Let
                     ? this.letHandler
-                    : undefined;
+                    : command === Command.Loop
+                      ? this.loopHandler
+                      : command === Command.LoopEnd
+                        ? this.loopEndHandler
+                        : command === Command.LoopBreak
+                          ? this.loopBreakHandler
+                          : command === Command.LoopContinue
+                            ? this.loopContinueHandler
+                            : command === Command.Gosub
+                              ? this.gosubHandler
+                              : command === Command.Return
+                                ? this.returnHandler
+                                : undefined;
     if (!native || this.handlers[command] !== native) return false;
     if (!this.canBatchLoop(loaded.index, position, position)) return false;
     if (command === Command.Int || command === Command.Str) {
@@ -613,7 +669,8 @@ export class YurisMachine {
       const region = loaded.regions[position];
       if (region !== undefined) {
         const next = region(task, position);
-        if (next !== position) {
+        // A call or return may land on the entry position of another script.
+        if (next !== position || task.script !== script) {
           task.position = next;
           continue;
         }
@@ -860,8 +917,8 @@ export class YurisMachine {
     this.define(Command.IfContinue, () => this.ifBreak(true));
     this.define(Command.Loop, this.loopHandler);
     this.define(Command.LoopEnd, this.loopEndHandler);
-    this.define(Command.LoopBreak, () => this.loopBreak(true));
-    this.define(Command.LoopContinue, () => this.loopBreak(false));
+    this.define(Command.LoopBreak, this.loopBreakHandler);
+    this.define(Command.LoopContinue, this.loopContinueHandler);
     this.define(Command.Go, () => this.go());
     this.define(Command.Gosub, this.gosubHandler);
     this.define(Command.Return, this.returnHandler);
@@ -1555,15 +1612,22 @@ export class YurisMachine {
     frame.loopDepth = task.loopDepth;
     task.gosubDepth++;
     this.enter(label.script, label.position);
-    const command = this.current.script.instructions[label.position]?.command;
-    if (command === Command.Str) this.foldStringSlice(frame.returnScript, label.position);
-    else if (command === Command.Int) {
-      const next = this.current.script.instructions[label.position + 1]?.command;
-      if (next === Command.CgInfo || next === 0x67)
-        this.foldIntQuery(frame.returnScript, label.position);
-      else this.foldArrayRanges(frame.returnScript, label.position);
-    }
+    this.foldCall(frame.returnScript, label.position);
     return 0;
+  }
+
+  /**
+   * Runs a recognized STR/INT library entry at `entry` of the callee script, called from
+   * `caller` at `this.position`, to its RETURN when the fold's conditions hold.
+   */
+  private foldCall(caller: number, entry: number): void {
+    const command = this.current.script.instructions[entry]?.command;
+    if (command === Command.Str) this.foldStringSlice(caller, entry);
+    else if (command === Command.Int) {
+      const next = this.current.script.instructions[entry + 1]?.command;
+      if (next === Command.CgInfo || next === 0x67) this.foldIntQuery(caller, entry);
+      else this.foldArrayRanges(caller, entry);
+    }
   }
 
   private foldIntQuery(caller: number, entry: number): void {

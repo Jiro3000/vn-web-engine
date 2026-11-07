@@ -2239,7 +2239,21 @@ test('YU-RIS compiled regions follow IF/ELSE branches and return to the interpre
     tokens: null,
     expression: new Uint8Array(),
   });
-  const commands = {if: 1, else: 2, ifBlend: 3, ifEnd: 4, int: 5, str: 6, let: 7};
+  const commands = {
+    if: 1,
+    else: 2,
+    ifBlend: 3,
+    ifEnd: 4,
+    int: 5,
+    str: 6,
+    let: 7,
+    loop: 8,
+    loopEnd: 9,
+    loopBreak: 10,
+    loopContinue: 11,
+    gosub: 12,
+    return: 13,
+  };
   const at = (command, ...args) => ({command, args, extra: 0});
   const string = (text) => token('M', 34, ...[...text].map((c) => c.charCodeAt(0)), 34);
   const instructions = [
@@ -2265,7 +2279,7 @@ test('YU-RIS compiled regions follow IF/ELSE branches and return to the interpre
     variables.allocateInt(1003, 0n);
     variables.allocateString(1004, '');
     const compiled = compileRegion(
-      {instructions, variables, system: {}, commands, eligible: () => true},
+      {instructions, variables, system: {}, commands, eligible: () => true, argKind: () => 0},
       0,
       instructions.length - 1,
     );
@@ -2299,4 +2313,139 @@ test('YU-RIS compiled regions follow IF/ELSE branches and return to the interpre
   ({variables, region, task} = setup(2n));
   assert.equal(region(task, 7), instructions.length);
   assert.equal(variables.get(1004).strings[0], 'abcde');
+});
+
+test('YU-RIS compiled regions run LOOP, LOOPBREAK and calls, leaving batched loops to the interpreter', async () => {
+  const {compileRegion} = await import('../dist/engines/yuris/vm/region-compiler.js');
+  const {YurisTask} = await import('../dist/engines/yuris/vm/task.js');
+  const token = (name, ...bytes) => [name.charCodeAt(0), bytes.length, 0, ...bytes];
+  const ref = (name, id) => token(name, 0x40, id & 255, id >>> 8);
+  const arg = (bytes, id = 0, op = 0, type = 1) => ({
+    id,
+    type,
+    op,
+    size: bytes.length,
+    offset: 0,
+    tokens: null,
+    expression: Uint8Array.from(bytes),
+  });
+  const jump = (size, id = 0) => ({
+    id,
+    type: 0,
+    op: 0,
+    size,
+    offset: 0,
+    tokens: null,
+    expression: new Uint8Array(),
+  });
+  const commands = {
+    if: 1,
+    else: 2,
+    ifBlend: 3,
+    ifEnd: 4,
+    int: 5,
+    str: 6,
+    let: 7,
+    loop: 8,
+    loopEnd: 9,
+    loopBreak: 10,
+    loopContinue: 11,
+    gosub: 12,
+    return: 13,
+  };
+  const at = (command, args = [], extra = 0) => ({command, args, extra});
+  const program = (count) => [
+    at(8, [arg(token('B', count)), jump(5, 1)]),
+    at(7, [arg(ref('H', 1002), 0, 1), arg(token('B', 1))]),
+    at(1, [arg([...ref('H', 1002), ...token('B', 3), ...token('=')]), jump(0), jump(4)]),
+    at(10),
+    at(4),
+    at(9),
+    // GOSUB #label PINT=H1002*10 (one int parameter), then the callee's RETURN RINT=9.
+    at(
+      12,
+      [
+        arg(token('M', 34, 0x6c, 34), 0),
+        arg([...ref('H', 1002), ...token('B', 10), ...token('*')], 1),
+      ],
+      8,
+    ),
+    at(7, [arg(ref('H', 1004)), arg(token('B', 1))]),
+    at(13, [arg(token('B', 9))], 8),
+  ];
+  const setup = (count, scanned = false) => {
+    const instructions = program(count);
+    const variables = new YurisVariables(1004);
+    for (const id of [1002, 1004]) variables.allocateInt(id, 0n);
+    const entered = [];
+    const task = new YurisTask();
+    const compiled = compileRegion(
+      {
+        instructions,
+        variables,
+        system: {},
+        commands,
+        script: 0,
+        lines: instructions.map((_, i) => i + 100),
+        hooks: {
+          enter: (script, position) => {
+            entered.push([script, position]);
+            task.position = position;
+          },
+          scanned: () => scanned,
+          forget: () => {},
+          called: (caller, position, entry) => entered.push([caller, position, entry]),
+        },
+        argKind: (command, id) =>
+          command === 12 && id === 0 ? 1 : command === 8 && id === 1 ? 3 : 0,
+        gosubTarget: (position) => (position === 6 ? {script: 0, position: 8} : null),
+        eligible: () => true,
+      },
+      0,
+      instructions.length - 1,
+    );
+    assert.equal(compiled.last, instructions.length - 1);
+    return {variables, region: compiled.region, task, entered};
+  };
+
+  let {variables, region, task, entered} = setup(5);
+  // Three iterations, the break, then the call.
+  assert.equal(region(task, 0), 8);
+  assert.equal(variables.get(1002).ints[0], 3n);
+  assert.deepEqual([task.loopDepth, task.ifDepth, task.gosubDepth], [0, 0, 1]);
+  assert.deepEqual([task.frames[1].ints[0][1], task.frames[1].flags[0][0]], [30n, 1]);
+  assert.deepEqual(
+    [task.frames[0].returnPosition, task.frames[0].returnLine, entered],
+    [
+      7,
+      106,
+      [
+        [0, 8],
+        [0, 6, 8],
+      ],
+    ],
+  );
+  assert.equal(region(task, 8), 7);
+  assert.deepEqual(
+    [task.gosubDepth, task.frames[0].ints[1][1], task.frames[0].flags[3][1]],
+    [0, 9n, 1],
+  );
+  // A RETURN outside a call ends the task in the interpreter.
+  assert.equal(region(task, 7), 8);
+  assert.equal(variables.get(1004).ints[0], 1n);
+
+  // Two iterations count to the limit without the break.
+  ({variables, region, task} = setup(2));
+  assert.equal(region(task, 0), 8);
+  assert.equal(variables.get(1002).ints[0], 2n);
+  assert.equal(task.loops[0].limit, 0n);
+
+  // Counts the interpreter batches stay with it, before the LOOP changes any state.
+  ({variables, region, task} = setup(16));
+  assert.equal(region(task, 0), 0);
+  assert.equal(task.loopDepth, 0);
+  // So does a LOOPEND whose entry an interpreter scan tracks.
+  ({variables, region, task} = setup(5, true));
+  assert.equal(region(task, 0), 5);
+  assert.deepEqual([task.loopDepth, variables.get(1002).ints[0]], [1, 1n]);
 });
