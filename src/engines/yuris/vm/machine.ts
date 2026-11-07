@@ -116,6 +116,7 @@ const REGION_COMMAND_NUMBERS = {
   ifBlend: Command.IfBlend,
   ifEnd: Command.IfEnd,
   int: Command.Int,
+  flt: Command.Flt,
   str: Command.Str,
   let: Command.Let,
   loop: Command.Loop,
@@ -294,6 +295,7 @@ export class YurisMachine {
   private readonly gosubHandler = () => this.gosub();
   private readonly returnHandler = () => this.return();
   private readonly intHandler = () => this.declare(YurisType.Int);
+  private readonly fltHandler = () => this.declare(YurisType.Float);
   private readonly strHandler = () => this.declare(YurisType.String);
   private readonly nativeVarInfo: YurisCommandHandler | undefined;
   private readonly nativeVarAct: YurisCommandHandler | undefined;
@@ -521,27 +523,29 @@ export class YurisMachine {
               ? this.ifEndHandler
               : command === Command.Int
                 ? this.intHandler
-                : command === Command.Str
-                  ? this.strHandler
-                  : command === Command.Let
-                    ? this.letHandler
-                    : command === Command.Loop
-                      ? this.loopHandler
-                      : command === Command.LoopEnd
-                        ? this.loopEndHandler
-                        : command === Command.LoopBreak
-                          ? this.loopBreakHandler
-                          : command === Command.LoopContinue
-                            ? this.loopContinueHandler
-                            : command === Command.Gosub
-                              ? this.gosubHandler
-                              : command === Command.Return
-                                ? this.returnHandler
-                                : undefined;
+                : command === Command.Flt
+                  ? this.fltHandler
+                  : command === Command.Str
+                    ? this.strHandler
+                    : command === Command.Let
+                      ? this.letHandler
+                      : command === Command.Loop
+                        ? this.loopHandler
+                        : command === Command.LoopEnd
+                          ? this.loopEndHandler
+                          : command === Command.LoopBreak
+                            ? this.loopBreakHandler
+                            : command === Command.LoopContinue
+                              ? this.loopContinueHandler
+                              : command === Command.Gosub
+                                ? this.gosubHandler
+                                : command === Command.Return
+                                  ? this.returnHandler
+                                  : undefined;
     if (!native || this.handlers[command] !== native) return false;
     if (!this.canBatchLoop(loaded.index, position, position)) return false;
-    if (command === Command.Int || command === Command.Str) {
-      // INT and STR run the decoder 0x4253C9 first; its range checks must not apply.
+    if (command === Command.Int || command === Command.Flt || command === Command.Str) {
+      // INT, FLT and STR run the decoder 0x4253C9 first; its range checks must not apply.
       const declared = this.project.commands.commands[command];
       if (!declared) return false;
       for (const arg of instruction.args) if (declared.args[arg.id]?.check) return false;
@@ -925,7 +929,7 @@ export class YurisMachine {
     this.define(Command.Wait, () => this.wait());
     this.define(Command.End, () => this.end());
     this.define(Command.Int, this.intHandler);
-    this.define(Command.Flt, () => this.declare(YurisType.Float));
+    this.define(Command.Flt, this.fltHandler);
     this.define(Command.Str, this.strHandler);
     this.define(Command.Let, this.letHandler);
     installVariableCommands(this);

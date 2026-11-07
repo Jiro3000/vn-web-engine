@@ -2245,6 +2245,7 @@ test('YU-RIS compiled regions follow IF/ELSE branches and return to the interpre
     ifBlend: 3,
     ifEnd: 4,
     int: 5,
+    flt: 14,
     str: 6,
     let: 7,
     loop: 8,
@@ -2344,6 +2345,7 @@ test('YU-RIS compiled regions run LOOP, LOOPBREAK and calls, leaving batched loo
     ifBlend: 3,
     ifEnd: 4,
     int: 5,
+    flt: 14,
     str: 6,
     let: 7,
     loop: 8,
@@ -2448,4 +2450,109 @@ test('YU-RIS compiled regions run LOOP, LOOPBREAK and calls, leaving batched loo
   ({variables, region, task} = setup(5, true));
   assert.equal(region(task, 0), 5);
   assert.deepEqual([task.loopDepth, variables.get(1002).ints[0]], [1, 1n]);
+});
+
+test('YU-RIS compiled regions evaluate float declarations, assignments and results', async () => {
+  const {compileRegion} = await import('../dist/engines/yuris/vm/region-compiler.js');
+  const {YurisTask} = await import('../dist/engines/yuris/vm/task.js');
+  const {YurisVariables} = await import('../dist/engines/yuris/vm/variables.js');
+  const token = (name, ...bytes) => [name.charCodeAt(0), bytes.length, 0, ...bytes];
+  const ref = (name, id) => token(name, 0x40, id & 255, id >>> 8);
+  const double = (value) => token('F', ...new Uint8Array(new Float64Array([value]).buffer));
+  const arg = (bytes, id = 0, op = 0, type = 1) => ({
+    id,
+    type,
+    op,
+    size: bytes.length,
+    offset: 0,
+    tokens: null,
+    expression: Uint8Array.from(bytes),
+  });
+  const jump = (size) => ({
+    id: 0,
+    type: 0,
+    op: 0,
+    size,
+    offset: 0,
+    tokens: null,
+    expression: new Uint8Array(),
+  });
+  const commands = {
+    if: 1,
+    else: 2,
+    ifBlend: 3,
+    ifEnd: 4,
+    int: 5,
+    flt: 14,
+    str: 6,
+    let: 7,
+    loop: 8,
+    loopEnd: 9,
+    loopBreak: 10,
+    loopContinue: 11,
+    gosub: 12,
+    return: 13,
+  };
+  const at = (command, args = [], extra = 0) => ({command, args, extra});
+  const instructions = [
+    at(14, [arg(ref('H', 1001)), arg(double(1.5), 1, 0, 2)]),
+    // Element assignments use float mode whatever the type: 1.5 * (1.5 + 2).
+    at(7, [arg(ref('H', 1001), 0, 3), arg([...ref('H', 1001), ...token('B', 2), ...token('+')])]),
+    // An int target rounds the float result (2.625) by FISTP.
+    at(7, [
+      arg(ref('H', 1002)),
+      arg([...ref('H', 1001), ...token('B', 2), ...token('/')], 1, 0, 2),
+    ]),
+    at(7, [arg(ref('H', 1001), 0, 4), arg(token('B', 0))]),
+    // Int mode reads the float element through FISTP.
+    at(7, [arg(ref('H', 1002), 0, 1), arg(ref('H', 1001))]),
+    // '%' drops its operand in float mode.
+    at(7, [arg(ref('H', 1003)), arg([...token('B', 7), ...token('B', 2), ...token('%')])]),
+    at(1, [arg([...ref('H', 1001), ...double(5), ...token('>')], 0, 0, 2), jump(0), jump(8)]),
+    at(7, [arg(ref('H', 1004)), arg(token('B', 1))]),
+    at(4),
+    at(14, [arg(ref('H', 1005)), arg(token('B', 3), 1)]),
+    at(13, [arg([...ref('H', 1001), ...token('B', 2), ...token('*')], 16)], 0x4000),
+  ];
+  const variables = new YurisVariables(1005);
+  variables.allocateFloat(1001, 0);
+  variables.allocateInt(1002, 0n);
+  variables.allocateFloat(1003, 0);
+  variables.allocateInt(1004, 0n);
+  variables.allocateInt(1005, 9n);
+  const task = new YurisTask();
+  task.gosubDepth = 1;
+  task.frameAt(0).returnPosition = 42;
+  const compiled = compileRegion(
+    {
+      instructions,
+      variables,
+      system: {},
+      commands,
+      script: 0,
+      lines: instructions.map((_, i) => i + 100),
+      hooks: {
+        enter: (script, position) => (task.position = position),
+        scanned: () => false,
+        forget: () => {},
+        called: () => {},
+      },
+      argKind: (command, id) => (command === 13 && id === 16 ? 2 : 0),
+      gosubTarget: () => null,
+      eligible: () => true,
+    },
+    0,
+    instructions.length - 1,
+  );
+  assert.equal(compiled.last, instructions.length - 1);
+  assert.equal(compiled.region(task, 0), 42);
+  assert.equal(variables.get(1001).floats[0], 5.25);
+  assert.equal(variables.get(1002).ints[0], 8n);
+  assert.equal(variables.get(1003).floats[0], 7);
+  assert.equal(variables.get(1004).ints[0], 1n);
+  assert.deepEqual([variables.get(1005).type, variables.get(1005).floats[0]], [2, 3]);
+  assert.deepEqual(
+    [task.gosubDepth, task.frames[0].floats[1][1], task.frames[0].flags[4][1]],
+    [0, 10.5, 1],
+  );
 });

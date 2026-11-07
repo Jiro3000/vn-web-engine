@@ -79,8 +79,24 @@ export const enum LookupMode {
 
 const NON_ASCII = /[^\x00-\x7f]/;
 
+interface Components {
+  readonly dirs: readonly ByteString[];
+  readonly last: ByteString;
+}
+/** Split paths by text; scripts address the same few hundred node paths every frame. */
+const splitPaths = new Map<ByteString, Components>();
+
 /** Splits at '/', stepping over double-byte characters (lead byte table 0x59B0C0). */
-function components(path: ByteString): {dirs: ByteString[]; last: ByteString} {
+function components(path: ByteString): Components {
+  let split = splitPaths.get(path);
+  if (!split) {
+    if (splitPaths.size >= 4096) splitPaths.clear();
+    splitPaths.set(path, (split = splitComponents(path)));
+  }
+  return split;
+}
+
+function splitComponents(path: ByteString): Components {
   if (!path.includes('/')) return {dirs: [], last: path};
   if (!NON_ASCII.test(path)) {
     const dirs = path.split('/');

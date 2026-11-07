@@ -18,6 +18,7 @@ export interface RegionCommands {
   readonly ifBlend: number;
   readonly ifEnd: number;
   readonly int: number;
+  readonly flt: number;
   readonly str: number;
   readonly let: number;
   readonly loop: number;
@@ -86,7 +87,8 @@ const PURE_STRINGS = new Set([
 const REFERENCE_ARRAYS = new Set([0x32, 0x33, 0x34, 0x46]);
 
 interface Item {
-  readonly kind: 'int' | 'str';
+  /** An int64 (bigint), a string, or a double of a float mode outside indexes. */
+  readonly kind: 'int' | 'str' | 'num';
   readonly code: string;
   /** The value of an int literal. */
   readonly literal?: bigint;
@@ -116,13 +118,15 @@ class Emitter {
 
 /**
  * Compiles the expression evaluator 0x420ACC for one expression in int mode (mode 1, the
- * int64 result) or string mode (mode 3), with the variable types as they are now as guards.
- * Null when the expression uses an operator or a value the compiled form does not cover;
- * those expressions stay with the interpreter. Evaluation has no effect besides its result.
+ * int64 result), float mode (mode 2, the double result) or string mode (mode 3), with the
+ * variable types as they are now as guards. Float mode keeps numbers outside array indexes
+ * as doubles (0x420FB2); index expressions use the int stacks. Null when the expression uses
+ * an operator or a value the compiled form does not cover; those expressions stay with the
+ * interpreter. Evaluation has no effect besides its result.
  */
 function compileExpression(
   bytes: Uint8Array,
-  mode: 'int' | 'str',
+  mode: 'int' | 'str' | 'float',
   source: RegionSource,
   out: Emitter,
   avoid = -1,
@@ -134,6 +138,8 @@ function compileExpression(
   const frames: {id: number; base: number}[] = [];
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const entries = source.variables.entries;
+  const floating = () => mode === 'float' && frames.length === 0;
+  const number = (value: bigint): Item => (floating() ? double(Number(value)) : literal(value));
   for (let p = 0; p < bytes.length;) {
     const op = bytes[p]!,
       length = bytes[p + 1]! | (bytes[p + 2]! << 8),
@@ -148,27 +154,32 @@ function compileExpression(
     };
     const ints = (pair: [Item, Item] | null): pair is [Item, Item] =>
       pair !== null && pair[0].kind === 'int' && pair[1].kind === 'int';
+    const nums = (pair: [Item, Item] | null): [Item, Item] | null =>
+      pair !== null && pair[0].kind === 'num' && pair[1].kind === 'num' ? pair : null;
     switch (op) {
       case 0x42: // B
         if (length < 1) return null;
-        stack.push(literal(BigInt((bytes[at]! << 24) >> 24)));
+        stack.push(number(BigInt((bytes[at]! << 24) >> 24)));
         break;
       case 0x57: // W
         if (length < 2) return null;
-        stack.push(literal(BigInt(view.getInt16(at, true))));
+        stack.push(number(BigInt(view.getInt16(at, true))));
         break;
       case 0x49: // I
         if (length < 4) return null;
-        stack.push(literal(BigInt(view.getInt32(at, true))));
+        stack.push(number(BigInt(view.getInt32(at, true))));
         break;
       case 0x4c: // L
         if (length < 8) return null;
-        stack.push(literal(view.getBigInt64(at, true)));
+        stack.push(number(view.getBigInt64(at, true)));
         break;
-      case 0x46: // F: rounded by FISTP on the int stacks
+      case 0x46: {
+        // F (0x422008): rounded by FISTP on the int stacks
         if (length < 8) return null;
-        stack.push(literal(fistp(view.getFloat64(at, true))));
+        const value = view.getFloat64(at, true);
+        stack.push(floating() ? double(value) : literal(fistp(value)));
         break;
+      }
       case 0x4d: // M
         stack.push({kind: 'str', code: JSON.stringify(decodeLiteral(bytes, at, length))});
         break;
@@ -177,7 +188,7 @@ function compileExpression(
         if (length !== 3) return null;
         const id = variableId(bytes, at);
         if (id < 0 || id === avoid) return null;
-        const item = read(id, null);
+        const item = read(id, null, floating());
         if (!item) return null;
         stack.push(item);
         break;
@@ -204,7 +215,7 @@ function compileExpression(
           stack.push(literal(0n));
           break;
         }
-        const item = read(frame.id, flat);
+        const item = read(frame.id, flat, floating());
         if (!item) return null;
         stack.push(item);
         break;
@@ -214,9 +225,11 @@ function compileExpression(
       case 0x52: {
         // R
         const top = stack.at(-1);
-        if (!top || top.kind !== 'int' || stack.length <= (frames.at(-1)?.base ?? 0)) return null;
+        if (!top || top.kind === 'str' || stack.length <= (frames.at(-1)?.base ?? 0)) return null;
         stack.pop();
-        stack.push(int(`BigInt.asIntN(64, -(${top.code}))`));
+        stack.push(
+          top.kind === 'num' ? num(`-(${top.code})`) : int(`BigInt.asIntN(64, -(${top.code}))`),
+        );
         break;
       }
       case 0x73: {
@@ -234,6 +247,7 @@ function compileExpression(
         const [l, r] = pair;
         if (l.kind === 'int' && r.kind === 'int')
           stack.push(int(`BigInt.asIntN(64, ${l.code} + ${r.code})`));
+        else if (l.kind === 'num' && r.kind === 'num') stack.push(num(`${l.code} + ${r.code}`));
         else if (l.kind === 'str' && r.kind === 'str') {
           const a = out.value(l.code),
             b = out.value(r.code);
@@ -250,6 +264,12 @@ function compileExpression(
         const pair = binary();
         if (!pair || pair[0].kind !== pair[1].kind) return null;
         const test = op === 0x3d ? '===' : '!==';
+        if (pair[0].kind === 'num') {
+          stack.push(num(`${pair[0].code} ${test} ${pair[1].code} ? 1 : 0`));
+          break;
+        }
+        // A string comparison leaves its result on the int stacks only.
+        if (floating()) return null;
         stack.push(int(`${pair[0].code} ${test} ${pair[1].code} ? 1n : 0n`));
         break;
       }
@@ -259,8 +279,13 @@ function compileExpression(
       case 0x53: {
         // S (<=)
         const pair = binary();
-        if (!ints(pair)) return null;
         const test = op === 0x3c ? '<' : op === 0x3e ? '>' : op === 0x5a ? '>=' : '<=';
+        const real = nums(pair);
+        if (real) {
+          stack.push(num(`${real[0].code} ${test} ${real[1].code} ? 1 : 0`));
+          break;
+        }
+        if (!ints(pair)) return null;
         stack.push(int(`${pair[0].code} ${test} ${pair[1].code} ? 1n : 0n`));
         break;
       }
@@ -268,6 +293,11 @@ function compileExpression(
       case 0x2a: {
         // *
         const pair = binary();
+        const real = nums(pair);
+        if (real) {
+          stack.push(num(`${real[0].code} ${op === 0x2d ? '-' : '*'} ${real[1].code}`));
+          break;
+        }
         if (!ints(pair)) return null;
         stack.push(
           int(`BigInt.asIntN(64, ${pair[0].code} ${op === 0x2d ? '-' : '*'} ${pair[1].code})`),
@@ -278,6 +308,16 @@ function compileExpression(
       case 0x25: {
         // %
         const pair = binary();
+        const real = nums(pair);
+        if (real) {
+          // '%' drops the operand in a float mode.
+          if (op === 0x25) stack.push(real[0]);
+          else {
+            const b = out.value(real[1].code);
+            stack.push(num(`${b} === 0 ? 0 : ${real[0].code} / ${b}`));
+          }
+          break;
+        }
         if (!ints(pair)) return null;
         const b = out.value(pair[1].code);
         const sign = op === 0x2f ? '/' : '%';
@@ -289,6 +329,12 @@ function compileExpression(
       case 0x5e: {
         // ^
         const pair = binary();
+        const real = nums(pair);
+        if (real) {
+          // Int64 only: a float mode drops the operand.
+          stack.push(real[0]);
+          break;
+        }
         if (!ints(pair)) return null;
         const sign = op === 0x41 ? '&' : op === 0x4f ? '|' : '^';
         stack.push(int(`${pair[0].code} ${sign} ${pair[1].code}`));
@@ -298,10 +344,17 @@ function compileExpression(
       case 0x7c: {
         // |
         const pair = binary();
+        const join = op === 0x26 ? '&&' : '||';
+        const real = nums(pair);
+        if (real) {
+          const a = out.value(real[0].code),
+            b = out.value(real[1].code);
+          stack.push(num(`${a} !== 0 ${join} ${b} !== 0 ? 1 : 0`));
+          break;
+        }
         if (!ints(pair)) return null;
         const a = out.value(pair[0].code),
           b = out.value(pair[1].code);
-        const join = op === 0x26 ? '&&' : '||';
         stack.push(int(`${a} !== 0n ${join} ${b} !== 0n ? 1n : 0n`));
         break;
       }
@@ -312,6 +365,8 @@ function compileExpression(
   if (frames.length || stack.length === 0) return null;
   if (target >= 0) return stack.length === 1 ? element : null;
   const result = stack[0]!;
+  // A string result leaves the double stack as it was.
+  if (mode === 'float') return result.kind === 'num' ? result.code : null;
   if (mode === 'int') return result.kind === 'int' ? result.code : '0n';
   if (result.kind === 'int') return "''";
   const text = out.value(result.code);
@@ -322,6 +377,12 @@ function compileExpression(
   }
   function int(code: string): Item {
     return {kind: 'int', code: out.value(code)};
+  }
+  function num(code: string): Item {
+    return {kind: 'num', code: out.value(code)};
+  }
+  function double(value: number): Item {
+    return {kind: 'num', code: Object.is(value, -0) ? '(-0)' : `(${value})`};
   }
 
   /**
@@ -347,8 +408,11 @@ function compileExpression(
     return indexes.length === 1 ? element : out.value(element);
   }
 
-  /** 0x420EC4 / 0x42158E: an element read (`element` null for a scalar read of element 0). */
-  function read(id: number, element: string | null): Item | null {
+  /**
+   * 0x420EC4 / 0x42158E (0x420FB2 as a double when `real`): an element read (`element` null
+   * for a scalar read of element 0). Float elements round by FISTP on the int stacks.
+   */
+  function read(id: number, element: string | null, real: boolean): Item | null {
     const variable = entries[id];
     if (!variable) return null;
     const v = out.ref(id);
@@ -356,7 +420,12 @@ function compileExpression(
     if (id >= SYSTEM_VARIABLE_LIMIT) {
       if (variable.type === YurisType.Int) {
         out.guard(`${v}.type !== ${YurisType.Int}`);
+        if (real) return num(`Number(${v}.ints[${index}] ?? 0n)`);
         return {kind: 'int', code: out.value(`${v}.ints[${index}] ?? 0n`)};
+      }
+      if (variable.type === YurisType.Float) {
+        out.guard(`${v}.type !== ${YurisType.Float}`);
+        return real ? num(`${v}.floats[${index}] ?? 0`) : int(`F(${v}.floats[${index}] ?? 0)`);
       }
       if (variable.type === YurisType.String) {
         out.guard(`${v}.type !== ${YurisType.String}`);
@@ -369,12 +438,11 @@ function compileExpression(
     }
     if (variable.type === YurisType.Int && PURE_INTS.has(id)) {
       out.guard(`${v}.type !== ${YurisType.Int}`);
-      if (id === 0x30 && element === null)
-        return {
-          kind: 'int',
-          code: out.value('task.loopDepth === 0 ? 0n : task.loops[task.loopDepth - 1].counter'),
-        };
-      return {kind: 'int', code: out.value(`S.int(${id}, ${index}, 0)`)};
+      const code =
+        id === 0x30 && element === null
+          ? 'task.loopDepth === 0 ? 0n : task.loops[task.loopDepth - 1].counter'
+          : `S.int(${id}, ${index}, 0)`;
+      return real ? num(`Number(${code})`) : int(code);
     }
     if (variable.type === YurisType.String && PURE_STRINGS.has(id)) {
       out.guard(`${v}.type !== ${YurisType.String}`);
@@ -413,12 +481,32 @@ function compileInstruction(
     args = instruction.args,
     entries = source.variables.entries;
   out.bail = `return ${position};`;
+  /** The integer evaluators by argument type (table 0x872654): float types round by FISTP. */
+  const integer = (arg: YurisArgument, avoid = -1): string | null => {
+    if (!arg.expression) return null;
+    if (!isFloat(arg)) return compileExpression(arg.expression, 'int', source, out, avoid);
+    const value = compileExpression(arg.expression, 'float', source, out, avoid);
+    return value === null ? null : out.value(`F(${value})`);
+  };
+  /** The float evaluators by argument type (table 0x872668). */
+  const real = (arg: YurisArgument, avoid = -1): string | null => {
+    if (!arg.expression) return null;
+    const value = compileExpression(
+      arg.expression,
+      isFloat(arg) ? 'float' : 'int',
+      source,
+      out,
+      avoid,
+    );
+    if (value === null) return null;
+    return isFloat(arg) ? value : out.value(`Number(${value})`);
+  };
   switch (instruction.command) {
     case c.if: {
       // 0x4435B0: the entry is pushed before the condition runs; a full stack is error 0x18CE0.
       const [condition, next, end] = args;
-      if (args.length !== 3 || !condition!.expression || isFloat(condition!)) return false;
-      const value = compileExpression(condition!.expression, 'int', source, out);
+      if (args.length !== 3) return false;
+      const value = integer(condition!);
       if (value === null) return false;
       const test = out.value(value);
       out.lines.push(
@@ -437,8 +525,8 @@ function compileInstruction(
       if (args.length === 0) return true;
       // The handler reads the condition and the jump; a third argument is unused.
       const [condition, next] = args;
-      if (args.length < 2 || !condition!.expression || isFloat(condition!)) return false;
-      const value = compileExpression(condition!.expression, 'int', source, out);
+      if (args.length < 2) return false;
+      const value = integer(condition!);
       if (value === null) return false;
       const target = next!.size !== 0 ? String(next!.size) : 'task.ifs[task.ifDepth - 1].end';
       out.lines.push(`if (${value} === 0n) { pc = ${target}; continue; }`);
@@ -455,34 +543,40 @@ function compileInstruction(
       out.lines.push('task.ifs[--task.ifDepth].end = 0;');
       return true;
     case c.int:
+    case c.flt:
     case c.str: {
-      // INT/STR 0x469CE0 with a scalar target: the target's dimensions clear, then the value
-      // (0 / '' without one) re-creates the variable (0x46A558 / 0x46A2E0).
+      // INT 0x4438FC / FLT 0x4415C0 / STR 0x44FBC8 with a scalar target: the target's
+      // dimensions clear, then the value (0 / 0.0 / '' without one) re-creates the variable
+      // (0x46A558 / 0x46A2E0).
       const [target, value] = args;
       const id = scalarTarget(target);
       if (id < SYSTEM_VARIABLE_LIMIT || !entries[id] || args.length > 2) return false;
-      const string = instruction.command === c.str;
-      let code = string ? "''" : '0n';
+      const command = instruction.command;
+      let code = command === c.str ? "''" : command === c.flt ? '0' : '0n';
       if (value) {
-        if (!value.expression || (!string && isFloat(value))) return false;
-        const compiled = compileExpression(
-          value.expression,
-          string ? 'str' : 'int',
-          source,
-          out,
-          id,
-        );
+        if (!value.expression) return false;
+        const compiled =
+          command === c.int
+            ? integer(value, id)
+            : command === c.flt
+              ? real(value, id)
+              : compileExpression(value.expression, 'str', source, out, id);
         if (compiled === null) return false;
-        code = string ? `${out.value(compiled)}.slice(0, ${STRING_CAPACITY - 1})` : compiled;
+        code =
+          command === c.str ? `${out.value(compiled)}.slice(0, ${STRING_CAPACITY - 1})` : compiled;
       }
       const v = out.ref(id),
         result = out.value(code);
-      const type = string ? YurisType.String : YurisType.Int,
-        array = string ? 'strings' : 'ints';
+      const [type, array, allocate] =
+        command === c.str
+          ? [YurisType.String, 'strings', 'allocateString']
+          : command === c.flt
+            ? [YurisType.Float, 'floats', 'allocateFloat']
+            : [YurisType.Int, 'ints', 'allocateInt'];
       out.lines.push(
         `if (${v}.dimensions.length !== 0) ${v}.dimensions = [];`,
         `if (${v}.type === ${type} && ${v}.${array}.length === 1) { ${v}.count = 1; ${v}.${array}[0] = ${result}; }`,
-        `else A.${string ? 'allocateString' : 'allocateInt'}(${id}, ${result});`,
+        `else A.${allocate}(${id}, ${result});`,
       );
       return true;
     }
@@ -503,20 +597,32 @@ function compileInstruction(
         element = flat;
       }
       const variable = entries[id];
-      if (id < SYSTEM_VARIABLE_LIMIT || !variable || isFloat(value!)) return false;
+      if (id < SYSTEM_VARIABLE_LIMIT || !variable) return false;
       const v = out.ref(id),
         op = target!.op;
       if (variable.type === YurisType.Int) {
         const update = INT_OPS[op];
         if (update === undefined) return false;
         out.guard(`${v}.type !== ${YurisType.Int} || ${element} >= ${v}.count`);
-        const compiled = compileExpression(value!.expression, 'int', source, out);
+        const compiled = integer(value!);
         if (compiled === null) return false;
         const result = out.value(compiled);
         out.lines.push(`${v}.ints[${element}] = ${update(`${v}.ints[${element}]`, result)};`);
         return true;
       }
-      if (variable.type === YurisType.String && (op === 0 || op === 1)) {
+      if (variable.type === YurisType.Float) {
+        // Element assignments evaluate in float mode whatever the argument type (0x87267C).
+        const update = FLOAT_OPS[op];
+        if (update === undefined) return false;
+        out.guard(`${v}.type !== ${YurisType.Float} || ${element} >= ${v}.count`);
+        const compiled = compileExpression(value!.expression, 'float', source, out);
+        if (compiled === null) return false;
+        const result = out.value(compiled);
+        out.lines.push(update(`${v}.floats[${element}]`, result));
+        return true;
+      }
+      // Type 4 sources evaluate through the float string evaluator 0x420BA8.
+      if (variable.type === YurisType.String && (op === 0 || op === 1) && !isFloat(value!)) {
         out.guard(`${v}.type !== ${YurisType.String} || ${element} >= ${v}.count`);
         const compiled = compileExpression(value!.expression, 'str', source, out);
         if (compiled === null) return false;
@@ -536,11 +642,11 @@ function compileInstruction(
       // LOOP 0x445DC4. Counts the interpreter batches (0, -1, 16 and more, the 5-instruction
       // character search) stay with it.
       const [count, end] = args;
-      if (args.length !== 2 || !count!.expression || isFloat(count!)) return false;
+      if (args.length !== 2) return false;
       // The decoder's own evaluation of either argument has no effect besides its result.
       if (source.argKind(c.loop, count!.id) < 0 || source.argKind(c.loop, end!.id) < 0)
         return false;
-      const value = compileExpression(count!.expression, 'int', source, out);
+      const value = integer(count!);
       if (value === null) return false;
       const limit = out.value(value);
       const start = position + 1;
@@ -576,8 +682,7 @@ function compileInstruction(
       let levels = '1n';
       if (args.length === 1) {
         if (source.argKind(instruction.command, 0) !== 0) return false;
-        if (!args[0]!.expression || isFloat(args[0]!)) return false;
-        const value = compileExpression(args[0]!.expression, 'int', source, out);
+        const value = integer(args[0]!);
         if (value === null) return false;
         levels = out.value(value);
       }
@@ -609,7 +714,8 @@ function compileInstruction(
         floats = (((extra & 7) * 4 + (extra >> 14)) << 24) >> 24,
         strings = (extra >> 9) & 0x1f;
       const ids = new Set(args.map((arg) => arg.id));
-      for (let i = 1; i <= floats; i++) if (ids.has(16 + i)) return false;
+      const reals = parameters(floats, 16);
+      if (!reals) return false;
       out.guard('task.gosubDepth === 0x3f');
       out.lines.push(
         'const d = task.gosubDepth;',
@@ -622,7 +728,9 @@ function compileInstruction(
             `callee.ints[0][${i}] = ${values.get(i) ?? '0n'}; callee.flags[0][${i}] = ${values.has(i) ? 1 : 0};`,
           );
         for (let i = 1; i <= floats; i++)
-          out.lines.push(`callee.floats[0][${i}] = 0; callee.flags[1][${i}] = 0;`);
+          out.lines.push(
+            `callee.floats[0][${i}] = ${reals.get(i) ?? '0'}; callee.flags[1][${i}] = ${reals.has(i) ? 1 : 0};`,
+          );
         for (let i = 1; i <= strings; i++)
           out.lines.push(
             `callee.strings[0][${i}] = ${values.get(32 + i) ?? `callee.strings[0][${i}] === null ? null : ''`}; callee.flags[2][${i}] = ${values.has(32 + i) ? 1 : 0};`,
@@ -647,7 +755,8 @@ function compileInstruction(
       const ints = (extra & 0xff) >> 3,
         floats = (((extra & 7) * 4 + (extra >> 14)) << 24) >> 24,
         strings = (extra >> 9) & 0x1f;
-      for (let i = 1; i <= floats; i++) if (args.some((arg) => arg.id === 15 + i)) return false;
+      const reals = parameters(floats, 15);
+      if (!reals) return false;
       out.guard('task.gosubDepth === 0');
       out.lines.push(
         'const d = task.gosubDepth;',
@@ -660,7 +769,9 @@ function compileInstruction(
             `caller.ints[1][${i}] = ${values.get(i - 1) ?? '0n'}; caller.flags[3][${i}] = ${values.has(i - 1) ? 1 : 0};`,
           );
         for (let i = 1; i <= floats; i++)
-          out.lines.push(`caller.floats[1][${i}] = 0; caller.flags[4][${i}] = 0;`);
+          out.lines.push(
+            `caller.floats[1][${i}] = ${reals.get(i) ?? '0'}; caller.flags[4][${i}] = ${reals.has(i) ? 1 : 0};`,
+          );
         for (let i = 1; i <= strings; i++)
           out.lines.push(
             `caller.strings[1][${i}] = ${values.get(31 + i) ?? `caller.strings[1][${i}] === null ? null : ''`}; caller.flags[5][${i}] = ${values.has(31 + i) ? 1 : 0};`,
@@ -686,10 +797,29 @@ function compileInstruction(
       const kind = source.argKind(instruction.command, arg.id);
       if (kind < 0) return null;
       if (kind !== 0 && kind !== 1) continue;
-      if (!arg.expression || (kind === 0 && isFloat(arg))) return null;
-      const value = compileExpression(arg.expression, kind === 0 ? 'int' : 'str', source, out);
+      if (!arg.expression) return null;
+      const value =
+        kind === 0 ? integer(arg) : compileExpression(arg.expression, 'str', source, out);
       if (value === null) return null;
       values.set(arg.id, out.value(value));
+    }
+    return values;
+  }
+
+  /**
+   * PFLT (ids 17..) / RFLT (ids 16..) of GOSUB and RETURN: float mode whatever the type
+   * (0x420C8C) on the expression the decoder kept, keyed by parameter number; null when one
+   * does not compile or its argument is not a kept expression.
+   */
+  function parameters(count: number, base: number): Map<number, string> | null {
+    const values = new Map<number, string>();
+    for (let i = 1; i <= count; i++) {
+      const arg = args.find((a) => a.id === base + i);
+      if (!arg) continue;
+      if (source.argKind(instruction.command, arg.id) !== 2 || !arg.expression) return null;
+      const value = compileExpression(arg.expression, 'float', source, out);
+      if (value === null) return null;
+      values.set(i, out.value(value));
     }
     return values;
   }
@@ -706,6 +836,24 @@ const INT_OPS: readonly ((current: string, value: string) => string)[] = [
   (current, value) => `${current} & ${value}`,
   (current, value) => `${current} | ${value}`,
   (current, value) => `${current} ^ ${value}`,
+];
+
+/**
+ * Float element assignments of LET (0x443BCC with the float operator table): `=`, `+=`, `-=`,
+ * `*=` and `/=` on doubles (division by zero leaves the element), `%=` and the bitwise
+ * operators on the FISTP-rounded values.
+ */
+const FLOAT_OPS: readonly ((current: string, value: string) => string)[] = [
+  (current, value) => `${current} = ${value};`,
+  (current, value) => `${current} = ${current} + ${value};`,
+  (current, value) => `${current} = ${current} - ${value};`,
+  (current, value) => `${current} = ${current} * ${value};`,
+  (current, value) => `if (${value} !== 0) ${current} = ${current} / ${value};`,
+  (current, value) =>
+    `if (${value} !== 0) ${current} = Number(BigInt.asIntN(64, F(${current}) % (F(${value}) || 1n)));`,
+  (current, value) => `${current} = Number(F(${current}) & F(${value}));`,
+  (current, value) => `${current} = Number(F(${current}) | F(${value}));`,
+  (current, value) => `${current} = Number(F(${current}) ^ F(${value}));`,
 ];
 
 /**
@@ -755,14 +903,15 @@ export function compileRegion(
     '};',
   ].join('\n');
   // eslint-disable-next-line @typescript-eslint/no-implied-eval
-  const factory = new Function('V', 'S', 'A', 'H', body) as (
+  const factory = new Function('V', 'S', 'A', 'H', 'F', body) as (
     v: YurisVariables['entries'],
     s: YurisSystemValues,
     a: YurisVariables,
     h: RegionHooks,
+    f: typeof fistp,
   ) => CompiledRegion;
   return {
-    region: factory(source.variables.entries, source.system, source.variables, source.hooks),
+    region: factory(source.variables.entries, source.system, source.variables, source.hooks, fistp),
     last: end,
   };
 }
