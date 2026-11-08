@@ -600,9 +600,14 @@ export class YurisBrowserPlayer {
     }
     // The movie inflates while the dialogue is read; the loader claims the partial stream.
     const bytes = this.files.readProgressive(path);
-    bytes.catch(() => {
-      // A failed read reaches the loader that claims it, which raises the native error.
-    });
+    bytes.then(
+      (source) => {
+        if (/\.ymv$/i.test(path)) this.ymvDecoder.prepare(source);
+      },
+      () => {
+        // A failed read reaches the loader that claims it, which raises the native error.
+      },
+    );
     this.progressiveArchiveFiles.set(path, {bytes, size: ref.entry.size});
     this.progressiveArchiveBytes += ref.entry.size;
   }

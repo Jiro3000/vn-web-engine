@@ -1,4 +1,5 @@
-import type {Ymv} from '../../../formats/yuris/ymv.js';
+import {Ymv} from '../../../formats/yuris/ymv.js';
+import type {ProgressiveBytes} from '../../../formats/zlib.js';
 import {WorkerPool} from '../../../platform/worker-pool.js';
 import type {YurisImage} from '../vm/cg.js';
 import type {YmvJpegs} from './ymv-decode-worker.js';
@@ -10,14 +11,35 @@ export class BrowserYmvDecoder {
   private readonly pool = new WorkerPool<YmvJpegs, YurisImage>(
     () => new Worker(new URL('./ymv-decode-worker.js', import.meta.url), {type: 'module'}),
   );
-  private readonly prepared = new WeakMap<Ymv, Map<number, Promise<YurisImage | undefined>>>();
+  /** Decoded frames by the file bytes they come from, so a movie read ahead can use them. */
+  private readonly prepared = new WeakMap<
+    Uint8Array,
+    Map<number, Promise<YurisImage | undefined>>
+  >();
   private preparing = 0;
+
+  /**
+   * Decodes the first frame of a movie file that is being read ahead, for the YMV command
+   * that later opens the same read.
+   */
+  prepare(source: ProgressiveBytes): void {
+    if (!this.pool.available || this.preparing >= this.pool.size || this.prepared.has(source.bytes))
+      return;
+    const frames = new Map<number, Promise<YurisImage | undefined>>();
+    this.prepared.set(source.bytes, frames);
+    this.preparing++;
+    const first = Ymv.open(source)
+      .then((movie) => (movie.count ? this.submit(movie, 0) : undefined))
+      .catch(() => undefined)
+      .finally(() => this.preparing--);
+    frames.set(0, first);
+  }
 
   async decode(movie: Ymv, requested: number): Promise<YurisImage | undefined> {
     if (!this.pool.available || !movie.count) return undefined;
     const index = Math.max(0, Math.min(movie.count - 1, requested));
-    let frames = this.prepared.get(movie);
-    if (!frames) this.prepared.set(movie, (frames = new Map()));
+    let frames = this.prepared.get(movie.data);
+    if (!frames) this.prepared.set(movie.data, (frames = new Map()));
     // A consumed frame belongs to the CG and may be modified by later CGACT commands.
     const current = frames.get(index) ?? this.submit(movie, index);
     frames.delete(index);

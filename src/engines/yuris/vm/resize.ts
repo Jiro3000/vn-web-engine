@@ -159,6 +159,15 @@ export function sizeNearest(
     const count = right - left,
       taps = new Int32Array(count);
     for (let x = 0; x < count; x++) taps[x] = columns[left + x]! + x0;
+    // Consecutive taps that read consecutive source pixels form runs; a scale close to 1
+    // has few, long runs, which copy as blocks.
+    let runs = 1;
+    for (let x = 1; x < count; x++) if (taps[x] !== taps[x - 1]! + 1) runs++;
+    const starts = runs * 16 <= count ? new Int32Array(runs + 1) : null;
+    if (starts) {
+      for (let x = 1, r = 1; x < count; x++) if (taps[x] !== taps[x - 1]! + 1) starts[r++] = x;
+      starts[runs] = count;
+    }
     let previous = -1;
     for (let y = top; y < bottom; y++) {
       const line = lines[y]! + y0,
@@ -169,7 +178,14 @@ export function sizeNearest(
       }
       previous = line;
       const row = line * stride;
-      for (let x = 0; x < count; x++) out[o + x] = from[row + taps[x]!]!;
+      if (starts) {
+        for (let r = 0; r < runs; r++) {
+          const a = starts[r]!,
+            b = starts[r + 1]!,
+            from0 = row + taps[a]!;
+          out.set(from.subarray(from0, from0 + b - a), o + a);
+        }
+      } else for (let x = 0; x < count; x++) out[o + x] = from[row + taps[x]!]!;
     }
     return;
   }

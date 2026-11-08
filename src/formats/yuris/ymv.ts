@@ -16,7 +16,8 @@ export class Ymv {
    * written, and frames are read only after `ready`.
    */
   constructor(
-    private readonly data: Uint8Array,
+    /** The whole file, shared by every movie opened from the same read. */
+    readonly data: Uint8Array,
     private readonly until?: (end: number) => Promise<void>,
   ) {
     const v = new ByteView(data, {littleEndian: true});

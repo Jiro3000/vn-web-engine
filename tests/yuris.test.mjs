@@ -2931,6 +2931,11 @@ test('YU-RIS nearest SIZE samples the 16.16 column and row steps and clears outs
     [16, 9, 16, 30, 0, 0, 15, 8],
     [16, 9, 33, 20, -3, -2, 19, 11],
     [5, 4, 9, 9, 0, 0, 4, 3],
+    // Scales close to 1 copy runs of consecutive taps.
+    [96, 20, 97, 21, 0, 0, 95, 19],
+    [96, 20, 95, 20, 0, 0, 95, 19],
+    [96, 20, 100, 22, -2, -1, 95, 19],
+    [96, 20, 64, 12, 30, 6, 93, 17],
   ]) {
     const src = new Uint8Array(stride * rows * 4).map(() => random());
     const out = new Uint8Array(width * height * 4).fill(7);
@@ -3147,13 +3152,34 @@ test('YU-RIS compiled VARINFO LENGTH and SJISCODE match the command on CP932 tex
   });
   const VARINFO = 0x67;
   const commands = {
-    if: 1, else: 2, ifBlend: 3, ifEnd: 4, int: 5, flt: 14, str: 6, let: 7, loop: 8,
-    loopEnd: 9, loopBreak: 10, loopContinue: 11, gosub: 12, return: 13, varInfo: VARINFO,
+    if: 1,
+    else: 2,
+    ifBlend: 3,
+    ifEnd: 4,
+    int: 5,
+    flt: 14,
+    str: 6,
+    let: 7,
+    loop: 8,
+    loopEnd: 9,
+    loopBreak: 10,
+    loopContinue: 11,
+    gosub: 12,
+    return: 13,
+    varInfo: VARINFO,
   };
   // VARINFO SJISCODE=1 SET=H$1001 LET=H@1002, then VARINFO LENGTH=1 SET=H$1001 LET=H@1003.
   const instructions = [
-    {command: VARINFO, extra: 0, args: [arg(16, token('B', 1)), arg(0, ref('H', 1001), 3), arg(1, ref('H', 1002))]},
-    {command: VARINFO, extra: 0, args: [arg(13, token('B', 1)), arg(0, ref('H', 1001), 3), arg(1, ref('H', 1003))]},
+    {
+      command: VARINFO,
+      extra: 0,
+      args: [arg(16, token('B', 1)), arg(0, ref('H', 1001), 3), arg(1, ref('H', 1002))],
+    },
+    {
+      command: VARINFO,
+      extra: 0,
+      args: [arg(13, token('B', 1)), arg(0, ref('H', 1001), 3), arg(1, ref('H', 1003))],
+    },
   ];
   const kinds = {0: 1, 1: 0, 13: 0, 16: 0};
   const run = (text, setType = 'string') => {
@@ -3163,9 +3189,15 @@ test('YU-RIS compiled VARINFO LENGTH and SJISCODE match the command on CP932 tex
     variables.allocateInt(1003, -1n);
     const compiled = compileRegion(
       {
-        instructions, variables, system: {}, commands, script: 0, lines: [],
+        instructions,
+        variables,
+        system: {},
+        commands,
+        script: 0,
+        lines: [],
         hooks: {characters: (t) => characterOffsets({}, t).count},
-        eligible: () => true, argKind: (_, id) => kinds[id] ?? 3,
+        eligible: () => true,
+        argKind: (_, id) => kinds[id] ?? 3,
       },
       0,
       1,
@@ -3173,11 +3205,19 @@ test('YU-RIS compiled VARINFO LENGTH and SJISCODE match the command on CP932 tex
     assert.equal(compiled.last, 1);
     if (setType !== 'string') variables.allocateInt(1001, 5n);
     const task = new YurisTask();
-    return {next: compiled.region(task, 0), code: variables.get(1002).ints[0], length: variables.get(1003).ints[0]};
+    return {
+      next: compiled.region(task, 0),
+      code: variables.get(1002).ints[0],
+      length: variables.get(1003).ints[0],
+    };
   };
   for (const text of ['abc', '\x82\xa0x\x88\x9f', '\x81', '', 'k\x82\xa0']) {
     const result = run(text);
-    assert.deepEqual(result, {next: 2, code: BigInt(sjisCode(text)), length: BigInt(characterOffsets({}, text).count)});
+    assert.deepEqual(result, {
+      next: 2,
+      code: BigInt(sjisCode(text)),
+      length: BigInt(characterOffsets({}, text).count),
+    });
   }
   // A SET that is no longer a string returns to the interpreter before the first VARINFO.
   assert.deepEqual(run('ab', 'int'), {next: 0, code: -1n, length: -1n});
