@@ -8,6 +8,7 @@ import {
   backgroundImageDecodes,
   decodeImageOffThread,
   decodeImageStripOffThread,
+  decodeYdgOffThread,
 } from './image-decode-offload.js';
 import type {WorkerPoolLane} from '../platform/worker-pool.js';
 import {swapRedBlueInPlace} from './pixel-order.js';
@@ -47,6 +48,23 @@ interface CachedImage {
   encoded: Uint8Array;
   image: DecodedImage | {width: number; height: number; word: number};
   size: number;
+  /** A preload whose pixels the first foreground load takes without a copy. */
+  handOff?: boolean;
+  /** The pixels were handed to a foreground load; the entry no longer holds a decode. */
+  consumed?: boolean;
+}
+
+/** Options of `LegacyImageCodec.preload`. */
+export interface ImagePreloadOptions {
+  /**
+   * The first foreground load of the decode receives its pixels without a copy and the caches
+   * drop it; a later load decodes again. The decode runs as an ordinary worker job rather than
+   * a speculative one. For files read once in a row within one pass, such as the pages of a
+   * LOOP of CG FILE loads, which are read ahead again on every pass.
+   */
+  readonly handOff?: boolean;
+  /** The caller never changes `bytes` and may pass the same array to `decodeCached`. */
+  readonly immutable?: boolean;
 }
 
 function cacheImage(encoded: Uint8Array, image: DecodedImage, copy: boolean): CachedImage {
@@ -182,7 +200,13 @@ export class LegacyImageCodec {
    * The worker jobs of an `urgent` preload, or of one the next click names, start before
    * those of other preloads.
    */
-  async preload(bytes: Uint8Array, mime: string, path: string, urgent = false): Promise<void> {
+  async preload(
+    bytes: Uint8Array,
+    mime: string,
+    path: string,
+    urgent = false,
+    options: ImagePreloadOptions = {},
+  ): Promise<void> {
     const key = this.key(mime, true, path);
     const cache = this.preparedFor(mime, bytes.length);
     if (this.uniformEntry(key, bytes)) return;
@@ -207,14 +231,20 @@ export class LegacyImageCodec {
               ? 'qoi'
               : null;
     if (!format) return;
-    const encoded = bytes.slice();
+    const encoded = options.immutable ? bytes : bytes.slice();
+    const handOff = options.handOff === true;
     const lane = backgroundImageDecodes(urgent || this.nextClick.has(key));
+    // A handed-off image is read in the same pass, so its decode is needed now.
+    if (handOff) lane.promote();
     const ready = (async () => {
       const decoded =
         format === 'png'
           ? await decodeImageOffThread(encoded, 'png', undefined, 'bgra', lane)
           : format === 'yuris-ydg'
-            ? await decodeYdgStrips(encoded, lane)
+            ? // Images handed off arrive together, so each decodes whole on one strip worker.
+              handOff
+              ? ((await decodeYdgOffThread(encoded, lane)) ?? (await decodeYdgStrips(encoded, lane)))
+              : await decodeYdgStrips(encoded, lane)
             : await decodeImageOffThread(encoded, format, undefined, undefined, lane);
       if (!decoded) return;
       // The worker returns PNG pixels already in BGRA order.
@@ -224,6 +254,7 @@ export class LegacyImageCodec {
         {width: decoded.width, height: decoded.height, pixels},
         false,
       );
+      if (handOff && 'pixels' in image.image) image.handOff = true;
       if (!this.keepUniform(key, image)) cache.put(key, image, this.nextClick);
       return image;
     })().catch(() => undefined);
@@ -253,8 +284,17 @@ export class LegacyImageCodec {
       pending.lane.promote();
       warmed = await pending.ready;
     }
-    const prepared = cache.entries.get(key) ?? warmed;
+    const prepared = cache.entries.get(key) ?? (warmed?.consumed ? undefined : warmed);
     if (prepared && sameBytes(bytes, prepared.encoded)) {
+      if (prepared.handOff && 'pixels' in prepared.image) {
+        // The only owner of these pixels becomes the caller.
+        if (cache.entries.get(key) === prepared) cache.take(key);
+        prepared.handOff = false;
+        prepared.consumed = true;
+        const {width, height, pixels} = prepared.image;
+        prepared.image = {width, height, word: 0};
+        return {width, height, pixels};
+      }
       // Keep explicitly queued art insulated from foreground decode churn after use.
       cache.put(key, prepared, this.nextClick);
       return copyCached(prepared.image);

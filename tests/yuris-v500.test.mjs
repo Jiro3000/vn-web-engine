@@ -83,6 +83,40 @@ test('YDG stacks its strips and counts the ones it cannot decode', async () => {
   assert.deepEqual(concurrent.pixels, image.pixels);
 });
 
+test('a handed-off YDG preload gives its pixels to the first load only', async (t) => {
+  const {LegacyImageCodec, YDG_MIME} = await import('../dist/graphics/legacy-image-codec.js');
+  const strip = qoi(2, 1, [
+    [10, 20, 30, 255],
+    [40, 50, 60, 255],
+  ]);
+  const header = new Uint8Array(0x34 + 16);
+  header.set(bytes('YDG\0YU-RIS\0\0'));
+  const view = new DataView(header.buffer);
+  view.setUint16(0x20, 2, true);
+  view.setUint16(0x22, 1, true);
+  view.setUint16(0x30, 1, true);
+  view.setUint32(0x34, header.length, true);
+  view.setUint32(0x38, strip.length, true);
+  view.setUint16(0x3e, 1, true);
+  const file = Uint8Array.from([...header, ...strip]);
+  const codec = new LegacyImageCodec();
+  const decode = t.mock.method(codec, 'decode');
+  const expected = [30, 20, 10, 255, 60, 50, 40, 255];
+  for (const handOff of [true, false]) {
+    const path = `page${handOff}.ydg`;
+    await codec.preload(file, YDG_MIME, path, true, {handOff, immutable: true});
+    const first = await codec.decodeCached(file, YDG_MIME, true, path);
+    assert.deepEqual([...first.pixels], expected);
+    first.pixels.fill(0);
+    // A hand-off leaves no decode behind; a shared preload keeps its own copy.
+    const second = await codec.decodeCached(file, YDG_MIME, true, path);
+    assert.deepEqual([...second.pixels], expected);
+    assert.notEqual(second.pixels, first.pixels);
+    // Only the load after the hand-off decodes in the foreground.
+    assert.equal(decode.mock.callCount(), 1);
+  }
+});
+
 test('libyuv BT.601 conversion matches the reference values', () => {
   const out = new Uint8Array(4 * 4);
   const plane = (data, stride) => ({data: Uint8Array.from(data), offset: 0, stride});

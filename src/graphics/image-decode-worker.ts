@@ -5,7 +5,7 @@ import {decodeArtemisPsd} from '../formats/artemis/psd.js';
 import {decodeOpaqueJpeg} from './browser-jpeg.js';
 import {decodeWebp} from '../formats/webp/webp.js';
 import {decodeQoi} from '../formats/qoi.js';
-import {decodeYdg} from '../formats/yuris/ydg.js';
+import {decodeYdgConcurrently} from '../formats/yuris/ydg.js';
 import type {ImageDecodeRequest, ImageDecodeResponse} from './image-decode-offload.js';
 import {swapRedBlueInPlace} from './pixel-order.js';
 import {createLosslessImageDecoder} from './browser-lossless-image.js';
@@ -29,7 +29,11 @@ serveWorkerPool<ImageDecodeRequest, ImageDecodeResponse>(async ({format, bytes, 
           : format === 'legacy-webp' || format === 'webp'
             ? ((await lossless.webp(bytes)) ?? decodeWebp(bytes, format === 'legacy-webp'))
             : format === 'yuris-ydg'
-              ? decodeYdg(bytes)
+              ? // A whole YDG decodes its strips here in turn; WebP strips (codec 2) take the
+                // verified browser path, the others the TS decoders.
+                await decodeYdgConcurrently(bytes, async (codec, strip) =>
+                  codec === 2 ? ((await lossless.webp(strip))?.pixels ?? null) : null,
+                )
               : format === 'qoi'
                 ? decodeQoi(bytes)
                 : await decodeBrowserImage(bytes, format));

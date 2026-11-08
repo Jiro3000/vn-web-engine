@@ -1,4 +1,5 @@
 import {YBN_VERSION_500} from '../../../formats/yuris/ybn.js';
+import {prepareBlendTables} from './blend.js';
 import {cgAct} from './cgact.js';
 import {compose, type Rect} from './compose.js';
 import {YurisError} from './errors.js';
@@ -95,6 +96,10 @@ export class YurisCg {
   };
   private windowReadback?: () => void;
   private pixelReaders?: Set<YurisCg>;
+  /** A copy `releaseReaders` made that no reader uses any more, refilled by the next one. */
+  private spareCopy?: Uint8Array;
+  /** The buffer `empty` dropped when nothing else read it, until the CG command ends. */
+  private released?: Uint8Array;
   get pixels(): Uint8Array | null {
     this.syncWindowPixels();
     if (this.pendingPixels) this.resolvePixels();
@@ -195,13 +200,60 @@ export class YurisCg {
   /** 0x425B64: the 1x1 transparent image of an empty or missing FILE. */
   empty(): void {
     this.masked = 0;
+    const previous = this.exclusivePixels();
     this.width = this.height = this.textureWidth = this.textureHeight = 1;
     this.setPixels(new Uint8Array(4));
+    this.released = previous ?? undefined;
+  }
+
+  /** The buffer `empty` dropped, when it has `length` bytes; a later call returns nothing. */
+  takeReleased(length: number): Uint8Array | undefined {
+    const released = this.released;
+    this.released = undefined;
+    return released?.length === length ? released : undefined;
+  }
+
+  forgetReleased(): void {
+    this.released = undefined;
+  }
+
+  /**
+   * The layer's buffer when only the layer uses it: unfiltered, read by no deferred transform
+   * and holding no text plane.
+   */
+  private exclusivePixels(): Uint8Array | null {
+    const pixels = this.inputPixels;
+    if (!pixels || pixels !== this.displayedPixels || this.windowReadback || this.pixelReaders?.size)
+      return null;
+    return hasRasterText(yurisRasterBitmap(pixels, this.width, this.height)) ? null : pixels;
+  }
+
+  /**
+   * Before a replacement of `length` bytes that is built from `from`: the layer's own buffer,
+   * when it can hold the replacement instead of a new allocation. It must have that length,
+   * belong to no other buffer than `from`'s and hold no text plane. Its deferred readers keep a
+   * copy and its own pending write is dropped; the caller writes every byte.
+   */
+  overwritablePixels(length: number, from: Uint8Array): Uint8Array | null {
+    const pixels = this.inputPixels;
+    if (
+      !pixels ||
+      pixels.length !== length ||
+      pixels.buffer === from.buffer ||
+      pixels !== this.displayedPixels ||
+      this.windowReadback ||
+      hasRasterText(yurisRasterBitmap(pixels, this.width, this.height))
+    )
+      return null;
+    this.releaseReaders(true);
+    this.cancelPixelWrite();
+    return pixels;
   }
 
   /** A new buffer replaces both +0xD0 and +0xC0. */
   setPixels(pixels: Uint8Array | null): void {
     // The dropped buffer is no longer written, so deferred readers keep reading it.
+    this.released = undefined;
     this.releaseReaders(false);
     this.cancelPixelWrite();
     this.windowReadback = undefined;
@@ -260,24 +312,40 @@ export class YurisCg {
       if (!copies) continue;
       let pixels = copies.get(pending.from);
       if (!pixels) {
-        copies.set(pending.from, (pixels = pending.from.slice()));
+        const spare = this.spareCopy;
+        this.spareCopy = undefined;
+        if (spare?.length === pending.from.length) (pixels = spare).set(pending.from);
+        else pixels = pending.from.slice();
+        copies.set(pending.from, pixels);
+        readerCopies.set(pixels, {owner: this, users: 0});
         rebindBgraSource(pending.from, this.pixelRevision, pixels);
       }
+      readerCopies.get(pixels)!.users++;
       pending.from = pixels;
       if (pending.scale) pending.scale = {...pending.scale, pixels};
     }
   }
 
   private cancelPixelWrite(): void {
-    this.pendingPixels?.source?.pixelReaders?.delete(this);
+    const pending = this.pendingPixels;
+    if (!pending) return;
+    pending.source?.pixelReaders?.delete(this);
     this.pendingPixels = undefined;
+    releaseReaderCopy(pending.from);
   }
 
   private resolvePixels(): void {
     const pending = this.pendingPixels;
     if (!pending) return;
-    this.cancelPixelWrite();
+    pending.source?.pixelReaders?.delete(this);
+    this.pendingPixels = undefined;
     pending.write(pending.target, pending.from);
+    releaseReaderCopy(pending.from);
+  }
+
+  /** @internal The layer keeps the copy for its next `releaseReaders`. */
+  keepSpareCopy(pixels: Uint8Array): void {
+    this.spareCopy = pixels;
   }
 
   /** 0x434440: a new buffer and size; the filtered copy is dropped. */
@@ -291,6 +359,21 @@ export class YurisCg {
 }
 
 export type YurisCgNode = YurisNode<YurisCg>;
+
+/**
+ * The copies `releaseReaders` gave deferred readers: the layer they copy and the readers whose
+ * pending write still reads them. Readers only read a copy (their own write goes to their
+ * buffer) and the kernels key staged pixels by buffer and revision, which only grows, so the
+ * last reader to finish returns the copy to its layer for the next one.
+ */
+const readerCopies = new WeakMap<Uint8Array, {owner: YurisCg; users: number}>();
+
+function releaseReaderCopy(pixels: Uint8Array): void {
+  const copy = readerCopies.get(pixels);
+  if (!copy || --copy.users > 0) return;
+  readerCopies.delete(pixels);
+  copy.owner.keepSpareCopy(pixels);
+}
 
 export interface DeferredScale {
   readonly pixels: Uint8Array;
@@ -439,6 +522,7 @@ export class YurisLayers {
     const screen = new YurisCg();
     screen.allocate(width, height, true);
     this.windowLayers[0] = this.tree.create('W0', true, 1n, screen);
+    prepareBlendTables();
   }
 
   install(): void {
@@ -565,11 +649,15 @@ export class YurisLayers {
     this.markDirty(node);
     const layer = cg;
     return this.load(layer, a.text(Cg.File)).then((result) => {
-      if (result !== 0) {
-        m.quit = true;
-        return -1;
+      try {
+        if (result !== 0) {
+          m.quit = true;
+          return -1;
+        }
+        return this.updateCg(node, layer, group, sx, sy, true, true);
+      } finally {
+        layer.forgetReleased();
       }
-      return this.updateCg(node, layer, group, sx, sy, true, true);
     });
   }
 
@@ -854,14 +942,23 @@ export class YurisLayers {
    * image's top-left part copied in.
    */
   private resize(cg: YurisCg, width: number, height: number): void {
-    const pixels = new Uint8Array(Math.max(width, 0) * Math.max(height, 0) * 4);
+    // Every byte is written below, so the buffer FILE dropped can take the new pixels.
+    const length = Math.max(width, 0) * Math.max(height, 0) * 4;
+    const pixels = cg.takeReleased(length) ?? new Uint8Array(length);
     const columns = Math.max(Math.min(width, cg.width), 0),
       rows = cg.pixels ? Math.max(Math.min(height, cg.height), 0) : 0;
     // Opaque black outside the copied top-left part; the copy overwrites the rest.
-    const words = LITTLE_ENDIAN ? new Uint32Array(pixels.buffer) : undefined;
+    const words =
+      LITTLE_ENDIAN && pixels.byteOffset % 4 === 0
+        ? new Uint32Array(pixels.buffer, pixels.byteOffset, length >> 2)
+        : undefined;
     const black = (from: number, to: number): void => {
       if (words) words.fill(0xff000000, from, to);
-      else for (let i = from * 4 + 3; i < to * 4; i += 4) pixels[i] = 0xff;
+      else
+        for (let i = from * 4; i < to * 4; i += 4) {
+          pixels[i] = pixels[i + 1] = pixels[i + 2] = 0;
+          pixels[i + 3] = 0xff;
+        }
     };
     for (let y = 0; y < rows; y++) {
       pixels.set(

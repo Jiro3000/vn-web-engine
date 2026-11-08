@@ -254,8 +254,9 @@ export class YurisBrowserPlayer {
       },
       decodeYmvFrame: (movie, frame) => this.ymvDecoder.decode(movie, frame),
       readAhead: (names, reading) => {
+        // A loading LOOP reads each page once per pass, so its decodes are handed off.
         if (this.machine.system.preloadEnabled)
-          for (const name of names) this.decodeAhead(name, reading);
+          for (const name of names) this.decodeAhead(name, reading, true);
       },
       encodeImage: codec.encode.bind(codec),
       now: () => performance.now(),
@@ -512,7 +513,7 @@ export class YurisBrowserPlayer {
         this.preloadedArchiveFiles.delete(old);
         this.preloadedArchiveBytes -= contents.length;
       }
-      this.preloadedArchiveFiles.set(path, bytes.slice());
+      this.preloadedArchiveFiles.set(path, bytes);
       this.preloadedArchiveBytes += bytes.length;
     }
     return bytes;
@@ -620,14 +621,14 @@ export class YurisBrowserPlayer {
    * Starts an image the VM is about to load later in the same pass, beside the foreground
    * decode of `reading`, instead of waiting for a queue slot.
    */
-  private decodeAhead(name: string, reading: string): void {
+  private decodeAhead(name: string, reading: string, handOff = false): void {
     if (typeof Worker === 'undefined' || this.preloading.size >= 8) return;
     const file = this.machine.files.resolve(name, YurisFileKind.Image);
     if (!file.found || !frameImage(file.type) || file.path === reading) return;
     if (this.preloading.has(file.path)) return;
     this.nextClickQueue.delete(file.path);
     this.preloadQueue.delete(file.path);
-    this.startPreload(file.path, imageMime[file.type]!, true);
+    this.startPreload(file.path, imageMime[file.type]!, true, handOff);
   }
   /**
    * Two CGCASH preloads run at a time; the images of the next click have two slots of their
@@ -651,10 +652,12 @@ export class YurisBrowserPlayer {
       this.startPreload(path, mime, false);
     }
   }
-  private startPreload(path: string, mime: string, urgent: boolean): void {
+  private startPreload(path: string, mime: string, urgent: boolean, handOff = false): void {
     this.preloading.add(path);
+    // The bytes are the array `readAsset` keeps for the foreground load, which only decodes
+    // and reads them, so the codec compares that load's bytes by identity.
     void this.readAsset(path, true)
-      .then((data) => this.codecs.preload(data, mime, path, urgent))
+      .then((data) => this.codecs.preload(data, mime, path, urgent, {handOff, immutable: true}))
       .catch(() => {
         // The foreground loader retains its original error handling and reads current bytes.
       })

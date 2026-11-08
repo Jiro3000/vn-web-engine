@@ -153,6 +153,26 @@ export function sizeNearest(
       return;
     }
   }
+  if (dst.buffer !== src.buffer && left < right && from.length >= stride * rows) {
+    // Every tap inside [left, right) x [top, bottom) lies in the source, and an output row
+    // whose source row repeats the previous one's is the same row of pixels.
+    const count = right - left,
+      taps = new Int32Array(count);
+    for (let x = 0; x < count; x++) taps[x] = columns[left + x]! + x0;
+    let previous = -1;
+    for (let y = top; y < bottom; y++) {
+      const line = lines[y]! + y0,
+        o = y * width + left;
+      if (line === previous) {
+        out.copyWithin(o, o - width, o - width + count);
+        continue;
+      }
+      previous = line;
+      const row = line * stride;
+      for (let x = 0; x < count; x++) out[o + x] = from[row + taps[x]!]!;
+    }
+    return;
+  }
   for (let y = top; y < bottom; y++) {
     const row = (lines[y]! + y0) * stride + x0;
     for (let x = left, o = y * width + left; x < right; x++, o++)

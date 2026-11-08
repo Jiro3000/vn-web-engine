@@ -109,6 +109,11 @@ function blendTables(): Uint8Array[] {
   return (tables = t);
 }
 
+/** The startup initializer 0x4686AC builds the F tables (0x4626FC) before the first frame. */
+export function prepareBlendTables(): void {
+  blendTables();
+}
+
 /**
  * 0x40646C: the rule weights for T (+0xA4), TA (+0xA6, 256 = a hard threshold) and A (+0xA2).
  * A weight at most 1 leaves the pixel unchanged.

@@ -103,6 +103,22 @@ export function decodeImageStripOffThread(
   } | null>;
 }
 
+/**
+ * Decodes a whole YDG image on one strip worker, which decodes its strips in turn and returns
+ * the stacked image (see `decodeYdgConcurrently`). It suits many images requested together,
+ * which keep the strip workers busy without the page stacking each image's strips.
+ */
+export function decodeYdgOffThread(
+  bytes: Uint8Array,
+  lane?: WorkerPoolLane,
+): Promise<{width: number; height: number; pixels: Uint8Array} | null> {
+  return decodeOn(stripDecodePool(), bytes, 'yuris-ydg', undefined, undefined, lane) as Promise<{
+    width: number;
+    height: number;
+    pixels: Uint8Array;
+  } | null>;
+}
+
 async function decodeOn(
   workers: WorkerPool<ImageDecodeRequest, ImageDecodeResponse>,
   bytes: Uint8Array,
@@ -116,8 +132,9 @@ async function decodeOn(
   const finish = beginRuntimeSpan(`graphics.decode.${format.replace('/', '-')}`, {
     bytes: bytes.length,
   });
-  // A Uint8Array subclass (for example Node Buffer) may implement slice as a borrowed view.
-  const snapshot = Uint8Array.from(bytes);
+  // A Uint8Array subclass (for example Node Buffer) may implement slice as a borrowed view;
+  // the typed-array constructor always copies into a plain Uint8Array.
+  const snapshot = new Uint8Array(bytes);
   try {
     return (
       (await workers.run({format, bytes: snapshot, png, order}, [snapshot.buffer], lane)) ?? null

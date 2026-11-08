@@ -15,7 +15,7 @@ import {
   skipInactiveLoop,
 } from '../dist/engines/yuris/vm/copy-loop.js';
 import {YurisExpression} from '../dist/engines/yuris/vm/expression.js';
-import {sizeBilinear, sizeLanczos} from '../dist/engines/yuris/vm/resize.js';
+import {sizeBilinear, sizeLanczos, sizeNearest} from '../dist/engines/yuris/vm/resize.js';
 import {bgraDisplayFrame, transitionBgra} from '../dist/graphics/bgra-effects-wasm.js';
 import {YurisVariables} from '../dist/engines/yuris/vm/variables.js';
 import {YurisFramePacer} from '../dist/engines/yuris/vm/pacing.js';
@@ -432,6 +432,59 @@ test('YU-RIS deferred layer pixels survive source writes and are composited when
   layers.composeSet(screen);
   assert.equal(writes, 3);
   assert.equal(screen.payload.pixels[0], 94);
+  // The source refills a copy for its next readers once no reader uses it.
+  const second = new YurisCg();
+  second.allocate(2, 1);
+  const read = [];
+  const capture = (target, from) => {
+    read.push(from);
+    target.set(from);
+  };
+  input.fill(40);
+  assert.equal(destination.deferPixelWrite(source, input, capture), true);
+  assert.equal(second.deferPixelWrite(source, input, capture), true);
+  source.beginPixelWrite();
+  input.fill(41);
+  assert.equal(destination.pixels[0], 40);
+  assert.equal(destination.deferPixelWrite(source, input, capture), true);
+  source.beginPixelWrite();
+  input.fill(42);
+  assert.equal(second.pixels[0], 40);
+  assert.equal(destination.pixels[0], 41);
+  assert.equal(read[1], read[0]);
+  assert.notEqual(read[2], read[0]);
+  assert.equal(destination.deferPixelWrite(source, input, capture), true);
+  source.beginPixelWrite();
+  input.fill(43);
+  assert.equal(destination.pixels[0], 42);
+  assert.equal(read[3], read[2]);
+});
+
+test('YU-RIS layers overwrite their own buffer only when no other reader depends on it', () => {
+  const layer = new YurisCg(),
+    reader = new YurisCg(),
+    other = new YurisCg();
+  for (const cg of [layer, reader, other]) cg.allocate(2, 1);
+  const own = layer.source;
+  own.fill(5);
+  const write = (target, from) => target.set(from);
+  // A deferred reader keeps the pixels it captured when the layer is overwritten in place.
+  assert.equal(reader.deferPixelWrite(layer, own, write), true);
+  assert.equal(layer.overwritablePixels(8, other.source), own);
+  assert.equal(layer.overwritablePixels(12, other.source), null);
+  assert.equal(layer.overwritablePixels(8, own.subarray(0, 4)), null);
+  own.fill(0).fill(9, 0, 4);
+  layer.replace(own, 2, 1);
+  assert.equal(reader.pixels[0], 5);
+  // FILE "" drops the buffer for a following SX/SY unless a reader still uses it.
+  layer.empty();
+  assert.equal(layer.takeReleased(8), own);
+  assert.equal(layer.takeReleased(8), undefined);
+  layer.replace(own, 2, 1);
+  assert.equal(reader.deferPixelWrite(layer, own, write), true);
+  layer.empty();
+  assert.equal(layer.takeReleased(8), undefined);
+  assert.equal(reader.pixels[0], 9);
 });
 
 test('YU-RIS bulk array loops preserve the final iteration and validate before writing', async () => {
@@ -2839,6 +2892,53 @@ test('YU-RIS SIZE5 matches the Lanczos-2 taps of 0x434A14', () => {
       out,
       reference(width, height, src, stride, rows),
       `${stride}x${rows} to ${width}x${height}`,
+    );
+  }
+});
+
+test('YU-RIS nearest SIZE samples the 16.16 column and row steps and clears outside taps', () => {
+  // 0x4610B0: column i reads x0 + (accumulated step >> 16); taps outside the source clear.
+  const reference = (width, height, src, stride, rows, x0, y0, x1, y1) => {
+    const out = new Uint32Array(width * height),
+      from = new Uint32Array(src.buffer);
+    const taps = (count, span) => {
+      const step = Math.trunc((span * 0x10000) / count) | 0,
+        list = [];
+      for (let i = 0, acc = 0; i < count; i++, acc = (acc + step) >>> 0) list.push(acc >>> 16);
+      return list;
+    };
+    const columns = taps(width, x1 - x0 + 1).map((c) => c + x0),
+      lines = taps(height, y1 - y0 + 1).map((l) => l + y0);
+    const range = (list, limit) => {
+      let start = 0;
+      for (let i = 0; i < list.length; i++) {
+        if (list[i] < 0) start = i + 1;
+        if (list[i] >= limit) return [start, i];
+      }
+      return [start, list.length];
+    };
+    const [top, bottom] = range(lines, rows),
+      [left, right] = range(columns, stride);
+    for (let y = top; y < bottom; y++)
+      for (let x = left; x < right; x++) out[y * width + x] = from[lines[y] * stride + columns[x]];
+    return new Uint8Array(out.buffer);
+  };
+  let seed = 0x1234;
+  const random = () => (seed = (Math.imul(seed, 1103515245) + 12345) >>> 0) >>> 24;
+  for (const [stride, rows, width, height, x0, y0, x1, y1] of [
+    [16, 9, 40, 27, 0, 0, 15, 8],
+    [16, 9, 7, 5, 2, 1, 13, 7],
+    [16, 9, 16, 30, 0, 0, 15, 8],
+    [16, 9, 33, 20, -3, -2, 19, 11],
+    [5, 4, 9, 9, 0, 0, 4, 3],
+  ]) {
+    const src = new Uint8Array(stride * rows * 4).map(() => random());
+    const out = new Uint8Array(width * height * 4).fill(7);
+    sizeNearest(out, width, height, src, stride, rows, x0, y0, x1, y1);
+    assert.deepEqual(
+      out,
+      reference(width, height, src, stride, rows, x0, y0, x1, y1),
+      `${stride}x${rows} (${x0},${y0})-(${x1},${y1}) to ${width}x${height}`,
     );
   }
 });

@@ -936,7 +936,7 @@ function regionOp(
     rw = tw;
     rh = th;
   }
-  const buffer = allocate(rw, rh);
+  const buffer = allocate(rw, rh, d, from);
   if (op === Op.RectPaint) buffer.set(from.subarray(0, buffer.length));
   run(op, buffer, from, s, p, tw, th, rw, rh, mode);
   if (op === Op.Copy || op === Op.Copy2)
@@ -953,9 +953,21 @@ function regionOp(
   return 0;
 }
 
-function allocate(width: number, height: number): Uint8Array {
+/**
+ * A zeroed buffer for a region result. With `target`, the layer the result replaces, its own
+ * buffer is cleared and reused when it has the size and only that layer uses it (see
+ * `YurisCg.overwritablePixels`).
+ */
+function allocate(
+  width: number,
+  height: number,
+  target?: YurisCg,
+  from?: Uint8Array,
+): Uint8Array {
   if (width > REGION_WIDTH) throw new YurisError(0x186aa, [width, height]);
-  return new Uint8Array(Math.max(width, 0) * Math.max(height, 0) * 4);
+  const length = Math.max(width, 0) * Math.max(height, 0) * 4;
+  const own = target && from ? target.overwritablePixels(length, from) : null;
+  return own ? own.fill(0) : new Uint8Array(length);
 }
 
 /** The per-operation workers of 0x42C21D; `to` is the region buffer or, in place, `from`. */
