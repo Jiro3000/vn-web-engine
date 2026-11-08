@@ -1,4 +1,5 @@
 import type {YurisInstruction, YurisScript, YurisToken} from '../../../formats/yuris/ybn.js';
+import {decodeCp932} from '../../../text/cp932.js';
 import {decodeLiteral} from './expression.js';
 import {windowsPath} from './fileact.js';
 import type {YurisMachine} from './machine.js';
@@ -437,6 +438,14 @@ function variablesOf(instruction: YurisInstruction | undefined, op?: number): nu
 }
 
 /** Uses the scenario library's own CGCASH forecast (YSTB62:185–208) as read-only hints. */
+/** A dialogue line of the scenario, as `currentDialogue` reads it. */
+export interface YurisDialogueLine {
+  readonly file: string;
+  readonly line: number;
+  readonly text: string;
+  readonly voiced: boolean;
+}
+
 export class YurisSceneLookahead {
   private file = '';
   private forecastKey = '';
@@ -701,6 +710,41 @@ export class YurisSceneLookahead {
     const source = vars[v.source]?.strings,
       line = Number(vars[v.line]?.ints?.[0] ?? -1n);
     return source && line >= 0 ? voices(macros(source[line] ?? '') ?? []) : [];
+  }
+
+  /**
+   * The dialogue of the line the scenario parser is executing (H@3040), or undefined for a
+   * line without one. The text joins the line's TEXT tokens, or takes the ML.TEXT argument of
+   * the language H@1176 selects, with `\R` as a line break. `voiced` tells whether a VO
+   * macro on the line plays a voice cue with it.
+   */
+  currentDialogue(): YurisDialogueLine | undefined {
+    const vars = this.machine.variables.entries,
+      v = this.v;
+    if (vars[v.stopped]?.ints?.[0]) return;
+    const file = vars[v.file]?.strings?.[0] ?? '',
+      source = vars[v.source]?.strings,
+      line = Number(vars[v.line]?.ints?.[0] ?? -1n);
+    if (!source || line < 0) return;
+    const tags = macros(source[line] ?? '');
+    if (!tags?.some(([tag]) => dialogue(tag))) return;
+    const lang = vars[1176],
+      language = Number(lang?.ints?.[255 * (lang.dimensions[1] ?? 0)] ?? -1n);
+    let text = '';
+    for (const [tag, args] of tags) {
+      if (tag === 'TEXT') text += args;
+      else if (tag === 'R') text += '\n';
+      else if (tag === 'ML.TEXT') {
+        const strings = [...args.matchAll(/"([^"]*)"/g)].map((match) => match[1]!);
+        text += strings[language] ?? strings[0] ?? '';
+      }
+    }
+    // A bilingual argument keeps its inline macros; a voice cue there is in `tags` already.
+    // Decoded first, so that a DBCS trail byte 0x5C does not read as a macro.
+    text = decodeCp932(latin1(text))
+      .replace(/\\[A-Z][A-Z0-9_.]*(?:\([^)]*\))?/g, '')
+      .trim();
+    return text ? {file, line, text, voiced: voices(tags).length > 0} : undefined;
   }
 
   /** A transition's rule image: es.TRDEF maps transition names to rules (es.TRDEF.CHECK). */

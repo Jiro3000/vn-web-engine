@@ -3489,3 +3489,67 @@ test('YU-RIS frame pacing shows the frame that polls a press at once and keeps i
   assert.equal(pacer.begin(1046), 4);
   assert.equal(pacer.skipping, false);
 });
+
+test('YU-RIS lookahead reads the current dialogue line for the clipboard text hook', async () => {
+  const {YurisSceneLookahead} = await import('../dist/engines/yuris/vm/scene-lookahead.js');
+  const {encodeCp932} = await import('../dist/text/cp932.js');
+  const {publishTextHookLine, setTextHookMode} = await import('../dist/text/text-hook.js');
+  const sjis = (text) => String.fromCharCode(...encodeCp932(text));
+  const entries = [];
+  const source = [
+    sjis('\\VO(ABC_0001)【アリス】「こんにちは」'),
+    sjis('【ボブ】「ソ\\Rうだね」'),
+    sjis('風が吹いている。'),
+    String.raw`\BG(room,250)`,
+    sjis('\\VO2(ABC_0002)\\ML.TEXT("ハロー","やあ\\W(10)")'),
+  ];
+  const lang = new BigInt64Array(256);
+  lang[255] = 1n;
+  for (const [id, ints] of [
+    [1221, [0n]],
+    [3040, [0n]],
+    [1176, lang],
+  ])
+    entries[id] = {ints, dimensions: [256, 1]};
+  entries[3038] = {strings: ['scenario.txt']};
+  entries[2899] = {strings: source};
+  const lookahead = new YurisSceneLookahead({variables: {entries}, now: () => 0});
+  const at = (line) => {
+    entries[3040].ints[0] = BigInt(line);
+    return lookahead.currentDialogue();
+  };
+  assert.deepEqual(at(0), {
+    file: 'scenario.txt',
+    line: 0,
+    text: '【アリス】「こんにちは」',
+    voiced: true,
+  });
+  assert.deepEqual(at(1), {
+    file: 'scenario.txt',
+    line: 1,
+    text: '【ボブ】「ソ\nうだね」',
+    voiced: false,
+  });
+  assert.equal(at(2).text, '風が吹いている。');
+  assert.equal(at(2).voiced, false);
+  assert.equal(at(3), undefined);
+  assert.deepEqual(at(4), {file: 'scenario.txt', line: 4, text: 'やあ', voiced: true});
+  entries[1221].ints[0] = 1n;
+  assert.equal(at(0), undefined);
+
+  const written = [];
+  const clipboard = {writeText: async (text) => void written.push(text)};
+  const voiced = {text: 'a', voiced: true},
+    unvoiced = {text: 'b', voiced: false};
+  setTextHookMode('off');
+  assert.equal(publishTextHookLine(unvoiced, clipboard), false);
+  setTextHookMode('unvoiced');
+  assert.equal(publishTextHookLine(voiced, clipboard), false);
+  assert.equal(publishTextHookLine(unvoiced, clipboard), true);
+  setTextHookMode('all');
+  assert.equal(publishTextHookLine(voiced, clipboard), true);
+  const refused = {writeText: () => Promise.reject(new Error('Document is not focused'))};
+  assert.equal(publishTextHookLine(unvoiced, refused), true);
+  setTextHookMode('off');
+  assert.deepEqual(written, ['b', 'a']);
+});

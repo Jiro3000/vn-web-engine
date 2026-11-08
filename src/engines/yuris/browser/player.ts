@@ -36,6 +36,7 @@ import type {YurisCgNode, YurisLayers} from '../vm/cg.js';
 import {YurisIntegerWindow} from './integer-window.js';
 import {BrowserYmvDecoder} from './ymv-decode.js';
 import {YurisSceneLookahead} from '../vm/scene-lookahead.js';
+import {getTextHookMode, publishTextHookLine} from '../../../text/text-hook.js';
 
 const bytes = (s: string): Uint8Array => Uint8Array.from(s, (c) => c.charCodeAt(0));
 const decode = (s: string): string => decodeCp932(bytes(s));
@@ -137,6 +138,8 @@ export class YurisBrowserPlayer {
   private voiceTemplate?: readonly [string, string, (cue: string) => string];
   private readonly prefetchedVoices = new Set<string>();
   private lookahead?: YurisSceneLookahead;
+  /** The dialogue line last handed to the text hook. */
+  private dialogueKey = '';
   private readonly preloading = new Set<string>();
   /** The preloads of `preloading` the next click needs, which have slots of their own. */
   private readonly urgentPreloads = new Set<string>();
@@ -689,6 +692,15 @@ export class YurisBrowserPlayer {
       this.wakePace = done;
     });
   }
+  /** Hands each new dialogue line of the scenario parser to the clipboard text hook. */
+  private publishDialogue(): void {
+    if (!this.lookahead || getTextHookMode() === 'off') return;
+    const line = this.lookahead.currentDialogue();
+    const key = line ? line.file + '\0' + line.line + '\0' + line.text : '';
+    if (key === this.dialogueKey) return;
+    this.dialogueKey = key;
+    if (line) publishTextHookLine(line);
+  }
   private async loop(): Promise<void> {
     try {
       while (this.running && !this.machine.quit) {
@@ -696,6 +708,7 @@ export class YurisBrowserPlayer {
         if (!this.running) break;
         await this.device.flush();
         await this.machine.frame();
+        this.publishDialogue();
         const next = this.machine.system.preloadEnabled ? this.lookahead?.update() : undefined;
         if (next) this.prioritizeNextClick(next);
         if (next) for (const movie of this.lookahead!.nextMovies) this.prefetchArchiveFile(movie);
