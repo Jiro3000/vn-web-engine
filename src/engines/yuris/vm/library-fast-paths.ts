@@ -215,6 +215,8 @@ export interface LexerRun {
   readonly spaces: boolean;
   readonly comments: boolean;
   readonly initial: Uint8Array | null;
+  /** Offset of the classifier chain's IFEND from the loop body start. */
+  readonly chain: number;
 }
 
 export interface CharacterSearch {
@@ -406,9 +408,62 @@ export function scanArrayRanges(
   return {index, value, result, arrays};
 }
 
+interface LexerArm {
+  readonly high: boolean;
+  readonly lo: number;
+  readonly hi: number;
+}
+
+/**
+ * Parse a classifier arm test: a left-associated `|` of `value n =` and
+ * `value lo Z value hi S &` terms over the character code or its lead byte.
+ */
+function lexerArmTest(hex: string, ch: string, high: string): LexerArm[] | null {
+  const arms: LexerArm[] = [];
+  let i = 0;
+  const take = (token: string) => (hex.startsWith(token, i) ? ((i += token.length), true) : false);
+  const number = () => {
+    if (hex.startsWith('420100', i) && i + 8 <= hex.length) {
+      const n = parseInt(hex.slice(i + 6, i + 8), 16);
+      i += 8;
+      return n < 128 ? n : -1;
+    }
+    if (hex.startsWith('570200', i) && i + 10 <= hex.length) {
+      const n = parseInt(hex.slice(i + 8, i + 10) + hex.slice(i + 6, i + 8), 16);
+      i += 10;
+      return n < 32768 ? n : -1;
+    }
+    return -1;
+  };
+  const term = () => {
+    const useHigh = take(high);
+    if (!useHigh && !take(ch)) return false;
+    const value = useHigh ? high : ch;
+    const lo = number();
+    if (lo < 0) return false;
+    if (take(op('='))) return arms.push({high: useHigh, lo, hi: lo}) > 0;
+    if (!take(op('Z')) || !take(value)) return false;
+    const hi = number();
+    if (hi < lo || !take(op('S')) || !take(op('&'))) return false;
+    return arms.push({high: useHigh, lo, hi}) > 0;
+  };
+  if (!term()) return null;
+  while (i < hex.length) if (!term() || !take(op('|'))) return null;
+  return arms;
+}
+
+function expressionHex(arg: YurisArgument | undefined): string | null {
+  if (!arg?.tokens || arg.id !== 0 || arg.type !== 1 || arg.op !== 0) return null;
+  let hex = '';
+  for (const value of arg.expression) hex += byte(value);
+  return hex;
+}
+
 /**
  * Recognize paths that only classify a character and advance the cursor.
  * Replay the final iteration before the delimiter to restore scratch outputs.
+ * Library revisions differ in the state 0 classifier chain only: its arms end
+ * at `chain` and every later instruction keeps its order.
  */
 export function scanLexerRun(
   code: readonly YurisInstruction[],
@@ -416,7 +471,10 @@ export function scanLexerRun(
   end: number,
   commands: YurisCommandSet,
 ): LexerRun | null {
-  if (end !== at + 241) return null;
+  // The hajiron revision's chain ends at at+177 (11 arms); shorter chains shift the rest.
+  const shift = at + 241 - end;
+  if (shift < 0 || shift > 177 - 12 - 9) return null;
+  const p = (position: number) => (position >= 177 ? position - shift : position);
   const cursor = local(code[at]);
   const count = local(code[at], 0, 6);
   const text = local(code[at + 3], 1);
@@ -431,14 +489,15 @@ export function scanLexerRun(
   const ids = [cursor, count, text, state, ...scratch];
   if (ids.some((id) => id < 1000) || new Set(ids).size !== ids.length) return null;
 
-  const matches = matchAt(code, at);
+  const at0 = matchAt(code, at);
+  const matches: typeof at0 = (position, ...rest) => at0(p(position), ...rest);
   const c = scalar(cursor),
     n = scalar(count),
     s = scalar(state),
     ch = scalar(char);
   const equals = (value: string, number: number) => value + int(number) + op('=');
   const condition = (position: number, exit: number, test: string, next = 0) =>
-    matches(position, 0x2c, 0, [0, 1, test], [0, 0, next ? at + next : 0], [0, 0, at + exit]);
+    matches(position, 0x2c, 0, [0, 1, test], [0, 0, next ? at + p(next) : 0], [0, 0, at + p(exit)]);
   const readChar = (position: number, offset: number, target: number, result: number) =>
     matches(
       position,
@@ -505,9 +564,10 @@ export function scanLexerRun(
     matches(232, 0x2d, 0) &&
     matches(233, 0x0b, 0, [0, 1, equals(ch, 13)], [0, 0, 0], [0, 0, 0]) &&
     matches(237, 0x30, 0);
-  const wordResult = local(code[at + 212]);
-  const highTable = local(code[at + 212], 1);
-  const lowTable = local(code[at + 212], 1, 16);
+  const wordAt = code[at + p(212)];
+  const wordResult = local(wordAt);
+  const highTable = local(wordAt, 1);
+  const lowTable = local(wordAt, 1, 16);
   const table = (id: number, index: string) => '56030040' + word(id) + index + '29010000';
   const result = scalar(wordResult);
   const wordIds = [...ids, wordResult, highTable, lowTable];
@@ -529,53 +589,60 @@ export function scanLexerRun(
     ) &&
     condition(213, 222, equals(result, 0)) &&
     matches(222, 0x30, 0);
-  // The leading state classifier is an IF/ELSE chain with one state assignment per arm.
-  const branches = [
-    {lo: 48, hi: 57, extra: 45, state: 91},
-    {lo: 65, hi: 90, state: 92},
-    {lo: 97, hi: 122, state: 93},
-    {lo: 94, hi: 94, state: 93},
-    {lo: 39, hi: 39, state: 93},
-    {lo: 95, hi: 95, state: 94},
-    {lo: 46, hi: 46, state: 95},
-    {lo: 129, hi: 254, state: 96, high: true},
-    {lo: 34, hi: 34, state: 22},
-    {lo: 32, hi: 32, state: 31},
-    {lo: 9, hi: 9, state: 32},
-  ];
-  const number = (n: number) => (n <= 127 ? int(n) : '570200' + word(n));
+  // The state 0 classifier is an IF/ELSE chain with one state assignment per arm; the
+  // first arm whose test fails to parse is the general ELSE that the table leaves to the VM.
+  const chain = p(177);
+  const arms: {readonly tests: LexerArm[]; readonly position: number}[] = [];
+  let position = 12;
+  for (; position + 2 < chain; position += 3) {
+    const instruction = code[at + position];
+    const tests =
+      instruction?.args.length === 3
+        ? lexerArmTest(expressionHex(instruction.args[0]) ?? '', ch, scalar(high))
+        : null;
+    if (
+      !tests ||
+      !at0(
+        position,
+        position === 12 ? 0x2c : 0x0b,
+        0,
+        [0, 1, expressionHex(instruction!.args[0])!],
+        [0, 0, at + position + 3],
+        [0, 0, position === 12 ? at + chain : 0],
+      ) ||
+      code[at + position + 1]?.args.length !== 2 ||
+      !at0(
+        position + 1,
+        0x35,
+        0,
+        [0, 1, s],
+        [0, 1, expressionHex(code[at + position + 1]!.args[1]) ?? ''],
+      ) ||
+      !at0(position + 2, 0x2d, 0)
+    )
+      break;
+    const assigned = code[at + position + 1]!.args[1]!.expression;
+    if (assigned.length !== 4 || assigned[0] !== 0x42 || assigned[3]! >= 128) break;
+    arms.push({tests, position: position + 1});
+  }
   const classify =
-    code[at + 45]?.command === 0x0b &&
-    matches(177, 0x30, 0) &&
-    matches(178, 0x35, 0, [0, 1, c, 1], [0, 1, int(1)]) &&
-    matches(179, 0x2d, 0) &&
-    branches.every(({lo, hi, extra, state, high: useHigh}, i) => {
-      const value = useHigh ? scalar(high) : ch;
-      let test =
-        lo === hi
-          ? equals(value, lo)
-          : value + number(lo) + op('Z') + value + number(hi) + op('S') + op('&');
-      if (extra !== undefined) test += equals(value, extra) + op('|');
-      const position = 12 + i * 3;
-      return (
-        matches(
-          position,
-          i === 0 ? 0x2c : 0x0b,
-          0,
-          [0, 1, test],
-          [0, 0, at + position + 3],
-          [0, 0, i === 0 ? at + 177 : 0],
-        ) &&
-        matches(position + 1, 0x35, 0, [0, 1, s], [0, 1, int(state)]) &&
-        matches(position + 2, 0x2d, 0)
-      );
-    });
-  const initial = classify ? new Uint8Array(65536).fill(45) : null;
-  if (initial) {
-    for (const [i, {lo, hi, extra, high: useHigh}] of branches.entries()) {
-      const position = 13 + i * 3;
-      initial.fill(position, useHigh ? lo << 8 : lo, useHigh ? (hi + 1) << 8 : hi + 1);
-      if (extra !== undefined) initial[extra] = position;
+    arms.length > 0 &&
+    position < 256 &&
+    code[at + position]?.command === 0x0b &&
+    at0(chain, 0x30, 0) &&
+    at0(chain + 1, 0x35, 0, [0, 1, c, 1], [0, 1, int(1)]) &&
+    at0(chain + 2, 0x2d, 0);
+  let initial: Uint8Array | null = null;
+  if (classify) {
+    initial = new Uint8Array(65536).fill(position);
+    // Earlier arms win: fill the last arm first.
+    for (let i = arms.length - 1; i >= 0; i--) {
+      const arm = arms[i]!;
+      for (let j = arm.tests.length - 1; j >= 0; j--) {
+        const {high: useHigh, lo, hi} = arm.tests[j]!;
+        if (useHigh) initial.fill(arm.position, Math.min(lo, 256) << 8, Math.min(hi + 1, 256) << 8);
+        else initial.fill(arm.position, Math.min(lo, 65536), Math.min(hi + 1, 65536));
+      }
     }
   }
   return {
@@ -587,6 +654,7 @@ export function scanLexerRun(
     spaces,
     comments,
     initial,
+    chain,
     word: wordRun ? {high: highTable, low: lowTable, result: wordResult} : null,
   };
 }

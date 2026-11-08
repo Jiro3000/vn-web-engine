@@ -3130,6 +3130,59 @@ test('YU-RIS compiled regions follow IF/ELSE branches and return to the interpre
   assert.equal(variables.get(1004).strings[0], 'abcde');
 });
 
+test('YU-RIS compiled VARINFO LENGTH and SJISCODE match the command on CP932 text', async () => {
+  const {compileRegion} = await import('../dist/engines/yuris/vm/region-compiler.js');
+  const {YurisTask} = await import('../dist/engines/yuris/vm/task.js');
+  const {characterOffsets, sjisCode} = await import('../dist/engines/yuris/vm/vars.js');
+  const token = (name, ...bytes) => [name.charCodeAt(0), bytes.length, 0, ...bytes];
+  const ref = (name, id) => token(name, 0x40, id & 255, id >>> 8);
+  const arg = (id, bytes, type = 1) => ({
+    id,
+    type,
+    op: 0,
+    size: bytes.length,
+    offset: 0,
+    tokens: null,
+    expression: Uint8Array.from(bytes),
+  });
+  const VARINFO = 0x67;
+  const commands = {
+    if: 1, else: 2, ifBlend: 3, ifEnd: 4, int: 5, flt: 14, str: 6, let: 7, loop: 8,
+    loopEnd: 9, loopBreak: 10, loopContinue: 11, gosub: 12, return: 13, varInfo: VARINFO,
+  };
+  // VARINFO SJISCODE=1 SET=H$1001 LET=H@1002, then VARINFO LENGTH=1 SET=H$1001 LET=H@1003.
+  const instructions = [
+    {command: VARINFO, extra: 0, args: [arg(16, token('B', 1)), arg(0, ref('H', 1001), 3), arg(1, ref('H', 1002))]},
+    {command: VARINFO, extra: 0, args: [arg(13, token('B', 1)), arg(0, ref('H', 1001), 3), arg(1, ref('H', 1003))]},
+  ];
+  const kinds = {0: 1, 1: 0, 13: 0, 16: 0};
+  const run = (text, setType = 'string') => {
+    const variables = new YurisVariables(1003);
+    variables.allocateString(1001, text);
+    variables.allocateInt(1002, -1n);
+    variables.allocateInt(1003, -1n);
+    const compiled = compileRegion(
+      {
+        instructions, variables, system: {}, commands, script: 0, lines: [],
+        hooks: {characters: (t) => characterOffsets({}, t).count},
+        eligible: () => true, argKind: (_, id) => kinds[id] ?? 3,
+      },
+      0,
+      1,
+    );
+    assert.equal(compiled.last, 1);
+    if (setType !== 'string') variables.allocateInt(1001, 5n);
+    const task = new YurisTask();
+    return {next: compiled.region(task, 0), code: variables.get(1002).ints[0], length: variables.get(1003).ints[0]};
+  };
+  for (const text of ['abc', '\x82\xa0x\x88\x9f', '\x81', '', 'k\x82\xa0']) {
+    const result = run(text);
+    assert.deepEqual(result, {next: 2, code: BigInt(sjisCode(text)), length: BigInt(characterOffsets({}, text).count)});
+  }
+  // A SET that is no longer a string returns to the interpreter before the first VARINFO.
+  assert.deepEqual(run('ab', 'int'), {next: 0, code: -1n, length: -1n});
+});
+
 test('YU-RIS compiled regions run LOOP, LOOPBREAK and calls, leaving batched loops to the interpreter', async () => {
   const {compileRegion} = await import('../dist/engines/yuris/vm/region-compiler.js');
   const {YurisTask} = await import('../dist/engines/yuris/vm/task.js');

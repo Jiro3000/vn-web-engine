@@ -126,6 +126,7 @@ const REGION_COMMAND_NUMBERS = {
   loopContinue: Command.LoopContinue,
   gosub: Command.Gosub,
   return: Command.Return,
+  varInfo: 0x67,
 } as const;
 const REGION_COMMANDS = new Set<number>(Object.values(REGION_COMMAND_NUMBERS));
 
@@ -483,9 +484,10 @@ export class YurisMachine {
       hooks: this.regionHooks,
       script: loaded.index,
       lines: loaded.script.lines,
-      argKind: (command, id) => {
+      argKind: (command, id, arg) => {
         const spec = this.project.commands.commands[command]?.args[id];
-        return spec?.check ? -1 : (spec?.kind ?? 3);
+        if (!spec?.check) return spec?.kind ?? 3;
+        return arg && this.literalPasses(spec.check, arg) ? spec.kind : -1;
       },
       gosubTarget: (p) => this.gosubTarget(loaded, p),
       eligible: (p) => this.regionEligible(loaded, p),
@@ -503,6 +505,7 @@ export class YurisMachine {
       this.position = position;
       this.foldCall(caller, entry);
     },
+    characters: (text) => characterOffsets(this, text).count,
   };
 
   /** A GOSUB's constant callee in a loaded script. */
@@ -551,14 +554,19 @@ export class YurisMachine {
                                 ? this.gosubHandler
                                 : command === Command.Return
                                   ? this.returnHandler
-                                  : undefined;
+                                  : command === 0x67
+                                    ? this.nativeVarInfo
+                                    : undefined;
     if (!native || this.handlers[command] !== native) return false;
     if (!this.canBatchLoop(loaded.index, position, position)) return false;
     if (command === Command.Int || command === Command.Flt || command === Command.Str) {
       // INT, FLT and STR run the decoder 0x4253C9 first; its range checks must not apply.
       const declared = this.project.commands.commands[command];
       if (!declared) return false;
-      for (const arg of instruction.args) if (declared.args[arg.id]?.check) return false;
+      for (const arg of instruction.args) {
+        const check = declared.args[arg.id]?.check;
+        if (check && !this.literalPasses(check, arg)) return false;
+      }
     }
     return true;
   }
@@ -884,6 +892,19 @@ export class YurisMachine {
     this.args.variable[i] = e.lastId;
     this.args.variableIndex[i] = e.lastIndex;
     this.args.whole[i] = e.wholeVariable ? 1 : 0;
+  }
+
+  /** Whether `arg` is a number literal that the decoder's range check `code` accepts. */
+  private literalPasses(code: number, arg: YurisArgument): boolean {
+    const token = arg.tokens?.length === 1 ? arg.tokens[0]! : null;
+    // B, W, I and L tokens (0x42, 0x57, 0x49, 0x4C) are literals; others read state.
+    if (!token || ![0x42, 0x57, 0x49, 0x4c].includes(token.op)) return false;
+    try {
+      this.check(code, this.expression.intOf(arg.type, arg.expression), '', '');
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   private check(code: number, value: bigint, command: string, name: string): void {
@@ -1238,7 +1259,8 @@ export class YurisMachine {
     )
       return;
     if (entry.limit === -1n) {
-      if (entry.end - entry.start === 241) {
+      const length = entry.end - entry.start;
+      if (length >= 85 && length <= 241) {
         let lexer = this.lexerRuns.get(instruction);
         if (lexer === undefined) {
           lexer = this.findLexerScan(entry);
@@ -1545,11 +1567,11 @@ export class YurisMachine {
       const outer = task.ifEntry(task.ifDepth++);
       outer.position = entry.start + 11;
       outer.loopDepth = task.loopDepth;
-      outer.end = entry.start + 240;
+      outer.end = entry.end - 1;
       const inner = task.ifEntry(task.ifDepth++);
       inner.position = entry.start + 12;
       inner.loopDepth = task.loopDepth;
-      inner.end = entry.start + 177;
+      inner.end = entry.start + scan.run.chain;
       task.position = entry.start + initial[code]!;
     }
   }

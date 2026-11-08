@@ -27,6 +27,7 @@ export interface RegionCommands {
   readonly loopContinue: number;
   readonly gosub: number;
   readonly return: number;
+  readonly varInfo: number;
 }
 
 /** Interpreter services that compiled control transfers use. */
@@ -42,6 +43,8 @@ export interface RegionHooks {
    * recognized library entries, which may run the callee to its RETURN.
    */
   called(caller: number, position: number, entry: number): void;
+  /** The CP932 character count VARINFO LENGTH (0x455464) reports for `text`. */
+  characters(text: string): number;
 }
 
 export interface RegionSource {
@@ -55,9 +58,10 @@ export interface RegionSource {
   readonly lines: ArrayLike<number>;
   /**
    * The YSCM decoder kind of argument `id` of `command` (0 number, 1 string, 2 expression,
-   * other kinds unevaluated), or -1 when the decoder applies a range check to it.
+   * other kinds unevaluated), or -1 when the decoder applies a range check to it that
+   * `arg`, when given, is not a number literal known to pass.
    */
-  argKind(command: number, id: number): number;
+  argKind(command: number, id: number, arg?: YurisArgument): number;
   /**
    * The constant label of the GOSUB at `position` when its script is loaded; null otherwise.
    */
@@ -69,8 +73,19 @@ export interface RegionSource {
   eligible(position: number): boolean;
 }
 
+/** VARINFO argument ids (`ysc.ybn`, vars.ts). */
+const INFO_SET = 0,
+  INFO_LET = 1,
+  INFO_LENGTH = 13,
+  INFO_SJIS_CODE = 16;
+
 /** The longest range one region covers. */
 export const REGION_LIMIT = 160;
+/**
+ * The source size after which a region ends: V8 optimizes functions only up to 60 KiB of
+ * bytecode, about one byte per source character of this code.
+ */
+const REGION_SOURCE_LIMIT = 40000;
 
 /**
  * System variables whose reads only return state (0x448280, 0x4212D4): call frame
@@ -102,6 +117,11 @@ class Emitter {
   readonly variables = new Map<number, string>();
   private temp = 0;
   bail = '';
+
+  /** Temporaries are numbered per instruction; the region declares each name once. */
+  startInstruction(): void {
+    this.temp = 0;
+  }
 
   ref(id: number): string {
     let name = this.variables.get(id);
@@ -791,17 +811,50 @@ function compileInstruction(
       );
       return true;
     }
+    case c.varInfo: {
+      // VARINFO 0x455464 with LENGTH (the CP932 character count) or SJISCODE (the first
+      // character's code) of a scalar string script variable into a scalar int one.
+      if (args.length !== 3) return false;
+      const set = args.find((arg) => arg.id === INFO_SET),
+        to = args.find((arg) => arg.id === INFO_LET);
+      const query = args.some((arg) => arg.id === INFO_LENGTH)
+        ? INFO_LENGTH
+        : args.some((arg) => arg.id === INFO_SJIS_CODE)
+          ? INFO_SJIS_CODE
+          : -1;
+      const from = scalarTarget(set),
+        into = scalarTarget(to);
+      if (query < 0 || from < SYSTEM_VARIABLE_LIMIT || into < SYSTEM_VARIABLE_LIMIT) return false;
+      if (!entries[from] || !entries[into]) return false;
+      // The decoder evaluates every argument first; compiled evaluations have no effects.
+      if (!evaluate()) return false;
+      const s = out.ref(from),
+        l = out.ref(into);
+      // LENGTH of another type is error 0x1A6BC; an int LET of another type converts or fails.
+      out.guard(`${s}.type !== ${YurisType.String} || ${l}.type !== ${YurisType.Int}`);
+      const text = out.value(`0 < ${s}.count ? ${s}.strings[0] : ''`);
+      let value: string;
+      if (query === INFO_LENGTH) value = `BigInt(H.characters(${text}))`;
+      else {
+        // sjisCode (vars.ts): a lead byte 0x81..0xFE joins the next byte.
+        const first = out.value(`${text}.charCodeAt(0) || 0`);
+        value = `BigInt(${first} >= 0x81 && ${first} <= 0xfe ? (${first} << 8) + (${text}.charCodeAt(1) || 0) : ${first})`;
+      }
+      out.lines.push(`if (0 < ${l}.count) ${l}.ints[0] = ${value};`);
+      return true;
+    }
   }
   return false;
 
   /**
    * The decoder 0x4253C9 / 0x4430C5 for every argument: numbers and strings by their YSCM
-   * kind, keyed by argument id; null when one does not compile or has a range check.
+   * kind, keyed by argument id; null when one does not compile or has a range check that
+   * it may fail.
    */
   function evaluate(): Map<number, string> | null {
     const values = new Map<number, string>();
     for (const arg of args) {
-      const kind = source.argKind(instruction.command, arg.id);
+      const kind = source.argKind(instruction.command, arg.id, arg);
       if (kind < 0) return null;
       if (kind !== 0 && kind !== 1) continue;
       if (!arg.expression) return null;
@@ -875,9 +928,17 @@ export function compileRegion(
 ): {region: CompiledRegion; last: number} | null {
   const out = new Emitter();
   const cases: string[] = [];
-  let end = first;
-  for (let position = first; position <= last && position - first < REGION_LIMIT; position++) {
+  // Locals of all cases, declared once at the top of the region function.
+  const locals = new Set<string>();
+  let end = first,
+    size = 0;
+  for (
+    let position = first;
+    position <= last && position - first < REGION_LIMIT && size < REGION_SOURCE_LIMIT;
+    position++
+  ) {
     if (!source.eligible(position)) break;
+    out.startInstruction();
     const mark = out.lines.length,
       names = new Map(out.variables);
     const ok = compileInstruction(
@@ -892,7 +953,14 @@ export function compileRegion(
       for (const [k, v] of names) out.variables.set(k, v);
       break;
     }
-    cases.push(`case ${position}: {\n${out.lines.splice(mark).join('\n')}\n}`);
+    const lines = out.lines
+      .splice(mark)
+      .map((line) =>
+        line.replace(/^const (\w+) = /, (_, name: string) => (locals.add(name), `${name} = `)),
+      );
+    const text = `case ${position}: {\n${lines.join('\n')}\n}`;
+    cases.push(text);
+    size += text.length;
     end = position;
   }
   if (cases.length === 0) return null;
@@ -900,6 +968,7 @@ export function compileRegion(
   const body = [
     ...[...out.variables].map(([id, name]) => `const ${name} = V[${id}];`),
     'return function region(task, pc) {',
+    ...(locals.size ? [`let ${[...locals].join(', ')};`] : []),
     'for (;;) {',
     'switch (pc) {',
     ...cases,
@@ -908,6 +977,8 @@ export function compileRegion(
     '}',
     '}',
     '};',
+    // Names the region in stack traces and profiles by its script and first position.
+    `//# sourceURL=yuris-region/${source.script}/${first}`,
   ].join('\n');
   // eslint-disable-next-line @typescript-eslint/no-implied-eval
   const factory = new Function('V', 'S', 'A', 'H', 'F', body) as (
