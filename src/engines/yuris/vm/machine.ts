@@ -641,6 +641,7 @@ export class YurisMachine {
       this.windows.background();
     }
     this.input.poll(this.screenWidth, this.screenHeight);
+    this.pacer.poll();
     this.system.frames++;
     this.input.update(this.host.now(), this.pacer.time);
     // 0x404237: a TASK RESTART during a pass runs the dispatcher again.

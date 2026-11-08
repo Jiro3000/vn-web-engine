@@ -1108,6 +1108,12 @@ function copyRegion(
 ): void {
   const bytes = (x1 - x0 + 1) * 4;
   if (bytes <= 0) return;
+  if (bytes === fromWidth * 4 && fromWidth === toWidth) {
+    // Whole rows of equal width are one contiguous span.
+    const start = (y0 * fromWidth + x0) * 4;
+    if (y1 >= y0) to.set(from.subarray(start, start + (y1 - y0 + 1) * bytes), 0);
+    return;
+  }
   for (let y = y0, at = 0; y <= y1; y++, at += toWidth * 4) {
     const start = (y * fromWidth + x0) * 4;
     to.set(from.subarray(start, start + bytes), at);

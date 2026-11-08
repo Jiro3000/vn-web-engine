@@ -192,7 +192,11 @@ async function linearMacros(m: YurisMachine, cursor: number): Promise<Set<string
 interface MacroImage {
   /** Index into the sprite kind folders (V$movieFolder). */
   readonly folder: number;
+  /** The macro argument with the name, or -1 for the literal `name`. */
   readonly arg: number;
+  readonly name?: string;
+  /** The request is inside branches taken when each argument equals one of the values. */
+  readonly when?: readonly ArgumentCondition[];
   /** A transition rule name, which es.SP.LOADTR maps through es.TRDEF.CHECK (YSTB160:135). */
   readonly rule: boolean;
 }
@@ -204,7 +208,41 @@ interface MacroCalls {
   readonly jumps: ReadonlyMap<string, number>;
 }
 
+interface ArgumentCondition {
+  readonly arg: number;
+  readonly values: readonly string[];
+}
+
 const PARAMETER = /^P(?:STR|INT|FLT)([0-9]*)$/;
+
+/**
+ * An IF or ELSE condition `H$v "a" = H$v "b" = | …` on one string variable that holds a macro
+ * argument, as the argument and its literal values; anything else is undefined.
+ */
+function argumentCondition(
+  tokens: readonly YurisToken[] | null | undefined,
+  vars: ReadonlyMap<number, number>,
+): ArgumentCondition | undefined {
+  if (!tokens?.length) return;
+  let variable: number | undefined;
+  const values: string[] = [];
+  for (let i = 0; i < tokens.length;) {
+    const [v, literal, equal] = [tokens[i], tokens[i + 1], tokens[i + 2]];
+    if (v?.op !== 0x48 || v.payload[0] !== 0x24 || literal?.op !== 0x4d || equal?.op !== 0x3d)
+      return;
+    const id = v.payload[1]! | (v.payload[2]! << 8);
+    if (variable !== undefined && id !== variable) return;
+    variable = id;
+    values.push(decodeLiteral(literal.payload, 0, literal.payload.length));
+    i += 3;
+    if (values.length > 1) {
+      if (tokens[i]?.op !== 0x7c) return;
+      i++;
+    }
+  }
+  const arg = variable === undefined ? undefined : vars.get(variable);
+  return arg === undefined ? undefined : {arg, values};
+}
 const SYSTEM_STRING_PARAMETERS = 55;
 
 /**
@@ -254,14 +292,24 @@ async function macroCalls(m: YurisMachine, trFolder: number): Promise<MacroCalls
     const label = labels[labelIndex]!;
     let jump: number | undefined,
       nesting = 0;
+    // The condition of each open IF or ELSE branch and LOOP (undefined when not an argument test).
+    const branches: (ArgumentCondition | undefined)[] = [];
     const code = (await m.project.script(label.script)).instructions;
     const end = Math.min(code.length, ends(label.script, label.position));
     for (let p = label.position; p < end; p++) {
       const ins = code[p]!,
         name = commands[ins.command]?.name;
-      if (name === 'IF' || name === 'LOOP') nesting++;
-      else if (name === 'IFEND' || name === 'LOOPEND') nesting--;
-      else if (name === 'RETURN' && nesting <= 0) break;
+      if (name === 'IF' || name === 'LOOP') {
+        nesting++;
+        branches.push(name === 'IF' ? argumentCondition(ins.args[0]?.tokens, vars) : undefined);
+      } else if (name === 'ELSE') {
+        // An ELSE chain on the preset name: the later tests still hold where this one runs.
+        if (branches.length)
+          branches[branches.length - 1] = argumentCondition(ins.args[0]?.tokens, vars);
+      } else if (name === 'IFEND' || name === 'LOOPEND') {
+        nesting--;
+        branches.pop();
+      } else if (name === 'RETURN' && nesting <= 0) break;
       else if (name === 'STR' || name === 'LET') {
         const target = single(ins.args[0]?.tokens),
           source = ins.args[1]?.tokens;
@@ -291,7 +339,8 @@ async function macroCalls(m: YurisMachine, trFolder: number): Promise<MacroCalls
         );
         if (callee < 0) continue;
         const passed = new Map<number, number>(),
-          literals = new Map<number, number>();
+          literals = new Map<number, number>(),
+          strings = new Map<number, string>();
         for (const arg of ins.args.slice(1)) {
           const match = PARAMETER.exec(commands[ins.command]?.args[arg.id]?.name ?? '');
           if (!match) continue;
@@ -300,6 +349,27 @@ async function macroCalls(m: YurisMachine, trFolder: number): Promise<MacroCalls
           if (id !== undefined && vars.has(id)) passed.set(position, vars.get(id)!);
           const literal = arg.tokens?.length === 1 ? literalNumber(arg.tokens[0]) : undefined;
           if (literal !== undefined) literals.set(position, literal);
+          const text = arg.tokens?.length === 1 ? arg.tokens[0]! : undefined;
+          if (text?.op === 0x4d)
+            strings.set(position, decodeLiteral(text.payload, 0, text.payload.length));
+        }
+        // es.SP.CG.SET with a literal kind and name inside branches that test macro arguments
+        // against literals (the PSET preset table, YSTB304:25–) loads when the arguments match.
+        const when = branches.filter((condition) => condition) as ArgumentCondition[];
+        if (
+          callee === cgSet &&
+          !conditional &&
+          nesting > 0 &&
+          when.length === branches.length &&
+          when.length === nesting &&
+          literals.has(1)
+        ) {
+          const literalName = strings.get(2),
+            arg = passed.get(2);
+          if (literalName)
+            out.push({folder: literals.get(1)!, arg: -1, name: literalName, rule: false, when});
+          else if (arg !== undefined) out.push({folder: literals.get(1)!, arg, rule: false, when});
+          continue;
         }
         // Only requests every call makes count: none inside an IF or LOOP block at any level.
         const branch = conditional || nesting > 0;
@@ -309,8 +379,11 @@ async function macroCalls(m: YurisMachine, trFolder: number): Promise<MacroCalls
           continue;
         } else if (callee === cgSet) {
           const kind = literals.get(1),
-            arg = passed.get(2);
+            arg = passed.get(2),
+            literalName = strings.get(2);
           if (kind !== undefined && arg !== undefined) out.push({folder: kind, arg, rule: false});
+          else if (kind !== undefined && literalName)
+            out.push({folder: kind, arg: -1, name: literalName, rule: false});
         } else if (callee === trSet) {
           const arg = passed.get(1);
           if (arg !== undefined && trFolder >= 0) out.push({folder: trFolder, arg, rule: true});
@@ -808,7 +881,9 @@ export class YurisSceneLookahead {
         if (rule) this.addRule(assets, rule);
         // es.SP.CG.SET and es.SP.TR.SET requests: the kind folder and the argument's name.
         for (const image of this.calls?.images.get(tag) ?? []) {
-          const name = values[image.arg];
+          if (image.when?.some(({arg, values: wanted}) => !wanted.includes(values[arg] ?? '')))
+            continue;
+          const name = image.arg < 0 ? image.name : values[image.arg];
           if (!name || !/^[^"',()\\$@ ]+$/.test(name)) continue;
           if (image.rule) this.addRule(assets, name);
           else if (folders?.[image.folder]) assets.add(folders[image.folder] + name);

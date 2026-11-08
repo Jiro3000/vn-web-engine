@@ -27,6 +27,20 @@ export class YurisFramePacer {
   /** 0x8722B8 and 0x8722BC: the previous second's paced and drawn frames. */
   lastPaced = 0;
   lastDrawn = 0;
+  /** Host: a key or button press arrived; the frame that polls it is shown without waiting. */
+  private pressed = false;
+  private restart = false;
+
+  /** Host: a key or button press ends the current wait; see `poll`. */
+  interrupt(): void {
+    this.pressed = true;
+  }
+
+  /** Host: the input poll of a frame consumes the press, so this frame's `begin` returns 0. */
+  poll(): void {
+    this.restart = this.pressed;
+    this.pressed = false;
+  }
 
   /** 0x4459F8 (after LOAD restores a layer): the reference time becomes `now`. */
   rebase(now: number): void {
@@ -58,6 +72,13 @@ export class YurisFramePacer {
     this.period = (this.period & 0xffff) + Math.trunc(0x3e80000 / this.fps);
     const interval = this.period >>> 16;
     const elapsed = (now - this.base) >>> 0;
+    if (this.restart) {
+      // Host: the frame that handles a press shows at once. The reference time stays, so
+      // the next frames keep the frame grid of the frames before the press.
+      this.restart = false;
+      this.next = false;
+      return 0;
+    }
     if (elapsed < interval) {
       this.base = (this.base + interval) >>> 0;
       this.next = false;

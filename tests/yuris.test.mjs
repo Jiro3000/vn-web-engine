@@ -18,6 +18,7 @@ import {YurisExpression} from '../dist/engines/yuris/vm/expression.js';
 import {sizeBilinear, sizeLanczos} from '../dist/engines/yuris/vm/resize.js';
 import {bgraDisplayFrame, transitionBgra} from '../dist/graphics/bgra-effects-wasm.js';
 import {YurisVariables} from '../dist/engines/yuris/vm/variables.js';
+import {YurisFramePacer} from '../dist/engines/yuris/vm/pacing.js';
 
 test('YU-RIS SIMD transition retains paired midpoint and odd-tail rounding', () => {
   const width = 513,
@@ -2534,7 +2535,16 @@ test('YU-RIS lookahead follows macro images, labels and jumps into other files',
   const lookahead = new YurisSceneLookahead(machine, false, []);
   lookahead.linearNames = new Set(['BG']);
   lookahead.calls = {
-    images: new Map([['BG', [{folder: 1, arg: 0, rule: false}]]]),
+    images: new Map([
+      [
+        'BG',
+        [
+          {folder: 1, arg: 0, rule: false},
+          // A preset branch's literal image, requested when the first argument names it.
+          {folder: 0, arg: -1, name: 'item/x', rule: false, when: [{arg: 0, values: ['bg01']}]},
+        ],
+      ],
+    ]),
     jumps: new Map([['GO', 0]]),
   };
   lookahead.update();
@@ -2543,7 +2553,7 @@ test('YU-RIS lookahead follows macro images, labels and jumps into other files',
   assert.deepEqual(lookahead.update(), []);
   assert.deepEqual(reads, ['scenario\\b.txt']);
   await new Promise((resolve) => setTimeout(resolve));
-  assert.deepEqual(lookahead.update(), ['cg/bg/bg01', 'cg/bg/bg02']);
+  assert.deepEqual(lookahead.update(), ['cg/bg/bg01', 'cg/item/x', 'cg/bg/bg02']);
   assert.equal(reads.length, 1);
   // A jump within the file resumes at its label's line; an unknown label ends the scan.
   const local = [`first`, `\\GO(near)`, `unreached`, `#near`, `\\BG(bg03)`, `third`];
@@ -2563,6 +2573,8 @@ test('YU-RIS lookahead locates the scenario library variables in its routines', 
     V = (n) => id(0x56, n),
     lit = (n) => ({op: 0x49, payload: new Uint8Array(new Int32Array([n]).buffer)}),
     op = (c) => ({op: c.charCodeAt(0), payload: new Uint8Array()});
+  const S = (n) => ({op: 0x48, payload: Uint8Array.of(0x24, n & 255, n >> 8)}),
+    text = (t) => ({op: 0x4d, payload: new TextEncoder().encode(`"${t}"`)});
   const ins = (...args) => ({
     command: 0,
     extra: 0,
@@ -2604,7 +2616,8 @@ test('YU-RIS lookahead locates the scenario library variables in its routines', 
     GOSUB = 2,
     IF = 3,
     IFEND = 4,
-    RETURN = 5;
+    RETURN = 5,
+    ELSE = 6;
   // GOSUB argument ids: 0 the label, then PINT, PSTR and PSTR2.
   const call = (name, ...params) => ({
     command: GOSUB,
@@ -2650,6 +2663,23 @@ test('YU-RIS lookahead locates the scenario library variables in its routines', 
       {...ins(), command: IFEND},
     ],
     'es.ScenarioMacro.SP.TR': [call('es.SP.TR.SET', [PSTR, [H(3071)]])],
+    // A preset table: ELSE branches test the first argument against literal names.
+    'es.ScenarioMacro.PSET': [call('PSET', [PSTR, [H(3070)]]), {...ins(), command: RETURN}],
+    PSET: [
+      let_(3, [S(4300)], [V(55), lit(1), op(')')]),
+      {...ins([S(4301), text('ysr'), op('=')]), command: IF},
+      {...ins([S(4300), text('a'), op('=')]), command: ELSE},
+      call('es.SP.CG.SET', [PINT, [lit(3)]], [PSTR2, [text('ITEM/a1')]]),
+      {...ins([S(4300), text('b'), op('='), S(4300), text('c'), op('='), op('|')]), command: ELSE},
+      call('es.SP.CG.SET', [PINT, [lit(3)]], [PSTR2, [text('ITEM/bc')]]),
+      {...ins(), command: IF},
+      call('es.SP.CG.SET', [PINT, [lit(3)]], [PSTR2, [text('ITEM/maybe')]]),
+      {...ins(), command: IFEND},
+      {...ins(), command: ELSE},
+      call('es.SP.CG.SET', [PINT, [lit(3)]], [PSTR2, [text('ITEM/other')]]),
+      {...ins(), command: IFEND},
+      {...ins(), command: RETURN},
+    ],
     'es.SP.CG.SET': [ins()],
     'es.SP.TR.SET': [ins()],
     'es.SP.LOADTR': [...pad(2), let_(3, [H(4200)], [V(5534), lit(4), op(')'), H(4201), op('+')])],
@@ -2682,6 +2712,7 @@ test('YU-RIS lookahead locates the scenario library variables in its routines', 
           {name: 'IF'},
           {name: 'IFEND'},
           {name: 'RETURN'},
+          {name: 'ELSE'},
         ],
       },
       labels: {
@@ -2724,11 +2755,15 @@ test('YU-RIS lookahead locates the scenario library variables in its routines', 
   assert.deepEqual(lookahead.scaleBands, [{low: 13000, high: 99999, scale: 66}]);
   // Macros that reach a cursor write or the choice routines end the forecast scan.
   await lookahead.macrosRead;
-  assert.deepEqual([...lookahead.linearNames], ['SP.GO', 'SetParam', 'BG', 'SP.TR']);
+  assert.deepEqual([...lookahead.linearNames], ['SP.GO', 'SetParam', 'BG', 'SP.TR', 'PSET']);
   // Sprite requests follow the macro arguments into the routines; GO always jumps to its first.
   assert.deepEqual(Object.fromEntries(lookahead.calls.images), {
     BG: [{folder: 1, arg: 0, rule: false}],
     'SP.TR': [{folder: 4, arg: 1, rule: true}],
+    PSET: [
+      {folder: 3, arg: -1, name: 'ITEM/a1', rule: false, when: [{arg: 0, values: ['a']}]},
+      {folder: 3, arg: -1, name: 'ITEM/bc', rule: false, when: [{arg: 0, values: ['b', 'c']}]},
+    ],
   });
   assert.deepEqual(Object.fromEntries(lookahead.calls.jumps), {GO: 0});
   // A parser whose source read does not index by its cursor is not this library.
@@ -3241,4 +3276,23 @@ test('YU-RIS compiled regions evaluate float declarations, assignments and resul
     [task.gosubDepth, task.frames[0].floats[1][1], task.frames[0].flags[4][1]],
     [0, 10.5, 1],
   );
+});
+
+test('YU-RIS frame pacing shows the frame that polls a press at once and keeps its grid', () => {
+  const pacer = new YurisFramePacer();
+  pacer.rebase(1000);
+  assert.equal(pacer.begin(1004), 12);
+  pacer.end(1016, true);
+  // A press during the dispatch is consumed by the next frame's input poll, not this wait.
+  pacer.interrupt();
+  assert.equal(pacer.begin(1020), 13);
+  pacer.end(1033, true);
+  pacer.poll();
+  assert.equal(pacer.begin(1040), 0);
+  assert.equal(pacer.time, 1040);
+  pacer.end(1040, false);
+  pacer.poll();
+  // The next frame waits for the grid point after the one before the press (1033 + 17).
+  assert.equal(pacer.begin(1046), 4);
+  assert.equal(pacer.skipping, false);
 });

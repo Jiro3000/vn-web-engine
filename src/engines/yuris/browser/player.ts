@@ -458,6 +458,7 @@ export class YurisBrowserPlayer {
         const key = setWindowsVirtualKey(this.machine.input.keyboard, e, true);
         if (key) this.machine.input.keyDown(key);
         e.preventDefault();
+        this.machine.pacer.interrupt();
         this.wakePace?.();
       },
       {signal},
@@ -665,8 +666,8 @@ export class YurisBrowserPlayer {
   }
   /**
    * The frame pacing `Sleep` of 0x4109A8, which a key or button press ends early: the frame
-   * shows at once and the next pass, which polls the press, starts without the rest of the
-   * wait (its pacing then restarts from that moment, as after a late frame).
+   * shows at once, and the frame that polls the press is shown without a wait; later frames
+   * keep the earlier frame grid (`YurisFramePacer.interrupt`).
    */
   private paceSleep(ms: number, process: {sleep(ms: number): Promise<void>}): Promise<void> {
     if (ms <= 0) return process.sleep(ms);
@@ -843,6 +844,7 @@ export class YurisBrowserPlayer {
         this.machine.input.keyboard[button] = 128;
         this.machine.input.buttonDown(button);
         canvas.setPointerCapture(e.pointerId);
+        this.machine.pacer.interrupt();
         this.wakePace?.();
       },
       {signal},

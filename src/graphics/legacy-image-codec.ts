@@ -32,7 +32,7 @@ export const YDG_MIME = 'image/x-yuris-ydg';
 export const QOI_MIME = 'image/x-qoi';
 
 const IMAGE_CACHE_BYTES = 96 * 1024 * 1024;
-const PRELOAD_CACHE_BYTES = 160 * 1024 * 1024;
+const PRELOAD_CACHE_BYTES = 224 * 1024 * 1024;
 const PRELOAD_WEBP_BYTES = 56 * 1024 * 1024;
 const PRELOAD_LARGE_PNG_BYTES = 68 * 1024 * 1024;
 const LARGE_PNG_BYTES = 2 * 1024 * 1024;
@@ -159,6 +159,8 @@ export class LegacyImageCodec {
   /** Keeps the decodes of `images` (path to MIME type) for the next click. */
   prioritize(images: ReadonlyMap<string, string>): void {
     this.nextClick = new Set(Array.from(images, ([path, mime]) => this.key(mime, true, path)));
+    // A background decode of a named image already in progress joins the urgent lane.
+    for (const key of this.nextClick) this.warming.get(key)?.lane.promote();
   }
 
   private key(mime: string, legacyWebpColor: boolean, path: string): string {
@@ -177,7 +179,8 @@ export class LegacyImageCodec {
 
   /**
    * Preload the exact PNG, YDG, QOI or legacy WebP decode while the caller is doing other work.
-   * An `urgent` preload's worker jobs start before those of other preloads.
+   * The worker jobs of an `urgent` preload, or of one the next click names, start before
+   * those of other preloads.
    */
   async preload(bytes: Uint8Array, mime: string, path: string, urgent = false): Promise<void> {
     const key = this.key(mime, true, path);
@@ -205,7 +208,7 @@ export class LegacyImageCodec {
               : null;
     if (!format) return;
     const encoded = bytes.slice();
-    const lane = backgroundImageDecodes(urgent);
+    const lane = backgroundImageDecodes(urgent || this.nextClick.has(key));
     const ready = (async () => {
       const decoded =
         format === 'png'

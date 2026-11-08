@@ -8,25 +8,32 @@ import {decodeQoi} from '../formats/qoi.js';
 import {decodeYdg} from '../formats/yuris/ydg.js';
 import type {ImageDecodeRequest, ImageDecodeResponse} from './image-decode-offload.js';
 import {swapRedBlueInPlace} from './pixel-order.js';
+import {createLosslessImageDecoder} from './browser-lossless-image.js';
+
+const lossless = createLosslessImageDecoder();
 
 // Failures are reported as failed jobs; the host reruns the in-thread decoder, which raises
 // the original error.
 serveWorkerPool<ImageDecodeRequest, ImageDecodeResponse>(async ({format, bytes, png, order}) => {
+  // The browser path returns pixels in the requested order; it applies only to strict decodes.
+  const browserPng =
+    format === 'png' && !png ? await lossless.png(bytes, order === 'bgra' ? 'bgra' : 'rgba') : null;
   const image =
-    format === 'png'
+    browserPng ??
+    (format === 'png'
       ? await decodePng(bytes, png)
       : format === 'artemis-psd'
         ? decodeArtemisPsd(bytes)
         : format === 'opaque-jpeg'
           ? await decodeOpaqueJpeg(bytes)
           : format === 'legacy-webp' || format === 'webp'
-            ? decodeWebp(bytes, format === 'legacy-webp')
+            ? ((await lossless.webp(bytes)) ?? decodeWebp(bytes, format === 'legacy-webp'))
             : format === 'yuris-ydg'
               ? decodeYdg(bytes)
               : format === 'qoi'
                 ? decodeQoi(bytes)
-                : await decodeBrowserImage(bytes, format);
-  if (format === 'png' && order === 'bgra') swapRedBlueInPlace(image.pixels);
+                : await decodeBrowserImage(bytes, format));
+  if (format === 'png' && !browserPng && order === 'bgra') swapRedBlueInPlace(image.pixels);
   const transfer: Transferable[] = [image.pixels.buffer];
   const indices = (image as {indices?: Uint8Array}).indices;
   if (indices) transfer.push(indices.buffer);
