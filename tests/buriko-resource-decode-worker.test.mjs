@@ -7,7 +7,7 @@ import {
   BurikoDistributedAllocator,
   BurikoDistributedProcessing,
 } from '../dist/engines/buriko/native/distributed-processing.js';
-import {WorkerPool} from '../dist/platform/worker-pool.js';
+import {WorkerPool, WorkerPoolLane} from '../dist/platform/worker-pool.js';
 import {
   getRuntimePerformanceSnapshot,
   startRuntimePerformanceRecording,
@@ -151,4 +151,120 @@ test('a worker pool that cannot start workers resolves jobs as unavailable', asy
   );
   assert.equal(await failing.run({}), undefined);
   assert.equal(failing.available, false);
+});
+
+test('a worker pool starts background lane jobs only on idle workers', async () => {
+  const posted = [];
+  let worker;
+  const pool = new WorkerPool(() => {
+    worker = {
+      postMessage: (message) => posted.push(message),
+      terminate() {},
+    };
+    return worker;
+  }, 1);
+  const reply = (index) => worker.onmessage({data: {id: posted[index].id, response: index}});
+  const tick = () => new Promise((resolve) => setTimeout(resolve));
+  const lane = new WorkerPoolLane();
+  const a = pool.run('a', [], lane);
+  const b = pool.run('b', [], lane);
+  // A job needed now goes to the worker at once, ahead of the waiting background job.
+  const now = pool.run('now');
+  assert.deepEqual(
+    posted.map((m) => m.request),
+    ['a', 'now'],
+  );
+  reply(0);
+  assert.equal(await a, 0);
+  assert.deepEqual(
+    posted.map((m) => m.request),
+    ['a', 'now'],
+  );
+  reply(1);
+  assert.equal(await now, 1);
+  await tick();
+  assert.deepEqual(
+    posted.map((m) => m.request),
+    ['a', 'now', 'b'],
+  );
+  // Promoting a lane starts its waiting jobs and later ones without waiting for an idle worker.
+  const other = new WorkerPoolLane();
+  const c = pool.run('c', [], other);
+  assert.equal(posted.length, 3);
+  other.promote();
+  await tick();
+  assert.equal(other.background, false);
+  pool.run('d', [], other);
+  assert.deepEqual(
+    posted.map((m) => m.request),
+    ['a', 'now', 'b', 'c', 'd'],
+  );
+  reply(2);
+  assert.equal(await b, 2);
+  reply(3);
+  assert.equal(await c, 3);
+  // Terminating resolves waiting background jobs as unavailable.
+  const waiting = pool.run('e', [], new WorkerPoolLane());
+  pool.terminate();
+  assert.equal(await waiting, undefined);
+});
+
+test('a worker pool starts urgent lane jobs before other waiting background jobs', async () => {
+  const posted = [];
+  let worker;
+  const pool = new WorkerPool(() => {
+    worker = {postMessage: (message) => posted.push(message), terminate() {}};
+    return worker;
+  }, 1);
+  const reply = (index) => worker.onmessage({data: {id: posted[index].id, response: index}});
+  const tick = () => new Promise((resolve) => setTimeout(resolve));
+  const lane = new WorkerPoolLane(),
+    urgent = new WorkerPoolLane(true);
+  pool.run('a', [], lane);
+  pool.run('b', [], lane);
+  pool.run('c', [], lane);
+  pool.run('u1', [], urgent);
+  pool.run('u2', [], urgent);
+  for (let i = 0; i < 4; i++) {
+    reply(i);
+    await tick();
+  }
+  assert.deepEqual(
+    posted.map((m) => m.request),
+    ['a', 'u1', 'u2', 'b', 'c'],
+  );
+  pool.terminate();
+});
+
+test('a worker pool runs at most its background limit of lane jobs', async () => {
+  const posted = [];
+  const workers = [];
+  const pool = new WorkerPool(
+    () => {
+      const worker = {postMessage: (message) => posted.push([worker, message]), terminate() {}};
+      workers.push(worker);
+      return worker;
+    },
+    3,
+    1,
+  );
+  const lane = new WorkerPoolLane();
+  const first = pool.run('a', [], lane);
+  pool.run('b', [], lane);
+  // Jobs needed now still use every worker.
+  pool.run('now');
+  pool.run('now2');
+  assert.deepEqual(
+    posted.map(([, m]) => m.request),
+    ['a', 'now', 'now2'],
+  );
+  assert.equal(workers.length, 3);
+  const [worker, message] = posted[0];
+  worker.onmessage({data: {id: message.id, response: 1}});
+  assert.equal(await first, 1);
+  await new Promise((resolve) => setTimeout(resolve));
+  assert.deepEqual(
+    posted.map(([, m]) => m.request),
+    ['a', 'now', 'now2', 'b'],
+  );
 });

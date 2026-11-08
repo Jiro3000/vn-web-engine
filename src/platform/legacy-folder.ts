@@ -7,6 +7,8 @@ export class LegacyFolder {
   readonly files: OverlayFileSystem;
   private cwd = '/';
   private readonly known = new Set<string>();
+  /** Files written through this folder, which the store holds with the same bytes. */
+  private readonly written = new Map<string, Uint8Array>();
   constructor(
     sources: ReadonlyMap<string, ByteSource>,
     readonly store: RecordStore,
@@ -54,8 +56,15 @@ export class LegacyFolder {
     await this.files.installDirectories([this.path(raw)]);
   }
   async readFile(raw: string): Promise<Uint8Array | null> {
+    // Every file this folder can hold is known (installed, stored before `initialize`, or
+    // written here), so a miss needs no store snapshot.
+    const path = this.path(raw);
+    if (!this.known.has(path)) return null;
+    // A program that rewrites a file reads it back without a store snapshot.
+    const own = this.written.get(path);
+    if (own) return own.slice();
     try {
-      const s = await this.files.open(this.path(raw));
+      const s = await this.files.open(path);
       return await s.read(0, s.size);
     } catch (e) {
       if (e instanceof FileError && ['NOT_FOUND', 'IS_DIRECTORY'].includes(e.code)) return null;
@@ -63,8 +72,12 @@ export class LegacyFolder {
     }
   }
   async writeFile(raw: string, data: Uint8Array): Promise<void> {
-    await this.files.commit([{kind: 'write', path: this.path(raw), data}]);
-    this.known.add(this.path(raw));
+    const path = this.path(raw),
+      contents = data.slice();
+    this.written.delete(path);
+    await this.files.commit([{kind: 'write', path, data: contents}]);
+    this.known.add(path);
+    this.written.set(path, contents);
   }
   async appendFile(raw: string, data: Uint8Array): Promise<void> {
     const before = (await this.readFile(raw)) ?? new Uint8Array();
@@ -79,6 +92,7 @@ export class LegacyFolder {
     await this.writeFile(to, bytes);
   }
   async deleteFile(raw: string): Promise<void> {
+    this.written.delete(this.path(raw));
     if (await this.stat(raw)) await this.files.commit([{kind: 'delete', path: this.path(raw)}]);
     this.known.delete(this.path(raw));
   }

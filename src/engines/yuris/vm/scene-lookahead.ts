@@ -2,6 +2,8 @@ import type {YurisInstruction, YurisScript, YurisToken} from '../../../formats/y
 import {decodeLiteral} from './expression.js';
 import {windowsPath} from './fileact.js';
 import type {YurisMachine} from './machine.js';
+import {YurisScenarioText} from './scenario-text.js';
+import {textLines} from './text.js';
 
 // A brief hold keeps speculative worker jobs off the rapid-advance path.
 const READING_PAUSE_MS = 60;
@@ -75,8 +77,19 @@ export interface LookaheadVariables {
   readonly size: number;
   /** es.SP.RELOAD's sprite name array, indexed by slot. */
   readonly sprite: number;
-  /** es.L.YMV.INIT's folder array, read at index 6. */
+  /**
+   * es.L.YMV.INIT's folder array, read at index 6. es.SP.INIT.VER fills it with the folder of
+   * each sprite kind, which es.SP.CGLOADEXEC prefixes to the sprite name (YSTB156:215).
+   */
   readonly movieFolder: number;
+  /** es.Scenario.SearchLABEL+2 `LOOP H@labelCount` and +3 `IF V$labelNames[...] = name`. */
+  readonly labelCount: number;
+  readonly labelNames: number;
+  /** es.Scenario.JumpLabel+11: the line, token and file number of each label. */
+  readonly labelLine: number;
+  readonly labelFile: number;
+  /** es.SCENARIO.FILENAME.GET+1 `RETURN RSTR=V$fileNames[number]`. */
+  readonly fileNames: number;
 }
 
 const DEFAULT_VARIABLES: LookaheadVariables = {
@@ -99,9 +112,17 @@ const DEFAULT_VARIABLES: LookaheadVariables = {
   size: 5318,
   sprite: 5240,
   movieFolder: 5491,
+  labelCount: 2909,
+  labelNames: 2904,
+  labelLine: 2907,
+  labelFile: 2905,
+  fileNames: 2966,
 };
 
 /** An `ML.TEXT` macro or a TEXT token: the parser shows a dialogue and waits for a click. */
+/** Scenario lines a forecast reads ahead; scripted scenes run long macro sequences. */
+const SCAN_LINES = 256;
+
 const dialogue = (tag: string | undefined) => tag === 'ML.TEXT' || tag === 'TEXT';
 
 const latin1 = (text: string) => Uint8Array.from(text, (c) => c.charCodeAt(0));
@@ -167,6 +188,168 @@ async function linearMacros(m: YurisMachine, cursor: number): Promise<Set<string
   return names;
 }
 
+/** A sprite image a scenario macro loads: the kind folder and the macro argument with its name. */
+interface MacroImage {
+  /** Index into the sprite kind folders (V$movieFolder). */
+  readonly folder: number;
+  readonly arg: number;
+  /** A transition rule name, which es.SP.LOADTR maps through es.TRDEF.CHECK (YSTB160:135). */
+  readonly rule: boolean;
+}
+
+interface MacroCalls {
+  /** The images each es.ScenarioMacro.NAME requests, by NAME. */
+  readonly images: ReadonlyMap<string, readonly MacroImage[]>;
+  /** The macros that always jump to the label named by one of their arguments, by NAME. */
+  readonly jumps: ReadonlyMap<string, number>;
+}
+
+const PARAMETER = /^P(?:STR|INT|FLT)([0-9]*)$/;
+const SYSTEM_STRING_PARAMETERS = 55;
+
+/**
+ * Reads what the scenario macros load and where they jump, following arguments through the
+ * routines they call with constant labels (three levels deep). es.ScenarioMacro.SetParam
+ * (YSTB62:5–14) copies argument k into the k-th string it sets; a callee reads its k-th
+ * parameter as V$55[k] (GOSUB 0x442C84). A sprite request is es.SP.CG.SET with a literal kind
+ * (PINT) and a name (PSTR2), or es.SP.TR.SET with a rule name (PSTR), which es.SP.LOADTR loads
+ * from kind folder `trFolder`. A jump is es.Scenario.JumpLabel outside any IF or LOOP block.
+ */
+async function macroCalls(m: YurisMachine, trFolder: number): Promise<MacroCalls> {
+  const images = new Map<string, MacroImage[]>(),
+    jumps = new Map<string, number>();
+  const labels = m.project.labels.labels,
+    commands = m.project.commands.commands;
+  const ends = routineEnds(m);
+  const index = (name: string) => m.label(latin1(name));
+  const cgSet = index('es.SP.CG.SET'),
+    trSet = index('es.SP.TR.SET'),
+    jumpLabel = index('es.Scenario.JumpLabel');
+  const setParam = labels[index('es.ScenarioMacro.SetParam')];
+  if (!setParam) return {images, jumps};
+  const argumentVars = new Map<number, number>();
+  const setCode = (await m.project.script(setParam.script)).instructions;
+  const setEnd = Math.min(setCode.length, ends(setParam.script, setParam.position));
+  for (let p = setParam.position; p < setEnd; p++) {
+    const ins = setCode[p]!,
+      name = commands[ins.command]?.name;
+    if (name === 'RETURN') break;
+    if (name === 'LET' && ins.args[0]?.type === 3) {
+      const [id] = variablesOf(ins);
+      if (id !== undefined) argumentVars.set(id, argumentVars.size);
+    }
+  }
+  const single = (tokens: readonly YurisToken[] | null | undefined) =>
+    tokens?.length === 1 && tokens[0]!.op === 0x48
+      ? tokens[0]!.payload[1]! | (tokens[0]!.payload[2]! << 8)
+      : undefined;
+  const walk = async (
+    labelIndex: number,
+    vars: Map<number, number>,
+    parameters: ReadonlyMap<number, number>,
+    depth: number,
+    out: MacroImage[],
+    conditional: boolean,
+  ): Promise<number | undefined> => {
+    const label = labels[labelIndex]!;
+    let jump: number | undefined,
+      nesting = 0;
+    const code = (await m.project.script(label.script)).instructions;
+    const end = Math.min(code.length, ends(label.script, label.position));
+    for (let p = label.position; p < end; p++) {
+      const ins = code[p]!,
+        name = commands[ins.command]?.name;
+      if (name === 'IF' || name === 'LOOP') nesting++;
+      else if (name === 'IFEND' || name === 'LOOPEND') nesting--;
+      else if (name === 'RETURN' && nesting <= 0) break;
+      else if (name === 'STR' || name === 'LET') {
+        const target = single(ins.args[0]?.tokens),
+          source = ins.args[1]?.tokens;
+        if (target === undefined) continue;
+        const copied = single(source);
+        const parameter =
+          source?.length === 3 &&
+          source[0]!.op === 0x56 &&
+          (source[0]!.payload[1]! | (source[0]!.payload[2]! << 8)) === SYSTEM_STRING_PARAMETERS &&
+          source[2]!.op === 0x29
+            ? literalNumber(source[1])
+            : undefined;
+        const value =
+          copied !== undefined
+            ? vars.get(copied)
+            : parameter !== undefined
+              ? parameters.get(parameter)
+              : undefined;
+        if (value !== undefined) vars.set(target, value);
+        // A conditional default (an omitted argument) leaves the argument's value possible.
+        else if (nesting <= 0) vars.delete(target);
+      } else if (name === 'GOSUB') {
+        const target = ins.args[0]?.tokens;
+        if (target?.length !== 1 || target[0]!.op !== 0x4d) continue;
+        const callee = m.label(
+          latin1(decodeLiteral(target[0]!.payload, 0, target[0]!.payload.length)),
+        );
+        if (callee < 0) continue;
+        const passed = new Map<number, number>(),
+          literals = new Map<number, number>();
+        for (const arg of ins.args.slice(1)) {
+          const match = PARAMETER.exec(commands[ins.command]?.args[arg.id]?.name ?? '');
+          if (!match) continue;
+          const position = match[1] ? Number(match[1]) : 1;
+          const id = single(arg.tokens);
+          if (id !== undefined && vars.has(id)) passed.set(position, vars.get(id)!);
+          const literal = arg.tokens?.length === 1 ? literalNumber(arg.tokens[0]) : undefined;
+          if (literal !== undefined) literals.set(position, literal);
+        }
+        // Only requests every call makes count: none inside an IF or LOOP block at any level.
+        const branch = conditional || nesting > 0;
+        if (callee === jumpLabel) {
+          if (!branch && jump === undefined) jump = passed.get(1);
+        } else if (branch) {
+          continue;
+        } else if (callee === cgSet) {
+          const kind = literals.get(1),
+            arg = passed.get(2);
+          if (kind !== undefined && arg !== undefined) out.push({folder: kind, arg, rule: false});
+        } else if (callee === trSet) {
+          const arg = passed.get(1);
+          if (arg !== undefined && trFolder >= 0) out.push({folder: trFolder, arg, rule: true});
+        } else if (depth < 3 && passed.size) {
+          await walk(callee, new Map(), passed, depth + 1, out, false);
+        }
+      }
+    }
+    return jump;
+  };
+  const prefix = 'es.ScenarioMacro.';
+  for (const [i, label] of labels.entries()) {
+    const name = String.fromCharCode(...label.name);
+    if (!name.startsWith(prefix)) continue;
+    const out: MacroImage[] = [];
+    try {
+      const jump = await walk(i, new Map(argumentVars), new Map(), 0, out, false);
+      if (jump !== undefined) jumps.set(name.slice(prefix.length), jump);
+    } catch {
+      // A script that does not load contributes nothing.
+    }
+    if (out.length) images.set(name.slice(prefix.length), out);
+  }
+  return {images, jumps};
+}
+
+/** The end of the routine at `position` of `script`: the next label of that script. */
+function routineEnds(m: YurisMachine): (script: number, position: number) => number {
+  const starts = new Map<number, number[]>();
+  for (const l of m.project.labels.labels) {
+    let list = starts.get(l.script);
+    if (!list) starts.set(l.script, (list = []));
+    list.push(l.position);
+  }
+  for (const list of starts.values()) list.sort((a, b) => a - b);
+  return (script, position) =>
+    starts.get(script)?.find((p) => p > position) ?? Number.MAX_SAFE_INTEGER;
+}
+
 /** The H@/V@ variables an instruction names, in argument and token order; `op` keeps one kind. */
 function variablesOf(instruction: YurisInstruction | undefined, op?: number): number[] {
   const ids: number[] = [];
@@ -188,6 +371,8 @@ export class YurisSceneLookahead {
   private source?: string[] | null;
   private language = -1;
   private standScale = '';
+  /** How many stand images each scale folder has supplied, for scans after a camera move. */
+  private readonly scaleUses = new Map<string, number>();
   private waitingSince?: number;
   /** The VO cues of the lines up to the next dialogue, as of the last forecast. */
   nextVoices: readonly string[] = [];
@@ -195,6 +380,12 @@ export class YurisSceneLookahead {
   nextMovies: readonly string[] = [];
   /** The library's in-line macros, once `linearMacros` has read them. */
   private linearNames?: Set<string>;
+  /** The images and jumps of the library's macros, once `macroCalls` has read them. */
+  private calls?: MacroCalls;
+  /** Other scenario files a jump continues into: their TEXT lines, or the pending read. */
+  private readonly sources = new Map<string, readonly string[] | null | Promise<void>>();
+  /** The library splits scenario lines for ML.TEXT (es.SCENARIO.LOAD, see `installText`). */
+  private bilingual = false;
   /** Settles when the macro analysis has finished. */
   macrosRead: Promise<void> = Promise.resolve();
 
@@ -206,7 +397,9 @@ export class YurisSceneLookahead {
 
   observeImage(path: string): void {
     const scale = /^cg\\stand\\(m_[0-9]+)\\/.exec(path)?.[1];
-    if (scale) this.standScale = scale;
+    if (!scale) return;
+    this.standScale = scale;
+    this.scaleUses.set(scale, (this.scaleUses.get(scale) ?? 0) + 1);
   }
 
   private constructor(
@@ -281,6 +474,20 @@ export class YurisSceneLookahead {
     // `YMV FILE=V$movieFolder[6] + V$sprite[slot] + ".ymv"` (YSTB172:1792).
     const [sprite] = (await routine('es.SP.RELOAD'))?.at(6, 0x56) ?? [];
     const [movieFolder, movieSprite] = (await routine('es.L.YMV.INIT'))?.at(9, 0x56) ?? [];
+    // es.Scenario.SearchLABEL+2/+3 (YSTB59:74–75), es.Scenario.JumpLabel+11
+    // `GOSUB es.SCENARIO.com_no.pos.SET PINT2=V@line[i] PINT3=V@token[i] PINT4=V@file[i]`
+    // (YSTB59:92) and es.SCENARIO.FILENAME.GET+1 `RETURN RSTR=V$names[n]` (YSTB54:45).
+    const search = await routine('es.Scenario.SearchLABEL');
+    const [labelCount] = single(search?.at(2, 0x48) ?? []),
+      [labelNames] = single(search?.at(3, 0x56) ?? []);
+    const [labelLine, , labelFile] = (await routine('es.Scenario.JumpLabel'))?.at(11, 0x56) ?? [];
+    const [fileNames] = single((await routine('es.SCENARIO.FILENAME.GET'))?.at(1, 0x56) ?? []);
+    const labelTable =
+      labelCount !== undefined &&
+      labelNames !== undefined &&
+      labelLine !== undefined &&
+      labelFile !== undefined &&
+      fileNames !== undefined;
     const stand =
       splz &&
       slots !== undefined &&
@@ -310,6 +517,11 @@ export class YurisSceneLookahead {
       size: stand ? size : -1,
       sprite: sprite ?? -1,
       movieFolder: movieSprite !== undefined && movieSprite === sprite ? movieFolder! : -1,
+      labelCount: labelTable ? labelCount : -1,
+      labelNames: labelTable ? labelNames : -1,
+      labelLine: labelTable ? labelLine : -1,
+      labelFile: labelTable ? labelFile : -1,
+      fileNames: labelTable ? fileNames : -1,
     };
     const lookahead = new YurisSceneLookahead(
       m,
@@ -317,10 +529,38 @@ export class YurisSceneLookahead {
       stand ? scaleBands(splz.code, splz.position, folder) : [],
       v,
     );
-    lookahead.macrosRead = linearMacros(m, cursor).then(
-      (names) => void (lookahead.linearNames = names),
-      () => undefined,
-    );
+    // es.SP.LOADTR `LET H$path = V$folders[k] + H$rule` (YSTB160:149) names the rule folder.
+    let trFolder = -1;
+    const loadTr = await routine('es.SP.LOADTR');
+    if (loadTr && v.movieFolder >= 0)
+      search: for (let i = 0; i < 64 && loadTr.position + i < loadTr.code.instructions.length; i++)
+        for (const arg of loadTr.code.instructions[loadTr.position + i]!.args) {
+          const tokens = arg.tokens ?? [];
+          for (let t = 0; t + 2 < tokens.length; t++) {
+            const token = tokens[t]!;
+            if (
+              token.op !== 0x56 ||
+              (token.payload[1]! | (token.payload[2]! << 8)) !== v.movieFolder
+            )
+              continue;
+            const k = literalNumber(tokens[t + 1]);
+            if (k !== undefined && tokens[t + 2]!.op === 0x29) {
+              trFolder = k;
+              break search;
+            }
+          }
+        }
+    lookahead.bilingual = !!label('es.SCENARIO.LOAD') && !!label('es.ScenarioMacro.ML.TEXT');
+    lookahead.macrosRead = Promise.all([
+      linearMacros(m, cursor).then(
+        (names) => void (lookahead.linearNames = names),
+        () => undefined,
+      ),
+      macroCalls(m, trFolder).then(
+        (calls) => void (lookahead.calls = calls),
+        () => undefined,
+      ),
+    ]).then(() => undefined);
     return lookahead;
   }
 
@@ -360,8 +600,12 @@ export class YurisSceneLookahead {
     const source = vars[v.source]?.strings,
       line = Number(vars[v.line]?.ints?.[0] ?? -1n);
     if (source && line >= 0)
-      scan: for (let next = line; next <= line + 64 && next < source.length; next++) {
-        const tags = macros(source[next] ?? '');
+      scan: for (
+        let next = line, state = {comment: false};
+        next <= line + SCAN_LINES && next < source.length;
+        next++
+      ) {
+        const tags = macros(source[next] ?? '', state);
         if (!tags) break;
         for (const [tag, args] of tags) {
           if (dialogue(tag)) break scan;
@@ -384,6 +628,62 @@ export class YurisSceneLookahead {
     const source = vars[v.source]?.strings,
       line = Number(vars[v.line]?.ints?.[0] ?? -1n);
     return source && line >= 0 ? voices(macros(source[line] ?? '') ?? []) : [];
+  }
+
+  /** A transition's rule image: es.TRDEF maps transition names to rules (es.TRDEF.CHECK). */
+  private addRule(assets: Set<string>, rule: string): void {
+    if (!this.transitionTable || !/^[A-Za-z0-9_-]+$/.test(rule)) return;
+    const vars = this.machine.variables.entries,
+      v = this.v;
+    const index = vars[v.rules]?.strings?.indexOf(rule) ?? -1;
+    const ruleName = index >= 0 ? vars[v.ruleImages]?.strings?.[index] : rule;
+    const folders = vars[1174];
+    const folder = folders?.strings?.[38 * (folders.dimensions[1] ?? 0) + 4];
+    if (folder && ruleName) assets.add(folder + ruleName);
+  }
+
+  /**
+   * Where a jump to label `name` continues: es.Scenario.SearchLABEL takes the first label of
+   * that name, and es.SCENARIO.com_no.pos.SET (YSTB59:26–45) loads the label's file when it
+   * is not the current one and resumes at the label's line. Undefined for an unknown label and
+   * while another file's lines are read.
+   */
+  private jumpTarget(
+    name: string,
+    file: string,
+    source: readonly string[],
+  ): {lines: readonly string[]; next: number} | undefined {
+    const vars = this.machine.variables.entries,
+      v = this.v;
+    if (v.labelNames < 0 || !name) return;
+    const count = Number(vars[v.labelCount]?.ints?.[0] ?? 0n);
+    const index = vars[v.labelNames]?.strings?.slice(0, Math.max(0, count)).indexOf(name) ?? -1;
+    if (index < 0) return;
+    const at = Number(vars[v.labelLine]?.ints?.[index] ?? -1n),
+      number = vars[v.labelFile]?.ints?.[index];
+    const target = number === undefined ? undefined : vars[v.fileNames]?.strings?.[Number(number)];
+    if (at < 0 || !target) return;
+    if (target === file) return {lines: source, next: at};
+    const lines = this.sources.get(target);
+    if (Array.isArray(lines)) return {lines, next: at};
+    if (lines === undefined) {
+      if (this.sources.size >= 8) this.sources.clear();
+      this.sources.set(target, this.readSource(target));
+    }
+  }
+
+  /** es.SCENARIO.LOAD's TEXT lines of scenario file `name`; the next update scans again. */
+  private async readSource(name: string): Promise<void> {
+    let lines: readonly string[] | null = null;
+    try {
+      const bytes = await this.machine.files.read(windowsPath(name));
+      const bound = BigInt(this.machine.variables.entries[this.v.source]?.dimensions[0] ?? 0);
+      lines = textLines(bytes, bound, this.bilingual ? new YurisScenarioText() : undefined);
+    } catch {
+      // A file that does not read ends the scan at the jump.
+    }
+    this.sources.set(name, lines);
+    this.line = -1;
   }
 
   /** Undefined means that the previous priority window still applies. */
@@ -439,28 +739,49 @@ export class YurisSceneLookahead {
     const cues: string[] = [];
     const movies: string[] = [];
     let standScale = this.standScale;
-    for (let next = line + 1; next <= line + 64 && next < source.length; next++) {
-      const tags = macros(source[next] ?? '');
+    // After C.XYZ the sprite's folder depends on the new camera, so the scan names the
+    // last observed folder and the one that has supplied the most stand images.
+    let common = '',
+      uses = 0;
+    for (const [scale, n] of this.scaleUses) if (n > uses) [common, uses] = [scale, n];
+    const movedScales = [...new Set([this.standScale, common])].filter(Boolean);
+    let cameraMoved = false;
+    const folders = vars[v.movieFolder]?.strings;
+    // The scan follows unconditional jumps into the lines they continue at, within
+    // SCAN_LINES lines, and skips block comments.
+    let lines: readonly string[] = source,
+      next = line + 1,
+      jumped = false;
+    const state: LexerState = {comment: false};
+    for (let step = 0; step < SCAN_LINES; step++, next++) {
+      if (next >= lines.length) return [];
+      const tags = macros(lines[next] ?? '', state);
       if (!tags) return [];
       cues.push(...voices(tags));
+      let target: {lines: readonly string[]; next: number} | undefined;
       for (const [tag, args] of tags) {
         if (dialogue(tag)) {
           if (!dialogue(tags.at(-1)?.[0])) return [];
           this.nextVoices = cues;
           this.nextMovies = movies;
           const count = Number(vars[v.cashCount]?.ints?.[0] ?? 0n);
-          const lines = vars[v.cashLines]?.ints,
+          const cashLines = vars[v.cashLines]?.ints,
             paths = vars[v.cashPaths]?.strings;
-          if (lines && paths) {
+          // The library's CGCASH list covers the current file only.
+          if (cashLines && paths && !jumped) {
             // es.CASH.ADD stores 1-based source lines, sorted by its parser.
             let lo = 0,
-              hi = Math.min(Math.max(0, count), lines.length, paths.length);
+              hi = Math.min(Math.max(0, count), cashLines.length, paths.length);
             while (lo < hi) {
               const mid = (lo + hi) >>> 1;
-              if (lines[mid]! <= BigInt(line + 1)) lo = mid + 1;
+              if (cashLines[mid]! <= BigInt(line + 1)) lo = mid + 1;
               else hi = mid;
             }
-            for (let i = lo; i < count && i < paths.length && lines[i]! <= BigInt(next + 1); i++) {
+            for (
+              let i = lo;
+              i < count && i < paths.length && cashLines[i]! <= BigInt(next + 1);
+              i++
+            ) {
               const path = paths[i];
               // The authored distant list includes two default sprite scales.
               // The near pass already uses the observed scale where it can.
@@ -469,37 +790,60 @@ export class YurisSceneLookahead {
           }
           return [...assets].slice(0, 20);
         }
-        if (!this.linear(tag)) return [];
-        const [first, second, , fourth] = args
-          .split(',')
-          .map((arg) => arg.trim().replace(/^"(.*)"$/, '$1'));
+        const values = args.split(',').map((arg) => arg.trim().replace(/^"(.*)"$/, '$1'));
+        if (!this.linear(tag)) {
+          const jump = this.calls?.jumps.get(tag);
+          target =
+            jump === undefined ? undefined : this.jumpTarget(values[jump] ?? '', file, source);
+          if (!target) return [];
+          break;
+        }
+        const [first, second, , fourth] = values;
         const rule =
           tag === 'FIN' || tag === 'FOUT'
             ? second
             : tag === 'BG' || tag === 'ML.BG'
               ? fourth
               : undefined;
-        if (this.transitionTable && rule && /^[A-Za-z0-9_-]+$/.test(rule)) {
-          const index = vars[v.rules]?.strings?.indexOf(rule) ?? -1;
-          const ruleName = index >= 0 ? vars[v.ruleImages]?.strings?.[index] : rule;
-          const folders = vars[1174];
-          const folder = folders?.strings?.[38 * (folders.dimensions[1] ?? 0) + 4];
-          if (folder && ruleName) assets.add(folder + ruleName);
+        if (rule) this.addRule(assets, rule);
+        // es.SP.CG.SET and es.SP.TR.SET requests: the kind folder and the argument's name.
+        for (const image of this.calls?.images.get(tag) ?? []) {
+          const name = values[image.arg];
+          if (!name || !/^[^"',()\\$@ ]+$/.test(name)) continue;
+          if (image.rule) this.addRule(assets, name);
+          else if (folders?.[image.folder]) assets.add(folders[image.folder] + name);
         }
         // es.L.YMV.INIT (YSTB172:1792) opens V$5491[6] + the sprite name + ".ymv".
-        const movieFolder = vars[v.movieFolder]?.strings?.[6];
+        const movieFolder = folders?.[6];
         if (tag === 'S.MV' && movieFolder && second && !/["',()\\]/.test(second))
           movies.push(windowsPath(movieFolder + second + '.ymv'));
-        if (tag === 'C.XYZ') standScale = '';
+        if (tag === 'C.XYZ') {
+          standScale = '';
+          cameraMoved = true;
+        }
         if (tag === 'T' || tag === 'FACE') {
           // The foreground sprite's last observed resolution is a hint for a stable camera.
-          const root = tag === 'FACE' ? 'cg/face' : standScale ? 'cg/stand/' + standScale : '';
-          if (root && first) addSprite(assets, root, first);
+          const roots =
+            tag === 'FACE'
+              ? ['cg/face']
+              : standScale
+                ? ['cg/stand/' + standScale]
+                : cameraMoved
+                  ? movedScales.map((scale) => 'cg/stand/' + scale)
+                  : [];
+          if (first) for (const root of roots) addSprite(assets, root, first);
         }
         // Standard multilingual variants (es.ScenarioMacro.ML.S / ML.BG).
         const name = tag === 'ML.S' ? second : tag === 'ML.BG' ? first : undefined;
         if (name && /^[A-Za-z0-9_/-]+$/.test(name) && (language === 0 || language === 1))
           assets.add((tag === 'ML.S' ? 'cg/' : 'cg/bg/') + name + (language === 0 ? '_c' : ''));
+      }
+      if (target) {
+        lines = target.lines;
+        next = target.next - 1;
+        jumped = true;
+        // A jump lands on a label line, which the lexer reads outside any comment.
+        state.comment = false;
       }
     }
     return [];
@@ -520,22 +864,51 @@ function voices(tags: readonly [string, string][]): string[] {
   return cues;
 }
 
-function macros(line: string): [string, string][] | undefined {
+/** es.SCENARIO.LEXER's block comment flag H@2909, which carries over to the next lines. */
+interface LexerState {
+  comment: boolean;
+}
+
+/**
+ * The macros and TEXT tokens of a scenario line. Without `state` a block comment is unknown
+ * ground and the line is undefined; with it, the comment is skipped as the lexer does.
+ */
+function macros(line: string, state?: LexerState): [string, string][] | undefined {
   // A DBCS trail byte may be a slash, backslash, quote or parenthesis.
   const syntax = line.trimEnd().replace(/[\x81-\xfe][\s\S]/g, '\0\0');
   const token = /[ \t]*\\([A-Z][A-Z0-9_.]*)(?:\(((?:"[^"]*"|'[^']*'|[^"'()])*)\))?/dy;
   const tags: [string, string][] = [];
   let i = 0;
+  if (state?.comment) {
+    // State 99 (YSTB57:264–271): `*/` clears H@2909 and lexing resumes after it.
+    const end = syntax.indexOf('*/');
+    if (end < 0) return tags;
+    state.comment = false;
+    i = end + 2;
+  }
   while (i < syntax.length) {
     if (/^[ \t]*\/\//.test(syntax.slice(i))) break;
     token.lastIndex = i;
     const match = token.exec(syntax);
     if (!match) {
-      // es.SCENARIO.LEXER (YSTB57:85–156): `/*` comments and `#` labels stop the scan;
-      // anything else up to the next macro is a TEXT token, a dialogue line.
+      // es.SCENARIO.LEXER (YSTB57:85–156): a `/*` starts a block comment and a `#` label
+      // ends the line; anything else up to the next macro is a TEXT token, a dialogue line.
       const start = i + /^[ \t]*/.exec(syntax.slice(i))![0].length;
       if (start >= syntax.length) break;
-      if (syntax[start] === '#' || syntax.startsWith('/*', start)) return;
+      // A label line runs no command: es.SCENARIO.PARSER (YSTB59:163–192) only calls the
+      // es.NEXTSEL skip routines with H@1003 set.
+      if (syntax[start] === '#') break;
+      if (syntax.startsWith('/*', start)) {
+        // YSTB57:96–98 sets H@2909 and state 99, which tests from the next character on.
+        if (!state) return;
+        const end = syntax.indexOf('*/', start + 1);
+        if (end < 0) {
+          state.comment = true;
+          break;
+        }
+        i = end + 2;
+        continue;
+      }
       const end = syntax.indexOf('\\', start);
       tags.push(['TEXT', line.slice(start, end < 0 ? syntax.length : end)]);
       i = end < 0 ? syntax.length : end;

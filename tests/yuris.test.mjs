@@ -27,15 +27,32 @@ test('YU-RIS SIMD transition retains paired midpoint and odd-tail rounding', () 
   const second = Uint8Array.from({length: stride * height}, (_, i) => (i * 17 + 1) & 255);
   const output = new Uint8Array(stride * height);
   const region = (bytes) => ({bytes, offset: 4, stride});
-  for (const [weight, sse] of [
+  // Without revisions every call stages its inputs; with them a fade over unchanged
+  // inputs reuses the staged pair until a revision or buffer changes.
+  for (const [weight, sse, revisions, change] of [
     [37, true],
     [128, false],
     [128, true],
     [177, false],
     [256, true],
+    [37, true, [1, 1]],
+    [128, false, [1, 1]],
+    [177, true, [1, 1]],
+    [90, false, [2, 1], true],
+    [128, true, [2, 1]],
   ]) {
+    if (change) first.fill(200, 0, stride * 8);
     assert.equal(
-      transitionBgra(region(first), region(second), region(output), width, height, weight, sse),
+      transitionBgra(
+        region(first),
+        region(second),
+        region(output),
+        width,
+        height,
+        weight,
+        sse,
+        revisions,
+      ),
       true,
     );
     const expected = new Uint8Array(stride * height);
@@ -80,6 +97,35 @@ test('YU-RIS image cache preserves byte changes and gives each layer its own pix
   assert.equal(decode.mock.callCount(), 3);
 });
 
+test('YU-RIS image cache keeps reused and single-colour decodes through one-off loads', async (t) => {
+  const {LegacyImageCodec} = await import('../dist/graphics/legacy-image-codec.js');
+  const codec = new LegacyImageCodec();
+  const decode = t.mock.method(codec, 'decode', async (data) => {
+    const side = data[0] === 1 ? 1024 : 128;
+    const pixels = new Uint8Array(side * side * 4);
+    if (data[0] !== 0) pixels.fill(data[0]).set(data, 4);
+    return {width: side, height: side, pixels};
+  });
+  const black = Uint8Array.of(0, 0),
+    rule = Uint8Array.of(2, 5);
+  await codec.decodeCached(black, 'image/png', true, 'black.png');
+  await codec.decodeCached(rule, 'image/png', true, 'rule.png');
+  await codec.decodeCached(rule, 'image/png', true, 'rule.png');
+  assert.equal(decode.mock.callCount(), 2);
+  // 4 MiB one-off decodes overflow the single-use LRU several times.
+  for (let i = 0; i < 40; i++)
+    await codec.decodeCached(Uint8Array.of(1, i), 'image/png', true, `once${i}.png`);
+  const calls = decode.mock.callCount();
+  const blackAgain = await codec.decodeCached(black, 'image/png', true, 'black.png');
+  const ruleAgain = await codec.decodeCached(rule, 'image/png', true, 'rule.png');
+  assert.equal(decode.mock.callCount(), calls);
+  assert.equal(blackAgain.pixels.length, 128 * 128 * 4);
+  assert.ok(blackAgain.pixels.every((v) => v === 0));
+  assert.deepEqual([...ruleAgain.pixels.subarray(0, 6)], [2, 2, 2, 2, 2, 5]);
+  await codec.decodeCached(Uint8Array.of(0, 1), 'image/png', true, 'black.png');
+  assert.equal(decode.mock.callCount(), calls + 1);
+});
+
 test('YU-RIS polls independent sound cursors together and uses acknowledged positions', async (t) => {
   const {BrowserLoopingSoundDevice} = await import('../dist/audio/browser-looping-sound.js');
   const {BrowserSpeakerBuffer} = await import('../dist/audio/browser-speaker-buffer.js');
@@ -109,6 +155,72 @@ test('YU-RIS polls independent sound cursors together and uses acknowledged posi
   await result;
   assert.deepEqual([first.playCursor(), second.playCursor()], [10, 20]);
   await device.dispose();
+});
+
+test('YU-RIS reads a loading LOOP ahead without changing its counter or last variable', async () => {
+  const {YurisMachine} = await import('../dist/engines/yuris/vm/machine.js');
+  const entry = {start: 4, end: 6, counter: 2n, limit: 5n};
+  const expression = {
+    lastId: 7,
+    saveLast: () => [expression.lastId],
+    restoreLast: ([id]) => (expression.lastId = id),
+    string: () => {
+      expression.lastId = 99;
+      if (entry.counter === 5n) throw new Error('out of range');
+      return `page${entry.counter}`;
+    },
+  };
+  const machine = {
+    task: {loopDepth: 1, loops: [entry]},
+    position: 5,
+    instruction: {args: [{id: 3, expression: new Uint8Array()}]},
+    expression,
+  };
+  const ahead = (id, count) => YurisMachine.prototype.loopStringsAhead.call(machine, id, count);
+  assert.deepEqual(ahead(3, 8), ['page3', 'page4']);
+  assert.deepEqual(ahead(3, 1), ['page3']);
+  assert.equal(entry.counter, 2n);
+  assert.equal(expression.lastId, 7);
+  assert.deepEqual(ahead(4, 8), []);
+  machine.position = 6;
+  assert.deepEqual(ahead(3, 8), []);
+});
+
+test('YU-RIS posts sound commands in order without waiting for acknowledgements', async (t) => {
+  const {BrowserLoopingSoundDevice} = await import('../dist/audio/browser-looping-sound.js');
+  const {BrowserSpeakerBuffer} = await import('../dist/audio/browser-speaker-buffer.js');
+  const posted = [],
+    acks = [];
+  t.mock.method(BrowserSpeakerBuffer, 'create', async () => ({
+    command: ({kind}) => {
+      posted.push(kind);
+      return new Promise((resolve, reject) =>
+        acks.push((error) =>
+          error ? reject(error) : resolve({playing: true, byteCursor: posted.length}),
+        ),
+      );
+    },
+    async dispose() {},
+  }));
+  const device = new BrowserLoopingSoundDevice({});
+  const sound = device.createSoundBuffer({
+    channels: 1,
+    sampleRate: 22050,
+    bitsPerSample: 16,
+    byteLength: 32,
+  });
+  sound.write(0, new Uint8Array(4));
+  sound.play();
+  sound.setVolume(-100);
+  const flushed = device.flush();
+  await new Promise(setImmediate);
+  // The initial silence, three commands and the status query are all on the port.
+  assert.deepEqual(posted, ['write', 'write', 'play', 'volume', 'status']);
+  acks[0]();
+  acks[1](new Error('bad write'));
+  for (const ack of acks.slice(2)) ack();
+  await assert.rejects(flushed, /bad write/);
+  assert.throws(() => sound.playCursor(), /bad write/);
 });
 
 test('YU-RIS expression reads retain int64 references and low-dword array validation', () => {
@@ -287,8 +399,8 @@ test('YU-RIS deferred layer pixels survive source writes and are composited when
   layers.frameEnd();
   const input = source.source;
   let writes = 0;
-  const write = (target) => {
-    target.set(input);
+  const write = (target, from) => {
+    target.set(from);
     writes++;
   };
   assert.equal(layers.isCovered(lower), true);
@@ -300,13 +412,24 @@ test('YU-RIS deferred layer pixels survive source writes and are composited when
   assert.equal(screen.payload.dirty, false);
   source.beginPixelWrite();
   input.fill(94);
-  assert.equal(writes, 1);
+  // The reader keeps a copy of the pixels its CGACT saw and resamples only when read.
+  assert.equal(writes, 0);
   assert.equal(destination.pixels[0], 27);
+  assert.equal(writes, 1);
+  // A replaced source buffer is kept as it is.
+  const kept = new Uint8Array(8).fill(33);
+  source.setPixels(kept);
+  assert.equal(destination.deferPixelWrite(source, kept, write), true);
+  source.setPixels(new Uint8Array(8));
+  kept.fill(1);
+  assert.equal(destination.pixels[0], 1);
+  assert.equal(writes, 2);
+  source.setPixels(input);
   assert.equal(destination.deferPixelWrite(source, input, write), true);
   layers.markCoveredPixelWrite(lower);
   cover.a = 0;
   layers.composeSet(screen);
-  assert.equal(writes, 2);
+  assert.equal(writes, 3);
   assert.equal(screen.payload.pixels[0], 94);
 });
 
@@ -850,6 +973,30 @@ test('YU-RIS large BGRA blits and bilinear crops preserve scalar results', () =>
       true,
     );
     assert.deepEqual(fast, slow);
+    // A small clip of a source already staged at this revision also uses the kernel.
+    const clip = [18, 23, 51, 62];
+    const clipped = new Uint8Array(fast.length).fill(177),
+      scalar = clipped.slice();
+    for (const [target, input, at] of [
+      [clipped, source, revision],
+      [scalar, unaligned, undefined],
+    ])
+      sizeBilinear(
+        target,
+        input,
+        stride,
+        rows,
+        23,
+        fy,
+        30025,
+        28074,
+        width * 100,
+        height * 100,
+        true,
+        at,
+        clip,
+      );
+    assert.deepEqual(clipped, scalar);
   }
   for (const masked of [false, true]) {
     const fast = new Uint8Array((width + 1) * height * 4).fill(171),
@@ -2205,6 +2352,39 @@ test('YU-RIS lookahead reads PNG hints through one dialogue and stops at choices
   assert.equal(source.length, 8);
 });
 
+test('YU-RIS lookahead names stands after a camera move at the last and most used scales', async () => {
+  const {YurisSceneLookahead} = await import('../dist/engines/yuris/vm/scene-lookahead.js');
+  const entries = [];
+  for (const [id, ints] of [
+    [1157, [1n]],
+    [3039, [1n]],
+    [3040, [0n]],
+    [1176, new BigInt64Array(256)],
+  ])
+    entries[id] = {ints, dimensions: [256, 1]};
+  entries[3038] = {strings: ['scenario.txt']};
+  entries[2899] = {
+    strings: [
+      String.raw`\ML.TEXT("a","a")`,
+      String.raw`\C.XYZ(800, -426, 300, -6)`,
+      String.raw`\T(T_ABC_1A0200, 500)`,
+      String.raw`\ML.TEXT("b","b")`,
+    ],
+  };
+  let time = 0;
+  const lookahead = new YurisSceneLookahead({variables: {entries}, now: () => time});
+  for (const scale of ['m_050', 'm_050', 'm_040'])
+    lookahead.observeImage(`cg\\stand\\${scale}\\t_abc\\t_abc_1a\\t_abc_1a0100.png`);
+  lookahead.update();
+  time = 61;
+  assert.deepEqual(lookahead.update(), [
+    'cg/stand/m_040/T_ABC/T_ABC_1A/T_ABC_1A0100',
+    'cg/stand/m_040/T_ABC/T_ABC_1A/T_ABC_1A0200',
+    'cg/stand/m_050/T_ABC/T_ABC_1A/T_ABC_1A0100',
+    'cg/stand/m_050/T_ABC/T_ABC_1A/T_ABC_1A0200',
+  ]);
+});
+
 test('YU-RIS stand forecast names SPLZ scale reloads and the sprites before the next dialogue', async () => {
   const {YurisSceneLookahead} = await import('../dist/engines/yuris/vm/scene-lookahead.js');
   const entries = [];
@@ -2285,6 +2465,96 @@ test('YU-RIS lookahead treats plain text lines as dialogue', async () => {
   assert.deepEqual(lookahead.update(), []);
 });
 
+test('YU-RIS lookahead skips block comments as the scenario lexer does', async () => {
+  const {YurisSceneLookahead} = await import('../dist/engines/yuris/vm/scene-lookahead.js');
+  const entries = [];
+  const source = [
+    String.raw`\VO(ab0001)first`,
+    String.raw`\SP.GO(A,ev,1,2) /* \VO(xx0001)not read`,
+    String.raw`\GO(label) still a comment`,
+    String.raw`*/ \SP.GO(A,ev,1,2) /* one line */ \VO(ab0002)second`,
+  ];
+  for (const [id, ints] of [
+    [1157, [1n]],
+    [3039, [1n]],
+    [3040, [0n]],
+    [2930, [2n]],
+    [2931, [2n, 5n]],
+  ])
+    entries[id] = {ints, dimensions: [1]};
+  entries[3038] = {strings: ['scenario.txt']};
+  entries[2899] = {strings: source};
+  entries[2932] = {strings: ['cg/bg/near', 'cg/bg/far']};
+  let time = 0;
+  const lookahead = new YurisSceneLookahead({variables: {entries}, now: () => time});
+  lookahead.linearNames = new Set(['VO', 'SP.GO']);
+  lookahead.update();
+  time = 61;
+  assert.deepEqual(lookahead.update(), ['cg/bg/near']);
+  assert.deepEqual(lookahead.nextVoices, ['ab0002']);
+});
+
+test('YU-RIS lookahead follows macro images, labels and jumps into other files', async () => {
+  const {YurisSceneLookahead} = await import('../dist/engines/yuris/vm/scene-lookahead.js');
+  const entries = [];
+  const source = [
+    String.raw`first`,
+    String.raw`#near`,
+    String.raw`\BG(bg01)`,
+    String.raw`\GO(far)`,
+    String.raw`unreached`,
+  ];
+  for (const [id, ints] of [
+    [1157, [1n]],
+    [3039, [1n]],
+    [3040, [0n]],
+    [2930, [0n]],
+    [2909, [2n]],
+    [2907, [1n, 0n]],
+    [2905, [0n, 1n]],
+  ])
+    entries[id] = {ints, dimensions: [2]};
+  entries[3038] = {strings: ['a.txt']};
+  entries[2899] = {strings: source, dimensions: [100]};
+  entries[2904] = {strings: ['near', 'far']};
+  entries[2966] = {strings: ['a.txt', 'scenario/b.txt']};
+  entries[5491] = {strings: ['cg/', 'cg/bg/']};
+  const reads = [];
+  let time = 0;
+  const machine = {
+    variables: {entries},
+    now: () => time,
+    files: {
+      read: async (name) => {
+        reads.push(name);
+        return new TextEncoder().encode('#far\r\n\\BG(bg02)\r\nsecond');
+      },
+    },
+  };
+  const lookahead = new YurisSceneLookahead(machine, false, []);
+  lookahead.linearNames = new Set(['BG']);
+  lookahead.calls = {
+    images: new Map([['BG', [{folder: 1, arg: 0, rule: false}]]]),
+    jumps: new Map([['GO', 0]]),
+  };
+  lookahead.update();
+  time = 61;
+  // The jump's file is read first; the scan continues at its label when it has been read.
+  assert.deepEqual(lookahead.update(), []);
+  assert.deepEqual(reads, ['scenario\\b.txt']);
+  await new Promise((resolve) => setTimeout(resolve));
+  assert.deepEqual(lookahead.update(), ['cg/bg/bg01', 'cg/bg/bg02']);
+  assert.equal(reads.length, 1);
+  // A jump within the file resumes at its label's line; an unknown label ends the scan.
+  const local = [`first`, `\\GO(near)`, `unreached`, `#near`, `\\BG(bg03)`, `third`];
+  entries[2907].ints[0] = 3n;
+  entries[2899] = {strings: local, dimensions: [100]};
+  assert.deepEqual(lookahead.update(), ['cg/bg/bg03']);
+  entries[2904].strings[0] = 'none';
+  entries[2899] = {strings: [...local], dimensions: [100]};
+  assert.deepEqual(lookahead.update(), []);
+});
+
 test('YU-RIS lookahead locates the scenario library variables in its routines', async () => {
   const {YurisSceneLookahead} = await import('../dist/engines/yuris/vm/scene-lookahead.js');
   // Library routines with a numbering other than the default one.
@@ -2331,17 +2601,66 @@ test('YU-RIS lookahead locates the scenario library variables in its routines', 
   const reload = [...pad(6), ins([H(6164)], [V(5283), H(6164)])];
   const ymv = [...pad(9), ins([V(5534), lit(6), V(5283), H(6125)])];
   const LET = 1,
-    GOSUB = 2;
-  const call = (name) => ({
+    GOSUB = 2,
+    IF = 3,
+    IFEND = 4,
+    RETURN = 5;
+  // GOSUB argument ids: 0 the label, then PINT, PSTR and PSTR2.
+  const call = (name, ...params) => ({
     command: GOSUB,
     extra: 0,
-    args: [{id: 0, type: 3, tokens: [{op: 0x4d, payload: new TextEncoder().encode(`"${name}"`)}]}],
+    args: [
+      {id: 0, type: 3, tokens: [{op: 0x4d, payload: new TextEncoder().encode(`"${name}"`)}]},
+      ...params.map(([id, tokens]) => ({id, type: 1, tokens})),
+    ],
   });
+  const let_ = (type, target, source) => ({
+    command: LET,
+    extra: 0,
+    args: [
+      {id: 0, type, tokens: target},
+      {id: 1, type, tokens: source},
+    ],
+  });
+  const PINT = 1,
+    PSTR = 2,
+    PSTR2 = 3;
   const routines = {
     'es.ScenarioMacro.SP.GO': [call('es.SP.SET')],
     'es.SP.SET': [{...ins([H(5000)], [lit(1)]), command: LET}],
-    'es.ScenarioMacro.GO': [call('es.Scenario.JumpLabel')],
-    'es.Scenario.JumpLabel': [{...ins([H(3014)], [lit(1)]), command: LET}],
+    // es.ScenarioMacro.SetParam stores argument k into the k-th string it sets.
+    'es.ScenarioMacro.SetParam': [
+      let_(3, [H(3070)], [lit(0)]),
+      let_(3, [H(3071)], [lit(0)]),
+      {...ins(), command: RETURN},
+    ],
+    // BG copies its first argument and passes it on; the callee reads it as V$55[1].
+    'es.ScenarioMacro.BG': [
+      let_(3, [H(4000)], [H(3070)]),
+      call('es.MAC.BG', [PSTR, [H(4000)]]),
+      {...ins(), command: RETURN},
+      call('es.SP.CG.SET', [PINT, [lit(7)]], [PSTR2, [H(3071)]]),
+    ],
+    'es.MAC.BG': [
+      let_(3, [H(4100)], [V(55), lit(1), op(')')]),
+      call('es.SP.CG.SET', [PINT, [lit(1)]], [PSTR2, [H(4100)]]),
+      // A request inside an IF block is not made by every call.
+      {...ins(), command: IF},
+      call('es.SP.CG.SET', [PINT, [lit(2)]], [PSTR2, [H(4100)]]),
+      {...ins(), command: IFEND},
+    ],
+    'es.ScenarioMacro.SP.TR': [call('es.SP.TR.SET', [PSTR, [H(3071)]])],
+    'es.SP.CG.SET': [ins()],
+    'es.SP.TR.SET': [ins()],
+    'es.SP.LOADTR': [...pad(2), let_(3, [H(4200)], [V(5534), lit(4), op(')'), H(4201), op('+')])],
+    'es.ScenarioMacro.GO': [call('es.Scenario.JumpLabel', [PSTR, [H(3070)]])],
+    'es.Scenario.JumpLabel': [
+      {...ins([H(3014)], [lit(1)]), command: LET},
+      ...pad(10),
+      ins([V(2883), H(3031), op(')')], [V(2884), H(3031), op(')')], [V(2881), H(3031), op(')')]),
+    ],
+    'es.Scenario.SearchLABEL': [...pad(2), ins([H(2885)]), ins([V(2880), H(48), op(')')])],
+    'es.SCENARIO.FILENAME.GET': [...pad(1), ins([V(2942), H(3012), op(')')])],
     'es.ScenarioMacro.SEL': [call('ES.SEL')],
     'ES.SEL': [ins()],
     'es.SCENARIO.PARSER': parser,
@@ -2355,7 +2674,16 @@ test('YU-RIS lookahead locates the scenario library variables in its routines', 
   const machine = {
     label: (name) => names.indexOf(new TextDecoder().decode(name)),
     project: {
-      commands: {commands: [{name: 'X'}, {name: 'LET'}, {name: 'GOSUB'}]},
+      commands: {
+        commands: [
+          {name: 'X'},
+          {name: 'LET'},
+          {name: 'GOSUB', args: [{name: '#'}, {name: 'PINT'}, {name: 'PSTR'}, {name: 'PSTR2'}]},
+          {name: 'IF'},
+          {name: 'IFEND'},
+          {name: 'RETURN'},
+        ],
+      },
       labels: {
         labels: names.map((name, script) => ({
           script,
@@ -2387,11 +2715,22 @@ test('YU-RIS lookahead locates the scenario library variables in its routines', 
     size: 5361,
     sprite: 5283,
     movieFolder: 5534,
+    labelCount: 2885,
+    labelNames: 2880,
+    labelLine: 2883,
+    labelFile: 2881,
+    fileNames: 2942,
   });
   assert.deepEqual(lookahead.scaleBands, [{low: 13000, high: 99999, scale: 66}]);
   // Macros that reach a cursor write or the choice routines end the forecast scan.
   await lookahead.macrosRead;
-  assert.deepEqual([...lookahead.linearNames], ['SP.GO']);
+  assert.deepEqual([...lookahead.linearNames], ['SP.GO', 'SetParam', 'BG', 'SP.TR']);
+  // Sprite requests follow the macro arguments into the routines; GO always jumps to its first.
+  assert.deepEqual(Object.fromEntries(lookahead.calls.images), {
+    BG: [{folder: 1, arg: 0, rule: false}],
+    'SP.TR': [{folder: 4, arg: 1, rule: true}],
+  });
+  assert.deepEqual(Object.fromEntries(lookahead.calls.jumps), {GO: 0});
   // A parser whose source read does not index by its cursor is not this library.
   parser[30] = ins([V(2875), H(9999)]);
   assert.equal(await YurisSceneLookahead.create(machine), undefined);
@@ -2455,6 +2794,7 @@ test('YU-RIS SIZE5 matches the Lanczos-2 taps of 0x434A14', () => {
     [64, 9, 16, 21, 0],
     [4, 3, 2, 2, 16],
     [5, 40, 3, 6, 0],
+    [320, 180, 40, 23, 0],
   ]) {
     const src = new Uint8Array(stride * rows * 4 + extra);
     for (let i = 0; i < src.length; i++) src[i] = i % 4 === 3 && random() & 1 ? 0xff : random();

@@ -95,6 +95,21 @@ export class YurisExpression {
   }
   /** 0x7DB991: set by `v`, a whole-variable reference. */
   wholeVariable = false;
+  /** The last-variable record, for an evaluation that must leave it unchanged. */
+  saveLast(): readonly [number, number | bigint, boolean, number] {
+    return [this.lastId, this.lastElement, this.wholeVariable, this.prefix];
+  }
+  restoreLast([id, element, whole, prefix]: readonly [
+    number,
+    number | bigint,
+    boolean,
+    number,
+  ]): void {
+    this.lastId = id;
+    this.lastElement = element;
+    this.wholeVariable = whole;
+    this.prefix = prefix;
+  }
   /** 0x7DB992: 1 for a '`' prefix, 2 for '#'; either makes reads push a reference. */
   prefix = 0;
   /** 0x7DB990: declaration mode of INT/FLT/STR targets. */

@@ -87,12 +87,25 @@ unsafe fn normal_blend_span(
     opacity: u32,
     masked: u32,
 ) {
+    normal_blend_span_into(source, destination, destination, pixels, opacity, masked);
+}
+
+/// `normal_blend_span` that reads the destination pixels from `under` and writes `destination`.
+#[inline]
+unsafe fn normal_blend_span_into(
+    source: *const u32,
+    under: *const u32,
+    destination: *mut u32,
+    pixels: usize,
+    opacity: u32,
+    masked: u32,
+) {
     let opacity16 = u16x8_splat(opacity as u16);
     let rgb = u32x4_splat(0x00ffffff);
     let mut i = 0;
     while i + 4 <= pixels {
         let s = v128_load(source.add(i).cast());
-        let d = v128_load(destination.add(i).cast());
+        let d = v128_load(under.add(i).cast());
         let (low, high) = if masked != 0 {
             let alpha =
                 i8x16_shuffle::<3, 3, 3, 3, 7, 7, 7, 7, 11, 11, 11, 11, 15, 15, 15, 15>(s, s);
@@ -121,7 +134,7 @@ unsafe fn normal_blend_span(
     }
     while i < pixels {
         let s = *source.add(i);
-        let d = *destination.add(i);
+        let d = *under.add(i);
         let k = if masked != 0 {
             ((s >> 24) * opacity >> 8) + 1
         } else {
@@ -148,13 +161,28 @@ pub unsafe extern "C" fn transition_bgra(
     weight: u32,
     sse: u32,
 ) {
+    transition_bgra_into(first, second, first, width, height, weight, sse);
+}
+
+/// `transition_bgra` with the first image left in place and the result written to `output`.
+#[no_mangle]
+pub unsafe extern "C" fn transition_bgra_into(
+    first: *const u32,
+    second: *const u32,
+    output: *mut u32,
+    width: usize,
+    height: usize,
+    weight: u32,
+    sse: u32,
+) {
     if weight != 128 {
-        normal_blend_span(second, first, width * height, weight, 0);
+        normal_blend_span_into(second, first, output, width * height, weight, 0);
         return;
     }
     for row in 0..height {
         let a = first.add(row * width);
         let b = second.add(row * width);
+        let o = output.add(row * width);
         let mut x = 0;
         while x + 4 <= width {
             let left = v128_load(a.add(x).cast());
@@ -164,7 +192,7 @@ pub unsafe extern "C" fn transition_bgra(
             } else {
                 u8x16_add(u8x16_shr(left, 1), u8x16_shr(right, 1))
             };
-            v128_store(a.add(x).cast(), mixed);
+            v128_store(o.add(x).cast(), mixed);
             x += 4;
         }
         while x < width {
@@ -184,7 +212,7 @@ pub unsafe extern "C" fn transition_bgra(
                 };
                 mixed |= value << shift;
             }
-            *a.add(x) = mixed;
+            *o.add(x) = mixed;
             x += 1;
         }
     }
@@ -509,6 +537,68 @@ pub unsafe extern "C" fn bilinear(
                 v128_store64_lane::<0>(pixels, output.add(pair * 2).cast());
             } else {
                 *output.add(pair * 2) = u32x4_extract_lane::<0>(pixels);
+            }
+        }
+    }
+}
+
+/// One pass of YU-RIS SIZE5 (0x434A14) over taps that stay inside the line. Output `i` of a
+/// line sums the BGRA bytes at `samples[starts[i]..starts[i + 1]]` (in units of `tap_in`
+/// bytes) times their weights, each sum wrapping to 32 bits after every tap, then divides by
+/// `totals[i]` (1 plus the weights) toward zero; an alpha above 0xFC becomes 0xFF and every
+/// byte is clamped. `outputs_outer` walks outputs before lines, for passes along columns.
+#[no_mangle]
+pub unsafe extern "C" fn lanczos_pass(
+    source: *const u8,
+    destination: *mut u8,
+    lines: usize,
+    count: usize,
+    line_in: usize,
+    tap_in: usize,
+    line_out: usize,
+    step_out: usize,
+    starts: *const u32,
+    samples: *const u32,
+    weights: *const i32,
+    totals: *const i32,
+    outputs_outer: u32,
+) {
+    let run = |line: usize, i: usize| {
+        let from = source.add(line * line_in);
+        let mut sum = i32x4_splat(0);
+        for t in *starts.add(i) as usize..*starts.add(i + 1) as usize {
+            let pixel = v128_load32_zero(from.add(*samples.add(t) as usize * tap_in).cast());
+            let channels = u32x4_extend_low_u16x8(u16x8_extend_low_u8x16(pixel));
+            sum = i32x4_add(sum, i32x4_mul(channels, i32x4_splat(*weights.add(t))));
+        }
+        let total = *totals.add(i);
+        let quotient = |value: i32| {
+            if total == 0 {
+                0
+            } else {
+                value.wrapping_div(total)
+            }
+        };
+        let output = destination.add(line * line_out + i * step_out);
+        let mut alpha = quotient(i32x4_extract_lane::<3>(sum));
+        if alpha > 0xfc {
+            alpha = 0xff;
+        }
+        *output = quotient(i32x4_extract_lane::<0>(sum)).clamp(0, 255) as u8;
+        *output.add(1) = quotient(i32x4_extract_lane::<1>(sum)).clamp(0, 255) as u8;
+        *output.add(2) = quotient(i32x4_extract_lane::<2>(sum)).clamp(0, 255) as u8;
+        *output.add(3) = alpha.clamp(0, 255) as u8;
+    };
+    if outputs_outer != 0 {
+        for i in 0..count {
+            for line in 0..lines {
+                run(line, i);
+            }
+        }
+    } else {
+        for line in 0..lines {
+            for i in 0..count {
+                run(line, i);
             }
         }
     }

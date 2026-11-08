@@ -28,6 +28,15 @@ interface BgraEffects extends WebAssembly.Exports {
     weight: number,
     sse: number,
   ) => void;
+  transition_bgra_into: (
+    first: number,
+    second: number,
+    output: number,
+    width: number,
+    height: number,
+    weight: number,
+    sse: number,
+  ) => void;
   rule_blend: (
     source: number,
     destination: number,
@@ -49,6 +58,21 @@ interface BgraEffects extends WebAssembly.Exports {
     opacity: number,
     masked: number,
     mode: number,
+  ) => void;
+  lanczos_pass: (
+    source: number,
+    destination: number,
+    lines: number,
+    count: number,
+    lineIn: number,
+    tapIn: number,
+    lineOut: number,
+    stepOut: number,
+    starts: number,
+    samples: number,
+    weights: number,
+    totals: number,
+    outputsOuter: number,
   ) => void;
   bilinear: (
     source: number,
@@ -81,6 +105,20 @@ interface ScratchOwner {
 const blendMemory: ScratchOwner = {};
 const scaleMemory: ScratchOwner = {};
 const rowCacheMemory: ScratchOwner = {};
+const transitionMemory: ScratchOwner = {};
+const lanczosMemory: ScratchOwner = {};
+/** Largest pair of whole transition inputs kept staged between calls. */
+const MAX_STAGED_TRANSITION = 32 * 1024 * 1024;
+interface StagedTransitionInput {
+  bytes: WeakRef<Uint8Array>;
+  revision: number;
+  offset: number;
+  stride: number;
+  at: number;
+  length: number;
+  row: number;
+}
+const stagedTransition: [StagedTransitionInput?, StagedTransitionInput?] = [];
 interface ScaleGeometry {
   bytes: WeakRef<Uint8Array>;
   revision: number;
@@ -216,6 +254,91 @@ interface BgraRegion {
   stride: number;
 }
 
+/**
+ * A copy of `bytes`, taken at `revision` before they are written in place, takes over the
+ * pixels the kernels staged from them, so a deferred reader of the copy is not staged again.
+ */
+export function rebindBgraSource(bytes: Uint8Array, revision: number, copy: Uint8Array): void {
+  for (const owner of [scaleMemory, rowCacheMemory])
+    if (owner.source?.revision === revision && owner.source.bytes.deref() === bytes)
+      owner.source = {bytes: new WeakRef(copy), revision};
+  for (const scale of new Set([previousScale, cachedScale]))
+    if (scale?.revision === revision && scale.bytes.deref() === bytes)
+      scale.bytes = new WeakRef(copy);
+  for (const input of stagedTransition)
+    if (input?.revision === revision && input.bytes.deref() === bytes)
+      input.bytes = new WeakRef(copy);
+}
+
+/**
+ * A transition repeated with new weights over unchanged inputs (a fade) keeps both whole
+ * inputs staged, keyed by buffer and pixel revision; each band of the output is then a copy
+ * of the staged first image that the kernel overwrites.
+ */
+function transitionStaged(
+  first: BgraRegion,
+  second: BgraRegion,
+  target: BgraRegion,
+  width: number,
+  height: number,
+  weight: number,
+  sse: boolean,
+  revisions: readonly [number, number],
+): boolean {
+  const row = width * 4,
+    length = row * height;
+  const rows = Math.min(height, Math.max(1, Math.floor(TRANSITION_BAND / row)));
+  const stage = workspace(transitionMemory, [length, length, row * rows]);
+  if (!stage) return false;
+  const [a, b, o] = stage.offsets as [number, number, number];
+  [first, second].forEach(({bytes, offset, stride}, slot) => {
+    const at = slot ? b : a,
+      staged = stagedTransition[slot];
+    if (
+      staged &&
+      staged.revision === revisions[slot] &&
+      staged.bytes.deref() === bytes &&
+      staged.offset === offset &&
+      staged.stride === stride &&
+      staged.at === at &&
+      staged.length === length &&
+      staged.row === row
+    )
+      return;
+    pack(new Uint8Array(stage.buffer, at, length), bytes, offset, stride, row);
+    stagedTransition[slot] = {
+      bytes: new WeakRef(bytes),
+      revision: revisions[slot]!,
+      offset,
+      stride,
+      at,
+      length,
+      row,
+    };
+  });
+  for (let top = 0; top < height; top += rows) {
+    const count = Math.min(rows, height - top),
+      size = row * count;
+    stage.kernel.transition_bgra_into(
+      a + top * row,
+      b + top * row,
+      o,
+      width,
+      count,
+      weight,
+      Number(sse),
+    );
+    unpack(
+      target.bytes,
+      new Uint8Array(stage.buffer, o, size),
+      target.offset + top * target.stride,
+      target.stride,
+      row,
+    );
+  }
+  return true;
+}
+
 /** Stage disjoint transition inputs, preserving the paired midpoint and odd scalar tail. */
 export function transitionBgra(
   first: BgraRegion,
@@ -225,6 +348,7 @@ export function transitionBgra(
   height: number,
   weight: number,
   sse: boolean,
+  revisions?: readonly [number, number],
 ): boolean {
   if (
     width <= 0 ||
@@ -239,6 +363,13 @@ export function transitionBgra(
   const row = width * 4;
   for (const {bytes, offset, stride} of [first, second, target])
     if (offset < 0 || offset + (height - 1) * stride + row > bytes.length) return false;
+  if (
+    revisions &&
+    first.bytes !== second.bytes &&
+    row * height * 2 <= MAX_STAGED_TRANSITION &&
+    transitionStaged(first, second, target, width, height, weight, sse, revisions)
+  )
+    return true;
   // Pixels are independent within a row, so bands of whole rows keep the staged copies in
   // cache instead of streaming every image through linear memory twice.
   const rows = Math.min(height, Math.max(1, Math.floor(TRANSITION_BAND / row)));
@@ -391,8 +522,14 @@ export function bilinearBgra(
   const outputStride = destination?.stride ?? targetWidth;
   const outputX = destination?.x ?? left;
   const outputY = destination?.y ?? top;
+  // Once the source is staged, a small clipped draw costs only its own pixels.
+  const staged =
+    sourceRevision !== undefined &&
+    [scaleMemory, rowCacheMemory].some(
+      (owner) => owner.source?.revision === sourceRevision && owner.source.bytes.deref() === source,
+    );
   if (
-    width * height < MIN_PIXELS ||
+    width * height < (staged ? RESIDENT_MIN_PIXELS : MIN_PIXELS) ||
     sourceRows * stride >= 0x20000000 ||
     outputX < 0 ||
     outputY < 0 ||
@@ -502,5 +639,73 @@ export function bilinearBgra(
     outputStride * 4,
     width * 4,
   );
+  return true;
+}
+
+/** The in-range taps of one Lanczos pass: per output a range of mirrored samples and weights. */
+export interface LanczosTaps {
+  readonly starts: Uint32Array;
+  readonly samples: Uint32Array;
+  readonly weights: Int32Array;
+  readonly totals: Int32Array;
+}
+
+/**
+ * Both passes of SIZE5 with in-range taps: `rows` source lines of `stride` pixels to `rows`
+ * lines of `width`, then those columns to `height` rows. The intermediate stays in linear memory.
+ */
+export function lanczosBgra(
+  target: Uint8Array,
+  width: number,
+  height: number,
+  source: Uint8Array,
+  stride: number,
+  rows: number,
+  horizontal: LanczosTaps,
+  vertical: LanczosTaps,
+): boolean {
+  const input = rows * stride * 4,
+    middle = rows * width * 4,
+    output = width * height * 4;
+  if (width <= 0 || height <= 0 || rows <= 0 || source.length < input || target.length < output)
+    return false;
+  const tables = [horizontal, vertical].flatMap((taps) => [
+    taps.starts,
+    taps.samples,
+    taps.weights,
+    taps.totals,
+  ]);
+  const stage = workspace(lanczosMemory, [
+    input,
+    middle,
+    output,
+    ...tables.map((table) => table.byteLength),
+  ]);
+  if (!stage) return false;
+  const [from, between, to, ...at] = stage.offsets as number[];
+  new Uint8Array(stage.buffer, from, input).set(source.subarray(0, input));
+  tables.forEach((table, i) =>
+    new Uint8Array(stage.buffer, at[i]!, table.byteLength).set(
+      new Uint8Array(table.buffer, table.byteOffset, table.byteLength),
+    ),
+  );
+  const pass = stage.kernel.lanczos_pass;
+  pass(
+    from!,
+    between!,
+    rows,
+    width,
+    stride * 4,
+    4,
+    width * 4,
+    4,
+    at[0]!,
+    at[1]!,
+    at[2]!,
+    at[3]!,
+    0,
+  );
+  pass(between!, to!, width, height, 4, width * 4, 4, width * 4, at[4]!, at[5]!, at[6]!, at[7]!, 1);
+  target.set(new Uint8Array(stage.buffer, to, output));
   return true;
 }

@@ -76,23 +76,35 @@ function splitLines(
   bytes: Uint8Array,
   scenario?: YurisScenarioText,
 ): void {
+  const lines = textLines(bytes, BigInt(m.variables.get(id).dimensions[0] ?? 0), scenario);
+  for (let i = 0; i < lines.length; i++) m.setString(id, BigInt(i), lines[i]!);
+}
+
+/**
+ * The elements TEXT FILE stores for `bytes` into an array whose first dimension is `bound`
+ * (see `splitLines`), from element 0. The last two are the partial line and an empty string,
+ * which a write past the array drops.
+ */
+export function textLines(
+  bytes: Uint8Array,
+  bound: bigint,
+  scenario?: YurisScenarioText,
+): string[] {
   const size = bytes.length + 2,
     data = new Uint8Array(size);
   data.set(bytes);
   data[size - 2] = 0x0d;
   data[size - 1] = 0x0a;
-  const bound = BigInt(m.variables.get(id).dimensions[0] ?? 0);
-  let line = 0n,
-    current = '',
+  const lines: string[] = [];
+  let current = '',
     i = 0;
   while (i < size) {
     const byte = data[i]!;
     if (byte === 0x0d || byte === 0x0a) {
-      if (line >= bound) break;
+      if (BigInt(lines.length) >= bound) break;
       const value = cString(current);
-      m.setString(id, line, (scenario?.normalize(value) ?? value) + '\r');
+      lines.push((scenario?.normalize(value) ?? value) + '\r');
       i += byte === 0x0d && data[i + 1] === 0x0a ? 2 : 1;
-      line++;
       current = '';
     } else if (isLeadByte(byte)) {
       current += String.fromCharCode(byte, data[i + 1] ?? 0);
@@ -102,6 +114,6 @@ function splitLines(
       i++;
     }
   }
-  m.setString(id, line, cString(current));
-  m.setString(id, line + 1n, '');
+  lines.push(cString(current), '');
+  return lines;
 }

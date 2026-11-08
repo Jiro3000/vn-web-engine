@@ -8,7 +8,7 @@ import {LookupMode, type YurisNode, YurisTree, resolveNodePath} from './nodes.js
 import {type ByteString, formatInt, i64} from './numbers.js';
 import {applyAtLeast, applyBounded, applyOp} from './operators.js';
 import {YurisType} from './variables.js';
-import {allocateBgraTarget} from '../../../graphics/bgra-effects-wasm.js';
+import {allocateBgraTarget, rebindBgraSource} from '../../../graphics/bgra-effects-wasm.js';
 import type {Ymv} from '../../../formats/yuris/ymv.js';
 import {hasRasterText} from '../../../text/raster-text.js';
 import {yurisRasterBitmap} from './raster-text.js';
@@ -24,10 +24,14 @@ export interface YurisImage {
 export interface YurisImageHost {
   decodeImage(bytes: Uint8Array, type: YurisFileType, path: ByteString): Promise<YurisImage>;
   decodeYmvFrame?(movie: Ymv, index: number): Promise<YurisImage | undefined>;
+  /** Images the running script will load next, beside the current load of `reading`. */
+  readAhead?(names: readonly ByteString[], reading: ByteString): void;
 }
 
+/** A deferred transform of `from` into `pixels`; a direct one may draw into another output. */
 type PixelWriter = (
   pixels: Uint8Array,
+  from: Uint8Array,
   clip?: Rect,
   output?: {stride: number; x: number; y: number},
 ) => boolean | void;
@@ -81,9 +85,12 @@ export class YurisCg {
   private displayedPixels: Uint8Array | null = null;
   private inputPixels: Uint8Array | null = null;
   private pendingPixels?: {
-    source: YurisCg;
-    write: (clip?: Rect) => void;
-    draw?: PixelWriter;
+    /** The layer whose buffer `from` is, until that layer changes it. */
+    source?: YurisCg;
+    from: Uint8Array;
+    target: Uint8Array;
+    write: PixelWriter;
+    direct: boolean;
     scale?: DeferredScale;
   };
   private windowReadback?: () => void;
@@ -129,18 +136,21 @@ export class YurisCg {
     if (this.pendingPixels) {
       if (x === 0 && y === 0 && width === this.width && height === this.height)
         this.resolvePixels();
-      else this.pendingPixels.write([x, y, x + width - 1, y + height - 1]);
+      else {
+        const {target, from, write} = this.pendingPixels;
+        write(target, from, [x, y, x + width - 1, y + height - 1]);
+      }
     }
     return this.displayedPixels;
   }
   drawPendingTo(pixels: Uint8Array, stride: number, clip: Rect, x: number, y: number): boolean {
-    const draw = this.pendingPixels?.draw;
+    const pending = this.pendingPixels;
     const source = this.displayedPixels;
     return (
-      !!draw &&
+      !!pending?.direct &&
       !!source &&
       !hasRasterText(yurisRasterBitmap(source, this.width, this.height)) &&
-      draw(pixels, clip, {stride, x, y}) === true
+      pending.write(pixels, pending.from, clip, {stride, x, y}) === true
     );
   }
   /** Invalidates derived pixel data after in-place writes. */
@@ -191,7 +201,8 @@ export class YurisCg {
 
   /** A new buffer replaces both +0xD0 and +0xC0. */
   setPixels(pixels: Uint8Array | null): void {
-    this.resolveReaders();
+    // The dropped buffer is no longer written, so deferred readers keep reading it.
+    this.releaseReaders(false);
     this.cancelPixelWrite();
     this.windowReadback = undefined;
     this.displayedPixels = this.inputPixels = pixels;
@@ -208,7 +219,7 @@ export class YurisCg {
   beginPixelWrite(): void {
     this.syncWindowPixels();
     this.resolvePixels();
-    this.resolveReaders();
+    this.releaseReaders(true);
     this.pixelRevision++;
   }
 
@@ -222,25 +233,43 @@ export class YurisCg {
   ): boolean {
     const target = this.inputPixels;
     if (!target || target !== this.displayedPixels || from.buffer === target.buffer) return false;
-    this.resolveReaders();
+    // The deferred write changes this buffer in place.
+    this.releaseReaders(true);
     this.cancelPixelWrite();
     this.pixelRevision++;
-    this.pendingPixels = {
-      source,
-      write: (clip) => write(target, clip),
-      draw: direct ? write : undefined,
-      scale,
-    };
+    this.pendingPixels = {source, from, target, write, direct, scale};
     (source.pixelReaders ??= new Set()).add(this);
     return true;
   }
 
-  private resolveReaders(): void {
-    if (this.pixelReaders) for (const reader of this.pixelReaders) reader.resolvePixels();
+  /**
+   * Before this layer's pixels change, its deferred readers stop following it. They keep the
+   * buffer they captured, or a copy of it when `copy` (the buffer is written in place), so the
+   * transform still sees the pixels of its CGACT and runs only when its result is read. A
+   * layer with readers has no pending write itself: reading `source` or `pixels` resolved it.
+   */
+  private releaseReaders(copy: boolean): void {
+    const readers = this.pixelReaders;
+    if (!readers?.size) return;
+    this.pixelReaders = undefined;
+    const copies = copy ? new Map<Uint8Array, Uint8Array>() : undefined;
+    for (const reader of readers) {
+      const pending = reader.pendingPixels;
+      if (pending?.source !== this) continue;
+      pending.source = undefined;
+      if (!copies) continue;
+      let pixels = copies.get(pending.from);
+      if (!pixels) {
+        copies.set(pending.from, (pixels = pending.from.slice()));
+        rebindBgraSource(pending.from, this.pixelRevision, pixels);
+      }
+      pending.from = pixels;
+      if (pending.scale) pending.scale = {...pending.scale, pixels};
+    }
   }
 
   private cancelPixelWrite(): void {
-    this.pendingPixels?.source.pixelReaders?.delete(this);
+    this.pendingPixels?.source?.pixelReaders?.delete(this);
     this.pendingPixels = undefined;
   }
 
@@ -248,7 +277,7 @@ export class YurisCg {
     const pending = this.pendingPixels;
     if (!pending) return;
     this.cancelPixelWrite();
-    pending.write();
+    pending.write(pending.target, pending.from);
   }
 
   /** 0x434440: a new buffer and size; the filtered copy is dropped. */
@@ -276,6 +305,9 @@ export interface DeferredScale {
   readonly fsy: number;
   readonly sse: boolean;
 }
+
+/** Iterations of a loading LOOP whose files are read ahead. */
+const LOOP_READ_AHEAD = 8;
 
 /** CG argument ids (`ysc.ybn`). */
 const enum Cg {
@@ -826,8 +858,9 @@ export class YurisLayers {
     const columns = Math.max(Math.min(width, cg.width), 0),
       rows = cg.pixels ? Math.max(Math.min(height, cg.height), 0) : 0;
     // Opaque black outside the copied top-left part; the copy overwrites the rest.
+    const words = LITTLE_ENDIAN ? new Uint32Array(pixels.buffer) : undefined;
     const black = (from: number, to: number): void => {
-      if (LITTLE_ENDIAN) new Uint32Array(pixels.buffer, from * 4, to - from).fill(0xff000000);
+      if (words) words.fill(0xff000000, from, to);
       else for (let i = from * 4 + 3; i < to * 4; i += 4) pixels[i] = 0xff;
     };
     for (let y = 0; y < rows; y++) {
@@ -860,6 +893,10 @@ export class YurisLayers {
       this.machine.fail(new YurisError(0x186be, [this.commandName(), name]));
       return -1;
     }
+    // A LOOP of CG FILE loads (an atlas or an animation) loads its files one after another;
+    // the next iterations' names are read and decoded meanwhile.
+    if (this.images.readAhead)
+      this.images.readAhead(this.machine.loopStringsAhead(Cg.File, LOOP_READ_AHEAD), file.path);
     const data = await this.files.read(file.path);
     const image = await this.images.decodeImage(data, file.type, file.path);
     cg.masked = Number(maskedImage(file.type, data, this.files.version));

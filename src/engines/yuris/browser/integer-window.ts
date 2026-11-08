@@ -71,6 +71,7 @@ export class YurisIntegerWindow {
   private node?: YurisCgNode;
   private unsupported = false;
   private horizontal?: {scale: DeferredScale; coordinates: Int32Array};
+  private vertical?: {scale: DeferredScale; coordinates: Int32Array};
   drawn = 0;
   readbacks = 0;
   get queueWaits(): number {
@@ -92,6 +93,21 @@ export class YurisIntegerWindow {
       return last.coordinates;
     const coordinates = bilinearCoordinates(scale.fx, scale.fx2, scale.fsx, scale.width, true);
     this.horizontal = {scale, coordinates};
+    return coordinates;
+  }
+
+  private rows(scale: DeferredScale): Int32Array {
+    const last = this.vertical;
+    if (
+      last &&
+      last.scale.fy === scale.fy &&
+      last.scale.fy2 === scale.fy2 &&
+      last.scale.fsy === scale.fsy &&
+      last.scale.height === scale.height
+    )
+      return last.coordinates;
+    const coordinates = bilinearCoordinates(scale.fy, scale.fy2, scale.fsy, scale.height, false);
+    this.vertical = {scale, coordinates};
     return coordinates;
   }
 
@@ -241,7 +257,7 @@ export class YurisIntegerWindow {
         if (pixels.length !== pending.width * pending.height * 4) return null;
         layer.scale = {
           columns: this.columns(pending),
-          rows: bilinearCoordinates(pending.fy, pending.fy2, pending.fsy, pending.height, false),
+          rows: this.rows(pending),
           sse: pending.sse,
         };
       }

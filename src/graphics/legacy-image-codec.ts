@@ -4,16 +4,21 @@ import {decodeBmp} from '../formats/bmp.js';
 import {decodeQoi} from '../formats/qoi.js';
 import {decodeYdgConcurrently} from '../formats/yuris/ydg.js';
 import {BrowserGdiImageCodec} from './browser-gdi-image.js';
-import {decodeImageOffThread} from './image-decode-offload.js';
+import {
+  backgroundImageDecodes,
+  decodeImageOffThread,
+  decodeImageStripOffThread,
+} from './image-decode-offload.js';
+import type {WorkerPoolLane} from '../platform/worker-pool.js';
 import {swapRedBlueInPlace} from './pixel-order.js';
 
 /** Each YDG strip decodes on its own worker; without workers it decodes in this thread. */
-const decodeYdgStrips = (bytes: Uint8Array) =>
+const decodeYdgStrips = (bytes: Uint8Array, lane?: WorkerPoolLane) =>
   decodeYdgConcurrently(
     bytes,
     async (codec, strip) =>
       // Strip codec 0 is QOI, 2 WebP.
-      (await decodeImageOffThread(strip, codec === 0 ? 'qoi' : 'webp'))?.pixels ?? null,
+      (await decodeImageStripOffThread(strip, codec === 0 ? 'qoi' : 'webp', lane))?.pixels ?? null,
   );
 
 interface DecodedImage {
@@ -31,6 +36,12 @@ const PRELOAD_CACHE_BYTES = 160 * 1024 * 1024;
 const PRELOAD_WEBP_BYTES = 56 * 1024 * 1024;
 const PRELOAD_LARGE_PNG_BYTES = 68 * 1024 * 1024;
 const LARGE_PNG_BYTES = 2 * 1024 * 1024;
+/** Single-colour decodes cost a few bytes each, so they stay out of the byte-budget eviction. */
+const UNIFORM_IMAGES = 256;
+/** Decodes requested again after their first use, kept apart from one-off foreground decodes. */
+const REUSED_IMAGE_BYTES = 64 * 1024 * 1024;
+/** Paths remembered as decoded once, for the reuse test. */
+const DECODED_KEYS = 8192;
 
 interface CachedImage {
   encoded: Uint8Array;
@@ -126,6 +137,11 @@ function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
 export class LegacyImageCodec {
   private readonly gdi = new BrowserGdiImageCodec();
   private readonly recent = new ImageCache(IMAGE_CACHE_BYTES);
+  /** Single-colour images (fill words), least recently used first. */
+  private readonly uniform = new Map<string, CachedImage>();
+  private readonly reused = new ImageCache(REUSED_IMAGE_BYTES);
+  /** Keys of earlier foreground decodes, least recently decoded first. */
+  private readonly decodedKeys = new Set<string>();
   // Unrelated foreground decodes cannot evict art queued for a future script line.
   private readonly prepared = new ImageCache(
     PRELOAD_CACHE_BYTES - PRELOAD_WEBP_BYTES - PRELOAD_LARGE_PNG_BYTES,
@@ -134,9 +150,10 @@ export class LegacyImageCodec {
   private readonly preparedWebp = new ImageCache(PRELOAD_WEBP_BYTES);
   private readonly preparedLargePng = new ImageCache(PRELOAD_LARGE_PNG_BYTES);
   private nextClick = new Set<string>();
+  /** Speculative decodes in progress; a foreground load of the same bytes promotes and awaits one. */
   private readonly warming = new Map<
     string,
-    {encoded: Uint8Array; ready: Promise<void>; urgent: boolean}
+    {encoded: Uint8Array; ready: Promise<CachedImage | undefined>; lane: WorkerPoolLane}
   >();
 
   /** Keeps the decodes of `images` (path to MIME type) for the next click. */
@@ -158,10 +175,16 @@ export class LegacyImageCodec {
     return this.prepared;
   }
 
-  /** Preload the exact PNG, YDG, QOI or legacy WebP decode while the caller is doing other work. */
-  async preload(bytes: Uint8Array, mime: string, path: string): Promise<void> {
+  /**
+   * Preload the exact PNG, YDG, QOI or legacy WebP decode while the caller is doing other work.
+   * An `urgent` preload's worker jobs start before those of other preloads.
+   */
+  async preload(bytes: Uint8Array, mime: string, path: string, urgent = false): Promise<void> {
     const key = this.key(mime, true, path);
     const cache = this.preparedFor(mime, bytes.length);
+    if (this.uniformEntry(key, bytes)) return;
+    const reused = this.reused.entries.get(key);
+    if (reused && sameBytes(bytes, reused.encoded)) return;
     const existing = cache.entries.get(key) ?? this.recent.entries.get(key);
     if (existing && sameBytes(bytes, existing.encoded)) {
       this.recent.take(key);
@@ -169,7 +192,7 @@ export class LegacyImageCodec {
       return;
     }
     const pending = this.warming.get(key);
-    if (pending) return pending.ready;
+    if (pending) return void (await pending.ready);
     const format =
       mime === 'image/webp'
         ? 'legacy-webp'
@@ -182,23 +205,26 @@ export class LegacyImageCodec {
               : null;
     if (!format) return;
     const encoded = bytes.slice();
+    const lane = backgroundImageDecodes(urgent);
     const ready = (async () => {
       const decoded =
         format === 'png'
-          ? await decodeImageOffThread(encoded, 'png', undefined, 'bgra')
+          ? await decodeImageOffThread(encoded, 'png', undefined, 'bgra', lane)
           : format === 'yuris-ydg'
-            ? await decodeYdgStrips(encoded)
-            : await decodeImageOffThread(encoded, format);
+            ? await decodeYdgStrips(encoded, lane)
+            : await decodeImageOffThread(encoded, format, undefined, undefined, lane);
       if (!decoded) return;
       // The worker returns PNG pixels already in BGRA order.
       const pixels = decoded.pixels;
-      cache.put(
-        key,
-        cacheImage(encoded, {width: decoded.width, height: decoded.height, pixels}, false),
-        this.nextClick,
+      const image = cacheImage(
+        encoded,
+        {width: decoded.width, height: decoded.height, pixels},
+        false,
       );
-    })();
-    this.warming.set(key, {encoded, ready, urgent: this.nextClick.has(key)});
+      if (!this.keepUniform(key, image)) cache.put(key, image, this.nextClick);
+      return image;
+    })().catch(() => undefined);
+    this.warming.set(key, {encoded, ready, lane});
     try {
       await ready;
     } finally {
@@ -214,27 +240,70 @@ export class LegacyImageCodec {
     path: string,
   ): Promise<DecodedImage> {
     const key = this.key(mime, legacyWebpColor, path);
+    const uniform = this.uniformEntry(key, bytes);
+    if (uniform) return copyCached(uniform.image);
     const cache = this.preparedFor(mime, bytes.length);
     const pending = this.warming.get(key);
-    if (pending && !pending.urgent && !this.nextClick.has(key) && sameBytes(bytes, pending.encoded))
-      await pending.ready.catch(() => {});
-    const prepared = cache.entries.get(key);
+    // The speculative decode's waiting parts start before any later background work.
+    let warmed: CachedImage | undefined;
+    if (pending && sameBytes(bytes, pending.encoded)) {
+      pending.lane.promote();
+      warmed = await pending.ready;
+    }
+    const prepared = cache.entries.get(key) ?? warmed;
     if (prepared && sameBytes(bytes, prepared.encoded)) {
       // Keep explicitly queued art insulated from foreground decode churn after use.
       cache.put(key, prepared, this.nextClick);
       return copyCached(prepared.image);
     }
+    const again = this.reused.take(key);
+    if (again && sameBytes(bytes, again.encoded)) {
+      this.reused.put(key, again);
+      return copyCached(again.image);
+    }
+    // A second use moves the decode out of the single-use LRU into the reuse cache.
     const existing = this.recent.take(key);
     if (existing && sameBytes(bytes, existing.encoded)) {
-      this.recent.put(key, existing);
+      this.keepReused(key, existing);
       return copyCached(existing.image);
     }
     const image = await this.decode(bytes, mime, legacyWebpColor);
     const size = bytes.length + image.pixels.length;
-    if (size >= 65536 && size <= IMAGE_CACHE_BYTES) {
-      this.recent.put(key, cacheImage(bytes.slice(), image, true));
+    if (size <= IMAGE_CACHE_BYTES) {
+      const entry = cacheImage(bytes.slice(), image, true);
+      if (!this.keepUniform(key, entry))
+        if (this.decodedKeys.has(key)) this.keepReused(key, entry);
+        else this.recent.put(key, entry);
     }
+    this.decodedKeys.delete(key);
+    this.decodedKeys.add(key);
+    if (this.decodedKeys.size > DECODED_KEYS)
+      this.decodedKeys.delete(this.decodedKeys.values().next().value!);
     return image;
+  }
+
+  /** The cached single-colour decode of exactly `bytes`, refreshed as most recently used. */
+  private uniformEntry(key: string, bytes: Uint8Array): CachedImage | undefined {
+    const entry = this.uniform.get(key);
+    if (!entry) return;
+    this.uniform.delete(key);
+    if (!sameBytes(bytes, entry.encoded)) return;
+    this.uniform.set(key, entry);
+    return entry;
+  }
+
+  private keepReused(key: string, entry: CachedImage): void {
+    this.reused.put(key, entry);
+    if (!this.reused.entries.has(key)) this.recent.put(key, entry);
+  }
+
+  private keepUniform(key: string, entry: CachedImage): boolean {
+    if ('pixels' in entry.image) return false;
+    this.uniform.delete(key);
+    this.uniform.set(key, entry);
+    if (this.uniform.size > UNIFORM_IMAGES)
+      this.uniform.delete(this.uniform.keys().next().value!);
+    return true;
   }
 
   async decode(bytes: Uint8Array, mime: string, legacyWebpColor = false): Promise<DecodedImage> {
@@ -242,6 +311,11 @@ export class LegacyImageCodec {
     if (mime === YDG_MIME) return decodeYdgStrips(bytes);
     if (mime === QOI_MIME) return decodeQoi(bytes);
     if (mime === 'image/png') {
+      // A worker decode keeps the inflate and scanline passes off the page, which a load
+      // otherwise shares with the other tasks of the frame.
+      const offThread = await decodeImageOffThread(bytes, 'png', undefined, 'bgra');
+      if (offThread)
+        return {width: offThread.width, height: offThread.height, pixels: offThread.pixels};
       const d = await decodePng(bytes);
       return {...d, pixels: swap(d.pixels)};
     }

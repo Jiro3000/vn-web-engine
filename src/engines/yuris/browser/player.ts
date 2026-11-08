@@ -138,6 +138,10 @@ export class YurisBrowserPlayer {
   private readonly prefetchedVoices = new Set<string>();
   private lookahead?: YurisSceneLookahead;
   private readonly preloading = new Set<string>();
+  /** The preloads of `preloading` the next click needs, which have slots of their own. */
+  private readonly urgentPreloads = new Set<string>();
+  /** Ends the current frame pacing sleep (see `paceSleep`). */
+  private wakePace?: () => void;
   private readonly preloadedArchiveFiles = new Map<string, Uint8Array>();
   private preloadedArchiveBytes = 0;
   /** Archive files read ahead progressively (S.MV movies), with their inflated sizes. */
@@ -249,9 +253,13 @@ export class YurisBrowserPlayer {
         return codec.decodeCached(data, imageMime[type] ?? 'application/octet-stream', true, path);
       },
       decodeYmvFrame: (movie, frame) => this.ymvDecoder.decode(movie, frame),
+      readAhead: (names, reading) => {
+        if (this.machine.system.preloadEnabled)
+          for (const name of names) this.decodeAhead(name, reading);
+      },
       encodeImage: codec.encode.bind(codec),
       now: () => performance.now(),
-      sleep: (ms) => process.sleep(ms),
+      sleep: (ms) => this.paceSleep(ms, process),
       openSoundDevice: () => 0,
       createSoundBuffer: (format) => this.device.createSoundBuffer(format),
       readPads: () =>
@@ -450,6 +458,7 @@ export class YurisBrowserPlayer {
         const key = setWindowsVirtualKey(this.machine.input.keyboard, e, true);
         if (key) this.machine.input.keyDown(key);
         e.preventDefault();
+        this.wakePace?.();
       },
       {signal},
     );
@@ -617,30 +626,59 @@ export class YurisBrowserPlayer {
     if (this.preloading.has(file.path)) return;
     this.nextClickQueue.delete(file.path);
     this.preloadQueue.delete(file.path);
-    this.startPreload(file.path, imageMime[file.type]!);
+    this.startPreload(file.path, imageMime[file.type]!, true);
   }
+  /**
+   * Two CGCASH preloads run at a time; the images of the next click have two slots of their
+   * own, so a long CGCASH queue never delays them.
+   */
   private drainPreloadQueue(): void {
-    while (this.preloading.size < 2 && !this.abort.signal.aborted) {
-      const urgent = this.nextClickQueue.entries().next().value;
-      const next = urgent ?? this.preloadQueue.entries().next().value;
-      if (next === undefined) return;
+    while (this.urgentPreloads.size < 2 && !this.abort.signal.aborted) {
+      const next = this.nextClickQueue.entries().next().value;
+      if (next === undefined) break;
       const [path, mime] = next;
       this.nextClickQueue.delete(path);
       this.preloadQueue.delete(path);
-      this.startPreload(path, mime);
+      this.urgentPreloads.add(path);
+      this.startPreload(path, mime, true);
+    }
+    while (this.preloading.size - this.urgentPreloads.size < 2 && !this.abort.signal.aborted) {
+      const next = this.preloadQueue.entries().next().value;
+      if (next === undefined) return;
+      const [path, mime] = next;
+      this.preloadQueue.delete(path);
+      this.startPreload(path, mime, false);
     }
   }
-  private startPreload(path: string, mime: string): void {
+  private startPreload(path: string, mime: string, urgent: boolean): void {
     this.preloading.add(path);
     void this.readAsset(path, true)
-      .then((data) => this.codecs.preload(data, mime, path))
+      .then((data) => this.codecs.preload(data, mime, path, urgent))
       .catch(() => {
         // The foreground loader retains its original error handling and reads current bytes.
       })
       .finally(() => {
         this.preloading.delete(path);
+        this.urgentPreloads.delete(path);
         this.drainPreloadQueue();
       });
+  }
+  /**
+   * The frame pacing `Sleep` of 0x4109A8, which a key or button press ends early: the frame
+   * shows at once and the next pass, which polls the press, starts without the rest of the
+   * wait (its pacing then restarts from that moment, as after a late frame).
+   */
+  private paceSleep(ms: number, process: {sleep(ms: number): Promise<void>}): Promise<void> {
+    if (ms <= 0) return process.sleep(ms);
+    return new Promise((resolve) => {
+      const done = () => {
+        clearTimeout(timer);
+        if (this.wakePace === done) this.wakePace = undefined;
+        resolve();
+      };
+      const timer = setTimeout(done, ms);
+      this.wakePace = done;
+    });
   }
   private async loop(): Promise<void> {
     try {
@@ -805,6 +843,7 @@ export class YurisBrowserPlayer {
         this.machine.input.keyboard[button] = 128;
         this.machine.input.buttonDown(button);
         canvas.setPointerCapture(e.pointerId);
+        this.wakePace?.();
       },
       {signal},
     );

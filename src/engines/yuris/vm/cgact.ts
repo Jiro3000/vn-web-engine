@@ -473,6 +473,7 @@ function transition(
       height,
       weight,
       simd,
+      [a.pixelRevision, b.pixelRevision],
     )
   )
     return 0;
@@ -730,7 +731,7 @@ function resize(
     const deferred = t.deferPixelWrite(
       s,
       from,
-      (to, clip, output) =>
+      (to, from, clip, output) =>
         sizeBilinear(
           to,
           from,

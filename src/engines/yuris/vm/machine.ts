@@ -586,6 +586,38 @@ export class YurisMachine {
     return this.current.script.instructions[this.position]!;
   }
 
+  /**
+   * The string argument `id` of the running instruction as the next iterations of the
+   * innermost LOOP around it would evaluate it (H@48 = counter + 1 .., at most `count`
+   * values), so a loop body's file loads can be read ahead. The counter is restored and an
+   * evaluation error ends the list; nothing else the evaluation touches is kept.
+   */
+  loopStringsAhead(id: number, count: number): ByteString[] {
+    const task = this.task;
+    if (task.loopDepth === 0) return [];
+    const entry = task.loops[task.loopDepth - 1]!;
+    const position = this.position;
+    if (entry.limit <= entry.counter || position < entry.start || position >= entry.end) return [];
+    const arg = this.instruction.args.find((a) => a.id === id);
+    if (!arg) return [];
+    const e = this.expression,
+      saved = entry.counter,
+      last = e.saveLast();
+    const values: ByteString[] = [];
+    try {
+      for (let k = saved + 1n; k <= entry.limit && values.length < count; k++) {
+        entry.counter = k;
+        values.push(e.string(arg.expression));
+      }
+    } catch {
+      // A value the loop could not compute is not read ahead.
+    } finally {
+      entry.counter = saved;
+      e.restoreLast(last);
+    }
+    return values;
+  }
+
   /** The source line of the running instruction. */
   get line(): number {
     return this.current.script.lines[this.position] ?? 0;

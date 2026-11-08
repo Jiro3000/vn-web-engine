@@ -1,4 +1,4 @@
-import {bilinearBgra} from '../../../graphics/bgra-effects-wasm.js';
+import {bilinearBgra, type LanczosTaps, lanczosBgra} from '../../../graphics/bgra-effects-wasm.js';
 import type {Rect} from './compose.js';
 
 /**
@@ -609,10 +609,17 @@ export function sizeLanczos(
   stride: number,
   rows: number,
 ): void {
-  const middle = new Uint8Array(Math.max(width, 0) * Math.max(rows, 0) * 4);
   // Horizontal pass: rows of the source to rows of `middle`.
   const horizontal = lanczosTaps(stride, width);
   const columns = mirroredTaps(horizontal, width, stride);
+  const vertical = lanczosTaps(rows, height);
+  const lines = mirroredTaps(vertical, height, rows);
+  if (columns && lines && src.length >= rows * stride * 4) {
+    const across = flatTaps(horizontal.weights, columns, width),
+      down = flatTaps(vertical.weights, lines, height);
+    if (across && down && lanczosBgra(dst, width, height, src, stride, rows, across, down)) return;
+  }
+  const middle = new Uint8Array(Math.max(width, 0) * Math.max(rows, 0) * 4);
   if (columns && src.length >= rows * stride * 4)
     lanczosRows(middle, src, rows, stride, width, horizontal.weights, columns);
   else
@@ -626,8 +633,6 @@ export function sizeLanczos(
       (line, i) => (line * width + i) * 4,
     );
   // Vertical pass: columns of `middle` to the output.
-  const vertical = lanczosTaps(rows, height);
-  const lines = mirroredTaps(vertical, height, rows);
   if (lines) lanczosColumns(dst, middle, width, height, vertical.weights, lines);
   else
     resample(
@@ -639,6 +644,32 @@ export function sizeLanczos(
       (column, k) => (mirror(k, rows) * width + column) * 4,
       (column, i) => (i * width + column) * 4,
     );
+}
+
+/**
+ * The taps of outputs 0..count-1 for the linear-memory kernel, or null when a divisor
+ * (1 plus the weights) leaves the 32-bit range the kernel divides in.
+ */
+function flatTaps(weights: Int32Array[], samples: Int32Array[], count: number): LanczosTaps | null {
+  let length = 0;
+  for (let i = 0; i < count; i++) length += weights[i]!.length;
+  const starts = new Uint32Array(count + 1),
+    flat = new Uint32Array(length),
+    flatWeights = new Int32Array(length),
+    totals = new Int32Array(count);
+  for (let i = 0, at = 0; i < count; i++) {
+    const w = weights[i]!;
+    let total = 1;
+    starts[i] = at;
+    flat.set(samples[i]!, at);
+    flatWeights.set(w, at);
+    for (let t = 0; t < w.length; t++) total += w[t]!;
+    if ((total | 0) !== total) return null;
+    totals[i] = total;
+    at += w.length;
+  }
+  starts[count] = length;
+  return {starts, samples: flat, weights: flatWeights, totals};
 }
 
 /**
