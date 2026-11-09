@@ -3564,12 +3564,12 @@ test('YU-RIS lookahead reads the current dialogue line for the clipboard text ho
   setTextHookMode('off');
   assert.equal(publishTextHookLine(unvoiced, clipboard), false);
   setTextHookMode('unvoiced');
-  assert.equal(publishTextHookLine(voiced, clipboard), false);
   assert.equal(publishTextHookLine(unvoiced, clipboard), true);
+  assert.equal(publishTextHookLine(voiced, clipboard), true);
   setTextHookMode('all');
   assert.equal(publishTextHookLine(voiced, clipboard), true);
   const refused = {writeText: () => Promise.reject(new Error('Document is not focused'))};
   assert.equal(publishTextHookLine(unvoiced, refused), true);
   setTextHookMode('off');
-  assert.deepEqual(written, ['b', 'a']);
+  assert.deepEqual(written, ['b', '\u2063', 'a']);
 });

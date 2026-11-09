@@ -564,7 +564,13 @@ export class YurisBrowserPlayer {
    * while the parser executes a line with a VO cue gives the folder and extension.
    */
   private observeVoiceRead(path: string): void {
-    if (this.voiceTemplate || !this.lookahead || !/\.(?:ogg|opus)$/i.test(path)) return;
+    const interruptSpeech = getTextHookMode() === 'unvoiced';
+    if (
+      (this.voiceTemplate && !interruptSpeech) ||
+      !this.lookahead ||
+      !/\.(?:ogg|opus)$/i.test(path)
+    )
+      return;
     const lower = path.toLowerCase();
     for (const cue of this.lookahead.currentVoices()) {
       const at = lower.lastIndexOf(cue.toLowerCase());
@@ -580,7 +586,9 @@ export class YurisBrowserPlayer {
               ? (c: string) => c.toUpperCase()
               : undefined;
       if (at > 0 && casing && /[\\/]$/.test(prefix) && /^\.(?:ogg|opus)$/i.test(suffix)) {
-        this.voiceTemplate = [prefix, suffix, casing];
+        this.voiceTemplate ??= [prefix, suffix, casing];
+        // Stop TTS before the VM fills and starts the game voice buffer.
+        if (interruptSpeech) this.publishDialogue();
         return;
       }
     }

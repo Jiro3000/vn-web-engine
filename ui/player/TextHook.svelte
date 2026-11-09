@@ -47,6 +47,6 @@
   <p id="text-hook-help">
     Each new line is copied while this page has focus, for text-to-speech readers, dictionaries and
     translators that watch the clipboard. “Lines without voice” copies narration and the lines of an
-    unvoiced protagonist.
+    unvoiced protagonist. A voiced line sends an invisible stop signal to Japanese Reader.
   </p>
 </section>

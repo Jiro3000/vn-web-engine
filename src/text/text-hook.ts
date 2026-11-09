@@ -3,8 +3,8 @@
  * here; when the reader enables the hook, the line is written to the system clipboard, where
  * reading aids such as text-to-speech readers, dictionaries and translators pick it up.
  *
- * `unvoiced` publishes only lines without a voice cue: in a voiced game, the narration and
- * the lines of an unvoiced protagonist.
+ * In `unvoiced` mode the hook publishes narration and other lines without a voice cue.
+ * Voiced lines send a stop signal to the reader.
  */
 export type TextHookMode = 'off' | 'all' | 'unvoiced';
 
@@ -20,6 +20,8 @@ export interface TextHookClipboard {
 }
 
 const modes: readonly TextHookMode[] = ['off', 'all', 'unvoiced'];
+/** Invisible clipboard signal recognized by Japanese Reader's Speech.js. */
+const stopSpeechSignal = '\u2063';
 let mode: TextHookMode = 'off';
 
 export function normalizeTextHookMode(value: unknown): TextHookMode {
@@ -35,17 +37,18 @@ export function setTextHookMode(value: TextHookMode): void {
 }
 
 /**
- * Writes `line` to the clipboard when the current mode selects it, and tells whether it did.
+ * Publishes the line or a stop signal and reports whether it requested a write.
  * The browser accepts the write only while the page has focus; a refused write drops the line.
  */
 export function publishTextHookLine(
   line: TextHookLine,
   clipboard: TextHookClipboard | undefined = globalThis.navigator?.clipboard,
 ): boolean {
-  if (mode === 'off' || (mode === 'unvoiced' && line.voiced) || !line.text || !clipboard)
-    return false;
-  clipboard.writeText(line.text).catch(() => {
-    /* An unfocused page or a denied permission loses this line, not the next one. */
-  });
+  if (mode === 'off' || !line.text || !clipboard) return false;
+  clipboard
+    .writeText(mode === 'unvoiced' && line.voiced ? stopSpeechSignal : line.text)
+    .catch(() => {
+      /* An unfocused page or a denied permission loses this line, not the next one. */
+    });
   return true;
 }
