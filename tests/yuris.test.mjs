@@ -2748,13 +2748,23 @@ test('YU-RIS lookahead locates the scenario library variables in its routines', 
     'ES.SEL': [ins()],
     'es.SCENARIO.PARSER': parser,
     'es.CASH.ADD.MAIN': cash,
+    'es.ZENKAKU.LOAD': [
+      ...pad(5),
+      let_(
+        3,
+        [V(5500), lit(1), op(')')],
+        [{op: 0x4d, payload: Buffer.from('22b8fcc9b4badacce522', 'hex')}],
+      ),
+    ],
     'es.TRDEF': trdef,
     'es.SP.CHK.SPLZ': splz,
     'es.SP.RELOAD': reload,
     'es.L.YMV.INIT': ymv,
   };
   const names = Object.keys(routines);
+  const entries = [];
   const machine = {
+    variables: {entries},
     label: (name) => names.indexOf(new TextDecoder().decode(name)),
     project: {
       commands: {
@@ -2806,6 +2816,16 @@ test('YU-RIS lookahead locates the scenario library variables in its routines', 
     fileNames: 2942,
   });
   assert.deepEqual(lookahead.scaleBands, [{low: 13000, high: 99999, scale: 66}]);
+  // A Sarasa SC atlas uses GBK for Chinese and Japanese in the same scenario line.
+  const chinese = Buffer.from('c4e3bac3a3accac0bde7a1a3', 'hex').toString('latin1');
+  const japanese = Buffer.from('a4b3a4f3a4cba4c1a4cfa1a2cac0bde7a1a3', 'hex').toString('latin1');
+  entries[2875] = {strings: ['\\VO2(ABC_0001)\\ML.TEXT("' + chinese + '","' + japanese + '")']};
+  entries[3015] = {ints: [0n]};
+  entries[1176] = {ints: new BigInt64Array(256), dimensions: [256, 1]};
+  assert.equal(lookahead.currentDialogue()?.text, '你好，世界。');
+  entries[1176].ints[255] = 1n;
+  assert.equal(lookahead.currentDialogue()?.text, 'こんにちは、世界。');
+  assert.equal(lookahead.currentDialogue()?.voiced, true);
   // Macros that reach a cursor write or the choice routines end the forecast scan.
   await lookahead.macrosRead;
   assert.deepEqual([...lookahead.linearNames], ['SP.GO', 'SetParam', 'BG', 'SP.TR', 'PSET']);

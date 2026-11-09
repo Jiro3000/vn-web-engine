@@ -185,11 +185,16 @@ export function analyzeAtlasLibrary(m: YurisMachine): AtlasLibrary | null {
   };
 }
 
-/** A browser face for the atlas family named by es.ZENKAKU.LOAD. Sarasa SC names are GBK
- * and index GBK glyphs; the others are CP932. */
+/** Sarasa SC atlas names are GBK and index GBK glyphs. */
+export function gbkAtlasDecoder(name: string): TextDecoder | undefined {
+  return gbk.decode(bytes(name)).startsWith('更纱黑体') ? gbk : undefined;
+}
+
+/** A browser face for the atlas family named by es.ZENKAKU.LOAD. */
 function atlasFace(name: string): {chinese: boolean; family: string; bold: boolean} {
-  const chinese = gbk.decode(bytes(name)).startsWith('更纱黑体');
-  const decoded = chinese ? gbk.decode(bytes(name)) : decodeCp932(bytes(name));
+  const decoder = gbkAtlasDecoder(name);
+  const chinese = decoder !== undefined;
+  const decoded = decoder ? decoder.decode(bytes(name)) : decodeCp932(bytes(name));
   const gothic = chinese || /ゴシック|ｺﾞｼｯｸ|gothic|sans/i.test(decoded);
   return {
     chinese,

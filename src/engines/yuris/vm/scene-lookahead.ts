@@ -3,6 +3,7 @@ import {decodeCp932} from '../../../text/cp932.js';
 import {decodeLiteral} from './expression.js';
 import {windowsPath} from './fileact.js';
 import type {YurisMachine} from './machine.js';
+import {gbkAtlasDecoder} from './raster-text.js';
 import {YurisScenarioText} from './scenario-text.js';
 import {textLines} from './text.js';
 
@@ -468,6 +469,7 @@ export class YurisSceneLookahead {
   private readonly sources = new Map<string, readonly string[] | null | Promise<void>>();
   /** The library splits scenario lines for ML.TEXT (es.SCENARIO.LOAD, see `installText`). */
   private bilingual = false;
+  private dialogueDecoder?: TextDecoder;
   /** Settles when the macro analysis has finished. */
   macrosRead: Promise<void> = Promise.resolve();
 
@@ -633,6 +635,24 @@ export class YurisSceneLookahead {
           }
         }
     lookahead.bilingual = !!label('es.SCENARIO.LOAD') && !!label('es.ScenarioMacro.ML.TEXT');
+    // es.ZENKAKU.LOAD+5 assigns the first atlas name. The Sarasa SC atlas library uses GBK
+    // for both language arguments to ML.TEXT, even when the script displays Japanese.
+    const atlas = await routine('es.ZENKAKU.LOAD');
+    const firstName = atlas?.code.instructions[atlas.position + 5];
+    if (firstName && m.project.commands.commands[firstName.command]?.name === 'LET') {
+      const [target, value] = firstName.args;
+      const array = target?.tokens?.[0],
+        literal = value?.tokens?.[0];
+      if (
+        array?.op === 0x56 &&
+        array.payload[0] === 0x24 &&
+        literal?.op === 0x4d &&
+        value?.tokens?.length === 1
+      )
+        lookahead.dialogueDecoder = gbkAtlasDecoder(
+          decodeLiteral(literal.payload, 0, literal.payload.length),
+        );
+    }
     lookahead.macrosRead = Promise.all([
       linearMacros(m, cursor).then(
         (names) => void (lookahead.linearNames = names),
@@ -741,7 +761,8 @@ export class YurisSceneLookahead {
     }
     // A bilingual argument keeps its inline macros; a voice cue there is in `tags` already.
     // Decoded first, so that a DBCS trail byte 0x5C does not read as a macro.
-    text = decodeCp932(latin1(text))
+    const bytes = latin1(text);
+    text = (this.dialogueDecoder ? this.dialogueDecoder.decode(bytes) : decodeCp932(bytes))
       .replace(/\\[A-Z][A-Z0-9_.]*(?:\([^)]*\))?/g, '')
       .trim();
     return text ? {file, line, text, voiced: voices(tags).length > 0} : undefined;
