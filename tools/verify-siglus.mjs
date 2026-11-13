@@ -255,9 +255,15 @@ try {
     `New Game: ${backgrounds.size} backgrounds, ${sprites.size} portraits, ${voices.size} decoded voices, ${music}.`,
   );
 } finally {
-  cdp?.socket.close();
+  if (cdp?.socket.readyState === WebSocket.OPEN) {
+    await cdp.command('Browser.close').catch(() => {});
+    cdp.socket.close();
+  }
   server.close();
-  if (child && child.exitCode === null && child.signalCode === null) child.kill();
-  await browserClosed;
-  await rm(profile, {recursive: true, force: true});
+  if (child && child.exitCode === null && child.signalCode === null) {
+    const kill = setTimeout(() => child.kill(), 2000);
+    await browserClosed;
+    clearTimeout(kill);
+  }
+  await rm(profile, {recursive: true, force: true, maxRetries: 8, retryDelay: 100});
 }
