@@ -105,12 +105,16 @@ export interface SiglusScene {
   strings: string[];
   labels: number[];
   entries: number[];
+  properties: number[];
+  commands: number[];
 }
 
 export class SiglusScenePack {
   readonly commandNames: string[];
   readonly commandScenes: number[];
   readonly sceneNames: string[];
+  readonly propertyNames: string[];
+  readonly properties: number[];
   private readonly entries: number[];
   private readonly key?: Uint8Array;
   private readonly sceneBase: number;
@@ -119,6 +123,8 @@ export class SiglusScenePack {
   constructor(private readonly bytes: Uint8Array) {
     const header = words(bytes, 0, 23);
     if (header[0] !== 92 || header[14] !== header[18]) throw new Error('Invalid Siglus Scene.pck');
+    this.properties = words(bytes, header[1]!, header[2]! * 2);
+    this.propertyNames = stringTable(bytes, header[3]!, header[4]!, header[5]!);
     this.commandNames = stringTable(bytes, header[9]!, header[10]!, header[11]!);
     this.commandScenes = words(bytes, header[7]!, header[8]! * 2);
     this.sceneNames = stringTable(bytes, header[13]!, header[14]!, header[15]!);
@@ -131,9 +137,10 @@ export class SiglusScenePack {
   }
 
   scene(name: string): SiglusScene {
-    const cached = this.scenes.get(name);
+    const key = name.toLowerCase();
+    const cached = this.scenes.get(key);
     if (cached) return cached;
-    const index = this.sceneNames.indexOf(name);
+    const index = this.sceneNames.findIndex((entry) => entry.toLowerCase() === key);
     if (index < 0) throw new Error(`Missing Siglus scene ${name}`);
     const compressed = span(
       this.bytes,
@@ -146,13 +153,15 @@ export class SiglusScenePack {
     const header = words(data, 0, 33);
     if (header[0] !== 132) throw new Error(`Invalid Siglus scene ${name}`);
     const scene = {
-      name,
+      name: this.sceneNames[index]!,
       code: span(data, header[1]!, header[2]!),
       strings: stringTable(data, header[3]!, header[4]!, header[5]!, 0x7087),
       labels: words(data, header[7]!, header[8]!),
       entries: words(data, header[9]!, header[10]!),
+      properties: words(data, header[13]!, header[14]! * 2),
+      commands: words(data, header[19]!, header[20]!),
     };
-    this.scenes.set(name, scene);
+    this.scenes.set(key, scene);
     return scene;
   }
 
