@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
 import {spawn} from 'node:child_process';
 import {mkdtemp, readFile, readdir, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
@@ -8,6 +9,9 @@ import {DevToolsConnection} from './capture-browser-trace.mjs';
 import {createStaticServer} from './serve-static.mjs';
 
 const [folder, browser, disassemblyDirectory] = process.argv.slice(2);
+const diagnosticPages = Number(process.env.SIGLUS_DIAGNOSTIC_PAGES ?? 0);
+const openingOnly = process.env.SIGLUS_OPENING_ONLY === '1';
+const digest = (value) => createHash('sha256').update(value).digest('hex');
 if (!folder || !browser || !disassemblyDirectory)
   throw new Error('Usage: node tools/verify-siglus.mjs GAME_FOLDER CHROMIUM DISASSEMBLY_DIRECTORY');
 
@@ -21,14 +25,20 @@ async function referenceScripts(directory) {
     if (!name || start < 0) continue;
     let line = 0;
     const tags = new Map();
+    const edges = new Map();
+    const instructions = [];
     for (const instruction of lines.slice(start + 1)) {
-      const match = /^([\dA-F]{8}): CD_(NL|COMMAND|TEXT|NAME) (.*)$/.exec(instruction);
+      const match = /^([\dA-F]{8}): CD_(\w+)(?: (.*))?$/.exec(instruction);
       if (!match) continue;
-      const [, offset, op, body] = match;
+      const [, offset, op, body = ''] = match;
+      const address = Number.parseInt(offset, 16);
+      const target = / -> ([\dA-F]{8})/.exec(body)?.[1];
+      instructions.push({address, op, target: target ? Number.parseInt(target, 16) : undefined});
       if (op === 'NL') {
         line = Number(body);
         continue;
       }
+      if (!['COMMAND', 'TEXT', 'NAME'].includes(op)) continue;
       const flag = /\bread_flag=(\d+)/.exec(body);
       const entry = {
         offset: Number.parseInt(offset, 16),
@@ -41,10 +51,11 @@ async function referenceScripts(directory) {
         entry.argc = Number(/\bargc=(\d+)/.exec(body)?.[1]);
       } else {
         const quoted = /"(.*)"$/.exec(body)?.[1];
-        entry.value = quoted?.replace(
+        const value = quoted?.replace(
           /\\([\\rnt])/g,
           (_, c) => ({r: '\r', n: '\n', t: '\t', '\\': '\\'})[c],
         );
+        if (value !== undefined) entry.hash = digest(value);
       }
       tags.set(entry.offset, entry);
     }
@@ -56,12 +67,17 @@ async function referenceScripts(directory) {
           return [Number(id), Number.parseInt(offset, 16)];
         }),
     );
-    scripts.set(name, {tags, entries});
+    for (const [i, {address, op, target}] of instructions.entries()) {
+      if (op === 'RETURN' || op === 'EOF') edges.set(address, []);
+      else if (op === 'GOTO') edges.set(address, [target]);
+      else edges.set(address, [instructions[i + 1]?.address, target].filter(Number.isInteger));
+    }
+    scripts.set(name, {tags, entries, edges});
   }
   return scripts;
 }
 
-function compareTrace(trace, scripts, scene, entry, lineCount) {
+function compareTags(trace, scripts) {
   for (const tag of trace) {
     const {tags} = scripts.get(tag.scene) ?? {};
     const expected = tags?.get(tag.offset);
@@ -71,10 +87,14 @@ function compareTrace(trace, scripts, scene, entry, lineCount) {
     assert.deepEqual(
       tag.tag === 'command'
         ? {...fields, code: tag.path.at(-1), argc: tag.args.length}
-        : {...fields, value: tag.value},
+        : {...fields, hash: digest(tag.value)},
       expected,
     );
   }
+}
+
+function compareOpening(trace, scripts, scene, entry, lineCount) {
+  compareTags(trace, scripts);
   const actual = trace.filter((tag) => tag.scene === scene && tag.offset >= entry);
   const expected = [];
   let text = 0;
@@ -98,6 +118,42 @@ const scene = [...scripts.keys()].find((name) => name.startsWith('01_'));
 const entry = scripts.get(scene)?.entries.get(2);
 assert.ok(entry, 'Missing first New Game scene entry in Siglus disassembly');
 
+function compareChapterOrder(trace, scripts, chapters, firstEntry) {
+  for (const [index, chapter] of chapters.entries()) {
+    const script = scripts.get(chapter);
+    const entry = script.entries.get(index === 0 ? firstEntry : 0);
+    const tags = trace.filter((tag) => tag.scene === chapter && tag.offset >= entry);
+    assert.ok(tags.length > 0, 'No tags in ' + chapter);
+    const {edges} = script;
+    let candidates = [entry];
+    for (const {offset} of tags) {
+      const queue = [...candidates];
+      const visited = new Set();
+      let found = false;
+      while (queue.length) {
+        const address = queue.pop();
+        if (address === offset) {
+          found = true;
+          break;
+        }
+        if (visited.has(address) || script.tags.has(address)) continue;
+        visited.add(address);
+        queue.push(...(edges.get(address) ?? []));
+      }
+      assert.ok(found, chapter + ': unexpected tag at ' + offset.toString(16));
+      candidates = edges.get(offset) ?? [];
+    }
+    const expectedText = [...script.tags.values()].filter(
+      (tag) => tag.offset >= entry && tag.tag === 'text',
+    );
+    assert.deepEqual(
+      tags.filter((tag) => tag.tag === 'text').map((tag) => digest(tag.value)),
+      expectedText.map((tag) => tag.hash),
+      chapter + ': text order and SHA-256',
+    );
+  }
+}
+
 const profile = await mkdtemp(join(tmpdir(), 'vn-siglus-'));
 const server = await createStaticServer();
 let child;
@@ -113,6 +169,8 @@ try {
     resolve(browser),
     [
       '--headless=new',
+      '--incognito',
+      '--mute-audio',
       '--remote-debugging-port=0',
       '--user-data-dir=' + profile,
       '--no-first-run',
@@ -181,6 +239,9 @@ try {
     for (const type of ['mousePressed', 'mouseReleased'])
       await send('Input.dispatchMouseEvent', {type, x, y, button: 'left', clickCount: 1});
   }
+  async function clickStage() {
+    await click('#siglus-surface > div[tabindex="0"]');
+  }
   async function advance() {
     for (const type of ['keyDown', 'keyUp'])
       await send('Input.dispatchKeyEvent', {
@@ -189,6 +250,15 @@ try {
         code: 'Enter',
         windowsVirtualKeyCode: 13,
       });
+  }
+  async function control(type) {
+    await send('Input.dispatchKeyEvent', {
+      type,
+      key: 'Control',
+      code: 'ControlLeft',
+      windowsVirtualKeyCode: 17,
+      modifiers: type === 'keyDown' ? 2 : 0,
+    });
   }
   for (const domain of ['Page', 'DOM', 'Runtime', 'Log']) await send(domain + '.enable');
   await send('Page.navigate', {
@@ -200,8 +270,12 @@ try {
   await send('DOM.setFileInputFiles', {nodeId, files: [resolve(folder)]});
   await waitFor("document.querySelector('#play')?.disabled === false");
   await evaluate(`window.siglusTags = [];
+    window.siglusAudio = [];
+    window.siglusMovies = [];
     window.siglusSurface = document.querySelector('#siglus-surface');
-    siglusSurface.addEventListener('siglus-tag', (event) => siglusTags.push(event.detail)); true`);
+    siglusSurface.addEventListener('siglus-tag', (event) => siglusTags.push(event.detail));
+    siglusSurface.addEventListener('siglus-audio', (event) => siglusAudio.push(event.detail));
+    siglusSurface.addEventListener('siglus-movie-ended', (event) => siglusMovies.push(event.detail)); true`);
   await click('#play');
   await waitFor("siglusTags.some((tag) => tag.scene === '_start' && tag.path?.[0] === 55)");
   await delay(180);
@@ -240,20 +314,115 @@ try {
   await runUntil((current) => current.title);
   console.log(`Reached title after ${page} advances`);
   await click('#siglus-surface button[aria-label="New Game"]');
-  backgrounds.clear();
-  voices.clear();
-  sprites.clear();
-  music = undefined;
-  await runUntil((current) => current.lines === 50 && Number(current.page) > page);
-  assert.ok(backgrounds.size > 1 && voices.size > 1 && sprites.size > 1 && music === 'bgm02');
-  const trace = await evaluate('siglusTags');
-  const newGameTags = compareTrace(trace, scripts, scene, entry, 50);
-  console.log(
-    `50 text tags, ${newGameTags} New Game tags and ${trace.length} total tags matched. Console errors: ${errors.length}.`,
-  );
-  console.log(
-    `New Game: ${backgrounds.size} backgrounds, ${sprites.size} portraits, ${voices.size} decoded voices, ${music}.`,
-  );
+  if (diagnosticPages > 0) {
+    const firstPage = page;
+    await runUntil((current) => Number(current.page) >= firstPage + 1);
+    await control('keyDown');
+    try {
+      const checkpoint = await waitFor(
+        `Number(siglusSurface.dataset.page) >= ${firstPage + diagnosticPages} || siglusSurface.dataset.movie`,
+        120000,
+      );
+      console.log(
+        'Diagnostic checkpoint',
+        checkpoint,
+        await evaluate(
+          `({page: siglusSurface.dataset.page, movie: siglusSurface.dataset.movie,
+           tags: siglusTags.length, position: siglusTags.at(-1)?.scene})`,
+        ),
+      );
+    } finally {
+      await control('keyUp').catch(() => {});
+    }
+  } else if (openingOnly) {
+    backgrounds.clear();
+    voices.clear();
+    sprites.clear();
+    music = undefined;
+    await runUntil((current) => current.lines === 50 && Number(current.page) > page);
+    assert.ok(backgrounds.size > 1 && voices.size > 1 && sprites.size > 1 && music === 'bgm02');
+    const trace = await evaluate('siglusTags');
+    const newGameTags = compareOpening(trace, scripts, scene, entry, 50);
+    console.log(
+      `50 text tags, ${newGameTags} New Game tags and ${trace.length} total tags matched. Console errors: ${errors.length}.`,
+    );
+    console.log(
+      `New Game: ${backgrounds.size} backgrounds, ${sprites.size} portraits, ${voices.size} decoded voices, ${music}.`,
+    );
+  } else {
+    await runUntil((current) => Number(current.page) > page + 2);
+    await click('[data-siglus-action="save"]');
+    const saved = await waitFor('siglusSurface.dataset.savedPage');
+    assert.ok(Number(saved) >= page + 3);
+    const beforeLoad = await evaluate('siglusTags.length');
+    await clickStage();
+    await waitFor('Number(siglusSurface.dataset.page) > ' + saved);
+    await click('[data-siglus-action="load"]');
+    await waitFor("siglusSurface.dataset.loaded === 'true'");
+    const afterLoad = await evaluate('siglusTags.length');
+    await clickStage();
+    const movies = ['op', 'chapter1', 'chapter2', 'chapter3', 'ed'];
+    for (const [index, name] of movies.entries()) {
+      await control('keyDown');
+      await waitFor('siglusSurface.dataset.movie === ' + JSON.stringify(name), 600000);
+      await control('keyUp');
+      await waitFor('siglusMovies.length === ' + (index + 1), 360000);
+      console.log('Movie completed:', name);
+    }
+    // The ending leaves a skippable scene fade before the real title menu.
+    await clickStage();
+    await waitFor(
+      "siglusSurface.dataset.phase === 'title' && siglusSurface.dataset.bgm === 'bgm12'",
+    );
+    assert.equal(await evaluate('siglusMovies.every((movie) => movie.frames > 0)'), true);
+    const media = await evaluate('({audio: siglusAudio, movies: siglusMovies})');
+    assert.deepEqual(
+      media.movies.map((movie) => movie.name),
+      movies,
+    );
+    assert.ok(
+      media.audio.every(
+        ({peak, rms, frames, rate}) =>
+          Number.isFinite(peak) && Number.isFinite(rms) && frames > 0 && rate > 0,
+      ),
+    );
+    for (const channel of ['bgm', 'voice', 'pcm0'])
+      assert.ok(
+        media.audio.some((audio) => audio.channel === channel && audio.rms > 0),
+        channel,
+      );
+
+    const trace = [];
+    const total = await evaluate('siglusTags.length');
+    for (let i = 0; i < total; i += 1024)
+      trace.push(...(await evaluate('siglusTags.slice(' + i + ',' + (i + 1024) + ')')));
+    compareTags(trace, scripts);
+    const chapters = [...scripts.keys()].filter((name) => /^0[1-8]_/.test(name)).sort();
+    const calls = trace.filter(
+      (tag) => tag.scene.startsWith('00') && tag.path?.length === 1 && tag.path[0] === 5,
+    );
+    assert.deepEqual(
+      calls.map((tag) =>
+        chapters.find((chapter) => chapter.toLowerCase() === String(tag.args[0]).toLowerCase()),
+      ),
+      [chapters[0], ...chapters],
+    );
+    assert.equal(calls[1].args[1], 2);
+    compareChapterOrder(
+      [...trace.slice(0, beforeLoad), ...trace.slice(afterLoad)],
+      scripts,
+      chapters,
+      2,
+    );
+    assert.ok(
+      trace.some(
+        (tag) => tag.scene.startsWith('00') && tag.path?.length === 1 && tag.path[0] === 3,
+      ),
+    );
+    console.log(
+      `${total} tags matched. ${media.audio.length} decoded audio buffers, console errors ${errors.length}.`,
+    );
+  }
 } finally {
   if (cdp?.socket.readyState === WebSocket.OPEN) {
     await cdp.command('Browser.close').catch(() => {});
