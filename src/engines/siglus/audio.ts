@@ -16,6 +16,7 @@ export class SiglusAudio {
   private readonly indexes = new Map<string, ReturnType<typeof ovkIndex>>();
   private readonly effects = new Map<string, Promise<AudioBuffer>>();
   private readonly active = new Set<Playing>();
+  private readonly measured = new WeakMap<AudioBuffer, {peak: number; rms: number}>();
   private closed = false;
   private bgmVolume: number;
 
@@ -44,7 +45,7 @@ export class SiglusAudio {
     return buffer;
   }
 
-  async bgm(name: string, loop = true): Promise<void> {
+  async bgm(name: string, loop = true, fade = 0, crossfade = 0): Promise<void> {
     const entry = [...this.config].find(
       ([key, value]) =>
         /^BGM\.\d+$/.test(key) && value.split('"')[1]?.toLowerCase() === name.toLowerCase(),
@@ -63,6 +64,7 @@ export class SiglusAudio {
     const start = Number(fields[2] ?? 0) / rate;
     const end = Number(fields[3] ?? -1);
     const loopStart = Number(fields[4] ?? 0) / rate;
+    if (crossfade > 0) this.stop('bgm', crossfade);
     this.start(
       'bgm',
       buffer,
@@ -71,6 +73,7 @@ export class SiglusAudio {
       loopStart,
       end < 0 ? buffer.duration : end / rate,
       start,
+      fade || crossfade,
     );
     this.root.dataset.bgm = name;
   }
@@ -114,12 +117,15 @@ export class SiglusAudio {
     loopStart = 0,
     loopEnd = -1,
     start = 0,
+    fade = 0,
   ): void {
     if (this.closed) return;
     this.stop(channel);
     const source = this.context.createBufferSource();
     const gain = this.context.createGain();
-    gain.gain.value = volume;
+    const now = this.context.currentTime;
+    gain.gain.setValueAtTime(fade > 0 ? 0 : volume, now);
+    if (fade > 0) gain.gain.linearRampToValueAtTime(volume, now + fade / 1000);
     source.buffer = buffer;
     source.loop = loop;
     source.loopStart = loopStart;
@@ -136,6 +142,26 @@ export class SiglusAudio {
     };
     source.start(0, start);
     this.root.dataset.audioState = this.context.state;
+    if (new URLSearchParams(location.search).has('siglus-trace')) {
+      let levels = this.measured.get(buffer);
+      if (!levels) {
+        let sum = 0;
+        let peak = 0;
+        for (let channel = 0; channel < buffer.numberOfChannels; channel++) {
+          for (const sample of buffer.getChannelData(channel)) {
+            sum += sample * sample;
+            peak = Math.max(peak, Math.abs(sample));
+          }
+        }
+        levels = {peak, rms: Math.sqrt(sum / (buffer.length * buffer.numberOfChannels))};
+        this.measured.set(buffer, levels);
+      }
+      this.root.dispatchEvent(
+        new CustomEvent('siglus-audio', {
+          detail: {channel, frames: buffer.length, rate: buffer.sampleRate, ...levels},
+        }),
+      );
+    }
   }
 
   private volume(type: string): number {
@@ -162,6 +188,12 @@ export class SiglusAudio {
     if (fade > 0) playing.gain.gain.linearRampToValueAtTime(0, time + fade / 1000);
     playing.source.stop(time + fade / 1000);
     if (channel === 'bgm') delete this.root.dataset.bgm;
+  }
+
+  stopEffects(): void {
+    for (const channel of this.playing.keys()) {
+      if (channel !== 'bgm' && channel !== 'voice') this.stop(channel);
+    }
   }
 
   async dispose(): Promise<void> {
