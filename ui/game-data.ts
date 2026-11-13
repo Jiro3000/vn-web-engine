@@ -221,6 +221,8 @@ export async function knownGames(player: PlayerId): Promise<KnownGame[]> {
           ]),
         );
     }
+    case 'siglus':
+      return [];
     case 'yuris':
       return (stored ?? [])
         .filter((n) => n.length === 2 && n[0] === 'yuris')

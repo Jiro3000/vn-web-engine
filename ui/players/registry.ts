@@ -1,3 +1,4 @@
+import {isSiglusInstallation} from '../../src/engines/siglus/installation-markers.js';
 import {isYurisInstallation} from '../../src/engines/yuris/installation-markers.js';
 import type {Component} from 'svelte';
 import type {InstallationRecognizer} from '../../src/platform/installation-detection.js';
@@ -7,7 +8,7 @@ import {isRScriptInstallation} from '../../src/engines/rscript/installation-mark
 import {isArtemisInstallation} from '../../src/engines/artemis/installation-markers.js';
 
 /** Players the library offers: an engine for all of its titles, or one title. */
-export type PlayerId = 'buriko' | 'chaos-head-noah' | 'rscript' | 'artemis' | 'yuris';
+export type PlayerId = 'buriko' | 'chaos-head-noah' | 'rscript' | 'artemis' | 'yuris' | 'siglus';
 
 export interface PlayerEntry {
   readonly id: PlayerId;
@@ -33,6 +34,20 @@ export interface PlayerEntry {
 }
 
 export const PLAYERS: readonly PlayerEntry[] = [
+  {
+    id: 'siglus',
+    title: 'SiglusEngine',
+    engine: 'SIGLUS',
+    summary: 'FORTUNE×WORLD',
+    engineName: 'SiglusEngine',
+    initials: 'SG',
+    route: './siglus.html',
+    explorerRoute: null,
+    installationKey: 'siglus',
+    installationFiles: 'game files',
+    recognize: isSiglusInstallation,
+    saveFiles: () => import('./siglus/SaveFiles.svelte'),
+  },
   {
     id: 'yuris',
     title: 'YU-RIS',

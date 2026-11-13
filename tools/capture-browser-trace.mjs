@@ -21,7 +21,7 @@ const baseCategories = [
 ];
 const screenshotCategory = 'disabled-by-default-devtools.screenshot';
 
-class DevToolsConnection extends EventEmitter {
+export class DevToolsConnection extends EventEmitter {
   constructor(socket) {
     super();
     this.socket = socket;

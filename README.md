@@ -21,10 +21,12 @@ Zero setup. Visit the page and select your local game files, optionally install 
 | Fairytale Symphony                    | codeX RScript | Complete      |
 | Fairytale Encore                      | codeX RScript | Complete      |
 | Albatross Koukairoku                  | codeX RScript | Complete      |
+| FORTUNE×WORLD                         | SiglusEngine  | Prologue, title and New Game opening |
 
 The games share browser services for files, storage, audio, video, graphics, and input. Reusable interpreters live under `src/engines/`; installation identity and explicit game compatibility profiles are selected separately.
 See [BGI compatibility](docs/buriko-compatibility.md) for revision selection, optional metadata, native evidence, and current verification limits.
 See the [codeX RScript notes](src/engines/rscript/README.md) for installation identity, native evidence, and known gaps.
+See the [SiglusEngine notes](src/engines/siglus/README.md) for the FORTUNE×WORLD setup and verification.
 
 ## Dev setup
 

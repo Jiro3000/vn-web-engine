@@ -31,6 +31,7 @@ export default defineConfig(({mode}) => {
           'rscript.html',
           'artemis.html',
           'yuris.html',
+          'siglus.html',
           'assets.html',
           'buriko-assets.html',
         ],
