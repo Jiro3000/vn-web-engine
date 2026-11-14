@@ -11,6 +11,7 @@ import {createStaticServer} from './serve-static.mjs';
 const [folder, browser, disassemblyDirectory] = process.argv.slice(2);
 const diagnosticPages = Number(process.env.SIGLUS_DIAGNOSTIC_PAGES ?? 0);
 const musicOnly = process.env.SIGLUS_MUSIC_ONLY === '1';
+const loadOnly = process.env.SIGLUS_LOAD_ONLY === '1';
 const configOnly = process.env.SIGLUS_CONFIG_ONLY === '1';
 const openingOnly = process.env.SIGLUS_OPENING_ONLY === '1';
 const digest = (value) => createHash('sha256').update(value).digest('hex');
@@ -201,8 +202,8 @@ try {
     child.once('exit', (code) => finish(reject, new Error(`Chromium exited ${code}\n${stderr}`)));
   });
   cdp = await DevToolsConnection.connect(endpoint);
-  const {targetId} = await cdp.command('Target.createTarget', {url: 'about:blank'});
-  const {sessionId} = await cdp.command('Target.attachToTarget', {targetId, flatten: true});
+  let {targetId} = await cdp.command('Target.createTarget', {url: 'about:blank'});
+  let {sessionId} = await cdp.command('Target.attachToTarget', {targetId, flatten: true});
   const send = (method, params) => cdp.command(method, params, sessionId);
   cdp.on('event', ({method, params}) => {
     if (method === 'Runtime.exceptionThrown')
@@ -289,11 +290,11 @@ try {
     await advance();
   }
   await openPlayer();
-  if (musicOnly || configOnly) {
+  if (musicOnly || configOnly || loadOnly) {
     const pack = await readFile(join(resolve(folder), 'StartData', 'GameData', 'Scene.pck')).catch(
       () => readFile(join(resolve(folder), 'Scene.pck')),
     );
-    const key = 'siglus:' + digest(pack) + ':system';
+    const key = 'siglus:' + digest(pack);
     const flags = [
       [1006, 1],
       [1007, 3],
@@ -303,7 +304,7 @@ try {
     // Chapter 02 unlocks the first character voice control.
     if (configOnly) flags.push([1600, 1]);
     await evaluate(
-      `localStorage.setItem(${JSON.stringify(key)}, ${JSON.stringify(JSON.stringify(flags))})`,
+      `localStorage.setItem(${JSON.stringify(key + ':system')}, ${JSON.stringify(JSON.stringify(flags))})`,
     );
   }
   await playInstallation();
@@ -340,7 +341,83 @@ try {
   }
   await runUntil((current) => current.title);
   console.log(`Reached title after ${page} advances`);
-  if (configOnly) {
+  if (loadOnly) {
+    const newGame = '#siglus-surface button[aria-label="New Game"]';
+    await click(newGame);
+    const savedState = await runUntil((current) => Number(current.page) >= 3);
+    const dialogue = "siglusSurface.querySelector('[data-siglus-dialogue]').textContent";
+    const savedText = digest(await evaluate(dialogue));
+    await click('[data-siglus-action="save"]');
+    await waitFor('siglusSurface.dataset.savedPage');
+    const thumbnail = await evaluate(`(() => {
+      const key = Object.keys(localStorage).find((key) => key.endsWith(':saves'));
+      return JSON.parse(localStorage.getItem(key))[0][1].thumbnail;
+    })()`);
+    assert.match(thumbnail, /^data:image\/jpeg;base64,/);
+    await clickStage();
+    await waitFor(`Number(siglusSurface.dataset.page) > ${savedState.page}`);
+    const nextText = digest(await evaluate(dialogue));
+    assert.notEqual(nextText, savedText);
+    const previousTab = targetId;
+    ({targetId} = await cdp.command('Target.createTarget', {url: 'about:blank'}));
+    ({sessionId} = await cdp.command('Target.attachToTarget', {targetId, flatten: true}));
+    for (const domain of ['Page', 'DOM', 'Runtime', 'Log']) await send(domain + '.enable');
+    await cdp.command('Target.closeTarget', {targetId: previousTab});
+    await openPlayer();
+    await playInstallation();
+    await click('#siglus-surface button[aria-label="Load Game"]');
+    const loadScene = '__sys_menu_save_load01';
+    const loop = `siglusTags.filter(({scene, path}) => scene === '${loadScene}' && path?.join('.') === '86.3').length`;
+    await waitFor(loop);
+    const canvasShape = await evaluate(`Array.from(siglusSurface.querySelectorAll('canvas'))
+      .filter(({width, height}) => width === 354 && height === 199).length`);
+    assert.ok(canvasShape > 0, 'The scripted slot created the stored thumbnail');
+    async function clickLoad(gameX, gameY) {
+      const [x, y] = await evaluate(`(() => {
+        const rect = siglusSurface.querySelector('div[tabindex="0"]').getBoundingClientRect();
+        return [rect.left + rect.width * ${gameX} / 1920, rect.top + rect.height * ${gameY} / 1080];
+      })()`);
+      const frame = await evaluate(loop);
+      await send('Input.dispatchMouseEvent', {type: 'mouseMoved', x, y});
+      await send('Input.dispatchMouseEvent', {
+        type: 'mousePressed',
+        x,
+        y,
+        button: 'left',
+        clickCount: 1,
+      });
+      await waitFor(`${loop} > ${frame}`);
+      await send('Input.dispatchMouseEvent', {
+        type: 'mouseReleased',
+        x,
+        y,
+        button: 'left',
+        clickCount: 1,
+      });
+    }
+    await clickLoad(140, 240);
+    const action = await waitFor(`siglusSurface.dataset.loaded ? 'loaded' :
+      siglusTags.some(({scene, args}) => scene === '${loadScene}' && args?.[0] === '__sys_lo_setbtn_bg00') ? 'confirm' : ''`);
+    if (action === 'confirm') await clickLoad(883, 557);
+    await waitFor("siglusSurface.dataset.loaded === 'true'");
+    assert.equal(digest(await evaluate(dialogue)), savedText);
+    assert.equal(await evaluate('siglusSurface.dataset.background'), savedState.background);
+    assert.equal(await evaluate('siglusSurface.dataset.cast'), savedState.cast);
+    assert.equal(await evaluate('siglusSurface.dataset.bgm'), savedState.bgm);
+    const restoredPage = await evaluate('Number(siglusSurface.dataset.page)');
+    await clickStage();
+    await waitFor(`Number(siglusSurface.dataset.page) > ${restoredPage}`);
+    assert.equal(
+      digest(await evaluate(dialogue)),
+      nextText,
+      'The script continued at the saved VM position',
+    );
+    const commands = await evaluate(`siglusTags.filter(({scene}) => scene === '${loadScene}')`);
+    compareTags(commands, scripts, {compareSourceLine: false});
+    console.log(
+      `Original Load restored the dialogue, stage and thumbnail after reopening, then resumed the script. Matched ${commands.length} tags.`,
+    );
+  } else if (configOnly) {
     await click('#siglus-surface button[aria-label="Configuration"]');
     await waitFor(`siglusTags.some(({scene, path}) =>
       scene === '__sys_menu_config01' && path?.join('.') === '86.3')`);
@@ -495,7 +572,7 @@ try {
       scene === '_titlemenu_dmy' && path?.join('.') === '38.6.-1.0.3').length >= 2`);
     await click('#siglus-surface button[aria-label="New Game"]');
   }
-  if (musicOnly || configOnly) {
+  if (musicOnly || configOnly || loadOnly) {
     assert.equal(errors.length, 0);
   } else if (diagnosticPages > 0) {
     const firstPage = page;

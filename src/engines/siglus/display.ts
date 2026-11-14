@@ -15,7 +15,7 @@ export interface Graphic {
 
 export interface DrawObject {
   name: string;
-  frames: Graphic[];
+  frames: (Graphic | undefined)[];
   x: number;
   y: number;
   visible: boolean;
@@ -426,6 +426,12 @@ export class SiglusDisplay {
     return pending;
   }
 
+  async objectGraphic(name: string, pattern: number): Promise<Graphic | undefined> {
+    const resource = await this.resource(name);
+    if (pattern < 0 || pattern >= resource.count) return;
+    return this.graphic(name, pattern);
+  }
+
   async graphic(name: string, pattern = 0): Promise<Graphic> {
     const resource = await this.resource(name);
     this.signal.throwIfAborted();
@@ -463,6 +469,63 @@ export class SiglusDisplay {
     context.fillStyle = `rgba(${r},${g},${b},${alpha / 255})`;
     context.fillRect(0, 0, width, height);
     return {image, width, height, x: 0, y: 0, centerX: 0, centerY: 0};
+  }
+
+  captureThumbnail(): string | undefined {
+    if (this.config.get('SAVE_THUMB.USE') !== '1') return;
+    const [width, height] = (this.config.get('SAVE_THUMB.SIZE') ?? '').split(',').map(Number);
+    if (!width || !height || width > this.width || height > this.height) return;
+    const bounds = this.stage.getBoundingClientRect();
+    if (!bounds.width || !bounds.height) return;
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext('2d')!;
+    context.fillStyle = 'black';
+    context.fillRect(0, 0, width, height);
+    for (const layer of [this.layers, this.cast, this.effect, this.day]) {
+      for (const source of layer.querySelectorAll('canvas')) {
+        let opacity = 1;
+        for (
+          let element: HTMLElement | null = source;
+          element && element !== this.stage;
+          element = element.parentElement
+        ) {
+          const style = getComputedStyle(element);
+          if (style.display === 'none' || style.visibility === 'hidden') {
+            opacity = 0;
+            break;
+          }
+          opacity *= Number(style.opacity);
+        }
+        if (opacity === 0) continue;
+        const rect = source.getBoundingClientRect();
+        context.globalAlpha = opacity;
+        context.drawImage(
+          source,
+          ((rect.left - bounds.left) * width) / bounds.width,
+          ((rect.top - bounds.top) * height) / bounds.height,
+          (rect.width * width) / bounds.width,
+          (rect.height * height) / bounds.height,
+        );
+      }
+    }
+    return canvas.toDataURL('image/jpeg', 0.8);
+  }
+
+  async savedThumbnail(url: string): Promise<Graphic> {
+    const image = new Image();
+    image.src = url;
+    await image.decode();
+    return {
+      image,
+      width: image.naturalWidth,
+      height: image.naturalHeight,
+      x: 0,
+      y: 0,
+      centerX: 0,
+      centerY: 0,
+    };
   }
 
   private node(graphic: Graphic): HTMLCanvasElement {
@@ -573,7 +636,8 @@ export class SiglusDisplay {
       if (object.pattern < 0) continue;
       const frame =
         object.frames[object.pattern] ??
-        (object.frames[object.pattern] = await this.graphic(object.name, object.pattern));
+        (object.frames[object.pattern] = await this.objectGraphic(object.name, object.pattern));
+      if (!frame) continue;
       const element =
         object.button === undefined
           ? document.createElement('div')

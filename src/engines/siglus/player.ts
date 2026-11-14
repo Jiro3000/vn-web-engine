@@ -92,6 +92,11 @@ interface PlayerSave {
   bgm?: string;
   cast: string[];
   speed: number;
+  timestamp?: number;
+  title?: string;
+  comment?: string;
+  thumbnail?: string;
+  waitsForInput?: boolean;
 }
 
 export class SiglusPlayer {
@@ -135,7 +140,10 @@ export class SiglusPlayer {
   private vm!: SiglusVm;
   private saveEnabled = true;
   private loadEnabled = true;
-  private saved?: PlayerSave;
+  private readonly saves = new Map<number, PlayerSave>();
+  private readonly quickSaves = new Map<number, PlayerSave>();
+  private savePoint?: PlayerSave;
+  private selectedSave?: PlayerSave;
   private readonly system = new Map<number, number>();
   private bgmName?: string;
   private movieError?: Error;
@@ -230,10 +238,21 @@ export class SiglusPlayer {
         this.movieError = new Error('Siglus movie ' + name + ': ' + reason);
       },
     });
-    const saved = localStorage.getItem(game.saveKey + ':slot');
-    if (saved) {
-      const slot = JSON.parse(saved) as PlayerSave;
-      if (slot.version === 1) this.saved = slot;
+    for (const [kind, slots] of [
+      ['saves', this.saves],
+      ['quick-saves', this.quickSaves],
+    ] as const) {
+      const stored = localStorage.getItem(game.saveKey + ':' + kind);
+      if (!stored) continue;
+      for (const [slot, save] of JSON.parse(stored) as [number, PlayerSave][])
+        if (save.version === 1) slots.set(slot, save);
+    }
+    if (!localStorage.getItem(game.saveKey + ':saves')) {
+      const legacy = localStorage.getItem(game.saveKey + ':slot');
+      if (legacy) {
+        const save = JSON.parse(legacy) as PlayerSave;
+        if (save.version === 1) this.saves.set(0, save);
+      }
     }
     const system = localStorage.getItem(game.saveKey + ':system');
     if (system)
@@ -287,6 +306,8 @@ export class SiglusPlayer {
       this.messageHidden,
       this.quakeStopped,
     ] as const;
+    if (key === 'SAVE_SCENE' && this.savePoint && this.waitingForPage)
+      this.savePoint.thumbnail = this.display.captureThumbnail();
     this.systemCallActive = true;
     this.display.setSystemInput(true);
     try {
@@ -301,6 +322,9 @@ export class SiglusPlayer {
       this.display.setScenePaused(this.timeStopped);
       this.display.setMessageDisplayed(!this.messageHidden);
     }
+    const selected = this.selectedSave;
+    this.selectedSave = undefined;
+    if (selected) await this.loadSave(selected);
   }
 
   private systemOption(option: SystemOption): boolean {
@@ -482,7 +506,10 @@ export class SiglusPlayer {
     const speed = this.speed || (this.messageNowait ? 0 : this.messageSpeed);
     if (speed > 0) await this.delay(speed, true);
     this.root.dataset.page = String(++this.pages);
-    if (!this.skipping) this.updateSaveControls();
+    if (!this.skipping) {
+      this.savePoint = this.captureSave();
+      this.updateSaveControls();
+    }
     let result: number;
     try {
       const autoWait = this.autoEnabled
@@ -502,32 +529,61 @@ export class SiglusPlayer {
   private updateSaveControls(): void {
     this.display.pageControls(
       this.saveEnabled ? () => this.save() : undefined,
-      this.loadEnabled && this.saved ? () => this.wait?.(2) : undefined,
+      this.loadEnabled && this.saves.has(0) ? () => this.wait?.(2) : undefined,
     );
   }
 
-  private save(): void {
+  private captureSave(waitsForInput = true): PlayerSave {
     const {background, bgm} = this.root.dataset;
-    const save: PlayerSave = {
+    return {
       version: 1,
       vm: this.vm.checkpoint(0),
       stage: [...this.stageProperties],
       message: this.display.saveMessage(),
       background,
       bgm,
-      cast: this.currentCast,
+      cast: [...this.currentCast],
       speed: this.speed,
+      title: this.saveTitle,
+      waitsForInput,
     };
-    localStorage.setItem(this.game.saveKey + ':slot', JSON.stringify(save));
-    this.saved = save;
+  }
+
+  private writeSlot(slots: Map<number, PlayerSave>, slot: number, save: PlayerSave): void {
+    const next = new Map(slots);
+    next.set(slot, save);
+    const kind = slots === this.saves ? ':saves' : ':quick-saves';
+    localStorage.setItem(this.game.saveKey + kind, JSON.stringify([...next]));
+    slots.set(slot, save);
+  }
+
+  private newestSlot(slots: Map<number, PlayerSave>, start = 0, count = Infinity): number {
+    let newest = -1;
+    let timestamp = -Infinity;
+    for (const [slot, save] of slots) {
+      if (slot < start || slot >= start + count || (save.timestamp ?? 0) < timestamp) continue;
+      timestamp = save.timestamp ?? 0;
+      newest = slot;
+    }
+    return newest;
+  }
+
+  private saveTitle = '';
+
+  private save(): void {
+    this.writeSlot(this.saves, 0, {
+      ...this.captureSave(),
+      timestamp: Date.now(),
+      thumbnail: this.display.captureThumbnail(),
+    });
     this.root.dataset.savedPage = String(this.pages);
     this.updateSaveControls();
   }
 
-  private async loadSave(): Promise<void> {
-    const save = this.saved;
+  private async loadSave(save = this.saves.get(0)): Promise<void> {
     if (!save) return;
     this.skip = false;
+    this.savePoint = save;
     this.audio.stop('voice');
     this.audio.stopEffects();
     this.audio.stop('bgm');
@@ -540,11 +596,19 @@ export class SiglusPlayer {
     await this.cast(save.cast, -1);
     if (save.bgm) await this.audio.bgm(save.bgm);
     this.speed = save.speed;
+    this.saveTitle = save.title ?? '';
     await this.display.loadMessage(save.message);
     this.pendingText = true;
     this.root.dataset.loaded = 'true';
     this.root.dataset.page = String(++this.pages);
-    await this.delay(undefined, true);
+    if (save.waitsForInput ?? true) {
+      this.waitingForPage = true;
+      try {
+        await this.delay(undefined, true);
+      } finally {
+        this.waitingForPage = false;
+      }
+    }
     this.pendingText = false;
     this.vm.requestLoad(save.vm);
   }
@@ -937,6 +1001,11 @@ export class SiglusPlayer {
         case 61:
           this.display.annotate(s(0));
           break;
+        case 74:
+          this.saveTitle = s(0);
+          break;
+        case 75:
+          return this.saveTitle;
         case 84:
           break; // Message-block boundaries delimit CD_NAME / CD_TEXT.
         case 95:
@@ -951,8 +1020,15 @@ export class SiglusPlayer {
           this.display.repPosition(n(0), n(1));
           break;
         case 111:
+          break; // No selection checkpoint on a new session.
         case 113:
-          break; // No browser save or backlog history on a new session.
+          this.savePoint = undefined;
+          break;
+        case 36:
+          this.savePoint = this.captureSave(false);
+          return 0;
+        case 112:
+          return Number(Boolean(this.savePoint));
         case 118:
           this.backlog.length = 0;
           break;
@@ -997,14 +1073,70 @@ export class SiglusPlayer {
     if (root === 38 && member === 6 && path.length === 5 && path[2] === -1)
       return this.groupCommand(path[3]!, path[4]!);
     if (root === 63) {
-      if (member === 3) {
-        await this.callSystemScene('CONFIG_SCENE');
+      if (member === 1 || member === 2 || member === 3) {
+        await this.callSystemScene(
+          member === 1 ? 'SAVE_SCENE' : member === 2 ? 'LOAD_SCENE' : 'CONFIG_SCENE',
+        );
         return 0;
       }
       if (member === 9) return Number(this.game.config.get('CONFIG.WINDOW_MODE') ?? 0);
       if (member === 284) return this.game.config.get('CONFIG.FONT.NAME')?.split('"')[1] ?? '';
-      if (member === 69) return Number(n(0) === 0 && Boolean(this.saved));
-      if (member === 255) return Number(this.saveEnabled);
+      if (member === 69 || member === 169)
+        return Number((member === 69 ? this.saves : this.quickSaves).has(n(0)));
+      if (member === 79 || member === 170)
+        return this.newestSlot(
+          member === 79 ? this.saves : this.quickSaves,
+          n(0),
+          args.length ? n(1) : Infinity,
+        );
+      if (member === 252 || member === 255) return Number(this.saveEnabled);
+      if (member === 259 || member === 262) return Number(this.loadEnabled);
+      const slot = this.saves.get(n(0));
+      const quick = this.quickSaves.get(n(0));
+      if (member === 78 || member === 179) return (member === 78 ? slot : quick)?.title ?? '';
+      if (member === 131 || member === 132) return (member === 131 ? slot : quick)?.comment ?? '';
+      if (member === 129 || member === 130 || member === 324 || member === 325) {
+        const message = (member === 129 || member === 324 ? slot : quick)?.message;
+        return message?.text.map(({text}) => text).join('') ?? '';
+      }
+      if (
+        member !== undefined &&
+        ((member >= 70 && member <= 77) || (member >= 171 && member <= 178))
+      ) {
+        const save = member <= 77 ? slot : quick;
+        if (save?.timestamp === undefined) return 0;
+        const date = new Date(save.timestamp);
+        return [
+          date.getFullYear(),
+          date.getMonth() + 1,
+          date.getDate(),
+          date.getDay(),
+          date.getHours(),
+          date.getMinutes(),
+          date.getSeconds(),
+          date.getMilliseconds(),
+        ][member - (member <= 77 ? 70 : 171)]!;
+      }
+      if (member === 249 || member === 18) {
+        if (!this.saveEnabled || !this.savePoint) return 0;
+        const slots = member === 249 ? this.saves : this.quickSaves;
+        this.writeSlot(slots, n(0), {
+          ...this.savePoint,
+          timestamp: Date.now(),
+          comment: slots.get(n(0))?.comment,
+        });
+        return 1;
+      }
+      if (member === 256 || member === 20) {
+        const save = member === 256 ? slot : quick;
+        if (save && this.loadEnabled) {
+          if (this.systemCallActive) {
+            this.selectedSave = save;
+            this.vm.returnFromHostScene();
+          } else await this.loadSave(save);
+        }
+        return 0;
+      }
       for (const [index, [set, reset, get]] of filterCommands.entries()) {
         if (member === get) return this.filterColor[index]!;
         if (member === set || member === reset) {
@@ -1102,11 +1234,6 @@ export class SiglusPlayer {
         this.autoMinimumWait = member === 54 ? Math.max(0, Math.min(10000, n(0))) : 1000;
         return 0;
       }
-      if (member === 79) return this.saved ? 0 : -1;
-      if (member === 2) {
-        await this.loadSave();
-        return 0;
-      }
       if (member === 242) {
         void this.dispose();
         return 0;
@@ -1167,6 +1294,7 @@ export class SiglusPlayer {
     if (root === 46 && (member === 4 || member === 8)) return 0;
     if (root === 39 && member === 0)
       return n(0) + Math.floor(Math.random() * (Math.max(0, n(1) - n(0)) + 1));
+    if (root === 39 && member === 1 && args.length === 1) return String(n(0));
     if (root === 39 && member === 2 && Array.isArray(args[3])) {
       const previousTime = n(1);
       let previousValue = n(2);
@@ -1266,8 +1394,22 @@ export class SiglusPlayer {
       const name = String(args[0]);
       const pattern = n(4);
       const frames = [];
-      frames[pattern] = await this.display.graphic(name, pattern);
+      frames[pattern] = await this.display.objectGraphic(name, pattern);
       page.set(id!, {name, frames, x: n(2), y: n(3), visible: Boolean(n(1)), pattern});
+      return 0;
+    }
+    if (command === 116) {
+      const save = this.saves.get(n(0));
+      const thumbnail = save?.thumbnail;
+      const frames = thumbnail ? [await this.display.savedThumbnail(thumbnail)] : [];
+      page.set(id!, {
+        name: '',
+        frames,
+        x: n(2),
+        y: n(3),
+        visible: frames.length > 0 && (args.length === 1 || Boolean(n(1))),
+        pattern: 0,
+      });
       return 0;
     }
     if (command === 39) {
@@ -1306,10 +1448,10 @@ export class SiglusPlayer {
       const frame =
         object.frames[object.pattern] ??
         (object.name
-          ? (object.frames[object.pattern] = await this.display.graphic(
+          ? ((object.frames[object.pattern] = await this.display.objectGraphic(
               object.name,
               object.pattern,
-            ))
+            )) ?? (await this.display.graphic(object.name)))
           : undefined);
       return (command === 24 ? frame?.width : frame?.height) ?? 0;
     }

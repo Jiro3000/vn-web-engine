@@ -48,6 +48,8 @@ const callProperty = 125;
 const elementOwner = (code: number): number => code >>> 24;
 const elementIndex = (code: number): number => code & 0xffff;
 
+class ReturnFromHostScene {}
+
 class ReturnToMenu {
   constructor(
     readonly scene: string,
@@ -234,7 +236,16 @@ export class SiglusVm {
   async callScene(scene: string, entry = 0): Promise<Value> {
     this.signal.throwIfAborted();
     if (!this.frames.length) throw new Error('No Siglus command to suspend');
-    return this.call(this.entry(scene, entry), this.frames.length);
+    try {
+      return await this.call(this.entry(scene, entry), this.frames.length);
+    } catch (error) {
+      if (error instanceof ReturnFromHostScene) return 0;
+      throw error;
+    }
+  }
+
+  returnFromHostScene(): never {
+    throw new ReturnFromHostScene();
   }
 
   private restore(checkpoint: SiglusCheckpoint): Frame[] {
@@ -553,7 +564,11 @@ export class SiglusVm {
             throw new Error(`Unsupported Siglus opcode ${frame.code.getUint8(offset)}`);
         }
       } catch (error) {
-        if (error instanceof ReturnToMenu || (this.pendingLoad && error === this.pendingLoad))
+        if (
+          error instanceof ReturnToMenu ||
+          error instanceof ReturnFromHostScene ||
+          (this.pendingLoad && error === this.pendingLoad)
+        )
           throw error;
         this.signal.throwIfAborted();
         throw new Error(
@@ -571,6 +586,18 @@ export class SiglusVm {
         return receiver.toUpperCase();
       case 1:
         return receiver.toLowerCase();
+      case 7: {
+        // left_len uses one column for halfwidth characters and two for fullwidth.
+        let width = 0;
+        let end = 0;
+        for (const character of receiver) {
+          const code = character.codePointAt(0)!;
+          width += code <= 0x7f || (code >= 0xff61 && code <= 0xff9f) ? 1 : 2;
+          if (width > start) break;
+          end += character.length;
+        }
+        return receiver.slice(0, end);
+      }
       case 2:
         return receiver.slice(0, start);
       case 3:
