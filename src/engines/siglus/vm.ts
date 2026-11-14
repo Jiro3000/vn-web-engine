@@ -216,6 +216,13 @@ export class SiglusVm {
     this.pendingLoad = checkpoint;
   }
 
+  /** Run a host-invoked scenario while the current command is suspended. */
+  async callScene(scene: string, entry = 0): Promise<Value> {
+    this.signal.throwIfAborted();
+    if (!this.frames.length) throw new Error('No Siglus command to suspend');
+    return this.call(this.entry(scene, entry), this.frames.length);
+  }
+
   private restore(checkpoint: SiglusCheckpoint): Frame[] {
     const system = [...this.globals].filter(([key]) => key.startsWith('31.'));
     this.globals.clear();

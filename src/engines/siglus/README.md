@@ -52,6 +52,13 @@ Set `SIGLUS_OPENING_ONLY=1` for the original 50-text check or set
 Set `SIGLUS_MUSIC_ONLY=1` for the Music check. It uses a cleared-title
 checkpoint in the temporary browser profile and exercises track selection,
 Next, Stop, Play, the volume slider, and the return button with mouse input.
+It exits the game and reopens the player at the same origin in the same
+browser profile, then checks the restored volume against the slider position.
+
+Set `SIGLUS_CONFIG_ONLY=1` to diagnose the original Configuration scene. This
+enables its title button for the probe, enters the scene from Gameexe.dat, and
+reports the first unsupported command or observes the script's input loop.
+The regular title keeps Configuration disabled while that path is incomplete.
 
 The clean-profile route matched 130,121 command and message tags and
 checked 8,540 decoded audio buffers with zero browser console errors.
@@ -96,3 +103,8 @@ and Gameexe.dat SHA-256
   original scripted Music screen on the cleared title. Configuration is
   still unavailable. Alpha-tested button hit areas use the bounds of the
   nontransparent pixels.
+
+The browser renders system-call objects above the retained game stage. This
+keeps scene animations and message visibility separate from the system menu.
+The capture commands used by Configuration retain the scene for this overlay.
+Standalone capture surfaces and save thumbnails still need implementation.

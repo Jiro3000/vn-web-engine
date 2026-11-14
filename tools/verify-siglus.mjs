@@ -11,6 +11,7 @@ import {createStaticServer} from './serve-static.mjs';
 const [folder, browser, disassemblyDirectory] = process.argv.slice(2);
 const diagnosticPages = Number(process.env.SIGLUS_DIAGNOSTIC_PAGES ?? 0);
 const musicOnly = process.env.SIGLUS_MUSIC_ONLY === '1';
+const configOnly = process.env.SIGLUS_CONFIG_ONLY === '1';
 const openingOnly = process.env.SIGLUS_OPENING_ONLY === '1';
 const digest = (value) => createHash('sha256').update(value).digest('hex');
 if (!folder || !browser || !disassemblyDirectory)
@@ -264,22 +265,31 @@ try {
     });
   }
   for (const domain of ['Page', 'DOM', 'Runtime', 'Log']) await send(domain + '.enable');
-  await send('Page.navigate', {
-    url: `http://127.0.0.1:${server.address().port}/siglus.html?siglus-trace`,
-  });
-  await waitFor("document.querySelector('#files') !== null");
-  const {root} = await send('DOM.getDocument');
-  const {nodeId} = await send('DOM.querySelector', {nodeId: root.nodeId, selector: '#files'});
-  await send('DOM.setFileInputFiles', {nodeId, files: [resolve(folder)]});
-  await waitFor("document.querySelector('#play')?.disabled === false");
-  await evaluate(`window.siglusTags = [];
+  async function openPlayer() {
+    await send('Page.navigate', {
+      url: `http://127.0.0.1:${server.address().port}/siglus.html?siglus-trace${configOnly ? '&siglus-probe-configuration' : ''}`,
+    });
+    await waitFor("document.querySelector('#files') !== null && !window.siglusSurface");
+    const {root} = await send('DOM.getDocument');
+    const {nodeId} = await send('DOM.querySelector', {nodeId: root.nodeId, selector: '#files'});
+    await send('DOM.setFileInputFiles', {nodeId, files: [resolve(folder)]});
+    await waitFor("document.querySelector('#play')?.disabled === false");
+    await evaluate(`window.siglusTags = [];
     window.siglusAudio = [];
     window.siglusMovies = [];
     window.siglusSurface = document.querySelector('#siglus-surface');
     siglusSurface.addEventListener('siglus-tag', (event) => siglusTags.push(event.detail));
     siglusSurface.addEventListener('siglus-audio', (event) => siglusAudio.push(event.detail));
     siglusSurface.addEventListener('siglus-movie-ended', (event) => siglusMovies.push(event.detail)); true`);
-  if (musicOnly) {
+  }
+  async function playInstallation() {
+    await click('#play');
+    await waitFor("siglusTags.some((tag) => tag.scene === '_start' && tag.path?.[0] === 55)");
+    await delay(180);
+    await advance();
+  }
+  await openPlayer();
+  if (musicOnly || configOnly) {
     const pack = await readFile(join(resolve(folder), 'StartData', 'GameData', 'Scene.pck')).catch(
       () => readFile(join(resolve(folder), 'Scene.pck')),
     );
@@ -288,10 +298,7 @@ try {
       `localStorage.setItem(${JSON.stringify(key)}, '[[1006,1],[1007,3],[1571,1],[1575,1]]')`,
     );
   }
-  await click('#play');
-  await waitFor("siglusTags.some((tag) => tag.scene === '_start' && tag.path?.[0] === 55)");
-  await delay(180);
-  await advance();
+  await playInstallation();
   const state = () =>
     evaluate(`({
     ...siglusSurface.dataset,
@@ -325,7 +332,12 @@ try {
   }
   await runUntil((current) => current.title);
   console.log(`Reached title after ${page} advances`);
-  if (musicOnly) {
+  if (configOnly) {
+    await click('#siglus-surface button[aria-label="Configuration"]');
+    await waitFor(`siglusTags.some(({scene, path}) =>
+      scene === '__sys_menu_config01' && path?.join('.') === '86.3')`);
+    console.log('Reached the original Configuration input loop.');
+  } else if (musicOnly) {
     const music = '#siglus-surface button[aria-label="Music"]';
     await click(music);
     await waitFor(`siglusTags.filter(({scene, path}) =>
@@ -370,15 +382,33 @@ try {
     });
     await click('#siglus-surface [data-siglus-button="100"]');
     await waitFor(`document.querySelector(${JSON.stringify(music)})?.isConnected`);
+    const volume = await evaluate(`siglusTags.findLast(tag => ${writeVolume}).args[0]`);
+    const savedMix = await evaluate(`(() => {
+      const key = Object.keys(localStorage).find(key => /^siglus:[0-9a-f]{64}:audio$/.test(key));
+      return key ? JSON.parse(localStorage.getItem(key)) : null;
+    })()`);
+    assert.equal(savedMix?.levels.BGM, volume);
     console.log('Music: selected track, next, stop, resume, volume drag, and return to title.');
     const trace = await evaluate('siglusTags');
     compareTags(trace, scripts);
+    await click('#siglus-surface button[aria-label="Exit"]');
+    await waitFor("document.querySelector('#play')?.disabled === false");
+    await openPlayer();
+    await playInstallation();
+    await click(music);
+    const restored = await waitFor(`(() => {
+      const slider = siglusSurface.querySelector('[data-siglus-button="107"]');
+      if (!slider) return false;
+      return Number.parseFloat(slider.style.left) + 1;
+    })()`);
+    assert.equal(restored - 1, Math.trunc((volume * 347) / 255), 'Restored BGM volume slider');
+    console.log('Music: BGM volume restored after reopening the player.');
   } else {
     await waitFor(`siglusTags.filter(({scene, path}) =>
       scene === '_titlemenu_dmy' && path?.join('.') === '38.6.-1.0.3').length >= 2`);
     await click('#siglus-surface button[aria-label="New Game"]');
   }
-  if (musicOnly) {
+  if (musicOnly || configOnly) {
     assert.equal(errors.length, 0);
   } else if (diagnosticPages > 0) {
     const firstPage = page;

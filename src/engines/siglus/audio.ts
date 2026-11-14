@@ -7,7 +7,13 @@ import {decodeNwa, ovkIndex, readOvk} from '../../formats/siglus/sound.js';
 interface Playing {
   source: AudioBufferSourceNode;
   gain: GainNode;
+  kind: SiglusAudioKind;
+  character?: number;
 }
+
+export type SiglusAudioKind = 'BGM' | 'KOE' | 'PCM' | 'SE';
+const mixKinds = ['ALL', 'BGM', 'KOE', 'PCM', 'SE', 'MOV'] as const;
+type MixKind = (typeof mixKinds)[number];
 
 export class SiglusAudio {
   private readonly context = new AudioContext();
@@ -18,16 +24,47 @@ export class SiglusAudio {
   private readonly active = new Set<Playing>();
   private readonly measured = new WeakMap<AudioBuffer, {peak: number; rms: number}>();
   private closed = false;
-  private bgmVolume: number;
-  private bgmLevel: number;
+  private readonly levels = new Map<MixKind, number>();
+  private readonly disabled = new Set<MixKind>();
+  private voiceDuck = 1;
+  private readonly voiceGroups = new Map<number, number>();
+  private readonly characterLevels = new Map<number, number>();
+  private readonly mutedCharacters = new Set<number>();
 
   constructor(
     private readonly files: ReadonlyMap<string, ByteSource>,
     private readonly config: ReadonlyMap<string, string>,
     private readonly root: HTMLElement,
+    private readonly settingsKey: string,
   ) {
-    this.bgmVolume = this.volume('BGM');
-    this.bgmLevel = Number(config.get('CONFIG.VOLUME.BGM') ?? 255);
+    for (const [key, value] of config) {
+      const group = /^CHRKOE\.(\d+)$/.exec(key)?.[1];
+      const members = /\(([^()]*)\)\s*$/.exec(value)?.[1];
+      if (group === undefined || !members) continue;
+      for (const member of members.split(','))
+        this.voiceGroups.set(Number(member.trim()), Number(group));
+    }
+    const saved = root.ownerDocument.defaultView?.localStorage.getItem(settingsKey);
+    if (!saved) return;
+    try {
+      const {levels, disabled, characters, mutedCharacters} = JSON.parse(saved);
+      for (const kind of mixKinds) {
+        const level = levels?.[kind];
+        if (typeof level === 'number' && Number.isFinite(level))
+          this.levels.set(kind, Math.max(0, Math.min(255, level)));
+        if (Array.isArray(disabled) && disabled.includes(kind)) this.disabled.add(kind);
+      }
+      if (Array.isArray(characters))
+        for (const entry of characters) {
+          if (Array.isArray(entry) && Number.isInteger(entry[0]) && Number.isFinite(entry[1]))
+            this.characterLevels.set(entry[0], Math.max(0, Math.min(255, entry[1])));
+        }
+      if (Array.isArray(mutedCharacters))
+        for (const group of mutedCharacters)
+          if (Number.isInteger(group)) this.mutedCharacters.add(group);
+    } catch {
+      // An unreadable settings record falls back to the installation defaults.
+    }
   }
 
   resume(): Promise<void> {
@@ -67,20 +104,17 @@ export class SiglusAudio {
     const end = Number(fields[3] ?? -1);
     const loopStart = Number(fields[4] ?? 0) / rate;
     if (crossfade > 0) this.stop('bgm', crossfade);
-    this.start(
-      'bgm',
-      buffer,
-      this.bgmVolume,
+    this.start('bgm', buffer, 'BGM', {
       loop,
       loopStart,
-      end < 0 ? buffer.duration : end / rate,
+      loopEnd: end < 0 ? buffer.duration : end / rate,
       start,
-      fade || crossfade,
-    );
+      fade: fade || crossfade,
+    });
     this.root.dataset.bgm = name;
   }
 
-  async voice(id: number, channel = 'voice'): Promise<void> {
+  async voice(id: number, channel = 'voice', character?: number): Promise<void> {
     const bank = Math.floor(id / 100000);
     const path = `koe/z${String(bank).padStart(4, '0')}.ovk`;
     const file = this.files.get(path);
@@ -95,7 +129,10 @@ export class SiglusAudio {
     if (!entry) throw new Error(`Missing Siglus voice ${id}`);
     const data = await readOvk(file, entry);
     const buffer = await this.context.decodeAudioData(data.buffer);
-    this.start(channel, buffer, this.volume('KOE'));
+    this.start(channel, buffer, 'KOE', {
+      character:
+        character === undefined ? undefined : (this.voiceGroups.get(character) ?? character),
+    });
     this.root.dataset.voice = String(id);
     this.root.dataset.voiceDuration = String(buffer.duration);
   }
@@ -108,23 +145,34 @@ export class SiglusAudio {
       this.effects.set(path, decoded);
       if (this.effects.size > 16) this.effects.delete(this.effects.keys().next().value!);
     }
-    this.start(channel, await decoded, this.volume(channel === 'se' ? 'SE' : 'PCM'), loop);
+    this.start(channel, await decoded, channel === 'se' ? 'SE' : 'PCM', {loop});
   }
 
   private start(
     channel: string,
     buffer: AudioBuffer,
-    volume: number,
-    loop = false,
-    loopStart = 0,
-    loopEnd = -1,
-    start = 0,
-    fade = 0,
+    kind: SiglusAudioKind,
+    {
+      loop = false,
+      loopStart = 0,
+      loopEnd = -1,
+      start = 0,
+      fade = 0,
+      character,
+    }: {
+      loop?: boolean;
+      loopStart?: number;
+      loopEnd?: number;
+      start?: number;
+      fade?: number;
+      character?: number;
+    } = {},
   ): void {
     if (this.closed) return;
     this.stop(channel);
     const source = this.context.createBufferSource();
     const gain = this.context.createGain();
+    const volume = this.volume(kind, character);
     const now = this.context.currentTime;
     gain.gain.setValueAtTime(fade > 0 ? 0 : volume, now);
     if (fade > 0) gain.gain.linearRampToValueAtTime(volume, now + fade / 1000);
@@ -133,7 +181,7 @@ export class SiglusAudio {
     source.loopStart = loopStart;
     source.loopEnd = loopEnd < 0 ? buffer.duration : loopEnd;
     source.connect(gain).connect(this.context.destination);
-    const playing = {source, gain};
+    const playing = {source, gain, kind, character};
     this.playing.set(channel, playing);
     this.active.add(playing);
     source.onended = () => {
@@ -141,8 +189,10 @@ export class SiglusAudio {
       if (this.playing.get(channel) === playing) this.playing.delete(channel);
       source.disconnect();
       gain.disconnect();
+      if (channel === 'voice') this.updateGains('BGM');
     };
     source.start(0, start);
+    if (channel === 'voice') this.updateGains('BGM');
     this.root.dataset.audioState = this.context.state;
     if (new URLSearchParams(location.search).has('siglus-trace')) {
       let levels = this.measured.get(buffer);
@@ -166,24 +216,93 @@ export class SiglusAudio {
     }
   }
 
-  private volume(type: string): number {
-    return (
-      (Number(this.config.get('CONFIG.VOLUME.ALL') ?? 255) *
-        Number(this.config.get('CONFIG.VOLUME.' + type) ?? 255)) /
-      (255 * 255)
+  volume(kind: Exclude<MixKind, 'ALL'>, character?: number): number {
+    const duck = kind === 'BGM' && this.playing.has('voice') ? this.voiceDuck : 1;
+    const individual =
+      character === undefined
+        ? 1
+        : this.characterEnabled(character)
+          ? this.characterLevel(character) / 255
+          : 0;
+    return this.enabled('ALL') && this.enabled(kind)
+      ? (this.level('ALL') * this.level(kind) * duck * individual) / (255 * 255)
+      : 0;
+  }
+
+  characterLevel(group: number): number {
+    return this.characterLevels.get(group) ?? 255;
+  }
+
+  characterEnabled(group: number): boolean {
+    return !this.mutedCharacters.has(group);
+  }
+
+  setCharacterLevel(group: number, level?: number): void {
+    if (level === undefined) this.characterLevels.delete(group);
+    else this.characterLevels.set(group, Math.max(0, Math.min(255, level)));
+    this.updateGains('KOE');
+    this.saveMix();
+  }
+
+  setCharacterEnabled(group: number, enabled: boolean): void {
+    if (enabled) this.mutedCharacters.delete(group);
+    else this.mutedCharacters.add(group);
+    this.updateGains('KOE');
+    this.saveMix();
+  }
+
+  setVoiceDuck(level: number): void {
+    this.voiceDuck = Math.max(0, Math.min(255, level)) / 255;
+    this.updateGains('BGM');
+  }
+
+  level(kind: MixKind): number {
+    return this.levels.get(kind) ?? Number(this.config.get('CONFIG.VOLUME.' + kind) ?? 255);
+  }
+
+  enabled(kind: MixKind): boolean {
+    return !this.disabled.has(kind);
+  }
+
+  setLevel(kind: MixKind, level?: number): void {
+    if (level === undefined) {
+      if (!this.levels.delete(kind)) return;
+    } else {
+      const next = Math.max(0, Math.min(255, level));
+      if (next === this.level(kind)) return;
+      this.levels.set(kind, next);
+    }
+    this.updateGains(kind);
+    this.saveMix();
+  }
+
+  setEnabled(kind: MixKind, enabled: boolean): void {
+    if (this.enabled(kind) === enabled) return;
+    if (enabled) this.disabled.delete(kind);
+    else this.disabled.add(kind);
+    this.updateGains(kind);
+    this.saveMix();
+  }
+
+  private saveMix(): void {
+    this.root.ownerDocument.defaultView?.localStorage.setItem(
+      this.settingsKey,
+      JSON.stringify({
+        levels: Object.fromEntries(this.levels),
+        disabled: [...this.disabled],
+        characters: [...this.characterLevels],
+        mutedCharacters: [...this.mutedCharacters],
+      }),
     );
   }
 
-  setBgmVolume(level: number): void {
-    this.bgmLevel = Math.max(0, Math.min(255, level));
-    this.bgmVolume =
-      (Number(this.config.get('CONFIG.VOLUME.ALL') ?? 255) * this.bgmLevel) / (255 * 255);
-    const active = this.playing.get('bgm');
-    if (active) active.gain.gain.value = this.bgmVolume;
-  }
-
-  getBgmVolume(): number {
-    return this.bgmLevel;
+  private updateGains(kind: MixKind): void {
+    const time = this.context.currentTime;
+    for (const {gain, kind: playingKind, character} of this.playing.values()) {
+      if (kind !== 'ALL' && playingKind !== kind) continue;
+      gain.gain.cancelScheduledValues(time);
+      gain.gain.setValueAtTime(this.volume(playingKind, character), time);
+    }
   }
 
   stop(channel: string, fade = 0): void {
@@ -194,6 +313,7 @@ export class SiglusAudio {
     if (fade > 0) playing.gain.gain.linearRampToValueAtTime(0, time + fade / 1000);
     playing.source.stop(time + fade / 1000);
     if (channel === 'bgm') delete this.root.dataset.bgm;
+    if (channel === 'voice') this.updateGains('BGM');
   }
 
   stopEffects(): void {

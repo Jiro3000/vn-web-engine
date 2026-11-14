@@ -18,6 +18,8 @@ export interface DrawObject {
   x: number;
   y: number;
   visible: boolean;
+  layer?: number;
+  transparency?: number;
   pattern: number;
   button?: {id: number; group: number};
   children?: Map<number, DrawObject>;
@@ -29,6 +31,12 @@ export interface DrawObject {
   movement?: [target: number, duration: number, delay: number, easing: number, start: number];
 }
 
+export function orderedObjects(objects: ReadonlyMap<number, DrawObject>): DrawObject[] {
+  return [...objects]
+    .sort(([a, first], [b, second]) => (first.layer ?? 0) - (second.layer ?? 0) || a - b)
+    .map(([, object]) => object);
+}
+
 export class SiglusDisplay {
   readonly stage = document.createElement('div');
   private readonly layers = document.createElement('div');
@@ -36,6 +44,7 @@ export class SiglusDisplay {
   private readonly effect = document.createElement('div');
   private readonly day = document.createElement('div');
   private readonly controls = document.createElement('div');
+  private readonly systemLayer = document.createElement('div');
   private readonly message = document.createElement('div');
   private readonly speaker = document.createElement('div');
   private readonly text = document.createElement('div');
@@ -56,11 +65,13 @@ export class SiglusDisplay {
   private currentText: {text: string; ruby?: string}[] = [];
   private windowIndex = 0;
   private ruby = '';
-  private filter?: HTMLElement;
+  private filter?: HTMLCanvasElement;
+  private filterFrame?: Graphic;
   readonly windowDisplay: BrowserWindowDisplayHost;
   private readonly click: (event: MouseEvent) => void;
   private readonly pointerDown: (event: PointerEvent) => void;
   private readonly key: (event: KeyboardEvent) => void;
+  private readonly probeConfiguration: boolean;
 
   constructor(
     readonly root: HTMLElement,
@@ -73,6 +84,9 @@ export class SiglusDisplay {
     windowOptions: {root: HTMLElement; changed(): void; report(message: string): void},
     skip: (active: boolean) => void,
   ) {
+    this.probeConfiguration = new URLSearchParams(root.ownerDocument.location.search).has(
+      'siglus-probe-configuration',
+    );
     root.replaceChildren(this.stage);
     this.stage.style.cssText = 'position:absolute;overflow:hidden;background:#000;color:white';
     this.layers.style.cssText = 'position:absolute;inset:0;pointer-events:none';
@@ -93,7 +107,16 @@ export class SiglusDisplay {
       'position:absolute;right:28px;bottom:18px;display:flex;gap:8px;z-index:1';
     this.controls.hidden = true;
     this.controls.style.display = 'none';
-    this.stage.append(this.layers, this.cast, this.effect, this.day, this.message, this.controls);
+    this.systemLayer.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:2';
+    this.stage.append(
+      this.layers,
+      this.cast,
+      this.effect,
+      this.day,
+      this.message,
+      this.controls,
+      this.systemLayer,
+    );
     this.message.append(this.portrait, this.speaker, this.text);
     this.message.hidden = true;
     this.windowDisplay = new BrowserWindowDisplayHost(
@@ -180,6 +203,38 @@ export class SiglusDisplay {
     return this.pointer[axis]!;
   }
 
+  setMessageDisplayed(displayed: boolean): void {
+    this.message.style.visibility = displayed ? '' : 'hidden';
+  }
+
+  setScenePaused(paused: boolean): void {
+    for (const layer of [this.layers, this.cast, this.effect, this.day])
+      for (const animation of layer.getAnimations({subtree: true})) {
+        if (paused && animation.playState === 'running') animation.pause();
+        else if (!paused && animation.playState === 'paused') animation.play();
+      }
+  }
+
+  setSystemInput(active: boolean): void {
+    this.layers.inert = active;
+    this.message.inert = active;
+    this.controls.inert = active;
+    this.stage.focus({preventScroll: true});
+  }
+
+  async showSystemObjects(
+    objects: Iterable<DrawObject>,
+    button: (target: NonNullable<DrawObject['button']>) => void,
+  ): Promise<void> {
+    const next = await this.drawObjects(objects, button);
+    this.signal.throwIfAborted();
+    this.systemLayer.replaceChildren(next);
+  }
+
+  clearSystemObjects(): void {
+    this.systemLayer.replaceChildren();
+  }
+
   async prepare(): Promise<void> {
     const name = this.config.get('FONT_FILE.000.NAME')?.split('"')[1]?.toLowerCase();
     const file = name ? this.files.get(`dat/${name}`) : undefined;
@@ -199,7 +254,25 @@ export class SiglusDisplay {
       layer.style.zIndex = '-1';
       this.message.prepend(layer);
       this.filter = layer;
+      this.filterFrame = frame;
     }
+  }
+
+  setMessageFilter([red, green, blue, alpha]: readonly number[]): void {
+    const canvas = this.filter;
+    const frame = this.filterFrame;
+    if (!canvas || !frame) return;
+    const context = canvas.getContext('2d')!;
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(frame.image, 0, 0);
+    const image = context.getImageData(0, 0, canvas.width, canvas.height);
+    for (let i = 0; i < image.data.length; i += 4) {
+      image.data[i] = image.data[i]! + red!;
+      image.data[i + 1] = image.data[i + 1]! + green!;
+      image.data[i + 2] = image.data[i + 2]! + blue!;
+    }
+    context.putImageData(image, 0, 0);
+    canvas.style.opacity = String(alpha! / 255);
   }
 
   selectMessageWindow(index: number): void {
@@ -362,6 +435,10 @@ export class SiglusDisplay {
   ): Promise<void> {
     for (const object of objects) {
       if (!object.visible) continue;
+      if (!object.name && !object.frames.length) {
+        if (object.children) await this.appendChildren(parent, object, button, animate);
+        continue;
+      }
       const frame =
         object.frames[object.pattern] ??
         (object.frames[object.pattern] = await this.graphic(object.name, object.pattern));
@@ -375,6 +452,8 @@ export class SiglusDisplay {
       element.style.cssText = `position:absolute;left:${object.x + frame.x}px;top:${object.y + frame.y}px;width:${frame.width}px;height:${frame.height}px;border:0;padding:0;background:none`;
       element.append(canvas);
       parent.append(element);
+      if (object.transparency !== undefined)
+        element.style.opacity = String(object.transparency / 255);
       if (object.sourceClip) {
         const [x, y, width, height] = object.sourceClip;
         canvas.style.clipPath = `inset(${y}px ${frame.width - x - width}px ${frame.height - y - height}px ${x}px)`;
@@ -390,7 +469,8 @@ export class SiglusDisplay {
           role === 'prol' ||
           role === 'exit' ||
           role === 'load' ||
-          role === 'music';
+          role === 'music' ||
+          (role === 'config' && this.probeConfiguration);
         element.disabled = !supported || Boolean(object.disabled);
         element.style.pointerEvents = supported ? 'auto' : 'none';
         element.style.cursor = 'pointer';
@@ -406,7 +486,9 @@ export class SiglusDisplay {
                   ? 'Exit'
                   : role === 'music'
                     ? 'Music'
-                    : object.name,
+                    : role === 'config'
+                      ? 'Configuration'
+                      : object.name,
         );
         element.dataset.siglusButton = String(target.id);
         element.dataset.siglusGroup = String(target.group);
@@ -438,20 +520,23 @@ export class SiglusDisplay {
           {duration: time, delay, fill: 'both'},
         );
       }
-      if (object.children) {
-        // Child objects are siblings of the parent's graphic and hit region.
-        // This also keeps button elements from nesting inside one another.
-        const children = document.createElement('div');
-        children.style.cssText = `position:absolute;left:${object.x}px;top:${object.y}px;pointer-events:none`;
-        parent.append(children);
-        await this.appendObjects(
-          children,
-          [...object.children].sort(([a], [b]) => a - b).map(([, child]) => child),
-          button,
-          animate,
-        );
-      }
+      if (object.children) await this.appendChildren(parent, object, button, animate);
     }
+  }
+
+  private async appendChildren(
+    parent: HTMLElement,
+    object: DrawObject,
+    button: (target: NonNullable<DrawObject['button']>) => void,
+    animate: boolean,
+  ): Promise<void> {
+    // Child graphics share their parent's origin without nesting interactive buttons.
+    const children = document.createElement('div');
+    children.style.cssText = `position:absolute;left:${object.x}px;top:${object.y}px;pointer-events:none`;
+    if (object.transparency !== undefined)
+      children.style.opacity = String(object.transparency / 255);
+    parent.append(children);
+    await this.appendObjects(children, orderedObjects(object.children!), button, animate);
   }
 
   private async replaceLayer(next: HTMLElement, duration: number): Promise<void> {
