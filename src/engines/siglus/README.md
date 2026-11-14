@@ -67,9 +67,11 @@ Next, Stop, Play, the volume slider, and the return button with mouse input.
 It exits the game and reopens the player at the same origin in the same
 browser profile, then checks the restored volume against the slider position.
 
-Set `SIGLUS_CONFIG_ONLY=1` to diagnose the original Configuration scene. This
-enables its title button for the probe, enters the scene from Gameexe.dat, and
-checks the wheel-to-advance and window/fullscreen controls in the System tab.
+Set `SIGLUS_CONFIG_ONLY=1` to diagnose the original Configuration scene. The
+probe clicks the title button, enters the scene from Gameexe.dat, and checks
+the wheel-to-advance and window/fullscreen controls in the System tab. It
+checks window scaling, synchronous custom fullscreen scaling, position,
+restoring defaults, and reopening at the selected window size.
 It opens the movie dialog, changes the selected mode and checks the restored
 choice and keyboard focus after reopening.
 It switches the dialogue from the default Kosugi Maru to the bundled Kosugi
@@ -78,12 +80,12 @@ and outline with shadow. It plays the seven volume tests and the first
 character's sample in the Sound tab, and returns to the title with a
 right-click. It reopens the player in the same temporary profile and checks
 that the selected font is still applied. Only that profile starts with
-the character's Chapter 02 unlock flag set. Audio checks cover the sample IDs,
+the character's Chapter 02 unlock flag set. Add `SIGLUS_CONFIG_FRESH=1` to
+test from the first title after the mandatory prologue in a clean profile.
+That run uses the original character voice availability. Audio checks cover the sample IDs,
 volume types, applied gain, decoded frames, sample rate, peak and RMS. It compares command
 offsets, opcodes and argument counts with the disassembly. For Configuration,
 the trace uses offsets as source locations because branches can skip line markers.
-The regular title keeps Configuration disabled while the detailed display
-dialog is incomplete.
 
 The System and Text tabs execute `syscom.set_window_mode` (4) and
 `syscom.set_font_name` (283) in `__sys_menu_config01`. The browser maps the
@@ -103,7 +105,14 @@ Windows Media Player selection. Both choices play through the same browser
 host, which chooses the decoder by the file format.
 In the embedded image, the screen modal wrapper at `0x5481b0` uses the
 `cfg_wnd_modal_screen` key and calls `DialogBoxParamW` with template 127
-at `0x548248`. The font modal references `cfg_wnd_modal_font`
+at `0x548248`. Commands at `0x540640` through `0x540679`
+set the scale ranges to 50–300% and the position ranges to −100–100%.
+The browser places these controls using the template's dialog units.
+Window sizes are bounded by the available browser area. Physical display
+resolution and monitor switching are unavailable to the web player, so that
+section reports the current browser display with the native change controls
+disabled. Custom offsets are percentages of the available viewport.
+The font modal references `cfg_wnd_modal_font`
 at `0x54757c` and opens the empty base template 240 at `0x5475cb`.
 Initializer `0x5396e0` creates the font list, proportional filter, bold
 control and four shadow controls. Handler `0x53a770` applies the settings
@@ -211,12 +220,13 @@ and Gameexe.dat SHA-256
   recollection, shake, dizziness and motion effects approximate the script's
   native compositing. Effect timing and rendering have not been compared
   frame by frame.
-- Browser title buttons expose New Game, Prologue, Load, Exit, and the
-  original scripted Music screen on the cleared title. Configuration is
-  still unavailable. Alpha-tested button hit areas use the bounds of the
+- Browser title buttons expose New Game, Prologue, Load, Exit, Configuration,
+  and the original scripted Music screen on the cleared title. Alpha-tested
+  button hit areas use the bounds of the
   nontransparent pixels.
 
 The browser renders system-call objects above the retained game stage. This
 keeps scene animations and message visibility separate from the system menu.
 The capture commands used by Configuration retain the scene for this overlay.
-Standalone capture surfaces and save thumbnails still need implementation.
+Standalone capture surfaces still need implementation. Save thumbnails
+composite the retained scene layers as described above.

@@ -19,6 +19,7 @@ const cancelOnly = process.env.SIGLUS_CANCEL_ONLY === '1';
 const manageOnly = process.env.SIGLUS_SLOT_MANAGEMENT_ONLY === '1';
 const loadOnly = process.env.SIGLUS_LOAD_ONLY === '1';
 const configOnly = process.env.SIGLUS_CONFIG_ONLY === '1';
+const freshConfiguration = configOnly && process.env.SIGLUS_CONFIG_FRESH === '1';
 const openingOnly = process.env.SIGLUS_OPENING_ONLY === '1';
 const digest = (value) => createHash('sha256').update(value).digest('hex');
 if (!folder || !browser || !disassemblyDirectory)
@@ -331,8 +332,15 @@ try {
   }
   for (const domain of ['Page', 'DOM', 'Runtime', 'Log']) await send(domain + '.enable');
   async function openPlayer() {
+    if (configOnly)
+      await send('Emulation.setDeviceMetricsOverride', {
+        width: 1440,
+        height: 900,
+        deviceScaleFactor: 1,
+        mobile: false,
+      });
     await send('Page.navigate', {
-      url: `http://127.0.0.1:${server.address().port}/siglus.html?siglus-trace${configOnly ? '&siglus-probe-configuration' : ''}`,
+      url: `http://127.0.0.1:${server.address().port}/siglus.html?siglus-trace`,
     });
     await waitFor("document.querySelector('#files') !== null && !window.siglusSurface");
     const {root} = await send('DOM.getDocument');
@@ -444,7 +452,7 @@ try {
   await openPlayer();
   if (
     musicOnly ||
-    configOnly ||
+    (configOnly && !freshConfiguration) ||
     loadOnly ||
     quickOnly ||
     autoOnly ||
@@ -1044,6 +1052,57 @@ try {
     await clickConfig(470, 192);
     await waitFor(`${configCommand('63.4', beforeWindow)} && !(${expanded})`);
     console.log('Configuration: original window and fullscreen buttons changed the viewport.');
+    const screenDialog = 'dialog[data-siglus-configuration="screen"]';
+    const screenControl = (id) => `${screenDialog} [data-siglus-control="${id}"]`;
+    const stageWidth = 'siglusSurface.firstElementChild.getBoundingClientRect().width';
+    const oldWidth = await evaluate(stageWidth);
+    const openScreenDialog = async () => {
+      const start = await evaluate('siglusTags.length');
+      await clickConfig(785, 193);
+      await waitFor(
+        `${configCommand('63.138', start)} && document.querySelector('${screenDialog}')?.open`,
+      );
+    };
+    await openScreenDialog();
+    assert.equal(
+      await evaluate(`document.querySelector('${screenDialog}').getAttribute('aria-label')`),
+      '画面の設定',
+    );
+    await click(`${screenControl(1170)} input`);
+    const halfWidth = await evaluate(stageWidth);
+    assert.ok(Math.abs(halfWidth - 960) < 1 && halfWidth < oldWidth);
+    await click(`${screenControl(1166)} input`);
+    await waitFor(expanded);
+    await click(`${screenControl(1155)} input`);
+    const customWidth = await evaluate(stageWidth);
+    assert.ok(Math.abs(customWidth - 1920) < 1);
+    await click(screenControl(1181));
+    assert.notEqual(await evaluate(stageWidth), customWidth);
+    assert.equal(
+      await evaluate(`document.querySelector('${screenControl(1181)}').value`),
+      await evaluate(`document.querySelector('${screenControl(1182)}').value`),
+    );
+    const stageLeft = 'siglusSurface.firstElementChild.getBoundingClientRect().left';
+    const centered = await evaluate(stageLeft);
+    await click(screenControl(1179));
+    for (const type of ['keyDown', 'keyUp'])
+      await send('Input.dispatchKeyEvent', {
+        type,
+        key: 'End',
+        code: 'End',
+        windowsVirtualKeyCode: 35,
+      });
+    assert.ok((await evaluate(stageLeft)) > centered + 100);
+    await click(screenControl(1020));
+    await waitFor(`!(${expanded}) && Math.abs(${stageWidth} - ${oldWidth}) < 1`);
+    await click(`${screenControl(1170)} input`);
+    await click(screenControl(1036));
+    await waitFor(
+      `!document.querySelector('${screenDialog}') && document.activeElement === siglusSurface.firstElementChild`,
+    );
+    console.log(
+      'Configuration: screen dialog applied native window sizes, custom fullscreen scale, and defaults.',
+    );
     const movieDialog = 'dialog[data-siglus-configuration="movie"]';
     const openMovieDialog = async () => {
       const start = await evaluate('siglusTags.length');
@@ -1138,25 +1197,35 @@ try {
     let effectShape;
     for (const [buttonY, volume] of volumePreviews) {
       const preview = await evaluate('siglusAudio.length');
+      const beforePreview = await evaluate('siglusTags.length');
       await clickConfig(875, buttonY + 15);
       const sample = await waitFor(`siglusAudio.slice(${preview}).find(({channel, resource}) =>
         channel === 'pcm15' && resource === 'system_decide')`);
       assert.equal(sample.volumeType, 31);
-      assert.ok(Math.abs(sample.gain - volume / 255) < 1e-7);
+      const setGain = await evaluate(`siglusTags.slice(${beforePreview}).findLast(({scene, path}) =>
+        scene === '${configScene}' && path?.join('.') === '63.277')?.args`);
+      assert.deepEqual(setGain, [31, volume], `Sound preview at y=${buttonY}`);
+      assert.ok(
+        Math.abs(sample.gain - volume / 255) < 1e-7,
+        `gain at y=${buttonY}: ${sample.gain}`,
+      );
       const {frames, rate, peak, rms} = sample;
       const shape = {frames, rate, peak, rms};
       assert.ok(frames > 0 && rate > 0 && peak >= rms && rms > 0);
       if (effectShape) assert.deepEqual(shape, effectShape);
       effectShape = shape;
     }
-    const voice = await evaluate('siglusAudio.length');
-    await clickConfig(1163, 247);
-    const voicePreview = await waitFor(`siglusAudio.slice(${voice}).find(({channel, resource}) =>
-      channel === 'pcm15' && resource === 300914)`);
-    assert.equal(voicePreview.volumeType, 1);
-    assert.equal(voicePreview.gain, 1);
-    assert.ok(voicePreview.frames > 0 && voicePreview.rate > 0);
-    assert.ok(voicePreview.peak >= voicePreview.rms && voicePreview.rms > 0);
+    let voicePreview;
+    if (!freshConfiguration) {
+      const voice = await evaluate('siglusAudio.length');
+      await clickConfig(1163, 247);
+      voicePreview = await waitFor(`siglusAudio.slice(${voice}).find(({channel, resource}) =>
+        channel === 'pcm15' && resource === 300914)`);
+      assert.equal(voicePreview.volumeType, 1);
+      assert.equal(voicePreview.gain, 1);
+      assert.ok(voicePreview.frames > 0 && voicePreview.rate > 0);
+      assert.ok(voicePreview.peak >= voicePreview.rms && voicePreview.rms > 0);
+    }
     console.log('Configuration audio previews', {effectShape, voicePreview});
     await clickConfig(1630, 22, 'right');
     await waitFor(`(() => {
@@ -1171,6 +1240,7 @@ try {
     await reopenPlayer();
     assert.equal(await evaluate(dialogueFont), chosenFont);
     assert.deepEqual(await evaluate(messageFontStyle), changedFontStyle);
+    assert.ok(Math.abs((await evaluate(stageWidth)) - halfWidth) < 1);
     await click('#siglus-surface button[aria-label="Configuration"]');
     await waitFor(`document.querySelector('#siglus-surface canvas') && ${configLoop}`);
     await openMovieDialog();

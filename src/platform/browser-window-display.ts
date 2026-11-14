@@ -16,6 +16,16 @@ import {
 } from './browser-fullscreen.js';
 
 export type BrowserFullscreenMode = 'page' | 'screen';
+export type ViewportFullscreenLayout = 'native' | 'stretch' | 'fit' | 'height' | 'width' | 'custom';
+export interface ViewportPresentation {
+  windowScale: number;
+  fullscreenLayout: ViewportFullscreenLayout;
+  scaleX: number;
+  scaleY: number;
+  /** Fractions of the available output area, measured from the centered viewport. */
+  offsetX: number;
+  offsetY: number;
+}
 /** Browser screen dimensions are CSS pixels; native display queries use device pixels. */
 export function browserDesktopSize(
   view: Pick<Window, 'screen' | 'devicePixelRatio'>,
@@ -44,6 +54,7 @@ export class BrowserWindowDisplayHost implements WindowDisplayHost {
   private expanded = false;
   private modeValue: BrowserFullscreenMode = 'page';
   private scalingValue: BrowserFullscreenScaling;
+  private presentation?: ViewportPresentation;
   private pending = false;
   private blocked = false;
   private disposed = false;
@@ -88,6 +99,9 @@ export class BrowserWindowDisplayHost implements WindowDisplayHost {
   get scaling(): BrowserFullscreenScaling {
     return this.scalingValue;
   }
+  get fullscreenLayout(): ViewportFullscreenLayout {
+    return this.presentation?.fullscreenLayout ?? this.scalingValue;
+  }
   get isExpanded(): boolean {
     return this.expanded;
   }
@@ -112,7 +126,14 @@ export class BrowserWindowDisplayHost implements WindowDisplayHost {
 
   setScaling(scaling: BrowserFullscreenScaling): void {
     this.scalingValue = scaling;
+    if (this.presentation) this.presentation = {...this.presentation, fullscreenLayout: scaling};
     writeBrowserFullscreenScaling(this.view, scaling);
+    this.layout();
+    this.changed();
+  }
+
+  setPresentation(presentation: ViewportPresentation): void {
+    this.presentation = {...presentation};
     this.layout();
     this.changed();
   }
@@ -166,14 +187,35 @@ export class BrowserWindowDisplayHost implements WindowDisplayHost {
     // Native window dimensions are device pixels. Preserve their physical extent on
     // high-DPI screens; page/screen expansion is the separate user-controlled policy.
     // Expansion letterboxes to native proportions unless stretching was chosen.
-    const containScale = Math.min(availableWidth / width, availableHeight / height);
-    const stretch = this.expanded && this.scalingValue === 'stretch';
-    this.scaleX = stretch
-      ? availableWidth / width
-      : this.expanded
-        ? containScale
-        : Math.min(containScale, 1 / ratio);
-    this.scaleY = stretch ? availableHeight / height : this.scaleX;
+    const widthScale = availableWidth / width;
+    const heightScale = availableHeight / height;
+    const containScale = Math.min(widthScale, heightScale);
+    const layout = this.fullscreenLayout;
+    let offsetX = 0;
+    let offsetY = 0;
+    if (!this.expanded) {
+      this.scaleX = this.scaleY = Math.min(
+        containScale,
+        (this.presentation?.windowScale ?? 1) / ratio,
+      );
+    } else if (layout === 'stretch') {
+      this.scaleX = widthScale;
+      this.scaleY = heightScale;
+    } else if (layout === 'custom' && this.presentation) {
+      this.scaleX = this.presentation.scaleX / ratio;
+      this.scaleY = this.presentation.scaleY / ratio;
+      offsetX = this.presentation.offsetX * availableWidth;
+      offsetY = this.presentation.offsetY * availableHeight;
+    } else {
+      this.scaleX = this.scaleY =
+        layout === 'native'
+          ? 1 / ratio
+          : layout === 'width'
+            ? widthScale
+            : layout === 'height'
+              ? heightScale
+              : containScale;
+    }
     if (this.resizeViewport)
       this.viewport.style.height = this.expanded ? '' : `${height * this.scaleY}px`;
     for (const element of new Set([this.windowElement, this.auxiliaryLayer])) {
@@ -186,8 +228,8 @@ export class BrowserWindowDisplayHost implements WindowDisplayHost {
         this.scaleX === this.scaleY
           ? `scale(${this.scaleX})`
           : `scale(${this.scaleX}, ${this.scaleY})`;
-      style.left = `${(availableWidth - width * this.scaleX) / 2}px`;
-      style.top = `${(availableHeight - height * this.scaleY) / 2}px`;
+      style.left = `${(availableWidth - width * this.scaleX) / 2 + offsetX}px`;
+      style.top = `${(availableHeight - height * this.scaleY) / 2 + offsetY}px`;
     }
     this.coordinates.refresh();
   };

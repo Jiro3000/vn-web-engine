@@ -119,7 +119,6 @@ export class SiglusDisplay {
   private readonly click: (event: MouseEvent) => void;
   private readonly pointerDown: (event: PointerEvent) => void;
   private readonly key: (event: KeyboardEvent) => void;
-  private readonly probeConfiguration: boolean;
 
   constructor(
     readonly root: HTMLElement,
@@ -133,9 +132,6 @@ export class SiglusDisplay {
     skip: (active: boolean) => void,
     cancel: () => boolean,
   ) {
-    this.probeConfiguration = new URLSearchParams(root.ownerDocument.location.search).has(
-      'siglus-probe-configuration',
-    );
     root.replaceChildren(this.stage);
     this.stage.style.cssText = 'position:absolute;overflow:hidden;background:#000;color:white';
     this.layers.style.cssText = 'position:absolute;inset:0;pointer-events:none';
@@ -977,7 +973,7 @@ export class SiglusDisplay {
           role === 'exit' ||
           role === 'load' ||
           role === 'music' ||
-          (role === 'config' && this.probeConfiguration);
+          role === 'config';
         element.disabled = !supported || Boolean(object.disabled);
         element.style.pointerEvents = supported ? 'auto' : 'none';
         element.style.cursor = 'pointer';
