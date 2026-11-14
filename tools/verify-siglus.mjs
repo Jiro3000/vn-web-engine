@@ -1007,6 +1007,31 @@ try {
     await clickConfig(470, 192);
     await waitFor(`${configCommand('63.4', beforeWindow)} && !(${expanded})`);
     console.log('Configuration: original window and fullscreen buttons changed the viewport.');
+    const movieDialog = 'dialog[data-siglus-configuration="movie"]';
+    const openMovieDialog = async () => {
+      const start = await evaluate('siglusTags.length');
+      await clickConfig(1360, 731);
+      await waitFor(
+        `${configCommand('63.167', start)} && document.querySelector('${movieDialog}')?.open`,
+      );
+    };
+    await openMovieDialog();
+    assert.equal(
+      await evaluate(`document.querySelector('${movieDialog}').getAttribute('aria-label')`),
+      'ムービーの再生方法の設定',
+    );
+    assert.equal(
+      await evaluate(`document.querySelector('${movieDialog} input:checked').value`),
+      'wmp',
+    );
+    await click(`${movieDialog} [data-siglus-control="1164"]`);
+    await click(`${movieDialog} [data-siglus-control="1026"]`);
+    await waitFor(
+      `!document.querySelector('${movieDialog}') && document.activeElement === siglusSurface.firstElementChild`,
+    );
+    console.log(
+      'Configuration: original movie settings opened, selected MCI and returned to the menu.',
+    );
     const beforeText = await evaluate('siglusTags.length');
     await clickConfig(1450, 22);
     await waitFor(configCommand('65.1.2.-1.63.93.-1.23.39', beforeText));
@@ -1078,6 +1103,26 @@ try {
     console.log(`Configuration: returned to title and matched ${tags.length} command tags.`);
     await reopenPlayer();
     assert.equal(await evaluate(dialogueFont), chosenFont);
+    await click('#siglus-surface button[aria-label="Configuration"]');
+    await waitFor(`document.querySelector('#siglus-surface canvas') && ${configLoop}`);
+    await openMovieDialog();
+    assert.equal(
+      await evaluate(`document.querySelector('${movieDialog} input:checked').value`),
+      'mci',
+    );
+    for (const type of ['keyDown', 'keyUp'])
+      await send('Input.dispatchKeyEvent', {
+        type,
+        key: 'Escape',
+        code: 'Escape',
+        windowsVirtualKeyCode: 27,
+      });
+    await waitFor(
+      `!document.querySelector('${movieDialog}') && document.activeElement === siglusSurface.firstElementChild`,
+    );
+    console.log(
+      'Configuration: movie mode persisted across reopening and Escape restored game focus.',
+    );
   } else if (musicOnly) {
     const music = '#siglus-surface button[aria-label="Music"]';
     await click(music);

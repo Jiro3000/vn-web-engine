@@ -66,6 +66,11 @@ non-cursor resources. Named type/name entries are supported. Language leaves mus
 be numeric. Resource-directory offsets are relative to the resource root; payload
 RVAs are mapped through file-backed sections or headers, never virtual zero-fill.
 
+`parseDialogTemplate(bytes, offset)` in `dialog-template.ts` reads
+`DLGTEMPLATE` or `DLGTEMPLATEEX` from an RT_DIALOG payload or a memory view.
+It returns dialog and control bounds in dialog units, control IDs and classes,
+styles, captions, and the optional font. Pass offset 0 for a resource payload.
+
 ## Supported static images and bounds
 
 DIB extraction supports BITMAPCOREHEADER (12) and uncompressed BI_RGB

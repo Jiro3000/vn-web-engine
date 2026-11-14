@@ -3,6 +3,7 @@ import type {ByteSource} from '../../core/source.js';
 import {SiglusScenePack} from '../../formats/siglus/scene-pack.js';
 import {BrowserFullscreenMoviePlayer} from '../../video/fullscreen-movie.js';
 import {SiglusAudio, type SiglusAudioKind} from './audio.js';
+import {SiglusConfiguration, type SiglusMoviePlayer} from './configuration.js';
 import {
   SiglusDisplay,
   orderedObjects,
@@ -150,6 +151,8 @@ export class SiglusPlayer {
   private readonly options = new Map<SystemOption, boolean>();
   private messageFont: string;
   private windowMode: boolean;
+  private moviePlayer: SiglusMoviePlayer = 'wmp';
+  private readonly configuration: SiglusConfiguration;
   private readonly systemCounters = new Map<number, RealCounter>();
   private waitingForPage = false;
   private systemMenuEnabled = true;
@@ -218,6 +221,11 @@ export class SiglusPlayer {
     this.audio = new SiglusAudio(files, config, root, game.saveKey + ':audio');
     this.messageFont = config.get('CONFIG.FONT.NAME')?.split('"')[1] ?? '';
     this.windowMode = config.get('CONFIG.WINDOW_MODE') === '1';
+    this.configuration = new SiglusConfiguration(
+      root,
+      files.get('siglusengine.exe'),
+      this.controller.signal,
+    );
     const savedOptions = localStorage.getItem(game.saveKey + ':options');
     if (savedOptions) {
       try {
@@ -226,6 +234,8 @@ export class SiglusPlayer {
           if (typeof values?.[option] === 'boolean') this.options.set(option, values[option]);
         if (typeof values?.font === 'string') this.messageFont = values.font;
         if (typeof values?.fullscreen === 'boolean') this.windowMode = values.fullscreen;
+        if (values?.moviePlayer === 'mci' || values?.moviePlayer === 'wmp')
+          this.moviePlayer = values.moviePlayer;
       } catch {
         // An unreadable settings record falls back to the installation defaults.
       }
@@ -410,6 +420,7 @@ export class SiglusPlayer {
         ...Object.fromEntries(this.options),
         font: this.messageFont,
         fullscreen: this.windowMode,
+        moviePlayer: this.moviePlayer,
       }),
     );
   }
@@ -1029,6 +1040,7 @@ export class SiglusPlayer {
     const volume = this.audio.volume('MOV');
     const attenuation = volume > 0 ? 2000 * Math.log10(volume) : -10000;
     try {
+      // The Windows modes share the browser's container-based player.
       if (!(await this.movies.play({path: name, attenuation, renderer: 0})))
         throw new Error('Missing Siglus movie ' + name);
       let progress: typeof this.movies.progress = null;
@@ -1454,6 +1466,12 @@ export class SiglusPlayer {
         return 0;
       }
       if (member === 9) return Number(this.windowDisplay.isExpanded);
+      if (member === 167) {
+        this.moviePlayer = await this.configuration.moviePlayer(this.moviePlayer);
+        this.persistOptions();
+        this.display.stage.focus({preventScroll: true});
+        return 0;
+      }
       if (member === 283) {
         this.messageFont = s(0);
         this.display.setMessageFont(this.messageFont);

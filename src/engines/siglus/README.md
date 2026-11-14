@@ -70,6 +70,8 @@ browser profile, then checks the restored volume against the slider position.
 Set `SIGLUS_CONFIG_ONLY=1` to diagnose the original Configuration scene. This
 enables its title button for the probe, enters the scene from Gameexe.dat, and
 checks the wheel-to-advance and window/fullscreen controls in the System tab.
+It opens the movie dialog, changes the selected mode and checks the restored
+choice and keyboard focus after reopening.
 It switches the dialogue from the default Kosugi Maru to the bundled Kosugi
 font through the Text tab, plays the seven volume tests and the first
 character's sample in the Sound tab, and returns to the title with a
@@ -79,9 +81,8 @@ the character's Chapter 02 unlock flag set. Audio checks cover the sample IDs,
 volume types, applied gain, decoded frames, sample rate, peak and RMS. It compares command
 offsets, opcodes and argument counts with the disassembly. For Configuration,
 the trace uses offsets as source locations because branches can skip line markers.
-The regular title keeps Configuration disabled while its other actions are
-incomplete, including the detailed display and movie dialogs and transitions
-to Save and Load.
+The regular title keeps Configuration disabled while the detailed display
+and font dialogs and the transitions to Save and Load are incomplete.
 
 The System and Text tabs execute `syscom.set_window_mode` (4) and
 `syscom.set_font_name` (283) in `__sys_menu_config01`. The browser maps the
@@ -95,8 +96,11 @@ That image contains Japanese screen and movie dialog templates (PE
 resources 127 and 124, language 1041). The outer PE resource 103 is the
 SdWrap version dialog. StartData/Config.exe contains the support tool's
 separate dialog. The embedded templates provide control labels and
-bounds. Mapping their command dispatch and finding the font dialog
-remain open.
+bounds. The browser handles movie configuration command 167 using template
+124, its original control IDs and dialog units. It persists the MCI or
+Windows Media Player selection. Both choices play through the same browser
+host, which chooses the decoder by the file format. The remaining advanced
+dialogs still need their native command dispatch and controls mapped.
 
 Set `SIGLUS_LOAD_ONLY=1` for the Save and Load round trip. It starts at the
 cleared-title checkpoint, starts a new game, saves a live page in slot 0,
