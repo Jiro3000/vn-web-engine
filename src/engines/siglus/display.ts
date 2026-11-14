@@ -3,6 +3,12 @@ import {BrowserWindowDisplayHost} from '../../platform/browser-window-display.js
 import {readSfntFontMetadata} from '../../formats/sfnt.js';
 import {G00Image} from '../../formats/siglus/g00.js';
 
+export interface SiglusHistoryEntry {
+  name: string;
+  text: readonly {text: string; ruby?: string}[];
+  voices: readonly {id: number; character?: number}[];
+}
+
 export interface Graphic {
   image: CanvasImageSource;
   width: number;
@@ -1137,7 +1143,11 @@ export class SiglusDisplay {
     for (const [key, value] of this.config) {
       if (!/^WAKU\.000\.BTN\.\d+\.TYPE$/.test(key)) continue;
       const type = value.split('"')[1];
-      if (type !== 'save' && type !== 'load' && type !== 'qsave' && type !== 'qload') continue;
+      if (
+        !type ||
+        !['save', 'load', 'qsave', 'qload', 'msg_log', 'close_mwnd', 'koe_play'].includes(type)
+      )
+        continue;
       const id = Number(key.split('.')[3]);
       const prefix = key.slice(0, -4);
       const file = this.config.get(prefix + 'FILE')?.split('"')[1];
@@ -1151,16 +1161,16 @@ export class SiglusDisplay {
       const button = document.createElement('button');
       button.type = 'button';
       button.dataset.siglusAction = type;
-      button.setAttribute(
-        'aria-label',
-        type === 'save'
-          ? 'Save'
-          : type === 'load'
-            ? 'Load'
-            : type === 'qsave'
-              ? 'Quick save'
-              : 'Quick load',
-      );
+      const labels: Record<string, string> = {
+        save: 'Save',
+        load: 'Load',
+        qsave: 'Quick save',
+        qload: 'Quick load',
+        msg_log: 'Message history',
+        close_mwnd: 'Hide message',
+        koe_play: 'Replay voice',
+      };
+      button.setAttribute('aria-label', labels[type]!);
       button.style.cssText = `position:absolute;left:${x}px;bottom:${y - frame.height}px;width:${frame.width}px;height:${frame.height}px;border:0;padding:0;background:none;pointer-events:auto`;
       const canvas = this.node(frame);
       const paint = (graphic: Graphic) => {
@@ -1187,6 +1197,167 @@ export class SiglusDisplay {
       });
       this.controls.append(button);
     }
+  }
+
+  async showHistory(
+    entries: readonly SiglusHistoryEntry[],
+    play: (entry?: SiglusHistoryEntry, sound?: number) => void,
+  ): Promise<void> {
+    const quoted = (key: string) => this.config.get(key)?.split('"')[1];
+    const numbers = (key: string, fallback: number[]) =>
+      this.config.get(key)?.split(',').map(Number) ?? fallback;
+    const backdrop = quoted('MSGBK.BACK_FILE');
+    if (!backdrop) return;
+    const overlay = document.createElement('div');
+    overlay.dataset.siglusHistory = '';
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-label', 'Message history');
+    const [x, y] = numbers('MSGBK.WINDOW_POS', [0, 0]);
+    const [width, height] = numbers('MSGBK.WINDOW_SIZE', [this.width, this.height]);
+    overlay.style.cssText = `position:absolute;left:${x}px;top:${y}px;width:${width}px;height:${height}px;overflow:hidden;pointer-events:auto`;
+    overlay.append(this.node(await this.graphic(backdrop)));
+    const [left, top, , bottom] = numbers('MSGBK.DISP_MARGIN', [0, 0, 0, 0]);
+    const [columns] = numbers('MSGBK.MOJI_CNT', [34]);
+    const [letterSpace, lineSpace] = numbers('MSGBK.MOJI_SPACE', [0, 0]);
+    const fontSize = Number(this.config.get('MSGBK.MOJI_SIZE') ?? 34);
+    const textLeft = Number(this.config.get('MSGBK.MESSAGE_POS') ?? 0);
+    const scroll = document.createElement('div');
+    scroll.style.cssText = `position:absolute;left:${left}px;top:${top}px;width:${textLeft + columns! * (fontSize + letterSpace!)}px;bottom:${bottom}px;overflow:auto;scrollbar-width:none;user-select:text;color:white;font-size:${fontSize}px;line-height:${fontSize + lineSpace!}px;letter-spacing:${letterSpace}px`;
+    scroll.style.fontFamily = this.message.style.fontFamily;
+    overlay.append(scroll);
+    const makeButton = async (kind: string, label: string, action: () => void) => {
+      const key = 'MSGBK_ITEM.' + kind + '.';
+      const file = quoted(key + 'FILE');
+      if (!file) return;
+      const [bx, by] = numbers(key + 'POS', [0, 0]);
+      const frame = await this.graphic(file);
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.setAttribute('aria-label', label);
+      button.style.cssText = `position:absolute;left:${bx}px;top:${by}px;width:${frame.width}px;height:${frame.height}px;padding:0;border:0;background:none;cursor:pointer`;
+      button.append(this.node(frame));
+      button.onclick = (event) => {
+        event.stopPropagation();
+        play(undefined, Number(this.config.get(key + 'SE') ?? -1));
+        action();
+      };
+      return button;
+    };
+    const divider = quoted('MSGBK.SEPARATOR_FILE');
+    const separator = divider && (await this.graphic(divider));
+    const replay = await makeButton('KOE_BTN', 'Replay history voice', () => {});
+    const replayGraphic = replay
+      ? await this.graphic(quoted('MSGBK_ITEM.KOE_BTN.FILE')!)
+      : undefined;
+    for (const entry of entries) {
+      const row = document.createElement('div');
+      row.style.cssText = 'position:relative;white-space:pre-wrap;overflow-wrap:anywhere';
+      row.dataset.siglusHistoryEntry = '';
+      const name = document.createElement('span');
+      name.style.cssText = `position:absolute;left:0;width:${textLeft - 64}px;text-align:right`;
+      name.textContent = entry.name;
+      const body = document.createElement('div');
+      body.dataset.siglusHistoryText = '';
+      body.style.cssText = `position:relative;margin-left:${textLeft}px;min-height:${fontSize + lineSpace!}px`;
+      for (const {text, ruby} of entry.text) {
+        if (!ruby) body.append(text);
+        else {
+          const annotation = document.createElement('ruby');
+          const reading = document.createElement('rt');
+          reading.textContent = ruby;
+          annotation.append(text, reading);
+          body.append(annotation);
+        }
+      }
+      if (replay && replayGraphic && entry.voices.length) {
+        const button = replay.cloneNode(true) as HTMLButtonElement;
+        button.replaceChildren(this.node(replayGraphic));
+        button.onclick = (event) => {
+          event.stopPropagation();
+          play(entry, Number(this.config.get('MSGBK_ITEM.KOE_BTN.SE') ?? -1));
+        };
+        body.append(button);
+      }
+      row.append(name, body);
+      if (separator) {
+        const line = this.node(separator);
+        line.style.position = 'relative';
+        row.append(line);
+      }
+      scroll.append(row);
+    }
+    const step = (direction: number) => scroll.scrollBy(0, direction * (fontSize + lineSpace!));
+    const up = await makeButton('MSG_UP_BTN', 'Scroll history up', () => step(-1));
+    const down = await makeButton('MSG_DOWN_BTN', 'Scroll history down', () => step(1));
+    if (up) overlay.append(up);
+    if (down) overlay.append(down);
+    const sliderFile = quoted('MSGBK_ITEM.SLIDER.FILE');
+    if (sliderFile) {
+      const [sx, from, to] = numbers('MSGBK_ITEM.SLIDER.POS', [0, 0, 0]);
+      const thumb = await this.graphic(sliderFile);
+      const track = document.createElement('div');
+      track.style.cssText = `position:absolute;left:${sx}px;top:${from}px;width:${thumb.width}px;height:${to! - from! + thumb.height}px;touch-action:none`;
+      const icon = this.node(thumb);
+      const update = () => {
+        const limit = scroll.scrollHeight - scroll.clientHeight;
+        icon.style.top = `${limit > 0 ? (scroll.scrollTop / limit) * (to! - from!) : 0}px`;
+      };
+      const move = (event: PointerEvent) => {
+        if (!track.hasPointerCapture(event.pointerId)) return;
+        const bounds = track.getBoundingClientRect();
+        const position = (event.clientY - bounds.top) / bounds.height;
+        scroll.scrollTop =
+          ((position * (to! - from! + thumb.height) - thumb.height / 2) /
+            Math.max(1, to! - from!)) *
+          (scroll.scrollHeight - scroll.clientHeight);
+      };
+      track.onpointerdown = (event) => {
+        event.stopPropagation();
+        track.setPointerCapture(event.pointerId);
+        move(event);
+      };
+      track.onpointermove = move;
+      scroll.addEventListener('scroll', update);
+      track.append(icon);
+      overlay.append(track);
+    }
+    this.signal.throwIfAborted();
+    let closeHistory = () => {};
+    const close = await makeButton('CLOSE_BTN', 'Close message history', () => closeHistory());
+    if (close) overlay.append(close);
+    await new Promise<void>((resolve, reject) => {
+      const finish = () => {
+        this.signal.removeEventListener('abort', abort);
+        overlay.remove();
+        resolve();
+      };
+      const abort = () => {
+        overlay.remove();
+        reject(this.signal.reason);
+      };
+      closeHistory = finish;
+      this.signal.addEventListener('abort', abort, {once: true});
+      overlay.tabIndex = -1;
+      overlay.onkeydown = (event) => {
+        if (event.key === 'Escape') {
+          event.stopPropagation();
+          finish();
+        }
+      };
+      overlay.onpointerdown = (event) => event.stopPropagation();
+      overlay.onclick = (event) => event.stopPropagation();
+      overlay.onwheel = (event) => event.stopPropagation();
+      overlay.oncontextmenu = (event) => {
+        if (!this.stage.ownerDocument.getSelection()?.isCollapsed) return;
+        event.preventDefault();
+        event.stopPropagation();
+        finish();
+      };
+      this.setSystemInput(true);
+      this.systemLayer.append(overlay);
+      overlay.focus({preventScroll: true});
+      scroll.scrollTop = scroll.scrollHeight;
+    }).finally(() => this.setSystemInput(false));
   }
 
   pageControls(

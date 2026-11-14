@@ -20,6 +20,7 @@ export class SiglusAudio {
   private readonly context = new AudioContext();
   private readonly host = new BrowserAudioContextHost(this.context, document);
   private readonly soundLevels = new Map<number, number>();
+  private readonly pendingVoices = new Map<string, object>();
   private readonly channelLevels = new Map<string, number>();
   private readonly playing = new Map<string, Playing>();
   private readonly indexes = new Map<string, ReturnType<typeof ovkIndex>>();
@@ -123,6 +124,8 @@ export class SiglusAudio {
     character?: number,
     volumeType?: number,
   ): Promise<void> {
+    const request = {};
+    this.pendingVoices.set(channel, request);
     const bank = Math.floor(id / 100000);
     const path = `koe/z${String(bank).padStart(4, '0')}.ovk`;
     const file = this.files.get(path);
@@ -137,6 +140,8 @@ export class SiglusAudio {
     if (!entry) throw new Error(`Missing Siglus voice ${id}`);
     const data = await readOvk(file, entry);
     const buffer = await this.context.decodeAudioData(data.buffer);
+    if (this.pendingVoices.get(channel) !== request) return;
+    this.pendingVoices.delete(channel);
     this.start(channel, buffer, 'KOE', {
       resource: id,
       volumeType,
@@ -375,7 +380,16 @@ export class SiglusAudio {
     }
   }
 
+  async waitForEnd(channel: string): Promise<void> {
+    const playing = this.playing.get(channel);
+    if (!playing) return;
+    await new Promise<void>((resolve) =>
+      playing.source.addEventListener('ended', () => resolve(), {once: true}),
+    );
+  }
+
   stop(channel: string, fade = 0): void {
+    this.pendingVoices.delete(channel);
     const playing = this.playing.get(channel);
     if (!playing) return;
     this.playing.delete(channel);

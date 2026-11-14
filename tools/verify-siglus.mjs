@@ -13,6 +13,7 @@ const diagnosticPages = Number(process.env.SIGLUS_DIAGNOSTIC_PAGES ?? 0);
 const musicOnly = process.env.SIGLUS_MUSIC_ONLY === '1';
 const autoOnly = process.env.SIGLUS_AUTOSAVE_ONLY === '1';
 const quickOnly = process.env.SIGLUS_QUICK_ONLY === '1';
+const historyOnly = process.env.SIGLUS_HISTORY_ONLY === '1';
 const skipOnly = process.env.SIGLUS_READ_SKIP_ONLY === '1';
 const cancelOnly = process.env.SIGLUS_CANCEL_ONLY === '1';
 const manageOnly = process.env.SIGLUS_SLOT_MANAGEMENT_ONLY === '1';
@@ -369,7 +370,8 @@ try {
     autoOnly ||
     manageOnly ||
     cancelOnly ||
-    skipOnly
+    skipOnly ||
+    historyOnly
   ) {
     const pack = await readFile(join(resolve(folder), 'StartData', 'GameData', 'Scene.pck')).catch(
       () => readFile(join(resolve(folder), 'Scene.pck')),
@@ -421,7 +423,45 @@ try {
   }
   await runUntil((current) => current.title);
   console.log(`Reached title after ${page} advances`);
-  if (skipOnly) {
+  if (historyOnly) {
+    await click('#siglus-surface button[aria-label="New Game"]');
+    await runUntil((current) => Number(current.page) >= 7);
+    const page = await evaluate('siglusSurface.dataset.page');
+    const overlay = '[data-siglus-history]';
+    await click('[data-siglus-action="msg_log"]');
+    await waitFor(`document.querySelector('${overlay}')`);
+    const entries =
+      await evaluate(`Array.from(document.querySelectorAll('[data-siglus-history-text]'),
+      (node) => Array.from(node.childNodes)
+        .filter((part) => part.nodeName !== 'BUTTON')
+        .map((part) => part.nodeName === 'RUBY' ? part.firstChild.textContent : part.textContent).join(''))`);
+    const trace = await evaluate("siglusTags.filter(({tag}) => tag === 'text')");
+    compareTags(trace, scripts);
+    assert.ok(entries.length >= 7);
+    assert.ok(entries.some((entry) => trace.some(({value}) => digest(value) === digest(entry))));
+    const before = await evaluate('siglusAudio.length');
+    await evaluate(`(() => {
+      const buttons = document.querySelectorAll('${overlay} button[aria-label="Replay history voice"]');
+      if (buttons.length) {
+        buttons[buttons.length - 1].scrollIntoView({block: 'nearest'});
+        buttons[buttons.length - 1].dataset.replayProbe = '';
+      }
+      return buttons.length;
+    })()`).then((count) => assert.ok(count > 0));
+    await click(`${overlay} [data-replay-probe]`);
+    const voice = await waitFor(
+      `siglusAudio.slice(${before}).find(({channel}) => channel === 'history-voice')`,
+    );
+    assert.ok(voice.frames > 0 && voice.rms > 0);
+    await click(`${overlay} button[aria-label="Close message history"]`);
+    await waitFor(`!document.querySelector('${overlay}')`);
+    assert.equal(await evaluate('siglusSurface.dataset.page'), page);
+    await advance();
+    await waitFor(`Number(siglusSurface.dataset.page) > ${page}`);
+    console.log(
+      'Message history displayed script text, replayed a voice and returned focus to the same page.',
+    );
+  } else if (skipOnly) {
     await click('#siglus-surface button[aria-label="New Game"]');
     const first = await runUntil((current) => Number(current.page) >= 3);
     assert.equal(await selectSlot('save'), 'confirm');
@@ -944,7 +984,8 @@ try {
     autoOnly ||
     manageOnly ||
     cancelOnly ||
-    skipOnly
+    skipOnly ||
+    historyOnly
   ) {
     assert.equal(errors.length, 0);
   } else if (diagnosticPages > 0) {

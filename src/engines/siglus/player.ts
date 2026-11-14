@@ -2,7 +2,12 @@ import type {ByteSource} from '../../core/source.js';
 import {SiglusScenePack} from '../../formats/siglus/scene-pack.js';
 import {BrowserFullscreenMoviePlayer} from '../../video/fullscreen-movie.js';
 import {SiglusAudio, type SiglusAudioKind} from './audio.js';
-import {SiglusDisplay, orderedObjects, type DrawObject} from './display.js';
+import {
+  SiglusDisplay,
+  orderedObjects,
+  type DrawObject,
+  type SiglusHistoryEntry,
+} from './display.js';
 import {
   SiglusVm,
   type SiglusCheckpoint,
@@ -99,6 +104,7 @@ interface PlayerSave {
   comment?: string;
   thumbnail?: string;
   waitsForInput?: boolean;
+  history?: SiglusHistoryEntry[];
   controls?: {
     systemMenu: boolean;
     messageButtons: boolean;
@@ -247,6 +253,17 @@ export class SiglusPlayer {
     this.display.stage.addEventListener(
       'wheel',
       (event) => {
+        if (
+          event.deltaY < 0 &&
+          this.waitingForPage &&
+          !this.systemCallActive &&
+          !this.userMessageHidden &&
+          this.backlog.length
+        ) {
+          event.preventDefault();
+          this.wait?.(5);
+          return;
+        }
         if (
           event.deltaY <= 0 ||
           this.userMessageHidden ||
@@ -579,6 +596,8 @@ export class SiglusPlayer {
         JSON.stringify(Array.from(this.readFlags, ([scene, flags]) => [scene, [...flags]])),
       );
     this.pageReadFlags = [];
+    this.addHistory({...this.display.saveMessage(), voices: this.pageVoices});
+    this.pageVoices = [];
     this.root.dataset.page = String(++this.pages);
     if (!this.skipping && this.saveEnabled) this.savePoint = this.captureSave();
     await this.waitAtPage();
@@ -606,11 +625,15 @@ export class SiglusPlayer {
             menu = {type, sound, id};
             this.wait?.(1);
           },
-          (type, id) =>
-            !this.disabledMessageButtons.has(id) &&
-            (type.endsWith('save')
+          (type, id) => {
+            if (this.disabledMessageButtons.has(id)) return false;
+            if (type === 'msg_log') return this.backlog.length > 0;
+            if (type === 'koe_play') return Boolean(this.backlog.at(-1)?.voices.length);
+            if (type === 'close_mwnd') return true;
+            return type.endsWith('save')
               ? this.saveEnabled && Boolean(this.savePoint)
-              : this.loadEnabled && (type !== 'qload' || this.quickSaves.size > 0)),
+              : this.loadEnabled && (type !== 'qload' || this.quickSaves.size > 0);
+          },
         );
       }
       let result: number;
@@ -625,6 +648,10 @@ export class SiglusPlayer {
         this.waitingForPage = false;
         this.display.pageControls();
       }
+      if (result === 5) {
+        await this.openHistory();
+        continue;
+      }
       if (result === 4) continue;
       if (result === 3) {
         await this.callSystemScene('CANCEL_SCENE');
@@ -633,7 +660,13 @@ export class SiglusPlayer {
       if (!menu) return;
       const {type, sound, id} = menu;
       await this.playSystemSound(sound);
-      if (type === 'qsave' || type === 'qload')
+      if (type === 'msg_log') await this.openHistory();
+      else if (type === 'close_mwnd') this.setUserMessageHidden(true);
+      else if (type === 'koe_play')
+        void this.replayHistoryVoice(this.backlog.at(-1)).catch((error) => {
+          if (!this.controller.signal.aborted) console.error(error);
+        });
+      else if (type === 'qsave' || type === 'qload')
         await this.callSystemScene(
           `WAKU.000.BTN.${String(id).padStart(3, '0')}.CALL`,
           type === 'qsave',
@@ -655,6 +688,12 @@ export class SiglusPlayer {
       speed: this.speed,
       title: this.saveTitle,
       waitsForInput,
+      history: this.backlog.slice(
+        Math.max(
+          0,
+          this.backlog.length - Number(this.game.config.get('MESSAGE_BACK_SAVE.CNT') ?? 200),
+        ),
+      ),
       controls: {
         systemMenu: this.systemMenuEnabled,
         messageButtons: this.messageButtonsEnabled,
@@ -716,6 +755,8 @@ export class SiglusPlayer {
     this.skip = false;
     this.readSkipEnabled = false;
     this.savePoint = save;
+    this.backlog.splice(0, this.backlog.length, ...(save.history ?? []));
+    this.pageVoices = [];
     this.systemMenuEnabled = save.controls?.systemMenu ?? true;
     this.messageButtonsEnabled = save.controls?.messageButtons ?? true;
     this.disabledMessageButtons.clear();
@@ -819,6 +860,7 @@ export class SiglusPlayer {
   private async wipe(ms: number): Promise<void> {
     const back = this.objects[1]!;
     this.display.closeMessage();
+    this.pageVoices = [];
     this.currentCast = [];
     await this.display.show(orderedObjects(back), this.wipeDuration(ms), (id) => this.choose(id));
     this.objects[0] = this.copyObjects(back);
@@ -1090,7 +1132,11 @@ export class SiglusPlayer {
         this.display.centerText(Boolean(n(1)));
         break;
       case '$$add_msgback':
-        this.backlog.push(s(3));
+        this.addHistory({
+          name: s(2),
+          text: [{text: s(3)}],
+          voices: n(0) < 0 ? [] : [{id: n(0), character: n(1)}],
+        });
         break;
       case '$wait_bs_face_change_time':
         await this.delay(n(0), true);
@@ -1104,7 +1150,46 @@ export class SiglusPlayer {
     return 0;
   }
 
-  private readonly backlog: string[] = [];
+  private readonly backlog: SiglusHistoryEntry[] = [];
+  private pageVoices: SiglusHistoryEntry['voices'] = [];
+
+  private addHistory(entry: SiglusHistoryEntry): void {
+    if (!entry.text.length) return;
+    this.backlog.push(entry);
+    const limit = Number(this.game.config.get('MSGBK.HISTORY_CNT') ?? 1000);
+    if (this.backlog.length > limit) this.backlog.splice(0, this.backlog.length - limit);
+  }
+
+  private replayGeneration = 0;
+
+  private async replayHistoryVoice(entry?: SiglusHistoryEntry): Promise<void> {
+    const generation = ++this.replayGeneration;
+    for (const {id, character} of entry?.voices ?? []) {
+      if (generation !== this.replayGeneration) break;
+      await this.audio.voice(id, 'history-voice', character);
+      await this.audio.waitForEnd('history-voice');
+    }
+  }
+
+  private async openHistory(): Promise<void> {
+    if (!this.backlog.length) return;
+    this.readSkipEnabled = false;
+    this.display.setScenePaused(true);
+    try {
+      await this.display.showHistory(this.backlog, (entry, sound) => {
+        void (async () => {
+          if (sound !== undefined) await this.playSystemSound(sound);
+          if (entry) await this.replayHistoryVoice(entry);
+        })().catch((error) => {
+          if (!this.controller.signal.aborted) console.error(error);
+        });
+      });
+    } finally {
+      this.replayGeneration++;
+      this.audio.stop('history-voice');
+      this.display.setScenePaused(this.timeStopped);
+    }
+  }
 
   private async playBgm(name: string, fade = 0, crossfade = 0): Promise<void> {
     if (this.bgmName === name && this.root.dataset.bgm === name) return;
@@ -1141,6 +1226,7 @@ export class SiglusPlayer {
           break;
         case 10:
           this.display.closeMessage();
+          this.pageVoices = [];
           this.pendingText = false;
           break;
         case 12:
@@ -1159,6 +1245,10 @@ export class SiglusPlayer {
           this.display.setTextSize(n(0));
           break;
         case 18:
+          this.pageVoices = [
+            ...this.pageVoices,
+            {id: n(0), character: args.length > 1 ? n(1) : undefined},
+          ];
           await this.audio.voice(n(0), 'voice', args.length > 1 ? n(1) : undefined);
           break;
         case 54:
@@ -1391,6 +1481,10 @@ export class SiglusPlayer {
       }
       if (member === 200) {
         this.readSkipEnabled = Boolean(n(0));
+        return 0;
+      }
+      if (member === 192) {
+        await this.openHistory();
         return 0;
       }
       if (member === 201) return Number(this.readSkipEnabled);

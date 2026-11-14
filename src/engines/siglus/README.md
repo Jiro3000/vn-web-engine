@@ -105,6 +105,11 @@ and checks that Read Skip advances over two read pages and stops at the first
 unread page. Read flags are scoped to the scene and the installation’s Scene.pck.
 Save records also restore the script’s menu and skip permissions.
 
+Set `SIGLUS_HISTORY_ONLY=1` to open the original message history button,
+compare displayed text with script hashes, replay a stored voice, and verify
+that closing history restores keyboard focus to the same page. The browser
+uses the original MSGBK resources and stores recent history in each save.
+
 The clean-profile route matched 130,121 command and message tags and
 checked 8,540 decoded audio buffers with zero browser console errors.
 Save and load were exercised on page 67. `npm test` reported the same
@@ -133,6 +138,9 @@ and Gameexe.dat SHA-256
 `492bccbb33ca3ce6e6ff074fe66d52281bb1e80dca5d528696494574b3cb892f`.
 
 ## Known differences
+
+- History supports browsing, scrolling and voice replay. Its jump-to-line
+  command and native line breaking still need implementation and verification.
 
 - Day saves run the script’s rotation routine and resume after
   the browser’s day transition. The native savepoint is inside the transition.
