@@ -13,6 +13,7 @@ const diagnosticPages = Number(process.env.SIGLUS_DIAGNOSTIC_PAGES ?? 0);
 const musicOnly = process.env.SIGLUS_MUSIC_ONLY === '1';
 const autoOnly = process.env.SIGLUS_AUTOSAVE_ONLY === '1';
 const quickOnly = process.env.SIGLUS_QUICK_ONLY === '1';
+const manageOnly = process.env.SIGLUS_SLOT_MANAGEMENT_ONLY === '1';
 const loadOnly = process.env.SIGLUS_LOAD_ONLY === '1';
 const configOnly = process.env.SIGLUS_CONFIG_ONLY === '1';
 const openingOnly = process.env.SIGLUS_OPENING_ONLY === '1';
@@ -346,7 +347,7 @@ try {
     await advance();
   }
   await openPlayer();
-  if (musicOnly || configOnly || loadOnly || quickOnly || autoOnly) {
+  if (musicOnly || configOnly || loadOnly || quickOnly || autoOnly || manageOnly) {
     const pack = await readFile(join(resolve(folder), 'StartData', 'GameData', 'Scene.pck')).catch(
       () => readFile(join(resolve(folder), 'Scene.pck')),
     );
@@ -397,7 +398,65 @@ try {
   }
   await runUntil((current) => current.title);
   console.log(`Reached title after ${page} advances`);
-  if (autoOnly) {
+  if (manageOnly) {
+    await click('#siglus-surface button[aria-label="New Game"]');
+    await runUntil((current) => Number(current.page) >= 3);
+    assert.equal(await selectSlot('save'), 'confirm');
+    const records = `(() => {
+      const key = Object.keys(localStorage).find((key) => key.endsWith(':saves'));
+      return key ? JSON.parse(localStorage.getItem(key)) : [];
+    })()`;
+    const slot = (no) => `${records}.find(([slot]) => slot === ${no})?.[1]`;
+    await waitFor(`siglusTags.some(({scene, path}) =>
+      scene === '${slotScene}' && path?.join('.') === '63.180')`);
+    async function clickAction(x, y) {
+      await clickScriptMenu(slotLoop, x, y);
+      const frame = await evaluate(slotLoop);
+      await waitFor(`${slotLoop} > ${frame}`);
+    }
+    const comment = 'テスト保存';
+    await clickScriptMenu(slotLoop, 105, 446);
+    await waitFor(`document.activeElement?.getAttribute('aria-label') === 'Save comment'`);
+    await send('Input.insertText', {text: comment});
+    await advance();
+    await waitFor(`${slot(0)}?.comment === ${JSON.stringify(comment)}`);
+    const original = await evaluate(slot(0));
+    const lock = `(() => {
+      const key = Object.keys(localStorage).find((key) => key.endsWith(':system'));
+      return new Map(JSON.parse(localStorage.getItem(key))).get(1200) & 1;
+    })()`;
+    await clickAction(90, 480);
+    await waitFor(lock);
+    await clickAction(310, 480);
+    assert.deepEqual(
+      await evaluate(slot(0)),
+      original,
+      'The locked slot survived a delete attempt',
+    );
+    await clickAction(90, 480);
+    await waitFor(`!(${lock})`);
+    async function confirmMutation(trigger, accept) {
+      const start = await evaluate('siglusTags.length');
+      await trigger();
+      await waitFor(`siglusTags.slice(${start}).some(({scene, args}) =>
+        scene === '${slotScene}' && args?.[0] === '__sys_sa_setbtn_bg00')`);
+      await clickAction(accept ? 883 : 1008, 557);
+    }
+    await clickAction(201, 480);
+    await confirmMutation(() => clickAction(515, 240), true);
+    await waitFor(slot(1));
+    assert.deepEqual(await evaluate(slot(1)), original);
+    assert.equal(await evaluate(slot(0)), undefined);
+    await confirmMutation(() => clickAction(685, 480), false);
+    assert.deepEqual(await evaluate(slot(1)), original, 'No leaves the moved record intact');
+    await confirmMutation(() => clickAction(685, 480), true);
+    await waitFor(`!${slot(1)}`);
+    const tags = await evaluate(`siglusTags.filter(({scene}) => scene === '${slotScene}')`);
+    compareTags(tags, scripts, {compareSourceLine: false});
+    console.log(
+      `Slot management: comment, lock, unlock, move, cancelled deletion and confirmed deletion. Matched ${tags.length} tags.`,
+    );
+  } else if (autoOnly) {
     await click('#siglus-surface button[aria-label="New Game"]');
     await runUntil((current) => Number(current.page) >= 1);
     const slotsExpression = `(() => {
@@ -741,7 +800,7 @@ try {
       scene === '_titlemenu_dmy' && path?.join('.') === '38.6.-1.0.3').length >= 2`);
     await click('#siglus-surface button[aria-label="New Game"]');
   }
-  if (musicOnly || configOnly || loadOnly || quickOnly || autoOnly) {
+  if (musicOnly || configOnly || loadOnly || quickOnly || autoOnly || manageOnly) {
     assert.equal(errors.length, 0);
   } else if (diagnosticPages > 0) {
     const firstPage = page;

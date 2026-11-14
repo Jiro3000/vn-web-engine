@@ -89,6 +89,9 @@ the cleared-title checkpoint and Control skip to reach both day changes. It
 checks slot rotation and opens the original Auto tab to load slot 1000, then
 compares the resumed scene position and the next text hash with the disassembly.
 
+Set `SIGLUS_SLOT_MANAGEMENT_ONLY=1` to check the original comment editor,
+locking, slot movement, and deletion confirmation with test saves.
+
 The clean-profile route matched 130,121 command and message tags and
 checked 8,540 decoded audio buffers with zero browser console errors.
 Save and load were exercised on page 67. `npm test` reported the same
@@ -118,7 +121,7 @@ and Gameexe.dat SHA-256
 
 ## Known differences
 
-- Slot management still needs end-to-end verification. Day saves run the script’s rotation routine and resume after
+- Day saves run the script’s rotation routine and resume after
   the browser’s day transition. The native savepoint is inside the transition.
   Thumbnails composite the visible graphical layers
   at the configured size. Dialogue and native capture effects are absent from

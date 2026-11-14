@@ -322,6 +322,7 @@ export class SiglusPlayer {
       this.releaseSystemObjects();
       this.systemCounters.clear();
       this.systemFont = undefined;
+      this.display.clearEdits();
       this.display.setSystemInput(false);
       [this.timeStopped, this.systemSkipDisabled, this.messageHidden, this.quakeStopped] = previous;
       this.display.setScenePaused(this.timeStopped);
@@ -419,6 +420,15 @@ export class SiglusPlayer {
 
   private property(path: number[], value?: Value): Value | undefined {
     const [page, list, array] = path;
+    if (page === 31 && list === 3 && array === -1 && path[3] !== undefined && path[3] >= 0) {
+      const bit = path[3];
+      const index = Math.floor(bit / 32);
+      const mask = 1 << (bit % 32);
+      const previous = this.system.get(index) ?? 0;
+      if (value !== undefined)
+        this.property([31, -1, index], Number(value) & 1 ? previous | mask : previous & ~mask);
+      return Number(Boolean((this.system.get(index) ?? 0) & mask));
+    }
     if (page === 31 && list === -1 && array !== undefined) {
       if (value !== undefined && this.system.get(array) !== Number(value)) {
         this.system.set(array, Number(value));
@@ -585,11 +595,22 @@ export class SiglusPlayer {
   }
 
   private writeSlot(slots: Map<number, PlayerSave>, slot: number, save: PlayerSave): void {
+    this.updateSlots(slots, [[slot, save]]);
+  }
+
+  private updateSlots(
+    slots: Map<number, PlayerSave>,
+    changes: [number, PlayerSave | undefined][],
+  ): void {
     const next = new Map(slots);
-    next.set(slot, save);
+    for (const [slot, save] of changes) {
+      if (save) next.set(slot, save);
+      else next.delete(slot);
+    }
     const kind = slots === this.saves ? ':saves' : ':quick-saves';
     localStorage.setItem(this.game.saveKey + kind, JSON.stringify([...next]));
-    slots.set(slot, save);
+    slots.clear();
+    for (const [slot, save] of next) slots.set(slot, save);
   }
 
   private newestSlot(slots: Map<number, PlayerSave>, start = 0, count = Infinity): number {
@@ -1178,6 +1199,28 @@ export class SiglusPlayer {
           date.getMilliseconds(),
         ][member - (member <= 77 ? 70 : 171)]!;
       }
+      if (member === 19 || member === 65) {
+        const [slots, index] =
+          member === 19 ? this.saveSlotAddress(n(0)) : ([this.quickSaves, n(0)] as const);
+        if (!slots.has(index)) return 0;
+        this.updateSlots(slots, [[index, undefined]]);
+        return 1;
+      }
+      if (member === 22 || member === 66) {
+        const [slots, first] =
+          member === 22 ? this.saveSlotAddress(n(0)) : ([this.quickSaves, n(0)] as const);
+        const [other, second] =
+          member === 22 ? this.saveSlotAddress(n(1)) : ([this.quickSaves, n(1)] as const);
+        if (slots !== other) return undefined;
+        const source = slots.get(first);
+        const target = slots.get(second);
+        if (!source && !target) return 0;
+        this.updateSlots(slots, [
+          [first, target],
+          [second, source],
+        ]);
+        return 1;
+      }
       if (member === 67 || member === 128) {
         const slots = member === 67 ? this.saves : this.quickSaves;
         const save = slots.get(n(0));
@@ -1350,6 +1393,8 @@ export class SiglusPlayer {
       if (member === 25 || member === 27) this.speed = n(0);
       return 0;
     }
+    if (root === 97 && member === -1 && path.length === 4)
+      return this.display.editBox(path[2]!, path[3]!, n, s);
     if (root === 86 && member === 2) {
       this.display.clearInput();
       return 0;
@@ -1575,7 +1620,9 @@ export class SiglusPlayer {
       }
       return undefined;
     }
-    if (command === 104 && object.text) object.text.size = n(0);
+    if (command === 52 && path.at(-1) === 1 && args[1] === '$sys_change_mark') {
+      object.patternCycle = {count: 11, duration: 1000, started: performance.now()};
+    } else if (command === 104 && object.text) object.text.size = n(0);
     else if (command === 160) object.clip = [n(0), n(1), n(2), n(3), n(4)];
     else if (command === 42) object.button = {id: n(0), group: n(1)};
     else if (command === 175) object.alphaTest = Boolean(n(0));

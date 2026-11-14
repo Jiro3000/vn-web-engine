@@ -22,6 +22,7 @@ export interface DrawObject {
   layer?: number;
   transparency?: number;
   pattern: number;
+  patternCycle?: {count: number; duration: number; started: number};
   button?: {id: number; group: number};
   children?: Map<number, DrawObject>;
   text?: {value: string; font?: string; size: number; bold: boolean; shadow: number};
@@ -55,6 +56,8 @@ export class SiglusDisplay {
     refresh: () => void;
   }[] = [];
   private activateFrameAction?: (type: string, sound: number, id: number) => void;
+  private readonly editLayer = document.createElement('div');
+  private readonly edits = new Map<number, {input: HTMLInputElement; result: string}>();
   private readonly systemLayer = document.createElement('div');
   private readonly message = document.createElement('div');
   private readonly speaker = document.createElement('div');
@@ -122,6 +125,7 @@ export class SiglusDisplay {
     this.controls.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:1';
     this.controls.hidden = true;
     this.systemLayer.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:2';
+    this.editLayer.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:3';
     this.stage.append(
       this.layers,
       this.cast,
@@ -130,6 +134,7 @@ export class SiglusDisplay {
       this.message,
       this.controls,
       this.systemLayer,
+      this.editLayer,
     );
     this.message.append(this.portrait, this.speaker, this.text);
     this.message.hidden = true;
@@ -325,6 +330,63 @@ export class SiglusDisplay {
     const next = await this.drawObjects(objects, button);
     this.signal.throwIfAborted();
     this.systemLayer.replaceChildren(next);
+  }
+
+  editBox(
+    id: number,
+    command: number,
+    n: (index: number) => number,
+    s: (index: number) => string,
+  ): number | string | undefined {
+    const edit = this.edits.get(id);
+    if (command === 0) {
+      edit?.input.remove();
+      const input = document.createElement('input');
+      const state = {input, result: ''};
+      input.type = 'text';
+      input.style.cssText = `position:absolute;left:${n(0)}px;top:${n(1)}px;width:${n(2)}px;height:${n(3)}px;font-size:${n(4)}px;box-sizing:border-box;pointer-events:auto`;
+      input.setAttribute('aria-label', 'Save comment');
+      input.addEventListener('keydown', (event) => {
+        if (event.isComposing || (event.key !== 'Enter' && event.key !== 'Escape')) return;
+        event.preventDefault();
+        event.stopPropagation();
+        state.result = event.key;
+      });
+      input.addEventListener('pointerdown', (event) => event.stopPropagation());
+      input.addEventListener('click', (event) => event.stopPropagation());
+      this.edits.set(id, state);
+      this.editLayer.append(input);
+      return 0;
+    }
+    if (command === 7) {
+      if (edit) edit.result = '';
+      return 0;
+    }
+    if (!edit) return undefined;
+    switch (command) {
+      case 1:
+        edit.input.remove();
+        this.edits.delete(id);
+        this.stage.focus({preventScroll: true});
+        return 0;
+      case 2:
+        edit.input.value = s(0);
+        return 0;
+      case 3:
+        return edit.input.value;
+      case 4:
+        return Number(edit.result === 'Enter');
+      case 5:
+        return Number(edit.result === 'Escape');
+      case 6:
+        edit.input.focus({preventScroll: true});
+        return 0;
+    }
+  }
+
+  clearEdits(): void {
+    this.edits.clear();
+    this.editLayer.replaceChildren();
   }
 
   clearSystemObjects(): void {
@@ -661,6 +723,27 @@ export class SiglusDisplay {
         frame.height,
       );
       element.append(canvas);
+      if (object.patternCycle) {
+        const {count, duration, started} = object.patternCycle;
+        const elapsed = performance.now() - started;
+        for (let index = 0; index < count; index++) {
+          const graphic = (object.frames[index] ??= await this.graphic(object.name, index));
+          const image = index === object.pattern ? canvas : this.node(graphic);
+          if (image !== canvas) element.append(image);
+          image.style.left = '0';
+          image.style.top = '0';
+          image.style.opacity = '0';
+          const animation = image.animate(
+            [
+              {opacity: 1, easing: 'steps(1, jump-end)'},
+              {opacity: 0, offset: 1 / count},
+              {opacity: 0},
+            ],
+            {duration, delay: (index * duration) / count, iterations: Infinity},
+          );
+          animation.currentTime = elapsed + duration;
+        }
+      }
       parent.append(element);
       if (object.transparency !== undefined)
         element.style.opacity = String(object.transparency / 255);
