@@ -233,11 +233,22 @@ export class SiglusVm {
   }
 
   /** Run a host-invoked scenario while the current command is suspended. */
-  async callScene(scene: string, entry = 0): Promise<Value> {
+  async callScene(scene: string, entry: number | string = 0): Promise<Value> {
     this.signal.throwIfAborted();
     if (!this.frames.length) throw new Error('No Siglus command to suspend');
     try {
-      return await this.call(this.entry(scene, entry), this.frames.length);
+      if (typeof entry === 'number')
+        return await this.call(this.entry(scene, entry), this.frames.length);
+      const index = this.pack.commandNames.indexOf(entry);
+      const sceneIndex = this.pack.commandScenes[index * 2];
+      const offset = this.pack.commandScenes[index * 2 + 1];
+      if (
+        sceneIndex === undefined ||
+        offset === undefined ||
+        this.pack.sceneNames[sceneIndex]?.toLowerCase() !== scene.toLowerCase()
+      )
+        throw new Error(`Missing Siglus system command ${scene}.${entry}`);
+      return await this.call(new Frame(this.pack.scene(scene), offset), this.frames.length);
     } catch (error) {
       if (error instanceof ReturnFromHostScene) return 0;
       throw error;

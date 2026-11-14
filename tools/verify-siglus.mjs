@@ -11,6 +11,7 @@ import {createStaticServer} from './serve-static.mjs';
 const [folder, browser, disassemblyDirectory] = process.argv.slice(2);
 const diagnosticPages = Number(process.env.SIGLUS_DIAGNOSTIC_PAGES ?? 0);
 const musicOnly = process.env.SIGLUS_MUSIC_ONLY === '1';
+const quickOnly = process.env.SIGLUS_QUICK_ONLY === '1';
 const loadOnly = process.env.SIGLUS_LOAD_ONLY === '1';
 const configOnly = process.env.SIGLUS_CONFIG_ONLY === '1';
 const openingOnly = process.env.SIGLUS_OPENING_ONLY === '1';
@@ -344,7 +345,7 @@ try {
     await advance();
   }
   await openPlayer();
-  if (musicOnly || configOnly || loadOnly) {
+  if (musicOnly || configOnly || loadOnly || quickOnly) {
     const pack = await readFile(join(resolve(folder), 'StartData', 'GameData', 'Scene.pck')).catch(
       () => readFile(join(resolve(folder), 'Scene.pck')),
     );
@@ -395,7 +396,54 @@ try {
   }
   await runUntil((current) => current.title);
   console.log(`Reached title after ${page} advances`);
-  if (loadOnly) {
+  if (quickOnly) {
+    await click('#siglus-surface button[aria-label="New Game"]');
+    await runUntil((current) => Number(current.page) >= 3);
+    const dialogue = "siglusSurface.querySelector('[data-siglus-dialogue]').textContent";
+    const quickLoop = `siglusTags.filter(({scene, path}) =>
+      scene === '__sys_system_call' && path?.join('.') === '6').length`;
+    async function quickAction(type) {
+      const frame = await evaluate(quickLoop);
+      await click(`[data-siglus-action="${type}"]`);
+      await waitFor(`${quickLoop} > ${frame}`);
+      await clickScriptMenu(quickLoop, 883, 557);
+    }
+    const first = digest(await evaluate(dialogue));
+    await quickAction('qsave');
+    const saved = await waitFor('siglusSurface.dataset.savedPage');
+    await waitFor("!document.querySelector('[data-siglus-action=save]')?.parentElement.hidden");
+    await clickStage();
+    await waitFor(`Number(siglusSurface.dataset.page) > ${saved}`);
+    const second = digest(await evaluate(dialogue));
+    assert.notEqual(second, first);
+    await quickAction('qsave');
+    await waitFor(`siglusSurface.dataset.savedPage !== '${saved}'`);
+    await waitFor("!document.querySelector('[data-siglus-action=save]')?.parentElement.hidden");
+    const slots = await evaluate(`(() => {
+      const key = Object.keys(localStorage).find((key) => key.endsWith(':quick-saves'));
+      return JSON.parse(localStorage.getItem(key)).map(([slot, save]) =>
+        [slot, save.message.text.map(({text}) => text).join('')]);
+    })()`);
+    assert.deepEqual(
+      new Map(slots.map(([slot, text]) => [slot, digest(text)])),
+      new Map([
+        [0, second],
+        [1, first],
+      ]),
+    );
+    const quickPage = await evaluate('Number(siglusSurface.dataset.page)');
+    await clickStage();
+    await waitFor(`Number(siglusSurface.dataset.page) > ${quickPage}`);
+    assert.notEqual(digest(await evaluate(dialogue)), second);
+    await quickAction('qload');
+    await waitFor("siglusSurface.dataset.loaded === 'true'");
+    assert.equal(digest(await evaluate(dialogue)), second);
+    const tags = await evaluate("siglusTags.filter(({scene}) => scene === '__sys_system_call')");
+    compareTags(tags, scripts, {compareSourceLine: false});
+    console.log(
+      `Quick Save rotated two slots and Quick Load restored the newest one. Matched ${tags.length} tags.`,
+    );
+  } else if (loadOnly) {
     const newGame = '#siglus-surface button[aria-label="New Game"]';
     await click(newGame);
     let savedState = await runUntil((current) => Number(current.page) >= 3);
@@ -616,7 +664,7 @@ try {
       scene === '_titlemenu_dmy' && path?.join('.') === '38.6.-1.0.3').length >= 2`);
     await click('#siglus-surface button[aria-label="New Game"]');
   }
-  if (musicOnly || configOnly || loadOnly) {
+  if (musicOnly || configOnly || loadOnly || quickOnly) {
     assert.equal(errors.length, 0);
   } else if (diagnosticPages > 0) {
     const firstPage = page;

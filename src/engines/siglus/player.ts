@@ -17,7 +17,9 @@ const fadeTimes = [
 ];
 const spriteActor = (name: string): string => name.replace(/^bs\d_/i, '').slice(0, 2);
 const systemFlags = new Set([6, 7, 133, 134, 223, 251, 258]);
-const scriptFlags = new Set([12, 13, 14, 15, 25, 27, 32, 33, 34, 35, 38, 39, 48, 51, 54, 55]);
+const scriptFlags = new Set([
+  30, 31, 12, 13, 14, 15, 25, 27, 32, 33, 34, 35, 38, 39, 48, 51, 54, 55,
+]);
 // syscom's set, reset, and get opcodes for each configured volume.
 const soundLevels: ReadonlyArray<[SiglusAudioKind | 'ALL' | 'MOV', number, number, number]> = [
   ['ALL', 39, 40, 41],
@@ -125,6 +127,7 @@ export class SiglusPlayer {
   private readonly options = new Map<SystemOption, boolean>();
   private readonly systemCounters = new Map<number, RealCounter>();
   private waitingForPage = false;
+  private inputSampled = false;
   private readonly filterDefaults: [number, number, number, number];
   private readonly filterColor: [number, number, number, number];
   private wait?: (value: number) => void;
@@ -297,7 +300,7 @@ export class SiglusPlayer {
     await this.vm.run(this.startScene);
   }
 
-  private async callSystemScene(key: string): Promise<void> {
+  private async callSystemScene(key: string, capture = key === 'SAVE_SCENE'): Promise<void> {
     const [scene, label] = this.game.config.get(key)?.split(',') ?? [];
     const name = scene?.split('"')[1];
     if (!name) throw new Error(`Missing Siglus ${key}`);
@@ -308,12 +311,12 @@ export class SiglusPlayer {
       this.messageHidden,
       this.quakeStopped,
     ] as const;
-    if (key === 'SAVE_SCENE' && this.savePoint)
-      this.savePoint.thumbnail = this.display.captureThumbnail();
+    if (capture && this.savePoint) this.savePoint.thumbnail = this.display.captureThumbnail();
     this.systemCallActive = true;
+    this.inputSampled = false;
     this.display.setSystemInput(true);
     try {
-      await this.vm.callScene(name, Number(label ?? 0));
+      await this.vm.callScene(name, label?.split('"')[1] ?? Number(label ?? 0));
     } finally {
       this.systemCallActive = false;
       this.releaseSystemObjects();
@@ -516,15 +519,18 @@ export class SiglusPlayer {
 
   private async waitAtPage(): Promise<void> {
     for (;;) {
-      let menu: {type: string; sound: number} | undefined;
+      let menu: {type: string; sound: number; id: number} | undefined;
       if (!this.skipping && this.messageButtonsEnabled) {
         this.display.pageControls(
-          (type, sound) => {
-            menu = {type, sound};
+          (type, sound, id) => {
+            menu = {type, sound, id};
             this.wait?.(1);
           },
-          this.saveEnabled && Boolean(this.savePoint) && !this.disabledMessageButtons.has(3),
-          this.loadEnabled && !this.disabledMessageButtons.has(4),
+          (type, id) =>
+            !this.disabledMessageButtons.has(id) &&
+            (type.endsWith('save')
+              ? this.saveEnabled && Boolean(this.savePoint)
+              : this.loadEnabled && (type !== 'qload' || this.quickSaves.size > 0)),
         );
       }
       try {
@@ -538,9 +544,14 @@ export class SiglusPlayer {
         this.display.pageControls();
       }
       if (!menu) return;
-      const {type, sound} = menu;
+      const {type, sound, id} = menu;
       await this.playSystemSound(sound);
-      await this.callSystemScene(type === 'save' ? 'SAVE_SCENE' : 'LOAD_SCENE');
+      if (type === 'qsave' || type === 'qload')
+        await this.callSystemScene(
+          `WAKU.000.BTN.${String(id).padStart(3, '0')}.CALL`,
+          type === 'qsave',
+        );
+      else await this.callSystemScene(type === 'save' ? 'SAVE_SCENE' : 'LOAD_SCENE');
     }
   }
 
@@ -890,6 +901,12 @@ export class SiglusPlayer {
       case '$bgm_play':
         await this.playBgm(s(0), Math.max(0, n(1)), Math.max(0, n(2)));
         break;
+      case '$pcm_stop':
+        this.audio.stop('pcm');
+        break;
+      case '$pcmch_stop_all':
+        this.audio.stopPcmChannels();
+        break;
       case '$bgm_stop':
         this.audio.stop('bgm', Math.max(0, n(0)));
         break;
@@ -970,6 +987,11 @@ export class SiglusPlayer {
         case 6: // disp
         case 96: // frame
           await this.renderObjects();
+          if (root === 6 && this.systemCallActive && !this.inputSampled) {
+            await this.nextInput();
+            this.display.sampleInput();
+          }
+          this.inputSampled = false;
           break;
         case 7:
           await this.wipe(n(1));
@@ -1131,6 +1153,13 @@ export class SiglusPlayer {
           date.getSeconds(),
           date.getMilliseconds(),
         ][member - (member <= 77 ? 70 : 171)]!;
+      }
+      if (member === 67 || member === 128) {
+        const slots = member === 67 ? this.saves : this.quickSaves;
+        const save = slots.get(n(0));
+        if (!save) return 0;
+        this.writeSlot(slots, n(1), save);
+        return 1;
       }
       if (member === 249 || member === 18) {
         if (!this.saveEnabled || !this.savePoint) return 0;
@@ -1304,10 +1333,17 @@ export class SiglusPlayer {
     if (root === 86 && member === 3) {
       await this.nextInput();
       this.display.sampleInput();
+      this.inputSampled = true;
       return 0;
     }
     if (root === 86 && (member === 0 || member === 1) && path.length === 3)
       return this.display.inputState(member, path[2]!);
+    if (root === 70 && member === 25 && path[2] === -1 && path[4] === 8) {
+      this.display.endShake(n(0));
+      return 0;
+    }
+    // Frame action callbacks are not currently scheduled by the browser host.
+    if (root === 53 && member === -1 && path[3] === 2) return 0;
     if (root === 92 && member === 0)
       return Number(!this.root.ownerDocument.hidden && this.root.ownerDocument.hasFocus());
     if (root === 46 && member !== undefined && member >= 0 && member <= 3)
@@ -1383,6 +1419,10 @@ export class SiglusPlayer {
           return 0;
         }
       }
+    }
+    if (root === 45 && member === 7) {
+      this.audio.stop('se', n(0));
+      return 0;
     }
     if (root === 45 && member === 0) {
       await this.playSystemSound(n(0));
@@ -1500,7 +1540,7 @@ export class SiglusPlayer {
         object.transparency = n(0);
         return 0;
       }
-      if (event === 4) {
+      if (event === 4 || event === 10) {
         await this.renderObjects();
         const animation = object.opacity;
         if (animation && object.opacityStarted !== undefined)

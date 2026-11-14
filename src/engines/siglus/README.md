@@ -77,6 +77,11 @@ original title menu. The probe confirms the three types of prompts and checks
 thumbnail dimensions, dialogue hashes, stage identifiers and script tag offsets
 against the disassembly.
 
+Set `SIGLUS_QUICK_ONLY=1` to check the original frame’s Quick Save and Quick
+Load controls. The probe uses the cleared-title checkpoint, confirms two
+quick saves on distinct pages, checks the persisted slot order, then advances
+and restores the newest quick save through its confirmation dialog.
+
 The clean-profile route matched 130,121 command and message tags and
 checked 8,540 decoded audio buffers with zero browser console errors.
 Save and load were exercised on page 67. `npm test` reported the same
@@ -106,8 +111,8 @@ and Gameexe.dat SHA-256
 
 ## Known differences
 
-- Day-based autosaves, quick saves and slot management still need end-to-end
-  verification. Thumbnails composite the visible graphical layers
+- Day-based autosaves, the Quick tab of the slot browser and slot management
+  still need end-to-end verification. Thumbnails composite the visible graphical layers
   at the configured size. Dialogue and native capture effects are absent from
   that composite.
 - Loading restores the VM, current message, background and cast. BGM restarts

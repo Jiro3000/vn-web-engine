@@ -386,6 +386,12 @@ export class SiglusAudio {
     if (channel === 'voice') this.updateGains('BGM');
   }
 
+  stopPcmChannels(): void {
+    for (const channel of this.playing.keys()) {
+      if (/^pcm\d+$/.test(channel)) this.stop(channel);
+    }
+  }
+
   stopEffects(): void {
     for (const channel of this.playing.keys()) {
       if (channel !== 'bgm' && channel !== 'voice') this.stop(channel);

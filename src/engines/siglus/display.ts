@@ -48,9 +48,13 @@ export class SiglusDisplay {
   private readonly effect = document.createElement('div');
   private readonly day = document.createElement('div');
   private readonly controls = document.createElement('div');
-  private readonly frameActions: {type: string; button: HTMLButtonElement; refresh: () => void}[] =
-    [];
-  private activateFrameAction?: (type: string, sound: number) => void;
+  private readonly frameActions: {
+    id: number;
+    type: string;
+    button: HTMLButtonElement;
+    refresh: () => void;
+  }[] = [];
+  private activateFrameAction?: (type: string, sound: number, id: number) => void;
   private readonly systemLayer = document.createElement('div');
   private readonly message = document.createElement('div');
   private readonly speaker = document.createElement('div');
@@ -864,9 +868,23 @@ export class SiglusDisplay {
     this.effect.replaceChildren(this.node({...frame, x: frame.x - 64, y: frame.y - 60}));
   }
 
+  private shakeAnimation?: Animation;
+
+  endShake(duration: number): void {
+    const animation = this.shakeAnimation;
+    if (!animation || animation.playState !== 'running') return;
+    if (duration <= 0) animation.cancel();
+    else {
+      const transform = getComputedStyle(this.layers).transform;
+      animation.cancel();
+      this.shakeAnimation = this.layers.animate({transform: [transform, 'none']}, {duration});
+    }
+  }
+
   shake(strength: number): void {
     const delta = 8 + Math.max(0, strength) * 2;
-    this.layers.animate(
+    this.shakeAnimation?.cancel();
+    this.shakeAnimation = this.layers.animate(
       {transform: [0, -delta, delta, -delta / 2, 0].map((x) => `translateX(${x}px)`)},
       {duration: 350},
     );
@@ -984,7 +1002,8 @@ export class SiglusDisplay {
     for (const [key, value] of this.config) {
       if (!/^WAKU\.000\.BTN\.\d+\.TYPE$/.test(key)) continue;
       const type = value.split('"')[1];
-      if (type !== 'save' && type !== 'load') continue;
+      if (type !== 'save' && type !== 'load' && type !== 'qsave' && type !== 'qload') continue;
+      const id = Number(key.split('.')[3]);
       const prefix = key.slice(0, -4);
       const file = this.config.get(prefix + 'FILE')?.split('"')[1];
       const [anchor, x, y] = (this.config.get(prefix + 'POS') ?? '').split(',').map(Number);
@@ -997,7 +1016,16 @@ export class SiglusDisplay {
       const button = document.createElement('button');
       button.type = 'button';
       button.dataset.siglusAction = type;
-      button.setAttribute('aria-label', type === 'save' ? 'Save' : 'Load');
+      button.setAttribute(
+        'aria-label',
+        type === 'save'
+          ? 'Save'
+          : type === 'load'
+            ? 'Load'
+            : type === 'qsave'
+              ? 'Quick save'
+              : 'Quick load',
+      );
       button.style.cssText = `position:absolute;left:${x}px;bottom:${y - frame.height}px;width:${frame.width}px;height:${frame.height}px;border:0;padding:0;background:none;pointer-events:auto`;
       const canvas = this.node(frame);
       const paint = (graphic: Graphic) => {
@@ -1013,10 +1041,11 @@ export class SiglusDisplay {
       button.addEventListener('click', (event) => {
         event.stopPropagation();
         this.stage.focus({preventScroll: true});
-        this.activateFrameAction?.(type, sound);
+        this.activateFrameAction?.(type, sound, id);
       });
       button.append(canvas);
       this.frameActions.push({
+        id,
         type,
         button,
         refresh: () => paint(button.disabled ? disabled : frame),
@@ -1025,12 +1054,15 @@ export class SiglusDisplay {
     }
   }
 
-  pageControls(activate?: (type: string, sound: number) => void, save = false, load = false): void {
+  pageControls(
+    activate?: (type: string, sound: number, id: number) => void,
+    enabled?: (type: string, id: number) => boolean,
+  ): void {
     this.activateFrameAction = activate;
     const frame = this.config.get(`MWND.${String(this.windowIndex).padStart(3, '0')}.WAKU_NO`);
     this.controls.hidden = !activate || frame !== '0' || this.message.hidden;
-    for (const {type, button, refresh} of this.frameActions) {
-      button.disabled = !(type === 'save' ? save : load);
+    for (const {id, type, button, refresh} of this.frameActions) {
+      button.disabled = !enabled?.(type, id);
       refresh();
     }
   }
