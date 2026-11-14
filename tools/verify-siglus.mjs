@@ -999,12 +999,34 @@ try {
     })()`);
     assert.equal(typeof wheel, 'boolean');
     console.log('Configuration: wheel setting changed through the original checkbox.');
+    const expanded = "document.querySelector('#display').hasAttribute('data-expanded')";
+    const beforeFullscreen = await evaluate('siglusTags.length');
+    await clickConfig(630, 192);
+    await waitFor(`${configCommand('63.4', beforeFullscreen)} && ${expanded}`);
+    const beforeWindow = await evaluate('siglusTags.length');
+    await clickConfig(470, 192);
+    await waitFor(`${configCommand('63.4', beforeWindow)} && !(${expanded})`);
+    console.log('Configuration: original window and fullscreen buttons changed the viewport.');
     const beforeText = await evaluate('siglusTags.length');
     await clickConfig(1450, 22);
     await waitFor(configCommand('65.1.2.-1.63.93.-1.23.39', beforeText));
     await waitFor(`siglusTags.slice(${beforeText}).some(({scene, path}) =>
       scene === '${configScene}' && path?.join('.') === '86.3')`);
     console.log('Configuration: the Text tab created its original sample.');
+    const savedFont = `JSON.parse(localStorage.getItem(Object.keys(localStorage)
+      .find((key) => /^siglus:.*:options$/.test(key))))?.font`;
+    const dialogueFont =
+      "siglusSurface.querySelector('[data-siglus-dialogue]').parentElement.style.fontFamily";
+    const oldFont = await evaluate(dialogueFont);
+    const fontChoice = (await evaluate(savedFont)) === 'Kosugi' ? 'Kosugi Maru' : 'Kosugi';
+    const beforeFont = await evaluate('siglusTags.length');
+    await clickConfig(fontChoice === 'Kosugi' ? 530 : 390, 192);
+    await waitFor(
+      `${configCommand('63.283', beforeFont)} && ${savedFont} === ${JSON.stringify(fontChoice)}`,
+    );
+    const chosenFont = await evaluate(dialogueFont);
+    assert.notEqual(chosenFont, oldFont);
+    console.log('Configuration: original font button changed the dialogue font.', fontChoice);
     const beforeSound = await evaluate('siglusTags.length');
     await clickConfig(1630, 22);
     await waitFor(`siglusTags.slice(${beforeSound}).some(({scene, args}) =>
@@ -1054,6 +1076,8 @@ try {
     // marker. The independent disassembly prints lines in byte order.
     compareTags(tags, scripts, {compareSourceLine: false});
     console.log(`Configuration: returned to title and matched ${tags.length} command tags.`);
+    await reopenPlayer();
+    assert.equal(await evaluate(dialogueFont), chosenFont);
   } else if (musicOnly) {
     const music = '#siglus-surface button[aria-label="Music"]';
     await click(music);

@@ -69,9 +69,12 @@ browser profile, then checks the restored volume against the slider position.
 
 Set `SIGLUS_CONFIG_ONLY=1` to diagnose the original Configuration scene. This
 enables its title button for the probe, enters the scene from Gameexe.dat, and
-checks the wheel-to-advance option from the System tab, opens the Text and
-Sound tabs, plays the seven volume tests and the first character's sample, and
-returns to the title with a right-click. Only the temporary profile starts with
+checks the wheel-to-advance and window/fullscreen controls in the System tab.
+It switches the dialogue from the default Kosugi Maru to the bundled Kosugi
+font through the Text tab, plays the seven volume tests and the first
+character's sample in the Sound tab, and returns to the title with a
+right-click. It reopens the player in the same temporary profile and checks
+that the selected font is still applied. Only that profile starts with
 the character's Chapter 02 unlock flag set. Audio checks cover the sample IDs,
 volume types, applied gain, decoded frames, sample rate, peak and RMS. It compares command
 offsets, opcodes and argument counts with the disassembly. For Configuration,
@@ -79,6 +82,21 @@ the trace uses offsets as source locations because branches can skip line marker
 The regular title keeps Configuration disabled while its other actions are
 incomplete, including the detailed display and movie dialogs and transitions
 to Save and Load.
+
+The System and Text tabs execute `syscom.set_window_mode` (4) and
+`syscom.set_font_name` (283) in `__sys_menu_config01`. The browser maps the
+configured fullscreen mode to the shared window display host and stores
+the selected mode and font with the installation's other options. The
+advanced dialogs call separate engine commands (138, 142, 167). The
+installed SiglusEngine.exe contains a second PE32 image from file offset
+`0x1c000` to EOF, with SHA-256
+`3b04dfc1d4b1e0abd6d1b526b82591acc5206c5054d0d07cfa2acb887092daf6`.
+That image contains Japanese screen and movie dialog templates (PE
+resources 127 and 124, language 1041). The outer PE resource 103 is the
+SdWrap version dialog. StartData/Config.exe contains the support tool's
+separate dialog. The embedded templates provide control labels and
+bounds. Mapping their command dispatch and finding the font dialog
+remain open.
 
 Set `SIGLUS_LOAD_ONLY=1` for the Save and Load round trip. It starts at the
 cleared-title checkpoint, starts a new game, saves a live page in slot 0,

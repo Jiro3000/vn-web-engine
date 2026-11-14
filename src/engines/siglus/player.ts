@@ -148,6 +148,8 @@ export class SiglusPlayer {
   private voiceDuckLevel: number;
   private voiceDuckEnabled: boolean;
   private readonly options = new Map<SystemOption, boolean>();
+  private messageFont: string;
+  private windowMode: boolean;
   private readonly systemCounters = new Map<number, RealCounter>();
   private waitingForPage = false;
   private systemMenuEnabled = true;
@@ -214,12 +216,16 @@ export class SiglusPlayer {
       throw new Error('Invalid Siglus screen size');
     this.startScene = config.get('START_SCENE')?.split('"')[1] ?? '_start';
     this.audio = new SiglusAudio(files, config, root, game.saveKey + ':audio');
+    this.messageFont = config.get('CONFIG.FONT.NAME')?.split('"')[1] ?? '';
+    this.windowMode = config.get('CONFIG.WINDOW_MODE') === '1';
     const savedOptions = localStorage.getItem(game.saveKey + ':options');
     if (savedOptions) {
       try {
         const values = JSON.parse(savedOptions);
         for (const [option] of systemOptions)
           if (typeof values?.[option] === 'boolean') this.options.set(option, values[option]);
+        if (typeof values?.font === 'string') this.messageFont = values.font;
+        if (typeof values?.fullscreen === 'boolean') this.windowMode = values.fullscreen;
       } catch {
         // An unreadable settings record falls back to the installation defaults.
       }
@@ -315,6 +321,8 @@ export class SiglusPlayer {
     await this.audio.resume();
     await this.openSaveStore();
     await this.display.prepare();
+    this.display.setMessageFont(this.messageFont);
+    if (this.windowMode) this.windowDisplay.setFullscreen(true);
     this.display.setMessageFilter(this.filterColor);
     const [menu, entry] = (this.game.config.get('MENU_SCENE') ?? '"_titlemenu", 0').split(',');
     this.vm = new SiglusVm(
@@ -392,9 +400,17 @@ export class SiglusPlayer {
   private setSystemOption(option: SystemOption, value?: boolean): void {
     if (value === undefined) this.options.delete(option);
     else this.options.set(option, value);
+    this.persistOptions();
+  }
+
+  private persistOptions(): void {
     localStorage.setItem(
       this.game.saveKey + ':options',
-      JSON.stringify(Object.fromEntries(this.options)),
+      JSON.stringify({
+        ...Object.fromEntries(this.options),
+        font: this.messageFont,
+        fullscreen: this.windowMode,
+      }),
     );
   }
 
@@ -1430,8 +1446,21 @@ export class SiglusPlayer {
         );
         return 0;
       }
-      if (member === 9) return Number(this.game.config.get('CONFIG.WINDOW_MODE') ?? 0);
-      if (member === 284) return this.game.config.get('CONFIG.FONT.NAME')?.split('"')[1] ?? '';
+      if (member === 4 || member === 99) {
+        this.windowMode =
+          member === 4 ? Boolean(n(0)) : this.game.config.get('CONFIG.WINDOW_MODE') === '1';
+        this.windowDisplay.setFullscreen(this.windowMode);
+        this.persistOptions();
+        return 0;
+      }
+      if (member === 9) return Number(this.windowDisplay.isExpanded);
+      if (member === 283) {
+        this.messageFont = s(0);
+        this.display.setMessageFont(this.messageFont);
+        this.persistOptions();
+        return 0;
+      }
+      if (member === 284) return this.messageFont;
       if (member === 69 || member === 169)
         return Number(Boolean(member === 69 ? this.saveSlot(n(0)) : this.quickSaves.get(n(0))));
       if (member === 79 || member === 170)
@@ -1860,7 +1889,7 @@ export class SiglusPlayer {
         pattern: 0,
         text: {
           value: String(args[0]),
-          font: this.systemFont?.name ?? this.game.config.get('CONFIG.FONT.NAME')?.split('"')[1],
+          font: this.systemFont?.name ?? this.messageFont,
           bold: this.systemFont?.bold ?? this.game.config.get('CONFIG.FONT.FUTOKU') === '1',
           shadow:
             this.systemFont?.shadow ?? Number(this.game.config.get('CONFIG.FONT.SHADOW') ?? 0),

@@ -452,9 +452,7 @@ export class SiglusDisplay {
         if ((entry.id === 1 || entry.id === 16) && entry.unicode)
           this.fontNames.set(entry.unicode.toLowerCase(), family);
     }
-    this.message.style.fontFamily = this.fontFamily(
-      this.config.get('CONFIG.FONT.NAME')?.split('"')[1],
-    );
+    this.setMessageFont(this.config.get('CONFIG.FONT.NAME')?.split('"')[1]);
     await this.prepareFrameActions();
     this.selectMessageWindow(0);
     const filter = this.config.get('WAKU.000.FILTER_FILE')?.split('"')[1];
@@ -657,6 +655,12 @@ export class SiglusDisplay {
   private fontFamily(name?: string): string {
     const family = name && this.fontNames.get(name.toLowerCase());
     return family ? family + ', sans-serif' : (this.loadedFonts[0]?.family ?? 'sans-serif');
+  }
+
+  setMessageFont(name?: string): void {
+    this.message.style.fontFamily = this.fontFamily(name);
+    this.alignDomText();
+    this.paintNativeText();
   }
 
   private async resource(name: string): Promise<G00Image> {
