@@ -15,6 +15,7 @@ const fadeTimes = [
   250, 100, 500, 1000, 1500, 2000, 2500, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 12000,
   14000, 16000, 18000, 20000,
 ];
+const spriteActor = (name: string): string => name.replace(/^bs\d_/i, '').slice(0, 2);
 const systemFlags = new Set([6, 7, 11, 12, 21, 109, 117, 133, 134, 214, 223, 251, 258]);
 const scriptFlags = new Set([12, 13, 14, 15, 25, 27, 32, 33, 34, 35, 38, 39, 48, 51, 54, 55]);
 
@@ -339,6 +340,18 @@ export class SiglusPlayer {
     return /^(?:b_)?bg\d\d$/.test(key) ? key + 'a' : key;
   }
 
+  private async fade(name: string, transition: number): Promise<void> {
+    this.pendingText = false;
+    this.display.closeMessage();
+    this.display.endEffect();
+    this.stageProperties.set('$bg_name.-1.0', 'none');
+    this.stageProperties.set('$bg_set_ready', 0);
+    this.stageProperties.set('$bs_name.-1.0', 'none');
+    this.pendingBackground = undefined;
+    await this.display.setBackground(name, this.skipping ? 0 : (fadeTimes[transition] ?? 0));
+    await this.cast([], -1);
+  }
+
   private async background(
     name: string,
     fade: number,
@@ -356,8 +369,13 @@ export class SiglusPlayer {
   }
 
   private async cast(names: string[], fade: number): Promise<void> {
-    this.currentCast = names;
-    await this.display.showCast(names, this.skipping ? 0 : (fadeTimes[fade] ?? 0));
+    const resolved = names.map((name) =>
+      /^[a-z]{2}$/i.test(name)
+        ? this.currentCast.find((previous) => spriteActor(previous) === name) ?? 'none'
+        : name,
+    );
+    this.currentCast = resolved;
+    await this.display.showCast(resolved, this.skipping ? 0 : (fadeTimes[fade] ?? 0));
   }
 
   private async movie(name: string, skippable: boolean): Promise<number> {
@@ -408,7 +426,9 @@ export class SiglusPlayer {
       case '$bg_disp_set':
         if (this.pendingBackground) {
           const {name, pan} = this.pendingBackground;
-          await this.background(name, 0, pan);
+          // The script uses both "none" and names containing it (for example
+          // "b_none" from the blur macro) as empty background slots.
+          if (!name.includes('none')) await this.background(name, 0, pan);
           this.pendingBackground = undefined;
           this.stageProperties.set('$bg_set_ready', 0);
         }
@@ -423,11 +443,10 @@ export class SiglusPlayer {
         break;
       case '$$change_bs_only_face': {
         const names = [...this.currentCast];
-        const actor = (name: string) => name.replace(/^bs\d_/, '').slice(0, 2);
         for (const [i, value] of args.entries()) {
           const face = String(value);
           if (face === 'none') break;
-          const index = names.findIndex((name) => actor(name) === actor(face));
+          const index = names.findIndex((name) => spriteActor(name) === spriteActor(face));
           const prefix = index < 0 ? undefined : /^bs\d_/.exec(names[index]!)?.[0];
           names[index < 0 ? i : index] = prefix && !face.startsWith('bs') ? prefix + face : face;
         }
@@ -459,8 +478,7 @@ export class SiglusPlayer {
       case '$scene_fade':
         this.audio.stop('bgm', n(3));
         this.audio.stopEffects();
-        await this.cast([], -1);
-        await this.background('bg_kuro', n(0));
+        await this.fade('bg_kuro', n(0));
         await this.delay(n(2), true);
         break;
       case '$bg_pan_ud':
@@ -512,8 +530,7 @@ export class SiglusPlayer {
         this.display.sepia(Boolean(n(0)));
         break;
       case '$fade':
-        await this.background(s(1), n(0));
-        await this.cast([], -1);
+        await this.fade(s(1), n(0));
         break;
       case '$sc_cinemascope':
         this.display.cinema(n(0), n(1));

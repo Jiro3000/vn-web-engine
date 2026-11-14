@@ -350,10 +350,11 @@ try {
       `New Game: ${backgrounds.size} backgrounds, ${sprites.size} portraits, ${voices.size} decoded voices, ${music}.`,
     );
   } else {
-    await runUntil((current) => Number(current.page) > page + 2);
+    const savePage = page + 3;
+    await runUntil((current) => Number(current.page) >= savePage);
     await click('[data-siglus-action="save"]');
     const saved = await waitFor('siglusSurface.dataset.savedPage');
-    assert.ok(Number(saved) >= page + 3);
+    assert.equal(Number(saved), savePage);
     const beforeLoad = await evaluate('siglusTags.length');
     await clickStage();
     await waitFor('Number(siglusSurface.dataset.page) > ' + saved);
@@ -361,6 +362,7 @@ try {
     await waitFor("siglusSurface.dataset.loaded === 'true'");
     const afterLoad = await evaluate('siglusTags.length');
     await clickStage();
+    console.log('Saved and loaded page', saved);
     const movies = ['op', 'chapter1', 'chapter2', 'chapter3', 'ed'];
     for (const [index, name] of movies.entries()) {
       await control('keyDown');

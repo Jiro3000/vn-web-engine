@@ -334,11 +334,11 @@ export class SiglusDisplay {
     const visible = names.filter((name) => name && !name.startsWith('none'));
     const characters = await Promise.all(
       visible.map(async (name, index) => {
-        const match = /^(bs\d_)?([a-z]{2})(\d\d)(\d\d)(\d\d)?/i.exec(name);
+        const match = /^(bs\d_)?([a-z]{2})(\d\d)(\d\d)/i.exec(name);
         if (!match) throw new Error(`Invalid Siglus sprite ${name}`);
-        const [, prefix = 'bs2_', actor, pose, expression, dress] = match;
+        const [, prefix = 'bs2_', actor, pose, expression] = match;
         const position = (this.width * (index + 1)) / (visible.length + 1);
-        const bodyName = `${prefix}${actor}${dress && dress !== '00' ? dress : '01'}${pose}01`;
+        const bodyName = `${prefix}${actor}01${pose}01`;
         const body = await this.graphic(bodyName);
         const face = await this.spriteFace(prefix, actor!, pose!, expression!);
         const layer = document.createElement('div');
