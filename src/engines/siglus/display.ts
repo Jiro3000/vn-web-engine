@@ -859,6 +859,28 @@ export class SiglusDisplay {
     this.day.replaceChildren(...frames.map((graphic) => this.node(graphic)));
   }
 
+  async autosaveNotice(): Promise<void> {
+    const graphic = await this.graphic('__sys_mw_info00', 1);
+    const node = this.node(graphic);
+    node.style.left = `${1678 + graphic.x}px`;
+    node.style.top = `${783 + graphic.y}px`;
+    this.stage.append(node);
+    const animation = node.animate(
+      [
+        {opacity: 0, transform: 'translateX(0px)', offset: 0},
+        {opacity: 1, transform: 'translateX(-30px)', offset: 0.12},
+        {opacity: 1, transform: 'translateX(-50px)', offset: 0.32},
+        {opacity: 0, transform: 'translateX(-47px)', offset: 0.44},
+        {opacity: 0, transform: 'translateX(0px)', offset: 1},
+      ],
+      {duration: 2500},
+    );
+    void animation.finished.then(
+      () => node.remove(),
+      () => node.remove(),
+    );
+  }
+
   removeDayCard(): void {
     this.day.replaceChildren();
   }

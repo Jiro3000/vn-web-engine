@@ -82,6 +82,11 @@ Load controls. The probe uses the cleared-title checkpoint, confirms two
 quick saves on distinct pages, checks the persisted slot order, then advances
 and restores the newest quick save through its confirmation dialog.
 
+Set `SIGLUS_AUTOSAVE_ONLY=1` to check the first two day saves. The probe uses
+the cleared-title checkpoint and Control skip to reach both day changes. It
+checks slot rotation and opens the original Auto tab to load slot 1000, then
+compares the resumed scene position and the next text hash with the disassembly.
+
 The clean-profile route matched 130,121 command and message tags and
 checked 8,540 decoded audio buffers with zero browser console errors.
 Save and load were exercised on page 67. `npm test` reported the same
@@ -111,8 +116,10 @@ and Gameexe.dat SHA-256
 
 ## Known differences
 
-- Day-based autosaves, the Quick tab of the slot browser and slot management
-  still need end-to-end verification. Thumbnails composite the visible graphical layers
+- The Quick tab of the slot browser and slot management still need end-to-end
+  verification. Day saves run the script’s rotation routine and resume after
+  the browser’s day transition. The native savepoint is inside the transition.
+  Thumbnails composite the visible graphical layers
   at the configured size. Dialogue and native capture effects are absent from
   that composite.
 - Loading restores the VM, current message, background and cast. BGM restarts

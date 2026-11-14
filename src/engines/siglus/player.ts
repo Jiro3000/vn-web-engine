@@ -608,11 +608,13 @@ export class SiglusPlayer {
     if (save.bgm) await this.audio.bgm(save.bgm);
     this.speed = save.speed;
     this.saveTitle = save.title ?? '';
-    await this.display.loadMessage(save.message);
-    this.pendingText = true;
+    const waitsForInput = save.waitsForInput ?? true;
+    if (waitsForInput) await this.display.loadMessage(save.message);
+    else this.display.closeMessage();
+    this.pendingText = waitsForInput;
     this.root.dataset.loaded = 'true';
-    this.root.dataset.page = String(++this.pages);
-    if (save.waitsForInput ?? true) {
+    if (waitsForInput) {
+      this.root.dataset.page = String(++this.pages);
       this.waitingForPage = true;
       try {
         await this.delay(undefined, true);
@@ -797,6 +799,8 @@ export class SiglusPlayer {
       // The browser initializes empty scene properties and owns the display and sound state.
       case '$sys_set_gsd':
         for (let i = 0; i < 6; i++) this.stageProperties.set('$bs_name.-1.' + i, 'none');
+        // Earlier browser profiles may have an initialization flag without this setting.
+        if (!this.system.has(1330)) this.property([31, -1, 1330], 1);
         if (!this.property([31, -1, 1001])) {
           // __sys_scdata_init enables the authored confirmation flags on first launch.
           for (let flag = 1316; flag < 1324; flag++) this.system.set(flag, 1);
@@ -860,13 +864,20 @@ export class SiglusPlayer {
         this.stageProperties.set('$bg_type', exists ? 1 : 2);
         break;
       }
-      case '$change_days':
+      case '$change_days': {
         await this.background(s(1), 3, {from: [-360, -360], to: [0, -360], time: 15000});
         await this.display.dayCard(n(0));
         await this.delay(2000, true);
         await this.delay(4000, true);
+        if (this.saveEnabled && this.system.get(1330)) {
+          this.savePoint = this.captureSave(false);
+          this.savePoint.thumbnail = this.display.captureThumbnail();
+          await this.vm.callScene('__sys_system_call', '$sys_day_save');
+          await this.display.autosaveNotice();
+        }
         this.display.removeDayCard();
         break;
+      }
       case '$scene_fade':
         this.audio.stop('bgm', n(3));
         this.audio.stopEffects();

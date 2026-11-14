@@ -11,6 +11,7 @@ import {createStaticServer} from './serve-static.mjs';
 const [folder, browser, disassemblyDirectory] = process.argv.slice(2);
 const diagnosticPages = Number(process.env.SIGLUS_DIAGNOSTIC_PAGES ?? 0);
 const musicOnly = process.env.SIGLUS_MUSIC_ONLY === '1';
+const autoOnly = process.env.SIGLUS_AUTOSAVE_ONLY === '1';
 const quickOnly = process.env.SIGLUS_QUICK_ONLY === '1';
 const loadOnly = process.env.SIGLUS_LOAD_ONLY === '1';
 const configOnly = process.env.SIGLUS_CONFIG_ONLY === '1';
@@ -345,7 +346,7 @@ try {
     await advance();
   }
   await openPlayer();
-  if (musicOnly || configOnly || loadOnly || quickOnly) {
+  if (musicOnly || configOnly || loadOnly || quickOnly || autoOnly) {
     const pack = await readFile(join(resolve(folder), 'StartData', 'GameData', 'Scene.pck')).catch(
       () => readFile(join(resolve(folder), 'Scene.pck')),
     );
@@ -396,7 +397,57 @@ try {
   }
   await runUntil((current) => current.title);
   console.log(`Reached title after ${page} advances`);
-  if (quickOnly) {
+  if (autoOnly) {
+    await click('#siglus-surface button[aria-label="New Game"]');
+    await runUntil((current) => Number(current.page) >= 1);
+    const slotsExpression = `(() => {
+      const key = Object.keys(localStorage).find((key) => key.endsWith(':saves'));
+      return key ? JSON.parse(localStorage.getItem(key)) : [];
+    })()`;
+    await control('keyDown');
+    try {
+      await waitFor(`${slotsExpression}.some(([slot]) => slot === 1001)`, 120000);
+    } finally {
+      await control('keyUp');
+    }
+    const slots = await evaluate(`${slotsExpression}.map(([no, save]) =>
+      [no, {timestamp: save.timestamp, background: save.background, frame: save.vm.frames.at(-1)}])`);
+    const records = new Map(slots);
+    assert.ok(records.get(1000).timestamp >= records.get(1001).timestamp);
+    assert.notEqual(records.get(1000).frame.pc, records.get(1001).frame.pc);
+    assert.equal(records.get(1000).frame.scene, records.get(1001).frame.scene);
+    await waitFor(
+      "!document.querySelector('[data-siglus-action=load]')?.parentElement.hidden",
+      60000,
+    );
+    const dialogue = "siglusSurface.querySelector('[data-siglus-dialogue]').textContent";
+    const beforeLoad = await evaluate('Number(siglusSurface.dataset.page)');
+    const start = await evaluate('siglusTags.length');
+    await click('[data-siglus-action="load"]');
+    await waitFor(slotLoop);
+    const frame = await evaluate(slotLoop);
+    await clickScriptMenu(slotLoop, 1654, 34);
+    await waitFor(`${slotLoop} > ${frame} && siglusTags.slice(${start}).some(
+      ({path, args}) => path?.join('.') === '63.69' && args[0] === 1000)`);
+    assert.equal(await chooseSlot('load', start), 'confirm');
+    await waitFor("siglusSurface.dataset.loaded === 'true'");
+    await waitFor(`Number(siglusSurface.dataset.page) > ${beforeLoad}`);
+    const restored = await evaluate(`({text: ${dialogue},
+      command: siglusTags.slice(${start}).find(({path}) => path?.join('.') === '63.256'),
+      firstText: siglusTags.slice(${start}).find(({tag}) => tag === 'text')})`);
+    assert.equal(restored.command.args[0], 1000);
+    assert.ok(restored.firstText.offset >= records.get(1000).frame.pc);
+    assert.equal(restored.firstText.scene, records.get(1000).frame.scene);
+    assert.ok(restored.text.includes(restored.firstText.value));
+    compareTags([restored.firstText], scripts, {compareSourceLine: false});
+    console.log('Autosave: the original Auto tab restored slot 1000 and resumed the day.');
+    const tags = await evaluate("siglusTags.filter(({scene}) => scene === '__sys_system_call')");
+    compareTags(tags, scripts, {compareSourceLine: false});
+    console.log(
+      'Autosave: authored rotation retained two distinct day checkpoints.',
+      slots.map(([slot, {background, frame}]) => [slot, background, frame.pc]),
+    );
+  } else if (quickOnly) {
     await click('#siglus-surface button[aria-label="New Game"]');
     await runUntil((current) => Number(current.page) >= 3);
     const dialogue = "siglusSurface.querySelector('[data-siglus-dialogue]').textContent";
@@ -664,7 +715,7 @@ try {
       scene === '_titlemenu_dmy' && path?.join('.') === '38.6.-1.0.3').length >= 2`);
     await click('#siglus-surface button[aria-label="New Game"]');
   }
-  if (musicOnly || configOnly || loadOnly || quickOnly) {
+  if (musicOnly || configOnly || loadOnly || quickOnly || autoOnly) {
     assert.equal(errors.length, 0);
   } else if (diagnosticPages > 0) {
     const firstPage = page;
