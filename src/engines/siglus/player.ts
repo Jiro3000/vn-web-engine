@@ -16,7 +16,7 @@ const fadeTimes = [
   14000, 16000, 18000, 20000,
 ];
 const spriteActor = (name: string): string => name.replace(/^bs\d_/i, '').slice(0, 2);
-const systemFlags = new Set([6, 7, 11, 12, 109, 117, 133, 134, 223, 251, 258]);
+const systemFlags = new Set([6, 7, 133, 134, 223, 251, 258]);
 const scriptFlags = new Set([12, 13, 14, 15, 25, 27, 32, 33, 34, 35, 38, 39, 48, 51, 54, 55]);
 // syscom's set, reset, and get opcodes for each configured volume.
 const soundLevels: ReadonlyArray<[SiglusAudioKind | 'ALL' | 'MOV', number, number, number]> = [
@@ -139,6 +139,8 @@ export class SiglusPlayer {
   private readonly movies: BrowserFullscreenMoviePlayer;
   private vm!: SiglusVm;
   private saveEnabled = true;
+  private messageButtonsEnabled = true;
+  private readonly disabledMessageButtons = new Set<number>();
   private loadEnabled = true;
   private readonly saves = new Map<number, PlayerSave>();
   private readonly quickSaves = new Map<number, PlayerSave>();
@@ -306,7 +308,7 @@ export class SiglusPlayer {
       this.messageHidden,
       this.quakeStopped,
     ] as const;
-    if (key === 'SAVE_SCENE' && this.savePoint && this.waitingForPage)
+    if (key === 'SAVE_SCENE' && this.savePoint)
       this.savePoint.thumbnail = this.display.captureThumbnail();
     this.systemCallActive = true;
     this.display.setSystemInput(true);
@@ -501,36 +503,45 @@ export class SiglusPlayer {
     });
   }
 
-  private async pageInput(): Promise<boolean> {
-    if (!this.pendingText) return false;
+  private async pageInput(): Promise<void> {
+    if (!this.pendingText) return;
     const speed = this.speed || (this.messageNowait ? 0 : this.messageSpeed);
     if (speed > 0) await this.delay(speed, true);
     this.root.dataset.page = String(++this.pages);
-    if (!this.skipping) {
-      this.savePoint = this.captureSave();
-      this.updateSaveControls();
-    }
-    let result: number;
-    try {
-      const autoWait = this.autoEnabled
-        ? this.autoMinimumWait + this.autoCharacterWait * this.pageCharacters
-        : undefined;
-      this.waitingForPage = true;
-      result = await this.delay(autoWait, true);
-    } finally {
-      this.waitingForPage = false;
-      this.display.pageControls(undefined, undefined);
-    }
+    if (!this.skipping && this.saveEnabled) this.savePoint = this.captureSave();
+    await this.waitAtPage();
     if (!this.systemOption('KOE_DONT_STOP_ONOFF')) this.audio.stop('voice');
     this.pendingText = false;
-    return result === 2;
   }
 
-  private updateSaveControls(): void {
-    this.display.pageControls(
-      this.saveEnabled ? () => this.save() : undefined,
-      this.loadEnabled && this.saves.has(0) ? () => this.wait?.(2) : undefined,
-    );
+  private async waitAtPage(): Promise<void> {
+    for (;;) {
+      let menu: {type: string; sound: number} | undefined;
+      if (!this.skipping && this.messageButtonsEnabled) {
+        this.display.pageControls(
+          (type, sound) => {
+            menu = {type, sound};
+            this.wait?.(1);
+          },
+          this.saveEnabled && Boolean(this.savePoint) && !this.disabledMessageButtons.has(3),
+          this.loadEnabled && !this.disabledMessageButtons.has(4),
+        );
+      }
+      try {
+        const autoWait = this.autoEnabled
+          ? this.autoMinimumWait + this.autoCharacterWait * this.pageCharacters
+          : undefined;
+        this.waitingForPage = true;
+        await this.delay(autoWait, true);
+      } finally {
+        this.waitingForPage = false;
+        this.display.pageControls();
+      }
+      if (!menu) return;
+      const {type, sound} = menu;
+      await this.playSystemSound(sound);
+      await this.callSystemScene(type === 'save' ? 'SAVE_SCENE' : 'LOAD_SCENE');
+    }
   }
 
   private captureSave(waitsForInput = true): PlayerSave {
@@ -570,18 +581,7 @@ export class SiglusPlayer {
 
   private saveTitle = '';
 
-  private save(): void {
-    this.writeSlot(this.saves, 0, {
-      ...this.captureSave(),
-      timestamp: Date.now(),
-      thumbnail: this.display.captureThumbnail(),
-    });
-    this.root.dataset.savedPage = String(this.pages);
-    this.updateSaveControls();
-  }
-
-  private async loadSave(save = this.saves.get(0)): Promise<void> {
-    if (!save) return;
+  private async loadSave(save: PlayerSave): Promise<void> {
     this.skip = false;
     this.savePoint = save;
     this.audio.stop('voice');
@@ -611,6 +611,7 @@ export class SiglusPlayer {
     }
     this.pendingText = false;
     this.vm.requestLoad(save.vm);
+    throw save.vm;
   }
 
   private choose({id, group}: NonNullable<DrawObject['button']>): void {
@@ -757,7 +758,7 @@ export class SiglusPlayer {
     this.skip = false;
     this.movieError = undefined;
     this.root.dataset.movie = name;
-    this.display.pageControls(undefined, undefined);
+    this.display.pageControls();
     const volume = this.audio.volume('MOV');
     const attenuation = volume > 0 ? 2000 * Math.log10(volume) : -10000;
     try {
@@ -785,6 +786,11 @@ export class SiglusPlayer {
       // The browser initializes empty scene properties and owns the display and sound state.
       case '$sys_set_gsd':
         for (let i = 0; i < 6; i++) this.stageProperties.set('$bs_name.-1.' + i, 'none');
+        if (!this.property([31, -1, 1001])) {
+          // __sys_scdata_init enables the authored confirmation flags on first launch.
+          for (let flag = 1316; flag < 1324; flag++) this.system.set(flag, 1);
+          this.property([31, -1, 1001], 1);
+        }
         return 0;
       case '$bg_disp_in':
         await this.background(s(0), n(1));
@@ -985,7 +991,7 @@ export class SiglusPlayer {
           this.display.newline();
           break;
         case 14:
-          if (await this.pageInput()) await this.loadSave();
+          await this.pageInput();
           break;
         case 16:
           this.display.setTextSize(n(0));
@@ -1094,6 +1100,15 @@ export class SiglusPlayer {
       const slot = this.saves.get(n(0));
       const quick = this.quickSaves.get(n(0));
       if (member === 78 || member === 179) return (member === 78 ? slot : quick)?.title ?? '';
+      if (member === 180 || member === 181) {
+        const save = member === 180 ? slot : quick;
+        if (save)
+          this.writeSlot(member === 180 ? this.saves : this.quickSaves, n(0), {
+            ...save,
+            comment: s(1),
+          });
+        return 0;
+      }
       if (member === 131 || member === 132) return (member === 131 ? slot : quick)?.comment ?? '';
       if (member === 129 || member === 130 || member === 324 || member === 325) {
         const message = (member === 129 || member === 324 ? slot : quick)?.message;
@@ -1125,6 +1140,7 @@ export class SiglusPlayer {
           timestamp: Date.now(),
           comment: slots.get(n(0))?.comment,
         });
+        this.root.dataset.savedPage = String(this.pages);
         return 1;
       }
       if (member === 256 || member === 20) {
@@ -1236,6 +1252,14 @@ export class SiglusPlayer {
       }
       if (member === 242) {
         void this.dispose();
+        return 0;
+      }
+      if (member === 11 || member === 12) {
+        if (!args.length) {
+          this.messageButtonsEnabled = member === 11;
+          if (member === 11) this.disabledMessageButtons.clear();
+        } else if (member === 11) this.disabledMessageButtons.delete(n(0));
+        else this.disabledMessageButtons.add(n(0));
         return 0;
       }
       if (systemFlags.has(member!)) {
@@ -1361,12 +1385,16 @@ export class SiglusPlayer {
       }
     }
     if (root === 45 && member === 0) {
-      const name = this.game.config.get(`SE.${String(n(0)).padStart(3, '0')}`)?.split('"')[1];
-      if (name) await this.audio.effect('se', name);
+      await this.playSystemSound(n(0));
       return 0;
     }
     if (root !== undefined && root >= 23 && root <= 28 && member === 10) return 0;
     return undefined;
+  }
+
+  private async playSystemSound(id: number): Promise<void> {
+    const name = this.game.config.get(`SE.${String(id).padStart(3, '0')}`)?.split('"')[1];
+    if (name) await this.audio.effect('se', name);
   }
 
   private async objectCommand({path, args, named}: SiglusCommand): Promise<Value | undefined> {

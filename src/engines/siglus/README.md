@@ -23,10 +23,10 @@ scene sets `G[1007]=3` and `G[1009]=1` before `returnmenu`. The menu
 configured in Gameexe.dat is `_titlemenu` entry 0.
 
 Drag over dialogue text to select it. Click or press Enter to advance a page.
-Hold Control to skip where the script enables Control skip. At a page wait
-the browser player still offers temporary Save and Load buttons for slot 0.
-The original title's Load button opens the scripted slot browser. Saves and
-system flags are stored in the browser under the SHA-256 of Scene.pck.
+Hold Control to skip where the script enables Control skip. The original Save
+and Load controls in the message frame open the scripted slot browser, which
+is also available from the title’s Load button. Saves and system flags are
+stored in the browser under the SHA-256 of Scene.pck.
 
 ## Verification
 
@@ -69,12 +69,13 @@ The regular title keeps Configuration disabled while its other actions are
 incomplete, including the detailed display and movie dialogs and transitions
 to Save and Load.
 
-Set `SIGLUS_LOAD_ONLY=1` for the title Load round trip. It starts at the
+Set `SIGLUS_LOAD_ONLY=1` for the Save and Load round trip. It starts at the
 cleared-title checkpoint, starts a new game, saves a live page in slot 0,
-reopens the player in the same private browser session, and clicks the original
-Load button and slot. It checks thumbnail dimensions, the saved and subsequent
-dialogue hashes, stage identifiers and the Load command offsets against the
-disassembly.
+overwrites it on the next page and loads it from the message frame. It reopens
+the player in the same private browser session and loads the same slot from the
+original title menu. The probe confirms the three types of prompts and checks
+thumbnail dimensions, dialogue hashes, stage identifiers and script tag offsets
+against the disassembly.
 
 The clean-profile route matched 130,121 command and message tags and
 checked 8,540 decoded audio buffers with zero browser console errors.
@@ -105,9 +106,8 @@ and Gameexe.dat SHA-256
 
 ## Known differences
 
-- The original title opens the scripted Load menu. The in-game Save/Load
-  entry points, day-based autosaves, quick saves and slot management still need
-  end-to-end verification. Thumbnails composite the visible graphical layers
+- Day-based autosaves, quick saves and slot management still need end-to-end
+  verification. Thumbnails composite the visible graphical layers
   at the configured size. Dialogue and native capture effects are absent from
   that composite.
 - Loading restores the VM, current message, background and cast. BGM restarts

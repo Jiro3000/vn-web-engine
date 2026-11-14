@@ -244,6 +244,60 @@ try {
     for (const type of ['mousePressed', 'mouseReleased'])
       await send('Input.dispatchMouseEvent', {type, x, y, button: 'left', clickCount: 1});
   }
+  async function clickScriptMenu(loop, gameX, gameY) {
+    const [x, y] = await evaluate(`(() => {
+      const rect = siglusSurface.querySelector('div[tabindex="0"]').getBoundingClientRect();
+      return [rect.left + rect.width * ${gameX} / 1920, rect.top + rect.height * ${gameY} / 1080];
+    })()`);
+    const frame = await evaluate(loop);
+    await send('Input.dispatchMouseEvent', {type: 'mouseMoved', x, y});
+    await send('Input.dispatchMouseEvent', {
+      type: 'mousePressed',
+      x,
+      y,
+      button: 'left',
+      clickCount: 1,
+    });
+    await waitFor(`${loop} > ${frame}`);
+    await send('Input.dispatchMouseEvent', {
+      type: 'mouseReleased',
+      x,
+      y,
+      button: 'left',
+      clickCount: 1,
+    });
+  }
+  const slotScene = '__sys_menu_save_load01';
+  const slotLoop = `siglusTags.filter(({scene, path}) => scene === '${slotScene}' && path?.join('.') === '86.3').length`;
+  async function selectSlot(mode, slot = 0) {
+    const start = await evaluate('siglusTags.length');
+    const frame = await evaluate(slotLoop);
+    await click(`[data-siglus-action="${mode}"]`);
+    await waitFor(`${slotLoop} > ${frame}`);
+    return chooseSlot(mode, start, slot);
+  }
+  async function chooseSlot(mode, start, slot = 0) {
+    const confirmGraphic = mode === 'save' ? '__sys_sa_setbtn_bg00' : '__sys_lo_setbtn_bg00';
+    const confirm = `siglusTags.slice(${start}).some(({scene, args}) =>
+      scene === '${slotScene}' && args?.[0] === '${confirmGraphic}')`;
+    const field = mode === 'save' ? 'savedPage' : 'loaded';
+    const previous = await evaluate(`siglusSurface.dataset.${field} ?? null`);
+    const done = `(siglusSurface.dataset.${field} ?? null) !== ${JSON.stringify(previous)}`;
+    await clickScriptMenu(slotLoop, 140 + 375 * (slot % 5), 240 + 414 * Math.floor(slot / 5));
+    const action = await waitFor(`${done} ? 'done' : (${confirm}) ? 'confirm' : ''`);
+    if (action === 'confirm') await clickScriptMenu(slotLoop, 883, 557);
+    return action;
+  }
+  async function closeSlotMenu() {
+    for (const type of ['keyDown', 'keyUp'])
+      await send('Input.dispatchKeyEvent', {
+        type,
+        key: 'Escape',
+        code: 'Escape',
+        windowsVirtualKeyCode: 27,
+      });
+    await waitFor("!document.querySelector('[data-siglus-action=save]')?.parentElement.hidden");
+  }
   async function clickStage() {
     await click('#siglus-surface > div[tabindex="0"]');
   }
@@ -344,11 +398,22 @@ try {
   if (loadOnly) {
     const newGame = '#siglus-surface button[aria-label="New Game"]';
     await click(newGame);
-    const savedState = await runUntil((current) => Number(current.page) >= 3);
+    let savedState = await runUntil((current) => Number(current.page) >= 3);
     const dialogue = "siglusSurface.querySelector('[data-siglus-dialogue]').textContent";
-    const savedText = digest(await evaluate(dialogue));
-    await click('[data-siglus-action="save"]');
+    const originalText = digest(await evaluate(dialogue));
+    assert.equal(await selectSlot('save'), 'confirm');
     await waitFor('siglusSurface.dataset.savedPage');
+    await closeSlotMenu();
+    await clickStage();
+    await waitFor(`Number(siglusSurface.dataset.page) > ${savedState.page}`);
+    savedState = await state();
+    const savedText = digest(await evaluate(dialogue));
+    assert.notEqual(savedText, originalText);
+    assert.equal(await selectSlot('save'), 'confirm', 'Overwriting the slot requires confirmation');
+    await waitFor(`siglusSurface.dataset.savedPage === '${savedState.page}'`);
+    await closeSlotMenu();
+    const saveCommands = await evaluate(`siglusTags.filter(({scene}) => scene === '${slotScene}')`);
+    compareTags(saveCommands, scripts, {compareSourceLine: false});
     const thumbnail = await evaluate(`(() => {
       const key = Object.keys(localStorage).find((key) => key.endsWith(':saves'));
       return JSON.parse(localStorage.getItem(key))[0][1].thumbnail;
@@ -358,6 +423,13 @@ try {
     await waitFor(`Number(siglusSurface.dataset.page) > ${savedState.page}`);
     const nextText = digest(await evaluate(dialogue));
     assert.notEqual(nextText, savedText);
+    assert.equal(await selectSlot('load'), 'confirm');
+    await waitFor("siglusSurface.dataset.loaded === 'true'");
+    assert.equal(
+      digest(await evaluate(dialogue)),
+      savedText,
+      'In-game Load used the overwritten slot',
+    );
     const previousTab = targetId;
     ({targetId} = await cdp.command('Target.createTarget', {url: 'about:blank'}));
     ({sessionId} = await cdp.command('Target.attachToTarget', {targetId, flatten: true}));
@@ -366,39 +438,11 @@ try {
     await openPlayer();
     await playInstallation();
     await click('#siglus-surface button[aria-label="Load Game"]');
-    const loadScene = '__sys_menu_save_load01';
-    const loop = `siglusTags.filter(({scene, path}) => scene === '${loadScene}' && path?.join('.') === '86.3').length`;
-    await waitFor(loop);
+    await waitFor(slotLoop);
     const canvasShape = await evaluate(`Array.from(siglusSurface.querySelectorAll('canvas'))
       .filter(({width, height}) => width === 354 && height === 199).length`);
     assert.ok(canvasShape > 0, 'The scripted slot created the stored thumbnail');
-    async function clickLoad(gameX, gameY) {
-      const [x, y] = await evaluate(`(() => {
-        const rect = siglusSurface.querySelector('div[tabindex="0"]').getBoundingClientRect();
-        return [rect.left + rect.width * ${gameX} / 1920, rect.top + rect.height * ${gameY} / 1080];
-      })()`);
-      const frame = await evaluate(loop);
-      await send('Input.dispatchMouseEvent', {type: 'mouseMoved', x, y});
-      await send('Input.dispatchMouseEvent', {
-        type: 'mousePressed',
-        x,
-        y,
-        button: 'left',
-        clickCount: 1,
-      });
-      await waitFor(`${loop} > ${frame}`);
-      await send('Input.dispatchMouseEvent', {
-        type: 'mouseReleased',
-        x,
-        y,
-        button: 'left',
-        clickCount: 1,
-      });
-    }
-    await clickLoad(140, 240);
-    const action = await waitFor(`siglusSurface.dataset.loaded ? 'loaded' :
-      siglusTags.some(({scene, args}) => scene === '${loadScene}' && args?.[0] === '__sys_lo_setbtn_bg00') ? 'confirm' : ''`);
-    if (action === 'confirm') await clickLoad(883, 557);
+    assert.equal(await chooseSlot('load', 0), 'confirm');
     await waitFor("siglusSurface.dataset.loaded === 'true'");
     assert.equal(digest(await evaluate(dialogue)), savedText);
     assert.equal(await evaluate('siglusSurface.dataset.background'), savedState.background);
@@ -412,10 +456,10 @@ try {
       nextText,
       'The script continued at the saved VM position',
     );
-    const commands = await evaluate(`siglusTags.filter(({scene}) => scene === '${loadScene}')`);
+    const commands = await evaluate(`siglusTags.filter(({scene}) => scene === '${slotScene}')`);
     compareTags(commands, scripts, {compareSourceLine: false});
     console.log(
-      `Original Load restored the dialogue, stage and thumbnail after reopening, then resumed the script. Matched ${commands.length} tags.`,
+      `Original Load restored the dialogue, stage and thumbnail after reopening, then resumed the script. Matched ${saveCommands.length + commands.length} Save/Load tags.`,
     );
   } else if (configOnly) {
     await click('#siglus-surface button[aria-label="Configuration"]');
@@ -669,14 +713,15 @@ try {
     await runUntil((current) => Number(current.page) >= savePage);
     const dialogue = "siglusSurface.querySelector('[data-siglus-dialogue]').textContent";
     const savedText = digest(await evaluate(dialogue));
-    await click('[data-siglus-action="save"]');
+    await selectSlot('save');
+    await closeSlotMenu();
     const saved = await waitFor('siglusSurface.dataset.savedPage');
     assert.equal(Number(saved), savePage);
     const beforeLoad = await evaluate('siglusTags.length');
     await clickStage();
     await waitFor('Number(siglusSurface.dataset.page) > ' + saved);
     assert.notEqual(digest(await evaluate(dialogue)), savedText, 'Advanced to another page');
-    await click('[data-siglus-action="load"]');
+    await selectSlot('load');
     await waitFor("siglusSurface.dataset.loaded === 'true'");
     assert.equal(digest(await evaluate(dialogue)), savedText, 'Loaded dialogue SHA-256');
     const afterLoad = await evaluate('siglusTags.length');
@@ -727,7 +772,15 @@ try {
     const total = await evaluate('siglusTags.length');
     for (let i = 0; i < total; i += 1024)
       trace.push(...(await evaluate('siglusTags.slice(' + i + ',' + (i + 1024) + ')')));
-    compareTags(trace, scripts);
+    compareTags(
+      trace.filter(({scene}) => scene !== slotScene),
+      scripts,
+    );
+    compareTags(
+      trace.filter(({scene}) => scene === slotScene),
+      scripts,
+      {compareSourceLine: false},
+    );
     const chapters = [...scripts.keys()].filter((name) => /^0[1-8]_/.test(name)).sort();
     const calls = trace.filter(
       (tag) => tag.scene.startsWith('00') && tag.path?.length === 1 && tag.path[0] === 5,

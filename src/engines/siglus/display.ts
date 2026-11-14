@@ -48,6 +48,9 @@ export class SiglusDisplay {
   private readonly effect = document.createElement('div');
   private readonly day = document.createElement('div');
   private readonly controls = document.createElement('div');
+  private readonly frameActions: {type: string; button: HTMLButtonElement; refresh: () => void}[] =
+    [];
+  private activateFrameAction?: (type: string, sound: number) => void;
   private readonly systemLayer = document.createElement('div');
   private readonly message = document.createElement('div');
   private readonly speaker = document.createElement('div');
@@ -112,10 +115,8 @@ export class SiglusDisplay {
     this.cast.style.cssText = 'position:absolute;inset:0;pointer-events:none';
     for (const layer of [this.effect, this.day])
       layer.style.cssText = 'position:absolute;inset:0;pointer-events:none';
-    this.controls.style.cssText =
-      'position:absolute;right:28px;bottom:18px;display:flex;gap:8px;z-index:1';
+    this.controls.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:1';
     this.controls.hidden = true;
-    this.controls.style.display = 'none';
     this.systemLayer.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:2';
     this.stage.append(
       this.layers,
@@ -346,6 +347,7 @@ export class SiglusDisplay {
     this.message.style.fontFamily = this.fontFamily(
       this.config.get('CONFIG.FONT.NAME')?.split('"')[1],
     );
+    await this.prepareFrameActions();
     this.selectMessageWindow(0);
     const filter = this.config.get('WAKU.000.FILTER_FILE')?.split('"')[1];
     if (filter) {
@@ -978,26 +980,59 @@ export class SiglusDisplay {
     }
   }
 
-  pageControls(save: (() => void) | undefined, load: (() => void) | undefined): void {
-    this.controls.replaceChildren();
-    for (const [label, action] of [
-      ['Save', save],
-      ['Load', load],
-    ] as const) {
-      if (!action) continue;
+  private async prepareFrameActions(): Promise<void> {
+    for (const [key, value] of this.config) {
+      if (!/^WAKU\.000\.BTN\.\d+\.TYPE$/.test(key)) continue;
+      const type = value.split('"')[1];
+      if (type !== 'save' && type !== 'load') continue;
+      const prefix = key.slice(0, -4);
+      const file = this.config.get(prefix + 'FILE')?.split('"')[1];
+      const [anchor, x, y] = (this.config.get(prefix + 'POS') ?? '').split(',').map(Number);
+      if (!file || anchor !== 2 || x === undefined || y === undefined) continue;
+      const pattern = Number(this.config.get(prefix + 'CUT_NO') ?? 0);
+      const frame = await this.graphic(file, pattern);
+      const hover = await this.graphic(file, pattern + 1);
+      const pressed = await this.graphic(file, pattern + 2);
+      const disabled = await this.graphic(file, pattern + 3);
       const button = document.createElement('button');
       button.type = 'button';
-      button.textContent = label;
-      button.dataset.siglusAction = label.toLowerCase();
+      button.dataset.siglusAction = type;
+      button.setAttribute('aria-label', type === 'save' ? 'Save' : 'Load');
+      button.style.cssText = `position:absolute;left:${x}px;bottom:${y - frame.height}px;width:${frame.width}px;height:${frame.height}px;border:0;padding:0;background:none;pointer-events:auto`;
+      const canvas = this.node(frame);
+      const paint = (graphic: Graphic) => {
+        const context = canvas.getContext('2d')!;
+        context.clearRect(0, 0, canvas.width, canvas.height);
+        context.drawImage(graphic.image, 0, 0);
+      };
+      button.addEventListener('pointerenter', () => paint(button.disabled ? disabled : hover));
+      button.addEventListener('pointerleave', () => paint(button.disabled ? disabled : frame));
+      button.addEventListener('pointerdown', () => paint(pressed));
+      button.addEventListener('pointerup', () => paint(hover));
+      const sound = Number(this.config.get(prefix + 'SE') ?? 0);
       button.addEventListener('click', (event) => {
         event.stopPropagation();
-        action();
         this.stage.focus({preventScroll: true});
+        this.activateFrameAction?.(type, sound);
+      });
+      button.append(canvas);
+      this.frameActions.push({
+        type,
+        button,
+        refresh: () => paint(button.disabled ? disabled : frame),
       });
       this.controls.append(button);
     }
-    this.controls.hidden = !this.controls.childElementCount;
-    this.controls.style.display = this.controls.hidden ? 'none' : 'flex';
+  }
+
+  pageControls(activate?: (type: string, sound: number) => void, save = false, load = false): void {
+    this.activateFrameAction = activate;
+    const frame = this.config.get(`MWND.${String(this.windowIndex).padStart(3, '0')}.WAKU_NO`);
+    this.controls.hidden = !activate || frame !== '0' || this.message.hidden;
+    for (const {type, button, refresh} of this.frameActions) {
+      button.disabled = !(type === 'save' ? save : load);
+      refresh();
+    }
   }
 
   recollect(active: boolean): void {
