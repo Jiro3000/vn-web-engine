@@ -367,10 +367,7 @@ export class SiglusPlayer {
     await this.vm.run(this.startScene);
   }
 
-  private async callSystemScene(
-    key: string,
-    capture = key === 'SAVE_SCENE' || key === 'CANCEL_SCENE',
-  ): Promise<void> {
+  private async callSystemScene(key: string): Promise<void> {
     const [scene, label] = this.game.config.get(key)?.split(',') ?? [];
     const name = scene?.split('"')[1];
     if (!name) throw new Error(`Missing Siglus ${key}`);
@@ -381,7 +378,6 @@ export class SiglusPlayer {
       this.messageHidden,
       this.quakeStopped,
     ] as const;
-    if (capture && this.savePoint) this.savePoint.thumbnail = this.display.captureThumbnail();
     this.systemCallActive = true;
     this.inputSampled = false;
     this.display.setSystemInput(true);
@@ -697,10 +693,7 @@ export class SiglusPlayer {
           if (!this.controller.signal.aborted) console.error(error);
         });
       else if (type === 'qsave' || type === 'qload')
-        await this.callSystemScene(
-          `WAKU.000.BTN.${String(id).padStart(3, '0')}.CALL`,
-          type === 'qsave',
-        );
+        await this.callSystemScene(`WAKU.000.BTN.${String(id).padStart(3, '0')}.CALL`);
       else await this.callSystemScene(type === 'save' ? 'SAVE_SCENE' : 'LOAD_SCENE');
     }
   }
@@ -1324,7 +1317,10 @@ export class SiglusPlayer {
     const s = (i: number) => String(args[i] ?? '');
     if (path.length === 1) {
       switch (root) {
-        case 80: // capture: the system layer composites above the retained scene.
+        case 80: // capture
+          if (!this.systemCallActive) return undefined;
+          if (this.savePoint) this.savePoint.thumbnail = this.display.captureThumbnail();
+          return 0;
         case 81: // capture_free
           if (this.systemCallActive) return 0;
           return undefined;

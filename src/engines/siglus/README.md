@@ -82,7 +82,7 @@ volume types, applied gain, decoded frames, sample rate, peak and RMS. It compar
 offsets, opcodes and argument counts with the disassembly. For Configuration,
 the trace uses offsets as source locations because branches can skip line markers.
 The regular title keeps Configuration disabled while the detailed display
-and font dialogs and the transitions to Save and Load are incomplete.
+and font dialogs are incomplete.
 
 The System and Text tabs execute `syscom.set_window_mode` (4) and
 `syscom.set_font_name` (283) in `__sys_menu_config01`. The browser maps the
@@ -101,10 +101,21 @@ bounds. The browser handles movie configuration command 167 using template
 Windows Media Player selection. Both choices play through the same browser
 host, which chooses the decoder by the file format. The remaining advanced
 dialogs still need their native command dispatch and controls mapped.
+In the embedded image, the screen modal wrapper at `0x5481b0` uses the
+`cfg_wnd_modal_screen` key and calls `DialogBoxParamW` with template 127
+at `0x548248`. The font modal references `cfg_wnd_modal_font`
+at `0x54757c` and opens the empty base template 240 at `0x5475cb`.
+Its actual controls need to be recovered from the initializer.
 
 Set `SIGLUS_LOAD_ONLY=1` for the Save and Load round trip. It starts at the
-cleared-title checkpoint, starts a new game, saves a live page in slot 0,
-overwrites it on the next page and loads it from the message frame. It reopens
+cleared-title checkpoint and starts a new game. It uses the in-game Load
+menu to enter Configuration, then switches to Save and saves a live page
+in slot 0. It overwrites the slot on the next page, then goes from Save
+through Configuration to Load. These transitions use the script's bottom
+menu buttons and jumps within the current system call. The browser creates
+the thumbnail when the original `capture` command runs in
+`__sys_system_call.$excall_ready`, so the thumbnail is also available when
+Save is reached from a different menu. The probe reopens
 the player in the same private browser session and loads the same slot from the
 original title menu. The probe confirms the three types of prompts and checks
 thumbnail dimensions, dialogue hashes, stage identifiers and script tag offsets

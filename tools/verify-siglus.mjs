@@ -917,9 +917,34 @@ try {
     let savedState = await runUntil((current) => Number(current.page) >= 3);
     const dialogue = "siglusSurface.querySelector('[data-siglus-dialogue]').textContent";
     const originalText = digest(await evaluate(dialogue));
-    assert.equal(await selectSlot('save'), 'confirm');
+    const configScene = '__sys_menu_config01';
+    const configLoop = `siglusTags.filter(({scene, path}) =>
+      scene === '${configScene}' && path?.join('.') === '86.3').length`;
+    async function switchToConfiguration(from) {
+      const slotFrame = await evaluate(slotLoop);
+      await click(`[data-siglus-action="${from}"]`);
+      await waitFor(`${slotLoop} > ${slotFrame}`);
+      const configFrame = await evaluate(configLoop);
+      await clickScriptMenu(slotLoop, 745, 1023);
+      await waitFor(`${configLoop} > ${configFrame}`);
+    }
+    async function switchToSlots(mode) {
+      const frame = await evaluate(slotLoop);
+      const start = await evaluate('siglusTags.length');
+      await clickScriptMenu(configLoop, mode === 'save' ? 225 : 485, 1023);
+      await waitFor(`${slotLoop} > ${frame}`);
+      return chooseSlot(mode, start);
+    }
+    const fromLoad = await evaluate('siglusTags.length');
+    await switchToConfiguration('load');
+    assert.equal(await switchToSlots('save'), 'confirm');
     await waitFor('siglusSurface.dataset.savedPage');
-    await closeSlotMenu();
+    const thumbnail = async () =>
+      evaluate(asyncExpression(`${slotRecords()}.find(([slot]) => slot === 0)?.[1].thumbnail`));
+    assert.match(await thumbnail(), /^data:image\/jpeg;base64,/);
+    await clickScriptMenu(slotLoop, 1540, 1023);
+    await waitForDialogueControls();
+    assert.equal(digest(await evaluate(dialogue)), originalText);
     await clickStage();
     await waitFor(`Number(siglusSurface.dataset.page) > ${savedState.page}`);
     savedState = await state();
@@ -927,23 +952,35 @@ try {
     assert.notEqual(savedText, originalText);
     assert.equal(await selectSlot('save'), 'confirm', 'Overwriting the slot requires confirmation');
     await waitFor(`siglusSurface.dataset.savedPage === '${savedState.page}'`);
-    await closeSlotMenu();
+    await clickScriptMenu(slotLoop, 1540, 1023);
+    await waitForDialogueControls();
     const saveCommands = await evaluate(`siglusTags.filter(({scene}) => scene === '${slotScene}')`);
     compareTags(saveCommands, scripts, {compareSourceLine: false});
-    const thumbnail = await evaluate(
-      asyncExpression(`${slotRecords()}.find(([slot]) => slot === 0)?.[1].thumbnail`),
-    );
-    assert.match(thumbnail, /^data:image\/jpeg;base64,/);
+    assert.match(await thumbnail(), /^data:image\/jpeg;base64,/);
     await clickStage();
     await waitFor(`Number(siglusSurface.dataset.page) > ${savedState.page}`);
     const nextText = digest(await evaluate(dialogue));
     assert.notEqual(nextText, savedText);
-    assert.equal(await selectSlot('load'), 'confirm');
+    await switchToConfiguration('save');
+    assert.equal(await switchToSlots('load'), 'confirm');
     await waitFor("siglusSurface.dataset.loaded === 'true'");
     assert.equal(
       digest(await evaluate(dialogue)),
       savedText,
       'In-game Load used the overwritten slot',
+    );
+    const menuTrace = await evaluate(`siglusTags.slice(${fromLoad}).filter(({scene}) =>
+      scene === '${configScene}' || scene === '${slotScene}' || scene === '__sys_system_call')`);
+    compareTags(menuTrace, scripts, {compareSourceLine: false});
+    const jumps = (from) =>
+      menuTrace.filter(
+        ({scene, path, args}) =>
+          scene === from && path?.join('.') === '4' && [configScene, slotScene].includes(args[0]),
+      );
+    assert.ok(jumps(slotScene).some(({args}) => args[0] === configScene));
+    assert.ok(jumps(configScene).some(({args}) => args[0] === slotScene));
+    console.log(
+      'Configuration switched between the original Load and Save menus and retained the scene capture.',
     );
     await reopenPlayer();
     await click('#siglus-surface button[aria-label="Load Game"]');
