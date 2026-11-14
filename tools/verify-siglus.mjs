@@ -341,6 +341,57 @@ try {
     music = undefined;
     await runUntil((current) => current.lines === 50 && Number(current.page) > page);
     assert.ok(backgrounds.size > 1 && voices.size > 1 && sprites.size > 1 && music === 'bgm02');
+    const pausedPage = await evaluate('siglusSurface.dataset.page');
+    const dialogue = '#siglus-surface [data-siglus-dialogue]';
+    assert.equal(
+      await evaluate(
+        `getComputedStyle(document.querySelector(${JSON.stringify(dialogue)})).userSelect`,
+      ),
+      'text',
+    );
+    const [start, end, y] = await evaluate(`(() => {
+      const text = document.querySelector(${JSON.stringify(dialogue)});
+      const walker = document.createTreeWalker(text, NodeFilter.SHOW_TEXT);
+      let node;
+      while ((node = walker.nextNode())) {
+        if (node.length < 3 || !node.data.trim()) continue;
+        const range = document.createRange();
+        range.setStart(node, 0);
+        range.setEnd(node, node.length);
+        for (const rect of range.getClientRects()) {
+          const y = rect.top + rect.height / 2;
+          const start = rect.left + 2;
+          const end = Math.min(rect.right - 2, innerWidth - 2);
+          if (end - start >= 16 && text.contains(document.elementFromPoint(start, y)))
+            return [start, end, y];
+        }
+      }
+      throw Error('No selectable dialogue range');
+    })()`);
+    await send('Input.dispatchMouseEvent', {
+      type: 'mousePressed',
+      x: start,
+      y,
+      button: 'left',
+      clickCount: 1,
+    });
+    for (const fraction of [0.33, 0.66, 1])
+      await send('Input.dispatchMouseEvent', {
+        type: 'mouseMoved',
+        x: start + (end - start) * fraction,
+        y,
+        button: 'left',
+        buttons: 1,
+      });
+    await send('Input.dispatchMouseEvent', {
+      type: 'mouseReleased',
+      x: end,
+      y,
+      button: 'left',
+      clickCount: 1,
+    });
+    await waitFor('!getSelection().isCollapsed');
+    assert.equal(await evaluate('siglusSurface.dataset.page'), pausedPage);
     const trace = await evaluate('siglusTags');
     const newGameTags = compareOpening(trace, scripts, scene, entry, 50);
     console.log(
@@ -349,6 +400,10 @@ try {
     console.log(
       `New Game: ${backgrounds.size} backgrounds, ${sprites.size} portraits, ${voices.size} decoded voices, ${music}.`,
     );
+    // Click the unused space in the dialogue box, outside the highlighted glyphs.
+    await click(dialogue);
+    await waitFor('Number(siglusSurface.dataset.page) > ' + pausedPage);
+    console.log('Dragging selects dialogue, and clicking advances it.');
   } else {
     const savePage = page + 3;
     await runUntil((current) => Number(current.page) >= savePage);

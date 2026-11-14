@@ -22,9 +22,9 @@ CHAPTER2, CHAPTER3, ED. Chapter 08 sets `G[1575]` after ED, and the controlling
 scene sets `G[1007]=3` and `G[1009]=1` before `returnmenu`. The menu
 configured in Gameexe.dat is `_titlemenu` entry 0.
 
-Click the game or press Enter to advance a page. Hold Control to skip where
-the script enables Control skip. At a page wait the browser player offers one
-Save slot and a Load button. It keeps that slot and system flags in browser
+Drag over dialogue text to select it. Click or press Enter to advance a page.
+Hold Control to skip where the script enables Control skip. At a page wait
+the browser player offers one Save slot and a Load button. It keeps that slot and system flags in browser
 storage keyed by the SHA-256 of Scene.pck.
 
 ## Verification
@@ -54,6 +54,28 @@ The clean-profile route matched 130,121 command and message tags and
 checked 8,540 decoded audio buffers with zero browser console errors.
 Save and load were exercised on page 67. `npm test` reported the same
 48 failing test names as `main` at `15f2bee` (2,518 passed, 3 skipped).
+
+## Scripted interface in the original
+
+The following entries identify the UI in the tested archive. The table
+describes the original scripts and configuration.
+
+| Entry point                                | Access and state                                                                                                                                                                                                                                                                                |
+| ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `_start:0` → `00シナリオフロー:0`          | First startup runs the prologue. Once the prologue flag is set, startup goes to `_titlemenu:0`.                                                                                                                                                                                                 |
+| `_titlemenu_dmy:0`                         | New Game (button 1) resumes the opening flow. Configuration (3) returns to this title. Exit (4) requests game shutdown.                                                                                                                                                                         |
+| `_titlemenu:0/1/2`                         | Prologue (0), New Game (1), Load (2), Configuration (3), Music (4), Exit (5). Layout state 0 shows Start, Configuration and Exit; states 1 and 2 add Prologue and Load; state 3 also shows Music. Load is disabled when there is no save. New Game from startup enters the scenario flow at 90. |
+| `_extra_music:0`                           | Music opens from the cleared title. Its exit jumps to `_titlemenu:1`.                                                                                                                                                                                                                           |
+| `__sys_menu_cancel00:0`                    | In-game cancel action uses the current configuration: quick menu, hide message window, Save, Load, or Configuration. The script checks title state, map/replay state, and save/load permission.                                                                                                 |
+| `__sys_menu_config00:0`                    | Starts a system call and transfers to `__sys_menu_config01:0`.                                                                                                                                                                                                                                  |
+| `__sys_menu_save_load00:0/1`               | Save and Load select their mode, then transfer to `__sys_menu_save_load01:0`. Save checks title and replay state; Load checks replay state.                                                                                                                                                     |
+| `WAKU.000.BTN` in Gameexe.dat              | Message frame actions include quick save/load, slot save/load, return to selection, auto, read skip, title, exit, configuration, hide, replay voice and backlog. Button resources and positions are in the configuration.                                                                       |
+| `__sys_system_call` and `__sys_day_change` | Quick saves rotate through numbered positions. Day changes can invoke the scripted day save, gated by script state and configuration.                                                                                                                                                           |
+
+These entry points are from Scene.pck SHA-256
+`98ce9b7f4e16b65f47871af6068b43a07b8717ddf22a4e49ccd6a312979cd523`
+and Gameexe.dat SHA-256
+`492bccbb33ca3ce6e6ff074fe66d52281bb1e80dca5d528696494574b3cb892f`.
 
 ## Known differences
 

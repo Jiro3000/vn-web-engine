@@ -8,6 +8,6 @@
       id="siglus-surface"
       style="position:absolute;inset:0;overflow:hidden"
     ></div>{/snippet}
-  {#snippet textHelp()}Click the game or press Enter to advance.{/snippet}
+  {#snippet textHelp()}Drag to select dialogue. Click or press Enter to advance.{/snippet}
   {#snippet saveFiles()}{/snippet}
 </PlayerShell>

@@ -84,8 +84,6 @@ const controls = mountInstallationControls({
 });
 
 fullscreen.disabled = true;
-el<HTMLSelectElement>('text-mode').value = 'dom';
-el<HTMLSelectElement>('text-mode').disabled = true;
 
 function emit(tag: SiglusTag): void {
   surface.dispatchEvent(new CustomEvent('siglus-tag', {detail: tag}));

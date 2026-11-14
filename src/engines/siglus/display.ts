@@ -46,6 +46,7 @@ export class SiglusDisplay {
   private filter?: HTMLElement;
   readonly windowDisplay: BrowserWindowDisplayHost;
   private readonly click: (event: MouseEvent) => void;
+  private readonly pointerDown: (event: PointerEvent) => void;
   private readonly key: (event: KeyboardEvent) => void;
 
   constructor(
@@ -66,6 +67,11 @@ export class SiglusDisplay {
     this.speaker.style.cssText = 'position:absolute;white-space:pre;text-shadow:0 1px 4px #000';
     this.text.style.cssText =
       'position:absolute;white-space:pre-wrap;overflow-wrap:anywhere;text-shadow:0 1px 4px #000';
+    for (const element of [this.speaker, this.text]) {
+      element.style.pointerEvents = 'auto';
+      element.style.userSelect = 'text';
+      element.style.cursor = 'text';
+    }
     this.portrait.style.cssText = 'position:absolute;overflow:hidden';
     this.cast.style.cssText = 'position:absolute;inset:0;pointer-events:none';
     for (const layer of [this.effect, this.day])
@@ -87,9 +93,16 @@ export class SiglusDisplay {
       false,
     );
     this.windowDisplay.configure({width, height, fullscreen: false});
-    this.click = () => this.advance();
+    this.click = () => {
+      if (this.hasTextSelection()) return;
+      this.advance();
+    };
+    this.pointerDown = (event) => {
+      if (event.button === 0 && this.hasTextSelection())
+        this.stage.ownerDocument.getSelection()?.removeAllRanges();
+    };
     this.key = (event) => {
-      if (event.key === 'Control') skip(event.type === 'keydown');
+      if (event.key === 'Control') skip(event.type === 'keydown' && !this.hasTextSelection());
       if (
         event.type === 'keydown' &&
         (event.key === 'Enter' || event.key === ' ') &&
@@ -102,10 +115,18 @@ export class SiglusDisplay {
     };
     this.stage.tabIndex = 0;
     this.stage.addEventListener('click', this.click);
+    this.stage.addEventListener('pointerdown', this.pointerDown);
     this.stage.addEventListener('keydown', this.key);
     this.stage.addEventListener('keyup', this.key);
     this.stage.addEventListener('focusout', () => skip(false));
     this.stage.focus({preventScroll: true});
+  }
+
+  private hasTextSelection(): boolean {
+    const selection = this.stage.ownerDocument.getSelection();
+    return Boolean(
+      selection && !selection.isCollapsed && this.message.contains(selection.anchorNode),
+    );
   }
 
   async prepare(): Promise<void> {
@@ -540,6 +561,7 @@ export class SiglusDisplay {
   dispose(): void {
     this.windowDisplay.dispose();
     this.stage.removeEventListener('click', this.click);
+    this.stage.removeEventListener('pointerdown', this.pointerDown);
     this.stage.removeEventListener('keydown', this.key);
     this.stage.removeEventListener('keyup', this.key);
     if (this.loadedFont) document.fonts.delete(this.loadedFont);
