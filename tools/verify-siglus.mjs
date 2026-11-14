@@ -294,8 +294,16 @@ try {
       () => readFile(join(resolve(folder), 'Scene.pck')),
     );
     const key = 'siglus:' + digest(pack) + ':system';
+    const flags = [
+      [1006, 1],
+      [1007, 3],
+      [1571, 1],
+      [1575, 1],
+    ];
+    // Chapter 02 unlocks the first character voice control.
+    if (configOnly) flags.push([1600, 1]);
     await evaluate(
-      `localStorage.setItem(${JSON.stringify(key)}, '[[1006,1],[1007,3],[1571,1],[1575,1]]')`,
+      `localStorage.setItem(${JSON.stringify(key)}, ${JSON.stringify(JSON.stringify(flags))})`,
     );
   }
   await playInstallation();
@@ -374,6 +382,38 @@ try {
     await waitFor(`siglusTags.slice(${beforeSound}).some(({scene, path}) =>
       scene === '${configScene}' && path?.join('.') === '86.3')`);
     console.log('Configuration: the Sound tab created its original controls.');
+    const volumePreviews = [
+      [242, 255],
+      [307, 158],
+      [372, 204],
+      [437, 255],
+      [502, 190],
+      [567, 120],
+      [632, 100],
+    ];
+    let effectShape;
+    for (const [buttonY, volume] of volumePreviews) {
+      const preview = await evaluate('siglusAudio.length');
+      await clickConfig(875, buttonY + 15);
+      const sample = await waitFor(`siglusAudio.slice(${preview}).find(({channel, resource}) =>
+        channel === 'pcm15' && resource === 'system_decide')`);
+      assert.equal(sample.volumeType, 31);
+      assert.ok(Math.abs(sample.gain - volume / 255) < 1e-7);
+      const {frames, rate, peak, rms} = sample;
+      const shape = {frames, rate, peak, rms};
+      assert.ok(frames > 0 && rate > 0 && peak >= rms && rms > 0);
+      if (effectShape) assert.deepEqual(shape, effectShape);
+      effectShape = shape;
+    }
+    const voice = await evaluate('siglusAudio.length');
+    await clickConfig(1163, 247);
+    const voicePreview = await waitFor(`siglusAudio.slice(${voice}).find(({channel, resource}) =>
+      channel === 'pcm15' && resource === 300914)`);
+    assert.equal(voicePreview.volumeType, 1);
+    assert.equal(voicePreview.gain, 1);
+    assert.ok(voicePreview.frames > 0 && voicePreview.rate > 0);
+    assert.ok(voicePreview.peak >= voicePreview.rms && voicePreview.rms > 0);
+    console.log('Configuration audio previews', {effectShape, voicePreview});
     await clickConfig(1630, 22, 'right');
     await waitFor(`(() => {
       const button = siglusSurface.querySelector('button[aria-label="New Game"]');

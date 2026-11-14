@@ -9,6 +9,7 @@ interface Playing {
   gain: GainNode;
   kind: SiglusAudioKind;
   character?: number;
+  volumeType?: number;
 }
 
 export type SiglusAudioKind = 'BGM' | 'KOE' | 'PCM' | 'SE';
@@ -18,6 +19,7 @@ type MixKind = (typeof mixKinds)[number];
 export class SiglusAudio {
   private readonly context = new AudioContext();
   private readonly host = new BrowserAudioContextHost(this.context, document);
+  private readonly soundLevels = new Map<number, number>();
   private readonly channelLevels = new Map<string, number>();
   private readonly playing = new Map<string, Playing>();
   private readonly indexes = new Map<string, ReturnType<typeof ovkIndex>>();
@@ -115,7 +117,12 @@ export class SiglusAudio {
     this.root.dataset.bgm = name;
   }
 
-  async voice(id: number, channel = 'voice', character?: number): Promise<void> {
+  async voice(
+    id: number,
+    channel = 'voice',
+    character?: number,
+    volumeType?: number,
+  ): Promise<void> {
     const bank = Math.floor(id / 100000);
     const path = `koe/z${String(bank).padStart(4, '0')}.ovk`;
     const file = this.files.get(path);
@@ -131,14 +138,18 @@ export class SiglusAudio {
     const data = await readOvk(file, entry);
     const buffer = await this.context.decodeAudioData(data.buffer);
     this.start(channel, buffer, 'KOE', {
+      resource: id,
+      volumeType,
       character:
         character === undefined ? undefined : (this.voiceGroups.get(character) ?? character),
     });
-    this.root.dataset.voice = String(id);
-    this.root.dataset.voiceDuration = String(buffer.duration);
+    if (channel === 'voice') {
+      this.root.dataset.voice = String(id);
+      this.root.dataset.voiceDuration = String(buffer.duration);
+    }
   }
 
-  async effect(channel: string, name: string, loop = false): Promise<void> {
+  async effect(channel: string, name: string, loop = false, volumeType?: number): Promise<void> {
     const path = `wav/${name.toLowerCase()}.nwa`;
     let decoded = this.effects.get(path);
     if (!decoded) {
@@ -146,7 +157,11 @@ export class SiglusAudio {
       this.effects.set(path, decoded);
       if (this.effects.size > 16) this.effects.delete(this.effects.keys().next().value!);
     }
-    this.start(channel, await decoded, channel === 'se' ? 'SE' : 'PCM', {loop});
+    this.start(channel, await decoded, channel === 'se' ? 'SE' : 'PCM', {
+      loop,
+      volumeType,
+      resource: name,
+    });
   }
 
   private start(
@@ -160,6 +175,8 @@ export class SiglusAudio {
       start = 0,
       fade = 0,
       character,
+      volumeType,
+      resource,
     }: {
       loop?: boolean;
       loopStart?: number;
@@ -167,13 +184,15 @@ export class SiglusAudio {
       start?: number;
       fade?: number;
       character?: number;
+      volumeType?: number;
+      resource?: string | number;
     } = {},
   ): void {
     if (this.closed) return;
     this.stop(channel);
     const source = this.context.createBufferSource();
     const gain = this.context.createGain();
-    const volume = this.playbackVolume(channel, kind, character);
+    const volume = this.playbackVolume(channel, kind, character, volumeType);
     const now = this.context.currentTime;
     gain.gain.setValueAtTime(fade > 0 ? 0 : volume, now);
     if (fade > 0) gain.gain.linearRampToValueAtTime(volume, now + fade / 1000);
@@ -182,7 +201,7 @@ export class SiglusAudio {
     source.loopStart = loopStart;
     source.loopEnd = loopEnd < 0 ? buffer.duration : loopEnd;
     source.connect(gain).connect(this.context.destination);
-    const playing = {source, gain, kind, character};
+    const playing = {source, gain, kind, character, volumeType};
     this.playing.set(channel, playing);
     this.active.add(playing);
     source.onended = () => {
@@ -211,7 +230,15 @@ export class SiglusAudio {
       }
       this.root.dispatchEvent(
         new CustomEvent('siglus-audio', {
-          detail: {channel, frames: buffer.length, rate: buffer.sampleRate, ...levels},
+          detail: {
+            channel,
+            resource,
+            volumeType,
+            gain: volume,
+            frames: buffer.length,
+            rate: buffer.sampleRate,
+            ...levels,
+          },
         }),
       );
     }
@@ -297,29 +324,54 @@ export class SiglusAudio {
     );
   }
 
-  private playbackVolume(channel: string, kind: SiglusAudioKind, character?: number): number {
-    return this.volume(kind, character) * ((this.channelLevels.get(channel) ?? 255) / 255);
+  soundLevel(type: number): number {
+    return this.soundLevels.get(type) ?? 255;
+  }
+
+  setSoundLevel(type: number, level?: number): void {
+    if (level === undefined) this.soundLevels.delete(type);
+    else this.soundLevels.set(type, Math.max(0, Math.min(255, level)));
+    this.updateGains('ALL');
+  }
+
+  private playbackVolume(
+    channel: string,
+    kind: SiglusAudioKind,
+    character?: number,
+    volumeType?: number,
+  ): number {
+    const level = this.channelLevels.get(channel) ?? 255;
+    const volume =
+      volumeType === undefined || volumeType === 1
+        ? this.volume(kind, character)
+        : this.enabled('ALL')
+          ? (this.level('ALL') * this.soundLevel(volumeType)) / (255 * 255)
+          : 0;
+    return (volume * level) / 255;
   }
 
   setChannelLevel(channel: string, level: number, fade: number): void {
     this.channelLevels.set(channel, Math.max(0, Math.min(255, level)));
     const playing = this.playing.get(channel);
     if (!playing) return;
-    const {gain, kind, character} = playing;
+    const {gain, kind, character, volumeType} = playing;
     const time = this.context.currentTime;
     gain.gain.cancelAndHoldAtTime(time);
     gain.gain.linearRampToValueAtTime(
-      this.playbackVolume(channel, kind, character),
+      this.playbackVolume(channel, kind, character, volumeType),
       time + Math.max(0, fade) / 1000,
     );
   }
 
   private updateGains(kind: MixKind): void {
     const time = this.context.currentTime;
-    for (const [channel, {gain, kind: playingKind, character}] of this.playing) {
+    for (const [channel, {gain, kind: playingKind, character, volumeType}] of this.playing) {
       if (kind !== 'ALL' && playingKind !== kind) continue;
       gain.gain.cancelScheduledValues(time);
-      gain.gain.setValueAtTime(this.playbackVolume(channel, playingKind, character), time);
+      gain.gain.setValueAtTime(
+        this.playbackVolume(channel, playingKind, character, volumeType),
+        time,
+      );
     }
   }
 

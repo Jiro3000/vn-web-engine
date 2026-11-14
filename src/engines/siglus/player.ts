@@ -1058,6 +1058,11 @@ export class SiglusPlayer {
         return 0;
       }
       if (member === 150) return this.voiceMode;
+      if (member === 277 || member === 278) {
+        this.audio.setSoundLevel(n(0), member === 277 ? n(1) : undefined);
+        return 0;
+      }
+      if (member === 279) return this.audio.soundLevel(n(0));
       if (member === 145) return Number(this.audio.characterEnabled(n(0)));
       if (member === 188) return this.audio.characterLevel(n(0));
       if (member === 143 || member === 144) {
@@ -1200,13 +1205,32 @@ export class SiglusPlayer {
       this.audio.stop('bgm', n(0));
       return 0;
     }
-    if (root === 44 && member === -1 && path[3] === 13) {
-      this.audio.setChannelLevel(`pcm${path[2]}`, n(0), n(1));
-      return 0;
-    }
-    if (root === 44 && path.at(-1) === 0) {
-      await this.audio.voice(n(0), `pcm${path[2]}`);
-      return 0;
+    if (root === 44 && member === -1 && path.length === 4) {
+      const channel = `pcm${path[2]}`;
+      const opcode = path[3];
+      if (opcode === 13) {
+        this.audio.setChannelLevel(channel, n(0), n(1));
+        return 0;
+      }
+      if (opcode === 0 && command.named.every((id) => [0, 3, 6, 7, 8].includes(id))) {
+        const positional = args.length - command.named.length;
+        const namedNumber = (id: number): number | undefined => {
+          const index = command.named.indexOf(id);
+          return index < 0 ? undefined : n(positional + index);
+        };
+        const voice = namedNumber(8);
+        const volume = namedNumber(3);
+        if (voice !== undefined) {
+          await this.audio.voice(voice, channel, namedNumber(6), volume);
+          return 0;
+        }
+        const fileIndex = command.named.indexOf(7);
+        const file = fileIndex < 0 ? args[0] : args[positional + fileIndex];
+        if (typeof file === 'string') {
+          await this.audio.effect(channel, file, Boolean(namedNumber(0)), volume);
+          return 0;
+        }
+      }
     }
     if (root === 45 && member === 0) {
       const name = this.game.config.get(`SE.${String(n(0)).padStart(3, '0')}`)?.split('"')[1];
