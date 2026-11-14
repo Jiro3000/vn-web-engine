@@ -93,10 +93,11 @@ Set `SIGLUS_SLOT_MANAGEMENT_ONLY=1` to check the original comment editor,
 lock persistence after reopening the player, exchange of occupied slots, and
 deletion confirmation with test saves.
 
-Set `SIGLUS_CANCEL_ONLY=1` to verify that right-click opens and dismisses the
-original quick menu during dialogue and that the menu’s Save button enters the
-scripted slot browser. The probe confirms a save and checks that the current
-dialogue page remains active after closing the slot browser.
+Set `SIGLUS_CANCEL_ONLY=1` to check right-click in dialogue. The probe opens
+and dismisses the quick menu, saves through it, checks that Auto advances and
+stops, and opens Configuration to assign right-click to Hide. It checks that
+the next right-click hides selectable text and a normal click reveals the
+same page.
 
 The clean-profile route matched 130,121 command and message tags and
 checked 8,540 decoded audio buffers with zero browser console errors.

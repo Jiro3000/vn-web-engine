@@ -212,7 +212,7 @@ export class SiglusPlayer {
       () => {
         if (this.systemOption('SKIP_WIPE_ANIME_ONOFF') && this.display.finishWipe()) return;
         if (this.systemCallActive) return;
-        if (this.userMessageHidden) this.setUserMessageHidden(false);
+        if (this.userMessageHidden) this.revealMessage();
         else this.wait?.(1);
       },
       windowOptions,
@@ -222,7 +222,7 @@ export class SiglusPlayer {
       },
       () => {
         if (!this.waitingForPage || !this.systemMenuEnabled || this.systemCallActive) return false;
-        if (this.userMessageHidden) this.setUserMessageHidden(false);
+        if (this.userMessageHidden) this.revealMessage();
         else this.wait?.(3);
         return true;
       },
@@ -232,6 +232,7 @@ export class SiglusPlayer {
       (event) => {
         if (
           event.deltaY <= 0 ||
+          this.userMessageHidden ||
           !this.waitingForPage ||
           this.systemCallActive ||
           !this.systemOption('WHEEL_NEXT_MESSAGE_ONOFF')
@@ -540,6 +541,11 @@ export class SiglusPlayer {
     this.pendingText = false;
   }
 
+  private revealMessage(): void {
+    this.setUserMessageHidden(false);
+    this.wait?.(4);
+  }
+
   private setUserMessageHidden(hidden: boolean): void {
     this.userMessageHidden = hidden;
     this.display.setMessageDisplayed(!hidden && !this.messageHidden);
@@ -573,6 +579,7 @@ export class SiglusPlayer {
         this.waitingForPage = false;
         this.display.pageControls();
       }
+      if (result === 4) continue;
       if (result === 3) {
         await this.callSystemScene('CANCEL_SCENE');
         continue;

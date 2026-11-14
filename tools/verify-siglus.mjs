@@ -300,6 +300,9 @@ try {
         code: 'Escape',
         windowsVirtualKeyCode: 27,
       });
+    await waitForDialogueControls();
+  }
+  async function waitForDialogueControls() {
     await waitFor("!document.querySelector('[data-siglus-action=save]')?.parentElement.hidden");
   }
   async function clickStage() {
@@ -428,10 +431,53 @@ try {
     await waitFor(`siglusSurface.dataset.savedPage === '${pageBeforeMenu}'`);
     await closeSlotMenu();
     assert.equal(await evaluate('siglusSurface.dataset.page'), pageBeforeMenu);
+    async function quickMenu() {
+      const frame = await evaluate(loop);
+      await clickScriptMenu(undefined, 960, 540, 'right');
+      await waitFor(`${loop} > ${frame}`);
+    }
+    async function configuration() {
+      await quickMenu();
+      const configLoop = `siglusTags.filter(({scene, path}) =>
+        scene === '__sys_menu_config01' && path?.join('.') === '86.3').length`;
+      const frame = await evaluate(configLoop);
+      await clickScriptMenu(loop, 1270, 630);
+      await waitFor(`${configLoop} > ${frame}`);
+      return configLoop;
+    }
+    async function toggleAuto(enabled) {
+      const start = await evaluate('siglusTags.length');
+      await quickMenu();
+      const effect = await evaluate(loop);
+      await clickScriptMenu(loop, 735, 635);
+      await waitFor(`${loop} >= ${effect + 4}`);
+      await clickScriptMenu(loop, 960, 540, 'right');
+      await waitFor(`siglusTags.slice(${start}).some(({scene, path, args}) =>
+        scene === '__sys_menu_cancel00' && path?.join('.') === '63.214' && args[0] === ${Number(enabled)})`);
+    }
+    await toggleAuto(true);
+    await waitFor(`Number(siglusSurface.dataset.page) > ${pageBeforeMenu}`);
+    await toggleAuto(false);
+    await waitForDialogueControls();
+    const pageAfterAuto = await evaluate('siglusSurface.dataset.page');
+    await delay(2200);
+    assert.equal(await evaluate('siglusSurface.dataset.page'), pageAfterAuto);
+    const configLoop = await configuration();
+    await clickScriptMenu(configLoop, 628, 849);
+    await waitFor(`Object.keys(localStorage).some(key => key.endsWith(':system')
+      && new Map(JSON.parse(localStorage.getItem(key))).get(1307) === 1)`);
+    await clickScriptMenu(configLoop, 960, 540, 'right');
+    await waitForDialogueControls();
+    const dialogue = "siglusSurface.querySelector('[data-siglus-dialogue]')";
+    await clickScriptMenu(undefined, 960, 540, 'right');
+    await waitFor(`getComputedStyle(${dialogue}).visibility === 'hidden'`);
+    await clickStage();
+    await waitFor(`getComputedStyle(${dialogue}).visibility === 'visible'`);
+    assert.equal(await evaluate('siglusSurface.dataset.page'), pageAfterAuto);
     const tags = await evaluate(`siglusTags.filter((tag) => tag.scene === '${scene}')`);
     compareTags(tags, scripts, {compareSourceLine: false});
     console.log(
-      `Right-click opened the original quick menu, dismissed it, and reached Save on the next opening. Matched ${tags.length} tags.`,
+      `Right-click opened the original quick menu, dismissed it, entered Save and Configuration, toggled Auto, and hid and restored the same dialogue. Matched ${tags.length} tags.`,
     );
   } else if (manageOnly) {
     await click('#siglus-surface button[aria-label="New Game"]');
