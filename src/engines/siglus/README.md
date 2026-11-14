@@ -49,6 +49,9 @@ storage. Audio checks use decoded PCM lengths, sample rates, peak amplitudes
 and RMS levels with browser output muted.
 Set `SIGLUS_OPENING_ONLY=1` for the original 50-text check or set
 `SIGLUS_DIAGNOSTIC_PAGES=240` for a short skip check from New Game.
+Set `SIGLUS_MUSIC_ONLY=1` for the Music check. It uses a cleared-title
+checkpoint in the temporary browser profile and exercises track selection,
+Next, Stop, Play, the volume slider, and the return button with mouse input.
 
 The clean-profile route matched 130,121 command and message tags and
 checked 8,540 decoded audio buffers with zero browser console errors.
@@ -89,5 +92,7 @@ and Gameexe.dat SHA-256
   recollection, shake, dizziness and motion effects approximate the script's
   native compositing. Effect timing and rendering have not been compared
   frame by frame.
-- Browser title buttons currently expose New Game, Prologue, Load and Exit.
-  The original title also offers configuration and music screens.
+- Browser title buttons expose New Game, Prologue, Load, Exit, and the
+  original scripted Music screen on the cleared title. Configuration is
+  still unavailable. Alpha-tested button hit areas use the bounds of the
+  nontransparent pixels.

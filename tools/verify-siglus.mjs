@@ -10,6 +10,7 @@ import {createStaticServer} from './serve-static.mjs';
 
 const [folder, browser, disassemblyDirectory] = process.argv.slice(2);
 const diagnosticPages = Number(process.env.SIGLUS_DIAGNOSTIC_PAGES ?? 0);
+const musicOnly = process.env.SIGLUS_MUSIC_ONLY === '1';
 const openingOnly = process.env.SIGLUS_OPENING_ONLY === '1';
 const digest = (value) => createHash('sha256').update(value).digest('hex');
 if (!folder || !browser || !disassemblyDirectory)
@@ -234,7 +235,9 @@ try {
       const element = document.querySelector(${JSON.stringify(selector)});
       if (!element || element.disabled || !element.getClientRects().length) return false;
       const {x, y, width, height} = element.getBoundingClientRect();
-      return [x + width / 2, y + height / 2];
+      const cx = x + width / 2;
+      const cy = y + height / 2;
+      return element.contains(document.elementFromPoint(cx, cy)) ? [cx, cy] : false;
     })()`);
     for (const type of ['mousePressed', 'mouseReleased'])
       await send('Input.dispatchMouseEvent', {type, x, y, button: 'left', clickCount: 1});
@@ -276,6 +279,15 @@ try {
     siglusSurface.addEventListener('siglus-tag', (event) => siglusTags.push(event.detail));
     siglusSurface.addEventListener('siglus-audio', (event) => siglusAudio.push(event.detail));
     siglusSurface.addEventListener('siglus-movie-ended', (event) => siglusMovies.push(event.detail)); true`);
+  if (musicOnly) {
+    const pack = await readFile(join(resolve(folder), 'StartData', 'GameData', 'Scene.pck')).catch(
+      () => readFile(join(resolve(folder), 'Scene.pck')),
+    );
+    const key = 'siglus:' + digest(pack) + ':system';
+    await evaluate(
+      `localStorage.setItem(${JSON.stringify(key)}, '[[1006,1],[1007,3],[1571,1],[1575,1]]')`,
+    );
+  }
   await click('#play');
   await waitFor("siglusTags.some((tag) => tag.scene === '_start' && tag.path?.[0] === 55)");
   await delay(180);
@@ -313,10 +325,62 @@ try {
   }
   await runUntil((current) => current.title);
   console.log(`Reached title after ${page} advances`);
-  await waitFor(`siglusTags.filter(({scene, path}) =>
-    scene === '_titlemenu_dmy' && path?.join('.') === '38.6.-1.0.3').length >= 2`);
-  await click('#siglus-surface button[aria-label="New Game"]');
-  if (diagnosticPages > 0) {
+  if (musicOnly) {
+    const music = '#siglus-surface button[aria-label="Music"]';
+    await click(music);
+    await waitFor(`siglusTags.filter(({scene, path}) =>
+      scene === '_extra_music' && path?.join('.') === '38.6.-1.0.3').length >= 2`);
+    await click('#siglus-surface [data-siglus-button="0"]');
+    await waitFor("siglusSurface.dataset.bgm?.toLowerCase() === 'bgm01'");
+    await click('#siglus-surface [data-siglus-button="105"]');
+    await waitFor("siglusSurface.dataset.bgm?.toLowerCase() === 'bgm02'");
+    await click('#siglus-surface [data-siglus-button="103"]');
+    await waitFor('!siglusSurface.dataset.bgm');
+    await click('#siglus-surface [data-siglus-button="102"]');
+    await waitFor("siglusSurface.dataset.bgm?.toLowerCase() === 'bgm02'");
+    const slider = '#siglus-surface [data-siglus-button="107"]';
+    const [sliderX, sliderY] = await evaluate(`(() => {
+      const rect = document.querySelector(${JSON.stringify(slider)}).getBoundingClientRect();
+      return [rect.x + rect.width / 2, rect.y + rect.height / 2];
+    })()`);
+    await send('Input.dispatchMouseEvent', {
+      type: 'mousePressed',
+      x: sliderX,
+      y: sliderY,
+      button: 'left',
+      clickCount: 1,
+    });
+    const writeVolume = "tag.scene === '_extra_music' && tag.path?.join('.') === '63.21'";
+    await waitFor(`siglusTags.some(tag => ${writeVolume})`);
+    const initialVolume = await evaluate(`siglusTags.findLast(tag => ${writeVolume}).args[0]`);
+    await send('Input.dispatchMouseEvent', {
+      type: 'mouseMoved',
+      x: sliderX + 24,
+      y: sliderY,
+      button: 'left',
+      buttons: 1,
+    });
+    await waitFor(`siglusTags.findLast(tag => ${writeVolume})?.args[0] > ${initialVolume}`);
+    await send('Input.dispatchMouseEvent', {
+      type: 'mouseReleased',
+      x: sliderX + 24,
+      y: sliderY,
+      button: 'left',
+      clickCount: 1,
+    });
+    await click('#siglus-surface [data-siglus-button="100"]');
+    await waitFor(`document.querySelector(${JSON.stringify(music)})?.isConnected`);
+    console.log('Music: selected track, next, stop, resume, volume drag, and return to title.');
+    const trace = await evaluate('siglusTags');
+    compareTags(trace, scripts);
+  } else {
+    await waitFor(`siglusTags.filter(({scene, path}) =>
+      scene === '_titlemenu_dmy' && path?.join('.') === '38.6.-1.0.3').length >= 2`);
+    await click('#siglus-surface button[aria-label="New Game"]');
+  }
+  if (musicOnly) {
+    assert.equal(errors.length, 0);
+  } else if (diagnosticPages > 0) {
     const firstPage = page;
     await runUntil((current) => Number(current.page) >= firstPage + 1);
     await control('keyDown');

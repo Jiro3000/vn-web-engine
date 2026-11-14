@@ -32,10 +32,11 @@ export interface SiglusCheckpoint {
     scene: string;
     pc: number;
     line: number;
-    stack: Value[];
+    stack: Argument[];
     points: number[];
     locals: [string, Value][];
     declarations: [number, number][];
+    references?: [number, readonly number[]][];
   }[];
 }
 
@@ -101,10 +102,11 @@ function binary(op: number, a: Value, b: Value): Value {
 class Frame {
   pc: number;
   line = 0;
-  readonly stack: Value[] = [];
+  readonly stack: Argument[] = [];
   readonly points: number[] = [];
   readonly locals = new Map<string, Value>();
   readonly declarations = new Map<number, number>();
+  readonly references = new Map<number, readonly number[]>();
   readonly code: DataView;
   constructor(
     readonly scene: SiglusScene,
@@ -128,21 +130,28 @@ class Frame {
       throw new Error('Invalid Siglus argument table');
     return Array.from({length: count}, () => this.word());
   }
-  pop(): Value {
+  pop(): Argument {
     const value = this.stack.pop();
     if (value === undefined) throw new Error('Siglus value stack underflow');
+    return value;
+  }
+  scalar(): Value {
+    const value = this.pop();
+    if (typeof value === 'object') throw new Error('Expected a Siglus scalar');
     return value;
   }
   path(): number[] {
     const start = this.points.pop();
     if (start === undefined || this.stack.length <= start)
       throw new Error('Missing Siglus element path');
-    return this.stack.splice(start).map(Number);
+    return this.stack
+      .splice(start)
+      .flatMap((value) => (typeof value === 'object' ? [...value] : [Number(value)]));
   }
   args(): Argument[] {
     return this.words()
       .map((form) => {
-        if (form === 0 || form === 10 || form === 20 || form === 30) return this.pop();
+        if (form === 0 || form === 10 || form === 20 || form === 30) return this.scalar();
         if (form > 0) return this.path();
         throw new Error(`Unsupported Siglus argument form ${form}`);
       })
@@ -195,6 +204,7 @@ export class SiglusVm {
         points: [...frame.points],
         locals: [...frame.locals],
         declarations: [...frame.declarations],
+        references: [...frame.references],
       };
     });
     if (!frames.length) throw new Error('Siglus has no running frame');
@@ -222,6 +232,7 @@ export class SiglusVm {
       frame.points.push(...saved.points);
       for (const [key, value] of saved.locals) frame.locals.set(key, value);
       for (const [key, form] of saved.declarations) frame.declarations.set(key, form);
+      for (const [key, reference] of saved.references ?? []) frame.references.set(key, reference);
       return frame;
     });
   }
@@ -315,9 +326,25 @@ export class SiglusVm {
             frame.word();
             frame.stack.push(frame.stack.at(-1)!);
             break;
-          case 5:
-            frame.stack.push(this.property(frame, frame.path()));
+          case 5: {
+            const path = frame.path();
+            const slot = path[1];
+            const reference =
+              path[0] === localRoot && slot !== undefined && elementOwner(slot) === callProperty
+                ? frame.references.get(elementIndex(slot))
+                : undefined;
+            if (reference && path.length === 2) {
+              // The object-valued property becomes the replacement root of the
+              // current element, whose following members still need its point.
+              frame.points.push(frame.stack.length);
+              frame.stack.push(reference);
+            } else {
+              frame.stack.push(
+                this.property(frame, reference ? [...reference, ...path.slice(2)] : path),
+              );
+            }
             break;
+          }
           case 6: {
             const start = frame.points.at(-1);
             if (start === undefined) throw new Error('Missing Siglus element to copy');
@@ -337,9 +364,10 @@ export class SiglusVm {
             break;
           case 9: {
             for (const [i, value] of frame.parameters.entries()) {
-              if (i >= frame.declarations.size || typeof value === 'object')
+              if (i >= frame.declarations.size)
                 throw new Error('Unsupported Siglus parameter binding');
-              frame.locals.set(`${localRoot}.${(callProperty << 24) | i}`, value);
+              if (typeof value === 'object') frame.references.set(i, value);
+              else frame.locals.set(`${localRoot}.${(callProperty << 24) | i}`, value);
             }
             break;
           }
@@ -348,7 +376,7 @@ export class SiglusVm {
           case 18: {
             const op = frame.code.getUint8(offset);
             const label = frame.word();
-            const jump = op === 16 || Boolean(frame.pop()) === (op === 17);
+            const jump = op === 16 || Boolean(frame.scalar()) === (op === 17);
             if (jump) {
               const target = frame.scene.labels[label];
               if (target === undefined) throw new Error(`Invalid Siglus label ${label}`);
@@ -376,14 +404,14 @@ export class SiglusVm {
             frame.word();
             frame.word();
             frame.word();
-            const value = frame.pop();
+            const value = frame.scalar();
             this.property(frame, frame.path(), value);
             break;
           }
           case 33: {
             frame.word();
             const op = frame.byte();
-            const value = Number(frame.pop());
+            const value = Number(frame.scalar());
             if (op !== 1 && op !== 2 && op !== 48)
               throw new Error(`Unsupported Siglus unary operator ${op}`);
             frame.stack.push(op === 1 ? value : op === 2 ? -value | 0 : ~value);
@@ -393,8 +421,8 @@ export class SiglusVm {
             frame.word();
             frame.word();
             const op = frame.byte();
-            const right = frame.pop();
-            frame.stack.push(binary(op, frame.pop(), right));
+            const right = frame.scalar();
+            frame.stack.push(binary(op, frame.scalar(), right));
             break;
           }
           case 48: {
@@ -471,7 +499,7 @@ export class SiglusVm {
             const tag = {
               ...position(),
               tag: isText ? ('text' as const) : ('name' as const),
-              value: String(frame.pop()),
+              value: String(frame.scalar()),
               readFlag,
             };
             this.services.trace(tag);

@@ -19,6 +19,7 @@ export class SiglusAudio {
   private readonly measured = new WeakMap<AudioBuffer, {peak: number; rms: number}>();
   private closed = false;
   private bgmVolume: number;
+  private bgmLevel: number;
 
   constructor(
     private readonly files: ReadonlyMap<string, ByteSource>,
@@ -26,6 +27,7 @@ export class SiglusAudio {
     private readonly root: HTMLElement,
   ) {
     this.bgmVolume = this.volume('BGM');
+    this.bgmLevel = Number(config.get('CONFIG.VOLUME.BGM') ?? 255);
   }
 
   resume(): Promise<void> {
@@ -173,11 +175,15 @@ export class SiglusAudio {
   }
 
   setBgmVolume(level: number): void {
+    this.bgmLevel = Math.max(0, Math.min(255, level));
     this.bgmVolume =
-      (Number(this.config.get('CONFIG.VOLUME.ALL') ?? 255) * Math.max(0, Math.min(255, level))) /
-      (255 * 255);
+      (Number(this.config.get('CONFIG.VOLUME.ALL') ?? 255) * this.bgmLevel) / (255 * 255);
     const active = this.playing.get('bgm');
     if (active) active.gain.gain.value = this.bgmVolume;
+  }
+
+  getBgmVolume(): number {
+    return this.bgmLevel;
   }
 
   stop(channel: string, fade = 0): void {

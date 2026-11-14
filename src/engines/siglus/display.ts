@@ -20,6 +20,10 @@ export interface DrawObject {
   visible: boolean;
   pattern: number;
   button?: {id: number; group: number};
+  children?: Map<number, DrawObject>;
+  sourceClip?: [number, number, number, number];
+  pushKeep?: boolean;
+  alphaTest?: boolean;
   disabled?: boolean;
   opacity?: [target: number, duration: number, delay: number, easing: number, start: number];
   movement?: [target: number, duration: number, delay: number, easing: number, start: number];
@@ -37,7 +41,16 @@ export class SiglusDisplay {
   private readonly text = document.createElement('div');
   private readonly portrait = document.createElement('div');
   private readonly media = new Map<string, Promise<G00Image>>();
+  private readonly hitInsets = new WeakMap<Graphic, string>();
   private background?: HTMLElement;
+  private objectLayer?: HTMLElement;
+  private pressed?: {id: number; group: number};
+  private heldButton?: {
+    pointerId: number;
+    release: () => void;
+  };
+  private hovered?: {id: number; group: number};
+  private pointer = [0, 0];
   private currentFace?: string;
   private currentName = '';
   private currentText: {text: string; ruby?: string}[] = [];
@@ -116,6 +129,22 @@ export class SiglusDisplay {
     this.stage.tabIndex = 0;
     this.stage.addEventListener('click', this.click);
     this.stage.addEventListener('pointerdown', this.pointerDown);
+    this.stage.addEventListener('pointermove', (event) => this.trackPointer(event));
+    this.stage.addEventListener('pointerdown', (event) => this.trackPointer(event));
+    this.stage.addEventListener('pointerleave', () => {
+      this.hovered = undefined;
+    });
+    for (const type of ['pointerup', 'pointercancel', 'lostpointercapture'] as const)
+      this.stage.addEventListener(type, (event) => {
+        this.pressed = undefined;
+        const held = this.heldButton;
+        if (held?.pointerId !== event.pointerId) return;
+        this.heldButton = undefined;
+        if (type === 'pointerup') {
+          this.trackPointer(event);
+          held.release();
+        }
+      });
     this.stage.addEventListener('keydown', this.key);
     this.stage.addEventListener('keyup', this.key);
     this.stage.addEventListener('focusout', () => skip(false));
@@ -127,6 +156,28 @@ export class SiglusDisplay {
     return Boolean(
       selection && !selection.isCollapsed && this.message.contains(selection.anchorNode),
     );
+  }
+
+  private trackPointer(event: PointerEvent): void {
+    const bounds = this.stage.getBoundingClientRect();
+    this.pointer = [
+      Math.trunc(((event.clientX - bounds.left) * this.width) / bounds.width),
+      Math.trunc(((event.clientY - bounds.top) * this.height) / bounds.height),
+    ];
+    const button = (event.target as Element).closest<HTMLButtonElement>('[data-siglus-button]');
+    this.hovered =
+      button && !button.disabled
+        ? {id: Number(button.dataset.siglusButton), group: Number(button.dataset.siglusGroup)}
+        : undefined;
+  }
+
+  buttonState(group: number, pressed: boolean): number {
+    const button = pressed ? this.pressed : this.hovered;
+    return button?.group === group ? button.id : -1;
+  }
+
+  pointerPosition(axis: number): number {
+    return this.pointer[axis]!;
   }
 
   async prepare(): Promise<void> {
@@ -244,17 +295,76 @@ export class SiglusDisplay {
     return canvas;
   }
 
+  private buttonHitInsets(frame: Graphic, canvas: HTMLCanvasElement): string {
+    const cached = this.hitInsets.get(frame);
+    if (cached) return cached;
+    const {width, height} = frame;
+    const {data} = canvas.getContext('2d')!.getImageData(0, 0, width, height);
+    let left = width,
+      right = -1,
+      top = height,
+      bottom = -1;
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        if (!data[(y * width + x) * 4 + 3]) continue;
+        left = Math.min(left, x);
+        right = Math.max(right, x);
+        top = Math.min(top, y);
+        bottom = y;
+      }
+    }
+    const inset = `inset(${top}px ${width - right - 1}px ${height - bottom - 1}px ${left}px)`;
+    this.hitInsets.set(frame, inset);
+    return inset;
+  }
+
   async show(
     objects: Iterable<DrawObject>,
     duration: number,
     button: (target: NonNullable<DrawObject['button']>) => void,
   ): Promise<void> {
+    const next = await this.drawObjects(objects, button);
+    await this.replaceLayer(next, duration);
+    this.objectLayer = next;
+    this.cast.replaceChildren();
+    delete this.root.dataset.cast;
+    delete this.root.dataset.background;
+    this.root.dataset.phase = next.querySelector('[aria-label="New Game"]') ? 'title' : 'scene';
+  }
+
+  async refreshObjects(
+    objects: Iterable<DrawObject>,
+    button: (target: NonNullable<DrawObject['button']>) => void,
+  ): Promise<void> {
+    const layer = this.objectLayer;
+    if (!layer?.isConnected) return;
+    const next = await this.drawObjects(objects, button, false);
+    await this.replaceLayer(next, 0);
+    this.objectLayer = next;
+  }
+
+  private async drawObjects(
+    objects: Iterable<DrawObject>,
+    button: (target: NonNullable<DrawObject['button']>) => void,
+    animate = true,
+  ): Promise<HTMLElement> {
     const next = document.createElement('div');
     next.style.cssText = 'position:absolute;inset:0;pointer-events:none';
+    await this.appendObjects(next, objects, button, animate);
+    return next;
+  }
+
+  private async appendObjects(
+    parent: HTMLElement,
+    objects: Iterable<DrawObject>,
+    button: (target: NonNullable<DrawObject['button']>) => void,
+    animate: boolean,
+  ): Promise<void> {
     for (const object of objects) {
       if (!object.visible) continue;
       const frame =
-        object.frames[object.pattern] ?? (await this.graphic(object.name, object.pattern));
+        object.frames[object.pattern] ??
+        (object.frames[object.pattern] = await this.graphic(object.name, object.pattern));
       const element =
         object.button === undefined
           ? document.createElement('div')
@@ -264,11 +374,23 @@ export class SiglusDisplay {
       canvas.style.top = '0';
       element.style.cssText = `position:absolute;left:${object.x + frame.x}px;top:${object.y + frame.y}px;width:${frame.width}px;height:${frame.height}px;border:0;padding:0;background:none`;
       element.append(canvas);
-      next.append(element);
+      parent.append(element);
+      if (object.sourceClip) {
+        const [x, y, width, height] = object.sourceClip;
+        canvas.style.clipPath = `inset(${y}px ${frame.width - x - width}px ${frame.height - y - height}px ${x}px)`;
+      }
       if (element instanceof HTMLButtonElement) {
         const target = object.button!;
+        if (object.alphaTest !== false)
+          element.style.clipPath = this.buttonHitInsets(frame, canvas);
         const role = object.name.split('_').at(-1);
-        const supported = role === 'start' || role === 'prol' || role === 'exit' || role === 'load';
+        const supported =
+          !object.name.startsWith('__sys_title_btn_') ||
+          role === 'start' ||
+          role === 'prol' ||
+          role === 'exit' ||
+          role === 'load' ||
+          role === 'music';
         element.disabled = !supported || Boolean(object.disabled);
         element.style.pointerEvents = supported ? 'auto' : 'none';
         element.style.cursor = 'pointer';
@@ -282,36 +404,54 @@ export class SiglusDisplay {
                 ? 'Load Game'
                 : role === 'exit'
                   ? 'Exit'
-                  : object.name,
+                  : role === 'music'
+                    ? 'Music'
+                    : object.name,
         );
         element.dataset.siglusButton = String(target.id);
         element.dataset.siglusGroup = String(target.group);
         element.addEventListener('click', (event) => {
           event.stopPropagation();
           this.stage.focus({preventScroll: true});
-          button(target);
+          if (!object.pushKeep || event.detail === 0) button(target);
+        });
+        element.addEventListener('pointerdown', (event) => {
+          if (event.button !== 0) return;
+          this.pressed = target;
+          if (object.pushKeep) {
+            this.heldButton = {pointerId: event.pointerId, release: () => button(target)};
+            this.stage.setPointerCapture(event.pointerId);
+          }
         });
       }
-      if (object.opacity) {
+      if (animate && object.opacity) {
         const [target, time, delay, , start] = object.opacity;
         element.animate(
           {opacity: [start / 255, target / 255]},
           {duration: time, delay, fill: 'both'},
         );
       }
-      if (object.movement) {
+      if (animate && object.movement) {
         const [target, time, delay, , start] = object.movement;
         element.animate(
           {transform: [`translateY(${start}px)`, `translateY(${target}px)`]},
           {duration: time, delay, fill: 'both'},
         );
       }
+      if (object.children) {
+        // Child objects are siblings of the parent's graphic and hit region.
+        // This also keeps button elements from nesting inside one another.
+        const children = document.createElement('div');
+        children.style.cssText = `position:absolute;left:${object.x}px;top:${object.y}px;pointer-events:none`;
+        parent.append(children);
+        await this.appendObjects(
+          children,
+          [...object.children].sort(([a], [b]) => a - b).map(([, child]) => child),
+          button,
+          animate,
+        );
+      }
     }
-    await this.replaceLayer(next, duration);
-    this.cast.replaceChildren();
-    delete this.root.dataset.cast;
-    delete this.root.dataset.background;
-    this.root.dataset.phase = next.querySelector('[aria-label="New Game"]') ? 'title' : 'scene';
   }
 
   private async replaceLayer(next: HTMLElement, duration: number): Promise<void> {

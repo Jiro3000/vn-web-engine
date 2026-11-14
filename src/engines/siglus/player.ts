@@ -62,6 +62,7 @@ export class SiglusPlayer {
   private readonly activeGroups = new Set<number>();
   private readonly decisions = new Map<number, number>();
   private decisionReady?: () => void;
+  private objectsDirty = false;
   private pages = 0;
   private pendingText = false;
   private speed = 0;
@@ -171,13 +172,28 @@ export class SiglusPlayer {
     await this.vm.run(this.startScene);
   }
 
-  private object(path: number[]): DrawObject | undefined {
-    const [page, , , id] = path;
-    return this.objects[page === 37 ? 1 : 0]!.get(id!);
+  private objectAddress(
+    path: readonly number[],
+  ): {page: Map<number, DrawObject>; index: number} | undefined {
+    if ((path[0] !== 37 && path[0] !== 38) || path[1] !== 2) return;
+    let page = this.objects[path[0] === 37 ? 1 : 0]!;
+    let index = 2;
+    while (path[index] === -1 && path[index + 2] === 93) {
+      const object = page.get(path[index + 1]!);
+      if (!object) return;
+      page = object.children ??= new Map();
+      index += 3;
+    }
+    return {page, index};
+  }
+
+  private object(path: readonly number[]): DrawObject | undefined {
+    const address = this.objectAddress(path);
+    return address?.page.get(path[address.index + 1]!);
   }
 
   private property(path: number[], value?: Value): Value | undefined {
-    const [page, list, array, , property] = path;
+    const [page, list, array] = path;
     if (page === 31 && list === -1 && array !== undefined) {
       if (value !== undefined && this.system.get(array) !== Number(value)) {
         this.system.set(array, Number(value));
@@ -196,17 +212,25 @@ export class SiglusPlayer {
         return this.stageProperties.get(key) ?? (name.includes('name') ? '' : 0);
       }
     }
-    if ((page !== 37 && page !== 38) || list !== 2 || array !== -1) return;
+    const address = this.objectAddress(path);
+    if (!address || path[address.index] !== -1) return;
+    const property = path[address.index + 2];
     const object = this.object(path);
     if (!object) return 0;
     if (property === 0) {
-      if (value !== undefined) object.visible = Boolean(value);
+      if (value !== undefined && object.visible !== Boolean(value)) {
+        object.visible = Boolean(value);
+        if (page === 38) this.objectsDirty = true;
+      }
       return Number(object.visible);
     }
     const field =
       property === 1 ? 'pattern' : property === 3 ? 'x' : property === 4 ? 'y' : undefined;
     if (!field) return;
-    if (value !== undefined) object[field] = Number(value);
+    if (value !== undefined && object[field] !== Number(value)) {
+      object[field] = Number(value);
+      if (page === 38) this.objectsDirty = true;
+    }
     return object[field];
   }
 
@@ -324,8 +348,9 @@ export class SiglusPlayer {
         this.decisions.delete(group);
         return 0;
       case 6: // get_hit_no
+        return this.display.buttonState(group, false);
       case 7: // get_pushed_no
-        return -1;
+        return this.display.buttonState(group, true);
     }
     return undefined;
   }
@@ -363,7 +388,17 @@ export class SiglusPlayer {
       this.skipping ? 0 : ms,
       (id) => this.choose(id),
     );
-    this.objects[0] = new Map([...back].map(([id, object]) => [id, {...object}]));
+    this.objects[0] = this.copyObjects(back);
+    this.objectsDirty = false;
+  }
+
+  private copyObjects(objects: Map<number, DrawObject>): Map<number, DrawObject> {
+    return new Map(
+      [...objects].map(([id, object]) => [
+        id,
+        {...object, children: object.children && this.copyObjects(object.children)},
+      ]),
+    );
   }
 
   private backgroundName(name: string): string {
@@ -614,6 +649,13 @@ export class SiglusPlayer {
     if (path.length === 1) {
       switch (root) {
         case 6:
+          if (this.objectsDirty) {
+            this.objectsDirty = false;
+            await this.display.refreshObjects(
+              [...this.objects[0]!.entries()].sort(([a], [b]) => a - b).map(([, object]) => object),
+              (button) => this.choose(button),
+            );
+          }
           break; // The browser composites on its own refresh cycle.
         case 7:
           await this.wipe(n(1));
@@ -678,6 +720,7 @@ export class SiglusPlayer {
     if (root === 38 && member === 6 && path.length === 5 && path[2] === -1)
       return this.groupCommand(path[3]!, path[4]!);
     if (root === 63) {
+      if (member === 25) return this.audio.getBgmVolume();
       if (member === 79) return this.saved ? 0 : -1;
       if (member === 2) {
         await this.loadSave();
@@ -705,6 +748,17 @@ export class SiglusPlayer {
     }
     if (root === 86 && member === 2) return 0;
     if (root === 86 && member === 3) return this.nextInput();
+    if (root === 46 && (member === 2 || member === 3))
+      return this.display.pointerPosition(member - 2);
+    if (root === 46 && (member === 4 || member === 8)) return 0;
+    if (root === 39 && member === 0)
+      return n(0) + Math.floor(Math.random() * (Math.max(0, n(1) - n(0)) + 1));
+    if (root === 39 && member === 9)
+      return n(3) === n(1)
+        ? n(2)
+        : Math.trunc(n(2) + ((n(0) - n(1)) * (n(4) - n(2))) / (n(3) - n(1)));
+    if (root === 39 && member === 10) return Math.min(Math.max(n(1), n(0)), n(2));
+    if (root === 42 && member === 19) return this.root.dataset.bgm ?? '';
     if (root === 42 && member === 0) {
       await this.playBgm(s(0));
       return 0;
@@ -727,9 +781,13 @@ export class SiglusPlayer {
   }
 
   private async objectCommand({path, args}: SiglusCommand): Promise<Value | undefined> {
-    const [root, , array, id, command] = path;
-    const page = this.objects[root === 37 ? 1 : 0]!;
+    const address = this.objectAddress(path);
+    if (!address) return undefined;
+    const {page, index} = address;
+    const [array, id, command] = path.slice(index);
     if (array === 3 && id === undefined) return Math.max(0, ...page.keys()) + 1;
+    if (array === 4 && id === undefined) return 0; // Sparse list; absent indices carry default objects.
+    if (path[0] === 38 && command !== 175 && command !== 63) this.objectsDirty = true;
     const n = (index: number) => Number(args[index] ?? 0);
     if (command === 35) {
       page.delete(id!);
@@ -739,7 +797,8 @@ export class SiglusPlayer {
       const source = args[0];
       if (!Array.isArray(source)) throw new Error('Invalid Siglus source object reference');
       const object = this.object(source);
-      if (object) page.set(id!, {...object});
+      if (object)
+        page.set(id!, {...object, children: object.children && this.copyObjects(object.children)});
       else page.delete(id!);
       return 0;
     }
@@ -767,11 +826,14 @@ export class SiglusPlayer {
       return 0;
     if (!object) throw new Error(`Missing Siglus object ${id}`);
     if (command === 42) object.button = {id: n(0), group: n(1)};
+    else if (command === 175) object.alphaTest = Boolean(n(0));
+    else if (command === 98) object.pushKeep = Boolean(n(0));
+    else if (command === 161) object.sourceClip = n(0) ? [n(1), n(2), n(3), n(4)] : undefined;
     else if (command === 48) {
       object.x = n(0);
       object.y = n(1);
     } else if (command === 97) object.disabled = true;
-    else if (command === 175 || (command === 63 && path.at(-1) === 2)) return 0;
+    else if (command === 63 && path.at(-1) === 2) return 0;
     else if (path.at(-1) === 0 && args.length === 5) {
       const animation: NonNullable<DrawObject['opacity']> = [n(0), n(1), n(2), n(3), n(4)];
       if (command === 72) object.opacity = animation;
