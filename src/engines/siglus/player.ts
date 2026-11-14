@@ -571,6 +571,19 @@ export class SiglusPlayer {
     };
   }
 
+  private saveSlotAddress(number: number): [Map<number, PlayerSave>, number] {
+    // The slot browser addresses quick saves directly after the ordinary save range.
+    const count = Number(this.game.config.get('SAVE.CNT'));
+    const quickCount = Number(this.game.config.get('QUICK_SAVE.CNT'));
+    if (number >= count && number < count + quickCount) return [this.quickSaves, number - count];
+    return [this.saves, number];
+  }
+
+  private saveSlot(number: number): PlayerSave | undefined {
+    const [slots, slot] = this.saveSlotAddress(number);
+    return slots.get(slot);
+  }
+
   private writeSlot(slots: Map<number, PlayerSave>, slot: number, save: PlayerSave): void {
     const next = new Map(slots);
     next.set(slot, save);
@@ -1121,7 +1134,7 @@ export class SiglusPlayer {
       if (member === 9) return Number(this.game.config.get('CONFIG.WINDOW_MODE') ?? 0);
       if (member === 284) return this.game.config.get('CONFIG.FONT.NAME')?.split('"')[1] ?? '';
       if (member === 69 || member === 169)
-        return Number((member === 69 ? this.saves : this.quickSaves).has(n(0)));
+        return Number(Boolean(member === 69 ? this.saveSlot(n(0)) : this.quickSaves.get(n(0))));
       if (member === 79 || member === 170)
         return this.newestSlot(
           member === 79 ? this.saves : this.quickSaves,
@@ -1130,16 +1143,16 @@ export class SiglusPlayer {
         );
       if (member === 252 || member === 255) return Number(this.saveEnabled);
       if (member === 259 || member === 262) return Number(this.loadEnabled);
-      const slot = this.saves.get(n(0));
+      const slot = this.saveSlot(n(0));
       const quick = this.quickSaves.get(n(0));
       if (member === 78 || member === 179) return (member === 78 ? slot : quick)?.title ?? '';
       if (member === 180 || member === 181) {
         const save = member === 180 ? slot : quick;
-        if (save)
-          this.writeSlot(member === 180 ? this.saves : this.quickSaves, n(0), {
-            ...save,
-            comment: s(1),
-          });
+        if (save) {
+          const [slots, index] =
+            member === 180 ? this.saveSlotAddress(n(0)) : ([this.quickSaves, n(0)] as const);
+          this.writeSlot(slots, index, {...save, comment: s(1)});
+        }
         return 0;
       }
       if (member === 131 || member === 132) return (member === 131 ? slot : quick)?.comment ?? '';
@@ -1478,7 +1491,7 @@ export class SiglusPlayer {
       return 0;
     }
     if (command === 116) {
-      const save = this.saves.get(n(0));
+      const save = this.saveSlot(n(0));
       const thumbnail = save?.thumbnail;
       const frames = thumbnail ? [await this.display.savedThumbnail(thumbnail)] : [];
       page.set(id!, {

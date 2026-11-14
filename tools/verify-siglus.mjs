@@ -489,6 +489,32 @@ try {
     await quickAction('qload');
     await waitFor("siglusSurface.dataset.loaded === 'true'");
     assert.equal(digest(await evaluate(dialogue)), second);
+    const restoredPage = await evaluate('Number(siglusSurface.dataset.page)');
+    await clickStage();
+    await waitFor(`Number(siglusSurface.dataset.page) > ${restoredPage}`);
+    const start = await evaluate('siglusTags.length');
+    await click('[data-siglus-action="load"]');
+    await waitFor(slotLoop);
+    const frame = await evaluate(slotLoop);
+    await clickScriptMenu(slotLoop, 1715, 34);
+    await waitFor(`${slotLoop} > ${frame} && siglusTags.slice(${start}).some(
+      ({path, args}) => path?.join('.') === '63.69' && args[0] === 1011)`);
+    await waitFor(`Array.from(siglusSurface.querySelectorAll('canvas'))
+      .filter(({width, height}) => width === 354 && height === 199).length === 2`);
+    assert.equal(await chooseSlot('load', start, 1), 'confirm');
+    await waitFor(`siglusTags.slice(${start}).some(({path, args}) =>
+      path?.join('.') === '63.256' && args[0] === 1011)`);
+    await waitFor(`Number(siglusSurface.dataset.page) > ${restoredPage + 1}`);
+    assert.equal(
+      digest(await evaluate(dialogue)),
+      first,
+      'Quick tab restored the older quick slot',
+    );
+    const menuTags = await evaluate(
+      `siglusTags.slice(${start}).filter(({scene}) => scene === '${slotScene}')`,
+    );
+    compareTags(menuTags, scripts, {compareSourceLine: false});
+    console.log(`Quick tab loaded history slot 1. Matched ${menuTags.length} tags.`);
     const tags = await evaluate("siglusTags.filter(({scene}) => scene === '__sys_system_call')");
     compareTags(tags, scripts, {compareSourceLine: false});
     console.log(

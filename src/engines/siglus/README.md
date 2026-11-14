@@ -79,8 +79,10 @@ against the disassembly.
 
 Set `SIGLUS_QUICK_ONLY=1` to check the original frame’s Quick Save and Quick
 Load controls. The probe uses the cleared-title checkpoint, confirms two
-quick saves on distinct pages, checks the persisted slot order, then advances
-and restores the newest quick save through its confirmation dialog.
+quick saves on distinct pages and checks the stored slot order. Quick Load
+restores the newest entry. The scripted Quick tab draws both thumbnails and
+loads the older entry through its confirmation dialog. Gameexe.dat places
+quick slots after the 1,010 regular and automatic slots in the menu’s numbering.
 
 Set `SIGLUS_AUTOSAVE_ONLY=1` to check the first two day saves. The probe uses
 the cleared-title checkpoint and Control skip to reach both day changes. It
@@ -116,8 +118,7 @@ and Gameexe.dat SHA-256
 
 ## Known differences
 
-- The Quick tab of the slot browser and slot management still need end-to-end
-  verification. Day saves run the script’s rotation routine and resume after
+- Slot management still needs end-to-end verification. Day saves run the script’s rotation routine and resume after
   the browser’s day transition. The native savepoint is inside the transition.
   Thumbnails composite the visible graphical layers
   at the configured size. Dialogue and native capture effects are absent from
