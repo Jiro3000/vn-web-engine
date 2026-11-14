@@ -346,6 +346,15 @@ try {
     await delay(180);
     await advance();
   }
+  async function reopenPlayer() {
+    const previousTab = targetId;
+    ({targetId} = await cdp.command('Target.createTarget', {url: 'about:blank'}));
+    ({sessionId} = await cdp.command('Target.attachToTarget', {targetId, flatten: true}));
+    for (const domain of ['Page', 'DOM', 'Runtime', 'Log']) await send(domain + '.enable');
+    await cdp.command('Target.closeTarget', {targetId: previousTab});
+    await openPlayer();
+    await playInstallation();
+  }
   await openPlayer();
   if (musicOnly || configOnly || loadOnly || quickOnly || autoOnly || manageOnly) {
     const pack = await readFile(join(resolve(folder), 'StartData', 'GameData', 'Scene.pck')).catch(
@@ -421,18 +430,36 @@ try {
     await advance();
     await waitFor(`${slot(0)}?.comment === ${JSON.stringify(comment)}`);
     const original = await evaluate(slot(0));
+    await closeSlotMenu();
+    const firstPage = await evaluate('Number(siglusSurface.dataset.page)');
+    await clickStage();
+    await waitFor(`Number(siglusSurface.dataset.page) > ${firstPage}`);
+    const afterFirstSave = await evaluate('siglusTags.length');
+    assert.equal(await selectSlot('save', 1), 'confirm');
+    await waitFor(`siglusTags.slice(${afterFirstSave}).some(({path, args}) =>
+      path?.join('.') === '63.180' && args[0] === 1)`);
+    const second = await evaluate(slot(1));
+    assert.notDeepEqual(second.message, original.message);
     const lock = `(() => {
       const key = Object.keys(localStorage).find((key) => key.endsWith(':system'));
       return new Map(JSON.parse(localStorage.getItem(key))).get(1200) & 1;
     })()`;
     await clickAction(90, 480);
     await waitFor(lock);
+    const initialTags = await evaluate(`siglusTags.filter(({scene}) => scene === '${slotScene}')`);
+    await reopenPlayer();
+    await click('#siglus-surface button[aria-label="New Game"]');
+    await waitFor("!document.querySelector('[data-siglus-action=save]')?.parentElement.hidden");
+    await click('[data-siglus-action="save"]');
+    await waitFor(slotLoop);
+    await waitFor(lock);
     await clickAction(310, 480);
-    assert.deepEqual(
-      await evaluate(slot(0)),
-      original,
-      'The locked slot survived a delete attempt',
+    assert.equal(
+      await evaluate(`siglusTags.some(({path, args}) =>
+      path?.join('.') === '63.19' || args?.[0] === '__sys_sa_setbtn_bg00')`),
+      false,
     );
+    assert.deepEqual(await evaluate(slot(0)), original, 'The lock survived reopening the player');
     await clickAction(90, 480);
     await waitFor(`!(${lock})`);
     async function confirmMutation(trigger, accept) {
@@ -444,17 +471,17 @@ try {
     }
     await clickAction(201, 480);
     await confirmMutation(() => clickAction(515, 240), true);
-    await waitFor(slot(1));
+    await waitFor(`${slot(1)}?.comment === ${JSON.stringify(comment)}`);
     assert.deepEqual(await evaluate(slot(1)), original);
-    assert.equal(await evaluate(slot(0)), undefined);
+    assert.deepEqual(await evaluate(slot(0)), second);
     await confirmMutation(() => clickAction(685, 480), false);
-    assert.deepEqual(await evaluate(slot(1)), original, 'No leaves the moved record intact');
+    assert.deepEqual(await evaluate(slot(1)), original, 'No leaves the exchanged record intact');
     await confirmMutation(() => clickAction(685, 480), true);
     await waitFor(`!${slot(1)}`);
     const tags = await evaluate(`siglusTags.filter(({scene}) => scene === '${slotScene}')`);
-    compareTags(tags, scripts, {compareSourceLine: false});
+    compareTags([...initialTags, ...tags], scripts, {compareSourceLine: false});
     console.log(
-      `Slot management: comment, lock, unlock, move, cancelled deletion and confirmed deletion. Matched ${tags.length} tags.`,
+      `Slot management: persisted lock, occupied-slot exchange, comment and delete confirmation. Matched ${initialTags.length + tags.length} tags.`,
     );
   } else if (autoOnly) {
     await click('#siglus-surface button[aria-label="New Game"]');
@@ -614,13 +641,7 @@ try {
       savedText,
       'In-game Load used the overwritten slot',
     );
-    const previousTab = targetId;
-    ({targetId} = await cdp.command('Target.createTarget', {url: 'about:blank'}));
-    ({sessionId} = await cdp.command('Target.attachToTarget', {targetId, flatten: true}));
-    for (const domain of ['Page', 'DOM', 'Runtime', 'Log']) await send(domain + '.enable');
-    await cdp.command('Target.closeTarget', {targetId: previousTab});
-    await openPlayer();
-    await playInstallation();
+    await reopenPlayer();
     await click('#siglus-surface button[aria-label="Load Game"]');
     await waitFor(slotLoop);
     const canvasShape = await evaluate(`Array.from(siglusSurface.querySelectorAll('canvas'))
