@@ -1170,10 +1170,22 @@ try {
     assert.equal(await evaluate('siglusSurface.firstElementChild.dataset.textMode'), 'native');
     const metrics = await evaluate(`(() => {
       const canvas = siglusSurface.querySelector('[data-siglus-native-text]');
-      const alpha = canvas.getContext('2d').getImageData(0,0,canvas.width,canvas.height).data;
+      const context = canvas.getContext('2d');
+      const alpha = context.getImageData(0,0,canvas.width,canvas.height).data;
       let count = 0;
       for (let i = 3; i < alpha.length; i += 4) if (alpha[i]) count++;
-      return {width: canvas.width, height: canvas.height, count};
+      const text = siglusSurface.querySelector('[data-siglus-dialogue]');
+      const speaker = text.previousElementSibling;
+      context.save();
+      context.textBaseline = 'top';
+      const baseline = (element) => {
+        const style = getComputedStyle(element);
+        context.font = style.fontSize + ' ' + style.fontFamily;
+        return parseFloat(element.style.top) - context.measureText('国').alphabeticBaseline;
+      };
+      const baselines = [baseline(text), speaker.textContent ? baseline(speaker) : null];
+      context.restore();
+      return {width: canvas.width, height: canvas.height, count, baselines};
     })()`);
     assert.ok(metrics.width > 0 && metrics.height > 0 && metrics.count > 100);
     assert.equal(
@@ -1188,6 +1200,30 @@ try {
     })()`);
     assert.equal(await evaluate('siglusSurface.firstElementChild.dataset.textMode'), 'dom');
     assert.equal(await evaluate('siglusSurface.dataset.page'), pausedPage);
+    const domBaselines = await evaluate(`(() => {
+      const text = siglusSurface.querySelector('[data-siglus-dialogue]');
+      const speaker = text.previousElementSibling;
+      const baseline = (element) => {
+        const marker = document.createElement('span');
+        marker.style.cssText = 'display:inline-block;width:0;height:0;vertical-align:baseline';
+        element.prepend(marker);
+        const y = Number.parseFloat(element.style.top) + marker.offsetTop;
+        marker.remove();
+        return y;
+      };
+      return [baseline(text), speaker.textContent ? baseline(speaker) : null];
+    })()`);
+    for (const [index, nativeBaseline] of metrics.baselines.entries()) {
+      if (nativeBaseline === null) continue;
+      assert.ok(
+        Math.abs(domBaselines[index] - nativeBaseline) <= 1,
+        `DOM baseline ${domBaselines[index]} should align with Native ${nativeBaseline}`,
+      );
+    }
+    console.log('First-line baselines in game pixels', {
+      native: metrics.baselines,
+      dom: domBaselines,
+    });
     assert.equal(
       await evaluate(
         `getComputedStyle(document.querySelector(${JSON.stringify(dialogue)})).userSelect`,

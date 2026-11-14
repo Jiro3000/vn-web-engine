@@ -87,6 +87,7 @@ export class SiglusDisplay {
     rubySpace: 2,
   };
   private speakerMetrics = {x: 0, y: 0};
+  private readonly domBaselineOffsets = new Map<string, number>();
   private readonly portrait = document.createElement('div');
   private readonly media = new Map<string, Promise<G00Image>>();
   private readonly hitInsets = new WeakMap<Graphic, string>();
@@ -492,8 +493,48 @@ export class SiglusDisplay {
     this.nativeText.hidden = mode !== 'native';
     this.text.hidden = this.speaker.hidden = mode === 'native';
     this.stage.dataset.textMode = mode;
+    if (mode === 'dom') this.alignDomText();
+    else {
+      this.text.style.top = `${this.textMetrics.y}px`;
+      this.speaker.style.top = `${this.speakerMetrics.y}px`;
+    }
     this.paintNativeText();
     this.stage.focus({preventScroll: true});
+  }
+
+  private alignDomText(): void {
+    if (this.textMode !== 'dom' || !this.text.style.fontSize) return;
+    const family = this.message.style.fontFamily || 'sans-serif';
+    const context = this.nativeText.getContext('2d')!;
+    context.save();
+    context.textBaseline = 'top';
+    for (const [element, y] of [
+      [this.text, this.textMetrics.y],
+      [this.speaker, this.speakerMetrics.y],
+    ] as const) {
+      const {fontSize, lineHeight} = getComputedStyle(element);
+      const font = `${fontSize} ${family}`;
+      const key = `${font} / ${lineHeight}`;
+      let offset = this.domBaselineOffsets.get(key);
+      if (offset === undefined) {
+        const line = document.createElement('div');
+        const baseline = document.createElement('span');
+        line.style.cssText = 'position:absolute;top:0;left:0;visibility:hidden;white-space:pre';
+        line.style.font = font;
+        line.style.lineHeight = lineHeight;
+        baseline.style.cssText = 'display:inline-block;width:0;height:0;vertical-align:baseline';
+        line.append('国', baseline);
+        this.stage.append(line);
+        const cssBaseline = baseline.offsetTop;
+        line.remove();
+        context.font = font;
+        // A top-aligned canvas run starts above its alphabetic baseline.
+        offset = -context.measureText('国').alphabeticBaseline - cssBaseline;
+        if (this.stage.getClientRects().length) this.domBaselineOffsets.set(key, offset);
+      }
+      element.style.top = `${y + offset}px`;
+    }
+    context.restore();
   }
 
   private paintNativeText(): void {
@@ -600,8 +641,6 @@ export class SiglusDisplay {
     this.nativeText.width = windowSize[0]!;
     this.nativeText.height = windowSize[1]!;
     place(this.text, [textX, textY], [textWidth, textHeight]);
-    this.text.style.fontSize = `${size}px`;
-    this.text.style.lineHeight = `${size + lineSpace!}px`;
     this.text.style.letterSpacing = `${spacing}px`;
     this.text.dataset.siglusDialogue = '';
     const namePos = numbers(prefix + 'NAME_MESSAGE_POS', [x!, y! - size]);
@@ -610,7 +649,7 @@ export class SiglusDisplay {
     this.speaker.style.fontSize = `${this.config.get(prefix + 'NAME_MOJI_SIZE') ?? 36}px`;
     place(this.portrait, numbers('WAKU.000.FACE.000.POS', [24, 24]), [340, windowSize[1]! - 24]);
     if (this.filter) this.filter.hidden = this.config.get(prefix + 'WAKU_NO') === '-1';
-    this.paintNativeText();
+    this.setTextSize();
   }
   private readonly loadedFonts: FontFace[] = [];
   private readonly fontNames = new Map<string, string>();
@@ -1079,7 +1118,10 @@ export class SiglusDisplay {
   }
 
   setTextSize(size?: number): void {
-    this.text.style.fontSize = `${size ?? this.defaultTextSize}px`;
+    const pixels = size ?? this.defaultTextSize;
+    this.text.style.fontSize = `${pixels}px`;
+    this.text.style.lineHeight = `${pixels + this.textMetrics.lineSpace}px`;
+    this.alignDomText();
     this.paintNativeText();
   }
 
