@@ -2,6 +2,7 @@ import type {ByteSource} from '../../core/source.js';
 import {BrowserWindowDisplayHost} from '../../platform/browser-window-display.js';
 import {readSfntFontMetadata} from '../../formats/sfnt.js';
 import {G00Image} from '../../formats/siglus/g00.js';
+import {siglusFontShadow, type SiglusFontChoice} from './configuration.js';
 
 export interface SiglusHistoryEntry {
   name: string;
@@ -88,6 +89,7 @@ export class SiglusDisplay {
   };
   private speakerMetrics = {x: 0, y: 0};
   private readonly domBaselineOffsets = new Map<string, number>();
+  private messageShadow = 2;
   private readonly portrait = document.createElement('div');
   private readonly media = new Map<string, Promise<G00Image>>();
   private readonly hitInsets = new WeakMap<Graphic, string>();
@@ -448,9 +450,20 @@ export class SiglusDisplay {
       this.signal.throwIfAborted();
       document.fonts.add(font);
       this.loadedFonts.push(font);
-      for (const entry of metadata?.names ?? [])
+      const names = metadata?.names ?? [];
+      for (const entry of names)
         if ((entry.id === 1 || entry.id === 16) && entry.unicode)
           this.fontNames.set(entry.unicode.toLowerCase(), family);
+      const familyName =
+        names.find(({id, unicode}) => id === 16 && unicode) ??
+        names.find(({id, unicode}) => id === 1 && unicode);
+      if (familyName?.unicode) {
+        const context = this.nativeText.getContext('2d')!;
+        context.font = `16px ${family}`;
+        const proportional =
+          context.measureText('iiii').width !== context.measureText('WWWW').width;
+        this.fontChoices.push({name: familyName.unicode, family, proportional});
+      }
     }
     this.setMessageFont(this.config.get('CONFIG.FONT.NAME')?.split('"')[1]);
     await this.prepareFrameActions();
@@ -510,8 +523,8 @@ export class SiglusDisplay {
       [this.text, this.textMetrics.y],
       [this.speaker, this.speakerMetrics.y],
     ] as const) {
-      const {fontSize, lineHeight} = getComputedStyle(element);
-      const font = `${fontSize} ${family}`;
+      const {fontSize, fontWeight, lineHeight} = getComputedStyle(element);
+      const font = `${fontWeight} ${fontSize} ${family}`;
       const key = `${font} / ${lineHeight}`;
       let offset = this.domBaselineOffsets.get(key);
       if (offset === undefined) {
@@ -541,15 +554,24 @@ export class SiglusDisplay {
     const context = canvas.getContext('2d')!;
     context.clearRect(0, 0, canvas.width, canvas.height);
     const family = this.message.style.fontFamily || 'sans-serif';
+    const weight = this.message.style.fontWeight || 'normal';
     context.fillStyle = 'white';
-    context.shadowColor = 'black';
-    context.shadowBlur = 4;
-    context.shadowOffsetY = 1;
+    context.strokeStyle = 'black';
+    context.lineJoin = 'round';
+    context.lineWidth = 2;
+    context.shadowColor = this.messageShadow & 1 ? 'black' : 'transparent';
+    context.shadowBlur = 3;
+    context.shadowOffsetX = 1;
+    context.shadowOffsetY = 2;
     context.textBaseline = 'top';
+    const draw = (text: string, x: number, y: number) => {
+      if (this.messageShadow & 2) context.strokeText(text, x, y);
+      context.fillText(text, x, y);
+    };
     const speakerSize = Number.parseFloat(this.speaker.style.fontSize);
     if (this.currentName && speakerSize > 0) {
-      context.font = `${speakerSize}px ${family}`;
-      context.fillText(this.currentName, this.speakerMetrics.x, this.speakerMetrics.y);
+      context.font = `${weight} ${speakerSize}px ${family}`;
+      draw(this.currentName, this.speakerMetrics.x, this.speakerMetrics.y);
     }
     const size = Number.parseFloat(this.text.style.fontSize);
     if (!size || !this.currentText.length) return;
@@ -583,16 +605,16 @@ export class SiglusDisplay {
       const rowY = y + index * (size + lineSpace);
       let left = x + (this.text.style.textAlign === 'center' ? (width - row.width) / 2 : 0);
       for (const cell of row.cells) {
-        context.font = `${size}px ${family}`;
+        context.font = `${weight} ${size}px ${family}`;
         let glyphX = left;
         for (const character of cell.character) {
-          context.fillText(character, glyphX, rowY);
+          draw(character, glyphX, rowY);
           glyphX += advance(character);
         }
         if (cell.ruby) {
-          context.font = `${rubySize}px ${family}`;
+          context.font = `${weight} ${rubySize}px ${family}`;
           context.textAlign = 'center';
-          context.fillText(cell.ruby, left + cell.width / 2, rowY - rubySize - rubySpace);
+          draw(cell.ruby, left + cell.width / 2, rowY - rubySize - rubySpace);
           context.textAlign = 'start';
         }
         left += cell.width;
@@ -651,14 +673,18 @@ export class SiglusDisplay {
   }
   private readonly loadedFonts: FontFace[] = [];
   private readonly fontNames = new Map<string, string>();
+  readonly fontChoices: SiglusFontChoice[] = [];
 
   private fontFamily(name?: string): string {
     const family = name && this.fontNames.get(name.toLowerCase());
     return family ? family + ', sans-serif' : (this.loadedFonts[0]?.family ?? 'sans-serif');
   }
 
-  setMessageFont(name?: string): void {
+  setMessageFont(name?: string, bold = false, shadow = 2): void {
     this.message.style.fontFamily = this.fontFamily(name);
+    this.message.style.fontWeight = bold ? 'bold' : 'normal';
+    this.messageShadow = shadow;
+    this.text.style.textShadow = this.speaker.style.textShadow = siglusFontShadow(shadow);
     this.alignDomText();
     this.paintNativeText();
   }

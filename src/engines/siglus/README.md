@@ -73,7 +73,8 @@ checks the wheel-to-advance and window/fullscreen controls in the System tab.
 It opens the movie dialog, changes the selected mode and checks the restored
 choice and keyboard focus after reopening.
 It switches the dialogue from the default Kosugi Maru to the bundled Kosugi
-font through the Text tab, plays the seven volume tests and the first
+font through the Text tab and checks the detailed font selector, bold text
+and outline with shadow. It plays the seven volume tests and the first
 character's sample in the Sound tab, and returns to the title with a
 right-click. It reopens the player in the same temporary profile and checks
 that the selected font is still applied. Only that profile starts with
@@ -82,7 +83,7 @@ volume types, applied gain, decoded frames, sample rate, peak and RMS. It compar
 offsets, opcodes and argument counts with the disassembly. For Configuration,
 the trace uses offsets as source locations because branches can skip line markers.
 The regular title keeps Configuration disabled while the detailed display
-and font dialogs are incomplete.
+dialog is incomplete.
 
 The System and Text tabs execute `syscom.set_window_mode` (4) and
 `syscom.set_font_name` (283) in `__sys_menu_config01`. The browser maps the
@@ -99,13 +100,19 @@ separate dialog. The embedded templates provide control labels and
 bounds. The browser handles movie configuration command 167 using template
 124, its original control IDs and dialog units. It persists the MCI or
 Windows Media Player selection. Both choices play through the same browser
-host, which chooses the decoder by the file format. The remaining advanced
-dialogs still need their native command dispatch and controls mapped.
+host, which chooses the decoder by the file format.
 In the embedded image, the screen modal wrapper at `0x5481b0` uses the
 `cfg_wnd_modal_screen` key and calls `DialogBoxParamW` with template 127
 at `0x548248`. The font modal references `cfg_wnd_modal_font`
 at `0x54757c` and opens the empty base template 240 at `0x5475cb`.
-Its actual controls need to be recovered from the initializer.
+Initializer `0x5396e0` creates the font list, proportional filter, bold
+control and four shadow controls. Handler `0x53a770` applies the settings
+on input, including the four values for no shadow, shadow, outline and
+outline plus shadow. The browser uses the recovered Japanese labels,
+lists the bundled fonts, applies changes to Native and DOM Text, and
+stores the settings in the installation profile. It uses browser controls
+and CSS/Canvas effects, with approximate geometry and font rasterization.
+The browser font list currently covers the installation's bundled fonts.
 
 Set `SIGLUS_LOAD_ONLY=1` for the Save and Load round trip. It starts at the
 cleared-title checkpoint and starts a new game. It uses the in-game Load

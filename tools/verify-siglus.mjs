@@ -1089,6 +1089,36 @@ try {
     const chosenFont = await evaluate(dialogueFont);
     assert.notEqual(chosenFont, oldFont);
     console.log('Configuration: original font button changed the dialogue font.', fontChoice);
+    const fontDialog = 'dialog[data-siglus-configuration="font"]';
+    const beforeAdvancedFont = await evaluate('siglusTags.length');
+    await clickConfig(665, 192);
+    await waitFor(
+      `${configCommand('63.142', beforeAdvancedFont)} && document.querySelector('${fontDialog}')?.open`,
+    );
+    const fontControl = (input) => `${fontDialog} ${input}`;
+    const bold = fontControl('input[name="bold"]');
+    const proportional = fontControl('input[name="proportional"]');
+    await click(proportional);
+    const availableFonts = await evaluate(
+      `Array.from(document.querySelector('${fontDialog} select').options, option => option.value)`,
+    );
+    assert.ok(availableFonts.includes('Kosugi') && availableFonts.includes('Kosugi Maru'));
+    await click(bold);
+    await click(fontControl('input[name="shadow"][value="3"]'));
+    const messageFontStyle = `(() => {
+      const text = siglusSurface.querySelector('[data-siglus-dialogue]');
+      return {bold: getComputedStyle(text).fontWeight, shadow: text.style.textShadow};
+    })()`;
+    const changedFontStyle = await evaluate(messageFontStyle);
+    assert.equal(changedFontStyle.bold, '700');
+    assert.match(changedFontStyle.shadow, /1px 2px 3px/);
+    await click(fontControl('button[type="submit"]'));
+    await waitFor(
+      `!document.querySelector('${fontDialog}') && document.activeElement === siglusSurface.firstElementChild`,
+    );
+    console.log(
+      'Configuration: detailed font settings updated the message weight and outline/shadow.',
+    );
     const beforeSound = await evaluate('siglusTags.length');
     await clickConfig(1630, 22);
     await waitFor(`siglusTags.slice(${beforeSound}).some(({scene, args}) =>
@@ -1140,6 +1170,7 @@ try {
     console.log(`Configuration: returned to title and matched ${tags.length} command tags.`);
     await reopenPlayer();
     assert.equal(await evaluate(dialogueFont), chosenFont);
+    assert.deepEqual(await evaluate(messageFontStyle), changedFontStyle);
     await click('#siglus-surface button[aria-label="Configuration"]');
     await waitFor(`document.querySelector('#siglus-surface canvas') && ${configLoop}`);
     await openMovieDialog();

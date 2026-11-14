@@ -13,6 +13,30 @@ const moviePlayers = new Map<number, SiglusMoviePlayer>([
   [1165, 'wmp'],
 ]);
 export type SiglusMoviePlayer = 'mci' | 'wmp';
+export interface SiglusFontSettings {
+  name: string;
+  bold: boolean;
+  shadow: number;
+  showProportional: boolean;
+}
+
+export interface SiglusFontChoice {
+  name: string;
+  family: string;
+  proportional: boolean;
+}
+
+const shadowLabels = ['影なし', '影あり', '縁取る', '縁＋影'];
+const shadowStyles = [
+  'none',
+  '1px 1px 3px #000',
+  '-1px 0 #000, 1px 0 #000, 0 -1px #000, 0 1px #000',
+  '-1px 0 #000, 1px 0 #000, 0 -1px #000, 0 1px #000, 1px 2px 3px #000',
+];
+
+export function siglusFontShadow(shadow: number): string {
+  return shadowStyles[shadow] ?? shadowStyles[0]!;
+}
 
 export class SiglusConfiguration {
   private movieTemplate?: Promise<ReturnType<typeof parseDialogTemplate>>;
@@ -43,22 +67,12 @@ export class SiglusConfiguration {
     const template = await (this.movieTemplate ??= this.readMovieTemplate());
     this.signal.throwIfAborted();
     const document = this.owner.ownerDocument;
-    const dialog = document.createElement('dialog');
+    const {dialog, form} = this.dialog('movie', template.title);
     const {font} = template;
     const units = font ? dialogFontBaseUnits(font.face, font.pointSize) : SYSTEM_DIALOG_BASE_UNITS;
     const horizontal = (value: number) => Math.round((value * units.cx) / 4);
     const vertical = (value: number) => Math.round((value * units.cy) / 8);
-    dialog.dataset.siglusConfiguration = 'movie';
-    dialog.setAttribute('aria-label', template.title);
-    dialog.style.cssText =
-      'padding:0;border:1px solid #666;background:#f0f0f0;color:#000;font:11px sans-serif';
-    const title = document.createElement('div');
-    title.textContent = template.title;
-    title.style.cssText = 'padding:4px 6px;background:#fff;border-bottom:1px solid #ccc';
-    const form = document.createElement('form');
-    form.method = 'dialog';
     form.style.cssText = `position:relative;width:${horizontal(template.cx)}px;height:${vertical(template.cy)}px`;
-    dialog.append(title, form);
     for (const item of template.items) {
       if (typeof item.title !== 'string') continue;
       let element: HTMLElement;
@@ -93,7 +107,138 @@ export class SiglusConfiguration {
       });
       form.append(element);
     }
-    return new Promise((resolve, reject) => {
+    await this.show(dialog);
+    const selected = new FormData(form).get('method');
+    return selected === 'mci' || selected === 'wmp' ? selected : current;
+  }
+
+  font(
+    current: SiglusFontSettings,
+    defaults: SiglusFontSettings,
+    choices: readonly SiglusFontChoice[],
+    apply: (settings: SiglusFontSettings) => void,
+  ): Promise<void> {
+    const document = this.owner.ownerDocument;
+    const {dialog, form} = this.dialog('font', 'フォントの設定');
+    form.style.cssText =
+      'box-sizing:border-box;width:456px;max-width:90vw;padding:12px;display:grid;gap:8px';
+    const settings = {...current};
+    const chooser = document.createElement('select');
+    chooser.size = 8;
+    chooser.setAttribute('aria-label', 'フォント');
+    chooser.style.cssText = 'width:216px;max-width:100%';
+    const fonts = document.createElement('fieldset');
+    const legend = document.createElement('legend');
+    legend.textContent = 'フォント';
+    const checkbox = (name: string, caption: string) => {
+      const label = document.createElement('label');
+      const input = document.createElement('input');
+      input.type = 'checkbox';
+      input.name = name;
+      label.append(input, caption);
+      return {label, input};
+    };
+    const proportional = checkbox('proportional', 'プロポーショナルフォントを表示する');
+    const bold = checkbox('bold', '文字を太くする');
+    const note = document.createElement('div');
+    note.textContent =
+      '※プロポーショナルフォントを使うと、文章のレイアウトが崩れる可能性があります。';
+    fonts.append(legend, chooser, proportional.label, note);
+    const effects = document.createElement('div');
+    effects.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap';
+    const radios = shadowLabels.map((caption, mode) => {
+      const label = document.createElement('label');
+      const input = document.createElement('input');
+      input.type = 'radio';
+      input.name = 'shadow';
+      input.value = String(mode);
+      input.addEventListener('change', () => {
+        settings.shadow = mode;
+        update();
+      });
+      label.append(input, caption);
+      effects.append(label);
+      return input;
+    });
+    const sample = document.createElement('div');
+    sample.textContent = '「あいう漢字カナＡＢＣ０１２薔薇」';
+    sample.style.cssText = 'padding:6px;background:#888;color:white;font-size:20px';
+    const buttons = document.createElement('div');
+    buttons.style.cssText = 'display:flex;justify-content:flex-end;gap:6px';
+    const reset = document.createElement('button');
+    reset.type = 'button';
+    reset.textContent = '初期状態に戻す';
+    const close = document.createElement('button');
+    close.type = 'submit';
+    close.textContent = '閉じる';
+    buttons.append(reset, close);
+    form.append(fonts, bold.label, effects, sample, buttons);
+
+    const renderSelection = () => {
+      chooser.replaceChildren();
+      for (const choice of choices) {
+        if (choice.proportional && !settings.showProportional && choice.name !== settings.name)
+          continue;
+        chooser.add(new Option(choice.name, choice.name));
+      }
+      chooser.value = settings.name;
+      bold.input.checked = settings.bold;
+      proportional.input.checked = settings.showProportional;
+      radios[settings.shadow]!.checked = true;
+    };
+    const renderSample = () => {
+      sample.style.fontFamily =
+        choices.find(({name}) => name === settings.name)?.family ?? 'sans-serif';
+      sample.style.fontWeight = settings.bold ? 'bold' : 'normal';
+      sample.style.textShadow = siglusFontShadow(settings.shadow);
+    };
+    const update = () => {
+      renderSample();
+      apply({...settings});
+    };
+    chooser.addEventListener('change', () => {
+      if (!chooser.value) return;
+      settings.name = chooser.value;
+      update();
+    });
+    proportional.input.addEventListener('change', () => {
+      settings.showProportional = proportional.input.checked;
+      renderSelection();
+      update();
+    });
+    bold.input.addEventListener('change', () => {
+      settings.bold = bold.input.checked;
+      update();
+    });
+    reset.addEventListener('click', () => {
+      Object.assign(settings, defaults);
+      renderSelection();
+      update();
+    });
+    renderSelection();
+    renderSample();
+    return this.show(dialog);
+  }
+
+  private dialog(kind: string, caption: string) {
+    const document = this.owner.ownerDocument;
+    const dialog = document.createElement('dialog');
+    dialog.dataset.siglusConfiguration = kind;
+    dialog.setAttribute('aria-label', caption);
+    dialog.style.cssText =
+      'padding:0;border:1px solid #666;background:#f0f0f0;color:#000;font:11px sans-serif';
+    const title = document.createElement('div');
+    title.textContent = caption;
+    title.style.cssText = 'padding:4px 6px;background:#fff;border-bottom:1px solid #ccc';
+    const form = document.createElement('form');
+    form.method = 'dialog';
+    dialog.append(title, form);
+    return {dialog, form};
+  }
+
+  private show(dialog: HTMLDialogElement): Promise<void> {
+    this.signal.throwIfAborted();
+    return new Promise<void>((resolve, reject) => {
       const abort = (): void => {
         dialog.remove();
         reject(this.signal.reason);
@@ -103,9 +248,8 @@ export class SiglusConfiguration {
         'close',
         () => {
           this.signal.removeEventListener('abort', abort);
-          const selected = new FormData(form).get('method');
           dialog.remove();
-          resolve(selected === 'mci' || selected === 'wmp' ? selected : current);
+          resolve();
         },
         {once: true},
       );

@@ -3,7 +3,11 @@ import type {ByteSource} from '../../core/source.js';
 import {SiglusScenePack} from '../../formats/siglus/scene-pack.js';
 import {BrowserFullscreenMoviePlayer} from '../../video/fullscreen-movie.js';
 import {SiglusAudio, type SiglusAudioKind} from './audio.js';
-import {SiglusConfiguration, type SiglusMoviePlayer} from './configuration.js';
+import {
+  SiglusConfiguration,
+  type SiglusFontSettings,
+  type SiglusMoviePlayer,
+} from './configuration.js';
 import {
   SiglusDisplay,
   orderedObjects,
@@ -149,7 +153,8 @@ export class SiglusPlayer {
   private voiceDuckLevel: number;
   private voiceDuckEnabled: boolean;
   private readonly options = new Map<SystemOption, boolean>();
-  private messageFont: string;
+  private messageFont: SiglusFontSettings;
+  private readonly defaultMessageFont: SiglusFontSettings;
   private windowMode: boolean;
   private moviePlayer: SiglusMoviePlayer = 'wmp';
   private readonly configuration: SiglusConfiguration;
@@ -219,7 +224,13 @@ export class SiglusPlayer {
       throw new Error('Invalid Siglus screen size');
     this.startScene = config.get('START_SCENE')?.split('"')[1] ?? '_start';
     this.audio = new SiglusAudio(files, config, root, game.saveKey + ':audio');
-    this.messageFont = config.get('CONFIG.FONT.NAME')?.split('"')[1] ?? '';
+    this.defaultMessageFont = {
+      name: config.get('CONFIG.FONT.NAME')?.split('"')[1] ?? '',
+      bold: config.get('CONFIG.FONT.FUTOKU') === '1',
+      shadow: Math.min(3, Math.max(0, Number(config.get('CONFIG.FONT.SHADOW')) || 0)),
+      showProportional: false,
+    };
+    this.messageFont = {...this.defaultMessageFont};
     this.windowMode = config.get('CONFIG.WINDOW_MODE') === '1';
     this.configuration = new SiglusConfiguration(
       root,
@@ -232,7 +243,11 @@ export class SiglusPlayer {
         const values = JSON.parse(savedOptions);
         for (const [option] of systemOptions)
           if (typeof values?.[option] === 'boolean') this.options.set(option, values[option]);
-        if (typeof values?.font === 'string') this.messageFont = values.font;
+        if (typeof values?.font === 'string') this.messageFont.name = values.font;
+        if (typeof values?.fontBold === 'boolean') this.messageFont.bold = values.fontBold;
+        if ([0, 1, 2, 3].includes(values?.fontShadow)) this.messageFont.shadow = values.fontShadow;
+        if (typeof values?.fontShowProportional === 'boolean')
+          this.messageFont.showProportional = values.fontShowProportional;
         if (typeof values?.fullscreen === 'boolean') this.windowMode = values.fullscreen;
         if (values?.moviePlayer === 'mci' || values?.moviePlayer === 'wmp')
           this.moviePlayer = values.moviePlayer;
@@ -331,7 +346,7 @@ export class SiglusPlayer {
     await this.audio.resume();
     await this.openSaveStore();
     await this.display.prepare();
-    this.display.setMessageFont(this.messageFont);
+    this.applyMessageFont();
     if (this.windowMode) this.windowDisplay.setFullscreen(true);
     this.display.setMessageFilter(this.filterColor);
     const [menu, entry] = (this.game.config.get('MENU_SCENE') ?? '"_titlemenu", 0').split(',');
@@ -414,11 +429,19 @@ export class SiglusPlayer {
       this.game.saveKey + ':options',
       JSON.stringify({
         ...Object.fromEntries(this.options),
-        font: this.messageFont,
+        font: this.messageFont.name,
+        fontBold: this.messageFont.bold,
+        fontShadow: this.messageFont.shadow,
+        fontShowProportional: this.messageFont.showProportional,
         fullscreen: this.windowMode,
         moviePlayer: this.moviePlayer,
       }),
     );
+  }
+
+  private applyMessageFont(): void {
+    const {name, bold, shadow} = this.messageFont;
+    this.display.setMessageFont(name, bold, shadow);
   }
 
   private systemCounter(
@@ -1462,6 +1485,20 @@ export class SiglusPlayer {
         return 0;
       }
       if (member === 9) return Number(this.windowDisplay.isExpanded);
+      if (member === 142) {
+        await this.configuration.font(
+          this.messageFont,
+          this.defaultMessageFont,
+          this.display.fontChoices,
+          (settings) => {
+            this.messageFont = settings;
+            this.applyMessageFont();
+            this.persistOptions();
+          },
+        );
+        this.display.stage.focus({preventScroll: true});
+        return 0;
+      }
       if (member === 167) {
         this.moviePlayer = await this.configuration.moviePlayer(this.moviePlayer);
         this.persistOptions();
@@ -1469,12 +1506,12 @@ export class SiglusPlayer {
         return 0;
       }
       if (member === 283) {
-        this.messageFont = s(0);
-        this.display.setMessageFont(this.messageFont);
+        this.messageFont.name = s(0);
+        this.applyMessageFont();
         this.persistOptions();
         return 0;
       }
-      if (member === 284) return this.messageFont;
+      if (member === 284) return this.messageFont.name;
       if (member === 69 || member === 169)
         return Number(Boolean(member === 69 ? this.saveSlot(n(0)) : this.quickSaves.get(n(0))));
       if (member === 79 || member === 170)
@@ -1903,10 +1940,9 @@ export class SiglusPlayer {
         pattern: 0,
         text: {
           value: String(args[0]),
-          font: this.systemFont?.name ?? this.messageFont,
-          bold: this.systemFont?.bold ?? this.game.config.get('CONFIG.FONT.FUTOKU') === '1',
-          shadow:
-            this.systemFont?.shadow ?? Number(this.game.config.get('CONFIG.FONT.SHADOW') ?? 0),
+          font: this.systemFont?.name ?? this.messageFont.name,
+          bold: this.systemFont?.bold ?? this.messageFont.bold,
+          shadow: this.systemFont?.shadow ?? this.messageFont.shadow,
           size: 32,
         },
       });
