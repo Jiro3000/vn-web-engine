@@ -313,6 +313,8 @@ try {
   }
   await runUntil((current) => current.title);
   console.log(`Reached title after ${page} advances`);
+  await waitFor(`siglusTags.filter(({scene, path}) =>
+    scene === '_titlemenu_dmy' && path?.join('.') === '38.6.-1.0.3').length >= 2`);
   await click('#siglus-surface button[aria-label="New Game"]');
   if (diagnosticPages > 0) {
     const firstPage = page;

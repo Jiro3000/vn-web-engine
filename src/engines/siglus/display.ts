@@ -19,7 +19,7 @@ export interface DrawObject {
   y: number;
   visible: boolean;
   pattern: number;
-  button?: number;
+  button?: {id: number; group: number};
   disabled?: boolean;
   opacity?: [target: number, duration: number, delay: number, easing: number, start: number];
   movement?: [target: number, duration: number, delay: number, easing: number, start: number];
@@ -247,7 +247,7 @@ export class SiglusDisplay {
   async show(
     objects: Iterable<DrawObject>,
     duration: number,
-    button: (id: number) => void,
+    button: (target: NonNullable<DrawObject['button']>) => void,
   ): Promise<void> {
     const next = document.createElement('div');
     next.style.cssText = 'position:absolute;inset:0;pointer-events:none';
@@ -266,7 +266,7 @@ export class SiglusDisplay {
       element.append(canvas);
       next.append(element);
       if (element instanceof HTMLButtonElement) {
-        const id = object.button!;
+        const target = object.button!;
         const role = object.name.split('_').at(-1);
         const supported = role === 'start' || role === 'prol' || role === 'exit' || role === 'load';
         element.disabled = !supported || Boolean(object.disabled);
@@ -284,11 +284,12 @@ export class SiglusDisplay {
                   ? 'Exit'
                   : object.name,
         );
-        element.dataset.siglusButton = String(id);
+        element.dataset.siglusButton = String(target.id);
+        element.dataset.siglusGroup = String(target.group);
         element.addEventListener('click', (event) => {
           event.stopPropagation();
           this.stage.focus({preventScroll: true});
-          button(id);
+          button(target);
         });
       }
       if (object.opacity) {

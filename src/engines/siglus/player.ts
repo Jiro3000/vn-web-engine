@@ -59,8 +59,9 @@ export class SiglusPlayer {
   private readonly audio: SiglusAudio;
   private readonly objects = [new Map<number, DrawObject>(), new Map<number, DrawObject>()];
   private wait?: (value: number) => void;
-  private decide?: (value: number) => void;
-  private pendingDecision?: number;
+  private readonly activeGroups = new Set<number>();
+  private readonly decisions = new Map<number, number>();
+  private decisionReady?: () => void;
   private pages = 0;
   private pendingText = false;
   private speed = 0;
@@ -298,28 +299,58 @@ export class SiglusPlayer {
     this.vm.requestLoad(save.vm);
   }
 
-  private choose(id: number): void {
+  private choose({id, group}: NonNullable<DrawObject['button']>): void {
     this.skip = false;
-    if (this.decide) this.decide(id);
-    else this.pendingDecision = id;
+    this.decisions.set(group, id);
+    this.decisionReady?.();
   }
 
-  private titleChoice(): Promise<number> {
-    if (this.pendingDecision !== undefined) {
-      const id = this.pendingDecision;
-      this.pendingDecision = undefined;
-      return Promise.resolve(id);
+  private groupCommand(group: number, command: number): Value | undefined {
+    switch (command) {
+      case 2: // start
+      case 10: // start_cancel
+        this.activeGroups.add(group);
+        return 0;
+      case 3: {
+        // get_decided_no
+        if (!this.activeGroups.has(group)) return -2;
+        const result = this.decisions.get(group) ?? -2;
+        this.decisions.delete(group);
+        return result;
+      }
+      case 4: // init
+      case 5: // end
+        this.activeGroups.delete(group);
+        this.decisions.delete(group);
+        return 0;
+      case 6: // get_hit_no
+      case 7: // get_pushed_no
+        return -1;
     }
-    return new Promise((resolve) => {
-      const signal = this.controller.signal;
-      signal.throwIfAborted();
-      const cancel = (): void => this.decide?.(-2);
-      this.decide = (id) => {
-        this.decide = undefined;
-        signal.removeEventListener('abort', cancel);
-        resolve(id);
+    return undefined;
+  }
+
+  private async nextInput(): Promise<number> {
+    if (!this.activeGroups.size || this.decisions.size) return 0;
+    // The script polls group state, then calls input.next to yield between samples.
+    // Wake on a decision or on the next frame so polling scripts can keep animating.
+    const signal = this.controller.signal;
+    signal.throwIfAborted();
+    return new Promise((resolve, reject) => {
+      const finish = (): void => {
+        clearTimeout(timer);
+        signal.removeEventListener('abort', abort);
+        this.decisionReady = undefined;
+        resolve(0);
       };
-      signal.addEventListener('abort', cancel, {once: true});
+      const abort = (): void => {
+        clearTimeout(timer);
+        this.decisionReady = undefined;
+        reject(signal.reason);
+      };
+      const timer = setTimeout(finish, 16);
+      this.decisionReady = finish;
+      signal.addEventListener('abort', abort, {once: true});
     });
   }
 
@@ -644,12 +675,8 @@ export class SiglusPlayer {
       return 0;
     }
     if ((root === 37 || root === 38) && member === 2) return this.objectCommand(command);
-    if (root === 38 && member === 6) {
-      const id = path.at(-1);
-      if (id === 3) return this.titleChoice();
-      if (id === 6 || id === 7) return -1;
-      if (id === 10) return 0;
-    }
+    if (root === 38 && member === 6 && path.length === 5 && path[2] === -1)
+      return this.groupCommand(path[3]!, path[4]!);
     if (root === 63) {
       if (member === 79) return this.saved ? 0 : -1;
       if (member === 2) {
@@ -676,7 +703,8 @@ export class SiglusPlayer {
       if (member === 25 || member === 27) this.speed = n(0);
       return 0;
     }
-    if (root === 86 && (member === 2 || member === 3)) return 0;
+    if (root === 86 && member === 2) return 0;
+    if (root === 86 && member === 3) return this.nextInput();
     if (root === 42 && member === 0) {
       await this.playBgm(s(0));
       return 0;
@@ -738,7 +766,7 @@ export class SiglusPlayer {
     if (!object && (command === 175 || command === 63 || command === 72 || command === 113))
       return 0;
     if (!object) throw new Error(`Missing Siglus object ${id}`);
-    if (command === 42) object.button = n(0);
+    if (command === 42) object.button = {id: n(0), group: n(1)};
     else if (command === 48) {
       object.x = n(0);
       object.y = n(1);
