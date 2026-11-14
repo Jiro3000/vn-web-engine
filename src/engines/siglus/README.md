@@ -42,9 +42,18 @@ The verifier launches headless Chromium-compatible Brave with a temporary
 profile, `--incognito`, and `--mute-audio`. It uses browser input events,
 checks browser errors, and compares script tag positions and text SHA-256
 values against the disassembly. The route check includes save and load,
-movie completion, chapter order, and the return to the cleared title.
+movie completion, chapter order, and the return to the cleared title. It
+also checks that the saved page's dialogue hash matches after loading and
+that the prologue, movie and cleared-title flags were written to browser
+storage. Audio checks use decoded PCM lengths, sample rates, peak amplitudes
+and RMS levels with browser output muted.
 Set `SIGLUS_OPENING_ONLY=1` for the original 50-text check or set
 `SIGLUS_DIAGNOSTIC_PAGES=240` for a short skip check from New Game.
+
+The clean-profile route matched 130,121 command and message tags and
+checked 8,540 decoded audio buffers with zero browser console errors.
+Save and load were exercised on page 67. `npm test` reported the same
+48 failing test names as `main` at `15f2bee` (2,518 passed, 3 skipped).
 
 ## Known differences
 
