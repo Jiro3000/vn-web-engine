@@ -1,3 +1,4 @@
+import {IndexedDbStore} from '../../platform/store.js';
 import type {ByteSource} from '../../core/source.js';
 import {SiglusScenePack} from '../../formats/siglus/scene-pack.js';
 import {BrowserFullscreenMoviePlayer} from '../../video/fullscreen-movie.js';
@@ -90,6 +91,8 @@ export async function openSiglusGame(files: ReadonlyMap<string, ByteSource>): Pr
   return {files, pack, config, title, saveKey};
 }
 
+type HistoryPoint = Omit<PlayerSave, 'history' | 'historyPoints'>;
+
 interface PlayerSave {
   version: 1;
   vm: SiglusCheckpoint;
@@ -105,6 +108,7 @@ interface PlayerSave {
   thumbnail?: string;
   waitsForInput?: boolean;
   history?: SiglusHistoryEntry[];
+  historyPoints?: [number, HistoryPoint][];
   controls?: {
     systemMenu: boolean;
     messageButtons: boolean;
@@ -166,6 +170,7 @@ export class SiglusPlayer {
   private messageButtonsEnabled = true;
   private readonly disabledMessageButtons = new Set<number>();
   private loadEnabled = true;
+  private saveStore?: IndexedDbStore;
   private readonly saves = new Map<number, PlayerSave>();
   private readonly quickSaves = new Map<number, PlayerSave>();
   private savePoint?: PlayerSave;
@@ -288,22 +293,6 @@ export class SiglusPlayer {
         this.movieError = new Error('Siglus movie ' + name + ': ' + reason);
       },
     });
-    for (const [kind, slots] of [
-      ['saves', this.saves],
-      ['quick-saves', this.quickSaves],
-    ] as const) {
-      const stored = localStorage.getItem(game.saveKey + ':' + kind);
-      if (!stored) continue;
-      for (const [slot, save] of JSON.parse(stored) as [number, PlayerSave][])
-        if (save.version === 1) slots.set(slot, save);
-    }
-    if (!localStorage.getItem(game.saveKey + ':saves')) {
-      const legacy = localStorage.getItem(game.saveKey + ':slot');
-      if (legacy) {
-        const save = JSON.parse(legacy) as PlayerSave;
-        if (save.version === 1) this.saves.set(0, save);
-      }
-    }
     const read = localStorage.getItem(game.saveKey + ':read');
     if (read)
       for (const [scene, flags] of JSON.parse(read) as [string, number[]][])
@@ -320,6 +309,7 @@ export class SiglusPlayer {
 
   async start(): Promise<void> {
     await this.audio.resume();
+    await this.openSaveStore();
     await this.display.prepare();
     this.display.setMessageFilter(this.filterColor);
     const [menu, entry] = (this.game.config.get('MENU_SCENE') ?? '"_titlemenu", 0').split(',');
@@ -680,6 +670,19 @@ export class SiglusPlayer {
 
   private captureSave(waitsForInput = true, includeHistory = true): PlayerSave {
     const {background, bgm} = this.root.dataset;
+    const history = includeHistory
+      ? this.backlog.slice(
+          Math.max(
+            0,
+            this.backlog.length - Number(this.game.config.get('MESSAGE_BACK_SAVE.CNT') ?? 200),
+          ),
+        )
+      : undefined;
+    const historyPoints: [number, HistoryPoint][] = [];
+    for (const [index, entry] of history?.entries() ?? []) {
+      const point = this.historyPoints.get(entry);
+      if (point) historyPoints.push([index, point]);
+    }
     return {
       version: 1,
       vm: this.vm.checkpoint(0),
@@ -691,14 +694,8 @@ export class SiglusPlayer {
       speed: this.speed,
       title: this.saveTitle,
       waitsForInput,
-      history: includeHistory
-        ? this.backlog.slice(
-            Math.max(
-              0,
-              this.backlog.length - Number(this.game.config.get('MESSAGE_BACK_SAVE.CNT') ?? 200),
-            ),
-          )
-        : undefined,
+      history,
+      historyPoints: history ? historyPoints : undefined,
       controls: {
         systemMenu: this.systemMenuEnabled,
         messageButtons: this.messageButtonsEnabled,
@@ -724,23 +721,73 @@ export class SiglusPlayer {
     return slots.get(slot);
   }
 
-  private writeSlot(slots: Map<number, PlayerSave>, slot: number, save: PlayerSave): void {
-    this.updateSlots(slots, [[slot, save]]);
+  private async openSaveStore(): Promise<void> {
+    const store = await IndexedDbStore.open([this.game.saveKey, 'slots']);
+    if (this.controller.signal.aborted) {
+      store.close();
+      this.controller.signal.throwIfAborted();
+    }
+    this.saveStore = store;
+    const {saveKey} = this.game;
+    const regular = localStorage.getItem(saveKey + ':saves');
+    const quick = localStorage.getItem(saveKey + ':quick-saves');
+    const legacy = localStorage.getItem(saveKey + ':slot');
+    const encoder = new TextEncoder();
+    if (regular !== null || quick !== null || legacy !== null) {
+      await store.update((records) => {
+        if (records.has('migrated')) return;
+        for (const [prefix, stored] of [
+          ['saves', regular],
+          ['quick-saves', quick],
+        ] as const) {
+          const slots: [number, PlayerSave][] = stored
+            ? JSON.parse(stored)
+            : prefix === 'saves' && regular === null && legacy
+              ? [[0, JSON.parse(legacy)]]
+              : [];
+          for (const [index, save] of slots)
+            if (save.version === 1)
+              records.set(prefix + ':' + index, encoder.encode(JSON.stringify(save)));
+        }
+        records.set('migrated', new Uint8Array());
+      });
+      for (const suffix of [':saves', ':quick-saves', ':slot'])
+        localStorage.removeItem(saveKey + suffix);
+    }
+    const decoder = new TextDecoder();
+    for (const [key, value] of await store.snapshot()) {
+      const match = /^(saves|quick-saves):(\d+)$/.exec(key);
+      if (!match) continue;
+      const save: PlayerSave = JSON.parse(decoder.decode(value));
+      if (save.version === 1)
+        (match[1] === 'saves' ? this.saves : this.quickSaves).set(Number(match[2]), save);
+    }
   }
 
-  private updateSlots(
+  private writeSlot(slots: Map<number, PlayerSave>, slot: number, save: PlayerSave): Promise<void> {
+    return this.updateSlots(slots, [[slot, save]]);
+  }
+
+  private async updateSlots(
     slots: Map<number, PlayerSave>,
     changes: [number, PlayerSave | undefined][],
-  ): void {
-    const next = new Map(slots);
+  ): Promise<void> {
+    const kind = slots === this.saves ? 'saves:' : 'quick-saves:';
+    const encoder = new TextEncoder();
+    const stored = changes.map(
+      ([slot, save]) =>
+        [kind + slot, save ? encoder.encode(JSON.stringify(save)) : undefined] as const,
+    );
+    await this.saveStore!.update((records) => {
+      for (const [key, value] of stored) {
+        if (value) records.set(key, value);
+        else records.delete(key);
+      }
+    });
     for (const [slot, save] of changes) {
-      if (save) next.set(slot, save);
-      else next.delete(slot);
+      if (save) slots.set(slot, save);
+      else slots.delete(slot);
     }
-    const kind = slots === this.saves ? ':saves' : ':quick-saves';
-    localStorage.setItem(this.game.saveKey + kind, JSON.stringify([...next]));
-    slots.clear();
-    for (const [slot, save] of next) slots.set(slot, save);
   }
 
   private newestSlot(slots: Map<number, PlayerSave>, start = 0, count = Infinity): number {
@@ -761,6 +808,10 @@ export class SiglusPlayer {
     this.readSkipEnabled = false;
     this.savePoint = save;
     this.backlog.splice(0, this.backlog.length, ...(save.history ?? []));
+    for (const [index, point] of save.historyPoints ?? []) {
+      const entry = this.backlog[index];
+      if (entry) this.historyPoints.set(entry, point);
+    }
     this.pageVoices = [];
     this.systemMenuEnabled = save.controls?.systemMenu ?? true;
     this.messageButtonsEnabled = save.controls?.messageButtons ?? true;
@@ -1156,7 +1207,7 @@ export class SiglusPlayer {
   }
 
   private readonly backlog: SiglusHistoryEntry[] = [];
-  private readonly historyPoints = new WeakMap<SiglusHistoryEntry, PlayerSave>();
+  private readonly historyPoints = new WeakMap<SiglusHistoryEntry, HistoryPoint>();
   private historyTarget?: PlayerSave;
   private pageVoices: SiglusHistoryEntry['voices'] = [];
 
@@ -1388,7 +1439,7 @@ export class SiglusPlayer {
         if (save) {
           const [slots, index] =
             member === 180 ? this.saveSlotAddress(n(0)) : ([this.quickSaves, n(0)] as const);
-          this.writeSlot(slots, index, {...save, comment: s(1)});
+          await this.writeSlot(slots, index, {...save, comment: s(1)});
         }
         return 0;
       }
@@ -1419,7 +1470,7 @@ export class SiglusPlayer {
         const [slots, index] =
           member === 19 ? this.saveSlotAddress(n(0)) : ([this.quickSaves, n(0)] as const);
         if (!slots.has(index)) return 0;
-        this.updateSlots(slots, [[index, undefined]]);
+        await this.updateSlots(slots, [[index, undefined]]);
         return 1;
       }
       if (member === 22 || member === 66) {
@@ -1431,7 +1482,7 @@ export class SiglusPlayer {
         const source = slots.get(first);
         const target = slots.get(second);
         if (!source && !target) return 0;
-        this.updateSlots(slots, [
+        await this.updateSlots(slots, [
           [first, target],
           [second, source],
         ]);
@@ -1441,13 +1492,13 @@ export class SiglusPlayer {
         const slots = member === 67 ? this.saves : this.quickSaves;
         const save = slots.get(n(0));
         if (!save) return 0;
-        this.writeSlot(slots, n(1), save);
+        await this.writeSlot(slots, n(1), save);
         return 1;
       }
       if (member === 249 || member === 18) {
         if (!this.saveEnabled || !this.savePoint) return 0;
         const slots = member === 249 ? this.saves : this.quickSaves;
-        this.writeSlot(slots, n(0), {
+        await this.writeSlot(slots, n(0), {
           ...this.savePoint,
           timestamp: Date.now(),
           comment: slots.get(n(0))?.comment,
@@ -1903,6 +1954,7 @@ export class SiglusPlayer {
     if (this.controller.signal.aborted) return;
     this.controller.abort();
     this.movies.close();
+    this.saveStore?.close();
     this.display.dispose();
     for (const key of [
       'phase',

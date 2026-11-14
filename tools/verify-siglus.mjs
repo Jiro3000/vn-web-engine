@@ -223,6 +223,7 @@ try {
     const {result, exceptionDetails} = await send('Runtime.evaluate', {
       expression,
       returnByValue: true,
+      awaitPromise: true,
     });
     if (exceptionDetails)
       throw new Error(exceptionDetails.exception?.description ?? exceptionDetails.text);
@@ -352,6 +353,28 @@ try {
     await delay(180);
     await advance();
   }
+  const slotRecords = (kind = 'saves') => `(await (async () => {
+    const database = (await indexedDB.databases()).find(({name}) => name?.startsWith('vn-runtime:["siglus:') && name.endsWith(',"slots"]'));
+    if (!database) return [];
+    const open = indexedDB.open(database.name);
+    const db = await new Promise((resolve, reject) => {
+      open.onsuccess = () => resolve(open.result);
+      open.onerror = () => reject(open.error);
+    });
+    try {
+      const records = db.transaction('records').objectStore('records');
+      const keys = records.getAllKeys();
+      const values = records.getAll();
+      return await new Promise((resolve, reject) => {
+        values.onerror = () => reject(values.error);
+        values.onsuccess = () => resolve(keys.result.flatMap((key, index) =>
+          key.startsWith('${kind}:') ? [[Number(key.split(':')[1]), JSON.parse(new TextDecoder().decode(values.result[index]))]] : []));
+      });
+    } finally {
+      db.close();
+    }
+  })())`;
+  const asyncExpression = (expression) => `(async () => (${expression}))()`;
   async function reopenPlayer() {
     const previousTab = targetId;
     ({targetId} = await cdp.command('Target.createTarget', {url: 'about:blank'}));
@@ -461,6 +484,16 @@ try {
     console.log(
       'Message history displayed script text, replayed a voice and returned focus to the same page.',
     );
+    assert.equal(await selectSlot('save'), 'confirm');
+    await waitFor('siglusSurface.dataset.savedPage');
+    await closeSlotMenu();
+    await reopenPlayer();
+    await click('#siglus-surface button[aria-label="Load Game"]');
+    await waitFor(slotLoop);
+    assert.equal(await chooseSlot('load', 0), 'confirm');
+    await waitFor("siglusSurface.dataset.loaded === 'true'");
+    await clickStage();
+    await waitForDialogueControls();
     const jumpStart = await evaluate('siglusTags.length');
     const currentPage = Number(await evaluate('siglusSurface.dataset.page'));
     await click('[data-siglus-action="msg_log"]');
@@ -485,7 +518,12 @@ try {
     await clickScriptMenu(confirm, 1008, 557);
     await waitFor(`document.querySelector('${overlay}')`);
     assert.equal(Number(await evaluate('siglusSurface.dataset.page')), currentPage);
-    assert.equal(await evaluate('siglusSurface.dataset.loaded'), undefined);
+    assert.equal(
+      await evaluate(
+        `siglusTags.slice(${jumpStart}).some(({path}) => path?.join('.') === '63.310')`,
+      ),
+      false,
+    );
     confirmations = await evaluate(confirm);
     await click(`${jump}[data-history-selected]`);
     await waitFor(`${confirm} > ${confirmations}`);
@@ -610,11 +648,7 @@ try {
     await click('#siglus-surface button[aria-label="New Game"]');
     await runUntil((current) => Number(current.page) >= 3);
     assert.equal(await selectSlot('save'), 'confirm');
-    const records = `(() => {
-      const key = Object.keys(localStorage).find((key) => key.endsWith(':saves'));
-      return key ? JSON.parse(localStorage.getItem(key)) : [];
-    })()`;
-    const slot = (no) => `${records}.find(([slot]) => slot === ${no})?.[1]`;
+    const slot = (no) => `(${slotRecords()}).find(([slot]) => slot === ${no})?.[1]`;
     await waitFor(`siglusTags.some(({scene, path}) =>
       scene === '${slotScene}' && path?.join('.') === '63.180')`);
     async function clickAction(x, y) {
@@ -627,8 +661,8 @@ try {
     await waitFor(`document.activeElement?.getAttribute('aria-label') === 'Save comment'`);
     await send('Input.insertText', {text: comment});
     await advance();
-    await waitFor(`${slot(0)}?.comment === ${JSON.stringify(comment)}`);
-    const original = await evaluate(slot(0));
+    await waitFor(asyncExpression(`${slot(0)}?.comment === ${JSON.stringify(comment)}`));
+    const original = await evaluate(asyncExpression(slot(0)));
     await closeSlotMenu();
     const firstPage = await evaluate('Number(siglusSurface.dataset.page)');
     await clickStage();
@@ -637,7 +671,7 @@ try {
     assert.equal(await selectSlot('save', 1), 'confirm');
     await waitFor(`siglusTags.slice(${afterFirstSave}).some(({path, args}) =>
       path?.join('.') === '63.180' && args[0] === 1)`);
-    const second = await evaluate(slot(1));
+    const second = await evaluate(asyncExpression(slot(1)));
     assert.notDeepEqual(second.message, original.message);
     const lock = `(() => {
       const key = Object.keys(localStorage).find((key) => key.endsWith(':system'));
@@ -658,7 +692,11 @@ try {
       path?.join('.') === '63.19' || args?.[0] === '__sys_sa_setbtn_bg00')`),
       false,
     );
-    assert.deepEqual(await evaluate(slot(0)), original, 'The lock survived reopening the player');
+    assert.deepEqual(
+      await evaluate(asyncExpression(slot(0))),
+      original,
+      'The lock survived reopening the player',
+    );
     await clickAction(90, 480);
     await waitFor(`!(${lock})`);
     async function confirmMutation(trigger, accept) {
@@ -670,13 +708,17 @@ try {
     }
     await clickAction(201, 480);
     await confirmMutation(() => clickAction(515, 240), true);
-    await waitFor(`${slot(1)}?.comment === ${JSON.stringify(comment)}`);
-    assert.deepEqual(await evaluate(slot(1)), original);
-    assert.deepEqual(await evaluate(slot(0)), second);
+    await waitFor(asyncExpression(`${slot(1)}?.comment === ${JSON.stringify(comment)}`));
+    assert.deepEqual(await evaluate(asyncExpression(slot(1))), original);
+    assert.deepEqual(await evaluate(asyncExpression(slot(0))), second);
     await confirmMutation(() => clickAction(685, 480), false);
-    assert.deepEqual(await evaluate(slot(1)), original, 'No leaves the exchanged record intact');
+    assert.deepEqual(
+      await evaluate(asyncExpression(slot(1))),
+      original,
+      'No leaves the exchanged record intact',
+    );
     await confirmMutation(() => clickAction(685, 480), true);
-    await waitFor(`!${slot(1)}`);
+    await waitFor(asyncExpression(`!${slot(1)}`));
     const tags = await evaluate(`siglusTags.filter(({scene}) => scene === '${slotScene}')`);
     compareTags([...initialTags, ...tags], scripts, {compareSourceLine: false});
     console.log(
@@ -685,18 +727,17 @@ try {
   } else if (autoOnly) {
     await click('#siglus-surface button[aria-label="New Game"]');
     await runUntil((current) => Number(current.page) >= 1);
-    const slotsExpression = `(() => {
-      const key = Object.keys(localStorage).find((key) => key.endsWith(':saves'));
-      return key ? JSON.parse(localStorage.getItem(key)) : [];
-    })()`;
+    const slotsExpression = slotRecords();
     await control('keyDown');
     try {
-      await waitFor(`${slotsExpression}.some(([slot]) => slot === 1001)`, 120000);
+      await waitFor(asyncExpression(`${slotsExpression}.some(([slot]) => slot === 1001)`), 120000);
     } finally {
       await control('keyUp');
     }
-    const slots = await evaluate(`${slotsExpression}.map(([no, save]) =>
-      [no, {timestamp: save.timestamp, background: save.background, frame: save.vm.frames.at(-1)}])`);
+    const slots = await evaluate(
+      asyncExpression(`${slotsExpression}.map(([no, save]) =>
+      [no, {timestamp: save.timestamp, background: save.background, frame: save.vm.frames.at(-1)}])`),
+    );
     const records = new Map(slots);
     assert.ok(records.get(1000).timestamp >= records.get(1001).timestamp);
     assert.notEqual(records.get(1000).frame.pc, records.get(1001).frame.pc);
@@ -755,11 +796,10 @@ try {
     await quickAction('qsave');
     await waitFor(`siglusSurface.dataset.savedPage !== '${saved}'`);
     await waitFor("!document.querySelector('[data-siglus-action=save]')?.parentElement.hidden");
-    const slots = await evaluate(`(() => {
-      const key = Object.keys(localStorage).find((key) => key.endsWith(':quick-saves'));
-      return JSON.parse(localStorage.getItem(key)).map(([slot, save]) =>
-        [slot, save.message.text.map(({text}) => text).join('')]);
-    })()`);
+    const slots = await evaluate(
+      asyncExpression(`${slotRecords('quick-saves')}.map(([slot, save]) =>
+      [slot, save.message.text.map(({text}) => text).join('')])`),
+    );
     assert.deepEqual(
       new Map(slots.map(([slot, text]) => [slot, digest(text)])),
       new Map([
@@ -824,10 +864,9 @@ try {
     await closeSlotMenu();
     const saveCommands = await evaluate(`siglusTags.filter(({scene}) => scene === '${slotScene}')`);
     compareTags(saveCommands, scripts, {compareSourceLine: false});
-    const thumbnail = await evaluate(`(() => {
-      const key = Object.keys(localStorage).find((key) => key.endsWith(':saves'));
-      return JSON.parse(localStorage.getItem(key))[0][1].thumbnail;
-    })()`);
+    const thumbnail = await evaluate(
+      asyncExpression(`${slotRecords()}.find(([slot]) => slot === 0)?.[1].thumbnail`),
+    );
     assert.match(thumbnail, /^data:image\/jpeg;base64,/);
     await clickStage();
     await waitFor(`Number(siglusSurface.dataset.page) > ${savedState.page}`);

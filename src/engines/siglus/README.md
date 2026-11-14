@@ -26,7 +26,8 @@ Drag over dialogue text to select it. Click or press Enter to advance a page.
 Hold Control to skip where the script enables Control skip. The original Save
 and Load controls in the message frame open the scripted slot browser, which
 is also available from the title’s Load button. Saves and system flags are
-stored in the browser under the SHA-256 of Scene.pck.
+stored in the browser under the SHA-256 of Scene.pck. Slots use IndexedDB.
+The player migrates earlier browser-only slot records on first opening.
 
 ## Verification
 
@@ -108,7 +109,9 @@ Save records also restore the script’s menu and skip permissions.
 Set `SIGLUS_HISTORY_ONLY=1` to open the original message history button,
 compare displayed text with script hashes, replay a stored voice, and verify
 that closing history restores keyboard focus to the same page. The browser
-uses the original MSGBK resources and stores recent history in each save.
+uses the original MSGBK resources and stores recent history and rewind
+checkpoints in each save. The probe reloads the slot after reopening the player
+and checks both No and Yes in the original resume confirmation.
 
 The clean-profile route matched 130,121 command and message tags and
 checked 8,540 decoded audio buffers with zero browser console errors.
@@ -139,10 +142,10 @@ and Gameexe.dat SHA-256
 
 ## Known differences
 
-- History can resume checkpoints from the current runtime through the original
-  confirmation scene. Save files retain recent history text and voice references.
-  The saved history does not retain rewind checkpoints. Native line breaking
-  remains approximate.
+- History can resume a stored checkpoint from the current runtime or a newer
+  browser save. The browser keeps checkpoints per page within the configured
+  history limit. Native checkpoint sampling and line breaking still need
+  comparison.
 
 - Day saves run the script’s rotation routine and resume after
   the browser’s day transition. The native savepoint is inside the transition.
