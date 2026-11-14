@@ -99,6 +99,15 @@ interface PlayerSave {
   comment?: string;
   thumbnail?: string;
   waitsForInput?: boolean;
+  controls?: {
+    systemMenu: boolean;
+    messageButtons: boolean;
+    disabledButtons: number[];
+    save: boolean;
+    load: boolean;
+    controlSkip: boolean;
+    skipUnread?: boolean;
+  };
 }
 
 export class SiglusPlayer {
@@ -115,6 +124,10 @@ export class SiglusPlayer {
   private systemSkipDisabled = false;
   private systemCallActive = false;
   private readSkipEnabled = false;
+  private skipUnreadOverride?: boolean;
+  private pageReadFlags: {scene: string; flag: number}[] = [];
+  private readonly readFlags = new Map<string, Set<number>>();
+  private pageAlreadyRead = false;
   private autoEnabled = false;
   private autoCharacterWait = 30;
   private autoMinimumWait = 1000;
@@ -163,7 +176,11 @@ export class SiglusPlayer {
     pan: NonNullable<Parameters<SiglusDisplay['setBackground']>[2]>;
   };
   private get skipping(): boolean {
-    return this.skip && this.skipAllowed && !this.systemSkipDisabled;
+    return this.skipAllowed && !this.systemSkipDisabled && (this.skip || this.readSkipEnabled);
+  }
+
+  private get skipUnread(): boolean {
+    return this.skipUnreadOverride ?? this.systemOption('SKIP_UNREAD_MESSAGE_ONOFF');
   }
 
   constructor(
@@ -270,6 +287,10 @@ export class SiglusPlayer {
         if (save.version === 1) this.saves.set(0, save);
       }
     }
+    const read = localStorage.getItem(game.saveKey + ':read');
+    if (read)
+      for (const [scene, flags] of JSON.parse(read) as [string, number[]][])
+        this.readFlags.set(scene, new Set(flags));
     const system = localStorage.getItem(game.saveKey + ':system');
     if (system)
       for (const [index, value] of JSON.parse(system) as [number, number][])
@@ -294,12 +315,18 @@ export class SiglusPlayer {
         yieldDelay: () => (this.systemOption('SLEEP_ONOFF') ? 16 : 0),
         message: (tag) => {
           if (!this.pendingText) {
+            this.pageReadFlags = [];
             this.display.clearText();
             this.pendingText = true;
             this.pageCharacters = 0;
           }
           if (tag.tag === 'name') this.display.name(tag.value);
           else {
+            if (tag.readFlag !== undefined && tag.readFlag >= 0) {
+              this.pageReadFlags.push({scene: tag.scene, flag: tag.readFlag});
+              if (!this.skipUnread && !this.readFlags.get(tag.scene)?.has(tag.readFlag))
+                this.readSkipEnabled = false;
+            }
             this.display.append(tag.value);
             this.pageCharacters += [...tag.value].length;
           }
@@ -534,6 +561,24 @@ export class SiglusPlayer {
     if (!this.pendingText) return;
     const speed = this.speed || (this.messageNowait ? 0 : this.messageSpeed);
     if (speed > 0) await this.delay(speed, true);
+    this.pageAlreadyRead =
+      this.pageReadFlags.length > 0 &&
+      this.pageReadFlags.every(({scene, flag}) => this.readFlags.get(scene)?.has(flag));
+    if (!this.pageAlreadyRead && !this.skipUnread) this.readSkipEnabled = false;
+    let changed = false;
+    for (const {scene, flag} of this.pageReadFlags) {
+      let flags = this.readFlags.get(scene);
+      if (!flags) this.readFlags.set(scene, (flags = new Set()));
+      if (flags.has(flag)) continue;
+      flags.add(flag);
+      changed = true;
+    }
+    if (changed)
+      localStorage.setItem(
+        this.game.saveKey + ':read',
+        JSON.stringify(Array.from(this.readFlags, ([scene, flags]) => [scene, [...flags]])),
+      );
+    this.pageReadFlags = [];
     this.root.dataset.page = String(++this.pages);
     if (!this.skipping && this.saveEnabled) this.savePoint = this.captureSave();
     await this.waitAtPage();
@@ -547,6 +592,7 @@ export class SiglusPlayer {
   }
 
   private setUserMessageHidden(hidden: boolean): void {
+    if (hidden) this.readSkipEnabled = false;
     this.userMessageHidden = hidden;
     this.display.setMessageDisplayed(!hidden && !this.messageHidden);
   }
@@ -609,6 +655,15 @@ export class SiglusPlayer {
       speed: this.speed,
       title: this.saveTitle,
       waitsForInput,
+      controls: {
+        systemMenu: this.systemMenuEnabled,
+        messageButtons: this.messageButtonsEnabled,
+        disabledButtons: [...this.disabledMessageButtons],
+        save: this.saveEnabled,
+        load: this.loadEnabled,
+        controlSkip: this.skipAllowed,
+        skipUnread: this.skipUnreadOverride,
+      },
     };
   }
 
@@ -659,7 +714,16 @@ export class SiglusPlayer {
 
   private async loadSave(save: PlayerSave): Promise<void> {
     this.skip = false;
+    this.readSkipEnabled = false;
     this.savePoint = save;
+    this.systemMenuEnabled = save.controls?.systemMenu ?? true;
+    this.messageButtonsEnabled = save.controls?.messageButtons ?? true;
+    this.disabledMessageButtons.clear();
+    for (const id of save.controls?.disabledButtons ?? []) this.disabledMessageButtons.add(id);
+    this.saveEnabled = save.controls?.save ?? true;
+    this.loadEnabled = save.controls?.load ?? true;
+    this.skipAllowed = save.controls?.controlSkip ?? true;
+    this.skipUnreadOverride = save.controls?.skipUnread;
     this.audio.stop('voice');
     this.audio.stopEffects();
     this.audio.stop('bgm');
@@ -1331,7 +1395,7 @@ export class SiglusPlayer {
       }
       if (member === 201) return Number(this.readSkipEnabled);
       if (member === 206)
-        return Number(this.skipAllowed && this.systemOption('SKIP_UNREAD_MESSAGE_ONOFF'));
+        return Number(this.skipAllowed && (this.pageAlreadyRead || this.skipUnread));
       if (member === 213 || member === 234) return 0;
       if (member === 220 || member === 227) return 1;
       if (member === 221) {
@@ -1432,6 +1496,11 @@ export class SiglusPlayer {
       return 0;
     }
     if (root === 20 && (member === 2 || member === 3)) return this.movie(s(0), member === 3);
+    if (root === 64 && member === 74) {
+      this.skipUnreadOverride = Boolean(n(0));
+      return 0;
+    }
+    if (root === 64 && member === 75) return Number(this.skipUnread);
     if (root === 64 && scriptFlags.has(member!)) {
       if (member === 25 || member === 27) this.speed = n(0);
       return 0;

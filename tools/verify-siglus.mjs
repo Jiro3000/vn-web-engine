@@ -13,6 +13,7 @@ const diagnosticPages = Number(process.env.SIGLUS_DIAGNOSTIC_PAGES ?? 0);
 const musicOnly = process.env.SIGLUS_MUSIC_ONLY === '1';
 const autoOnly = process.env.SIGLUS_AUTOSAVE_ONLY === '1';
 const quickOnly = process.env.SIGLUS_QUICK_ONLY === '1';
+const skipOnly = process.env.SIGLUS_READ_SKIP_ONLY === '1';
 const cancelOnly = process.env.SIGLUS_CANCEL_ONLY === '1';
 const manageOnly = process.env.SIGLUS_SLOT_MANAGEMENT_ONLY === '1';
 const loadOnly = process.env.SIGLUS_LOAD_ONLY === '1';
@@ -360,7 +361,16 @@ try {
     await playInstallation();
   }
   await openPlayer();
-  if (musicOnly || configOnly || loadOnly || quickOnly || autoOnly || manageOnly || cancelOnly) {
+  if (
+    musicOnly ||
+    configOnly ||
+    loadOnly ||
+    quickOnly ||
+    autoOnly ||
+    manageOnly ||
+    cancelOnly ||
+    skipOnly
+  ) {
     const pack = await readFile(join(resolve(folder), 'StartData', 'GameData', 'Scene.pck')).catch(
       () => readFile(join(resolve(folder), 'Scene.pck')),
     );
@@ -411,7 +421,40 @@ try {
   }
   await runUntil((current) => current.title);
   console.log(`Reached title after ${page} advances`);
-  if (cancelOnly) {
+  if (skipOnly) {
+    await click('#siglus-surface button[aria-label="New Game"]');
+    const first = await runUntil((current) => Number(current.page) >= 3);
+    assert.equal(await selectSlot('save'), 'confirm');
+    await waitFor('siglusSurface.dataset.savedPage');
+    await closeSlotMenu();
+    await runUntil((current) => Number(current.page) >= Number(first.page) + 3);
+    await reopenPlayer();
+    await click('#siglus-surface button[aria-label="Load Game"]');
+    await waitFor(slotLoop);
+    assert.equal(await chooseSlot('load', 0), 'confirm');
+    await waitFor("siglusSurface.dataset.loaded === 'true'");
+    await clickStage();
+    await waitForDialogueControls();
+    const readPage = Number(await evaluate('siglusSurface.dataset.page'));
+    const start = await evaluate('siglusTags.length');
+    const loop = `siglusTags.filter(({scene, path}) => scene === '__sys_menu_cancel00' && path?.join('.') === '86.3').length`;
+    await clickScriptMenu(undefined, 960, 540, 'right');
+    await waitFor(loop);
+    const frame = await evaluate(loop);
+    await clickScriptMenu(loop, 975, 635);
+    await waitFor(`${loop} >= ${frame + 4}`);
+    await clickScriptMenu(loop, 960, 540, 'right');
+    await waitFor(`siglusTags.slice(${start}).some(({scene, path, args}) =>
+      scene === '__sys_menu_cancel00' && path?.join('.') === '63.200' && args[0] === 1)`);
+    await waitFor(`Number(siglusSurface.dataset.page) === ${readPage + 3}`);
+    await waitForDialogueControls();
+    const skipped = await evaluate(`siglusTags.slice(${start}).filter(({tag}) => tag === 'text')`);
+    assert.ok(skipped.length >= 3);
+    compareTags(skipped, scripts, {compareSourceLine: false});
+    console.log(
+      'Read Skip used persisted flags after reopening, skipped two read pages and stopped at the first unread page.',
+    );
+  } else if (cancelOnly) {
     await click('#siglus-surface button[aria-label="New Game"]');
     await runUntil((current) => Number(current.page) >= 3);
     const pageBeforeMenu = await evaluate('siglusSurface.dataset.page');
@@ -893,7 +936,16 @@ try {
       scene === '_titlemenu_dmy' && path?.join('.') === '38.6.-1.0.3').length >= 2`);
     await click('#siglus-surface button[aria-label="New Game"]');
   }
-  if (musicOnly || configOnly || loadOnly || quickOnly || autoOnly || manageOnly || cancelOnly) {
+  if (
+    musicOnly ||
+    configOnly ||
+    loadOnly ||
+    quickOnly ||
+    autoOnly ||
+    manageOnly ||
+    cancelOnly ||
+    skipOnly
+  ) {
     assert.equal(errors.length, 0);
   } else if (diagnosticPages > 0) {
     const firstPage = page;

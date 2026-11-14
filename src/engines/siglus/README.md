@@ -99,6 +99,12 @@ stops, and opens Configuration to assign right-click to Hide. It checks that
 the next right-click hides selectable text and a normal click reveals the
 same page.
 
+Set `SIGLUS_READ_SKIP_ONLY=1` to verify the quick menu’s Read Skip. The probe
+reads ahead of a save, reopens the player in the same profile, loads the save,
+and checks that Read Skip advances over two read pages and stops at the first
+unread page. Read flags are scoped to the scene and the installation’s Scene.pck.
+Save records also restore the script’s menu and skip permissions.
+
 The clean-profile route matched 130,121 command and message tags and
 checked 8,540 decoded audio buffers with zero browser console errors.
 Save and load were exercised on page 67. `npm test` reported the same
