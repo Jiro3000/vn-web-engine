@@ -139,8 +139,10 @@ and Gameexe.dat SHA-256
 
 ## Known differences
 
-- History supports browsing, scrolling and voice replay. Its jump-to-line
-  command and native line breaking still need implementation and verification.
+- History can resume checkpoints from the current runtime through the original
+  confirmation scene. Save files retain recent history text and voice references.
+  The saved history does not retain rewind checkpoints. Native line breaking
+  remains approximate.
 
 - Day saves run the script’s rotation routine and resume after
   the browser’s day transition. The native savepoint is inside the transition.

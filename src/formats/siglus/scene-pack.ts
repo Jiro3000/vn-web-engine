@@ -107,6 +107,7 @@ export interface SiglusScene {
   entries: number[];
   properties: number[];
   commands: number[];
+  commandNames: string[];
 }
 
 export class SiglusScenePack {
@@ -160,6 +161,7 @@ export class SiglusScenePack {
       entries: words(data, header[9]!, header[10]!),
       properties: words(data, header[13]!, header[14]! * 2),
       commands: words(data, header[19]!, header[20]!),
+      commandNames: stringTable(data, header[21]!, header[22]!, header[23]!),
     };
     this.scenes.set(key, scene);
     return scene;

@@ -596,7 +596,10 @@ export class SiglusPlayer {
         JSON.stringify(Array.from(this.readFlags, ([scene, flags]) => [scene, [...flags]])),
       );
     this.pageReadFlags = [];
-    this.addHistory({...this.display.saveMessage(), voices: this.pageVoices});
+    const history = {...this.display.saveMessage(), voices: this.pageVoices};
+    this.addHistory(history);
+    if (this.loadEnabled && this.saveEnabled)
+      this.historyPoints.set(history, this.captureSave(true, false));
     this.pageVoices = [];
     this.root.dataset.page = String(++this.pages);
     if (!this.skipping && this.saveEnabled) this.savePoint = this.captureSave();
@@ -675,7 +678,7 @@ export class SiglusPlayer {
     }
   }
 
-  private captureSave(waitsForInput = true): PlayerSave {
+  private captureSave(waitsForInput = true, includeHistory = true): PlayerSave {
     const {background, bgm} = this.root.dataset;
     return {
       version: 1,
@@ -688,12 +691,14 @@ export class SiglusPlayer {
       speed: this.speed,
       title: this.saveTitle,
       waitsForInput,
-      history: this.backlog.slice(
-        Math.max(
-          0,
-          this.backlog.length - Number(this.game.config.get('MESSAGE_BACK_SAVE.CNT') ?? 200),
-        ),
-      ),
+      history: includeHistory
+        ? this.backlog.slice(
+            Math.max(
+              0,
+              this.backlog.length - Number(this.game.config.get('MESSAGE_BACK_SAVE.CNT') ?? 200),
+            ),
+          )
+        : undefined,
       controls: {
         systemMenu: this.systemMenuEnabled,
         messageButtons: this.messageButtonsEnabled,
@@ -1151,6 +1156,8 @@ export class SiglusPlayer {
   }
 
   private readonly backlog: SiglusHistoryEntry[] = [];
+  private readonly historyPoints = new WeakMap<SiglusHistoryEntry, PlayerSave>();
+  private historyTarget?: PlayerSave;
   private pageVoices: SiglusHistoryEntry['voices'] = [];
 
   private addHistory(entry: SiglusHistoryEntry): void {
@@ -1174,20 +1181,42 @@ export class SiglusPlayer {
   private async openHistory(): Promise<void> {
     if (!this.backlog.length) return;
     this.readSkipEnabled = false;
-    this.display.setScenePaused(true);
-    try {
-      await this.display.showHistory(this.backlog, (entry, sound) => {
-        void (async () => {
-          if (sound !== undefined) await this.playSystemSound(sound);
-          if (entry) await this.replayHistoryVoice(entry);
-        })().catch((error) => {
-          if (!this.controller.signal.aborted) console.error(error);
-        });
-      });
-    } finally {
-      this.replayGeneration++;
-      this.audio.stop('history-voice');
-      this.display.setScenePaused(this.timeStopped);
+    let focus: SiglusHistoryEntry | undefined;
+    for (;;) {
+      this.display.setScenePaused(true);
+      let selected: SiglusHistoryEntry | undefined;
+      try {
+        selected = await this.display.showHistory(
+          this.backlog,
+          (entry, sound) => {
+            void (async () => {
+              if (sound !== undefined) await this.playSystemSound(sound);
+              if (entry) await this.replayHistoryVoice(entry);
+            })().catch((error) => {
+              if (!this.controller.signal.aborted) console.error(error);
+            });
+          },
+          (entry) => this.loadEnabled && this.historyPoints.has(entry),
+          focus,
+        );
+      } finally {
+        this.replayGeneration++;
+        this.audio.stop('history-voice');
+        this.display.setScenePaused(this.timeStopped);
+      }
+      if (!selected) return;
+      const point = this.historyPoints.get(selected);
+      if (!point) return;
+      focus = selected;
+      this.historyTarget = {
+        ...point,
+        history: this.backlog.slice(0, this.backlog.indexOf(selected) + 1),
+      };
+      try {
+        await this.callSystemScene('MSGBK.LOAD_CALL');
+      } finally {
+        this.historyTarget = undefined;
+      }
     }
   }
 
@@ -1482,6 +1511,10 @@ export class SiglusPlayer {
       if (member === 200) {
         this.readSkipEnabled = Boolean(n(0));
         return 0;
+      }
+      if (member === 310 && this.historyTarget && this.systemCallActive) {
+        this.selectedSave = this.historyTarget;
+        this.vm.returnFromHostScene();
       }
       if (member === 192) {
         await this.openHistory();

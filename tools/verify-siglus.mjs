@@ -461,6 +461,50 @@ try {
     console.log(
       'Message history displayed script text, replayed a voice and returned focus to the same page.',
     );
+    const jumpStart = await evaluate('siglusTags.length');
+    const currentPage = Number(await evaluate('siglusSurface.dataset.page'));
+    await click('[data-siglus-action="msg_log"]');
+    await waitFor(`document.querySelector('${overlay}')`);
+    const jump = `${overlay} button[aria-label="Resume from this message"]`;
+    const target = await evaluate(`(() => {
+      const buttons = document.querySelectorAll(${JSON.stringify(jump)});
+      const button = buttons[buttons.length - 3];
+      if (!button) return '';
+      button.scrollIntoView({block: 'nearest'});
+      button.dataset.jumpProbe = '';
+      return Array.from(button.parentElement.childNodes)
+        .filter((part) => part.nodeName !== 'BUTTON')
+        .map((part) => part.nodeName === 'RUBY' ? part.firstChild.textContent : part.textContent).join('');
+    })()`);
+    assert.ok(target);
+    const confirm =
+      "siglusTags.filter(({scene, path}) => scene === '__sys_system_call' && path?.join('.') === '6').length";
+    let confirmations = await evaluate(confirm);
+    await click('[data-jump-probe]');
+    await waitFor(`${confirm} > ${confirmations}`);
+    await clickScriptMenu(confirm, 1008, 557);
+    await waitFor(`document.querySelector('${overlay}')`);
+    assert.equal(Number(await evaluate('siglusSurface.dataset.page')), currentPage);
+    assert.equal(await evaluate('siglusSurface.dataset.loaded'), undefined);
+    confirmations = await evaluate(confirm);
+    await click(`${jump}[data-history-selected]`);
+    await waitFor(`${confirm} > ${confirmations}`);
+    await clickScriptMenu(confirm, 883, 557);
+    await waitFor(
+      `siglusSurface.dataset.loaded === 'true' && Number(siglusSurface.dataset.page) > ${currentPage}`,
+    );
+    assert.equal(
+      digest(await evaluate("siglusSurface.querySelector('[data-siglus-dialogue]').textContent")),
+      digest(target),
+    );
+    const jumpTags = await evaluate(
+      `siglusTags.slice(${jumpStart}).filter(({scene}) => scene === '__sys_system_call')`,
+    );
+    assert.ok(jumpTags.some(({path}) => path?.join('.') === '63.310'));
+    compareTags(jumpTags, scripts, {compareSourceLine: false});
+    console.log(
+      `Message history resumed the selected dialogue. Matched ${jumpTags.length} confirmation tags.`,
+    );
   } else if (skipOnly) {
     await click('#siglus-surface button[aria-label="New Game"]');
     const first = await runUntil((current) => Number(current.page) >= 3);

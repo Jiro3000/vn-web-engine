@@ -1202,7 +1202,9 @@ export class SiglusDisplay {
   async showHistory(
     entries: readonly SiglusHistoryEntry[],
     play: (entry?: SiglusHistoryEntry, sound?: number) => void,
-  ): Promise<void> {
+    canJump: (entry: SiglusHistoryEntry) => boolean,
+    focus?: SiglusHistoryEntry,
+  ): Promise<SiglusHistoryEntry | undefined> {
     const quoted = (key: string) => this.config.get(key)?.split('"')[1];
     const numbers = (key: string, fallback: number[]) =>
       this.config.get(key)?.split(',').map(Number) ?? fallback;
@@ -1249,6 +1251,10 @@ export class SiglusDisplay {
     const replayGraphic = replay
       ? await this.graphic(quoted('MSGBK_ITEM.KOE_BTN.FILE')!)
       : undefined;
+    const jump = await makeButton('LOAD_BTN', 'Resume from this message', () => {});
+    const jumpGraphic = jump ? await this.graphic(quoted('MSGBK_ITEM.LOAD_BTN.FILE')!) : undefined;
+    let closeHistory: (entry?: SiglusHistoryEntry) => void = () => {};
+    let focusedRow: HTMLElement | undefined;
     for (const entry of entries) {
       const row = document.createElement('div');
       row.style.cssText = 'position:relative;white-space:pre-wrap;overflow-wrap:anywhere';
@@ -1278,6 +1284,18 @@ export class SiglusDisplay {
         };
         body.append(button);
       }
+      if (jump && jumpGraphic && canJump(entry)) {
+        const button = jump.cloneNode(true) as HTMLButtonElement;
+        if (entry === focus) button.dataset.historySelected = '';
+        button.replaceChildren(this.node(jumpGraphic));
+        button.onclick = (event) => {
+          event.stopPropagation();
+          play(undefined, Number(this.config.get('MSGBK_ITEM.LOAD_BTN.SE') ?? -1));
+          closeHistory(entry);
+        };
+        body.append(button);
+      }
+      if (entry === focus) focusedRow = row;
       row.append(name, body);
       if (separator) {
         const line = this.node(separator);
@@ -1322,14 +1340,13 @@ export class SiglusDisplay {
       overlay.append(track);
     }
     this.signal.throwIfAborted();
-    let closeHistory = () => {};
     const close = await makeButton('CLOSE_BTN', 'Close message history', () => closeHistory());
     if (close) overlay.append(close);
-    await new Promise<void>((resolve, reject) => {
-      const finish = () => {
+    return new Promise<SiglusHistoryEntry | undefined>((resolve, reject) => {
+      const finish = (entry?: SiglusHistoryEntry) => {
         this.signal.removeEventListener('abort', abort);
         overlay.remove();
-        resolve();
+        resolve(entry);
       };
       const abort = () => {
         overlay.remove();
@@ -1356,7 +1373,8 @@ export class SiglusDisplay {
       this.setSystemInput(true);
       this.systemLayer.append(overlay);
       overlay.focus({preventScroll: true});
-      scroll.scrollTop = scroll.scrollHeight;
+      if (focusedRow) focusedRow.scrollIntoView({block: 'nearest'});
+      else scroll.scrollTop = scroll.scrollHeight;
     }).finally(() => this.setSystemInput(false));
   }
 

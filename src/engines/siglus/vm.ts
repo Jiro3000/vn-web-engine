@@ -239,16 +239,18 @@ export class SiglusVm {
     try {
       if (typeof entry === 'number')
         return await this.call(this.entry(scene, entry), this.frames.length);
-      const index = this.pack.commandNames.indexOf(entry);
-      const sceneIndex = this.pack.commandScenes[index * 2];
-      const offset = this.pack.commandScenes[index * 2 + 1];
-      if (
-        sceneIndex === undefined ||
-        offset === undefined ||
-        this.pack.sceneNames[sceneIndex]?.toLowerCase() !== scene.toLowerCase()
-      )
-        throw new Error(`Missing Siglus system command ${scene}.${entry}`);
-      return await this.call(new Frame(this.pack.scene(scene), offset), this.frames.length);
+      const script = this.pack.scene(scene);
+      const exported = this.pack.commandNames.findIndex(
+        (name, index) =>
+          name === entry &&
+          this.pack.sceneNames[this.pack.commandScenes[index * 2]!] === script.name,
+      );
+      const offset =
+        exported >= 0
+          ? this.pack.commandScenes[exported * 2 + 1]
+          : script.commands[script.commandNames.indexOf(entry)];
+      if (offset === undefined) throw new Error(`Missing Siglus system command ${scene}.${entry}`);
+      return await this.call(new Frame(script, offset), this.frames.length);
     } catch (error) {
       if (error instanceof ReturnFromHostScene) return 0;
       throw error;
