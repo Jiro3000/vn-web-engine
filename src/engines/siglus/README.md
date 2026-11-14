@@ -22,7 +22,8 @@ CHAPTER2, CHAPTER3, ED. Chapter 08 sets `G[1575]` after ED, and the controlling
 scene sets `G[1007]=3` and `G[1009]=1` before `returnmenu`. The menu
 configured in Gameexe.dat is `_titlemenu` entry 0.
 
-Drag over dialogue text to select it. Click or press Enter to advance a page.
+The browser defaults to Native text. Select DOM text in the player options
+to highlight dialogue by dragging. Click or press Enter to advance a page.
 Hold Control to skip where the script enables Control skip. The original Save
 and Load controls in the message frame open the scripted slot browser, which
 is also available from the title’s Load button. Saves and system flags are
@@ -49,8 +50,17 @@ also checks that the saved page's dialogue hash matches after loading and
 that the prologue, movie and cleared-title flags were written to browser
 storage. Audio checks use decoded PCM lengths, sample rates, peak amplitudes
 and RMS levels with browser output muted.
-Set `SIGLUS_OPENING_ONLY=1` for the original 50-text check or set
-`SIGLUS_DIAGNOSTIC_PAGES=240` for a short skip check from New Game.
+The page audit checks dialogue at the VM's input checkpoints, including
+checkpoints reached with Control held. It checks the active text layer
+against the stage bounds and inspects the alpha channel in the Native
+dialogue area or the character bounds in DOM text mode. Failures include
+the scene, bytecode offset, page and font size. The full pass requires
+at least one scripted `size()` reset to have been exercised.
+
+Set `SIGLUS_OPENING_ONLY=1` for the first 50 text tags and the DOM selection
+check. Set `SIGLUS_DIAGNOSTIC_PAGES=1000` for a focused regression check of the
+first message size resets. The command advances the mandatory prologue
+with normal input, starts New Game and holds Control to reach the target.
 Set `SIGLUS_MUSIC_ONLY=1` for the Music check. It uses a cleared-title
 checkpoint in the temporary browser profile and exercises track selection,
 Next, Stop, Play, the volume slider, and the return button with mouse input.
@@ -113,9 +123,11 @@ uses the original MSGBK resources and stores recent history and rewind
 checkpoints in each save. The probe reloads the slot after reopening the player
 and checks both No and Yes in the original resume confirmation.
 
-The clean-profile route matched 130,121 command and message tags and
-checked 8,540 decoded audio buffers with zero browser console errors.
-Save and load were exercised on page 67. `npm test` reported the same
+The clean-profile route matched 148,688 command and message tags and
+checked 8,553 decoded audio buffers with zero browser console errors.
+All 21,075 dialogue checkpoints passed the Native render check, including
+the pages following 40 scripted size resets. Save and load were exercised
+on page 67. `npm test` reported the same
 48 failing test names as `main` at `15f2bee` (2,518 passed, 3 skipped).
 
 ## Scripted interface in the original

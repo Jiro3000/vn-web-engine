@@ -343,7 +343,64 @@ try {
     window.siglusAudio = [];
     window.siglusMovies = [];
     window.siglusSurface = document.querySelector('#siglus-surface');
+    window.siglusPageAudit = {pages: 0, skipped: 0, textSizeResets: 0, failures: []};
+    let sizeOverride = false;
+    let resetPending = false;
     siglusSurface.addEventListener('siglus-tag', (event) => siglusTags.push(event.detail));
+    siglusSurface.addEventListener('siglus-tag', ({detail: tag}) => {
+      if (tag.path?.length !== 1 || tag.path[0] !== 16) return;
+      resetPending = sizeOverride && tag.args.length === 0;
+      sizeOverride = tag.args.length > 0;
+    });
+    siglusSurface.addEventListener('siglus-page', ({detail: {skipping}}) => {
+      const audit = siglusPageAudit;
+      audit.pages++;
+      if (skipping) audit.skipped++;
+      if (resetPending) {
+        audit.textSizeResets++;
+        resetPending = false;
+      }
+      const stage = siglusSurface.firstElementChild;
+      const text = stage.querySelector('[data-siglus-dialogue]');
+      const native = stage.dataset.textMode === 'native';
+      const rendered = native ? stage.querySelector('[data-siglus-native-text]') : text;
+      const size = Number.parseFloat(text.style.fontSize);
+      const viewport = stage.getBoundingClientRect();
+      const rect = rendered.getBoundingClientRect();
+      const intersects = (bounds) => bounds.width > 0 && bounds.height > 0 &&
+        bounds.right > viewport.left && bounds.bottom > viewport.top &&
+        bounds.left < viewport.right && bounds.top < viewport.bottom;
+      let reason;
+      if (text.textContent.trim()) {
+        if (!size || !intersects(rect) || !rendered.checkVisibility({visibilityProperty: true}))
+          reason = 'text or message window is invisible';
+        else if (native) {
+          // Read only the dialogue area, below the separate speaker name.
+          const x = Math.max(0, Math.floor((viewport.left - rect.left) * rendered.width / rect.width));
+          const y = Math.max(Number.parseFloat(text.style.top),
+            Math.floor((viewport.top - rect.top) * rendered.height / rect.height), 0);
+          const right = Math.min(rendered.width, Math.ceil((viewport.right - rect.left) * rendered.width / rect.width));
+          const bottom = Math.min(rendered.height, Math.ceil((viewport.bottom - rect.top) * rendered.height / rect.height));
+          if (right <= x || bottom <= y) reason = 'dialogue area is clipped';
+          else {
+            const alpha = rendered.getContext('2d').getImageData(x, y, right - x, bottom - y).data;
+            for (let i = 3; i < alpha.length; i += 4) {
+              if (alpha[i] >= 32) return;
+            }
+            reason = 'dialogue canvas has no visible ink';
+          }
+        } else {
+          const range = document.createRange();
+          range.selectNodeContents(text);
+          if (![...range.getClientRects()].some(intersects)) reason = 'dialogue has no visible text bounds';
+        }
+      } else reason = 'dialogue is empty';
+      if (reason) {
+        const {scene, offset, line} = siglusTags.at(-1) ?? {};
+        audit.failures.push({page: Number(siglusSurface.dataset.page), scene, offset, line,
+          mode: stage.dataset.textMode, size, reason});
+      }
+    });
     siglusSurface.addEventListener('siglus-audio', (event) => siglusAudio.push(event.detail));
     siglusSurface.addEventListener('siglus-movie-ended', (event) => siglusMovies.push(event.detail)); true`);
   }
@@ -413,6 +470,15 @@ try {
     );
   }
   await playInstallation();
+  async function verifyRenderedPages({requireReset = false} = {}) {
+    const audit = await evaluate(`({...siglusPageAudit,
+      failures: siglusPageAudit.failures.slice(0, 12),
+      failureCount: siglusPageAudit.failures.length})`);
+    console.log('Dialogue render audit:', audit);
+    assert.ok(audit.pages > 0, 'No dialogue checkpoints observed');
+    assert.equal(audit.failureCount, 0, 'Invisible dialogue checkpoints');
+    if (requireReset) assert.ok(audit.textSizeResets > 0, 'No size() reset was exercised');
+  }
   const state = () =>
     evaluate(`({
     ...siglusSurface.dataset,
@@ -1091,6 +1157,7 @@ try {
     } finally {
       await control('keyUp').catch(() => {});
     }
+    await verifyRenderedPages({requireReset: diagnosticPages >= 1000});
   } else if (openingOnly) {
     backgrounds.clear();
     voices.clear();
@@ -1100,6 +1167,27 @@ try {
     assert.ok(backgrounds.size > 1 && voices.size > 1 && sprites.size > 1 && music === 'bgm02');
     const pausedPage = await evaluate('siglusSurface.dataset.page');
     const dialogue = '#siglus-surface [data-siglus-dialogue]';
+    assert.equal(await evaluate('siglusSurface.firstElementChild.dataset.textMode'), 'native');
+    const metrics = await evaluate(`(() => {
+      const canvas = siglusSurface.querySelector('[data-siglus-native-text]');
+      const alpha = canvas.getContext('2d').getImageData(0,0,canvas.width,canvas.height).data;
+      let count = 0;
+      for (let i = 3; i < alpha.length; i += 4) if (alpha[i]) count++;
+      return {width: canvas.width, height: canvas.height, count};
+    })()`);
+    assert.ok(metrics.width > 0 && metrics.height > 0 && metrics.count > 100);
+    assert.equal(
+      await evaluate(`document.querySelector(${JSON.stringify(dialogue)}).hidden`),
+      true,
+    );
+    await evaluate(`(() => {
+      const selector = document.querySelector('#text-mode');
+      selector.value = 'dom';
+      selector.dispatchEvent(new Event('change'));
+      return true;
+    })()`);
+    assert.equal(await evaluate('siglusSurface.firstElementChild.dataset.textMode'), 'dom');
+    assert.equal(await evaluate('siglusSurface.dataset.page'), pausedPage);
     assert.equal(
       await evaluate(
         `getComputedStyle(document.querySelector(${JSON.stringify(dialogue)})).userSelect`,
@@ -1160,16 +1248,30 @@ try {
     // Click the unused space in the dialogue box, outside the highlighted glyphs.
     await click(dialogue);
     await waitFor('Number(siglusSurface.dataset.page) > ' + pausedPage);
+    const afterDom = await evaluate('Number(siglusSurface.dataset.page)');
+    await evaluate(`(() => {
+      const selector = document.querySelector('#text-mode');
+      selector.value = 'native';
+      selector.dispatchEvent(new Event('change'));
+      return true;
+    })()`);
+    await clickStage();
+    await waitFor(`Number(siglusSurface.dataset.page) > ${afterDom}`);
+    console.log('Native canvas metrics', metrics);
     console.log('Dragging selects dialogue, and clicking advances it.');
+    await verifyRenderedPages();
   } else {
     const savePage = page + 3;
     await runUntil((current) => Number(current.page) >= savePage);
     const dialogue = "siglusSurface.querySelector('[data-siglus-dialogue]').textContent";
     const savedText = digest(await evaluate(dialogue));
     await selectSlot('save');
-    await closeSlotMenu();
     const saved = await waitFor('siglusSurface.dataset.savedPage');
     assert.equal(Number(saved), savePage);
+    console.log('Saved page', saved);
+    // The script creates the Return to Game button at (1486, 998).
+    await clickScriptMenu(slotLoop, 1540, 1023);
+    await waitForDialogueControls();
     const beforeLoad = await evaluate('siglusTags.length');
     await clickStage();
     await waitFor('Number(siglusSurface.dataset.page) > ' + saved);
@@ -1194,6 +1296,7 @@ try {
     await waitFor(
       "siglusSurface.dataset.phase === 'title' && siglusSurface.dataset.bgm === 'bgm12'",
     );
+    await verifyRenderedPages({requireReset: true});
     const flags = new Map(
       await evaluate(`(() => {
       const key = Object.keys(localStorage).find((key) => /^siglus:[0-9a-f]{64}:system$/.test(key));

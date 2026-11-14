@@ -8,6 +8,6 @@
       id="siglus-surface"
       style="position:absolute;inset:0;overflow:hidden"
     ></div>{/snippet}
-  {#snippet textHelp()}Drag to select dialogue. Click or press Enter to advance.{/snippet}
+  {#snippet textHelp()}In DOM text mode, drag to select dialogue. Click or press Enter to advance.{/snippet}
   {#snippet saveFiles()}{/snippet}
 </PlayerShell>

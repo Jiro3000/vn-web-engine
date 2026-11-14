@@ -13,6 +13,7 @@ import {setRuntimeState} from '../player/runtime-state.js';
 const el = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const play = el<HTMLButtonElement>('play');
 const surface = el('siglus-surface');
+const textMode = el<HTMLSelectElement>('text-mode');
 const fullscreen = el<HTMLButtonElement>('fullscreen');
 let fullscreenControls: ReturnType<typeof mountFullscreenControls> | undefined;
 const viewer = mountGameViewer('siglus');
@@ -83,6 +84,7 @@ const controls = mountInstallationControls({
   },
 });
 
+textMode.onchange = () => player?.setTextMode(textMode.value === 'dom' ? 'dom' : 'native');
 fullscreen.disabled = true;
 
 function emit(tag: SiglusTag): void {
@@ -101,6 +103,7 @@ play.onclick = () => {
     },
     traceEnabled ? emit : undefined,
   );
+  active.setTextMode(textMode.value === 'dom' ? 'dom' : 'native');
   fullscreenControls = mountFullscreenControls(active.windowDisplay);
   fullscreen.disabled = false;
   player = active;

@@ -62,17 +62,12 @@
     <InstallationFiles />
     <section>
       <h2>Text rendering</h2>
-      {#if entry.id === 'siglus'}
-        <p>DOM text</p>
-        <p id="text-help">{@render textHelp()}</p>
-      {:else}
-        <label class="sr-only" for="text-mode">Text rendering mode</label>
-        <select id="text-mode" aria-describedby="text-help">
-          <option value="native">Native</option><option value="dom">DOM text</option>
-        </select>
-        <p id="text-help">{@render textHelp()}</p>
-        <DomTextStyle />
-      {/if}
+      <label class="sr-only" for="text-mode">Text rendering mode</label>
+      <select id="text-mode" aria-describedby="text-help">
+        <option value="native">Native</option><option value="dom">DOM text</option>
+      </select>
+      <p id="text-help">{@render textHelp()}</p>
+      {#if entry.id !== 'siglus'}<DomTextStyle />{/if}
     </section>
     {@render saveFiles()}
     {@render options?.()}

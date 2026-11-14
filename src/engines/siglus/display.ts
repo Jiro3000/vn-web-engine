@@ -9,6 +9,12 @@ export interface SiglusHistoryEntry {
   voices: readonly {id: number; character?: number}[];
 }
 
+interface SiglusMessageSnapshot extends Omit<SiglusHistoryEntry, 'voices'> {
+  face?: string;
+  index: number;
+  size?: number;
+}
+
 export interface Graphic {
   image: CanvasImageSource;
   width: number;
@@ -69,6 +75,18 @@ export class SiglusDisplay {
   private readonly message = document.createElement('div');
   private readonly speaker = document.createElement('div');
   private readonly text = document.createElement('div');
+  private readonly nativeText = document.createElement('canvas');
+  private textMode: 'native' | 'dom' = 'dom';
+  private textMetrics = {
+    x: 0,
+    y: 0,
+    width: 0,
+    spacing: 0,
+    lineSpace: 0,
+    rubySize: 13,
+    rubySpace: 2,
+  };
+  private speakerMetrics = {x: 0, y: 0};
   private readonly portrait = document.createElement('div');
   private readonly media = new Map<string, Promise<G00Image>>();
   private readonly hitInsets = new WeakMap<Graphic, string>();
@@ -90,6 +108,7 @@ export class SiglusDisplay {
   private currentName = '';
   private currentText: {text: string; ruby?: string}[] = [];
   private windowIndex = 0;
+  private defaultTextSize = 38;
   private ruby = '';
   private filter?: HTMLCanvasElement;
   private filterFrame?: Graphic;
@@ -144,7 +163,10 @@ export class SiglusDisplay {
       this.systemLayer,
       this.editLayer,
     );
-    this.message.append(this.portrait, this.speaker, this.text);
+    this.nativeText.style.cssText = 'position:absolute;inset:0;pointer-events:none';
+    this.nativeText.dataset.siglusNativeText = '';
+    this.nativeText.hidden = true;
+    this.message.append(this.portrait, this.nativeText, this.speaker, this.text);
     this.message.hidden = true;
     this.windowDisplay = new BrowserWindowDisplayHost(
       windowOptions.root,
@@ -462,6 +484,83 @@ export class SiglusDisplay {
     canvas.style.opacity = String(alpha! / 255);
   }
 
+  setTextMode(mode: 'native' | 'dom'): void {
+    if (mode === this.textMode) return;
+    const selection = this.stage.ownerDocument.getSelection();
+    if (selection && this.message.contains(selection.anchorNode)) selection.removeAllRanges();
+    this.textMode = mode;
+    this.nativeText.hidden = mode !== 'native';
+    this.text.hidden = this.speaker.hidden = mode === 'native';
+    this.stage.dataset.textMode = mode;
+    this.paintNativeText();
+    this.stage.focus({preventScroll: true});
+  }
+
+  private paintNativeText(): void {
+    if (this.textMode !== 'native') return;
+    const canvas = this.nativeText;
+    const context = canvas.getContext('2d')!;
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    const family = this.message.style.fontFamily || 'sans-serif';
+    context.fillStyle = 'white';
+    context.shadowColor = 'black';
+    context.shadowBlur = 4;
+    context.shadowOffsetY = 1;
+    context.textBaseline = 'top';
+    const speakerSize = Number.parseFloat(this.speaker.style.fontSize);
+    if (this.currentName && speakerSize > 0) {
+      context.font = `${speakerSize}px ${family}`;
+      context.fillText(this.currentName, this.speakerMetrics.x, this.speakerMetrics.y);
+    }
+    const size = Number.parseFloat(this.text.style.fontSize);
+    if (!size || !this.currentText.length) return;
+    const {x, y, width, spacing, lineSpace, rubySize, rubySpace} = this.textMetrics;
+    const advance = (character: string) => {
+      const unit = character.codePointAt(0)!;
+      return (unit <= 0x7f || (unit >= 0xff61 && unit <= 0xff9f) ? size / 2 : size) + spacing;
+    };
+    const lines: {cells: {character: string; ruby?: string; width: number}[]; width: number}[] = [];
+    let line: (typeof lines)[number] = {cells: [], width: 0};
+    const nextLine = () => {
+      lines.push(line);
+      line = {cells: [], width: 0};
+    };
+    const add = (character: string, ruby?: string) => {
+      const cellWidth = Array.from(character).reduce((total, unit) => total + advance(unit), 0);
+      if (line.width && line.width + cellWidth > width) nextLine();
+      line.cells.push({character, ruby, width: cellWidth});
+      line.width += cellWidth;
+    };
+    for (const {text, ruby} of this.currentText) {
+      if (ruby) add(text, ruby);
+      else
+        for (const character of text) {
+          if (character === '\n') nextLine();
+          else add(character);
+        }
+    }
+    nextLine();
+    for (const [index, row] of lines.entries()) {
+      const rowY = y + index * (size + lineSpace);
+      let left = x + (this.text.style.textAlign === 'center' ? (width - row.width) / 2 : 0);
+      for (const cell of row.cells) {
+        context.font = `${size}px ${family}`;
+        let glyphX = left;
+        for (const character of cell.character) {
+          context.fillText(character, glyphX, rowY);
+          glyphX += advance(character);
+        }
+        if (cell.ruby) {
+          context.font = `${rubySize}px ${family}`;
+          context.textAlign = 'center';
+          context.fillText(cell.ruby, left + cell.width / 2, rowY - rubySize - rubySpace);
+          context.textAlign = 'start';
+        }
+        left += cell.width;
+      }
+    }
+  }
+
   selectMessageWindow(index: number): void {
     this.windowIndex = index;
     const prefix = 'MWND.' + String(index).padStart(3, '0') + '.';
@@ -480,17 +579,38 @@ export class SiglusDisplay {
     const windowSize = numbers(prefix + 'WINDOW_SIZE', [1906, 353]);
     place(this.message, numbers(prefix + 'WINDOW_POS', [7, 727]), windowSize);
     const size = Number(this.config.get(prefix + 'MOJI_SIZE') ?? 38);
+    this.defaultTextSize = size;
     const margin = numbers(prefix + 'MESSAGE_MARGIN', index === 0 ? [32, 32] : [0, 0]);
     const [x, y] = numbers(prefix + 'MESSAGE_POS', [362, 124]);
-    place(this.text, [x! + margin[0]!, y! + margin[1]!], [size * 32, size * 4.5]);
+    const [columns, rows] = numbers(prefix + 'MOJI_CNT', [32, 3]);
+    const [spacing, lineSpace] = numbers(prefix + 'MOJI_SPACE', [0, 18]);
+    const textX = x! + margin[0]!;
+    const textY = y! + margin[1]!;
+    const textWidth = columns! * (size + spacing!);
+    const textHeight = rows! * (size + lineSpace!);
+    this.textMetrics = {
+      x: textX,
+      y: textY,
+      width: textWidth,
+      spacing: spacing!,
+      lineSpace: lineSpace!,
+      rubySize: Number(this.config.get(prefix + 'RUBY_SIZE') ?? 13),
+      rubySpace: Number(this.config.get(prefix + 'RUBY_SPACE') ?? 2),
+    };
+    this.nativeText.width = windowSize[0]!;
+    this.nativeText.height = windowSize[1]!;
+    place(this.text, [textX, textY], [textWidth, textHeight]);
     this.text.style.fontSize = `${size}px`;
-    this.text.style.lineHeight = '1.45';
+    this.text.style.lineHeight = `${size + lineSpace!}px`;
+    this.text.style.letterSpacing = `${spacing}px`;
     this.text.dataset.siglusDialogue = '';
     const namePos = numbers(prefix + 'NAME_MESSAGE_POS', [x!, y! - size]);
     place(this.speaker, namePos, [500, 80]);
+    this.speakerMetrics = {x: namePos[0]!, y: namePos[1]!};
     this.speaker.style.fontSize = `${this.config.get(prefix + 'NAME_MOJI_SIZE') ?? 36}px`;
     place(this.portrait, numbers('WAKU.000.FACE.000.POS', [24, 24]), [340, windowSize[1]! - 24]);
     if (this.filter) this.filter.hidden = this.config.get(prefix + 'WAKU_NO') === '-1';
+    this.paintNativeText();
   }
   private readonly loadedFonts: FontFace[] = [];
   private readonly fontNames = new Map<string, string>();
@@ -958,12 +1078,14 @@ export class SiglusDisplay {
     this.root.dataset.cast = visible.join(',');
   }
 
-  setTextSize(size: number): void {
-    this.text.style.fontSize = `${size}px`;
+  setTextSize(size?: number): void {
+    this.text.style.fontSize = `${size ?? this.defaultTextSize}px`;
+    this.paintNativeText();
   }
 
   centerText(center: boolean): void {
     this.text.style.textAlign = center ? 'center' : '';
+    this.paintNativeText();
   }
 
   slideMessage(time: number): void {
@@ -1078,6 +1200,7 @@ export class SiglusDisplay {
   name(value: string): void {
     this.currentName = value;
     this.speaker.textContent = value;
+    this.paintNativeText();
   }
 
   append(value: string): void {
@@ -1092,6 +1215,7 @@ export class SiglusDisplay {
     } else this.text.append(value);
     this.message.hidden = false;
     if (this.currentFace) this.root.dataset.sprite = this.currentFace;
+    this.paintNativeText();
   }
 
   annotate(value: string): void {
@@ -1101,6 +1225,7 @@ export class SiglusDisplay {
   newline(): void {
     this.text.append('\n');
     this.currentText.push({text: '\n'});
+    this.paintNativeText();
   }
 
   clearText(): void {
@@ -1109,6 +1234,7 @@ export class SiglusDisplay {
     this.ruby = '';
     this.speaker.textContent = '';
     this.text.textContent = '';
+    this.paintNativeText();
     this.portrait.replaceChildren();
     this.currentFace = undefined;
     delete this.root.dataset.sprite;
@@ -1119,18 +1245,20 @@ export class SiglusDisplay {
     this.message.hidden = true;
   }
 
-  saveMessage() {
+  saveMessage(): SiglusMessageSnapshot {
     return {
       name: this.currentName,
       text: this.currentText,
       face: this.currentFace,
       index: this.windowIndex,
+      size: Number.parseFloat(this.text.style.fontSize),
     };
   }
 
-  async loadMessage(message: ReturnType<SiglusDisplay['saveMessage']>): Promise<void> {
+  async loadMessage(message: SiglusMessageSnapshot): Promise<void> {
     this.clearText();
     this.selectMessageWindow(message.index);
+    this.setTextSize(message.size);
     this.name(message.name);
     if (message.face) await this.face(message.face);
     for (const {text, ruby} of message.text) {

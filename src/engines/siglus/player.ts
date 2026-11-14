@@ -198,7 +198,7 @@ export class SiglusPlayer {
     private readonly root: HTMLElement,
     private readonly game: SiglusGame,
     windowOptions: ConstructorParameters<typeof SiglusDisplay>[7],
-    private readonly trace: (tag: SiglusTag) => void = () => {},
+    private readonly trace?: (tag: SiglusTag) => void,
   ) {
     const {files, config} = game;
     const [width, height] = (config.get('SCREEN_SIZE') ?? '1920,1080').split(',').map(Number);
@@ -307,6 +307,10 @@ export class SiglusPlayer {
     return this.display.windowDisplay;
   }
 
+  setTextMode(mode: 'native' | 'dom'): void {
+    this.display.setTextMode(mode);
+  }
+
   async start(): Promise<void> {
     await this.audio.resume();
     await this.openSaveStore();
@@ -318,7 +322,7 @@ export class SiglusPlayer {
       {
         command: (command) => this.command(command),
         property: (path, value) => this.property(path, value),
-        trace: this.trace,
+        trace: this.trace ?? (() => {}),
         yieldDelay: () => (this.systemOption('SLEEP_ONOFF') ? 16 : 0),
         message: (tag) => {
           if (!this.pendingText) {
@@ -592,6 +596,7 @@ export class SiglusPlayer {
       this.historyPoints.set(history, this.captureSave(true, false));
     this.pageVoices = [];
     this.root.dataset.page = String(++this.pages);
+    this.tracePage();
     if (!this.skipping && this.saveEnabled) this.savePoint = this.captureSave();
     await this.waitAtPage();
     if (!this.systemOption('KOE_DONT_STOP_ONOFF')) this.audio.stop('voice');
@@ -601,6 +606,11 @@ export class SiglusPlayer {
   private revealMessage(): void {
     this.setUserMessageHidden(false);
     this.wait?.(4);
+  }
+
+  private tracePage(): void {
+    if (!this.trace) return;
+    this.root.dispatchEvent(new CustomEvent('siglus-page', {detail: {skipping: this.skipping}}));
   }
 
   private setUserMessageHidden(hidden: boolean): void {
@@ -841,6 +851,7 @@ export class SiglusPlayer {
     this.root.dataset.loaded = 'true';
     if (waitsForInput) {
       this.root.dataset.page = String(++this.pages);
+      this.tracePage();
       this.waitingForPage = true;
       try {
         await this.delay(undefined, true);
@@ -1322,7 +1333,7 @@ export class SiglusPlayer {
           await this.pageInput();
           break;
         case 16:
-          this.display.setTextSize(n(0));
+          this.display.setTextSize(args.length ? n(0) : undefined);
           break;
         case 18:
           this.pageVoices = [
