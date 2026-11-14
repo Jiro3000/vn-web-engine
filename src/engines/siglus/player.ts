@@ -61,6 +61,16 @@ const systemOptions = [
 ] as const;
 type SystemOption = (typeof systemOptions)[number][0];
 
+const playbackLimits = {
+  messageSpeed: 255,
+  autoCharacterWait: 500,
+  autoMinimumWait: 10000,
+  voiceDuckLevel: 255,
+} as const;
+const playbackSwitches = ['messageNowait', 'voiceDuckEnabled'] as const;
+type PlaybackSettings = Record<keyof typeof playbackLimits, number> &
+  Record<(typeof playbackSwitches)[number], boolean>;
+
 interface RealCounter {
   start: number;
   from: number;
@@ -145,14 +155,10 @@ export class SiglusPlayer {
   private readonly readFlags = new Map<string, Set<number>>();
   private pageAlreadyRead = false;
   private autoEnabled = false;
-  private autoCharacterWait = 30;
-  private autoMinimumWait = 1000;
   private pageCharacters = 0;
-  private messageSpeed = 30;
-  private messageNowait = true;
   private voiceMode = 0;
-  private voiceDuckLevel: number;
-  private voiceDuckEnabled: boolean;
+  private readonly playbackDefaults: PlaybackSettings;
+  private readonly playback: PlaybackSettings;
   private readonly options = new Map<SystemOption, boolean>();
   private messageFont: SiglusFontSettings;
   private readonly defaultMessageFont: SiglusFontSettings;
@@ -249,10 +255,39 @@ export class SiglusPlayer {
       files.get('siglusengine.exe'),
       this.controller.signal,
     );
+    const color = config.get('CONFIG.FILTER_COLOR')?.split(',').map(Number) ?? [];
+    this.filterDefaults = [color[0] ?? 0, color[1] ?? 0, color[2] ?? 0, color[3] ?? 255];
+    this.filterColor = [...this.filterDefaults];
+    this.playbackDefaults = {
+      messageSpeed: 30,
+      messageNowait: true,
+      autoCharacterWait: 30,
+      autoMinimumWait: 1000,
+      voiceDuckLevel: Number(config.get('CONFIG.BGMFADE_VOLUME') ?? 255),
+      voiceDuckEnabled: config.get('CONFIG.BGMFADE_ONOFF') === '1',
+    };
+    this.playback = {...this.playbackDefaults};
     const savedOptions = localStorage.getItem(game.saveKey + ':options');
     if (savedOptions) {
       try {
         const values = JSON.parse(savedOptions);
+        const playback = values?.playback;
+        for (const key of Object.keys(playbackLimits) as (keyof typeof playbackLimits)[]) {
+          const value = playback?.[key];
+          if (Number.isInteger(value) && value >= 0 && value <= playbackLimits[key])
+            this.playback[key] = value;
+        }
+        for (const key of playbackSwitches)
+          if (typeof playback?.[key] === 'boolean') this.playback[key] = playback[key];
+        if (
+          Array.isArray(values?.filter) &&
+          values.filter.length === 4 &&
+          values.filter.every(
+            (value: unknown) =>
+              typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 255,
+          )
+        )
+          this.filterColor.splice(0, 4, ...(values.filter as number[]));
         for (const [option] of systemOptions)
           if (typeof values?.[option] === 'boolean') this.options.set(option, values[option]);
         if (typeof values?.font === 'string') this.messageFont.name = values.font;
@@ -287,12 +322,7 @@ export class SiglusPlayer {
         // An unreadable settings record falls back to the installation defaults.
       }
     }
-    const color = config.get('CONFIG.FILTER_COLOR')?.split(',').map(Number) ?? [];
-    this.filterDefaults = [color[0] ?? 0, color[1] ?? 0, color[2] ?? 0, color[3] ?? 255];
-    this.filterColor = [...this.filterDefaults];
-    this.voiceDuckLevel = Number(config.get('CONFIG.BGMFADE_VOLUME') ?? 255);
-    this.voiceDuckEnabled = config.get('CONFIG.BGMFADE_ONOFF') === '1';
-    this.audio.setVoiceDuck(this.voiceDuckEnabled ? this.voiceDuckLevel : 255);
+    this.applyVoiceDuck();
     this.display = new SiglusDisplay(
       root,
       files,
@@ -468,8 +498,23 @@ export class SiglusPlayer {
         fullscreen: this.screenSettings.fullscreen,
         screen: this.screenSettings,
         moviePlayer: this.moviePlayer,
+        playback: this.playback,
+        filter: this.filterColor,
       }),
     );
+  }
+
+  private setPlaybackOption<K extends keyof PlaybackSettings>(
+    key: K,
+    value: PlaybackSettings[K],
+  ): void {
+    if (this.playback[key] === value) return;
+    this.playback[key] = value;
+    this.persistOptions();
+  }
+
+  private applyVoiceDuck(): void {
+    this.audio.setVoiceDuck(this.playback.voiceDuckEnabled ? this.playback.voiceDuckLevel : 255);
   }
 
   private applyMessageFont(): void {
@@ -655,7 +700,7 @@ export class SiglusPlayer {
 
   private async pageInput(): Promise<void> {
     if (!this.pendingText) return;
-    const speed = this.speed || (this.messageNowait ? 0 : this.messageSpeed);
+    const speed = this.speed || (this.playback.messageNowait ? 0 : this.playback.messageSpeed);
     if (speed > 0) await this.delay(speed, true);
     this.pageAlreadyRead =
       this.pageReadFlags.length > 0 &&
@@ -728,7 +773,7 @@ export class SiglusPlayer {
       try {
         const autoWait =
           this.autoEnabled && !this.userMessageHidden
-            ? this.autoMinimumWait + this.autoCharacterWait * this.pageCharacters
+            ? this.playback.autoMinimumWait + this.playback.autoCharacterWait * this.pageCharacters
             : undefined;
         this.waitingForPage = true;
         result = await this.delay(autoWait, true);
@@ -1672,6 +1717,7 @@ export class SiglusPlayer {
           if (value !== this.filterColor[index]) {
             this.filterColor[index] = value;
             this.display.setMessageFilter(this.filterColor);
+            this.persistOptions();
           }
           return 0;
         }
@@ -1683,14 +1729,22 @@ export class SiglusPlayer {
           return 0;
         }
       }
-      if (member === 48) return this.messageSpeed;
-      if (member === 50) return Number(this.messageNowait);
+      if (member === 48) return this.playback.messageSpeed;
+      if (member === 50) return Number(this.playback.messageNowait);
       if (member === 46 || member === 47) {
-        this.messageSpeed = member === 46 ? Math.max(0, Math.min(255, n(0))) : 30;
+        this.setPlaybackOption(
+          'messageSpeed',
+          member === 46
+            ? Math.max(0, Math.min(playbackLimits.messageSpeed, n(0)))
+            : this.playbackDefaults.messageSpeed,
+        );
         return 0;
       }
-      if (member === 49) {
-        this.messageNowait = Boolean(n(0));
+      if (member === 49 || member === 107) {
+        this.setPlaybackOption(
+          'messageNowait',
+          member === 49 ? Boolean(n(0)) : this.playbackDefaults.messageNowait,
+        );
         return 0;
       }
       for (const [kind, set, reset, get] of soundLevels) {
@@ -1749,18 +1803,24 @@ export class SiglusPlayer {
         this.audio.setCharacterLevel(n(0), member === 186 ? n(1) : undefined);
         return 0;
       }
-      if (member === 96) return this.voiceDuckLevel;
-      if (member === 98) return Number(this.voiceDuckEnabled);
+      if (member === 96) return this.playback.voiceDuckLevel;
+      if (member === 98) return Number(this.playback.voiceDuckEnabled);
       if (member === 94 || member === 95) {
-        this.voiceDuckLevel =
-          member === 94 ? n(0) : Number(this.game.config.get('CONFIG.BGMFADE_VOLUME') ?? 255);
-        this.audio.setVoiceDuck(this.voiceDuckEnabled ? this.voiceDuckLevel : 255);
+        this.setPlaybackOption(
+          'voiceDuckLevel',
+          member === 94
+            ? Math.max(0, Math.min(playbackLimits.voiceDuckLevel, n(0)))
+            : this.playbackDefaults.voiceDuckLevel,
+        );
+        this.applyVoiceDuck();
         return 0;
       }
       if (member === 97 || member === 106) {
-        this.voiceDuckEnabled =
-          member === 97 ? Boolean(n(0)) : this.game.config.get('CONFIG.BGMFADE_ONOFF') === '1';
-        this.audio.setVoiceDuck(this.voiceDuckEnabled ? this.voiceDuckLevel : 255);
+        this.setPlaybackOption(
+          'voiceDuckEnabled',
+          member === 97 ? Boolean(n(0)) : this.playbackDefaults.voiceDuckEnabled,
+        );
+        this.applyVoiceDuck();
         return 0;
       }
       if (member === 214) {
@@ -1768,14 +1828,24 @@ export class SiglusPlayer {
         return 0;
       }
       if (member === 215) return Number(this.autoEnabled);
-      if (member === 53) return this.autoCharacterWait;
-      if (member === 56) return this.autoMinimumWait;
+      if (member === 53) return this.playback.autoCharacterWait;
+      if (member === 56) return this.playback.autoMinimumWait;
       if (member === 51 || member === 52) {
-        this.autoCharacterWait = member === 51 ? Math.max(0, Math.min(500, n(0))) : 30;
+        this.setPlaybackOption(
+          'autoCharacterWait',
+          member === 51
+            ? Math.max(0, Math.min(playbackLimits.autoCharacterWait, n(0)))
+            : this.playbackDefaults.autoCharacterWait,
+        );
         return 0;
       }
       if (member === 54 || member === 55) {
-        this.autoMinimumWait = member === 54 ? Math.max(0, Math.min(10000, n(0))) : 1000;
+        this.setPlaybackOption(
+          'autoMinimumWait',
+          member === 54
+            ? Math.max(0, Math.min(playbackLimits.autoMinimumWait, n(0)))
+            : this.playbackDefaults.autoMinimumWait,
+        );
         return 0;
       }
       if (member === 242) {

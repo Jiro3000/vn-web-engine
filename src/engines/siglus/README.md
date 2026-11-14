@@ -87,6 +87,13 @@ volume types, applied gain, decoded frames, sample rate, peak and RMS. It compar
 offsets, opcodes and argument counts with the disassembly. For Configuration,
 the trace uses offsets as source locations because branches can skip line markers.
 
+The probe also changes text timing, the red component of the message
+background, Auto timing and the amount and switch for BGM attenuation
+under voice. After reopening it checks the original slider coordinates
+against the stored settings and the script's interpolation. These preferences
+are stored per installation independently of save slots. The Auto button
+still controls the reading session's active mode.
+
 The System and Text tabs execute `syscom.set_window_mode` (4) and
 `syscom.set_font_name` (283) in `__sys_menu_config01`. The browser maps the
 configured fullscreen mode to the shared window display host and stores

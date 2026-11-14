@@ -1024,7 +1024,7 @@ try {
     const configCommand = (path, start) =>
       `siglusTags.slice(${start}).some(({scene, path}) =>
         scene === '${configScene}' && path?.join('.') === '${path}')`;
-    async function clickConfig(gameX, gameY, button = 'left') {
+    async function clickConfig(gameX, gameY, button = 'left', heldFrames = 1) {
       const [x, y] = await evaluate(`(() => {
         const rect = siglusSurface.querySelector('div[tabindex="0"]').getBoundingClientRect();
         return [rect.left + rect.width * ${gameX} / 1920, rect.top + rect.height * ${gameY} / 1080];
@@ -1032,7 +1032,7 @@ try {
       const frame = await evaluate(configLoop);
       await send('Input.dispatchMouseEvent', {type: 'mouseMoved', x, y});
       await send('Input.dispatchMouseEvent', {type: 'mousePressed', x, y, button, clickCount: 1});
-      await waitFor(`${configLoop} > ${frame}`);
+      await waitFor(`${configLoop} >= ${frame + heldFrames}`);
       await send('Input.dispatchMouseEvent', {type: 'mouseReleased', x, y, button, clickCount: 1});
     }
     const initial = await evaluate('siglusTags.length');
@@ -1178,6 +1178,26 @@ try {
     console.log(
       'Configuration: detailed font settings updated the message weight and outline/shadow.',
     );
+    const settingsWrite = async (member, x, y) => {
+      const start = await evaluate('siglusTags.length');
+      const heldFrames = member === 49 || member === 97 ? 1 : 6;
+      await clickConfig(x, y, 'left', heldFrames);
+      return waitFor(`siglusTags.slice(${start}).findLast(({scene, path}) =>
+        scene === '${configScene}' && path?.join('.') === '63.${member}')?.args`);
+    };
+    const [messageNowait] = await settingsWrite(49, 188, 244);
+    const [messageSpeed] = await settingsWrite(46, 560, 245);
+    const [red] = await settingsWrite(82, 535, 421);
+    const [characterWait] = await settingsWrite(51, 1510, 484);
+    const [minimumWait] = await settingsWrite(54, 1520, 534);
+    assert.equal(messageNowait, 0);
+    for (const [value, original] of [
+      [messageSpeed, 30],
+      [red, 170],
+      [characterWait, 30],
+      [minimumWait, 1000],
+    ])
+      assert.notEqual(value, original);
     const beforeSound = await evaluate('siglusTags.length');
     await clickConfig(1630, 22);
     await waitFor(`siglusTags.slice(${beforeSound}).some(({scene, args}) =>
@@ -1227,6 +1247,21 @@ try {
       assert.ok(voicePreview.peak >= voicePreview.rms && voicePreview.rms > 0);
     }
     console.log('Configuration audio previews', {effectShape, voicePreview});
+    const [duckLevel] = await settingsWrite(94, 570, 384);
+    const [duckEnabled] = await settingsWrite(97, 188, 385);
+    assert.notEqual(duckLevel, 204);
+    assert.equal(duckEnabled, 0);
+    const storedSettings = `JSON.parse(localStorage.getItem(Object.keys(localStorage)
+      .find((key) => /^siglus:.*:options$/.test(key))))`;
+    assert.deepEqual(await evaluate(`${storedSettings}.playback`), {
+      messageSpeed,
+      messageNowait: false,
+      autoCharacterWait: characterWait,
+      autoMinimumWait: minimumWait,
+      voiceDuckLevel: duckLevel,
+      voiceDuckEnabled: false,
+    });
+    assert.deepEqual(await evaluate(`${storedSettings}.filter`), [red, 80, 60, 178]);
     await clickConfig(1630, 22, 'right');
     await waitFor(`(() => {
       const button = siglusSurface.querySelector('button[aria-label="New Game"]');
@@ -1260,6 +1295,29 @@ try {
     );
     console.log(
       'Configuration: movie mode persisted across reopening and Escape restored game focus.',
+    );
+    const sliderPositions = async (tab, rows) => {
+      const start = await evaluate('siglusTags.length');
+      await clickConfig(tab, 22);
+      return waitFor(`(() => {
+        const rows = ${JSON.stringify(rows)};
+        const controls = new Map(siglusTags.slice(${start}).filter(({scene, args}) =>
+          scene === '${configScene}' && args?.[0] === '__sys_cf_ctl01'
+          && rows.includes(args[3])).map(({args}) => [args[3], args[2]]));
+        return rows.every((row) => controls.has(row)) && rows.map((row) => controls.get(row));
+      })()`);
+    };
+    assert.deepEqual(await sliderPositions(1450, [234, 409, 473, 523]), [
+      794 + Math.trunc((-384 * messageSpeed) / 100),
+      410 + Math.trunc((384 * red) / 255),
+      1347 + Math.trunc((300 * characterWait) / 500),
+      1347 + Math.trunc((300 * minimumWait) / 5000),
+    ]);
+    assert.deepEqual(await sliderPositions(1630, [374]), [
+      410 + Math.trunc((384 * duckLevel) / 255),
+    ]);
+    console.log(
+      'Configuration: Text and Sound rebuilt their sliders from settings restored after reopening.',
     );
   } else if (musicOnly) {
     const music = '#siglus-surface button[aria-label="Music"]';
