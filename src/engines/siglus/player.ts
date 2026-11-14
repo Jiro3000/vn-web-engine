@@ -371,7 +371,7 @@ export class SiglusPlayer {
   private async cast(names: string[], fade: number): Promise<void> {
     const resolved = names.map((name) =>
       /^[a-z]{2}$/i.test(name)
-        ? this.currentCast.find((previous) => spriteActor(previous) === name) ?? 'none'
+        ? (this.currentCast.find((previous) => spriteActor(previous) === name) ?? 'none')
         : name,
     );
     this.currentCast = resolved;

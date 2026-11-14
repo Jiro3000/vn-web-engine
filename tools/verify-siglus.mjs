@@ -287,13 +287,13 @@ try {
     dialogue: !!siglusSurface.querySelector('[data-siglus-dialogue]')?.textContent,
     lines: siglusTags.filter((tag) => tag.tag === 'text' && tag.scene === ${JSON.stringify(scene)} && tag.offset >= ${entry}).length
   })`);
-  const deadline = Date.now() + 180000;
   let page = 0;
   const backgrounds = new Set();
   const voices = new Set();
   const sprites = new Set();
   let music;
   async function runUntil(finished) {
+    const deadline = Date.now() + 180000;
     while (Date.now() < deadline) {
       const current = await state();
       if (finished(current)) return current;
@@ -352,14 +352,18 @@ try {
   } else {
     const savePage = page + 3;
     await runUntil((current) => Number(current.page) >= savePage);
+    const dialogue = "siglusSurface.querySelector('[data-siglus-dialogue]').textContent";
+    const savedText = digest(await evaluate(dialogue));
     await click('[data-siglus-action="save"]');
     const saved = await waitFor('siglusSurface.dataset.savedPage');
     assert.equal(Number(saved), savePage);
     const beforeLoad = await evaluate('siglusTags.length');
     await clickStage();
     await waitFor('Number(siglusSurface.dataset.page) > ' + saved);
+    assert.notEqual(digest(await evaluate(dialogue)), savedText, 'Advanced to another page');
     await click('[data-siglus-action="load"]');
     await waitFor("siglusSurface.dataset.loaded === 'true'");
+    assert.equal(digest(await evaluate(dialogue)), savedText, 'Loaded dialogue SHA-256');
     const afterLoad = await evaluate('siglusTags.length');
     await clickStage();
     console.log('Saved and loaded page', saved);
@@ -368,6 +372,7 @@ try {
       await control('keyDown');
       await waitFor('siglusSurface.dataset.movie === ' + JSON.stringify(name), 600000);
       await control('keyUp');
+      console.log('Movie started:', name);
       await waitFor('siglusMovies.length === ' + (index + 1), 360000);
       console.log('Movie completed:', name);
     }
@@ -376,6 +381,15 @@ try {
     await waitFor(
       "siglusSurface.dataset.phase === 'title' && siglusSurface.dataset.bgm === 'bgm12'",
     );
+    const flags = new Map(
+      await evaluate(`(() => {
+      const key = Object.keys(localStorage).find((key) => /^siglus:[0-9a-f]{64}:system$/.test(key));
+      return key ? JSON.parse(localStorage.getItem(key)) : [];
+    })()`),
+    );
+    for (const index of [1006, 1571, 1572, 1573, 1574, 1575])
+      assert.equal(flags.get(index), 1, 'Persistent Siglus flag G[' + index + ']');
+    assert.equal(flags.get(1007), 3, 'Cleared title layout G[1007]');
     assert.equal(await evaluate('siglusMovies.every((movie) => movie.frames > 0)'), true);
     const media = await evaluate('({audio: siglusAudio, movies: siglusMovies})');
     assert.deepEqual(
