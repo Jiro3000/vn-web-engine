@@ -24,6 +24,7 @@ export interface SiglusServices {
   property(path: number[], value?: Value): Value | undefined;
   message(tag: Extract<SiglusTag, {tag: 'name' | 'text'}>): void;
   trace(tag: SiglusTag): void;
+  yieldDelay?(): number;
 }
 
 export interface SiglusCheckpoint {
@@ -149,13 +150,26 @@ class Frame {
       .flatMap((value) => (typeof value === 'object' ? [...value] : [Number(value)]));
   }
   args(): Argument[] {
-    return this.words()
-      .map((form) => {
-        if (form === 0 || form === 10 || form === 20 || form === 30) return this.scalar();
-        if (form > 0) return this.path();
-        throw new Error(`Unsupported Siglus argument form ${form}`);
-      })
-      .reverse();
+    return this.readArguments(this.word());
+  }
+  private readArguments(count: number): Argument[] {
+    if (count < 0 || count > (this.code.byteLength - this.pc) / 4)
+      throw new Error('Invalid Siglus argument table');
+    const args: Argument[] = [];
+    for (let index = 0; index < count; index++) {
+      const form = this.word();
+      if (form === -1) {
+        const values = this.readArguments(this.word());
+        if (!values.every((value) => typeof value === 'number'))
+          throw new Error('Expected a Siglus integer argument list');
+        args.push(values);
+      } else if (form === 0 || form === 10 || form === 20 || form === 30) {
+        args.push(this.scalar());
+      } else if (form > 0) {
+        args.push(this.path());
+      } else throw new Error(`Unsupported Siglus argument form ${form}`);
+    }
+    return args.reverse();
   }
 }
 
@@ -273,31 +287,39 @@ export class SiglusVm {
     return new Frame(scene, offset);
   }
 
+  private propertyForm(frame: Frame, path: readonly number[]): number | undefined {
+    const [root = 0, member = 0] = path;
+    if (root === localRoot) {
+      if (elementOwner(member) === callProperty)
+        return [...frame.declarations.values()][elementIndex(member)];
+      return member === 1 ? 21 : 11;
+    }
+    if (elementOwner(root) !== userProperty) return undefined;
+    const index = elementIndex(root);
+    if (index < this.pack.properties.length / 2) return this.pack.properties[index * 2];
+    return frame.scene.properties[index * 2 - this.pack.properties.length];
+  }
+
   private property(frame: Frame, path: number[], value?: Value): Value {
     const owned = this.services.property(path, value);
     if (owned !== undefined) return owned;
-    const [root = 0, member = 0] = path;
-    const local = root === localRoot;
+    const [root = 0] = path;
     const index = elementIndex(root);
     const sceneProperty =
       elementOwner(root) === userProperty && index >= this.pack.properties.length / 2;
-    const store = local ? frame.locals : this.globals;
+    const store = root === localRoot ? frame.locals : this.globals;
     const key = (sceneProperty ? frame.scene.name + ':' : '') + path.join('.');
     if (value !== undefined) store.set(key, value);
-    let form: number | undefined;
-    if (local) {
-      form =
-        elementOwner(member) === callProperty
-          ? [...frame.declarations.values()][elementIndex(member)]
-          : member === 1
-            ? 21
-            : 11;
-    } else if (elementOwner(root) === userProperty) {
-      form = sceneProperty
-        ? frame.scene.properties[index * 2 - this.pack.properties.length]
-        : this.pack.properties[index * 2];
-    }
+    const form = this.propertyForm(frame, path);
     return store.get(key) ?? (form === 20 || form === 21 ? '' : 0);
+  }
+
+  private setList(frame: Frame, receiver: number[], [start, ...values]: Argument[]): void {
+    if (typeof start !== 'number' || start < 0) throw new Error('Invalid Siglus list start index');
+    for (const [index, value] of values.entries()) {
+      if (typeof value !== 'number') throw new Error('Expected a Siglus list integer');
+      this.property(frame, [...receiver, -1, start + index], value);
+    }
   }
 
   private async execute(initial: Frame, depth = 0): Promise<Value> {
@@ -306,7 +328,8 @@ export class SiglusVm {
     for (let steps = 0; ; steps++) {
       if (steps % 8192 === 0) {
         this.signal.throwIfAborted();
-        if (steps) await new Promise((resolve) => setTimeout(resolve, 0));
+        if (steps)
+          await new Promise((resolve) => setTimeout(resolve, this.services.yieldDelay?.() ?? 0));
       }
       const offset = frame.pc;
       const position = () => ({scene: frame.scene.name, offset, line: frame.line});
@@ -470,13 +493,26 @@ export class SiglusVm {
               );
               break;
             }
+            const receiverPath = path.slice(0, -1);
+            const member = path.at(-1)!;
+            const form = this.propertyForm(frame, receiverPath);
+            if (
+              member === 1 &&
+              ((receiverPath[0] === localRoot && receiverPath.length === 2) ||
+                (elementOwner(receiverPath[0]!) === userProperty && receiverPath.length === 1)) &&
+              (form === 11 || form === 14)
+            ) {
+              this.setList(frame, receiverPath, args);
+              frame.stack.push(0);
+              break;
+            }
             const receiver =
               path.length > 1 && (path[0] === localRoot || elementOwner(path[0]!) === userProperty)
-                ? this.property(frame, path.slice(0, -1))
+                ? this.property(frame, receiverPath)
                 : undefined;
             const result =
               typeof receiver === 'string'
-                ? this.stringCommand(receiver, path.at(-1)!, args)
+                ? this.stringCommand(receiver, member, args)
                 : await this.services.command(command);
             if (this.pendingLoad) throw this.pendingLoad;
             if (result !== undefined) frame.stack.push(result);

@@ -79,13 +79,13 @@ async function referenceScripts(directory) {
   return scripts;
 }
 
-function compareTags(trace, scripts) {
+function compareTags(trace, scripts, {compareSourceLine = true} = {}) {
   for (const tag of trace) {
     const {tags} = scripts.get(tag.scene) ?? {};
     const expected = tags?.get(tag.offset);
     assert.ok(expected, `Missing reference tag at ${tag.scene}:${tag.offset.toString(16)}`);
     const {offset, line, readFlag} = tag;
-    const fields = {offset, line, tag: tag.tag, readFlag};
+    const fields = {offset, line: compareSourceLine ? line : expected.line, tag: tag.tag, readFlag};
     assert.deepEqual(
       tag.tag === 'command'
         ? {...fields, code: tag.path.at(-1), argc: tag.args.length}
@@ -336,7 +336,54 @@ try {
     await click('#siglus-surface button[aria-label="Configuration"]');
     await waitFor(`siglusTags.some(({scene, path}) =>
       scene === '__sys_menu_config01' && path?.join('.') === '86.3')`);
-    console.log('Reached the original Configuration input loop.');
+    const configScene = '__sys_menu_config01';
+    const configLoop = `siglusTags.filter(({scene, path}) => scene === '${configScene}' && path?.join('.') === '86.3').length`;
+    const configCommand = (path, start) =>
+      `siglusTags.slice(${start}).some(({scene, path}) =>
+        scene === '${configScene}' && path?.join('.') === '${path}')`;
+    async function clickConfig(gameX, gameY, button = 'left') {
+      const [x, y] = await evaluate(`(() => {
+        const rect = siglusSurface.querySelector('div[tabindex="0"]').getBoundingClientRect();
+        return [rect.left + rect.width * ${gameX} / 1920, rect.top + rect.height * ${gameY} / 1080];
+      })()`);
+      const frame = await evaluate(configLoop);
+      await send('Input.dispatchMouseEvent', {type: 'mouseMoved', x, y});
+      await send('Input.dispatchMouseEvent', {type: 'mousePressed', x, y, button, clickCount: 1});
+      await waitFor(`${configLoop} > ${frame}`);
+      await send('Input.dispatchMouseEvent', {type: 'mouseReleased', x, y, button, clickCount: 1});
+    }
+    const initial = await evaluate('siglusTags.length');
+    await clickConfig(1045, 561);
+    await waitFor(configCommand('63.119', initial));
+    const wheel = await evaluate(`(() => {
+      const key = Object.keys(localStorage).find((key) => key.endsWith(':options'));
+      return JSON.parse(localStorage.getItem(key)).WHEEL_NEXT_MESSAGE_ONOFF;
+    })()`);
+    assert.equal(typeof wheel, 'boolean');
+    console.log('Configuration: wheel setting changed through the original checkbox.');
+    const beforeText = await evaluate('siglusTags.length');
+    await clickConfig(1450, 22);
+    await waitFor(configCommand('65.1.2.-1.63.93.-1.23.39', beforeText));
+    await waitFor(`siglusTags.slice(${beforeText}).some(({scene, path}) =>
+      scene === '${configScene}' && path?.join('.') === '86.3')`);
+    console.log('Configuration: the Text tab created its original sample.');
+    const beforeSound = await evaluate('siglusTags.length');
+    await clickConfig(1630, 22);
+    await waitFor(`siglusTags.slice(${beforeSound}).some(({scene, args}) =>
+      scene === '${configScene}' && args?.[0] === '__sys_cf_btn33')`);
+    await waitFor(`siglusTags.slice(${beforeSound}).some(({scene, path}) =>
+      scene === '${configScene}' && path?.join('.') === '86.3')`);
+    console.log('Configuration: the Sound tab created its original controls.');
+    await clickConfig(1630, 22, 'right');
+    await waitFor(`(() => {
+      const button = siglusSurface.querySelector('button[aria-label="New Game"]');
+      return Boolean(button && !button.closest('[inert]'));
+    })()`);
+    const tags = await evaluate(`siglusTags.slice(${initial})`);
+    // A jump can skip CD_NL, leaving the live source line at the last executed
+    // marker. The independent disassembly prints lines in byte order.
+    compareTags(tags, scripts, {compareSourceLine: false});
+    console.log(`Configuration: returned to title and matched ${tags.length} command tags.`);
   } else if (musicOnly) {
     const music = '#siglus-surface button[aria-label="Music"]';
     await click(music);

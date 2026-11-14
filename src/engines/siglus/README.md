@@ -57,8 +57,13 @@ browser profile, then checks the restored volume against the slider position.
 
 Set `SIGLUS_CONFIG_ONLY=1` to diagnose the original Configuration scene. This
 enables its title button for the probe, enters the scene from Gameexe.dat, and
-reports the first unsupported command or observes the script's input loop.
-The regular title keeps Configuration disabled while that path is incomplete.
+checks the wheel-to-advance option from the System tab, opens the Text and
+Sound tabs, and returns to the title with a right-click. It compares command
+offsets, opcodes and argument counts with the disassembly. For Configuration,
+the trace uses offsets as source locations because branches can skip line markers.
+The regular title keeps Configuration disabled while its other actions are
+incomplete, including the detailed display and movie dialogs, audio previews,
+and transitions to Save and Load.
 
 The clean-profile route matched 130,121 command and message tags and
 checked 8,540 decoded audio buffers with zero browser console errors.

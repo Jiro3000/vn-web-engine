@@ -35,6 +35,24 @@ const soundSwitches: ReadonlyArray<[SiglusAudioKind | 'ALL' | 'MOV', number, num
   ['SE', 38, 105, 45],
   ['MOV', 266, 267, 268],
 ];
+const systemOptions = [
+  ['SLEEP_ONOFF', 110, 111, 112],
+  ['NO_WIPE_ANIME_ONOFF', 113, 114, 115],
+  ['NO_MWND_ANIME_ONOFF', 8, 109, 81],
+  ['SKIP_WIPE_ANIME_ONOFF', 116, 117, 118],
+  ['WHEEL_NEXT_MESSAGE_ONOFF', 119, 120, 121],
+  ['KOE_DONT_STOP_ONOFF', 122, 123, 124],
+  ['SKIP_UNREAD_MESSAGE_ONOFF', 125, 126, 127],
+  ['PLAY_SILENT_SOUND_ONOFF', 250, 257, 243],
+] as const;
+type SystemOption = (typeof systemOptions)[number][0];
+
+interface RealCounter {
+  start: number;
+  from: number;
+  range?: {to: number; duration: number};
+}
+
 const filterCommands = [
   [82, 83, 84],
   [85, 88, 91],
@@ -83,6 +101,7 @@ export class SiglusPlayer {
   private readonly objects = [new Map<number, DrawObject>(), new Map<number, DrawObject>()];
   private systemObjects?: Map<number, DrawObject>;
   private systemObjectsDirty = false;
+  private systemFont?: {name?: string; bold?: boolean; shadow?: number};
   private messageHidden = false;
   private quakeStopped = false;
   private timeStopped = false;
@@ -98,6 +117,9 @@ export class SiglusPlayer {
   private voiceMode = 0;
   private voiceDuckLevel: number;
   private voiceDuckEnabled: boolean;
+  private readonly options = new Map<SystemOption, boolean>();
+  private readonly systemCounters = new Map<number, RealCounter>();
+  private waitingForPage = false;
   private readonly filterDefaults: [number, number, number, number];
   private readonly filterColor: [number, number, number, number];
   private wait?: (value: number) => void;
@@ -149,6 +171,16 @@ export class SiglusPlayer {
       throw new Error('Invalid Siglus screen size');
     this.startScene = config.get('START_SCENE')?.split('"')[1] ?? '_start';
     this.audio = new SiglusAudio(files, config, root, game.saveKey + ':audio');
+    const savedOptions = localStorage.getItem(game.saveKey + ':options');
+    if (savedOptions) {
+      try {
+        const values = JSON.parse(savedOptions);
+        for (const [option] of systemOptions)
+          if (typeof values?.[option] === 'boolean') this.options.set(option, values[option]);
+      } catch {
+        // An unreadable settings record falls back to the installation defaults.
+      }
+    }
     const color = config.get('CONFIG.FILTER_COLOR')?.split(',').map(Number) ?? [];
     this.filterDefaults = [color[0] ?? 0, color[1] ?? 0, color[2] ?? 0, color[3] ?? 255];
     this.filterColor = [...this.filterDefaults];
@@ -162,12 +194,30 @@ export class SiglusPlayer {
       width,
       height,
       this.controller.signal,
-      () => this.wait?.(1),
+      () => {
+        if (this.systemOption('SKIP_WIPE_ANIME_ONOFF') && this.display.finishWipe()) return;
+        if (!this.systemCallActive) this.wait?.(1);
+      },
       windowOptions,
       (active) => {
         this.skip = active;
         if (this.skipping && this.pendingText) this.wait?.(1);
       },
+    );
+    this.display.stage.addEventListener(
+      'wheel',
+      (event) => {
+        if (
+          event.deltaY <= 0 ||
+          !this.waitingForPage ||
+          this.systemCallActive ||
+          !this.systemOption('WHEEL_NEXT_MESSAGE_ONOFF')
+        )
+          return;
+        event.preventDefault();
+        this.wait?.(1);
+      },
+      {passive: false, signal: this.controller.signal},
     );
     this.movies = new BrowserFullscreenMoviePlayer({
       document: root.ownerDocument,
@@ -206,6 +256,7 @@ export class SiglusPlayer {
         command: (command) => this.command(command),
         property: (path, value) => this.property(path, value),
         trace: this.trace,
+        yieldDelay: () => (this.systemOption('SLEEP_ONOFF') ? 16 : 0),
         message: (tag) => {
           if (!this.pendingText) {
             this.display.clearText();
@@ -243,10 +294,60 @@ export class SiglusPlayer {
     } finally {
       this.systemCallActive = false;
       this.releaseSystemObjects();
+      this.systemCounters.clear();
+      this.systemFont = undefined;
       this.display.setSystemInput(false);
       [this.timeStopped, this.systemSkipDisabled, this.messageHidden, this.quakeStopped] = previous;
       this.display.setScenePaused(this.timeStopped);
       this.display.setMessageDisplayed(!this.messageHidden);
+    }
+  }
+
+  private systemOption(option: SystemOption): boolean {
+    return this.options.get(option) ?? this.game.config.get('CONFIG.' + option) === '1';
+  }
+
+  private setSystemOption(option: SystemOption, value?: boolean): void {
+    if (value === undefined) this.options.delete(option);
+    else this.options.set(option, value);
+    localStorage.setItem(
+      this.game.saveKey + ':options',
+      JSON.stringify(Object.fromEntries(this.options)),
+    );
+  }
+
+  private systemCounter(
+    id: number,
+    member: number,
+    args: SiglusCommand['args'],
+  ): Value | undefined {
+    const counter = this.systemCounters.get(id);
+    const now = performance.now();
+    const elapsed = counter ? now - counter.start : 0;
+    switch (member) {
+      case 1: {
+        // get
+        if (!counter) return 0;
+        const {from, range} = counter;
+        if (!range) return from + Math.trunc(elapsed);
+        if (elapsed >= range.duration) return range.to;
+        return from + Math.trunc(((range.to - from) * elapsed) / range.duration);
+      }
+      case 2: // reset
+        this.systemCounters.delete(id);
+        return 0;
+      case 9: // start_real
+        this.systemCounters.set(id, {start: now, from: 0});
+        return 0;
+      case 11: // start_frame_real
+        this.systemCounters.set(id, {
+          start: now,
+          from: Number(args[0]),
+          range: {to: Number(args[1]), duration: Number(args[2])},
+        });
+        return 0;
+      case 14: // check_active
+        return Number(Boolean(counter && (!counter.range || elapsed < counter.range.duration)));
     }
   }
 
@@ -324,6 +425,15 @@ export class SiglusPlayer {
       }
       return Number(object.visible);
     }
+    if (property !== undefined && property >= 18 && property <= 22) {
+      const clip = (object.clip ??= [0, 0, 0, 0, 0]);
+      const index = property - 18;
+      if (value !== undefined && clip[index] !== Number(value)) {
+        clip[index] = Number(value);
+        this.markObjectsDirty(page!);
+      }
+      return clip[index];
+    }
     const field =
       property === 1
         ? 'pattern'
@@ -378,11 +488,13 @@ export class SiglusPlayer {
       const autoWait = this.autoEnabled
         ? this.autoMinimumWait + this.autoCharacterWait * this.pageCharacters
         : undefined;
+      this.waitingForPage = true;
       result = await this.delay(autoWait, true);
     } finally {
+      this.waitingForPage = false;
       this.display.pageControls(undefined, undefined);
     }
-    this.audio.stop('voice');
+    if (!this.systemOption('KOE_DONT_STOP_ONOFF')) this.audio.stop('voice');
     this.pendingText = false;
     return result === 2;
   }
@@ -470,7 +582,7 @@ export class SiglusPlayer {
   }
 
   private async nextInput(): Promise<number> {
-    if (!this.activeGroups.size || this.decisions.size) return 0;
+    if ((!this.systemCallActive && !this.activeGroups.size) || this.decisions.size) return 0;
     // The script polls group state, then calls input.next to yield between samples.
     // Wake on a decision or on the next frame so polling scripts can keep animating.
     const signal = this.controller.signal;
@@ -493,11 +605,15 @@ export class SiglusPlayer {
     });
   }
 
+  private wipeDuration(ms: number): number {
+    return this.skipping || this.systemOption('NO_WIPE_ANIME_ONOFF') ? 0 : ms;
+  }
+
   private async wipe(ms: number): Promise<void> {
     const back = this.objects[1]!;
     this.display.closeMessage();
     this.currentCast = [];
-    await this.display.show(orderedObjects(back), this.skipping ? 0 : ms, (id) => this.choose(id));
+    await this.display.show(orderedObjects(back), this.wipeDuration(ms), (id) => this.choose(id));
     this.objects[0] = this.copyObjects(back);
     this.objectsDirty = false;
   }
@@ -518,12 +634,16 @@ export class SiglusPlayer {
   }
 
   private copyObjects(objects: Map<number, DrawObject>): Map<number, DrawObject> {
-    return new Map(
-      [...objects].map(([id, object]) => [
-        id,
-        {...object, children: object.children && this.copyObjects(object.children)},
-      ]),
-    );
+    return new Map([...objects].map(([id, object]) => [id, this.copyObject(object)]));
+  }
+
+  private copyObject(object: DrawObject): DrawObject {
+    return {
+      ...object,
+      text: object.text && {...object.text},
+      clip: object.clip && [...object.clip],
+      children: object.children && this.copyObjects(object.children),
+    };
   }
 
   private backgroundName(name: string): string {
@@ -539,7 +659,7 @@ export class SiglusPlayer {
     this.stageProperties.set('$bg_set_ready', 0);
     this.stageProperties.set('$bs_name.-1.0', 'none');
     this.pendingBackground = undefined;
-    await this.display.setBackground(name, this.skipping ? 0 : (fadeTimes[transition] ?? 0));
+    await this.display.setBackground(name, this.wipeDuration(fadeTimes[transition] ?? 0));
     await this.cast([], -1);
   }
 
@@ -554,7 +674,7 @@ export class SiglusPlayer {
     this.stageProperties.set('$bg_name_prev.-1.0', name);
     await this.display.setBackground(
       this.backgroundName(name),
-      this.skipping ? 0 : (fadeTimes[fade] ?? 0),
+      this.wipeDuration(fadeTimes[fade] ?? 0),
       pan,
     );
   }
@@ -566,7 +686,7 @@ export class SiglusPlayer {
         : name,
     );
     this.currentCast = resolved;
-    await this.display.showCast(resolved, this.skipping ? 0 : (fadeTimes[fade] ?? 0));
+    await this.display.showCast(resolved, this.wipeDuration(fadeTimes[fade] ?? 0));
   }
 
   private async movie(name: string, skippable: boolean): Promise<number> {
@@ -822,7 +942,7 @@ export class SiglusPlayer {
         case 95:
           break; // Subsequent message blocks share the active message window.
         case 120:
-          this.display.slideMessage(n(0));
+          this.display.slideMessage(this.systemOption('NO_MWND_ANIME_ONOFF') ? 0 : n(0));
           break;
         case 122:
           this.display.slideMessage(0);
@@ -843,6 +963,25 @@ export class SiglusPlayer {
     }
     if ((root === 37 || root === 38) && member === 2) return this.objectCommand(command);
     if (root === 65) {
+      if (member === 13 && path.length === 3) {
+        const font = (this.systemFont ??= {});
+        switch (path[2]) {
+          case 87:
+          case 89:
+            font.name = path[2] === 87 ? s(0) : undefined;
+            return 0;
+          case 90:
+          case 91:
+            font.bold = path[2] === 90 ? Boolean(n(0)) : undefined;
+            return 0;
+          case 93:
+          case 94:
+            font.shadow = path[2] === 93 ? n(0) : undefined;
+            return 0;
+        }
+      }
+      if (member === 6 && path.length === 5 && path[2] === -1)
+        return this.systemCounter(path[3]!, path[4]!, args);
       if (path.length === 3 && member === 1 && path[2] === 2) return undefined;
       if (member === 1 && path[2] === 2) return this.objectCommand(command);
       if (path.length === 2 && member === 8) return Number(Boolean(this.systemObjects));
@@ -875,6 +1014,13 @@ export class SiglusPlayer {
             this.filterColor[index] = value;
             this.display.setMessageFilter(this.filterColor);
           }
+          return 0;
+        }
+      }
+      for (const [option, set, reset, get] of systemOptions) {
+        if (member === get) return Number(this.systemOption(option));
+        if (member === set || member === reset) {
+          this.setSystemOption(option, member === set ? Boolean(n(0)) : undefined);
           return 0;
         }
       }
@@ -936,8 +1082,6 @@ export class SiglusPlayer {
         this.audio.setVoiceDuck(this.voiceDuckEnabled ? this.voiceDuckLevel : 255);
         return 0;
       }
-      if (member === 127)
-        return Number(this.game.config.get('CONFIG.SKIP_UNREAD_MESSAGE_ONOFF') ?? 0);
       if (member === 214) {
         this.autoEnabled = Boolean(n(0));
         return 0;
@@ -997,17 +1141,55 @@ export class SiglusPlayer {
       if (member === 25 || member === 27) this.speed = n(0);
       return 0;
     }
-    if (root === 86 && member === 2) return 0;
-    if (root === 86 && member === 3) return this.nextInput();
-    if (root === 46 && (member === 2 || member === 3))
-      return this.display.pointerPosition(member - 2);
+    if (root === 86 && member === 2) {
+      this.display.clearInput();
+      return 0;
+    }
+    if (root === 86 && member === 3) {
+      await this.nextInput();
+      this.display.sampleInput();
+      return 0;
+    }
+    if (root === 86 && (member === 0 || member === 1) && path.length === 3)
+      return this.display.inputState(member, path[2]!);
+    if (root === 92 && member === 0)
+      return Number(!this.root.ownerDocument.hidden && this.root.ownerDocument.hasFocus());
+    if (root === 46 && member !== undefined && member >= 0 && member <= 3)
+      return this.display.pointerPosition(member % 2);
+    if (root === 46 && member === 5) return this.display.inputWheel();
+    if (root === 46 && (member === 6 || member === 7) && path.length === 3)
+      return this.display.inputState(member === 6 ? 1 : 0, path[2]!);
     if (root === 46 && (member === 4 || member === 8)) return 0;
     if (root === 39 && member === 0)
       return n(0) + Math.floor(Math.random() * (Math.max(0, n(1) - n(0)) + 1));
+    if (root === 39 && member === 2 && Array.isArray(args[3])) {
+      const previousTime = n(1);
+      let previousValue = n(2);
+      const time = n(0);
+      if (time <= previousTime) return previousValue;
+      const table = args[3];
+      for (let index = 0; index + 2 < table.length; index += 3) {
+        const start = table[index]!;
+        const end = table[index + 1]!;
+        const value = table[index + 2]!;
+        if (time <= start) return previousValue;
+        if (time < end)
+          return (
+            previousValue + Math.trunc(((value - previousValue) * (time - start)) / (end - start))
+          );
+        previousValue = value;
+      }
+      return previousValue;
+    }
     if (root === 39 && member === 9)
       return n(3) === n(1)
         ? n(2)
         : Math.trunc(n(2) + ((n(0) - n(1)) * (n(4) - n(2))) / (n(3) - n(1)));
+    if (root === 39 && member === 11) {
+      const value = n(0);
+      const sign = value < 0 ? '-' : '';
+      return sign + String(Math.abs(value)).padStart(Math.min(1024, n(1)) - sign.length, '0');
+    }
     if (root === 39 && member === 10) return Math.min(Math.max(n(1), n(0)), n(2));
     if (root === 42 && member === 19) return this.root.dataset.bgm ?? '';
     if (root === 42 && member === 0) {
@@ -1016,6 +1198,10 @@ export class SiglusPlayer {
     }
     if (root === 42 && member === 4) {
       this.audio.stop('bgm', n(0));
+      return 0;
+    }
+    if (root === 44 && member === -1 && path[3] === 13) {
+      this.audio.setChannelLevel(`pcm${path[2]}`, n(0), n(1));
       return 0;
     }
     if (root === 44 && path.at(-1) === 0) {
@@ -1031,7 +1217,7 @@ export class SiglusPlayer {
     return undefined;
   }
 
-  private async objectCommand({path, args}: SiglusCommand): Promise<Value | undefined> {
+  private async objectCommand({path, args, named}: SiglusCommand): Promise<Value | undefined> {
     const address = this.objectAddress(path);
     if (!address) return undefined;
     const {page, index} = address;
@@ -1048,8 +1234,7 @@ export class SiglusPlayer {
       const source = args[0];
       if (!Array.isArray(source)) throw new Error('Invalid Siglus source object reference');
       const object = this.object(source);
-      if (object)
-        page.set(id!, {...object, children: object.children && this.copyObjects(object.children)});
+      if (object) page.set(id!, this.copyObject(object));
       else page.delete(id!);
       return 0;
     }
@@ -1059,6 +1244,25 @@ export class SiglusPlayer {
       const frames = [];
       frames[pattern] = await this.display.graphic(name, pattern);
       page.set(id!, {name, frames, x: n(2), y: n(3), visible: Boolean(n(1)), pattern});
+      return 0;
+    }
+    if (command === 39) {
+      page.set(id!, {
+        name: '',
+        frames: [],
+        x: n(2),
+        y: n(3),
+        visible: args.length === 1 || Boolean(n(1)),
+        pattern: 0,
+        text: {
+          value: String(args[0]),
+          font: this.systemFont?.name ?? this.game.config.get('CONFIG.FONT.NAME')?.split('"')[1],
+          bold: this.systemFont?.bold ?? this.game.config.get('CONFIG.FONT.FUTOKU') === '1',
+          shadow:
+            this.systemFont?.shadow ?? Number(this.game.config.get('CONFIG.FONT.SHADOW') ?? 0),
+          size: 32,
+        },
+      });
       return 0;
     }
     if (command === 40) {
@@ -1073,10 +1277,49 @@ export class SiglusPlayer {
       return 0;
     }
     const object = page.get(id!);
+    if (command === 24 || command === 25) {
+      if (!object || object.pattern < 0) return 0;
+      const frame =
+        object.frames[object.pattern] ??
+        (object.name
+          ? (object.frames[object.pattern] = await this.display.graphic(
+              object.name,
+              object.pattern,
+            ))
+          : undefined);
+      return (command === 24 ? frame?.width : frame?.height) ?? 0;
+    }
     if (!object && (command === 175 || command === 63 || command === 72 || command === 113))
       return 0;
     if (!object) throw new Error(`Missing Siglus object ${id}`);
-    if (command === 42) object.button = {id: n(0), group: n(1)};
+    if (path[0] === 65 && command === 72 && path.length === index + 4) {
+      const event = path[index + 3];
+      if (event === 0 && (args.length === 4 || (args.length === 5 && named[0] === 0))) {
+        object.opacity = [
+          n(0),
+          n(1),
+          n(2),
+          n(3),
+          args.length === 5 ? n(4) : (object.transparency ?? 255),
+        ];
+        object.opacityStarted = performance.now();
+        object.transparency = n(0);
+        return 0;
+      }
+      if (event === 4) {
+        await this.renderObjects();
+        const animation = object.opacity;
+        if (animation && object.opacityStarted !== undefined)
+          await this.delay(
+            animation[1] + animation[2] - (performance.now() - object.opacityStarted),
+          );
+        return 0;
+      }
+      return undefined;
+    }
+    if (command === 104 && object.text) object.text.size = n(0);
+    else if (command === 160) object.clip = [n(0), n(1), n(2), n(3), n(4)];
+    else if (command === 42) object.button = {id: n(0), group: n(1)};
     else if (command === 175) object.alphaTest = Boolean(n(0));
     else if (command === 98) object.pushKeep = Boolean(n(0));
     else if (command === 161) object.sourceClip = n(0) ? [n(1), n(2), n(3), n(4)] : undefined;

@@ -1,5 +1,6 @@
 import type {ByteSource} from '../../core/source.js';
 import {BrowserWindowDisplayHost} from '../../platform/browser-window-display.js';
+import {readSfntFontMetadata} from '../../formats/sfnt.js';
 import {G00Image} from '../../formats/siglus/g00.js';
 
 export interface Graphic {
@@ -23,11 +24,14 @@ export interface DrawObject {
   pattern: number;
   button?: {id: number; group: number};
   children?: Map<number, DrawObject>;
+  text?: {value: string; font?: string; size: number; bold: boolean; shadow: number};
+  clip?: [number, number, number, number, number];
   sourceClip?: [number, number, number, number];
   pushKeep?: boolean;
   alphaTest?: boolean;
   disabled?: boolean;
   opacity?: [target: number, duration: number, delay: number, easing: number, start: number];
+  opacityStarted?: number;
   movement?: [target: number, duration: number, delay: number, easing: number, start: number];
 }
 
@@ -53,6 +57,11 @@ export class SiglusDisplay {
   private readonly hitInsets = new WeakMap<Graphic, string>();
   private background?: HTMLElement;
   private objectLayer?: HTMLElement;
+  private wipe?: Animation;
+  private systemInput = false;
+  private readonly keys = [this.inputKey(), this.inputKey()];
+  private wheelDelta = 0;
+  private sampledWheel = 0;
   private pressed?: {id: number; group: number};
   private heldButton?: {
     pointerId: number;
@@ -134,10 +143,23 @@ export class SiglusDisplay {
       this.advance();
     };
     this.pointerDown = (event) => {
+      if (this.systemInput && (event.button === 0 || event.button === 2)) {
+        this.stage.setPointerCapture(event.pointerId);
+        this.keys[event.button === 0 ? 0 : 1]!.pending.push(true);
+      }
       if (event.button === 0 && this.hasTextSelection())
         this.stage.ownerDocument.getSelection()?.removeAllRanges();
     };
     this.key = (event) => {
+      if (this.systemInput && event.target === this.stage) {
+        const index =
+          event.key === 'Escape' ? 1 : event.key === 'Enter' || event.key === ' ' ? 0 : -1;
+        if (index !== -1) {
+          event.preventDefault();
+          if (!event.repeat) this.keys[index]!.pending.push(event.type === 'keydown');
+          return;
+        }
+      }
       if (event.key === 'Control') skip(event.type === 'keydown' && !this.hasTextSelection());
       if (
         event.type === 'keydown' &&
@@ -159,6 +181,9 @@ export class SiglusDisplay {
     });
     for (const type of ['pointerup', 'pointercancel', 'lostpointercapture'] as const)
       this.stage.addEventListener(type, (event) => {
+        if (this.systemInput && type === 'pointerup' && (event.button === 0 || event.button === 2))
+          this.keys[event.button === 0 ? 0 : 1]!.pending.push(false);
+        if (this.systemInput && type === 'pointercancel') this.clearInput(true);
         this.pressed = undefined;
         const held = this.heldButton;
         if (held?.pointerId !== event.pointerId) return;
@@ -168,9 +193,24 @@ export class SiglusDisplay {
           held.release();
         }
       });
+    this.stage.addEventListener('contextmenu', (event) => {
+      if (this.systemInput) event.preventDefault();
+    });
+    this.stage.addEventListener(
+      'wheel',
+      (event) => {
+        if (!this.systemInput || !event.deltaY) return;
+        event.preventDefault();
+        this.wheelDelta -= Math.sign(event.deltaY);
+      },
+      {passive: false},
+    );
     this.stage.addEventListener('keydown', this.key);
     this.stage.addEventListener('keyup', this.key);
-    this.stage.addEventListener('focusout', () => skip(false));
+    this.stage.addEventListener('focusout', () => {
+      skip(false);
+      this.clearInput(true);
+    });
     this.stage.focus({preventScroll: true});
   }
 
@@ -215,7 +255,58 @@ export class SiglusDisplay {
       }
   }
 
+  private inputKey(): {
+    down: boolean;
+    edge?: boolean;
+    pending: boolean[];
+  } {
+    return {down: false, pending: []};
+  }
+
+  clearInput(reset = false): void {
+    for (const key of this.keys) {
+      key.edge = undefined;
+      if (reset) {
+        key.pending.length = 0;
+        key.down = false;
+      }
+    }
+    this.sampledWheel = 0;
+    if (reset) this.wheelDelta = 0;
+  }
+
+  sampleInput(): void {
+    for (const key of this.keys) {
+      const next = key.pending.shift();
+      key.edge = next !== undefined && next !== key.down ? next : undefined;
+      if (next !== undefined) key.down = next;
+    }
+    this.sampledWheel = this.wheelDelta;
+    this.wheelDelta = 0;
+  }
+
+  inputState(index: number, command: number): number | undefined {
+    const key = this.keys[index]!;
+    switch (command) {
+      case 1: // on_down
+        return Number(key.edge === true);
+      case 4: // on_up
+      case 5: // on_down_up
+        return Number(key.edge === false);
+      case 6: // is_down
+        return Number(key.down);
+      case 7: // is_up
+        return Number(!key.down);
+    }
+  }
+
+  inputWheel(): number {
+    return this.sampledWheel;
+  }
+
   setSystemInput(active: boolean): void {
+    this.systemInput = active;
+    this.clearInput(true);
     this.layers.inert = active;
     this.message.inert = active;
     this.controls.inert = active;
@@ -236,16 +327,25 @@ export class SiglusDisplay {
   }
 
   async prepare(): Promise<void> {
-    const name = this.config.get('FONT_FILE.000.NAME')?.split('"')[1]?.toLowerCase();
-    const file = name ? this.files.get(`dat/${name}`) : undefined;
-    if (file) {
+    for (const [key, value] of this.config) {
+      if (!/^FONT_FILE\.\d+\.NAME$/.test(key)) continue;
+      const name = value.split('"')[1]?.toLowerCase();
+      const file = name ? this.files.get(`dat/${name}`) : undefined;
+      if (!file) continue;
+      const [metadata] = await readSfntFontMetadata(file);
       const bytes = new Uint8Array(await file.read(0, file.size));
-      const font = await new FontFace('SiglusGame', bytes.buffer).load();
+      const family = 'SiglusGame' + this.loadedFonts.length;
+      const font = await new FontFace(family, bytes.buffer).load();
       this.signal.throwIfAborted();
       document.fonts.add(font);
-      this.loadedFont = font;
-      this.message.style.fontFamily = 'SiglusGame, sans-serif';
+      this.loadedFonts.push(font);
+      for (const entry of metadata?.names ?? [])
+        if ((entry.id === 1 || entry.id === 16) && entry.unicode)
+          this.fontNames.set(entry.unicode.toLowerCase(), family);
     }
+    this.message.style.fontFamily = this.fontFamily(
+      this.config.get('CONFIG.FONT.NAME')?.split('"')[1],
+    );
     this.selectMessageWindow(0);
     const filter = this.config.get('WAKU.000.FILTER_FILE')?.split('"')[1];
     if (filter) {
@@ -305,7 +405,13 @@ export class SiglusDisplay {
     place(this.portrait, numbers('WAKU.000.FACE.000.POS', [24, 24]), [340, windowSize[1]! - 24]);
     if (this.filter) this.filter.hidden = this.config.get(prefix + 'WAKU_NO') === '-1';
   }
-  private loadedFont?: FontFace;
+  private readonly loadedFonts: FontFace[] = [];
+  private readonly fontNames = new Map<string, string>();
+
+  private fontFamily(name?: string): string {
+    const family = name && this.fontNames.get(name.toLowerCase());
+    return family ? family + ', sans-serif' : (this.loadedFonts[0]?.family ?? 'sans-serif');
+  }
 
   private async resource(name: string): Promise<G00Image> {
     const path = `g00/${name.toLowerCase()}.g00`;
@@ -427,6 +533,19 @@ export class SiglusDisplay {
     return next;
   }
 
+  private applyClip(
+    element: HTMLElement,
+    object: DrawObject,
+    x: number,
+    y: number,
+    width: number,
+    height: number,
+  ): void {
+    if (!object.clip?.[0]) return;
+    const [, left, top, right, bottom] = object.clip;
+    element.style.clipPath = `inset(${Math.max(0, top - y)}px ${Math.max(0, x + width - right)}px ${Math.max(0, y + height - bottom)}px ${Math.max(0, left - x)}px)`;
+  }
+
   private async appendObjects(
     parent: HTMLElement,
     objects: Iterable<DrawObject>,
@@ -435,10 +554,23 @@ export class SiglusDisplay {
   ): Promise<void> {
     for (const object of objects) {
       if (!object.visible) continue;
+      if (object.text) {
+        const text = document.createElement('div');
+        const {value, font, size, bold, shadow} = object.text;
+        text.textContent = value;
+        text.style.cssText = `position:absolute;left:${object.x}px;top:${object.y}px;width:${this.width}px;height:${this.height}px;font-size:${size}px;color:white;white-space:pre`;
+        text.style.fontFamily = this.fontFamily(font);
+        text.style.fontWeight = bold ? 'bold' : 'normal';
+        if (shadow) text.style.textShadow = '1px 1px 2px black';
+        this.applyClip(text, object, object.x, object.y, this.width, this.height);
+        parent.append(text);
+        continue;
+      }
       if (!object.name && !object.frames.length) {
         if (object.children) await this.appendChildren(parent, object, button, animate);
         continue;
       }
+      if (object.pattern < 0) continue;
       const frame =
         object.frames[object.pattern] ??
         (object.frames[object.pattern] = await this.graphic(object.name, object.pattern));
@@ -450,6 +582,14 @@ export class SiglusDisplay {
       canvas.style.left = '0';
       canvas.style.top = '0';
       element.style.cssText = `position:absolute;left:${object.x + frame.x}px;top:${object.y + frame.y}px;width:${frame.width}px;height:${frame.height}px;border:0;padding:0;background:none`;
+      this.applyClip(
+        element,
+        object,
+        object.x + frame.x,
+        object.y + frame.y,
+        frame.width,
+        frame.height,
+      );
       element.append(canvas);
       parent.append(element);
       if (object.transparency !== undefined)
@@ -506,7 +646,8 @@ export class SiglusDisplay {
           }
         });
       }
-      if (animate && object.opacity) {
+      if (object.opacityStarted !== undefined) this.systemObjectOpacity(element, object);
+      else if (animate && object.opacity) {
         const [target, time, delay, , start] = object.opacity;
         element.animate(
           {opacity: [start / 255, target / 255]},
@@ -524,6 +665,22 @@ export class SiglusDisplay {
     }
   }
 
+  private systemObjectOpacity(element: HTMLElement, object: DrawObject): void {
+    if (!object.opacity || object.opacityStarted === undefined) return;
+    const [target, duration, delay, , start] = object.opacity;
+    const elapsed = performance.now() - object.opacityStarted;
+    if (duration + delay <= elapsed) return;
+    const animation = element.animate(
+      {opacity: [start / 255, target / 255]},
+      {
+        duration,
+        delay,
+        fill: 'both',
+      },
+    );
+    animation.currentTime = elapsed;
+  }
+
   private async appendChildren(
     parent: HTMLElement,
     object: DrawObject,
@@ -535,8 +692,15 @@ export class SiglusDisplay {
     children.style.cssText = `position:absolute;left:${object.x}px;top:${object.y}px;pointer-events:none`;
     if (object.transparency !== undefined)
       children.style.opacity = String(object.transparency / 255);
+    this.systemObjectOpacity(children, object);
     parent.append(children);
     await this.appendObjects(children, orderedObjects(object.children!), button, animate);
+  }
+
+  finishWipe(): boolean {
+    if (this.wipe?.playState !== 'running') return false;
+    this.wipe.finish();
+    return true;
   }
 
   private async replaceLayer(next: HTMLElement, duration: number): Promise<void> {
@@ -545,7 +709,11 @@ export class SiglusDisplay {
     for (const child of previous) (child as HTMLElement).inert = true;
     this.layers.append(next);
     this.background = next;
-    if (duration > 0) await next.animate({opacity: [0, 1]}, {duration}).finished;
+    if (duration > 0) {
+      this.wipe = next.animate({opacity: [0, 1]}, {duration});
+      await this.wipe.finished;
+      this.wipe = undefined;
+    }
     for (const child of previous) child.remove();
   }
 
@@ -790,7 +958,7 @@ export class SiglusDisplay {
     this.stage.removeEventListener('pointerdown', this.pointerDown);
     this.stage.removeEventListener('keydown', this.key);
     this.stage.removeEventListener('keyup', this.key);
-    if (this.loadedFont) document.fonts.delete(this.loadedFont);
+    for (const font of this.loadedFonts) document.fonts.delete(font);
     this.stage.remove();
   }
 }

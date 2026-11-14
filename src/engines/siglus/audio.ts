@@ -18,6 +18,7 @@ type MixKind = (typeof mixKinds)[number];
 export class SiglusAudio {
   private readonly context = new AudioContext();
   private readonly host = new BrowserAudioContextHost(this.context, document);
+  private readonly channelLevels = new Map<string, number>();
   private readonly playing = new Map<string, Playing>();
   private readonly indexes = new Map<string, ReturnType<typeof ovkIndex>>();
   private readonly effects = new Map<string, Promise<AudioBuffer>>();
@@ -172,7 +173,7 @@ export class SiglusAudio {
     this.stop(channel);
     const source = this.context.createBufferSource();
     const gain = this.context.createGain();
-    const volume = this.volume(kind, character);
+    const volume = this.playbackVolume(channel, kind, character);
     const now = this.context.currentTime;
     gain.gain.setValueAtTime(fade > 0 ? 0 : volume, now);
     if (fade > 0) gain.gain.linearRampToValueAtTime(volume, now + fade / 1000);
@@ -296,12 +297,29 @@ export class SiglusAudio {
     );
   }
 
+  private playbackVolume(channel: string, kind: SiglusAudioKind, character?: number): number {
+    return this.volume(kind, character) * ((this.channelLevels.get(channel) ?? 255) / 255);
+  }
+
+  setChannelLevel(channel: string, level: number, fade: number): void {
+    this.channelLevels.set(channel, Math.max(0, Math.min(255, level)));
+    const playing = this.playing.get(channel);
+    if (!playing) return;
+    const {gain, kind, character} = playing;
+    const time = this.context.currentTime;
+    gain.gain.cancelAndHoldAtTime(time);
+    gain.gain.linearRampToValueAtTime(
+      this.playbackVolume(channel, kind, character),
+      time + Math.max(0, fade) / 1000,
+    );
+  }
+
   private updateGains(kind: MixKind): void {
     const time = this.context.currentTime;
-    for (const {gain, kind: playingKind, character} of this.playing.values()) {
+    for (const [channel, {gain, kind: playingKind, character}] of this.playing) {
       if (kind !== 'ALL' && playingKind !== kind) continue;
       gain.gain.cancelScheduledValues(time);
-      gain.gain.setValueAtTime(this.volume(playingKind, character), time);
+      gain.gain.setValueAtTime(this.playbackVolume(channel, playingKind, character), time);
     }
   }
 
