@@ -13,6 +13,7 @@ const diagnosticPages = Number(process.env.SIGLUS_DIAGNOSTIC_PAGES ?? 0);
 const musicOnly = process.env.SIGLUS_MUSIC_ONLY === '1';
 const autoOnly = process.env.SIGLUS_AUTOSAVE_ONLY === '1';
 const quickOnly = process.env.SIGLUS_QUICK_ONLY === '1';
+const cancelOnly = process.env.SIGLUS_CANCEL_ONLY === '1';
 const manageOnly = process.env.SIGLUS_SLOT_MANAGEMENT_ONLY === '1';
 const loadOnly = process.env.SIGLUS_LOAD_ONLY === '1';
 const configOnly = process.env.SIGLUS_CONFIG_ONLY === '1';
@@ -247,26 +248,26 @@ try {
     for (const type of ['mousePressed', 'mouseReleased'])
       await send('Input.dispatchMouseEvent', {type, x, y, button: 'left', clickCount: 1});
   }
-  async function clickScriptMenu(loop, gameX, gameY) {
+  async function clickScriptMenu(loop, gameX, gameY, button = 'left') {
     const [x, y] = await evaluate(`(() => {
       const rect = siglusSurface.querySelector('div[tabindex="0"]').getBoundingClientRect();
       return [rect.left + rect.width * ${gameX} / 1920, rect.top + rect.height * ${gameY} / 1080];
     })()`);
-    const frame = await evaluate(loop);
+    const frame = loop ? await evaluate(loop) : 0;
     await send('Input.dispatchMouseEvent', {type: 'mouseMoved', x, y});
     await send('Input.dispatchMouseEvent', {
       type: 'mousePressed',
       x,
       y,
-      button: 'left',
+      button,
       clickCount: 1,
     });
-    await waitFor(`${loop} > ${frame}`);
+    if (loop) await waitFor(`${loop} > ${frame}`);
     await send('Input.dispatchMouseEvent', {
       type: 'mouseReleased',
       x,
       y,
-      button: 'left',
+      button,
       clickCount: 1,
     });
   }
@@ -356,7 +357,7 @@ try {
     await playInstallation();
   }
   await openPlayer();
-  if (musicOnly || configOnly || loadOnly || quickOnly || autoOnly || manageOnly) {
+  if (musicOnly || configOnly || loadOnly || quickOnly || autoOnly || manageOnly || cancelOnly) {
     const pack = await readFile(join(resolve(folder), 'StartData', 'GameData', 'Scene.pck')).catch(
       () => readFile(join(resolve(folder), 'Scene.pck')),
     );
@@ -407,7 +408,32 @@ try {
   }
   await runUntil((current) => current.title);
   console.log(`Reached title after ${page} advances`);
-  if (manageOnly) {
+  if (cancelOnly) {
+    await click('#siglus-surface button[aria-label="New Game"]');
+    await runUntil((current) => Number(current.page) >= 3);
+    const pageBeforeMenu = await evaluate('siglusSurface.dataset.page');
+    const scene = '__sys_menu_cancel00';
+    const loop = `siglusTags.filter(({scene, path}) => scene === '__sys_menu_cancel00' && path?.join('.') === '86.3').length`;
+    await clickScriptMenu(undefined, 960, 540, 'right');
+    await waitFor(loop);
+    await clickScriptMenu(loop, 960, 540, 'right');
+    await waitFor("!document.querySelector('[data-siglus-action=save]')?.parentElement.hidden");
+    assert.equal(await evaluate('siglusSurface.dataset.page'), pageBeforeMenu);
+    const secondOpen = await evaluate(loop);
+    await clickScriptMenu(undefined, 960, 540, 'right');
+    await waitFor(`${loop} > ${secondOpen}`);
+    await clickScriptMenu(loop, 690, 400);
+    await waitFor(slotLoop);
+    assert.equal(await chooseSlot('save', 0), 'confirm');
+    await waitFor(`siglusSurface.dataset.savedPage === '${pageBeforeMenu}'`);
+    await closeSlotMenu();
+    assert.equal(await evaluate('siglusSurface.dataset.page'), pageBeforeMenu);
+    const tags = await evaluate(`siglusTags.filter((tag) => tag.scene === '${scene}')`);
+    compareTags(tags, scripts, {compareSourceLine: false});
+    console.log(
+      `Right-click opened the original quick menu, dismissed it, and reached Save on the next opening. Matched ${tags.length} tags.`,
+    );
+  } else if (manageOnly) {
     await click('#siglus-surface button[aria-label="New Game"]');
     await runUntil((current) => Number(current.page) >= 3);
     assert.equal(await selectSlot('save'), 'confirm');
@@ -821,7 +847,7 @@ try {
       scene === '_titlemenu_dmy' && path?.join('.') === '38.6.-1.0.3').length >= 2`);
     await click('#siglus-surface button[aria-label="New Game"]');
   }
-  if (musicOnly || configOnly || loadOnly || quickOnly || autoOnly || manageOnly) {
+  if (musicOnly || configOnly || loadOnly || quickOnly || autoOnly || manageOnly || cancelOnly) {
     assert.equal(errors.length, 0);
   } else if (diagnosticPages > 0) {
     const firstPage = page;

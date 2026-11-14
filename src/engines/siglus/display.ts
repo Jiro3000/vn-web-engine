@@ -33,6 +33,7 @@ export interface DrawObject {
   disabled?: boolean;
   opacity?: [target: number, duration: number, delay: number, easing: number, start: number];
   opacityStarted?: number;
+  horizontalMotion?: {from: number; duration: number; delay: number; started: number};
   movement?: [target: number, duration: number, delay: number, easing: number, start: number];
 }
 
@@ -102,6 +103,7 @@ export class SiglusDisplay {
     private readonly advance: () => void,
     windowOptions: {root: HTMLElement; changed(): void; report(message: string): void},
     skip: (active: boolean) => void,
+    cancel: () => boolean,
   ) {
     this.probeConfiguration = new URLSearchParams(root.ownerDocument.location.search).has(
       'siglus-probe-configuration',
@@ -170,6 +172,16 @@ export class SiglusDisplay {
           return;
         }
       }
+      if (
+        event.key === 'Escape' &&
+        event.type === 'keydown' &&
+        event.target === this.stage &&
+        !event.repeat &&
+        cancel()
+      ) {
+        event.preventDefault();
+        return;
+      }
       if (event.key === 'Control') skip(event.type === 'keydown' && !this.hasTextSelection());
       if (
         event.type === 'keydown' &&
@@ -204,7 +216,7 @@ export class SiglusDisplay {
         }
       });
     this.stage.addEventListener('contextmenu', (event) => {
-      if (this.systemInput) event.preventDefault();
+      if (this.systemInput || (!this.hasTextSelection() && cancel())) event.preventDefault();
     });
     this.stage.addEventListener(
       'wheel',
@@ -255,6 +267,7 @@ export class SiglusDisplay {
 
   setMessageDisplayed(displayed: boolean): void {
     this.message.style.visibility = displayed ? '' : 'hidden';
+    this.controls.style.visibility = displayed ? '' : 'hidden';
   }
 
   setScenePaused(paused: boolean): void {
@@ -596,6 +609,12 @@ export class SiglusDisplay {
     };
   }
 
+  graphicAlpha(graphic: Graphic, x: number, y: number): number {
+    if (x < 0 || y < 0 || x >= graphic.width || y >= graphic.height) return 0;
+    const canvas = graphic.image instanceof HTMLCanvasElement ? graphic.image : this.node(graphic);
+    return canvas.getContext('2d')!.getImageData(x, y, 1, 1).data[3]!;
+  }
+
   private node(graphic: Graphic): HTMLCanvasElement {
     const canvas = document.createElement('canvas');
     canvas.width = graphic.width;
@@ -798,6 +817,17 @@ export class SiglusDisplay {
             this.stage.setPointerCapture(event.pointerId);
           }
         });
+      }
+      if (object.horizontalMotion) {
+        const {from, duration, delay, started} = object.horizontalMotion;
+        const elapsed = performance.now() - started;
+        if (elapsed < duration + delay) {
+          const animation = element.animate(
+            {transform: [`translateX(${from - object.x}px)`, 'translateX(0px)']},
+            {duration, delay, easing: 'ease-out', fill: 'both'},
+          );
+          animation.currentTime = elapsed;
+        }
       }
       if (object.opacityStarted !== undefined) this.systemObjectOpacity(element, object);
       else if (animate && object.opacity) {

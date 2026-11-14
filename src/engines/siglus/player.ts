@@ -127,6 +127,8 @@ export class SiglusPlayer {
   private readonly options = new Map<SystemOption, boolean>();
   private readonly systemCounters = new Map<number, RealCounter>();
   private waitingForPage = false;
+  private systemMenuEnabled = true;
+  private userMessageHidden = false;
   private inputSampled = false;
   private readonly filterDefaults: [number, number, number, number];
   private readonly filterColor: [number, number, number, number];
@@ -209,12 +211,20 @@ export class SiglusPlayer {
       this.controller.signal,
       () => {
         if (this.systemOption('SKIP_WIPE_ANIME_ONOFF') && this.display.finishWipe()) return;
-        if (!this.systemCallActive) this.wait?.(1);
+        if (this.systemCallActive) return;
+        if (this.userMessageHidden) this.setUserMessageHidden(false);
+        else this.wait?.(1);
       },
       windowOptions,
       (active) => {
         this.skip = active;
         if (this.skipping && this.pendingText) this.wait?.(1);
+      },
+      () => {
+        if (!this.waitingForPage || !this.systemMenuEnabled || this.systemCallActive) return false;
+        if (this.userMessageHidden) this.setUserMessageHidden(false);
+        else this.wait?.(3);
+        return true;
       },
     );
     this.display.stage.addEventListener(
@@ -300,7 +310,10 @@ export class SiglusPlayer {
     await this.vm.run(this.startScene);
   }
 
-  private async callSystemScene(key: string, capture = key === 'SAVE_SCENE'): Promise<void> {
+  private async callSystemScene(
+    key: string,
+    capture = key === 'SAVE_SCENE' || key === 'CANCEL_SCENE',
+  ): Promise<void> {
     const [scene, label] = this.game.config.get(key)?.split(',') ?? [];
     const name = scene?.split('"')[1];
     if (!name) throw new Error(`Missing Siglus ${key}`);
@@ -326,7 +339,7 @@ export class SiglusPlayer {
       this.display.setSystemInput(false);
       [this.timeStopped, this.systemSkipDisabled, this.messageHidden, this.quakeStopped] = previous;
       this.display.setScenePaused(this.timeStopped);
-      this.display.setMessageDisplayed(!this.messageHidden);
+      this.display.setMessageDisplayed(!this.messageHidden && !this.userMessageHidden);
     }
     const selected = this.selectedSave;
     this.selectedSave = undefined;
@@ -527,6 +540,11 @@ export class SiglusPlayer {
     this.pendingText = false;
   }
 
+  private setUserMessageHidden(hidden: boolean): void {
+    this.userMessageHidden = hidden;
+    this.display.setMessageDisplayed(!hidden && !this.messageHidden);
+  }
+
   private async waitAtPage(): Promise<void> {
     for (;;) {
       let menu: {type: string; sound: number; id: number} | undefined;
@@ -543,15 +561,21 @@ export class SiglusPlayer {
               : this.loadEnabled && (type !== 'qload' || this.quickSaves.size > 0)),
         );
       }
+      let result: number;
       try {
-        const autoWait = this.autoEnabled
-          ? this.autoMinimumWait + this.autoCharacterWait * this.pageCharacters
-          : undefined;
+        const autoWait =
+          this.autoEnabled && !this.userMessageHidden
+            ? this.autoMinimumWait + this.autoCharacterWait * this.pageCharacters
+            : undefined;
         this.waitingForPage = true;
-        await this.delay(autoWait, true);
+        result = await this.delay(autoWait, true);
       } finally {
         this.waitingForPage = false;
         this.display.pageControls();
+      }
+      if (result === 3) {
+        await this.callSystemScene('CANCEL_SCENE');
+        continue;
       }
       if (!menu) return;
       const {type, sound, id} = menu;
@@ -1092,6 +1116,8 @@ export class SiglusPlayer {
         case 151:
           this.display.repPosition(n(0), n(1));
           break;
+        case 110: // No selection point in the current story flow.
+          return 0;
         case 111:
           break; // No selection checkpoint on a new session.
         case 113:
@@ -1297,6 +1323,15 @@ export class SiglusPlayer {
         return 0;
       }
       if (member === 201) return Number(this.readSkipEnabled);
+      if (member === 206)
+        return Number(this.skipAllowed && this.systemOption('SKIP_UNREAD_MESSAGE_ONOFF'));
+      if (member === 213 || member === 234) return 0;
+      if (member === 220 || member === 227) return 1;
+      if (member === 221) {
+        this.setUserMessageHidden(Boolean(n(0)));
+        return 0;
+      }
+      if (member === 222) return Number(this.userMessageHidden);
       if (member === 148 || member === 149) {
         this.voiceMode = member === 148 ? n(0) : 0;
         return 0;
@@ -1359,6 +1394,7 @@ export class SiglusPlayer {
         return 0;
       }
       if (systemFlags.has(member!)) {
+        if (member === 6 || member === 7) this.systemMenuEnabled = member === 6;
         if (member === 251) this.saveEnabled = Boolean(n(0));
         if (member === 258) this.loadEnabled = Boolean(n(0));
         return 0;
@@ -1376,7 +1412,7 @@ export class SiglusPlayer {
     if (root === 64 && member === 17) return Number(this.messageHidden);
     if (root === 64 && member === 8) {
       this.messageHidden = Boolean(n(0));
-      this.display.setMessageDisplayed(!this.messageHidden);
+      this.display.setMessageDisplayed(!this.messageHidden && !this.userMessageHidden);
       return 0;
     }
     if (root === 64 && member === 23) return Number(this.quakeStopped);
@@ -1595,6 +1631,25 @@ export class SiglusPlayer {
     if (!object && (command === 175 || command === 63 || command === 72 || command === 113))
       return 0;
     if (!object) throw new Error(`Missing Siglus object ${id}`);
+    if (command === 100) {
+      const pattern = args.length >= 3 ? n(2) : object.pattern;
+      const frame =
+        object.frames[pattern] ??
+        (object.name
+          ? (object.frames[pattern] = await this.display.objectGraphic(object.name, pattern))
+          : undefined);
+      return frame ? this.display.graphicAlpha(frame, n(0), n(1)) : 0;
+    }
+    if (path[0] === 65 && command === 51 && path[index + 3] === 0 && args.length >= 4) {
+      object.horizontalMotion = {
+        from: args.length === 5 ? n(4) : object.x,
+        duration: n(1),
+        delay: n(2),
+        started: performance.now(),
+      };
+      object.x = n(0);
+      return 0;
+    }
     if (path[0] === 65 && command === 72 && path.length === index + 4) {
       const event = path[index + 3];
       if (event === 0 && (args.length === 4 || (args.length === 5 && named[0] === 0))) {

@@ -90,7 +90,13 @@ checks slot rotation and opens the original Auto tab to load slot 1000, then
 compares the resumed scene position and the next text hash with the disassembly.
 
 Set `SIGLUS_SLOT_MANAGEMENT_ONLY=1` to check the original comment editor,
-locking, slot movement, and deletion confirmation with test saves.
+lock persistence after reopening the player, exchange of occupied slots, and
+deletion confirmation with test saves.
+
+Set `SIGLUS_CANCEL_ONLY=1` to verify that right-click opens and dismisses the
+original quick menu during dialogue and that the menu’s Save button enters the
+scripted slot browser. The probe confirms a save and checks that the current
+dialogue page remains active after closing the slot browser.
 
 The clean-profile route matched 130,121 command and message tags and
 checked 8,540 decoded audio buffers with zero browser console errors.
