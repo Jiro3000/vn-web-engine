@@ -58,9 +58,12 @@ enters the unlocked Music screen and returns to the title.
 The page audit checks dialogue at the VM's input checkpoints, including
 checkpoints reached with Control held. It checks the active text layer
 against the stage bounds and inspects the alpha channel in the Native
-dialogue area or the character bounds in DOM text mode. Failures include
+dialogue area or the bounds of the base text in DOM Text. Ruby readings
+are excluded from the DOM visibility check. Failures include
 the scene, bytecode offset, page and font size. The full pass requires
 at least one scripted `size()` reset to have been exercised.
+Set `SIGLUS_TEXT_MODE=dom` on the full-route command to select DOM Text
+before Play and verify that it stays active throughout the route.
 
 Set `SIGLUS_OPENING_ONLY=1` for the first 50 text tags and the DOM selection
 check. Set `SIGLUS_ALIGNMENT_ONLY=1` to compare the DOM and Native baselines
@@ -249,13 +252,27 @@ and Gameexe.dat SHA-256
   that composite.
 - Loading restores the VM, current message, background and cast. Browser
   saves record the BGM source sample and loop mode. Older browser saves
-  use the configured start sample. The Windows save cursor still needs
-  comparison. In-flight animations and voice playback resume with the
-  next script command.
+  use the configured start sample. The embedded Windows PE writes the
+  track name at `0x6009f3`, followed by the level, stop countdown and
+  two playback flags. The reader at `0x600ae0` starts the saved track
+  with sample argument `-1` at `0x600c06`. The player resolves that
+  argument at `0x60527c` to the start sample from the BGM table populated
+  by the Gameexe.dat parser at `0x695112`. The Windows sound loader
+  applies the saved voice level at `0x5ff350`. In-flight animations and
+  voice playback in the browser resume with the next script command.
 - The browser's character layout, text layout, day cards, transition masks,
   recollection, shake, dizziness and motion effects approximate the script's
   native compositing. Effect timing and rendering have not been compared
   frame by frame.
+  The DOM Text route audit reports clipped text at 10 of 21,075 input
+  checkpoints. The first is chapter 02 at `0x344f8`, after six explicit
+  `nl()` calls in a single message. Seven of the affected messages use
+  `start_slide_msg`. The embedded PE sets the slide flag and duration at
+  `0x550813` and schedules a line offset at `0x5da999`. The browser
+  currently animates opacity for this command. Three failures follow
+  repeated `pp()` calls in chapters 04 and 08. The embedded PE dispatches
+  `pp()` at `0x54d4dd` to the message wait handler at `0x672a20`. The
+  browser currently inserts a line break for this command.
 - Browser title buttons expose New Game, Prologue, Load, Exit, Configuration,
   and the original scripted Music screen on the cleared title. Alpha-tested
   button hit areas use the bounds of the

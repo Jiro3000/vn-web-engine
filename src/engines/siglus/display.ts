@@ -139,6 +139,7 @@ export class SiglusDisplay {
     cancel: () => boolean,
   ) {
     root.replaceChildren(this.stage);
+    this.stage.dataset.textMode = this.textMode;
     this.stage.style.cssText = 'position:absolute;overflow:hidden;background:#000;color:white';
     this.layers.style.cssText = 'position:absolute;inset:0;pointer-events:none';
     this.message.style.cssText = 'position:absolute;isolation:isolate;pointer-events:none';

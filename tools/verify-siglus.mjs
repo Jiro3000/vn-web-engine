@@ -10,6 +10,7 @@ import {createStaticServer} from './serve-static.mjs';
 
 const [folder, browser, disassemblyDirectory] = process.argv.slice(2);
 const diagnosticPages = Number(process.env.SIGLUS_DIAGNOSTIC_PAGES ?? 0);
+const domRoute = process.env.SIGLUS_TEXT_MODE === 'dom';
 const musicOnly = process.env.SIGLUS_MUSIC_ONLY === '1';
 const autoOnly = process.env.SIGLUS_AUTOSAVE_ONLY === '1';
 const quickOnly = process.env.SIGLUS_QUICK_ONLY === '1';
@@ -351,11 +352,19 @@ verification: try {
     const {nodeId} = await send('DOM.querySelector', {nodeId: root.nodeId, selector: '#files'});
     await send('DOM.setFileInputFiles', {nodeId, files: [resolve(folder)]});
     await waitFor("document.querySelector('#play')?.disabled === false");
+    if (domRoute) {
+      await evaluate(`(() => {
+        const selector = document.querySelector('#text-mode');
+        selector.value = 'dom';
+        selector.dispatchEvent(new Event('change'));
+        return selector.value;
+      })()`).then((mode) => assert.equal(mode, 'dom'));
+    }
     await evaluate(`window.siglusTags = [];
     window.siglusAudio = [];
     window.siglusMovies = [];
     window.siglusSurface = document.querySelector('#siglus-surface');
-    window.siglusPageAudit = {pages: 0, skipped: 0, textSizeResets: 0, failures: []};
+    window.siglusPageAudit = {pages: 0, native: 0, dom: 0, skipped: 0, textSizeResets: 0, failures: []};
     let sizeOverride = false;
     let resetPending = false;
     siglusSurface.addEventListener('siglus-tag', (event) => siglusTags.push(event.detail));
@@ -375,6 +384,7 @@ verification: try {
       const stage = siglusSurface.firstElementChild;
       const text = stage.querySelector('[data-siglus-dialogue]');
       const native = stage.dataset.textMode === 'native';
+      audit[native ? 'native' : 'dom']++;
       const rendered = native ? stage.querySelector('[data-siglus-native-text]') : text;
       const size = Number.parseFloat(text.style.fontSize);
       const viewport = stage.getBoundingClientRect();
@@ -403,8 +413,20 @@ verification: try {
           }
         } else {
           const range = document.createRange();
-          range.selectNodeContents(text);
-          if (![...range.getClientRects()].some(intersects)) reason = 'dialogue has no visible text bounds';
+          const walker = document.createTreeWalker(text, NodeFilter.SHOW_TEXT);
+          let node;
+          let visible = false;
+          while ((node = walker.nextNode())) {
+            if (!node.data.trim() || node.parentElement.closest('rt')) continue;
+            range.selectNodeContents(node);
+            const bounds = [...range.getClientRects()];
+            if (!bounds.length || !bounds.every(intersects)) {
+              reason = 'base text has clipped or empty character bounds';
+              break;
+            }
+            visible = true;
+          }
+          if (!reason && !visible) reason = 'dialogue has no visible base text';
         }
       } else reason = 'dialogue is empty';
       if (reason) {
@@ -419,6 +441,8 @@ verification: try {
   async function playInstallation() {
     await click('#play');
     await waitFor("siglusTags.some((tag) => tag.scene === '_start' && tag.path?.[0] === 55)");
+    if (domRoute)
+      assert.equal(await evaluate('siglusSurface.firstElementChild.dataset.textMode'), 'dom');
     await delay(180);
     await advance();
   }
@@ -488,6 +512,8 @@ verification: try {
       failureCount: siglusPageAudit.failures.length})`);
     console.log('Dialogue render audit:', audit);
     assert.ok(audit.pages > 0, 'No dialogue checkpoints observed');
+    if (domRoute)
+      assert.equal(audit.dom, audit.pages, 'DOM Text stayed active throughout playback');
     assert.equal(audit.failureCount, 0, 'Invisible dialogue checkpoints');
     if (requireReset) assert.ok(audit.textSizeResets > 0, 'No size() reset was exercised');
   }
@@ -1855,6 +1881,7 @@ verification: try {
       && document.querySelector(${JSON.stringify(music)})?.disabled === false`);
     console.log('Reopened at the cleared title, entered the unlocked Music menu and returned.');
   }
+  assert.deepEqual(errors, [], 'Browser console errors');
 } finally {
   if (cdp?.socket.readyState === WebSocket.OPEN) {
     await cdp.command('Browser.close').catch(() => {});
