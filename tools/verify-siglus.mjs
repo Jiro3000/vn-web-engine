@@ -20,6 +20,7 @@ const historyOnly = process.env.SIGLUS_HISTORY_ONLY === '1';
 const skipOnly = process.env.SIGLUS_READ_SKIP_ONLY === '1';
 const cancelOnly = process.env.SIGLUS_CANCEL_ONLY === '1';
 const frameLockOnly = process.env.SIGLUS_FRAME_LOCK_ONLY === '1';
+const frameExitOnly = process.env.SIGLUS_FRAME_EXIT_ONLY === '1';
 const manageOnly = process.env.SIGLUS_SLOT_MANAGEMENT_ONLY === '1';
 const loadOnly = process.env.SIGLUS_LOAD_ONLY === '1';
 const configOnly = process.env.SIGLUS_CONFIG_ONLY === '1';
@@ -514,6 +515,7 @@ verification: try {
     manageOnly ||
     cancelOnly ||
     frameLockOnly ||
+    frameExitOnly ||
     skipOnly ||
     historyOnly
   ) {
@@ -942,6 +944,57 @@ verification: try {
     compareTags(frameCommands, scripts);
     console.log(
       'The message frame started and stopped Read Skip through its configured script calls.',
+    );
+  } else if (frameExitOnly) {
+    const dialogue = "siglusSurface.querySelector('[data-siglus-dialogue]').textContent";
+    const state = () => evaluate(`[siglusSurface.dataset.page, ${dialogue}]`);
+    const returnToTitle = 'button[aria-label="Return to title"]';
+    const quit = 'button[aria-label="Exit game"]';
+    const dialog = (entry) => `siglusTags.filter(({scene, offset, path}) =>
+      scene === '__sys_system_call' && offset > ${entry} && offset < ${entry + 11500}
+      && path?.length === 1 && path[0] === 6).length`;
+    async function choose(button, entry, x) {
+      const loop = dialog(entry);
+      const start = await evaluate(loop);
+      await click(button);
+      await waitFor(`${loop} > ${start}`);
+      await clickScriptMenu(loop, x, 566);
+    }
+    async function newGame() {
+      await click('#siglus-surface button[aria-label="New Game"]');
+      await waitForDialogueControls();
+    }
+    await newGame();
+    const before = await state();
+    await choose(returnToTitle, 0xdc3f, 1040);
+    await waitForDialogueControls();
+    assert.deepEqual(await state(), before);
+    await choose(quit, 0x10af3, 1040);
+    await waitForDialogueControls();
+    assert.deepEqual(await state(), before);
+    await choose(returnToTitle, 0xdc3f, 885);
+    await waitFor(`siglusTags.some(({scene, offset}) =>
+      scene === '__sys_system_call' && offset === 0x1099d)`);
+    await waitFor("siglusSurface.dataset.phase === 'title'");
+    await newGame();
+    await choose(quit, 0x10af3, 885);
+    await waitFor(`siglusTags.some(({scene, offset}) =>
+      scene === '__sys_system_call' && offset === 0x13816)`);
+    await waitFor("document.querySelector('#play')?.disabled === false");
+    const tags = await evaluate(`siglusTags.filter(({scene, offset}) =>
+      scene === '__sys_system_call' && offset >= 0xdc3f && offset <= 0x13955)`);
+    compareTags(tags, scripts, {compareSourceLine: false});
+    assert.deepEqual(
+      tags
+        .filter(({path}) => path[0] === 63 && (path[1] === 235 || path[1] === 242))
+        .map(({offset, args}) => [offset, ...args]),
+      [
+        [0x1099d, 0, 0, 0],
+        [0x13816, 0],
+      ],
+    );
+    console.log(
+      `Return to Title and Exit used the original confirmations. Matched ${tags.length} tags.`,
     );
   } else if (frameLockOnly) {
     const lock = (slot, enabled) => `[data-siglus-switch="${slot}"][aria-pressed="${enabled}"]`;
@@ -1885,6 +1938,7 @@ verification: try {
     manageOnly ||
     cancelOnly ||
     frameLockOnly ||
+    frameExitOnly ||
     skipOnly ||
     historyOnly
   ) {

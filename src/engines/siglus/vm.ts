@@ -266,6 +266,12 @@ export class SiglusVm {
     throw new ReturnFromHostScene();
   }
 
+  returnToMenu(scene = this.menu?.scene, entry = this.menu?.entry): never {
+    if (scene === undefined || entry === undefined)
+      throw new Error('Siglus menu scene is undefined');
+    throw new ReturnToMenu(scene, entry);
+  }
+
   private restore(checkpoint: SiglusCheckpoint): Frame[] {
     const system = [...this.globals].filter(([key]) => key.startsWith('31.'));
     this.globals.clear();
@@ -511,11 +517,8 @@ export class SiglusVm {
               break;
             }
             if (id === 3) {
-              const menu = args.length
-                ? {scene: String(args[0]), entry: Number(args[1] ?? 0)}
-                : this.menu;
-              if (!menu) throw new Error('Siglus menu scene is undefined');
-              throw new ReturnToMenu(menu.scene, menu.entry);
+              if (args.length) this.returnToMenu(String(args[0]), Number(args[1] ?? 0));
+              this.returnToMenu();
             }
             if (id === 4) {
               frame = this.entry(String(args[0]), Number(args[1] ?? 0));

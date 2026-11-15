@@ -1518,6 +1518,7 @@ export class SiglusDisplay {
       auto_mode: 'Auto',
       read_skip: 'Read Skip',
       config: 'Configuration',
+      none: 'Message frame action',
       msg_log: 'Message history',
       close_mwnd: 'Hide message',
       koe_play: 'Replay voice',
@@ -1528,6 +1529,8 @@ export class SiglusDisplay {
       if (!type || !Object.hasOwn(labels, type)) continue;
       const id = Number(key.split('.')[3]);
       const prefix = key.slice(0, -4);
+      const call = this.config.get(prefix + 'CALL');
+      if (type === 'none' && !call) continue;
       const [, argument, expected] = parameters?.split(',') ?? [];
       const slot = type === 'global_switch' ? Number(argument) : undefined;
       const state = type === 'global_switch' ? expected : argument;
@@ -1537,7 +1540,7 @@ export class SiglusDisplay {
         slot,
         state: state === undefined ? undefined : Number(state),
         sound: Number(this.config.get(prefix + 'SE') ?? -1),
-        call: this.config.has(prefix + 'CALL') ? prefix + 'CALL' : undefined,
+        call: call ? prefix + 'CALL' : undefined,
       };
       const file = this.config.get(prefix + 'FILE')?.split('"')[1];
       const [anchor, x, y] = (this.config.get(prefix + 'POS') ?? '').split(',').map(Number);
@@ -1550,10 +1553,16 @@ export class SiglusDisplay {
       const button = document.createElement('button');
       button.type = 'button';
       button.dataset.siglusAction = type;
-      button.setAttribute(
-        'aria-label',
-        type === 'global_switch' ? `${labels[type]} ${slot}` : labels[type]!,
-      );
+      const commandName = call?.split('"')[3];
+      const label =
+        commandName === '$sys_returnmenu_btn'
+          ? 'Return to title'
+          : commandName === '$sys_gameend_btn'
+            ? 'Exit game'
+            : type === 'global_switch'
+              ? `${labels[type]} ${slot}`
+              : labels[type]!;
+      button.setAttribute('aria-label', label);
       if (slot !== undefined) button.dataset.siglusSwitch = String(slot);
       if (type === 'auto_mode' || type === 'read_skip' || type === 'global_switch')
         button.setAttribute('aria-pressed', String(action.state === 1));

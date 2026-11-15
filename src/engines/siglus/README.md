@@ -238,6 +238,17 @@ pointer or lock state changes at a dialogue checkpoint. They move the
 bottom row by 70 pixels and the side column by 150, with a 300 ms hide
 and a 250 ms reveal. The browser maps easing mode 2 to CSS `ease-out`.
 
+Set `SIGLUS_FRAME_EXIT_ONLY=1` to check Return to Title and Exit from the
+message frame. The probe cancels both scripted confirmations, checks the
+unchanged dialogue, then confirms Return to Title and confirms Exit after
+starting another game. On Exit the browser returns to the player.
+Gameexe.dat buttons 11 and 12 use `TYPE = "none"` with named calls to the
+shared Scene.pck exports `$sys_returnmenu_btn` and `$sys_gameend_btn`.
+The embedded PE resolves the two strings at `0x5f4620` and checks for a
+registered named call at `0x5f4d16` before dispatching the button type.
+The original confirmation scenes call `syscom.return_to_menu(0, 0, 0)`
+at `0x1099d` and `syscom.end_game(0)` at `0x13816`.
+
 Set `SIGLUS_HISTORY_ONLY=1` to open the original message history button,
 compare displayed text with script hashes, replay a stored voice, and verify
 that closing history restores keyboard focus to the same page. The browser
@@ -283,13 +294,9 @@ and Gameexe.dat SHA-256
 
 ## Known differences
 
-- Gameexe.dat configures the message frame's title and exit buttons to
-  invoke `$sys_returnmenu_btn` and `$sys_gameend_btn`.
-  These names are absent from the command tables in the tested Scene.pck.
-  The disassembly contains separate bodies beginning at `0xdc3f` and
-  `0x10af3` that call `syscom.return_to_menu` at `0x1099d` and
-  `syscom.end_game` at `0x13816`. Their connection to the configured
-  buttons still needs verification against the native dispatcher.
+- The return and exit confirmations use the script's original objects,
+  coordinates and input loop. The browser approximates object blending
+  and waits out the scripted fade duration in the confirmation scene.
 
 - History can resume a stored checkpoint from the current runtime or a newer
   browser save. The browser keeps checkpoints per page within the configured

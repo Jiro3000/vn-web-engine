@@ -485,6 +485,7 @@ export class SiglusPlayer {
     this.display.setSystemInput(true);
     try {
       await this.vm.callScene(name, label?.split('"')[1] ?? Number(label ?? 0));
+      if (this.objectsDirty) await this.renderObjects();
     } finally {
       this.systemCallActive = false;
       this.releaseSystemObjects();
@@ -709,7 +710,7 @@ export class SiglusPlayer {
     const id = path[address.index + 1]!;
     let object = address.page.get(id);
     if (!object) {
-      if (value === undefined || page !== 65) return 0;
+      if (value === undefined) return 0;
       object = {name: '', frames: [], x: 0, y: 0, pattern: 0, visible: false};
       address.page.set(id, object);
     }
@@ -893,6 +894,7 @@ export class SiglusPlayer {
     switch (type) {
       case 'auto_mode':
       case 'global_switch':
+      case 'none':
         enabled = Boolean(call);
         break;
       case 'read_skip':
@@ -2177,6 +2179,13 @@ export class SiglusPlayer {
         void this.dispose();
         return 0;
       }
+      if (member === 235 && args.every((arg) => arg === 0)) {
+        this.display.closeMessage();
+        this.pendingText = false;
+        this.readSkipEnabled = this.autoEnabled = false;
+        this.savePoint = undefined;
+        this.vm.returnToMenu();
+      }
       if (member === 11 || member === 12) {
         if (!args.length) {
           this.messageButtonsEnabled = member === 11;
@@ -2354,7 +2363,12 @@ export class SiglusPlayer {
     const {page, index} = address;
     const [array, id, command] = path.slice(index);
     if (array === 3 && id === undefined) return Math.max(0, ...page.keys()) + 1;
-    if (array === 4 && id === undefined) return 0; // Sparse list; absent indices carry default objects.
+    if (array === 4 && id === undefined) {
+      const length = Math.max(0, Number(args[0] ?? 0));
+      for (const key of page.keys()) if (key >= length) page.delete(key);
+      this.markObjectsDirty(path);
+      return 0;
+    }
     if (command === 174) return Number(page.has(id!));
     if (command !== 175 && command !== 63) this.markObjectsDirty(path);
     const n = (index: number) => Number(args[index] ?? 0);
@@ -2456,7 +2470,7 @@ export class SiglusPlayer {
       object.x = n(0);
       return 0;
     }
-    if (path[0] === 65 && command === 72 && path.length === index + 4) {
+    if (command === 72 && path.length === index + 4) {
       const event = path[index + 3];
       if (event === 0 && (args.length === 4 || (args.length === 5 && named[0] === 0))) {
         object.opacity = [
