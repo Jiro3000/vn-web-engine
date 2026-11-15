@@ -205,16 +205,28 @@ lock persistence after reopening the player, exchange of occupied slots, and
 deletion confirmation with test saves.
 
 Set `SIGLUS_CANCEL_ONLY=1` to check right-click in dialogue. The probe opens
-and dismisses the quick menu, saves through it, checks that Auto advances and
-stops, and opens Configuration to assign right-click to Hide. It checks that
-the next right-click hides selectable text and a normal click reveals the
-same page.
+and dismisses the quick menu and saves through it. It starts and stops Auto
+through the quick menu and through the message frame's two configured buttons,
+then opens Configuration from the message frame and assigns right-click to
+Hide. It verifies that a normal click reveals the same page. The probe checks
+that Return to Selection is disabled on the linear route and that Read Skip
+is disabled on an unread page.
 
 Set `SIGLUS_READ_SKIP_ONLY=1` to verify the quick menu’s Read Skip. The probe
 reads ahead of a save, reopens the player in the same profile, loads the save,
 and checks that Read Skip advances over two read pages and stops at the first
-unread page. Read flags are scoped to the scene and the installation’s Scene.pck.
+unread page. It then loads the save after reading farther ahead, starts Read
+Skip from the message frame, and stops it by clicking the active button.
+Read flags are scoped to the scene and the installation’s Scene.pck.
 Save records also restore the script’s menu and skip permissions.
+
+The message frame uses the position, graphics, click sound and `CALL` from
+`WAKU.000.BTN`. The embedded PE parses `read_skip`, `auto_mode` and
+`return_sel` at `0x695f5e`, `0x695f9c` and `0x6960c2`. The Auto
+variants execute `__sys_system_call` offsets `0xd6c6` and `0xd8a4`.
+The Read Skip variants execute `0xda5d` and `0xdc16`. The browser
+keeps the active Read Skip button available for one browser frame per
+skipped page so a click can interrupt playback.
 
 Set `SIGLUS_HISTORY_ONLY=1` to open the original message history button,
 compare displayed text with script hashes, replay a stored voice, and verify
@@ -260,6 +272,15 @@ and Gameexe.dat SHA-256
 `492bccbb33ca3ce6e6ff074fe66d52281bb1e80dca5d528696494574b3cb892f`.
 
 ## Known differences
+
+- The browser does not yet reproduce the message frame's two lock switches
+  or their pointer-triggered movement. Gameexe.dat also configures title and
+  exit buttons to invoke `$sys_returnmenu_btn` and `$sys_gameend_btn`.
+  These names are absent from the command tables in the tested Scene.pck.
+  The disassembly contains separate bodies beginning at `0xdc3f` and
+  `0x10af3` that call `syscom.return_to_menu` at `0x1099d` and
+  `syscom.end_game` at `0x13816`. Their connection to the configured
+  buttons still needs verification against the native dispatcher.
 
 - History can resume a stored checkpoint from the current runtime or a newer
   browser save. The browser keeps checkpoints per page within the configured

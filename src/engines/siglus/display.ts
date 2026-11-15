@@ -51,6 +51,14 @@ export interface DrawObject {
   movement?: [target: number, duration: number, delay: number, easing: number, start: number];
 }
 
+export interface SiglusFrameAction {
+  id: number;
+  type: string;
+  state: number | undefined;
+  sound: number;
+  call: string | undefined;
+}
+
 export function orderedObjects(objects: ReadonlyMap<number, DrawObject>): DrawObject[] {
   return [...objects]
     .sort(([a, first], [b, second]) => (first.layer ?? 0) - (second.layer ?? 0) || a - b)
@@ -65,8 +73,7 @@ export class SiglusDisplay {
   private readonly day = document.createElement('div');
   private readonly controls = document.createElement('div');
   private readonly frameActions: {
-    id: number;
-    type: string;
+    action: SiglusFrameAction;
     button: HTMLButtonElement;
     refresh: () => void;
   }[] = [];
@@ -74,7 +81,7 @@ export class SiglusDisplay {
     number,
     Map<number, {x?: number; y?: number}>
   >();
-  private activateFrameAction?: (type: string, sound: number, id: number) => void;
+  private activateFrameAction?: (action: SiglusFrameAction) => void;
   private readonly editLayer = document.createElement('div');
   private readonly edits = new Map<number, {input: HTMLInputElement; result: string}>();
   private readonly systemLayer = document.createElement('div');
@@ -734,8 +741,8 @@ export class SiglusDisplay {
 
   private positionMessageButtons(): void {
     const positions = this.messageButtonPositions.get(this.windowIndex);
-    for (const {id, button} of this.frameActions) {
-      const {x = 0, y = 0} = positions?.get(id) ?? {};
+    for (const {action, button} of this.frameActions) {
+      const {x = 0, y = 0} = positions?.get(action.id) ?? {};
       button.style.translate = `${x}px ${y}px`;
     }
   }
@@ -1450,6 +1457,7 @@ export class SiglusDisplay {
   closeMessage(): void {
     this.clearText();
     this.message.hidden = true;
+    this.pageControls();
   }
 
   saveMessage(): SiglusMessageSnapshot {
@@ -1478,16 +1486,33 @@ export class SiglusDisplay {
   }
 
   private async prepareFrameActions(): Promise<void> {
+    const labels: Readonly<Record<string, string>> = {
+      save: 'Save',
+      load: 'Load',
+      qsave: 'Quick save',
+      qload: 'Quick load',
+      return_sel: 'Return to selection',
+      auto_mode: 'Auto',
+      read_skip: 'Read Skip',
+      config: 'Configuration',
+      msg_log: 'Message history',
+      close_mwnd: 'Hide message',
+      koe_play: 'Replay voice',
+    };
     for (const [key, value] of this.config) {
       if (!/^WAKU\.000\.BTN\.\d+\.TYPE$/.test(key)) continue;
-      const type = value.split('"')[1];
-      if (
-        !type ||
-        !['save', 'load', 'qsave', 'qload', 'msg_log', 'close_mwnd', 'koe_play'].includes(type)
-      )
-        continue;
+      const [, type, parameters] = value.split('"');
+      if (!type || !Object.hasOwn(labels, type)) continue;
       const id = Number(key.split('.')[3]);
       const prefix = key.slice(0, -4);
+      const state = parameters?.split(',')[1];
+      const action: SiglusFrameAction = {
+        id,
+        type,
+        state: state === undefined ? undefined : Number(state),
+        sound: Number(this.config.get(prefix + 'SE') ?? -1),
+        call: this.config.has(prefix + 'CALL') ? prefix + 'CALL' : undefined,
+      };
       const file = this.config.get(prefix + 'FILE')?.split('"')[1];
       const [anchor, x, y] = (this.config.get(prefix + 'POS') ?? '').split(',').map(Number);
       if (!file || anchor !== 2 || x === undefined || y === undefined) continue;
@@ -1499,16 +1524,9 @@ export class SiglusDisplay {
       const button = document.createElement('button');
       button.type = 'button';
       button.dataset.siglusAction = type;
-      const labels: Record<string, string> = {
-        save: 'Save',
-        load: 'Load',
-        qsave: 'Quick save',
-        qload: 'Quick load',
-        msg_log: 'Message history',
-        close_mwnd: 'Hide message',
-        koe_play: 'Replay voice',
-      };
       button.setAttribute('aria-label', labels[type]!);
+      if (type === 'auto_mode' || type === 'read_skip')
+        button.setAttribute('aria-pressed', String(action.state === 1));
       button.style.cssText = `position:absolute;left:${x}px;bottom:${y - frame.height}px;width:${frame.width}px;height:${frame.height}px;border:0;padding:0;background:none;pointer-events:auto`;
       const canvas = this.node(frame);
       const paint = (graphic: Graphic) => {
@@ -1520,16 +1538,14 @@ export class SiglusDisplay {
       button.addEventListener('pointerleave', () => paint(button.disabled ? disabled : frame));
       button.addEventListener('pointerdown', () => paint(pressed));
       button.addEventListener('pointerup', () => paint(hover));
-      const sound = Number(this.config.get(prefix + 'SE') ?? 0);
       button.addEventListener('click', (event) => {
         event.stopPropagation();
         this.stage.focus({preventScroll: true});
-        this.activateFrameAction?.(type, sound, id);
+        this.activateFrameAction?.(action);
       });
       button.append(canvas);
       this.frameActions.push({
-        id,
-        type,
+        action,
         button,
         refresh: () => paint(button.disabled ? disabled : frame),
       });
@@ -1717,13 +1733,16 @@ export class SiglusDisplay {
   }
 
   pageControls(
-    activate?: (type: string, sound: number, id: number) => void,
-    enabled?: (type: string, id: number) => boolean,
+    activate?: (action: SiglusFrameAction) => void,
+    state?: (action: SiglusFrameAction) => 'hidden' | 'disabled' | 'enabled',
   ): void {
     this.activateFrameAction = activate;
     this.controls.hidden = !activate || this.frameIndex !== 0 || this.message.hidden;
-    for (const {id, type, button, refresh} of this.frameActions) {
-      button.disabled = !enabled?.(type, id);
+    if (this.controls.hidden) return;
+    for (const {action, button, refresh} of this.frameActions) {
+      const status = state?.(action);
+      button.hidden = status === 'hidden';
+      button.disabled = status !== 'enabled';
       refresh();
     }
   }

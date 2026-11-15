@@ -13,6 +13,7 @@ import {
   SiglusDisplay,
   orderedObjects,
   type DrawObject,
+  type SiglusFrameAction,
   type SiglusHistoryEntry,
 } from './display.js';
 import {
@@ -158,6 +159,7 @@ export class SiglusPlayer {
   private systemSkipDisabled = false;
   private systemCallActive = false;
   private readSkipEnabled = false;
+  private requestedFrameAction?: SiglusFrameAction;
   private skipUnreadOverride?: boolean;
   private pageReadFlags: {scene: string; flag: number}[] = [];
   private readonly readFlags = new Map<string, Set<number>>();
@@ -348,7 +350,7 @@ export class SiglusPlayer {
       windowOptions,
       (active) => {
         this.skip = active;
-        if (this.skipping && this.pendingText) this.wait?.(1);
+        if (active && this.skipping && this.pendingText) this.wait?.(1);
       },
       () => {
         if (!this.waitingForPage || !this.systemMenuEnabled || this.systemCallActive) return false;
@@ -721,10 +723,10 @@ export class SiglusPlayer {
     return object[field] ?? (field === 'transparency' ? 255 : 0);
   }
 
-  private delay(time?: number, skippable = false): Promise<number> {
+  private delay(time?: number, skippable = false, skipImmediately = true): Promise<number> {
     const signal = this.controller.signal;
     signal.throwIfAborted();
-    if (this.skipping && skippable) return Promise.resolve(1);
+    if (skipImmediately && skippable && this.skipping) return Promise.resolve(1);
     return new Promise((resolve, reject) => {
       let timer: ReturnType<typeof setTimeout> | undefined;
       const finish = (value: number): void => {
@@ -852,38 +854,86 @@ export class SiglusPlayer {
     this.display.setMessageDisplayed(!hidden && !this.messageHidden);
   }
 
+  private frameActionState(
+    {id, type, state, call}: SiglusFrameAction,
+    readSkipping: boolean,
+  ): 'hidden' | 'disabled' | 'enabled' {
+    if (type === 'auto_mode' && state !== Number(this.autoEnabled)) return 'hidden';
+    if (type === 'read_skip' && state !== Number(this.readSkipEnabled)) return 'hidden';
+    if (this.disabledMessageButtons.has(id) || (readSkipping && type !== 'read_skip'))
+      return 'disabled';
+    let enabled: boolean;
+    switch (type) {
+      case 'auto_mode':
+        enabled = Boolean(call);
+        break;
+      case 'read_skip':
+        enabled =
+          Boolean(call) &&
+          (this.readSkipEnabled || (this.skipAllowed && (this.pageAlreadyRead || this.skipUnread)));
+        break;
+      case 'config':
+        enabled = this.game.config.has('CONFIG_SCENE');
+        break;
+      case 'msg_log':
+        enabled = this.backlog.length > 0;
+        break;
+      case 'koe_play':
+        enabled = Boolean(this.backlog.at(-1)?.voices.length);
+        break;
+      case 'close_mwnd':
+        enabled = true;
+        break;
+      case 'save':
+      case 'qsave':
+        enabled = this.saveEnabled && Boolean(this.savePoint);
+        break;
+      case 'load':
+      case 'qload':
+        enabled = this.loadEnabled && (type !== 'qload' || this.quickSaves.size > 0);
+        break;
+      default:
+        enabled = false;
+    }
+    return enabled ? 'enabled' : 'disabled';
+  }
+
   private async waitAtPage(): Promise<void> {
     for (;;) {
-      let menu: {type: string; sound: number; id: number} | undefined;
-      if (!this.skipping && this.messageButtonsEnabled) {
+      const readSkipping = this.skipping && this.readSkipEnabled && !this.skip;
+      const showControls = this.messageButtonsEnabled && (!this.skipping || readSkipping);
+      if (showControls) {
         this.display.pageControls(
-          (type, sound, id) => {
-            menu = {type, sound, id};
-            this.wait?.(1);
+          (action) => {
+            if (this.requestedFrameAction) return;
+            this.requestedFrameAction = action;
+            if (this.waitingForPage) this.wait?.(1);
           },
-          (type, id) => {
-            if (this.disabledMessageButtons.has(id)) return false;
-            if (type === 'msg_log') return this.backlog.length > 0;
-            if (type === 'koe_play') return Boolean(this.backlog.at(-1)?.voices.length);
-            if (type === 'close_mwnd') return true;
-            return type.endsWith('save')
-              ? this.saveEnabled && Boolean(this.savePoint)
-              : this.loadEnabled && (type !== 'qload' || this.quickSaves.size > 0);
-          },
+          (action) => this.frameActionState(action, readSkipping),
         );
+      } else {
+        this.display.pageControls();
       }
-      let result: number;
+      let result = 1;
       try {
         const autoWait =
           this.autoEnabled && !this.userMessageHidden
             ? this.playback.autoMinimumWait + this.playback.autoCharacterWait * this.pageCharacters
             : undefined;
         this.waitingForPage = true;
-        result = await this.delay(autoWait, true);
+        if (!this.requestedFrameAction) {
+          // Give Read Skip a browser frame and keep its button between consecutive pages.
+          result =
+            readSkipping && showControls
+              ? await this.delay(16, true, false)
+              : await this.delay(autoWait, true);
+        }
       } finally {
         this.waitingForPage = false;
-        this.display.pageControls();
+        if (!readSkipping || result !== 0) this.display.pageControls();
       }
+      const menu = this.requestedFrameAction;
+      this.requestedFrameAction = undefined;
       if (result === 5) {
         await this.openHistory();
         continue;
@@ -894,17 +944,18 @@ export class SiglusPlayer {
         continue;
       }
       if (!menu) return;
-      const {type, sound, id} = menu;
+      const {type, sound, call} = menu;
       await this.playSystemSound(sound);
-      if (type === 'msg_log') await this.openHistory();
+      if (call) await this.callSystemScene(call);
+      else if (type === 'msg_log') await this.openHistory();
       else if (type === 'close_mwnd') this.setUserMessageHidden(true);
       else if (type === 'koe_play')
         void this.replayHistoryVoice(this.backlog.at(-1)).catch((error) => {
           if (!this.controller.signal.aborted) console.error(error);
         });
-      else if (type === 'qsave' || type === 'qload')
-        await this.callSystemScene(`WAKU.000.BTN.${String(id).padStart(3, '0')}.CALL`);
-      else await this.callSystemScene(type === 'save' ? 'SAVE_SCENE' : 'LOAD_SCENE');
+      else if (type === 'save') await this.callSystemScene('SAVE_SCENE');
+      else if (type === 'load') await this.callSystemScene('LOAD_SCENE');
+      else if (type === 'config') await this.callSystemScene('CONFIG_SCENE');
     }
   }
 

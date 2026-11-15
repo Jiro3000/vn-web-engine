@@ -904,6 +904,43 @@ verification: try {
     console.log(
       'Read Skip used persisted flags after reopening, skipped two read pages and stopped at the first unread page.',
     );
+    page = 0;
+    const readThrough = readPage + 32;
+    await runUntil((current) => Number(current.page) >= readThrough);
+    await reopenPlayer();
+    await click('#siglus-surface button[aria-label="Load Game"]');
+    await waitFor(slotLoop);
+    assert.equal(await chooseSlot('load', 0), 'confirm');
+    await waitFor("siglusSurface.dataset.loaded === 'true'");
+    await clickStage();
+    await waitForDialogueControls();
+    const frameTags = await evaluate('siglusTags.length');
+    await click('[data-siglus-action="read_skip"][aria-pressed="false"]');
+    await waitFor(`Number(siglusSurface.dataset.page) >= ${readPage + 2}`);
+    await click('[data-siglus-action="read_skip"][aria-pressed="true"]');
+    await waitFor(
+      `siglusTags.slice(${frameTags}).some(({scene, offset}) =>
+      scene === '__sys_system_call' && offset === 0xdc16)`,
+      3000,
+    );
+    await waitForDialogueControls();
+    const stopped = Number(await evaluate('siglusSurface.dataset.page'));
+    assert.ok(stopped > readPage && stopped < readThrough, `Read Skip stopped on page ${stopped}`);
+    await delay(300);
+    assert.equal(Number(await evaluate('siglusSurface.dataset.page')), stopped);
+    const frameCommands = await evaluate(`siglusTags.slice(${frameTags}).filter(({scene, path}) =>
+      scene === '__sys_system_call' && path?.join('.') === '63.200')`);
+    assert.deepEqual(
+      frameCommands.map(({offset, args}) => [offset, ...args]),
+      [
+        [0xda5d, 1],
+        [0xdc16, 0],
+      ],
+    );
+    compareTags(frameCommands, scripts);
+    console.log(
+      'The message frame started and stopped Read Skip through its configured script calls.',
+    );
   } else if (cancelOnly) {
     await click('#siglus-surface button[aria-label="New Game"]');
     await runUntil((current) => Number(current.page) >= 3);
@@ -929,15 +966,6 @@ verification: try {
       await clickScriptMenu(undefined, 960, 540, 'right');
       await waitFor(`${loop} > ${frame}`);
     }
-    async function configuration() {
-      await quickMenu();
-      const configLoop = `siglusTags.filter(({scene, path}) =>
-        scene === '__sys_menu_config01' && path?.join('.') === '86.3').length`;
-      const frame = await evaluate(configLoop);
-      await clickScriptMenu(loop, 1270, 630);
-      await waitFor(`${configLoop} > ${frame}`);
-      return configLoop;
-    }
     async function toggleAuto(enabled) {
       const start = await evaluate('siglusTags.length');
       await quickMenu();
@@ -955,7 +983,38 @@ verification: try {
     const pageAfterAuto = await evaluate('siglusSurface.dataset.page');
     await delay(2200);
     assert.equal(await evaluate('siglusSurface.dataset.page'), pageAfterAuto);
-    const configLoop = await configuration();
+    assert.equal(
+      await evaluate("document.querySelector('[data-siglus-action=return_sel]').disabled"),
+      true,
+    );
+    assert.equal(
+      await evaluate(
+        "document.querySelector('[data-siglus-action=read_skip][aria-pressed=false]').disabled",
+      ),
+      true,
+    );
+    const frameTags = await evaluate('siglusTags.length');
+    await click('[data-siglus-action="auto_mode"][aria-pressed="false"]');
+    await waitFor(`Number(siglusSurface.dataset.page) > ${pageAfterAuto}`);
+    await click('[data-siglus-action="auto_mode"][aria-pressed="true"]');
+    await waitForDialogueControls();
+    const stopped = await evaluate('siglusSurface.dataset.page');
+    await delay(2200);
+    assert.equal(await evaluate('siglusSurface.dataset.page'), stopped);
+    const frameCommands = await evaluate(`siglusTags.slice(${frameTags}).filter(({scene, path}) =>
+      scene === '__sys_system_call' && path?.join('.') === '63.214')`);
+    assert.deepEqual(
+      frameCommands.map(({offset, args}) => [offset, ...args]),
+      [
+        [0xd6c6, 1],
+        [0xd8a4, 0],
+      ],
+    );
+    compareTags(frameCommands, scripts);
+    const configLoop = `siglusTags.filter(({scene, path}) =>
+      scene === '__sys_menu_config01' && path?.join('.') === '86.3').length`;
+    await click('[data-siglus-action="config"]');
+    await waitFor(configLoop);
     await clickScriptMenu(configLoop, 628, 849);
     await waitFor(`Object.keys(localStorage).some(key => key.endsWith(':system')
       && new Map(JSON.parse(localStorage.getItem(key))).get(1307) === 1)`);
@@ -966,11 +1025,11 @@ verification: try {
     await waitFor(`getComputedStyle(${dialogue}).visibility === 'hidden'`);
     await clickStage();
     await waitFor(`getComputedStyle(${dialogue}).visibility === 'visible'`);
-    assert.equal(await evaluate('siglusSurface.dataset.page'), pageAfterAuto);
+    assert.equal(await evaluate('siglusSurface.dataset.page'), stopped);
     const tags = await evaluate(`siglusTags.filter((tag) => tag.scene === '${scene}')`);
     compareTags(tags, scripts, {compareSourceLine: false});
     console.log(
-      `Right-click opened the original quick menu, dismissed it, entered Save and Configuration, toggled Auto, and hid and restored the same dialogue. Matched ${tags.length} tags.`,
+      `Verified the quick menu, frame Auto and Configuration buttons, and hiding and restoring dialogue. Matched ${tags.length} quick-menu tags.`,
     );
   } else if (manageOnly) {
     await click('#siglus-surface button[aria-label="New Game"]');
