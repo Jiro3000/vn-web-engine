@@ -78,6 +78,8 @@ checkpoint in the temporary browser profile and exercises track selection,
 Next, Stop, Play, the volume slider, and the return button with mouse input.
 It exits the game and reopens the player at the same origin in the same
 browser profile, then checks the restored volume against the slider position.
+The BGM16 selection verifies the configured source-sample start 44,100,
+repeat start 853,475, and end 4,885,472 from Gameexe.dat.
 
 Set `SIGLUS_CONFIG_ONLY=1` to diagnose the original Configuration scene. The
 probe clicks the title button, enters the scene from Gameexe.dat, and checks
@@ -154,7 +156,8 @@ Save is reached from a different menu. The probe reopens
 the player in the same private browser session and loads the same slot from the
 original title menu. The probe confirms the three types of prompts and checks
 thumbnail dimensions, dialogue hashes, stage identifiers and script tag offsets
-against the disassembly.
+against the disassembly. Both loads verify the actual Web Audio start
+offset against the saved BGM checkpoint in source samples.
 
 Set `SIGLUS_QUICK_ONLY=1` to check the original frame’s Quick Save and Quick
 Load controls. The probe uses the cleared-title checkpoint, confirms two
@@ -232,9 +235,11 @@ and Gameexe.dat SHA-256
   Thumbnails composite the visible graphical layers
   at the configured size. Dialogue and native capture effects are absent from
   that composite.
-- Loading restores the VM, current message, background and cast. BGM restarts
-  from its configured start sample. In-flight animations and voice playback
-  resume with the next script command.
+- Loading restores the VM, current message, background and cast. Browser
+  saves record the BGM source sample and loop mode. Older browser saves
+  use the configured start sample. The Windows save cursor still needs
+  comparison. In-flight animations and voice playback resume with the
+  next script command.
 - The browser's character layout, text layout, day cards, transition masks,
   recollection, shake, dizziness and motion effects approximate the script's
   native compositing. Effect timing and rendering have not been compared

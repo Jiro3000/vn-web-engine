@@ -2,7 +2,7 @@ import {IndexedDbStore} from '../../platform/store.js';
 import type {ByteSource} from '../../core/source.js';
 import {SiglusScenePack} from '../../formats/siglus/scene-pack.js';
 import {BrowserFullscreenMoviePlayer} from '../../video/fullscreen-movie.js';
-import {SiglusAudio, type SiglusAudioKind} from './audio.js';
+import {SiglusAudio, type SiglusAudioKind, type SiglusBgmCheckpoint} from './audio.js';
 import {
   SiglusConfiguration,
   type SiglusFontSettings,
@@ -116,6 +116,7 @@ interface PlayerSave {
   message: ReturnType<SiglusDisplay['saveMessage']>;
   background?: string;
   bgm?: string;
+  bgmPlayback?: SiglusBgmCheckpoint;
   cast: string[];
   speed: number;
   timestamp?: number;
@@ -196,7 +197,6 @@ export class SiglusPlayer {
   private savePoint?: PlayerSave;
   private selectedSave?: PlayerSave;
   private readonly system = new Map<number, number>();
-  private bgmName?: string;
   private movieError?: Error;
   private skip = false;
   private skipAllowed = true;
@@ -843,7 +843,8 @@ export class SiglusPlayer {
   }
 
   private captureSave(waitsForInput = true, includeHistory = true): PlayerSave {
-    const {background, bgm} = this.root.dataset;
+    const {background} = this.root.dataset;
+    const bgmPlayback = this.audio.bgmCheckpoint();
     const history = includeHistory
       ? this.backlog.slice(
           Math.max(
@@ -863,7 +864,8 @@ export class SiglusPlayer {
       stage: [...this.stageProperties],
       message: this.display.saveMessage(),
       background,
-      bgm,
+      bgm: bgmPlayback?.name,
+      bgmPlayback,
       cast: [...this.currentCast],
       speed: this.speed,
       title: this.saveTitle,
@@ -1005,7 +1007,9 @@ export class SiglusPlayer {
     this.pendingBackground = undefined;
     if (save.background) await this.display.setBackground(save.background, 0);
     await this.cast(save.cast, -1);
-    if (save.bgm) await this.audio.bgm(save.bgm);
+    const music = save.bgmPlayback;
+    if (music) await this.audio.bgm(music.name, music.loop, 0, 0, music.sample);
+    else if (save.bgm) await this.audio.bgm(save.bgm);
     this.speed = save.speed;
     this.saveTitle = save.title ?? '';
     const waitsForInput = save.waitsForInput ?? true;
@@ -1452,9 +1456,8 @@ export class SiglusPlayer {
   }
 
   private async playBgm(name: string, fade = 0, crossfade = 0): Promise<void> {
-    if (this.bgmName === name && this.root.dataset.bgm === name) return;
+    if (this.root.dataset.bgm?.toLowerCase() === name.toLowerCase()) return;
     await this.audio.bgm(name, true, fade, crossfade);
-    this.bgmName = name;
   }
 
   private async command(command: SiglusCommand): Promise<Value | undefined> {
@@ -1467,7 +1470,15 @@ export class SiglusPlayer {
       switch (root) {
         case 80: // capture
           if (!this.systemCallActive) return undefined;
-          if (this.savePoint) this.savePoint.thumbnail = this.display.captureThumbnail();
+          if (this.savePoint) {
+            const bgmPlayback = this.audio.bgmCheckpoint();
+            this.savePoint = {
+              ...this.savePoint,
+              thumbnail: this.display.captureThumbnail(),
+              bgm: bgmPlayback?.name,
+              bgmPlayback,
+            };
+          }
           return 0;
         case 81: // capture_free
           if (this.systemCallActive) return 0;

@@ -10,6 +10,16 @@ interface Playing {
   kind: SiglusAudioKind;
   character?: number;
   volumeType?: number;
+  resource?: string | number;
+  sourceRate: number;
+  startedAt: number;
+  start: number;
+}
+
+export interface SiglusBgmCheckpoint {
+  name: string;
+  sample: number;
+  loop: boolean;
 }
 
 export type SiglusAudioKind = 'BGM' | 'KOE' | 'PCM' | 'SE';
@@ -88,7 +98,7 @@ export class SiglusAudio {
     return buffer;
   }
 
-  async bgm(name: string, loop = true, fade = 0, crossfade = 0): Promise<void> {
+  async bgm(name: string, loop = true, fade = 0, crossfade = 0, sample?: number): Promise<void> {
     const entry = [...this.config].find(
       ([key, value]) =>
         /^BGM\.\d+$/.test(key) && value.split('"')[1]?.toLowerCase() === name.toLowerCase(),
@@ -104,18 +114,39 @@ export class SiglusAudio {
     const rate = byteDataView(page.bytes).getUint32(page.bodyOffset + 12, true);
     if (!rate) throw new Error('Invalid Siglus BGM sample rate');
     const buffer = await this.context.decodeAudioData(bytes.buffer);
-    const start = Number(fields[2] ?? 0) / rate;
+    const configuredStart = Number(fields[2] ?? 0);
     const end = Number(fields[3] ?? -1);
     const loopStart = Number(fields[4] ?? 0) / rate;
+    const loopEnd = end < 0 ? buffer.duration : Math.min(buffer.duration, end / rate);
+    const limit = Math.ceil((loop ? loopEnd : buffer.duration) * rate);
+    const startSample =
+      sample !== undefined && Number.isSafeInteger(sample) && sample >= 0 && sample < limit
+        ? sample
+        : configuredStart;
     if (crossfade > 0) this.stop('bgm', crossfade);
     this.start('bgm', buffer, 'BGM', {
       loop,
       loopStart,
-      loopEnd: end < 0 ? buffer.duration : end / rate,
-      start,
+      loopEnd,
+      start: startSample / rate,
       fade: fade || crossfade,
+      sourceRate: rate,
+      resource: name,
     });
-    this.root.dataset.bgm = name;
+    if (!this.closed) this.root.dataset.bgm = name;
+  }
+
+  bgmCheckpoint(): SiglusBgmCheckpoint | undefined {
+    const playing = this.playing.get('bgm');
+    if (!playing || typeof playing.resource !== 'string') return;
+    const {source, start, startedAt, sourceRate} = playing;
+    let position = start + Math.max(0, this.context.currentTime - startedAt);
+    if (source.loop) {
+      const duration = source.loopEnd - source.loopStart;
+      if (duration > 0 && position >= source.loopEnd)
+        position = source.loopStart + ((position - source.loopStart) % duration);
+    } else if (position >= source.buffer!.duration) return;
+    return {name: playing.resource, sample: Math.floor(position * sourceRate), loop: source.loop};
   }
 
   async voice(
@@ -182,6 +213,7 @@ export class SiglusAudio {
       character,
       volumeType,
       resource,
+      sourceRate = buffer.sampleRate,
     }: {
       loop?: boolean;
       loopStart?: number;
@@ -191,6 +223,7 @@ export class SiglusAudio {
       character?: number;
       volumeType?: number;
       resource?: string | number;
+      sourceRate?: number;
     } = {},
   ): void {
     if (this.closed) return;
@@ -206,17 +239,30 @@ export class SiglusAudio {
     source.loopStart = loopStart;
     source.loopEnd = loopEnd < 0 ? buffer.duration : loopEnd;
     source.connect(gain).connect(this.context.destination);
-    const playing = {source, gain, kind, character, volumeType};
+    const playing = {
+      source,
+      gain,
+      kind,
+      character,
+      volumeType,
+      resource,
+      sourceRate,
+      startedAt: now,
+      start,
+    };
     this.playing.set(channel, playing);
     this.active.add(playing);
     source.onended = () => {
       this.active.delete(playing);
-      if (this.playing.get(channel) === playing) this.playing.delete(channel);
+      if (this.playing.get(channel) === playing) {
+        this.playing.delete(channel);
+        if (channel === 'bgm') delete this.root.dataset.bgm;
+      }
       source.disconnect();
       gain.disconnect();
       if (channel === 'voice') this.updateGains('BGM');
     };
-    source.start(0, start);
+    source.start(now, start);
     if (channel === 'voice') this.updateGains('BGM');
     this.root.dataset.audioState = this.context.state;
     if (new URLSearchParams(location.search).has('siglus-trace')) {
@@ -242,6 +288,15 @@ export class SiglusAudio {
             gain: volume,
             frames: buffer.length,
             rate: buffer.sampleRate,
+            ...(kind === 'BGM'
+              ? {
+                  startSample: Math.round(start * sourceRate),
+                  sourceRate,
+                  loop,
+                  loopStartSample: Math.round(source.loopStart * sourceRate),
+                  loopEndSample: Math.round(source.loopEnd * sourceRate),
+                }
+              : {}),
             ...levels,
           },
         }),

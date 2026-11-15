@@ -1006,8 +1006,23 @@ verification: try {
     savedState = await state();
     const savedText = digest(await evaluate(dialogue));
     assert.notEqual(savedText, originalText);
+    assert.equal(savedState.bgm, 'bgm02');
+    await delay(400);
     assert.equal(await selectSlot('save'), 'confirm', 'Overwriting the slot requires confirmation');
     await waitFor(`siglusSurface.dataset.savedPage === '${savedState.page}'`);
+    const savedBgm = await evaluate(
+      asyncExpression(`${slotRecords()}.find(([slot]) => slot === 0)?.[1].bgmPlayback`),
+    );
+    assert.equal(savedBgm?.name, savedState.bgm);
+    assert.ok(Number.isSafeInteger(savedBgm?.sample) && savedBgm.sample > 0);
+    const restoredBgm = async (start) => {
+      const played = await evaluate(`siglusAudio.slice(${start}).findLast(({channel, resource}) =>
+        channel === 'bgm' && resource === ${JSON.stringify(savedBgm.name)})`);
+      assert.equal(played.startSample, savedBgm.sample);
+      assert.equal(played.loop, savedBgm.loop);
+      assert.ok(played.startSample < played.loopEndSample);
+      return played;
+    };
     await clickScriptMenu(slotLoop, 1540, 1023);
     await waitForDialogueControls();
     const saveCommands = await evaluate(`siglusTags.filter(({scene}) => scene === '${slotScene}')`);
@@ -1017,9 +1032,12 @@ verification: try {
     await waitFor(`Number(siglusSurface.dataset.page) > ${savedState.page}`);
     const nextText = digest(await evaluate(dialogue));
     assert.notEqual(nextText, savedText);
+    const beforeRestoreAudio = await evaluate('siglusAudio.length');
     await switchToConfiguration('save');
     assert.equal(await switchToSlots('load'), 'confirm');
     await waitFor("siglusSurface.dataset.loaded === 'true'");
+    const inGameBgm = await restoredBgm(beforeRestoreAudio);
+    assert.ok(inGameBgm.sourceRate > 0 && inGameBgm.rms > 0);
     assert.equal(
       digest(await evaluate(dialogue)),
       savedText,
@@ -1046,6 +1064,17 @@ verification: try {
     assert.ok(canvasShape > 0, 'The scripted slot created the stored thumbnail');
     assert.equal(await chooseSlot('load', 0), 'confirm');
     await waitFor("siglusSurface.dataset.loaded === 'true'");
+    const reopenedBgm = await restoredBgm(0);
+    for (const field of [
+      'frames',
+      'rate',
+      'sourceRate',
+      'loopStartSample',
+      'loopEndSample',
+      'gain',
+    ])
+      assert.equal(reopenedBgm[field], inGameBgm[field], field);
+    assert.ok(Math.abs(reopenedBgm.rms - inGameBgm.rms) < 0.001);
     assert.equal(digest(await evaluate(dialogue)), savedText);
     assert.equal(await evaluate('siglusSurface.dataset.background'), savedState.background);
     assert.equal(await evaluate('siglusSurface.dataset.cast'), savedState.cast);
@@ -1063,6 +1092,7 @@ verification: try {
     console.log(
       `Original Load restored the dialogue, stage and thumbnail after reopening, then resumed the script. Matched ${saveCommands.length + commands.length} Save/Load tags.`,
     );
+    console.log('BGM resumed from saved source sample:', savedBgm, inGameBgm.sourceRate);
   } else if (configOnly) {
     await click('#siglus-surface button[aria-label="Configuration"]');
     await waitFor(`siglusTags.some(({scene, path}) =>
@@ -1380,6 +1410,14 @@ verification: try {
     await waitFor('!siglusSurface.dataset.bgm');
     await click('#siglus-surface [data-siglus-button="102"]');
     await waitFor("siglusSurface.dataset.bgm?.toLowerCase() === 'bgm02'");
+    await click('#siglus-surface [data-siglus-button="15"]');
+    const loopedBgm = await waitFor(`siglusAudio.find(({channel, resource}) =>
+      channel === 'bgm' && resource?.toLowerCase() === 'bgm16')`);
+    assert.equal(loopedBgm.loop, true);
+    assert.equal(loopedBgm.startSample, 44100);
+    assert.equal(loopedBgm.loopStartSample, 853475);
+    assert.equal(loopedBgm.loopEndSample, 4885472);
+    console.log('Music: BGM16 start and loop points matched Gameexe.dat.');
     const slider = '#siglus-surface [data-siglus-button="107"]';
     const [sliderX, sliderY] = await evaluate(`(() => {
       const rect = document.querySelector(${JSON.stringify(slider)}).getBoundingClientRect();
