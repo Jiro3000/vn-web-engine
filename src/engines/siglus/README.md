@@ -164,6 +164,12 @@ against the disassembly. Both loads verify the actual Web Audio start
 offset against the saved BGM checkpoint in source samples. After loading
 from the title, the probe opens and closes both the message history and
 the original Save menu on the restored page before advancing.
+Gameexe.dat names `__sys_load_after` as `LOAD_AFTER_CALL`. The embedded
+PE parser at `0x68f591` and `0x68f5cf` accepts the scene name with or
+without a numeric label. The player runs that scene on the restored VM
+stack before continuing dialogue. Both loads verify the callback's command
+order and the 24 button offset list initializers in `__sys_scdata_init`
+against Scene.pck.
 
 Set `SIGLUS_QUICK_ONLY=1` to check the original frame’s Quick Save and Quick
 Load controls. The probe uses the cleared-title checkpoint, confirms two

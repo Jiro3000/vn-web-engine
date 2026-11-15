@@ -1081,6 +1081,20 @@ verification: try {
       assert.ok(played.startSample < played.loopEndSample);
       return played;
     };
+    const checkLoadHook = async (start) => {
+      const trace = await evaluate(`siglusTags.slice(${start}).filter(({scene}) =>
+        scene === '__sys_load_after' || scene === '__sys_scdata_init')`);
+      compareTags(trace, scripts, {compareSourceLine: false});
+      assert.deepEqual(
+        trace.filter(({scene}) => scene === '__sys_load_after').map(({offset}) => offset),
+        [0x39, 0x5e, 0x83, 0xc4, 0x1d3],
+      );
+      const positions = trace.filter(
+        ({scene, path}) =>
+          scene === '__sys_scdata_init' && path?.length === 9 && path[4] === 32 && path[8] === 2,
+      );
+      assert.equal(positions.length, 24, 'Load hook initializes both groups of message buttons');
+    };
     await clickScriptMenu(slotLoop, 1540, 1023);
     await waitForDialogueControls();
     const saveCommands = await evaluate(`siglusTags.filter(({scene}) => scene === '${slotScene}')`);
@@ -1091,9 +1105,11 @@ verification: try {
     const nextText = digest(await evaluate(dialogue));
     assert.notEqual(nextText, savedText);
     const beforeRestoreAudio = await evaluate('siglusAudio.length');
+    const beforeRestoreTags = await evaluate('siglusTags.length');
     await switchToConfiguration('save');
     assert.equal(await switchToSlots('load'), 'confirm');
     await waitFor("siglusSurface.dataset.loaded === 'true'");
+    await checkLoadHook(beforeRestoreTags);
     const inGameBgm = await restoredBgm(beforeRestoreAudio);
     assert.ok(inGameBgm.sourceRate > 0 && inGameBgm.rms > 0);
     assert.equal(
@@ -1120,8 +1136,10 @@ verification: try {
     const canvasShape = await evaluate(`Array.from(siglusSurface.querySelectorAll('canvas'))
       .filter(({width, height}) => width === 354 && height === 199).length`);
     assert.ok(canvasShape > 0, 'The scripted slot created the stored thumbnail');
+    const beforeTitleLoad = await evaluate('siglusTags.length');
     assert.equal(await chooseSlot('load', 0), 'confirm');
     await waitFor("siglusSurface.dataset.loaded === 'true'");
+    await checkLoadHook(beforeTitleLoad);
     const reopenedBgm = await restoredBgm(0);
     for (const field of [
       'frames',

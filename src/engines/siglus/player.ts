@@ -142,6 +142,9 @@ export class SiglusPlayer {
   private readonly display: SiglusDisplay;
   private readonly audio: SiglusAudio;
   private readonly objects = [new Map<number, DrawObject>(), new Map<number, DrawObject>()];
+  private readonly messageObjects = new Map<number, Map<number, DrawObject>>();
+  private readonly messageButtonOffsets = new Map<string, number[]>();
+  private messageObjectsDirty = false;
   private systemObjects?: Map<number, DrawObject>;
   private systemObjectsDirty = false;
   private systemFont?: {name?: string; bold?: boolean; shadow?: number};
@@ -469,7 +472,7 @@ export class SiglusPlayer {
     }
     const selected = this.selectedSave;
     this.selectedSave = undefined;
-    if (selected) await this.loadSave(selected);
+    if (selected) this.loadSave(selected);
   }
 
   private systemOption(option: SystemOption): boolean {
@@ -576,6 +579,11 @@ export class SiglusPlayer {
     } else if ((path[0] === 37 || path[0] === 38) && path[1] === 2) {
       page = this.objects[path[0] === 37 ? 1 : 0]!;
       index = 2;
+    } else if (path[0] === 38 && path[1] === 3 && path[2] === -1 && path[4] === 30) {
+      const window = path[3]!;
+      page = this.messageObjects.get(window) ?? new Map();
+      this.messageObjects.set(window, page);
+      index = 5;
     } else return;
     while (path[index] === -1 && path[index + 2] === 93) {
       const object = page.get(path[index + 1]!);
@@ -586,9 +594,36 @@ export class SiglusPlayer {
     return {page, index};
   }
 
-  private markObjectsDirty(root: number): void {
-    if (root === 38) this.objectsDirty = true;
+  private markObjectsDirty([root, member]: readonly number[]): void {
+    if (root === 38 && member === 3) this.messageObjectsDirty = true;
+    else if (root === 38) this.objectsDirty = true;
     if (root === 65) this.systemObjectsDirty = true;
+  }
+
+  private messageButtonList(path: readonly number[]): number[] | undefined {
+    const [root, windows, windowArray, window, buttons, buttonArray, button, axis] = path;
+    if (
+      root !== 38 ||
+      windows !== 3 ||
+      windowArray !== -1 ||
+      buttons !== 32 ||
+      buttonArray !== -1 ||
+      (axis !== 54 && axis !== 63)
+    )
+      return;
+    const key = `${window}.${button}.${axis}`;
+    let list = this.messageButtonOffsets.get(key);
+    if (!list) this.messageButtonOffsets.set(key, (list = []));
+    return list;
+  }
+
+  private updateMessageButton(path: readonly number[], list: readonly number[]): void {
+    this.display.offsetMessageButton(
+      path[3]!,
+      path[6]!,
+      path[7] === 54 ? 'x' : 'y',
+      list.reduce((sum, value) => sum + value, 0),
+    );
   }
 
   private object(path: readonly number[]): DrawObject | undefined {
@@ -625,6 +660,17 @@ export class SiglusPlayer {
         return this.stageProperties.get(key) ?? (name.includes('name') ? '' : 0);
       }
     }
+    if (path.length === 10 && path[8] === -1) {
+      const offsets = this.messageButtonList(path);
+      if (offsets) {
+        const index = path[9]!;
+        if (value !== undefined && index >= 0 && index < offsets.length) {
+          offsets[index] = Number(value);
+          this.updateMessageButton(path, offsets);
+        }
+        return offsets[index] ?? 0;
+      }
+    }
     const address = this.objectAddress(path);
     if (!address || path[address.index] !== -1) return;
     const property = path[address.index + 2];
@@ -638,7 +684,7 @@ export class SiglusPlayer {
     if (property === 0) {
       if (value !== undefined && object.visible !== Boolean(value)) {
         object.visible = Boolean(value);
-        this.markObjectsDirty(page!);
+        this.markObjectsDirty(path);
       }
       return Number(object.visible);
     }
@@ -647,7 +693,7 @@ export class SiglusPlayer {
       const index = property - 18;
       if (value !== undefined && clip[index] !== Number(value)) {
         clip[index] = Number(value);
-        this.markObjectsDirty(page!);
+        this.markObjectsDirty(path);
       }
       return clip[index];
     }
@@ -666,7 +712,7 @@ export class SiglusPlayer {
     if (!field) return;
     if (value !== undefined && object[field] !== Number(value)) {
       object[field] = Number(value);
-      this.markObjectsDirty(page!);
+      this.markObjectsDirty(path);
     }
     return object[field] ?? (field === 'transparency' ? 255 : 0);
   }
@@ -982,7 +1028,11 @@ export class SiglusPlayer {
 
   private saveTitle = '';
 
-  private async loadSave(save: PlayerSave): Promise<void> {
+  private loadSave(save: PlayerSave): never {
+    return this.vm.requestLoad(save.vm, () => this.restoreSave(save));
+  }
+
+  private async restoreSave(save: PlayerSave): Promise<void> {
     this.skip = false;
     this.readSkipEnabled = false;
     this.savePoint = save;
@@ -1026,6 +1076,17 @@ export class SiglusPlayer {
       this.pageAlreadyRead = true;
     } else this.display.closeMessage();
     this.pendingText = waitsForInput;
+    this.messageObjectsDirty = true;
+    const loadAfter = this.game.config.get('LOAD_AFTER_CALL');
+    if (loadAfter) {
+      const [, scene, entry] = loadAfter.split('"');
+      if (scene) {
+        const label = entry?.replace(/^\s*,\s*/, '').trim();
+        await this.vm.callScene(scene, Number(label || 0));
+      }
+    }
+    await this.renderMessageObjects();
+    this.savePoint = {...save, vm: this.vm.checkpoint()};
     this.root.dataset.loaded = 'true';
     if (waitsForInput) {
       this.root.dataset.page = String(++this.pages);
@@ -1033,8 +1094,6 @@ export class SiglusPlayer {
       await this.waitAtPage();
     }
     this.pendingText = false;
-    this.vm.requestLoad(save.vm);
-    throw save.vm;
   }
 
   private choose({id, group}: NonNullable<DrawObject['button']>): void {
@@ -1108,6 +1167,7 @@ export class SiglusPlayer {
   }
 
   private async renderObjects(): Promise<void> {
+    await this.renderMessageObjects();
     if (this.systemObjectsDirty && this.systemObjects) {
       this.systemObjectsDirty = false;
       await this.display.showSystemObjects(orderedObjects(this.systemObjects), (button) =>
@@ -1120,6 +1180,13 @@ export class SiglusPlayer {
         this.choose(button),
       );
     }
+  }
+
+  private async renderMessageObjects(): Promise<void> {
+    if (!this.messageObjectsDirty) return;
+    this.messageObjectsDirty = false;
+    const objects = this.messageObjects.get(this.display.messageWindow);
+    await this.display.showMessageObjects(objects ? orderedObjects(objects) : []);
   }
 
   private copyObjects(objects: Map<number, DrawObject>): Map<number, DrawObject> {
@@ -1213,6 +1280,8 @@ export class SiglusPlayer {
         for (let i = 0; i < 6; i++) this.stageProperties.set('$bs_name.-1.' + i, 'none');
         // Earlier browser profiles may have an initialization flag without this setting.
         if (!this.system.has(1330)) this.property([31, -1, 1330], 1);
+        for (const flag of [1010, 1011])
+          if (!this.system.has(flag)) this.property([31, -1, flag], 1);
         if (!this.property([31, -1, 1001])) {
           // __sys_scdata_init enables the authored confirmation flags on first launch.
           for (let flag = 1316; flag < 1324; flag++) this.system.set(flag, 1);
@@ -1502,6 +1571,8 @@ export class SiglusPlayer {
           break;
         case 8:
           this.display.selectMessageWindow(n(0));
+          this.messageObjectsDirty = true;
+          await this.renderMessageObjects();
           break;
         case 10:
           this.display.closeMessage();
@@ -1532,6 +1603,9 @@ export class SiglusPlayer {
             {id: n(0), character: args.length > 1 ? n(1) : undefined},
           ];
           await this.audio.voice(n(0), 'voice', args.length > 1 ? n(1) : undefined);
+          break;
+        case 22:
+          this.display.setMessageFrame(n(0));
           break;
         case 54:
           if (!this.skipping) await this.delay(n(0));
@@ -1567,6 +1641,8 @@ export class SiglusPlayer {
         case 113:
           this.savePoint = undefined;
           break;
+        case 116:
+          return this.display.messageWindow;
         case 36:
           this.savePoint = this.captureSave(false);
           return 0;
@@ -1581,6 +1657,17 @@ export class SiglusPlayer {
       return 0;
     }
     if ((root === 37 || root === 38) && member === 2) return this.objectCommand(command);
+    if (root === 38 && member === 3) {
+      if (path[4] === 30) return this.objectCommand(command);
+      if (path.length === 9 && path[8] === 2) {
+        const offsets = this.messageButtonList(path);
+        if (offsets) {
+          offsets.length = Math.max(0, n(0));
+          this.updateMessageButton(path, offsets);
+          return 0;
+        }
+      }
+    }
     if (root === 65) {
       if (member === 13 && path.length === 3) {
         const font = (this.systemFont ??= {});
@@ -1766,7 +1853,7 @@ export class SiglusPlayer {
           if (this.systemCallActive) {
             this.selectedSave = save;
             this.vm.returnFromHostScene();
-          } else await this.loadSave(save);
+          } else this.loadSave(save);
         }
         return 0;
       }
@@ -2082,7 +2169,7 @@ export class SiglusPlayer {
     const [array, id, command] = path.slice(index);
     if (array === 3 && id === undefined) return Math.max(0, ...page.keys()) + 1;
     if (array === 4 && id === undefined) return 0; // Sparse list; absent indices carry default objects.
-    if (command !== 175 && command !== 63) this.markObjectsDirty(path[0]!);
+    if (command !== 175 && command !== 63) this.markObjectsDirty(path);
     const n = (index: number) => Number(args[index] ?? 0);
     if (command === 35) {
       page.delete(id!);

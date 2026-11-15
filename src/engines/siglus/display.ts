@@ -69,11 +69,16 @@ export class SiglusDisplay {
     button: HTMLButtonElement;
     refresh: () => void;
   }[] = [];
+  private readonly messageButtonPositions = new Map<
+    number,
+    Map<number, {x?: number; y?: number}>
+  >();
   private activateFrameAction?: (type: string, sound: number, id: number) => void;
   private readonly editLayer = document.createElement('div');
   private readonly edits = new Map<number, {input: HTMLInputElement; result: string}>();
   private readonly systemLayer = document.createElement('div');
   private readonly message = document.createElement('div');
+  private readonly messageObjects = document.createElement('div');
   private readonly speaker = document.createElement('div');
   private readonly text = document.createElement('div');
   private readonly nativeText = document.createElement('canvas');
@@ -111,6 +116,7 @@ export class SiglusDisplay {
   private currentName = '';
   private currentText: {text: string; ruby?: string}[] = [];
   private windowIndex = 0;
+  private frameIndex = 0;
   private defaultTextSize = 38;
   private ruby = '';
   private filter?: HTMLCanvasElement;
@@ -136,6 +142,7 @@ export class SiglusDisplay {
     this.stage.style.cssText = 'position:absolute;overflow:hidden;background:#000;color:white';
     this.layers.style.cssText = 'position:absolute;inset:0;pointer-events:none';
     this.message.style.cssText = 'position:absolute;isolation:isolate;pointer-events:none';
+    this.messageObjects.style.cssText = 'position:absolute;inset:0;pointer-events:none';
     this.speaker.style.cssText = 'position:absolute;white-space:pre;text-shadow:0 1px 4px #000';
     this.text.style.cssText =
       'position:absolute;white-space:pre-wrap;overflow-wrap:anywhere;text-shadow:0 1px 4px #000';
@@ -165,7 +172,13 @@ export class SiglusDisplay {
     this.nativeText.style.cssText = 'position:absolute;inset:0;pointer-events:none';
     this.nativeText.dataset.siglusNativeText = '';
     this.nativeText.hidden = true;
-    this.message.append(this.portrait, this.nativeText, this.speaker, this.text);
+    this.message.append(
+      this.portrait,
+      this.nativeText,
+      this.speaker,
+      this.text,
+      this.messageObjects,
+    );
     this.message.hidden = true;
     this.windowDisplay = new BrowserWindowDisplayHost(
       windowOptions.root,
@@ -664,8 +677,41 @@ export class SiglusDisplay {
     this.speakerMetrics = {x: namePos[0]!, y: namePos[1]!};
     this.speaker.style.fontSize = `${this.config.get(prefix + 'NAME_MOJI_SIZE') ?? 36}px`;
     place(this.portrait, numbers('WAKU.000.FACE.000.POS', [24, 24]), [340, windowSize[1]! - 24]);
-    if (this.filter) this.filter.hidden = this.config.get(prefix + 'WAKU_NO') === '-1';
+    this.frameIndex = Number(this.config.get(prefix + 'WAKU_NO') ?? -1);
+    if (this.filter) this.filter.hidden = this.frameIndex === -1;
+    this.positionMessageButtons();
     this.setTextSize();
+  }
+
+  get messageWindow(): number {
+    return this.windowIndex;
+  }
+
+  setMessageFrame(index: number): void {
+    this.frameIndex = index;
+    if (this.filter) this.filter.hidden = index !== 0;
+  }
+
+  offsetMessageButton(window: number, id: number, axis: 'x' | 'y', value: number): void {
+    let positions = this.messageButtonPositions.get(window);
+    if (!positions) this.messageButtonPositions.set(window, (positions = new Map()));
+    const position = positions.get(id) ?? {};
+    position[axis] = value;
+    positions.set(id, position);
+    if (window === this.windowIndex) this.positionMessageButtons();
+  }
+
+  private positionMessageButtons(): void {
+    const positions = this.messageButtonPositions.get(this.windowIndex);
+    for (const {id, button} of this.frameActions) {
+      const {x = 0, y = 0} = positions?.get(id) ?? {};
+      button.style.translate = `${x}px ${y}px`;
+    }
+  }
+
+  async showMessageObjects(objects: Iterable<DrawObject>): Promise<void> {
+    const layer = await this.drawObjects(objects, () => {}, false);
+    this.messageObjects.replaceChildren(layer);
   }
   private readonly loadedFonts: FontFace[] = [];
   private readonly fontNames = new Map<string, string>();
@@ -1604,8 +1650,7 @@ export class SiglusDisplay {
     enabled?: (type: string, id: number) => boolean,
   ): void {
     this.activateFrameAction = activate;
-    const frame = this.config.get(`MWND.${String(this.windowIndex).padStart(3, '0')}.WAKU_NO`);
-    this.controls.hidden = !activate || frame !== '0' || this.message.hidden;
+    this.controls.hidden = !activate || this.frameIndex !== 0 || this.message.hidden;
     for (const {id, type, button, refresh} of this.frameActions) {
       button.disabled = !enabled?.(type, id);
       refresh();

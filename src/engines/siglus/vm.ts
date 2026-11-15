@@ -180,7 +180,7 @@ export class SiglusVm {
   private readonly globals = new Map<string, Value>();
   private readonly frames: Frame[] = [];
   private readonly sceneJumps = new Map<Frame, Frame>();
-  private pendingLoad?: SiglusCheckpoint;
+  private pendingLoad?: {checkpoint: SiglusCheckpoint; beforeResume: () => Promise<void>};
 
   constructor(
     private readonly pack: SiglusScenePack,
@@ -191,15 +191,19 @@ export class SiglusVm {
 
   async run(scene: string, label = 0): Promise<void> {
     let frames = [this.entry(scene, label)];
+    let beforeResume: (() => Promise<void>) | undefined;
     for (;;) {
       try {
-        await this.resume(frames);
+        const initialize = beforeResume;
+        beforeResume = undefined;
+        await this.resume(frames, initialize);
         return;
       } catch (error) {
         if (error instanceof ReturnToMenu) {
           frames = [this.entry(error.scene, error.entry)];
-        } else if (this.pendingLoad && error === this.pendingLoad) {
-          frames = this.restore(this.pendingLoad);
+        } else if (this.pendingLoad && error === this.pendingLoad.checkpoint) {
+          frames = this.restore(this.pendingLoad.checkpoint);
+          beforeResume = this.pendingLoad.beforeResume;
           this.pendingLoad = undefined;
         } else {
           throw error;
@@ -209,7 +213,7 @@ export class SiglusVm {
   }
 
   /** Capture the stack while a host command is waiting at a save point. */
-  checkpoint(commandResult: Value): SiglusCheckpoint {
+  checkpoint(commandResult?: Value): SiglusCheckpoint {
     const frames = this.frames.map((original) => {
       const frame = this.sceneJumps.get(original) ?? original;
       return {
@@ -224,12 +228,13 @@ export class SiglusVm {
       };
     });
     if (!frames.length) throw new Error('Siglus has no running frame');
-    frames.at(-1)!.stack.push(commandResult);
+    if (commandResult !== undefined) frames.at(-1)!.stack.push(commandResult);
     return {globals: [...this.globals], frames};
   }
 
-  requestLoad(checkpoint: SiglusCheckpoint): void {
-    this.pendingLoad = checkpoint;
+  requestLoad(checkpoint: SiglusCheckpoint, beforeResume: () => Promise<void>): never {
+    this.pendingLoad = {checkpoint, beforeResume};
+    throw checkpoint;
   }
 
   /** Run a host-invoked scenario while the current command is suspended. */
@@ -282,11 +287,17 @@ export class SiglusVm {
     });
   }
 
-  private async resume(frames: Frame[], index = 0): Promise<Value> {
+  private async resume(
+    frames: Frame[],
+    beforeResume?: () => Promise<void>,
+    index = 0,
+  ): Promise<Value> {
     const frame = frames[index]!;
     this.frames.push(frame);
     try {
-      if (index + 1 < frames.length) frame.stack.push(await this.resume(frames, index + 1));
+      if (index + 1 < frames.length)
+        frame.stack.push(await this.resume(frames, beforeResume, index + 1));
+      else await beforeResume?.();
       return await this.execute(frame, index);
     } finally {
       this.frames.pop();
@@ -538,7 +549,7 @@ export class SiglusVm {
               typeof receiver === 'string'
                 ? this.stringCommand(receiver, member, args)
                 : await this.services.command(command);
-            if (this.pendingLoad) throw this.pendingLoad;
+            if (this.pendingLoad) throw this.pendingLoad.checkpoint;
             if (result !== undefined) frame.stack.push(result);
             else if (include >= 0) {
               const count = this.pack.commandScenes.length / 2;
@@ -581,7 +592,7 @@ export class SiglusVm {
         if (
           error instanceof ReturnToMenu ||
           error instanceof ReturnFromHostScene ||
-          (this.pendingLoad && error === this.pendingLoad)
+          (this.pendingLoad && error === this.pendingLoad.checkpoint)
         )
           throw error;
         this.signal.throwIfAborted();
