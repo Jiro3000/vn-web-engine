@@ -249,6 +249,14 @@ registered named call at `0x5f4d16` before dispatching the button type.
 The original confirmation scenes call `syscom.return_to_menu(0, 0, 0)`
 at `0x1099d` and `syscom.end_game(0)` at `0x13816`.
 
+Set `SIGLUS_PCM_LOAD_ONLY=1` to check which audio state a slot preserves.
+The probe saves normally at the one-shot PCM effect `tin` in chapter 01
+and checks that the effect is omitted from the slot. The reachable story
+uses one-shot PCM, so the probe adds an active loop, a prepared sound
+and non-default levels to its test slot. It reopens the player, loads
+through the title menu, compares decoded length, sample start, RMS and
+gain, then saves to a second slot and compares the restored state.
+
 Set `SIGLUS_HISTORY_ONLY=1` to open the original message history button,
 compare displayed text with script hashes, replay a stored voice, and verify
 that closing history restores keyboard focus to the same page. The browser
@@ -317,10 +325,15 @@ and Gameexe.dat SHA-256
   with sample argument `-1` at `0x600c06`. The player resolves that
   argument at `0x60527c` to the start sample from the BGM table populated
   by the Gameexe.dat parser at `0x695112`. The Windows sound loader
-  applies the saved voice level at `0x5ff350`. The browser still lacks
-  the native pending BGM stop state and the full PCM channel save state.
-  In-flight animations and voice playback in the browser resume with
-  the next script command.
+  applies the saved voice level at `0x5ff350`. The PCM reader at
+  `0x604440` restores levels and checks the saved loop and ready flags
+  at `0x604759` and `0x60476a`. The file playback helper skips
+  starting a prepared source at `0x604bb1`. The browser saves the
+  voice and PCM levels along with active loops and prepared PCM.
+  Loops restart at the beginning and prepared PCM stays silent until
+  the script resumes it. The browser still lacks the native pending
+  BGM stop state and delayed PCM resume state. In-flight animations
+  and transient voice playback continue with the next script command.
 - The browser's character layout, text layout, day cards, transition masks,
   recollection, shake, dizziness and motion effects approximate the script's
   native compositing. Effect timing and rendering have not been compared

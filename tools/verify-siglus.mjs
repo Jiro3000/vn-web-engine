@@ -23,6 +23,7 @@ const frameLockOnly = process.env.SIGLUS_FRAME_LOCK_ONLY === '1';
 const frameExitOnly = process.env.SIGLUS_FRAME_EXIT_ONLY === '1';
 const manageOnly = process.env.SIGLUS_SLOT_MANAGEMENT_ONLY === '1';
 const loadOnly = process.env.SIGLUS_LOAD_ONLY === '1';
+const pcmLoadOnly = process.env.SIGLUS_PCM_LOAD_ONLY === '1';
 const configOnly = process.env.SIGLUS_CONFIG_ONLY === '1';
 const freshConfiguration = configOnly && process.env.SIGLUS_CONFIG_FRESH === '1';
 const openingOnly = process.env.SIGLUS_OPENING_ONLY === '1';
@@ -510,6 +511,7 @@ verification: try {
     slideOnly ||
     pauseSaveOnly ||
     loadOnly ||
+    pcmLoadOnly ||
     quickOnly ||
     autoOnly ||
     manageOnly ||
@@ -1388,6 +1390,91 @@ verification: try {
     console.log(
       `Quick Save rotated two slots and Quick Load restored the newest one. Matched ${tags.length} tags.`,
     );
+  } else if (pcmLoadOnly) {
+    await click('#siglus-surface button[aria-label="New Game"]');
+    await runUntil(() =>
+      evaluate(`siglusTags.at(-1)?.scene === ${JSON.stringify(scene)}
+      && siglusTags.at(-1)?.offset === 0x5310`),
+    );
+    const played = await evaluate(
+      "siglusAudio.findLast(({channel, resource}) => channel === 'pcm0' && resource === 'tin')",
+    );
+    assert.ok(played.frames > 0 && played.rms > 0 && played.loop === false);
+    compareTags(
+      await evaluate(`siglusTags.filter(({scene, offset}) =>
+      scene === ${JSON.stringify(scene)} && offset >= 0x52b1 && offset <= 0x5310)`),
+      scripts,
+    );
+    assert.equal(await selectSlot('save'), 'confirm');
+    await waitFor('siglusSurface.dataset.savedPage');
+    const readSlot = (slot) =>
+      evaluate(asyncExpression(`${slotRecords()}.find(([id]) => id === ${slot})?.[1]`));
+    const saved = await readSlot(0);
+    assert.deepEqual(saved.pcmPlayback, [], 'The transient tin effect is omitted from the save');
+    assert.equal(saved.voiceLevel, 255);
+    assert.equal(
+      digest(saved.message.text.map(({text}) => text).join('')),
+      scripts.get(scene).tags.get(0x52fc).hash,
+    );
+    // The reachable story uses one-shot PCM. Exercise the other save states
+    // in a fixture within the temporary browser profile.
+    const pcmPlayback = [
+      {channel: 5, level: 161, source: {resource: 'tin', loop: true}},
+      {channel: 6, level: 192, source: {resource: 'tin', loop: false}, ready: true},
+      {channel: 7, level: 64},
+    ];
+    await evaluate(`(async () => {
+      const {name} = (await indexedDB.databases()).find(({name}) =>
+        name?.startsWith('vn-runtime:["siglus:') && name.endsWith(',"slots"]'));
+      const open = indexedDB.open(name);
+      const db = await new Promise((resolve, reject) => {
+        open.onsuccess = () => resolve(open.result);
+        open.onerror = () => reject(open.error);
+      });
+      try {
+        await new Promise((resolve, reject) => {
+          const transaction = db.transaction('records', 'readwrite');
+          transaction.oncomplete = resolve;
+          transaction.onabort = () => reject(transaction.error);
+          const records = transaction.objectStore('records');
+          const record = records.get('saves:0');
+          record.onsuccess = () => {
+            const data = JSON.parse(new TextDecoder().decode(record.result));
+            data.pcmPlayback = ${JSON.stringify(pcmPlayback)};
+            data.voiceLevel = 128;
+            records.put(new TextEncoder().encode(JSON.stringify(data)), 'saves:0');
+          };
+        });
+      } finally { db.close(); }
+    })()`);
+    await reopenPlayer();
+    await click('#siglus-surface button[aria-label="Load Game"]');
+    await waitFor(slotLoop);
+    assert.equal(await chooseSlot('load', 0), 'confirm');
+    await waitFor("siglusSurface.dataset.loaded === 'true'");
+    const audio = await evaluate(
+      "siglusAudio.filter(({channel, resource}) => channel.startsWith('pcm') && resource === 'tin')",
+    );
+    assert.equal(audio.length, 1);
+    const [restored] = audio;
+    assert.equal(restored.channel, 'pcm5');
+    assert.equal(restored.loop, true);
+    assert.equal(restored.startSample, 0);
+    assert.equal(restored.frames, played.frames);
+    assert.equal(restored.rms, played.rms);
+    assert.ok(Math.abs(restored.gain - (played.gain * 161) / 255) < 1e-8);
+    await clickStage();
+    await waitForDialogueControls();
+    assert.equal(await selectSlot('save', 1), 'confirm');
+    const again = await waitFor(asyncExpression(`${slotRecords()}.find(([id]) => id === 1)?.[1]`));
+    assert.equal(again.voiceLevel, 128);
+    assert.deepEqual(
+      again.pcmPlayback.sort((a, b) => a.channel - b.channel),
+      pcmPlayback,
+    );
+    console.log(
+      'The real one-shot was omitted. The saved loop restarted at sample 0, and the prepared sound and channel levels round-tripped.',
+    );
   } else if (loadOnly) {
     const newGame = '#siglus-surface button[aria-label="New Game"]';
     await click(newGame);
@@ -1933,6 +2020,7 @@ verification: try {
     musicOnly ||
     configOnly ||
     loadOnly ||
+    pcmLoadOnly ||
     quickOnly ||
     autoOnly ||
     manageOnly ||

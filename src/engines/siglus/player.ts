@@ -2,7 +2,12 @@ import {IndexedDbStore} from '../../platform/store.js';
 import type {ByteSource} from '../../core/source.js';
 import {SiglusScenePack} from '../../formats/siglus/scene-pack.js';
 import {BrowserFullscreenMoviePlayer} from '../../video/fullscreen-movie.js';
-import {SiglusAudio, type SiglusAudioKind, type SiglusBgmCheckpoint} from './audio.js';
+import {
+  SiglusAudio,
+  type SiglusAudioKind,
+  type SiglusBgmCheckpoint,
+  type SiglusPcmCheckpoint,
+} from './audio.js';
 import {
   SiglusConfiguration,
   type SiglusFontSettings,
@@ -122,6 +127,8 @@ interface PlayerSave {
   background?: string;
   bgm?: string;
   bgmPlayback?: SiglusBgmCheckpoint;
+  pcmPlayback?: SiglusPcmCheckpoint[];
+  voiceLevel?: number;
   cast: string[];
   speed: number;
   timestamp?: number;
@@ -1042,6 +1049,8 @@ export class SiglusPlayer {
       background,
       bgm: bgmPlayback?.name,
       bgmPlayback,
+      pcmPlayback: this.audio.pcmCheckpoint(),
+      voiceLevel: this.audio.channelLevel('voice'),
       cast: [...this.currentCast],
       speed: this.speed,
       title: this.saveTitle,
@@ -1179,9 +1188,7 @@ export class SiglusPlayer {
     this.loadEnabled = save.controls?.load ?? true;
     this.skipAllowed = save.controls?.controlSkip ?? true;
     this.skipUnreadOverride = save.controls?.skipUnread;
-    this.audio.stop('voice');
-    this.audio.stopEffects();
-    this.audio.stop('bgm');
+    this.audio.resetPlayback();
     this.display.endEffect();
     this.display.cinema(0);
     this.stageProperties.clear();
@@ -1193,6 +1200,8 @@ export class SiglusPlayer {
     this.audio.setChannelLevel('bgm', music?.level ?? 255, 0);
     if (music) await this.audio.bgm(music.name, music.loop);
     else if (save.bgm) await this.audio.bgm(save.bgm);
+    this.audio.setChannelLevel('voice', save.voiceLevel ?? 255, 0);
+    await this.audio.restorePcm(save.pcmPlayback ?? []);
     this.speed = save.speed;
     this.saveTitle = save.title ?? '';
     const waitsForInput = save.waitsForInput ?? true;
@@ -1522,10 +1531,13 @@ export class SiglusPlayer {
         break;
       }
       case '$pcmch_play':
-        await this.audio.effect(`pcm${n(0)}`, s(1));
-        break;
       case '$pcmch_play_loop':
-        await this.audio.effect(`pcm${n(0)}`, s(1), true);
+        await this.audio.pcm(
+          n(0),
+          {resource: s(1), loop: command.name === '$pcmch_play_loop'},
+          false,
+          Math.max(0, n(2)),
+        );
         break;
       case '$pcmch_stop':
         this.audio.stop(`pcm${n(0)}`, Math.max(0, n(1)));
@@ -1691,6 +1703,8 @@ export class SiglusPlayer {
               thumbnail: this.display.captureThumbnail(),
               bgm: bgmPlayback?.name,
               bgmPlayback,
+              pcmPlayback: this.audio.pcmCheckpoint(),
+              voiceLevel: this.audio.channelLevel('voice'),
             };
           }
           return 0;
@@ -1776,6 +1790,17 @@ export class SiglusPlayer {
         case 151:
           this.display.repPosition(n(0), n(1));
           break;
+        case 152:
+        case 153:
+        case 154:
+          this.audio.setChannelLevel(
+            'voice',
+            root === 152 ? n(0) : root === 153 ? 255 : 0,
+            n(root === 152 ? 1 : 0),
+          );
+          break;
+        case 155:
+          return this.audio.channelLevel('voice');
         case 110: // No selection point in the current story flow.
           return 0;
         case 111:
@@ -2314,28 +2339,51 @@ export class SiglusPlayer {
       return 0;
     }
     if (root === 44 && member === -1 && path.length === 4) {
-      const channel = `pcm${path[2]}`;
+      const channel = path[2]!;
+      const key = `pcm${channel}`;
       const opcode = path[3];
-      if (opcode === 13) {
-        this.audio.setChannelLevel(channel, n(0), n(1));
+      if (opcode === 5) {
+        this.audio.stop(key, Math.max(0, n(0)));
         return 0;
       }
-      if (opcode === 0 && command.named.every((id) => [0, 3, 6, 7, 8].includes(id))) {
+      if (opcode === 9 && !command.named.length) {
+        this.audio.resumePcm(channel, Math.max(0, n(0)));
+        return 0;
+      }
+      if (opcode === 12) return this.audio.channelLevel(key);
+      if (opcode === 13 || opcode === 14 || opcode === 15) {
+        this.audio.setChannelLevel(
+          key,
+          opcode === 13 ? n(0) : opcode === 14 ? 255 : 0,
+          n(opcode === 13 ? 1 : 0),
+        );
+        return 0;
+      }
+      if (
+        (opcode === 0 || opcode === 2 || opcode === 11 || opcode === 16) &&
+        command.named.every((id) => [0, 2, 3, 6, 7, 8].includes(id))
+      ) {
         const positional = args.length - command.named.length;
         const namedNumber = (id: number): number | undefined => {
           const index = command.named.indexOf(id);
           return index < 0 ? undefined : n(positional + index);
         };
         const voice = namedNumber(8);
-        const volume = namedNumber(3);
-        if (voice !== undefined) {
-          await this.audio.voice(voice, channel, namedNumber(6), volume);
-          return 0;
-        }
         const fileIndex = command.named.indexOf(7);
         const file = fileIndex < 0 ? args[0] : args[positional + fileIndex];
-        if (typeof file === 'string') {
-          await this.audio.effect(channel, file, Boolean(namedNumber(0)), volume);
+        const resource = voice ?? file;
+        if (typeof resource === 'string' || typeof resource === 'number') {
+          await this.audio.pcm(
+            channel,
+            {
+              resource,
+              loop: opcode === 2 || opcode === 16 || Boolean(namedNumber(0)),
+              volumeType: namedNumber(3),
+              character: namedNumber(6),
+            },
+            opcode === 11 || opcode === 16,
+            Math.max(0, namedNumber(2) ?? (positional > 1 ? n(1) : 0)),
+          );
           return 0;
         }
       }

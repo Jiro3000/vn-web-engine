@@ -11,12 +11,27 @@ interface Playing {
   character?: number;
   volumeType?: number;
   resource?: string | number;
+  pcm?: SiglusPcmSource;
 }
 
 export interface SiglusBgmCheckpoint {
   name: string;
   loop: boolean;
   level?: number;
+}
+
+interface SiglusPcmSource {
+  resource: string | number;
+  loop: boolean;
+  volumeType?: number;
+  character?: number;
+}
+
+export interface SiglusPcmCheckpoint {
+  channel: number;
+  level: number;
+  source?: SiglusPcmSource;
+  ready?: boolean;
 }
 
 export type SiglusAudioKind = 'BGM' | 'KOE' | 'PCM' | 'SE';
@@ -27,7 +42,8 @@ export class SiglusAudio {
   private readonly context = new AudioContext();
   private readonly host = new BrowserAudioContextHost(this.context, document);
   private readonly soundLevels = new Map<number, number>();
-  private readonly pendingVoices = new Map<string, object>();
+  private readonly pendingPlayback = new Map<string, object>();
+  private readonly preparedPcm = new Map<string, {source: SiglusPcmSource; buffer: AudioBuffer}>();
   private readonly channelLevels = new Map<string, number>();
   private readonly playing = new Map<string, Playing>();
   private readonly indexes = new Map<string, ReturnType<typeof ovkIndex>>();
@@ -141,7 +157,22 @@ export class SiglusAudio {
     volumeType?: number,
   ): Promise<void> {
     const request = {};
-    this.pendingVoices.set(channel, request);
+    this.pendingPlayback.set(channel, request);
+    const buffer = await this.voiceBuffer(id);
+    if (this.pendingPlayback.get(channel) !== request) return;
+    this.start(channel, buffer, 'KOE', {
+      resource: id,
+      volumeType,
+      character:
+        character === undefined ? undefined : (this.voiceGroups.get(character) ?? character),
+    });
+    if (channel === 'voice') {
+      this.root.dataset.voice = String(id);
+      this.root.dataset.voiceDuration = String(buffer.duration);
+    }
+  }
+
+  private async voiceBuffer(id: number): Promise<AudioBuffer> {
     const bank = Math.floor(id / 100000);
     const path = `koe/z${String(bank).padStart(4, '0')}.ovk`;
     const file = this.files.get(path);
@@ -155,22 +186,10 @@ export class SiglusAudio {
     const entry = entries.get(id % 100000);
     if (!entry) throw new Error(`Missing Siglus voice ${id}`);
     const data = await readOvk(file, entry);
-    const buffer = await this.context.decodeAudioData(data.buffer);
-    if (this.pendingVoices.get(channel) !== request) return;
-    this.pendingVoices.delete(channel);
-    this.start(channel, buffer, 'KOE', {
-      resource: id,
-      volumeType,
-      character:
-        character === undefined ? undefined : (this.voiceGroups.get(character) ?? character),
-    });
-    if (channel === 'voice') {
-      this.root.dataset.voice = String(id);
-      this.root.dataset.voiceDuration = String(buffer.duration);
-    }
+    return this.context.decodeAudioData(data.buffer);
   }
 
-  async effect(channel: string, name: string, loop = false, volumeType?: number): Promise<void> {
+  private effectBuffer(name: string): Promise<AudioBuffer> {
     const path = `wav/${name.toLowerCase()}.nwa`;
     let decoded = this.effects.get(path);
     if (!decoded) {
@@ -178,11 +197,79 @@ export class SiglusAudio {
       this.effects.set(path, decoded);
       if (this.effects.size > 16) this.effects.delete(this.effects.keys().next().value!);
     }
-    this.start(channel, await decoded, channel === 'se' ? 'SE' : 'PCM', {
-      loop,
-      volumeType,
+    return decoded;
+  }
+
+  async effect(channel: string, name: string): Promise<void> {
+    this.start(channel, await this.effectBuffer(name), channel === 'se' ? 'SE' : 'PCM', {
       resource: name,
     });
+  }
+
+  async pcm(channel: number, source: SiglusPcmSource, ready = false, fade = 0): Promise<void> {
+    const key = `pcm${channel}`;
+    this.stop(key);
+    const request = {};
+    this.pendingPlayback.set(key, request);
+    const buffer =
+      typeof source.resource === 'number'
+        ? await this.voiceBuffer(source.resource)
+        : await this.effectBuffer(source.resource);
+    if (this.closed || this.pendingPlayback.get(key) !== request) return;
+    this.pendingPlayback.delete(key);
+    this.preparedPcm.set(key, {source, buffer});
+    if (!ready) this.resumePcm(channel, fade);
+  }
+
+  resumePcm(channel: number, fade = 0): void {
+    const key = `pcm${channel}`;
+    const prepared = this.preparedPcm.get(key);
+    if (!prepared) return;
+    const {source, buffer} = prepared;
+    const {resource, loop, volumeType, character} = source;
+    this.start(key, buffer, typeof resource === 'number' ? 'KOE' : 'PCM', {
+      resource,
+      loop,
+      fade,
+      volumeType,
+      character:
+        character === undefined ? undefined : (this.voiceGroups.get(character) ?? character),
+      pcm: source,
+    });
+  }
+
+  pcmCheckpoint(): SiglusPcmCheckpoint[] {
+    const channels = new Set([
+      ...this.channelLevels.keys(),
+      ...this.playing.keys(),
+      ...this.preparedPcm.keys(),
+    ]);
+    const checkpoint: SiglusPcmCheckpoint[] = [];
+    for (const key of channels) {
+      if (!/^pcm\d+$/.test(key)) continue;
+      const level = this.channelLevel(key);
+      const prepared = this.preparedPcm.get(key);
+      const pcm = this.playing.get(key)?.pcm;
+      if (prepared)
+        checkpoint.push({
+          channel: Number(key.slice(3)),
+          level,
+          source: prepared.source,
+          ready: true,
+        });
+      else if (pcm?.loop) checkpoint.push({channel: Number(key.slice(3)), level, source: pcm});
+      else if (level !== 255) checkpoint.push({channel: Number(key.slice(3)), level});
+    }
+    return checkpoint;
+  }
+
+  async restorePcm(checkpoint: readonly SiglusPcmCheckpoint[]): Promise<void> {
+    for (const key of this.channelLevels.keys())
+      if (/^pcm\d+$/.test(key)) this.channelLevels.delete(key);
+    for (const {channel, level, source, ready} of checkpoint) {
+      this.setChannelLevel(`pcm${channel}`, level, 0);
+      if (source) await this.pcm(channel, source, ready);
+    }
   }
 
   private start(
@@ -198,6 +285,7 @@ export class SiglusAudio {
       character,
       volumeType,
       resource,
+      pcm,
       sourceRate = buffer.sampleRate,
     }: {
       loop?: boolean;
@@ -208,6 +296,7 @@ export class SiglusAudio {
       character?: number;
       volumeType?: number;
       resource?: string | number;
+      pcm?: SiglusPcmSource;
       sourceRate?: number;
     } = {},
   ): void {
@@ -231,6 +320,7 @@ export class SiglusAudio {
       character,
       volumeType,
       resource,
+      pcm,
     };
     this.playing.set(channel, playing);
     this.active.add(playing);
@@ -270,7 +360,7 @@ export class SiglusAudio {
             gain: volume,
             frames: buffer.length,
             rate: buffer.sampleRate,
-            ...(kind === 'BGM'
+            ...(kind === 'BGM' || pcm
               ? {
                   startSample: Math.round(start * sourceRate),
                   sourceRate,
@@ -430,7 +520,8 @@ export class SiglusAudio {
   }
 
   stop(channel: string, fade = 0): void {
-    this.pendingVoices.delete(channel);
+    this.pendingPlayback.delete(channel);
+    this.preparedPcm.delete(channel);
     const playing = this.playing.get(channel);
     if (!playing) return;
     this.playing.delete(channel);
@@ -442,15 +533,31 @@ export class SiglusAudio {
   }
 
   stopPcmChannels(): void {
-    for (const channel of this.playing.keys()) {
+    for (const channel of new Set([
+      ...this.playing.keys(),
+      ...this.preparedPcm.keys(),
+      ...this.pendingPlayback.keys(),
+    ])) {
       if (/^pcm\d+$/.test(channel)) this.stop(channel);
     }
   }
 
   stopEffects(): void {
+    this.stopPcmChannels();
     for (const channel of this.playing.keys()) {
       if (channel !== 'bgm' && channel !== 'voice') this.stop(channel);
     }
+  }
+
+  resetPlayback(): void {
+    this.pendingPlayback.clear();
+    this.preparedPcm.clear();
+    this.playing.clear();
+    // A source in a fade-out is no longer addressable by its channel.
+    for (const {source} of this.active) source.stop();
+    delete this.root.dataset.bgm;
+    delete this.root.dataset.voice;
+    delete this.root.dataset.voiceDuration;
   }
 
   async dispose(): Promise<void> {
