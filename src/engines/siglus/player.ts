@@ -1080,7 +1080,8 @@ export class SiglusPlayer {
     if (save.background) await this.display.setBackground(save.background, 0);
     await this.cast(save.cast, -1);
     const music = save.bgmPlayback;
-    if (music) await this.audio.bgm(music.name, music.loop, 0, 0, music.sample);
+    this.audio.setChannelLevel('bgm', music?.level ?? 255, 0);
+    if (music) await this.audio.bgm(music.name, music.loop);
     else if (save.bgm) await this.audio.bgm(save.bgm);
     this.speed = save.speed;
     this.saveTitle = save.title ?? '';
@@ -2141,6 +2142,15 @@ export class SiglusPlayer {
     }
     if (root === 42 && member === 4) {
       this.audio.stop('bgm', n(0));
+      return 0;
+    }
+    if (root === 42 && member === 9) return this.audio.channelLevel('bgm');
+    if (root === 42 && (member === 6 || member === 7 || member === 8)) {
+      this.audio.setChannelLevel(
+        'bgm',
+        member === 6 ? n(0) : member === 7 ? 255 : 0,
+        n(member === 6 ? 1 : 0),
+      );
       return 0;
     }
     if (root === 44 && member === -1 && path.length === 4) {

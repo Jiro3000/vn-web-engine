@@ -1152,11 +1152,12 @@ verification: try {
       asyncExpression(`${slotRecords()}.find(([slot]) => slot === 0)?.[1].bgmPlayback`),
     );
     assert.equal(savedBgm?.name, savedState.bgm);
-    assert.ok(Number.isSafeInteger(savedBgm?.sample) && savedBgm.sample > 0);
+    assert.equal(savedBgm.level, 255);
+    assert.equal(savedBgm.sample, undefined);
     const restoredBgm = async (start) => {
       const played = await evaluate(`siglusAudio.slice(${start}).findLast(({channel, resource}) =>
         channel === 'bgm' && resource === ${JSON.stringify(savedBgm.name)})`);
-      assert.equal(played.startSample, savedBgm.sample);
+      assert.equal(played.startSample, 0, 'BGM02 starts at its configured Gameexe.dat sample');
       assert.equal(played.loop, savedBgm.loop);
       assert.ok(played.startSample < played.loopEndSample);
       return played;
@@ -1260,7 +1261,7 @@ verification: try {
     console.log(
       `Original Load restored the dialogue, stage and thumbnail after reopening, then resumed the script. Matched ${saveCommands.length + commands.length} Save/Load tags.`,
     );
-    console.log('BGM resumed from saved source sample:', savedBgm, inGameBgm.sourceRate);
+    console.log('BGM restored at the configured start:', savedBgm, inGameBgm.startSample);
   } else if (configOnly) {
     await click('#siglus-surface button[aria-label="Configuration"]');
     await waitFor(`siglusTags.some(({scene, path}) =>

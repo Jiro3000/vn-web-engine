@@ -11,15 +11,12 @@ interface Playing {
   character?: number;
   volumeType?: number;
   resource?: string | number;
-  sourceRate: number;
-  startedAt: number;
-  start: number;
 }
 
 export interface SiglusBgmCheckpoint {
   name: string;
-  sample: number;
   loop: boolean;
+  level?: number;
 }
 
 export type SiglusAudioKind = 'BGM' | 'KOE' | 'PCM' | 'SE';
@@ -98,7 +95,7 @@ export class SiglusAudio {
     return buffer;
   }
 
-  async bgm(name: string, loop = true, fade = 0, crossfade = 0, sample?: number): Promise<void> {
+  async bgm(name: string, loop = true, fade = 0, crossfade = 0): Promise<void> {
     const entry = [...this.config].find(
       ([key, value]) =>
         /^BGM\.\d+$/.test(key) && value.split('"')[1]?.toLowerCase() === name.toLowerCase(),
@@ -118,17 +115,12 @@ export class SiglusAudio {
     const end = Number(fields[3] ?? -1);
     const loopStart = Number(fields[4] ?? 0) / rate;
     const loopEnd = end < 0 ? buffer.duration : Math.min(buffer.duration, end / rate);
-    const limit = Math.ceil((loop ? loopEnd : buffer.duration) * rate);
-    const startSample =
-      sample !== undefined && Number.isSafeInteger(sample) && sample >= 0 && sample < limit
-        ? sample
-        : configuredStart;
     if (crossfade > 0) this.stop('bgm', crossfade);
     this.start('bgm', buffer, 'BGM', {
       loop,
       loopStart,
       loopEnd,
-      start: startSample / rate,
+      start: configuredStart / rate,
       fade: fade || crossfade,
       sourceRate: rate,
       resource: name,
@@ -139,14 +131,7 @@ export class SiglusAudio {
   bgmCheckpoint(): SiglusBgmCheckpoint | undefined {
     const playing = this.playing.get('bgm');
     if (!playing || typeof playing.resource !== 'string') return;
-    const {source, start, startedAt, sourceRate} = playing;
-    let position = start + Math.max(0, this.context.currentTime - startedAt);
-    if (source.loop) {
-      const duration = source.loopEnd - source.loopStart;
-      if (duration > 0 && position >= source.loopEnd)
-        position = source.loopStart + ((position - source.loopStart) % duration);
-    } else if (position >= source.buffer!.duration) return;
-    return {name: playing.resource, sample: Math.floor(position * sourceRate), loop: source.loop};
+    return {name: playing.resource, loop: playing.source.loop, level: this.channelLevel('bgm')};
   }
 
   async voice(
@@ -246,9 +231,6 @@ export class SiglusAudio {
       character,
       volumeType,
       resource,
-      sourceRate,
-      startedAt: now,
-      start,
     };
     this.playing.set(channel, playing);
     this.active.add(playing);
@@ -400,7 +382,7 @@ export class SiglusAudio {
     character?: number,
     volumeType?: number,
   ): number {
-    const level = this.channelLevels.get(channel) ?? 255;
+    const level = this.channelLevel(channel);
     const volume =
       volumeType === undefined || volumeType === 1
         ? this.volume(kind, character)
@@ -408,6 +390,10 @@ export class SiglusAudio {
           ? (this.level('ALL') * this.soundLevel(volumeType)) / (255 * 255)
           : 0;
     return (volume * level) / 255;
+  }
+
+  channelLevel(channel: string): number {
+    return this.channelLevels.get(channel) ?? 255;
   }
 
   setChannelLevel(channel: string, level: number, fade: number): void {

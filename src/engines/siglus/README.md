@@ -172,8 +172,8 @@ Save is reached from a different menu. The probe reopens
 the player in the same private browser session and loads the same slot from the
 original title menu. The probe confirms the three types of prompts and checks
 thumbnail dimensions, dialogue hashes, stage identifiers and script tag offsets
-against the disassembly. Both loads verify the actual Web Audio start
-offset against the saved BGM checkpoint in source samples. After loading
+against the disassembly. Both loads verify that Web Audio starts the saved
+BGM track at the source sample configured in Gameexe.dat. After loading
 from the title, the probe opens and closes both the message history and
 the original Save menu on the restored page before advancing.
 Gameexe.dat names `__sys_load_after` as `LOAD_AFTER_CALL`. The embedded
@@ -218,7 +218,13 @@ uses the original MSGBK resources and stores recent history and rewind
 checkpoints in each save. The probe reloads the slot after reopening the player
 and checks both No and Yes in the original resume confirmation.
 
-The clean-profile route matched 148,657 command and message tags and
+The clean-profile DOM Text route on `d31134d` checked 21,210 input
+checkpoints, including nine scrolled messages and 40 size resets. It
+matched 147,119 tags and checked 8,552 audio buffers. The run completed
+all five movies, checked the clear flags and entered Music after
+reopening. It reported zero browser console errors and zero text failures.
+
+An earlier clean-profile Native route matched 148,657 command and message tags and
 checked 8,552 decoded audio buffers with zero browser console errors.
 All 21,075 dialogue checkpoints passed the Native render check, including
 the pages following 40 scripted size resets. Save and load were exercised
@@ -260,15 +266,18 @@ and Gameexe.dat SHA-256
   at the configured size. Dialogue and native capture effects are absent from
   that composite.
 - Loading restores the VM, current message, background and cast. Browser
-  saves record the BGM source sample and loop mode. Older browser saves
-  use the configured start sample. The embedded Windows PE writes the
+  saves record the active BGM track, loop mode and channel level. Playback
+  starts at the configured sample, including for older browser records
+  with a playback cursor. The embedded Windows PE writes the
   track name at `0x6009f3`, followed by the level, stop countdown and
   two playback flags. The reader at `0x600ae0` starts the saved track
   with sample argument `-1` at `0x600c06`. The player resolves that
   argument at `0x60527c` to the start sample from the BGM table populated
   by the Gameexe.dat parser at `0x695112`. The Windows sound loader
-  applies the saved voice level at `0x5ff350`. In-flight animations and
-  voice playback in the browser resume with the next script command.
+  applies the saved voice level at `0x5ff350`. The browser still lacks
+  the native pending BGM stop state and the full PCM channel save state.
+  In-flight animations and voice playback in the browser resume with
+  the next script command.
 - The browser's character layout, text layout, day cards, transition masks,
   recollection, shake, dizziness and motion effects approximate the script's
   native compositing. Effect timing and rendering have not been compared
