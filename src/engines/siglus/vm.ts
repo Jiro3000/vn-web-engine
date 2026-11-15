@@ -238,12 +238,16 @@ export class SiglusVm {
   }
 
   /** Run a host-invoked scenario while the current command is suspended. */
-  async callScene(scene: string, entry: number | string = 0): Promise<Value> {
+  async callScene(
+    scene: string,
+    entry: number | string = 0,
+    parameters: Argument[] = [],
+  ): Promise<Value> {
     this.signal.throwIfAborted();
     if (!this.frames.length) throw new Error('No Siglus command to suspend');
     try {
       if (typeof entry === 'number')
-        return await this.call(this.entry(scene, entry), this.frames.length);
+        return await this.call(this.entry(scene, entry, parameters), this.frames.length);
       const script = this.pack.scene(scene);
       const exported = this.pack.commandNames.findIndex(
         (name, index) =>
@@ -255,7 +259,7 @@ export class SiglusVm {
           ? this.pack.commandScenes[exported * 2 + 1]
           : script.commands[script.commandNames.indexOf(entry)];
       if (offset === undefined) throw new Error(`Missing Siglus system command ${scene}.${entry}`);
-      return await this.call(new Frame(script, offset), this.frames.length);
+      return await this.call(new Frame(script, offset, parameters), this.frames.length);
     } catch (error) {
       if (error instanceof ReturnFromHostScene) return 0;
       throw error;
@@ -321,11 +325,11 @@ export class SiglusVm {
     }
   }
 
-  private entry(name: string, label: number): Frame {
+  private entry(name: string, label: number, parameters: Argument[] = []): Frame {
     const scene = this.pack.scene(name);
     const offset = scene.entries[label];
     if (offset === undefined) throw new Error(`Missing Siglus entry ${name}:${label}`);
-    return new Frame(scene, offset);
+    return new Frame(scene, offset, parameters);
   }
 
   private propertyForm(frame: Frame, path: readonly number[]): number | undefined {

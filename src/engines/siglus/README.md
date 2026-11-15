@@ -51,16 +51,20 @@ movie completion, chapter order, and the return to the cleared title. It
 also checks that the saved page's dialogue hash matches after loading and
 that the prologue, movie and cleared-title flags were written to browser
 storage. Audio checks use decoded PCM lengths, sample rates, peak amplitudes
-and RMS levels with browser output muted.
+and RMS levels with browser output muted. The route checks that each
+movie drew frames and reached the end of its decoded duration. Set
+`SIGLUS_FFPROBE=ffprobe` to compare the original WMV durations independently.
+The verifier reports decoded movie positions, displayed and dropped frames,
+clock stalls and maximum presentation lateness.
 The final title plays one of the ending-specific voice lines and clears
 the one-shot request G[1009]. The verifier then reopens the player in
 the same temporary profile, checks the regular cleared-title voice,
 enters the unlocked Music screen and returns to the title.
 The page audit checks dialogue at the VM's input checkpoints, including
 checkpoints reached with Control held. It checks the active text layer
-against the stage bounds and inspects the alpha channel in the Native
-dialogue area or the bounds of the base text in DOM Text. Ruby readings
-are excluded from the DOM visibility check. Failures include
+against the stage bounds and inspects the alpha channel of each drawn
+Native dialogue row or the bounds of base text in DOM Text. The audit
+counts Native rows with ink. Ruby readings are excluded from both checks. Failures include
 the scene, bytecode offset, page and font size. The full pass requires
 at least one scripted `size()` reset to have been exercised.
 Set `SIGLUS_TEXT_MODE=dom` on the full-route command to select DOM Text
@@ -78,7 +82,8 @@ disassembly at chapter 01 offset `0x0f40`, and that a click at `pp()` at
 `0x0fc2` appends the next fragment to the same message.
 The probe measured 87 checkpoints, including 29 with a speaker name,
 nine with multiple dialogue rows and two with ruby. All line counts
-matched. Each measured baseline difference was within one game pixel.
+matched. The largest measured baseline difference was below 0.001 game
+pixels.
 Set `SIGLUS_PAUSE_SAVE_ONLY=1` to save and load at `pp()` at `0x48c8`
 through the original slot menu and verify the restored prefix and following
 fragment by hash.
@@ -90,6 +95,10 @@ bounds with `SIGLUS_TEXT_MODE=dom`.
 Set `SIGLUS_DIAGNOSTIC_PAGES=1000` for a focused regression check of the
 first message size resets. The command advances the mandatory prologue
 with normal input, starts New Game and holds Control to reach the target.
+It checks the chapter 01 costume change at `0x28f75` by comparing the
+body resource, dimensions and subsequent dialogue hash at `0x29486`.
+The browser calls the original `$bs_dress_init` and `$dress_control`
+commands for costume selection and preserves the resulting state in saves.
 Set `SIGLUS_TYPING_ONLY=1` to measure character reveal on the first two
 prologue replies governed by `script.set_message_speed(60)`. It checks
 partial text, completion by click, natural completion in DOM Text and the
@@ -285,13 +294,13 @@ scripted save and load menus. It completed all five movies, checked
 the clear flags and entered Music after reopening. It reported zero
 browser console errors and zero text failures.
 
-The clean-profile Native route on `88f1b31` matched 148,352 command and message
-tags and checked 8,551 decoded audio buffers with zero browser console errors.
-All 21,210 dialogue checkpoints passed the Native render check, including
-the pages following 40 scripted size resets. Save and load were exercised
-on page 70. The run finished all five movies, verified the clear flags and
-entered Music after reopening. `npm test` reported the same
-48 failing test names as `main` at `15f2bee` (2,518 passed, 3 skipped).
+The clean-profile Native route on `4d57cdd` matched 149,412 command and
+message tags and 71,211 literal command arguments. It checked 8,553
+decoded audio buffers with zero browser console errors. All 21,210
+dialogue checkpoints passed the Native render check, including the pages
+following 40 scripted size resets. Save and load were exercised on page 70. The run finished all five movies, verified the clear flags and
+entered Music after reopening. `npm test` reported the same 48 failing
+test names as `main` at `15f2bee` (2,518 passed, 3 skipped).
 
 ## Scripted interface in the original
 
@@ -354,6 +363,10 @@ and Gameexe.dat SHA-256
   playback with the Web Audio clock and approximates a live BGM pause
   at the scheduled fade-out endpoint. In-flight animations and transient
   voice playback continue with the next script command.
+- Two close-up body poses for the `ko` costume `04` have no `bs3_`
+  resources in this installation. When the requested size is absent,
+  the browser uses the available `bs2_` body and face for the same costume
+  and pose. Windows behavior for those missing resources is unverified.
 - The browser's character layout, text layout, day cards, transition masks,
   recollection, shake, dizziness and motion effects approximate the script's
   native compositing. Effect timing and rendering have not been compared

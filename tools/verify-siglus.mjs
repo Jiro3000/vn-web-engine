@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
-import {spawn} from 'node:child_process';
+import {execFile, spawn} from 'node:child_process';
 import {mkdtemp, readFile, readdir, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 import {setTimeout as delay} from 'node:timers/promises';
+import {promisify} from 'node:util';
 import {DevToolsConnection} from './capture-browser-trace.mjs';
 import {createStaticServer} from './serve-static.mjs';
 
@@ -32,6 +33,36 @@ const typingOnly = process.env.SIGLUS_TYPING_ONLY === '1';
 const digest = (value) => createHash('sha256').update(value).digest('hex');
 if (!folder || !browser || !disassemblyDirectory)
   throw new Error('Usage: node tools/verify-siglus.mjs GAME_FOLDER CHROMIUM DISASSEMBLY_DIRECTORY');
+
+const movies = ['op', 'chapter1', 'chapter2', 'chapter3', 'ed'];
+
+async function movieDurations(ffprobe) {
+  const reference = new Map();
+  if (!ffprobe) return reference;
+  const root = resolve(folder);
+  let directory = join(root, 'StartData', 'GameData', 'mov');
+  const names = await readdir(directory).catch(() => {
+    directory = join(root, 'mov');
+    return readdir(directory);
+  });
+  for (const name of movies) {
+    const file = names.find((file) => file.toLowerCase() === name + '.wmv');
+    assert.ok(file, 'Missing original WMV ' + name);
+    const {stdout} = await promisify(execFile)(ffprobe, [
+      '-v',
+      'error',
+      '-show_entries',
+      'format=duration',
+      '-of',
+      'json',
+      join(directory, file),
+    ]);
+    const duration = Number(JSON.parse(stdout).format.duration);
+    assert.ok(Number.isFinite(duration) && duration > 0, 'Invalid FFprobe duration for ' + name);
+    reference.set(name, duration);
+  }
+  return reference;
+}
 
 function literalArguments(expression, count) {
   if (!count || !expression?.endsWith(')')) return [];
@@ -234,6 +265,7 @@ function compareStorySection(trace, chapter, script, entryId, end = Infinity) {
   return expectedText.length;
 }
 
+const originalMovieDurations = await movieDurations(process.env.SIGLUS_FFPROBE);
 const profile = await mkdtemp(join(tmpdir(), 'vn-siglus-'));
 const server = await createStaticServer();
 let child;
@@ -431,7 +463,23 @@ verification: try {
     window.siglusAudio = [];
     window.siglusMovies = [];
     window.siglusSurface = document.querySelector('#siglus-surface');
-    window.siglusPageAudit = {pages: 0, native: 0, dom: 0, skipped: 0, slides: 0, textSizeResets: 0, failures: []};
+    window.siglusPageAudit = {pages: 0, native: 0, dom: 0, inkRows: 0, skipped: 0, slides: 0, textSizeResets: 0, failures: []};
+    const nativeRows = new Map();
+    const canvas = CanvasRenderingContext2D.prototype;
+    const fillText = canvas.fillText;
+    const clearRect = canvas.clearRect;
+    canvas.fillText = function (value, x, y, ...rest) {
+      if (this.canvas.dataset.siglusNativeText !== undefined && value.trim()) {
+        const size = parseFloat(this.font.match(/([0-9.]+)px/)?.[1]);
+        if (!nativeRows.has(size)) nativeRows.set(size, new Set());
+        nativeRows.get(size).add(y);
+      }
+      fillText.call(this, value, x, y, ...rest);
+    };
+    canvas.clearRect = function (...rect) {
+      if (this.canvas.dataset.siglusNativeText !== undefined) nativeRows.clear();
+      clearRect.apply(this, rect);
+    };
     let sizeOverride = false;
     let resetPending = false;
     siglusSurface.addEventListener('siglus-tag', (event) => siglusTags.push(event.detail));
@@ -475,16 +523,33 @@ verification: try {
           const bottom = Math.min(rendered.height, Math.ceil((viewport.bottom - rect.top) * rendered.height / rect.height));
           if (right <= x || bottom <= y) reason = 'dialogue area is clipped';
           else {
-            const alpha = rendered.getContext('2d').getImageData(x, y, right - x, bottom - y).data;
-            let visible = false;
-            const finalRow = Number.parseFloat(text.style.top) + 2 * Number.parseFloat(text.style.lineHeight);
-            for (let i = 3; i < alpha.length; i += 4) {
-              if (alpha[i] < 32) continue;
-              visible = true;
-              if (!slideCheckpoint) break;
-              if (y + Math.floor(i / (4 * (right - x))) >= finalRow) finalRowInk++;
+            const width = right - x;
+            const alpha = rendered.getContext('2d').getImageData(x, y, width, bottom - y).data;
+            const textTop = Number.parseFloat(text.style.top);
+            const textBottom = textTop + Number.parseFloat(text.style.height);
+            const sliding = text.hasAttribute('data-siglus-slide');
+            const rows = [...(nativeRows.get(size) ?? [])]
+              .filter(row => row >= textTop && (!sliding || row < textBottom))
+              .sort((a, b) => a - b);
+            if (!rows.length) reason = 'dialogue canvas received no visible base text rows';
+            for (const row of rows) {
+              const start = Math.max(0, Math.floor(row) - y);
+              const end = Math.min(bottom - y, Math.ceil(row + size) - y);
+              let ink = 0;
+              for (let i = (start * width) * 4 + 3; i < (end * width) * 4; i += 4) {
+                if (alpha[i] < 32) continue;
+                ink++;
+                if (!slideCheckpoint) break;
+              }
+              if (!ink) {
+                reason = 'dialogue row has no visible ink at y=' + row;
+                break;
+              }
+              if (slideCheckpoint && row >= textTop + 2 * parseFloat(text.style.lineHeight) - 0.5) {
+                finalRowInk = ink;
+              }
+              audit.inkRows++;
             }
-            if (!visible) reason = 'dialogue canvas has no visible ink';
           }
         } else {
           const range = document.createRange();
@@ -515,6 +580,13 @@ verification: try {
           if (!reason && (!visible || !lastVisible)) reason = 'dialogue has no visible final row';
         }
       } else reason = 'dialogue is empty';
+      if (${diagnosticPages >= 1000} && siglusTags.at(-1)?.scene === ${JSON.stringify(scene)} &&
+          siglusTags.at(-1)?.offset === 0x29486) {
+        const layer = stage.querySelector('[data-siglus-cast-body]');
+        const body = layer?.querySelector('canvas');
+        window.siglusCostumeProof = {resource: layer?.dataset.siglusCastBody,
+          width: body?.width, height: body?.height, text: text.textContent};
+      }
       if (slideCheckpoint) {
         window.siglusSlideProof = {text: text.textContent, translate: text.style.translate, finalRowInk, reason};
       }
@@ -2279,6 +2351,19 @@ verification: try {
       await control('keyUp').catch(() => {});
     }
     await verifyRenderedPages({requireReset: diagnosticPages >= 1000});
+    if (diagnosticPages >= 1000) {
+      const proof = await evaluate('siglusCostumeProof');
+      assert.ok(proof, 'Expected the chapter 01 costume change checkpoint');
+      assert.equal(proof.resource, 'bs2_ma020101');
+      assert.deepEqual([proof.width, proof.height], [865, 1226], 'The G00 body dimensions');
+      assert.equal(digest(proof.text), scripts.get(scene).tags.get(0x29472).hash);
+      console.log(
+        'Costume change used the original body asset:',
+        proof.resource,
+        proof.width,
+        proof.height,
+      );
+    }
   } else if (openingOnly) {
     backgrounds.clear();
     voices.clear();
@@ -2439,14 +2524,33 @@ verification: try {
     const afterLoad = await evaluate('siglusTags.length');
     await clickStage();
     console.log('Saved and loaded page', saved);
-    const movies = ['op', 'chapter1', 'chapter2', 'chapter3', 'ed'];
     for (const [index, name] of movies.entries()) {
       await control('keyDown');
       await waitFor('siglusSurface.dataset.movie === ' + JSON.stringify(name), 600000);
       await control('keyUp');
       console.log('Movie started:', name);
       await waitFor('siglusMovies.length === ' + (index + 1), 360000);
-      console.log('Movie completed:', name);
+      const movie = await evaluate(`siglusMovies[${index}]`);
+      const expected = originalMovieDurations.get(name);
+      assert.ok(movie.frames > 0 && movie.duration > 0, name + ' produced no video frames');
+      assert.ok(movie.position >= movie.duration - 0.5, name + ' stopped before the end');
+      if (expected !== undefined) {
+        assert.ok(
+          Math.abs(movie.duration - expected) <= 0.1,
+          `${name}: browser duration ${movie.duration}, FFprobe duration ${expected}`,
+        );
+      }
+      console.log('Movie completed:', {
+        name,
+        position: movie.position,
+        duration: movie.duration,
+        reference: expected,
+        frames: movie.frames,
+        audioStalls: movie.decoding.audioStalls,
+        videoStalls: movie.decoding.videoStalls,
+        dropped: movie.decoding.skipped,
+        maxLateMs: movie.decoding.maxLateMs,
+      });
     }
     // The ending leaves a skippable scene fade before the real title menu.
     await clickStage();

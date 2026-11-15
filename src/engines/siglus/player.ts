@@ -131,6 +131,7 @@ interface PlayerSave {
   pcmPlayback?: SiglusPcmCheckpoint[];
   voiceLevel?: number;
   cast: string[];
+  castCostumes?: (string | null)[];
   speed: number;
   timestamp?: number;
   title?: string;
@@ -225,6 +226,7 @@ export class SiglusPlayer {
   private skipAllowed = true;
   private readonly stageProperties = new Map<string, Value>();
   private currentCast: string[] = [];
+  private currentCastCostumes: (string | null)[] = [];
   private pendingBackground?: {
     name: string;
     pan: NonNullable<Parameters<SiglusDisplay['setBackground']>[2]>;
@@ -694,7 +696,9 @@ export class SiglusPlayer {
       const name = this.game.pack.propertyNames[page & 0xffff];
       if (
         name &&
-        /^\$(bg_(?:name|name_prev|wipe|set_ready|type|file_exist)|bs_(?:name|wipe_set))$/.test(name)
+        /^\$(bg_(?:name|name_prev|wipe|set_ready|type|file_exist)|bs_(?:name|name_info|dress_info|wipe_set)|cha_dress)$/.test(
+          name,
+        )
       ) {
         const key = [name, ...path.slice(1)].join('.');
         if (value !== undefined) this.stageProperties.set(key, value);
@@ -947,12 +951,14 @@ export class SiglusPlayer {
   private async refreshMessageFrame(): Promise<void> {
     const queued = [...this.pendingFrameWatchers];
     this.pendingFrameWatchers.clear();
-    for (const {command} of queued) {
-      const index = this.game.pack.commandNames.indexOf(command);
-      const scene = this.game.pack.sceneNames[this.game.pack.commandScenes[index * 2]!];
-      if (scene) await this.vm.callScene(scene, command);
-    }
+    for (const {command} of queued) await this.runOriginalCommand(command);
     if (queued.length) await this.renderMessageObjects();
+  }
+
+  private async runOriginalCommand(command: string, parameters: Value[] = []): Promise<void> {
+    const index = this.game.pack.commandNames.indexOf(command);
+    const scene = this.game.pack.sceneNames[this.game.pack.commandScenes[index * 2]!];
+    if (scene) await this.vm.callScene(scene, command, parameters);
   }
 
   private async waitAtPage(): Promise<void> {
@@ -1054,6 +1060,7 @@ export class SiglusPlayer {
       pcmPlayback: this.audio.pcmCheckpoint(),
       voiceLevel: this.audio.channelLevel('voice'),
       cast: [...this.currentCast],
+      castCostumes: [...this.currentCastCostumes],
       speed: this.speed,
       title: this.saveTitle,
       waitsForInput,
@@ -1195,9 +1202,10 @@ export class SiglusPlayer {
     this.display.cinema(0);
     this.stageProperties.clear();
     for (const [key, value] of save.stage) this.stageProperties.set(key, value);
+    await this.restoreCastCostumes(save);
     this.pendingBackground = undefined;
     if (save.background) await this.display.setBackground(save.background, 0);
-    await this.cast(save.cast, -1);
+    await this.cast(save.cast, -1, save.castCostumes);
     const music = save.bgmPlayback ?? (save.bgm ? {name: save.bgm, loop: true} : undefined);
     await this.audio.restoreBgm(music, save.bgmLevel);
     this.audio.setChannelLevel('voice', save.voiceLevel ?? 255, 0);
@@ -1206,7 +1214,11 @@ export class SiglusPlayer {
     this.saveTitle = save.title ?? '';
     const waitsForInput = save.waitsForInput ?? true;
     if (waitsForInput) {
-      await this.display.loadMessage(save.message);
+      const message = save.message;
+      const faceCostume = message.face
+        ? (message.faceCostume ?? (await this.spriteCostume(message.face, 0, 1)))
+        : undefined;
+      await this.display.loadMessage({...message, faceCostume});
       this.pageCharacters = save.message.text.reduce(
         (count, {text}) => count + Array.from(text.replaceAll('\n', '')).length,
         0,
@@ -1304,6 +1316,7 @@ export class SiglusPlayer {
     this.display.closeMessage();
     this.pageVoices = [];
     this.currentCast = [];
+    this.currentCastCostumes = [];
     await this.display.show(orderedObjects(back), this.wipeDuration(ms), (id) => this.choose(id));
     this.objects[0] = this.copyObjects(back);
     this.objectsDirty = false;
@@ -1378,14 +1391,45 @@ export class SiglusPlayer {
     );
   }
 
-  private async cast(names: string[], fade: number): Promise<void> {
+  private async restoreCastCostumes(save: PlayerSave): Promise<void> {
+    const dressId = this.game.pack.propertyNames.indexOf('$cha_dress');
+    if (dressId < 0 || save.stage.some(([key]) => key.startsWith('$cha_dress.'))) return;
+    // Older saves kept costume globals in the VM and did not run the costume initializer.
+    await this.runOriginalCommand('$bs_dress_init');
+    const prefix = (0x7f000000 | dressId) + '.';
+    for (const [key, value] of save.vm.globals) {
+      if (key.startsWith(prefix)) {
+        this.stageProperties.set('$cha_dress.' + key.slice(prefix.length), value);
+      }
+    }
+  }
+
+  private async cast(
+    names: string[],
+    fade: number,
+    costumes?: readonly (string | null)[],
+  ): Promise<void> {
     const resolved = names.map((name) =>
       /^[a-z]{2}$/i.test(name)
         ? (this.currentCast.find((previous) => spriteActor(previous) === name) ?? 'none')
         : name,
     );
     this.currentCast = resolved;
-    await this.display.showCast(resolved, this.wipeDuration(fadeTimes[fade] ?? 0));
+    this.currentCastCostumes = resolved.map(() => null);
+    const sprites = [];
+    for (const [slot, name] of resolved.entries()) {
+      if (!name || name.startsWith('none')) continue;
+      const costume = costumes?.[slot] ?? (await this.spriteCostume(name, slot, 0));
+      this.currentCastCostumes[slot] = costume;
+      sprites.push({name, costume});
+    }
+    await this.display.showCast(sprites, this.wipeDuration(fadeTimes[fade] ?? 0));
+  }
+
+  private async spriteCostume(name: string, slot: number, portrait: number): Promise<string> {
+    this.stageProperties.set('$bs_name_info.-1.' + slot, spriteActor(name));
+    await this.runOriginalCommand('$dress_control', [slot, portrait]);
+    return String(this.stageProperties.get('$bs_dress_info.-1.' + slot) || '01');
   }
 
   private async movie(name: string, skippable: boolean): Promise<number> {
@@ -1421,6 +1465,7 @@ export class SiglusPlayer {
       // The browser initializes empty scene properties and owns the display and sound state.
       case '$sys_set_gsd':
         for (let i = 0; i < 6; i++) this.stageProperties.set('$bs_name.-1.' + i, 'none');
+        await this.runOriginalCommand('$bs_dress_init');
         // Earlier browser profiles may have an initialization flag without this setting.
         if (!this.system.has(1330)) this.property([31, -1, 1330], 1);
         for (const watcher of messageFrameWatchers) {
@@ -1563,7 +1608,7 @@ export class SiglusPlayer {
           this.pageCharacters = 0;
           this.revealWholePage = false;
         }
-        await this.display.face(s(0));
+        await this.display.face(s(0), await this.spriteCostume(s(0), 0, 1));
         this.pendingText = true;
         break;
       case '$sc_recollect':

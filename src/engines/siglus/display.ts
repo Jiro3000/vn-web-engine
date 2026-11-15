@@ -12,6 +12,7 @@ export interface SiglusHistoryEntry {
 
 interface SiglusMessageSnapshot extends Omit<SiglusHistoryEntry, 'voices'> {
   face?: string;
+  faceCostume?: string;
   index: number;
   size?: number;
   slideTime?: number;
@@ -125,6 +126,7 @@ export class SiglusDisplay {
   private hovered?: {id: number; group: number};
   private pointer = [0, 0];
   private currentFace?: string;
+  private currentFaceCostume?: string;
   private currentName = '';
   private currentText: {text: string; ruby?: string}[] = [];
   private windowIndex = 0;
@@ -1236,18 +1238,27 @@ export class SiglusDisplay {
     this.root.dataset.phase = 'scene';
   }
 
-  async showCast(names: readonly string[], duration: number): Promise<void> {
-    const visible = names.filter((name) => name && !name.startsWith('none'));
+  async showCast(
+    sprites: readonly {name: string; costume: string}[],
+    duration: number,
+  ): Promise<void> {
     const characters = await Promise.all(
-      visible.map(async (name, index) => {
+      sprites.map(async ({name, costume}, index) => {
         const match = /^(bs\d_)?([a-z]{2})(\d\d)(\d\d)/i.exec(name);
         if (!match) throw new Error(`Invalid Siglus sprite ${name}`);
         const [, prefix = 'bs2_', actor, pose, expression] = match;
-        const position = (this.width * (index + 1)) / (visible.length + 1);
-        const bodyName = `${prefix}${actor}01${pose}01`;
+        const position = (this.width * (index + 1)) / (sprites.length + 1);
+        const bodyCode = `${actor}${costume}${pose}01`;
+        const requested = prefix + bodyCode;
+        const medium = 'bs2_' + bodyCode;
+        const useMedium =
+          !this.files.has(`g00/${requested.toLowerCase()}.g00`) &&
+          this.files.has(`g00/${medium.toLowerCase()}.g00`);
+        const bodyName = useMedium ? medium : requested;
         const body = await this.graphic(bodyName);
-        const face = await this.spriteFace(prefix, actor!, pose!, expression!);
+        const face = await this.spriteFace(useMedium ? 'bs2_' : prefix, actor!, pose!, expression!);
         const layer = document.createElement('div');
+        layer.dataset.siglusCastBody = bodyName;
         layer.style.cssText = `position:absolute;left:${position}px;top:${Math.round(this.height * 0.32)}px`;
         for (const graphic of [body, face])
           layer.append(this.node({...graphic, x: -graphic.centerX, y: -graphic.centerY}));
@@ -1257,7 +1268,7 @@ export class SiglusDisplay {
     this.signal.throwIfAborted();
     this.cast.replaceChildren(...characters);
     if (duration > 0 && characters.length) this.cast.animate({opacity: [0, 1]}, {duration});
-    this.root.dataset.cast = visible.join(',');
+    this.root.dataset.cast = sprites.map(({name}) => name).join(',');
   }
 
   setTextSize(size?: number): void {
@@ -1403,9 +1414,9 @@ export class SiglusDisplay {
     this.cast.style.clipPath = this.layers.style.clipPath;
   }
 
-  async face(code: string): Promise<void> {
+  async face(code: string, costume = '01'): Promise<void> {
     const [actor, pose, expression] = code.match(/../g) ?? [];
-    const body = await this.graphic(`bs2_${actor}01${pose}01`);
+    const body = await this.graphic(`bs2_${actor}${costume}${pose}01`);
     const face = await this.spriteFace('bs2_', actor!, pose!, expression!);
     const composite = document.createElement('div');
     composite.style.cssText =
@@ -1414,6 +1425,7 @@ export class SiglusDisplay {
       composite.append(this.node({...graphic, x: -graphic.centerX, y: -graphic.centerY}));
     this.portrait.replaceChildren(composite);
     this.currentFace = code;
+    this.currentFaceCostume = costume;
   }
 
   private spriteFace(prefix: string, actor: string, pose: string, expression: string) {
@@ -1484,6 +1496,7 @@ export class SiglusDisplay {
     this.paintMessageText();
     this.portrait.replaceChildren();
     this.currentFace = undefined;
+    this.currentFaceCostume = undefined;
     delete this.root.dataset.sprite;
   }
 
@@ -1498,6 +1511,7 @@ export class SiglusDisplay {
       name: this.currentName,
       text: this.currentText.map((fragment) => ({...fragment})),
       face: this.currentFace,
+      faceCostume: this.currentFaceCostume,
       index: this.windowIndex,
       size: Number.parseFloat(this.text.style.fontSize),
       slideTime: this.slideTime,
@@ -1510,7 +1524,7 @@ export class SiglusDisplay {
     this.selectMessageWindow(message.index);
     this.setTextSize(message.size);
     this.name(message.name);
-    if (message.face) await this.face(message.face);
+    if (message.face) await this.face(message.face, message.faceCostume);
     for (const {text, ruby} of message.text) {
       if (ruby) this.annotate(ruby);
       this.append(text);
