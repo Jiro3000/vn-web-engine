@@ -19,6 +19,7 @@ const quickOnly = process.env.SIGLUS_QUICK_ONLY === '1';
 const historyOnly = process.env.SIGLUS_HISTORY_ONLY === '1';
 const skipOnly = process.env.SIGLUS_READ_SKIP_ONLY === '1';
 const cancelOnly = process.env.SIGLUS_CANCEL_ONLY === '1';
+const frameLockOnly = process.env.SIGLUS_FRAME_LOCK_ONLY === '1';
 const manageOnly = process.env.SIGLUS_SLOT_MANAGEMENT_ONLY === '1';
 const loadOnly = process.env.SIGLUS_LOAD_ONLY === '1';
 const configOnly = process.env.SIGLUS_CONFIG_ONLY === '1';
@@ -512,6 +513,7 @@ verification: try {
     autoOnly ||
     manageOnly ||
     cancelOnly ||
+    frameLockOnly ||
     skipOnly ||
     historyOnly
   ) {
@@ -940,6 +942,107 @@ verification: try {
     compareTags(frameCommands, scripts);
     console.log(
       'The message frame started and stopped Read Skip through its configured script calls.',
+    );
+  } else if (frameLockOnly) {
+    const lock = (slot, enabled) => `[data-siglus-switch="${slot}"][aria-pressed="${enabled}"]`;
+    const bottom = '[data-siglus-action="save"]';
+    const side = '[data-siglus-action="msg_log"]';
+    async function startGame() {
+      await click('#siglus-surface button[aria-label="New Game"]');
+      await waitForDialogueControls();
+    }
+    async function move(gameX, gameY) {
+      const [x, y] = await evaluate(`(() => {
+        const rect = siglusSurface.firstElementChild.getBoundingClientRect();
+        return [rect.left + rect.width * ${gameX} / 1920, rect.top + rect.height * ${gameY} / 1080];
+      })()`);
+      await send('Input.dispatchMouseEvent', {type: 'mouseMoved', x, y});
+    }
+    const settled = (selector, x, y) =>
+      waitFor(`(() => {
+      const button = document.querySelector(${JSON.stringify(selector)});
+      if (!button || button.parentElement.hidden) return false;
+      const [x, y] = getComputedStyle(button).translate.split(' ').map(parseFloat);
+      return (x || 0) === ${x} && (y || 0) === ${y} &&
+        button.getAnimations().every(({playState}) => playState === 'finished');
+    })()`);
+    const frameCommands = (start = 0) =>
+      evaluate(`siglusTags.slice(${start}).filter(({scene, path}) =>
+      (scene === '__sys_system_call' && path?.join('.') === '63.14') ||
+      (scene === '__sys_scdata_init' && path?.length === 11 && path[4] === 32))`);
+    await startGame();
+    const initial = await evaluate('siglusSurface.dataset.page');
+    await click(lock(2, true));
+    await move(960, 540);
+    await settled(bottom, 0, 70);
+    await move(950, 1040);
+    await settled(bottom, 0, 0);
+    await click(lock(3, true));
+    await move(960, 540);
+    await settled(side, 150, 0);
+    await move(1830, 900);
+    await settled(side, 0, 0);
+    assert.equal(await evaluate('siglusSurface.dataset.page'), initial);
+    const unlocked = await frameCommands();
+    compareTags(unlocked, scripts);
+    assert.deepEqual(
+      unlocked
+        .filter(({scene}) => scene === '__sys_system_call')
+        .map(({offset, args}) => [offset, ...args]),
+      [
+        [0x16a57, 2, 0],
+        [0x16baa, 3, 0],
+      ],
+    );
+    for (const [axis, displacement, elapsed] of [
+      [113, 70, 300],
+      [112, 150, 300],
+    ]) {
+      assert.ok(
+        unlocked.some(
+          ({path, args}) => path[7] === axis && args[0] === displacement && args[1] === elapsed,
+        ),
+      );
+      assert.ok(
+        unlocked.some(({path, args}) => path[7] === axis && args[0] === 0 && args[1] === 250),
+      );
+    }
+    await move(950, 1040);
+    await settled(bottom, 0, 0);
+    assert.equal(await selectSlot('save'), 'confirm');
+    await waitFor('siglusSurface.dataset.savedPage');
+    await reopenPlayer();
+    await click('#siglus-surface button[aria-label="Load Game"]');
+    await waitFor(slotLoop);
+    assert.equal(await chooseSlot('load', 0), 'confirm');
+    await waitFor("siglusSurface.dataset.loaded === 'true'");
+    await clickStage();
+    await waitForDialogueControls();
+    await move(960, 540);
+    await settled(bottom, 0, 70);
+    await settled(side, 150, 0);
+    await move(950, 1040);
+    await settled(bottom, 0, 0);
+    await click(lock(2, false));
+    await move(1830, 900);
+    await settled(side, 0, 0);
+    await click(lock(3, false));
+    await move(960, 540);
+    await settled(bottom, 0, 0);
+    await settled(side, 0, 0);
+    const locked = await frameCommands();
+    compareTags(locked, scripts);
+    assert.deepEqual(
+      locked
+        .filter(({scene}) => scene === '__sys_system_call')
+        .map(({offset, args}) => [offset, ...args]),
+      [
+        [0x16a57, 2, 1],
+        [0x16baa, 3, 1],
+      ],
+    );
+    console.log(
+      'Message frame locks persisted. Both script watchers moved the controls to their configured positions.',
     );
   } else if (cancelOnly) {
     await click('#siglus-surface button[aria-label="New Game"]');
@@ -1781,6 +1884,7 @@ verification: try {
     autoOnly ||
     manageOnly ||
     cancelOnly ||
+    frameLockOnly ||
     skipOnly ||
     historyOnly
   ) {

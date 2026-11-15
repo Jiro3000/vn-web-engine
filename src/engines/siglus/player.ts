@@ -33,6 +33,10 @@ const systemFlags = new Set([6, 7, 133, 134, 223, 251, 258]);
 const scriptFlags = new Set([
   30, 31, 12, 13, 14, 15, 25, 27, 32, 33, 34, 35, 38, 39, 48, 51, 54, 55,
 ]);
+const messageFrameWatchers = [
+  {flag: 1010, slot: 2, command: '$msg_btn_watch01'},
+  {flag: 1011, slot: 3, command: '$msg_btn_watch02'},
+] as const;
 // syscom's set, reset, and get opcodes for each configured volume.
 const soundLevels: ReadonlyArray<[SiglusAudioKind | 'ALL' | 'MOV', number, number, number]> = [
   ['ALL', 39, 40, 41],
@@ -160,6 +164,8 @@ export class SiglusPlayer {
   private systemCallActive = false;
   private readSkipEnabled = false;
   private requestedFrameAction?: SiglusFrameAction;
+  private readonly globalExtraSwitches = new Map<number, boolean>();
+  private readonly pendingFrameWatchers = new Set<(typeof messageFrameWatchers)[number]>();
   private skipUnreadOverride?: boolean;
   private pageReadFlags: {scene: string; flag: number}[] = [];
   private readonly readFlags = new Map<string, Set<number>>();
@@ -301,6 +307,9 @@ export class SiglusPlayer {
           this.filterColor.splice(0, 4, ...(values.filter as number[]));
         for (const [option] of systemOptions)
           if (typeof values?.[option] === 'boolean') this.options.set(option, values[option]);
+        for (const [slot, enabled] of Object.entries(values?.globalExtraSwitches ?? {}))
+          if (typeof enabled === 'boolean' && /^\d+$/.test(slot))
+            this.globalExtraSwitches.set(Number(slot), enabled);
         if (typeof values?.font === 'string') this.messageFont.name = values.font;
         if (typeof values?.fontBold === 'boolean') this.messageFont.bold = values.fontBold;
         if ([0, 1, 2, 3].includes(values?.fontShadow)) this.messageFont.shadow = values.fontShadow;
@@ -386,6 +395,17 @@ export class SiglusPlayer {
       },
       {passive: false, signal: this.controller.signal},
     );
+    const pointerChanged = () => {
+      for (const watcher of messageFrameWatchers)
+        if (
+          this.system.get(watcher.flag) === 0 &&
+          this.game.pack.commandNames.includes(watcher.command)
+        )
+          this.pendingFrameWatchers.add(watcher);
+      if (this.pendingFrameWatchers.size && this.waitingForPage) this.wait?.(6);
+    };
+    for (const type of ['pointermove', 'pointerleave'] as const)
+      this.display.stage.addEventListener(type, pointerChanged, {signal: this.controller.signal});
     this.movies = new BrowserFullscreenMoviePlayer({
       document: root.ownerDocument,
       container: this.display.stage,
@@ -496,6 +516,7 @@ export class SiglusPlayer {
       this.game.saveKey + ':options',
       JSON.stringify({
         ...Object.fromEntries(this.options),
+        globalExtraSwitches: Object.fromEntries(this.globalExtraSwitches),
         font: this.messageFont.name,
         fontBold: this.messageFont.bold,
         fontShadow: this.messageFont.shadow,
@@ -623,12 +644,17 @@ export class SiglusPlayer {
     return list;
   }
 
-  private updateMessageButton(path: readonly number[], list: readonly number[]): void {
+  private updateMessageButton(
+    path: readonly number[],
+    list: readonly number[],
+    timing?: KeyframeAnimationOptions,
+  ): void {
     this.display.offsetMessageButton(
       path[3]!,
       path[6]!,
       path[7] === 54 ? 'x' : 'y',
       list.reduce((sum, value) => sum + value, 0),
+      timing,
     );
   }
 
@@ -855,16 +881,18 @@ export class SiglusPlayer {
   }
 
   private frameActionState(
-    {id, type, state, call}: SiglusFrameAction,
+    {id, type, state, slot, call}: SiglusFrameAction,
     readSkipping: boolean,
   ): 'hidden' | 'disabled' | 'enabled' {
     if (type === 'auto_mode' && state !== Number(this.autoEnabled)) return 'hidden';
     if (type === 'read_skip' && state !== Number(this.readSkipEnabled)) return 'hidden';
+    if (slot !== undefined && state !== Number(this.globalExtraSwitch(slot))) return 'hidden';
     if (this.disabledMessageButtons.has(id) || (readSkipping && type !== 'read_skip'))
       return 'disabled';
     let enabled: boolean;
     switch (type) {
       case 'auto_mode':
+      case 'global_switch':
         enabled = Boolean(call);
         break;
       case 'read_skip':
@@ -898,6 +926,25 @@ export class SiglusPlayer {
     return enabled ? 'enabled' : 'disabled';
   }
 
+  private globalExtraSwitch(slot: number): boolean {
+    return (
+      this.globalExtraSwitches.get(slot) ??
+      this.game.config.get(`CONFIG.GLOBAL_EXTRA_SWITCH.${String(slot).padStart(3, '0')}.ONOFF`) ===
+        '1'
+    );
+  }
+
+  private async refreshMessageFrame(): Promise<void> {
+    const queued = [...this.pendingFrameWatchers];
+    this.pendingFrameWatchers.clear();
+    for (const {command} of queued) {
+      const index = this.game.pack.commandNames.indexOf(command);
+      const scene = this.game.pack.sceneNames[this.game.pack.commandScenes[index * 2]!];
+      if (scene) await this.vm.callScene(scene, command);
+    }
+    if (queued.length) await this.renderMessageObjects();
+  }
+
   private async waitAtPage(): Promise<void> {
     for (;;) {
       const readSkipping = this.skipping && this.readSkipEnabled && !this.skip;
@@ -920,14 +967,24 @@ export class SiglusPlayer {
           this.autoEnabled && !this.userMessageHidden
             ? this.playback.autoMinimumWait + this.playback.autoCharacterWait * this.pageCharacters
             : undefined;
-        this.waitingForPage = true;
-        if (!this.requestedFrameAction) {
+        const deadline = autoWait === undefined ? undefined : performance.now() + autoWait;
+        do {
+          this.waitingForPage = false;
+          if (this.pendingFrameWatchers.size) await this.refreshMessageFrame();
+          this.waitingForPage = true;
+          if (this.requestedFrameAction) {
+            result = 1;
+            break;
+          }
           // Give Read Skip a browser frame and keep its button between consecutive pages.
           result =
             readSkipping && showControls
               ? await this.delay(16, true, false)
-              : await this.delay(autoWait, true);
-        }
+              : await this.delay(
+                  deadline === undefined ? undefined : deadline - performance.now(),
+                  true,
+                );
+        } while (result === 6);
       } finally {
         this.waitingForPage = false;
         if (!readSkipping || result !== 0) this.display.pageControls();
@@ -1355,8 +1412,14 @@ export class SiglusPlayer {
         for (let i = 0; i < 6; i++) this.stageProperties.set('$bs_name.-1.' + i, 'none');
         // Earlier browser profiles may have an initialization flag without this setting.
         if (!this.system.has(1330)) this.property([31, -1, 1330], 1);
-        for (const flag of [1010, 1011])
+        for (const watcher of messageFrameWatchers) {
+          const {flag, slot} = watcher;
           if (!this.system.has(flag)) this.property([31, -1, flag], 1);
+          if (!this.globalExtraSwitches.has(slot))
+            this.globalExtraSwitches.set(slot, Boolean(this.system.get(flag)));
+          if (this.system.get(flag) === 0 && this.game.pack.commandNames.includes(watcher.command))
+            this.pendingFrameWatchers.add(watcher);
+        }
         if (!this.property([31, -1, 1001])) {
           // __sys_scdata_init enables the authored confirmation flags on first launch.
           for (let flag = 1316; flag < 1324; flag++) this.system.set(flag, 1);
@@ -1744,6 +1807,32 @@ export class SiglusPlayer {
           return 0;
         }
       }
+      if (
+        path.length === 11 &&
+        path[8] === -1 &&
+        path[10] === 0 &&
+        (path[7] === 112 || path[7] === 113)
+      ) {
+        const offsetPath = [...path.slice(0, 7), path[7] === 112 ? 54 : 63];
+        const offsets = this.messageButtonList(offsetPath);
+        if (offsets) {
+          offsets[path[9]!] = n(0);
+          const duration = Math.max(0, n(1));
+          this.updateMessageButton(
+            offsetPath,
+            offsets,
+            duration > 0
+              ? {
+                  duration,
+                  delay: n(2),
+                  easing: n(3) === 2 ? 'ease-out' : 'linear',
+                  fill: 'backwards',
+                }
+              : undefined,
+          );
+          return 0;
+        }
+      }
     }
     if (root === 65) {
       if (member === 13 && path.length === 3) {
@@ -1780,6 +1869,17 @@ export class SiglusPlayer {
     if (root === 38 && member === 6 && path.length === 5 && path[2] === -1)
       return this.groupCommand(path[3]!, path[4]!);
     if (root === 63) {
+      if (member === 14 || member === 15 || member === 17) {
+        const slot = n(0);
+        if (member === 17) return Number(this.globalExtraSwitch(slot));
+        if (member === 15) this.globalExtraSwitches.delete(slot);
+        else this.globalExtraSwitches.set(slot, Boolean(n(1)));
+        this.persistOptions();
+        for (const watcher of messageFrameWatchers)
+          if (watcher.slot === slot && this.game.pack.commandNames.includes(watcher.command))
+            this.pendingFrameWatchers.add(watcher);
+        return 0;
+      }
       if (member === 1 || member === 2 || member === 3) {
         await this.callSystemScene(
           member === 1 ? 'SAVE_SCENE' : member === 2 ? 'LOAD_SCENE' : 'CONFIG_SCENE',
@@ -2255,6 +2355,7 @@ export class SiglusPlayer {
     const [array, id, command] = path.slice(index);
     if (array === 3 && id === undefined) return Math.max(0, ...page.keys()) + 1;
     if (array === 4 && id === undefined) return 0; // Sparse list; absent indices carry default objects.
+    if (command === 174) return Number(page.has(id!));
     if (command !== 175 && command !== 63) this.markObjectsDirty(path);
     const n = (index: number) => Number(args[index] ?? 0);
     if (command === 35) {

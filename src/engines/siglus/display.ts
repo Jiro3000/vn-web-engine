@@ -55,6 +55,7 @@ export interface SiglusFrameAction {
   id: number;
   type: string;
   state: number | undefined;
+  slot: number | undefined;
   sound: number;
   call: string | undefined;
 }
@@ -76,6 +77,7 @@ export class SiglusDisplay {
     action: SiglusFrameAction;
     button: HTMLButtonElement;
     refresh: () => void;
+    motion?: Animation;
   }[] = [];
   private readonly messageButtonPositions = new Map<
     number,
@@ -256,6 +258,7 @@ export class SiglusDisplay {
     this.stage.addEventListener('pointerdown', (event) => this.trackPointer(event));
     this.stage.addEventListener('pointerleave', () => {
       this.hovered = undefined;
+      this.pointer = [-1, -1];
     });
     for (const type of ['pointerup', 'pointercancel', 'lostpointercapture'] as const)
       this.stage.addEventListener(type, (event) => {
@@ -730,18 +733,37 @@ export class SiglusDisplay {
     if (this.filter) this.filter.hidden = index !== 0;
   }
 
-  offsetMessageButton(window: number, id: number, axis: 'x' | 'y', value: number): void {
+  offsetMessageButton(
+    window: number,
+    id: number,
+    axis: 'x' | 'y',
+    value: number,
+    timing?: KeyframeAnimationOptions,
+  ): void {
     let positions = this.messageButtonPositions.get(window);
     if (!positions) this.messageButtonPositions.set(window, (positions = new Map()));
     const position = positions.get(id) ?? {};
+    if ((position[axis] ?? 0) === value) return;
     position[axis] = value;
     positions.set(id, position);
-    if (window === this.windowIndex) this.positionMessageButtons();
+    if (window !== this.windowIndex) return;
+    const entry = this.frameActions.find(({action}) => action.id === id);
+    if (!entry) return;
+    const {button} = entry;
+    const from = timing ? getComputedStyle(button).translate : '';
+    entry.motion?.cancel();
+    button.style.translate = `${position.x ?? 0}px ${position.y ?? 0}px`;
+    entry.motion = timing
+      ? button.animate([{translate: from}, {translate: button.style.translate}], timing)
+      : undefined;
   }
 
   private positionMessageButtons(): void {
     const positions = this.messageButtonPositions.get(this.windowIndex);
-    for (const {action, button} of this.frameActions) {
+    for (const entry of this.frameActions) {
+      const {action, button} = entry;
+      entry.motion?.cancel();
+      entry.motion = undefined;
       const {x = 0, y = 0} = positions?.get(action.id) ?? {};
       button.style.translate = `${x}px ${y}px`;
     }
@@ -1492,6 +1514,7 @@ export class SiglusDisplay {
       qsave: 'Quick save',
       qload: 'Quick load',
       return_sel: 'Return to selection',
+      global_switch: 'Message frame lock',
       auto_mode: 'Auto',
       read_skip: 'Read Skip',
       config: 'Configuration',
@@ -1505,10 +1528,13 @@ export class SiglusDisplay {
       if (!type || !Object.hasOwn(labels, type)) continue;
       const id = Number(key.split('.')[3]);
       const prefix = key.slice(0, -4);
-      const state = parameters?.split(',')[1];
+      const [, argument, expected] = parameters?.split(',') ?? [];
+      const slot = type === 'global_switch' ? Number(argument) : undefined;
+      const state = type === 'global_switch' ? expected : argument;
       const action: SiglusFrameAction = {
         id,
         type,
+        slot,
         state: state === undefined ? undefined : Number(state),
         sound: Number(this.config.get(prefix + 'SE') ?? -1),
         call: this.config.has(prefix + 'CALL') ? prefix + 'CALL' : undefined,
@@ -1524,8 +1550,12 @@ export class SiglusDisplay {
       const button = document.createElement('button');
       button.type = 'button';
       button.dataset.siglusAction = type;
-      button.setAttribute('aria-label', labels[type]!);
-      if (type === 'auto_mode' || type === 'read_skip')
+      button.setAttribute(
+        'aria-label',
+        type === 'global_switch' ? `${labels[type]} ${slot}` : labels[type]!,
+      );
+      if (slot !== undefined) button.dataset.siglusSwitch = String(slot);
+      if (type === 'auto_mode' || type === 'read_skip' || type === 'global_switch')
         button.setAttribute('aria-pressed', String(action.state === 1));
       button.style.cssText = `position:absolute;left:${x}px;bottom:${y - frame.height}px;width:${frame.width}px;height:${frame.height}px;border:0;padding:0;background:none;pointer-events:auto`;
       const canvas = this.node(frame);

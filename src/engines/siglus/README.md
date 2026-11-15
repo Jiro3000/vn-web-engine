@@ -228,6 +228,16 @@ The Read Skip variants execute `0xda5d` and `0xdc16`. The browser
 keeps the active Read Skip button available for one browser frame per
 skipped page so a click can interrupt playback.
 
+Set `SIGLUS_FRAME_LOCK_ONLY=1` to check the two message frame locks. The probe
+clicks both Gameexe.dat `global_switch` variants, moves the pointer across
+their scripted reveal regions, and checks that the positions and lock state
+survive saving, reopening and loading. `__sys_system_call` updates switches
+2 and 3 from G[1010] and G[1011] at `0x16a57` and `0x16baa`. The browser
+runs the `__sys_scdata_init` watchers at `0xa3d8` and `0xb371` when the
+pointer or lock state changes at a dialogue checkpoint. They move the
+bottom row by 70 pixels and the side column by 150, with a 300 ms hide
+and a 250 ms reveal. The browser maps easing mode 2 to CSS `ease-out`.
+
 Set `SIGLUS_HISTORY_ONLY=1` to open the original message history button,
 compare displayed text with script hashes, replay a stored voice, and verify
 that closing history restores keyboard focus to the same page. The browser
@@ -273,9 +283,8 @@ and Gameexe.dat SHA-256
 
 ## Known differences
 
-- The browser does not yet reproduce the message frame's two lock switches
-  or their pointer-triggered movement. Gameexe.dat also configures title and
-  exit buttons to invoke `$sys_returnmenu_btn` and `$sys_gameend_btn`.
+- Gameexe.dat configures the message frame's title and exit buttons to
+  invoke `$sys_returnmenu_btn` and `$sys_gameend_btn`.
   These names are absent from the command tables in the tested Scene.pck.
   The disassembly contains separate bodies beginning at `0xdc3f` and
   `0x10af3` that call `syscom.return_to_menu` at `0x1099d` and
