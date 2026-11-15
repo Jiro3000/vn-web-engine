@@ -14,6 +14,7 @@ interface SiglusMessageSnapshot extends Omit<SiglusHistoryEntry, 'voices'> {
   face?: string;
   index: number;
   size?: number;
+  slideTime?: number;
 }
 
 export interface Graphic {
@@ -87,6 +88,7 @@ export class SiglusDisplay {
     x: 0,
     y: 0,
     width: 0,
+    rows: 0,
     spacing: 0,
     lineSpace: 0,
     rubySize: 13,
@@ -119,6 +121,12 @@ export class SiglusDisplay {
   private frameIndex = 0;
   private defaultTextSize = 38;
   private ruby = '';
+  private slideTime?: number;
+  private slideOffset = 0;
+  private slideTarget = 0;
+  private slideOrigin = 0;
+  private slideStarted = 0;
+  private slideFrame = 0;
   private filter?: HTMLCanvasElement;
   private filterFrame?: Graphic;
   readonly windowDisplay: BrowserWindowDisplayHost;
@@ -519,7 +527,7 @@ export class SiglusDisplay {
       this.text.style.top = `${this.textMetrics.y}px`;
       this.speaker.style.top = `${this.speakerMetrics.y}px`;
     }
-    this.paintNativeText();
+    this.paintMessageText();
     this.stage.focus({preventScroll: true});
   }
 
@@ -558,8 +566,15 @@ export class SiglusDisplay {
     context.restore();
   }
 
-  private paintNativeText(): void {
-    if (this.textMode !== 'native') return;
+  private paintMessageText(): void {
+    if (this.textMode === 'dom') {
+      if (this.slideTime === undefined) return;
+      const offset = this.updateSlide(this.text.scrollHeight - this.text.clientHeight);
+      this.text.style.translate = `0 ${-offset}px`;
+      const rubyRoom = this.textMetrics.rubySize + this.textMetrics.rubySpace + 2;
+      this.text.style.clipPath = `inset(${offset - rubyRoom}px -8px ${-offset}px -8px)`;
+      return;
+    }
     const canvas = this.nativeText;
     const context = canvas.getContext('2d')!;
     context.clearRect(0, 0, canvas.width, canvas.height);
@@ -585,7 +600,7 @@ export class SiglusDisplay {
     }
     const size = Number.parseFloat(this.text.style.fontSize);
     if (!size || !this.currentText.length) return;
-    const {x, y, width, spacing, lineSpace, rubySize, rubySpace} = this.textMetrics;
+    const {x, y, width, rows, spacing, lineSpace, rubySize, rubySpace} = this.textMetrics;
     const advance = (character: string) => {
       const unit = character.codePointAt(0)!;
       return (unit <= 0x7f || (unit >= 0xff61 && unit <= 0xff9f) ? size / 2 : size) + spacing;
@@ -611,8 +626,21 @@ export class SiglusDisplay {
         }
     }
     nextLine();
+    const pitch = size + lineSpace;
+    const offset = this.updateSlide((lines.length - rows) * pitch);
+    if (this.slideTime !== undefined) {
+      context.save();
+      context.beginPath();
+      context.rect(
+        0,
+        y - rubySize - rubySpace - 2,
+        canvas.width,
+        pitch * rows + rubySize + rubySpace + 2,
+      );
+      context.clip();
+    }
     for (const [index, row] of lines.entries()) {
-      const rowY = y + index * (size + lineSpace);
+      const rowY = y + index * pitch - offset;
       let left = x + (this.text.style.textAlign === 'center' ? (width - row.width) / 2 : 0);
       for (const cell of row.cells) {
         context.font = `${weight} ${size}px ${family}`;
@@ -630,6 +658,7 @@ export class SiglusDisplay {
         left += cell.width;
       }
     }
+    if (this.slideTime !== undefined) context.restore();
   }
 
   selectMessageWindow(index: number): void {
@@ -663,6 +692,7 @@ export class SiglusDisplay {
       x: textX,
       y: textY,
       width: textWidth,
+      rows: rows!,
       spacing: spacing!,
       lineSpace: lineSpace!,
       rubySize: Number(this.config.get(prefix + 'RUBY_SIZE') ?? 13),
@@ -729,7 +759,7 @@ export class SiglusDisplay {
     this.messageShadow = shadow;
     this.text.style.textShadow = this.speaker.style.textShadow = siglusFontShadow(shadow);
     this.alignDomText();
-    this.paintNativeText();
+    this.paintMessageText();
   }
 
   private async resource(name: string): Promise<G00Image> {
@@ -1194,22 +1224,58 @@ export class SiglusDisplay {
     const pixels = size ?? this.defaultTextSize;
     this.text.style.fontSize = `${pixels}px`;
     this.text.style.lineHeight = `${pixels + this.textMetrics.lineSpace}px`;
+    this.text.style.height = `${(pixels + this.textMetrics.lineSpace) * this.textMetrics.rows}px`;
     this.text.style.setProperty(
       '--siglus-ruby-offset',
       `${pixels / 2 + this.textMetrics.rubySpace}px`,
     );
     this.alignDomText();
-    this.paintNativeText();
+    this.paintMessageText();
   }
 
   centerText(center: boolean): void {
     this.text.style.textAlign = center ? 'center' : '';
-    this.paintNativeText();
+    this.paintMessageText();
   }
 
-  slideMessage(time: number): void {
-    for (const animation of this.message.getAnimations()) animation.cancel();
-    if (time > 0) this.message.animate({opacity: [0, 1]}, {duration: time});
+  setMessageSlide(time?: number): void {
+    this.slideTime = time;
+    if (time === undefined) this.resetSlide();
+    this.text.toggleAttribute('data-siglus-slide', time !== undefined);
+    this.paintMessageText();
+  }
+
+  finishMessageSlide(): void {
+    if (this.slideTime === undefined || this.slideOffset === this.slideTarget) return;
+    this.slideStarted = -Infinity;
+    this.paintMessageText();
+  }
+
+  private updateSlide(overflow: number): number {
+    if (this.slideTime === undefined) return 0;
+    const now = performance.now();
+    const target = Math.max(0, overflow);
+    if (target !== this.slideTarget) {
+      this.slideOrigin = this.slideOffset;
+      this.slideTarget = target;
+      this.slideStarted = now;
+    }
+    const progress =
+      this.slideTime > 0 ? Math.min(1, (now - this.slideStarted) / this.slideTime) : 1;
+    this.slideOffset = this.slideOrigin + (target - this.slideOrigin) * progress;
+    if (progress < 1 && this.slideOffset !== target && !this.slideFrame)
+      this.slideFrame = requestAnimationFrame(() => {
+        this.slideFrame = 0;
+        this.paintMessageText();
+      });
+    return this.slideOffset;
+  }
+
+  private resetSlide(): void {
+    cancelAnimationFrame(this.slideFrame);
+    this.slideFrame = this.slideOffset = this.slideTarget = this.slideOrigin = 0;
+    this.text.style.translate = '';
+    this.text.style.clipPath = '';
   }
 
   async dayCard(index: number): Promise<void> {
@@ -1319,7 +1385,7 @@ export class SiglusDisplay {
   name(value: string): void {
     this.currentName = value;
     this.speaker.textContent = value;
-    this.paintNativeText();
+    this.paintMessageText();
   }
 
   append(value: string): void {
@@ -1347,13 +1413,13 @@ export class SiglusDisplay {
     } else this.text.append(node);
     this.message.hidden = false;
     if (this.currentFace) this.root.dataset.sprite = this.currentFace;
-    this.paintNativeText();
+    this.paintMessageText();
     return {
       ruby: Boolean(fragment.ruby),
       reveal: (visible: string) => {
         fragment.text = node.data = visible;
         if (annotation) annotation.textContent = visible ? fragment.ruby! : '';
-        this.paintNativeText();
+        this.paintMessageText();
       },
     };
   }
@@ -1365,7 +1431,7 @@ export class SiglusDisplay {
   newline(): void {
     this.text.append('\n');
     this.currentText.push({text: '\n'});
-    this.paintNativeText();
+    this.paintMessageText();
   }
 
   clearText(): void {
@@ -1374,7 +1440,8 @@ export class SiglusDisplay {
     this.ruby = '';
     this.speaker.textContent = '';
     this.text.textContent = '';
-    this.paintNativeText();
+    this.resetSlide();
+    this.paintMessageText();
     this.portrait.replaceChildren();
     this.currentFace = undefined;
     delete this.root.dataset.sprite;
@@ -1388,15 +1455,17 @@ export class SiglusDisplay {
   saveMessage(): SiglusMessageSnapshot {
     return {
       name: this.currentName,
-      text: this.currentText,
+      text: this.currentText.map((fragment) => ({...fragment})),
       face: this.currentFace,
       index: this.windowIndex,
       size: Number.parseFloat(this.text.style.fontSize),
+      slideTime: this.slideTime,
     };
   }
 
   async loadMessage(message: SiglusMessageSnapshot): Promise<void> {
     this.clearText();
+    this.setMessageSlide(message.slideTime);
     this.selectMessageWindow(message.index);
     this.setTextSize(message.size);
     this.name(message.name);
@@ -1405,6 +1474,7 @@ export class SiglusDisplay {
       if (ruby) this.annotate(ruby);
       this.append(text);
     }
+    this.finishMessageSlide();
   }
 
   private async prepareFrameActions(): Promise<void> {
@@ -1675,6 +1745,7 @@ export class SiglusDisplay {
   }
 
   dispose(): void {
+    this.resetSlide();
     this.windowDisplay.dispose();
     this.stage.removeEventListener('click', this.click);
     this.stage.removeEventListener('pointerdown', this.pointerDown);

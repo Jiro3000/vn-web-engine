@@ -11,6 +11,8 @@ import {createStaticServer} from './serve-static.mjs';
 const [folder, browser, disassemblyDirectory] = process.argv.slice(2);
 const diagnosticPages = Number(process.env.SIGLUS_DIAGNOSTIC_PAGES ?? 0);
 const domRoute = process.env.SIGLUS_TEXT_MODE === 'dom';
+const slideOnly = process.env.SIGLUS_SLIDE_ONLY === '1';
+const pauseSaveOnly = process.env.SIGLUS_PAUSE_SAVE_ONLY === '1';
 const musicOnly = process.env.SIGLUS_MUSIC_ONLY === '1';
 const autoOnly = process.env.SIGLUS_AUTOSAVE_ONLY === '1';
 const quickOnly = process.env.SIGLUS_QUICK_ONLY === '1';
@@ -364,7 +366,7 @@ verification: try {
     window.siglusAudio = [];
     window.siglusMovies = [];
     window.siglusSurface = document.querySelector('#siglus-surface');
-    window.siglusPageAudit = {pages: 0, native: 0, dom: 0, skipped: 0, textSizeResets: 0, failures: []};
+    window.siglusPageAudit = {pages: 0, native: 0, dom: 0, skipped: 0, slides: 0, textSizeResets: 0, failures: []};
     let sizeOverride = false;
     let resetPending = false;
     siglusSurface.addEventListener('siglus-tag', (event) => siglusTags.push(event.detail));
@@ -384,6 +386,8 @@ verification: try {
       const stage = siglusSurface.firstElementChild;
       const text = stage.querySelector('[data-siglus-dialogue]');
       const native = stage.dataset.textMode === 'native';
+      const slideCheckpoint = ${slideOnly} && siglusTags.at(-1)?.offset === 0x344f8 &&
+        siglusTags.at(-1)?.scene.startsWith('02_');
       audit[native ? 'native' : 'dom']++;
       const rendered = native ? stage.querySelector('[data-siglus-native-text]') : text;
       const size = Number.parseFloat(text.style.fontSize);
@@ -393,6 +397,7 @@ verification: try {
         bounds.right > viewport.left && bounds.bottom > viewport.top &&
         bounds.left < viewport.right && bounds.top < viewport.bottom;
       let reason;
+      let finalRowInk = 0;
       if (text.textContent.trim()) {
         if (!size || !intersects(rect) || !rendered.checkVisibility({visibilityProperty: true}))
           reason = 'text or message window is invisible';
@@ -406,29 +411,48 @@ verification: try {
           if (right <= x || bottom <= y) reason = 'dialogue area is clipped';
           else {
             const alpha = rendered.getContext('2d').getImageData(x, y, right - x, bottom - y).data;
+            let visible = false;
+            const finalRow = Number.parseFloat(text.style.top) + 2 * Number.parseFloat(text.style.lineHeight);
             for (let i = 3; i < alpha.length; i += 4) {
-              if (alpha[i] >= 32) return;
+              if (alpha[i] < 32) continue;
+              visible = true;
+              if (!slideCheckpoint) break;
+              if (y + Math.floor(i / (4 * (right - x))) >= finalRow) finalRowInk++;
             }
-            reason = 'dialogue canvas has no visible ink';
+            if (!visible) reason = 'dialogue canvas has no visible ink';
           }
         } else {
           const range = document.createRange();
           const walker = document.createTreeWalker(text, NodeFilter.SHOW_TEXT);
           let node;
           let visible = false;
+          let lastVisible = false;
+          const offset = text.hasAttribute('data-siglus-slide')
+            ? -(Number.parseFloat(text.style.translate.split(' ')[1]) || 0)
+            : 0;
+          const slideTop = rect.top + offset * rect.height / text.clientHeight;
+          const slideBottom = slideTop + rect.height;
+          if (offset > 0) audit.slides++;
           while ((node = walker.nextNode())) {
             if (!node.data.trim() || node.parentElement.closest('rt')) continue;
             range.selectNodeContents(node);
             const bounds = [...range.getClientRects()];
-            if (!bounds.length || !bounds.every(intersects)) {
+            const inSlideWindow = ({bottom, top}) => bottom > slideTop && top < slideBottom;
+            const activeBounds = offset > 0 ? bounds.filter(inSlideWindow) : bounds;
+            const finalBounds = bounds.at(-1);
+            lastVisible = Boolean(finalBounds && activeBounds.at(-1) === finalBounds && intersects(finalBounds));
+            if (!bounds.length || !activeBounds.every(intersects)) {
               reason = 'base text has clipped or empty character bounds';
               break;
             }
-            visible = true;
+            visible ||= activeBounds.length > 0;
           }
-          if (!reason && !visible) reason = 'dialogue has no visible base text';
+          if (!reason && (!visible || !lastVisible)) reason = 'dialogue has no visible final row';
         }
       } else reason = 'dialogue is empty';
+      if (slideCheckpoint) {
+        window.siglusSlideProof = {text: text.textContent, translate: text.style.translate, finalRowInk, reason};
+      }
       if (reason) {
         const {scene, offset, line} = siglusTags.at(-1) ?? {};
         audit.failures.push({page: Number(siglusSurface.dataset.page), scene, offset, line,
@@ -481,6 +505,8 @@ verification: try {
   if (
     musicOnly ||
     (configOnly && !freshConfiguration) ||
+    slideOnly ||
+    pauseSaveOnly ||
     loadOnly ||
     quickOnly ||
     autoOnly ||
@@ -554,8 +580,36 @@ verification: try {
     const firstRuby = `siglusTags.find(({scene, tag, offset}) =>
       scene === ${JSON.stringify(scene)} && tag === 'text' && offset === ${offset})`;
     await runUntil(() =>
+      evaluate(
+        `siglusTags.at(-1)?.offset === 0xfc2 && siglusTags.at(-1)?.scene === ${JSON.stringify(scene)}`,
+      ),
+    );
+    const pausePage = await evaluate('Number(siglusSurface.dataset.page)');
+    assert.equal(
+      digest(
+        await evaluate(
+          `siglusSurface.querySelector('[data-siglus-dialogue] ruby').firstChild.textContent`,
+        ),
+      ),
+      scripts.get(scene).tags.get(offset).hash,
+    );
+    assert.equal(
+      await evaluate(
+        `siglusTags.some(({scene, offset}) => scene === ${JSON.stringify(scene)} && offset === 0x1001)`,
+      ),
+      false,
+    );
+    await clickStage();
+    await runUntil(() =>
       evaluate(`siglusTags.some(({scene, offset}) =>
         scene === ${JSON.stringify(scene)} && offset === 0x1015)`),
+    );
+    assert.equal(await evaluate('Number(siglusSurface.dataset.page)'), pausePage + 1);
+    assert.equal(
+      await evaluate(
+        `siglusSurface.querySelector('[data-siglus-dialogue]').textContent.includes('\\n')`,
+      ),
+      false,
     );
     assert.equal(
       await evaluate(`siglusSurface.querySelector('[data-siglus-dialogue] rt')?.textContent`),
@@ -1586,8 +1640,9 @@ verification: try {
     assert.equal(restored - 1, Math.trunc((volume * 347) / 255), 'Restored BGM volume slider');
     console.log('Music: BGM volume restored after reopening the player.');
   } else {
-    await waitFor(`siglusTags.filter(({scene, path}) =>
-      scene === '_titlemenu_dmy' && path?.join('.') === '38.6.-1.0.3').length >= 2`);
+    if (!slideOnly && !pauseSaveOnly)
+      await waitFor(`siglusTags.filter(({scene, path}) =>
+        scene === '_titlemenu_dmy' && path?.join('.') === '38.6.-1.0.3').length >= 2`);
     await click('#siglus-surface button[aria-label="New Game"]');
   }
   if (
@@ -1602,6 +1657,53 @@ verification: try {
     historyOnly
   ) {
     assert.equal(errors.length, 0);
+  } else if (pauseSaveOnly) {
+    const atOffset = (offset) =>
+      `siglusTags.at(-1)?.scene === ${JSON.stringify(scene)} && siglusTags.at(-1)?.offset === ${offset}`;
+    const dialogue = "siglusSurface.querySelector('[data-siglus-dialogue]').textContent";
+    await runUntil(() => evaluate(atOffset(0x48c8)));
+    const prefix = await evaluate(dialogue);
+    assert.equal(digest(prefix), scripts.get(scene).tags.get(0x48b4).hash);
+    assert.equal(await selectSlot('save'), 'confirm');
+    await waitFor('siglusSurface.dataset.savedPage');
+    await clickScriptMenu(slotLoop, 1540, 1023);
+    await waitForDialogueControls();
+    await clickStage();
+    await waitFor(atOffset(0x491b));
+    const completed = await evaluate(dialogue);
+    assert.ok(completed.startsWith(prefix));
+    assert.equal(digest(completed.slice(prefix.length)), scripts.get(scene).tags.get(0x4907).hash);
+    assert.equal(await selectSlot('load'), 'confirm');
+    await waitFor("siglusSurface.dataset.loaded === 'true'");
+    assert.equal(await evaluate(dialogue), prefix);
+    await clickStage();
+    await waitFor(atOffset(0x491b));
+    assert.equal(await evaluate(dialogue), completed);
+    await verifyRenderedPages();
+    console.log('Save and Load restored a partial page and its inline continuation.');
+  } else if (slideOnly) {
+    const chapter = [...scripts.keys()].find((name) => name.startsWith('02_'));
+    const end = `siglusTags.some(({scene, offset}) => scene === ${JSON.stringify(chapter)} && offset === 0x344f8)`;
+    await runUntil((current) => Number(current.page) >= 1);
+    await control('keyDown');
+    try {
+      await waitFor(end, 300000);
+    } finally {
+      await control('keyUp').catch(() => {});
+    }
+    const {text: printed, translate, finalRowInk, reason} = await evaluate('siglusSlideProof');
+    const reference = [...scripts.get(chapter).tags.values()].filter(
+      ({offset, tag}) => tag === 'text' && offset >= 0x34250 && offset <= 0x344e4,
+    );
+    assert.deepEqual(
+      printed.split('\n').map(digest),
+      reference.map(({hash}) => hash),
+    );
+    assert.equal(reason, undefined, 'The last row of the long message is visible');
+    if (domRoute) assert.ok(Number.parseFloat(translate.split(' ')[1]) <= -224, translate);
+    else assert.ok(finalRowInk > 100, 'Native slide drew the final row');
+    console.log('Slide checkpoint:', {translate, finalRowInk, lines: reference.length});
+    await verifyRenderedPages();
   } else if (diagnosticPages > 0) {
     const firstPage = page;
     await runUntil((current) => Number(current.page) >= firstPage + 1);

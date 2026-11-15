@@ -69,7 +69,16 @@ Set `SIGLUS_OPENING_ONLY=1` for the first 50 text tags and the DOM selection
 check. Set `SIGLUS_ALIGNMENT_ONLY=1` to compare the DOM and Native baselines
 in game pixels on the first prologue page with ruby. It checks that the
 reading appears above its base and that the base text matches the
-disassembly at chapter 01 offset `0x0f40`.
+disassembly at chapter 01 offset `0x0f40`. The same probe checks that a
+click at `pp()` at `0x0fc2` appends the next fragment to the same message.
+Set `SIGLUS_PAUSE_SAVE_ONLY=1` to save and load at `pp()` at `0x48c8`
+through the original slot menu and verify the restored prefix and following
+fragment by hash.
+Set `SIGLUS_SLIDE_ONLY=1` to check the long message in chapter 02 that ends
+at `0x344f8`. The probe starts from a cleared-title checkpoint and skips to
+the message while checking page visibility. It compares the seven text hashes
+to Scene.pck and checks the final row using Native canvas alpha or DOM
+bounds with `SIGLUS_TEXT_MODE=dom`.
 Set `SIGLUS_DIAGNOSTIC_PAGES=1000` for a focused regression check of the
 first message size resets. The command advances the mandatory prologue
 with normal input, starts New Game and holds Control to reach the target.
@@ -264,15 +273,13 @@ and Gameexe.dat SHA-256
   recollection, shake, dizziness and motion effects approximate the script's
   native compositing. Effect timing and rendering have not been compared
   frame by frame.
-  The DOM Text route audit reports clipped text at 10 of 21,075 input
-  checkpoints. The first is chapter 02 at `0x344f8`, after six explicit
-  `nl()` calls in a single message. Seven of the affected messages use
-  `start_slide_msg`. The embedded PE sets the slide flag and duration at
-  `0x550813` and schedules a line offset at `0x5da999`. The browser
-  currently animates opacity for this command. Three failures follow
-  repeated `pp()` calls in chapters 04 and 08. The embedded PE dispatches
-  `pp()` at `0x54d4dd` to the message wait handler at `0x672a20`. The
-  browser currently inserts a line break for this command.
+  The embedded PE sets the message slide flag and duration at `0x550813`
+  and schedules a line offset at `0x5da999`. The browser slides the text
+  within the configured row count and keeps the full message for history.
+  The browser settles the offset at its input checkpoint. The embedded
+  PE dispatches `pp()` at `0x54d4dd` to the message wait handler at
+  `0x672a20`. The browser waits on the current text and keeps the current
+  message open for the next fragment.
 - Browser title buttons expose New Game, Prologue, Load, Exit, Configuration,
   and the original scripted Music screen on the cleared title. Alpha-tested
   button hit areas use the bounds of the

@@ -124,6 +124,10 @@ interface PlayerSave {
   comment?: string;
   thumbnail?: string;
   waitsForInput?: boolean;
+  messagePause?: {
+    readFlags: {scene: string; flag: number}[];
+    voices: SiglusHistoryEntry['voices'];
+  };
   history?: SiglusHistoryEntry[];
   historyPoints?: [number, HistoryPoint][];
   controls?: {
@@ -740,13 +744,26 @@ export class SiglusPlayer {
     });
   }
 
-  private async pageInput(): Promise<void> {
+  private async pageInput(continuesMessage = false): Promise<void> {
     if (!this.pendingText) return;
     this.revealWholePage = false;
     this.pageAlreadyRead =
       this.pageReadFlags.length > 0 &&
       this.pageReadFlags.every(({scene, flag}) => this.readFlags.get(scene)?.has(flag));
     if (!this.pageAlreadyRead && !this.skipUnread) this.readSkipEnabled = false;
+    this.display.finishMessageSlide();
+    if (continuesMessage) {
+      this.root.dataset.page = String(++this.pages);
+      this.tracePage();
+      if (!this.skipping && this.saveEnabled) {
+        this.savePoint = {
+          ...this.captureSave(),
+          messagePause: {readFlags: [...this.pageReadFlags], voices: this.pageVoices},
+        };
+      }
+      await this.waitAtPage();
+      return;
+    }
     let changed = false;
     for (const {scene, flag} of this.pageReadFlags) {
       let flags = this.readFlags.get(scene);
@@ -1041,8 +1058,9 @@ export class SiglusPlayer {
       const entry = this.backlog[index];
       if (entry) this.historyPoints.set(entry, point);
     }
-    this.pageVoices = [];
-    this.pageReadFlags = [];
+    this.pageVoices = [...(save.messagePause?.voices ?? [])];
+    this.pageReadFlags = [...(save.messagePause?.readFlags ?? [])];
+    this.revealWholePage = false;
     this.systemMenuEnabled = save.controls?.systemMenu ?? true;
     this.messageButtonsEnabled = save.controls?.messageButtons ?? true;
     this.disabledMessageButtons.clear();
@@ -1073,8 +1091,13 @@ export class SiglusPlayer {
         (count, {text}) => count + Array.from(text.replaceAll('\n', '')).length,
         0,
       );
-      this.pageAlreadyRead = true;
-    } else this.display.closeMessage();
+      this.pageAlreadyRead =
+        !save.messagePause ||
+        this.pageReadFlags.every(({scene, flag}) => this.readFlags.get(scene)?.has(flag));
+    } else {
+      this.display.closeMessage();
+      this.display.setMessageSlide(save.message.slideTime);
+    }
     this.pendingText = waitsForInput;
     this.messageObjectsDirty = true;
     const loadAfter = this.game.config.get('LOAD_AFTER_CALL');
@@ -1093,7 +1116,7 @@ export class SiglusPlayer {
       this.tracePage();
       await this.waitAtPage();
     }
-    this.pendingText = false;
+    this.pendingText = Boolean(save.messagePause);
   }
 
   private choose({id, group}: NonNullable<DrawObject['button']>): void {
@@ -1588,6 +1611,8 @@ export class SiglusPlayer {
           await this.print(s(0));
           break;
         case 13:
+          await this.pageInput(true);
+          break;
         case 15:
           this.display.newline();
           break;
@@ -1626,10 +1651,10 @@ export class SiglusPlayer {
         case 95:
           break; // Subsequent message blocks share the active message window.
         case 120:
-          this.display.slideMessage(this.systemOption('NO_MWND_ANIME_ONOFF') ? 0 : n(0));
+          this.display.setMessageSlide(this.systemOption('NO_MWND_ANIME_ONOFF') ? 0 : n(0));
           break;
         case 122:
-          this.display.slideMessage(0);
+          this.display.setMessageSlide();
           break;
         case 151:
           this.display.repPosition(n(0), n(1));
