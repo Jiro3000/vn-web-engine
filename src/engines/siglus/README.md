@@ -44,8 +44,9 @@ node tools/verify-siglus.mjs /path/to/FORTUNE×WORLD "/Applications/Brave Browse
 
 The verifier launches headless Chromium-compatible Brave with a temporary
 profile, `--incognito`, and `--mute-audio`. It uses browser input events,
-checks browser errors, and compares script tag positions and text SHA-256
-values against the disassembly. The route check includes save and load,
+checks browser errors, and compares script tag positions, named argument
+IDs, literal command arguments and text SHA-256 values against the
+disassembly. The route check includes save and load,
 movie completion, chapter order, and the return to the cleared title. It
 also checks that the saved page's dialogue hash matches after loading and
 that the prologue, movie and cleared-title flags were written to browser
@@ -67,15 +68,17 @@ before Play and verify that it stays active throughout the route.
 
 Set `SIGLUS_OPENING_ONLY=1` for the first 50 text tags and the DOM selection
 check. Set `SIGLUS_ALIGNMENT_ONLY=1` to compare the DOM and Native
-first-line baselines on the same pages through the prologue and the first
-20 input checkpoints after New Game. It measures dialogue and speaker
-names in game pixels and reports the largest difference. It also checks
+baselines on the same pages through the prologue and the first 20 input
+checkpoints after New Game. It uses the canvas draw calls and browser
+text ranges to measure dialogue rows and speaker names in game pixels.
+It reports line-count differences and the largest baseline difference
+for matching rows. It also checks
 that ruby appears above its base, that the base text matches the
 disassembly at chapter 01 offset `0x0f40`, and that a click at `pp()` at
 `0x0fc2` appends the next fragment to the same message.
-On `c8533a1`, the probe measured 87 checkpoints, including 29 with a
-speaker name and two with ruby. The largest baseline difference was below
-0.001 game pixels.
+The probe measured 87 checkpoints, including 29 with a speaker name,
+nine with multiple dialogue rows and two with ruby. All line counts
+matched. Each measured baseline difference was within one game pixel.
 Set `SIGLUS_PAUSE_SAVE_ONLY=1` to save and load at `pp()` at `0x48c8`
 through the original slot menu and verify the restored prefix and following
 fragment by hash.
@@ -248,6 +251,14 @@ The embedded PE resolves the two strings at `0x5f4620` and checks for a
 registered named call at `0x5f4d16` before dispatching the button type.
 The original confirmation scenes call `syscom.return_to_menu(0, 0, 0)`
 at `0x1099d` and `syscom.end_game(0)` at `0x13816`.
+Title object buttons use the rectangle recorded in the G00 cut.
+The embedded PE reads the rectangle at `0x6ddf98` through `0x6ddfb3`
+and sizes the cut texture to those bounds at `0x6f5d68` through
+`0x6f5dd0`. The rectangular hit test is at `0x67e70e`. Opcode 175
+sets the alpha-test flag at `0x5579f0`, which enables per-pixel
+testing at `0x67e6fd`. The probe clicks a transparent pixel just inside
+the New Game cut, checks the adjacent outside boundary and starts New
+Game again from the horizontal title layout after returning.
 
 Set `SIGLUS_PCM_LOAD_ONLY=1` to check which audio state a slot preserves.
 The probe saves normally at the one-shot PCM effect `tin` in chapter 01
@@ -265,14 +276,17 @@ uses the original MSGBK resources and stores recent history and rewind
 checkpoints in each save. The probe reloads the slot after reopening the player
 and checks both No and Yes in the original resume confirmation.
 
-The clean-profile DOM Text route on `d31134d` checked 21,210 input
-checkpoints, including nine scrolled messages and 40 size resets. It
-matched 147,119 tags and checked 8,552 audio buffers. The run completed
-all five movies, checked the clear flags and entered Music after
-reopening. It reported zero browser console errors and zero text failures.
+The clean-profile DOM Text route on `88f1b31` checked 21,210 input
+checkpoints, including nine scrolled messages and 40 size resets.
+The independent disassembly comparison matched 146,790 tags and
+70,851 literal command arguments, including all 68 prologue text
+fragments. The run checked 8,553 decoded audio buffers and used the
+scripted save and load menus. It completed all five movies, checked
+the clear flags and entered Music after reopening. It reported zero
+browser console errors and zero text failures.
 
-The clean-profile Native route on `c8533a1` matched 148,655 command and message
-tags and checked 8,553 decoded audio buffers with zero browser console errors.
+The clean-profile Native route on `88f1b31` matched 148,352 command and message
+tags and checked 8,551 decoded audio buffers with zero browser console errors.
 All 21,210 dialogue checkpoints passed the Native render check, including
 the pages following 40 scripted size resets. Save and load were exercised
 on page 70. The run finished all five movies, verified the clear flags and
@@ -314,9 +328,10 @@ and Gameexe.dat SHA-256
 
 - Day saves run the script’s rotation routine and resume after
   the browser’s day transition. The native savepoint is inside the transition.
-  Thumbnails composite the visible graphical layers
-  at the configured size. Dialogue and native capture effects are absent from
-  that composite.
+  Thumbnails composite the visible graphical layers at the configured
+  size. FORTUNE×WORLD sets `SAVE_THUMB.TYPE = 1`; the native filename
+  resolver at `0x6828eb` selects PNG for that setting. Dialogue and native
+  capture effects are absent from the browser composite.
 - Loading restores the VM, current message, background and cast. Browser
   saves record the BGM level and preserve looping, prepared and queued
   tracks. Playback starts at the configured sample, including for older browser records
@@ -350,10 +365,6 @@ and Gameexe.dat SHA-256
   PE dispatches `pp()` at `0x54d4dd` to the message wait handler at
   `0x672a20`. The browser waits on the current text and keeps the current
   message open for the next fragment.
-- Browser title buttons expose New Game, Prologue, Load, Exit, Configuration,
-  and the original scripted Music screen on the cleared title. Alpha-tested
-  button hit areas use the bounds of the
-  nontransparent pixels.
 
 The browser renders system-call objects above the retained game stage. This
 keeps scene animations and message visibility separate from the system menu.

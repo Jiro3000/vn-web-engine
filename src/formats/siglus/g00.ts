@@ -10,6 +10,7 @@ export interface G00Frame {
   bgra: Uint8Array<ArrayBuffer>;
   centerX: number;
   centerY: number;
+  contentBounds?: [left: number, top: number, right: number, bottom: number];
 }
 
 function pixelBytes(width: number, height: number): number {
@@ -99,6 +100,10 @@ export class G00Image {
       }
       p += cw * ch * 4;
     }
+    const left = cut.getInt32(4, true);
+    const top = cut.getInt32(8, true);
+    const contentWidth = cut.getInt32(12, true);
+    const contentHeight = cut.getInt32(16, true);
     return {
       width: w,
       height: h,
@@ -106,6 +111,7 @@ export class G00Image {
       y,
       centerX: cut.getInt32(20, true),
       centerY: cut.getInt32(24, true),
+      contentBounds: [left, top, left + contentWidth, top + contentHeight],
       bgra,
     };
   }

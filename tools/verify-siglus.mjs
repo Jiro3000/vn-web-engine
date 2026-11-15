@@ -33,6 +33,44 @@ const digest = (value) => createHash('sha256').update(value).digest('hex');
 if (!folder || !browser || !disassemblyDirectory)
   throw new Error('Usage: node tools/verify-siglus.mjs GAME_FOLDER CHROMIUM DISASSEMBLY_DIRECTORY');
 
+function literalArguments(expression, count) {
+  if (!count || !expression?.endsWith(')')) return [];
+  const argumentsInCall = [];
+  const tokens = expression.matchAll(/"(?:[^"\\]|\\.)*"|[()[\],]/g);
+  let depth = 0;
+  let start = -1;
+  for (const {0: token, index} of tokens) {
+    if (token === '(' || token === '[') {
+      if (depth === 0 && token === '(') {
+        argumentsInCall.length = 0;
+        start = index + 1;
+      }
+      depth++;
+    } else if (token === ')' || token === ']') {
+      if (depth === 1 && token === ')' && start >= 0)
+        argumentsInCall.push(expression.slice(start, index).trim());
+      depth--;
+    } else if (token === ',' && depth === 1 && start >= 0) {
+      argumentsInCall.push(expression.slice(start, index).trim());
+      start = index + 1;
+    }
+  }
+  if (depth !== 0 || argumentsInCall.length !== count) return [];
+  return argumentsInCall.flatMap((argument, index) => {
+    const value = argument.replace(/^\w+=\s*/, '');
+    const integer = /^(-?\d+)$|^\((-?\d+)\)$/.exec(value);
+    if (integer) return [[index, Number(integer[1] ?? integer[2])]];
+    if (/^"(?:[^"\\]|\\.)*"$/.test(value)) {
+      try {
+        return [[index, JSON.parse(value)]];
+      } catch {
+        // The expression printer can leave some string escapes unexpanded.
+      }
+    }
+    return [];
+  });
+}
+
 async function referenceScripts(directory) {
   const scripts = new Map();
   for (const file of await readdir(directory)) {
@@ -67,6 +105,10 @@ async function referenceScripts(directory) {
       if (op === 'COMMAND') {
         entry.code = Number.parseInt(/\bec=0x([\dA-F]+)/.exec(body)?.[1], 16);
         entry.argc = Number(/\bargc=(\d+)/.exec(body)?.[1]);
+        const named = /\bnamed_ids=\[([^\]]*)\]/.exec(body)?.[1];
+        entry.named = named?.match(/-?\d+/g)?.map(Number).reverse() ?? [];
+        const expression = body.split(' ; expr=', 2)[1];
+        entry.literals = literalArguments(expression, entry.argc);
       } else {
         const quoted = /"(.*)"$/.exec(body)?.[1];
         const value = quoted?.replace(
@@ -96,23 +138,34 @@ async function referenceScripts(directory) {
 }
 
 function compareTags(trace, scripts, {compareSourceLine = true} = {}) {
+  let comparedArguments = 0;
   for (const tag of trace) {
     const {tags} = scripts.get(tag.scene) ?? {};
     const expected = tags?.get(tag.offset);
     assert.ok(expected, `Missing reference tag at ${tag.scene}:${tag.offset.toString(16)}`);
+    const {named, literals, ...reference} = expected;
     const {offset, line, readFlag} = tag;
     const fields = {offset, line: compareSourceLine ? line : expected.line, tag: tag.tag, readFlag};
     assert.deepEqual(
       tag.tag === 'command'
         ? {...fields, code: tag.path.at(-1), argc: tag.args.length}
         : {...fields, hash: digest(tag.value)},
-      expected,
+      reference,
     );
+    if (tag.tag !== 'command') continue;
+    const position = `${tag.scene}:${offset.toString(16)}`;
+    assert.deepEqual(tag.named, named, `Named argument identifiers at ${position}`);
+    for (const [index, value] of literals) {
+      assert.equal(tag.args[index], value, `Literal argument ${index} at ${position}`);
+      comparedArguments++;
+    }
   }
+  return comparedArguments;
 }
 
 function compareOpening(trace, scripts, scene, entry, lineCount) {
   compareTags(trace, scripts);
+  comparePrologue(trace, scripts, scene);
   const actual = trace.filter((tag) => tag.scene === scene && tag.offset >= entry);
   const expected = [];
   let text = 0;
@@ -138,38 +191,47 @@ assert.ok(entry, 'Missing first New Game scene entry in Siglus disassembly');
 
 function compareChapterOrder(trace, scripts, chapters, firstEntry) {
   for (const [index, chapter] of chapters.entries()) {
-    const script = scripts.get(chapter);
-    const entry = script.entries.get(index === 0 ? firstEntry : 0);
-    const tags = trace.filter((tag) => tag.scene === chapter && tag.offset >= entry);
-    assert.ok(tags.length > 0, 'No tags in ' + chapter);
-    const {edges} = script;
-    let candidates = [entry];
-    for (const {offset} of tags) {
-      const queue = [...candidates];
-      const visited = new Set();
-      let found = false;
-      while (queue.length) {
-        const address = queue.pop();
-        if (address === offset) {
-          found = true;
-          break;
-        }
-        if (visited.has(address) || script.tags.has(address)) continue;
-        visited.add(address);
-        queue.push(...(edges.get(address) ?? []));
-      }
-      assert.ok(found, chapter + ': unexpected tag at ' + offset.toString(16));
-      candidates = edges.get(offset) ?? [];
-    }
-    const expectedText = [...script.tags.values()].filter(
-      (tag) => tag.offset >= entry && tag.tag === 'text',
-    );
-    assert.deepEqual(
-      tags.filter((tag) => tag.tag === 'text').map((tag) => digest(tag.value)),
-      expectedText.map((tag) => tag.hash),
-      chapter + ': text order and SHA-256',
-    );
+    compareStorySection(trace, chapter, scripts.get(chapter), index === 0 ? firstEntry : 0);
   }
+}
+
+function comparePrologue(trace, scripts, chapter) {
+  const script = scripts.get(chapter);
+  return compareStorySection(trace, chapter, script, 0, script.entries.get(2));
+}
+
+function compareStorySection(trace, chapter, script, entryId, end = Infinity) {
+  const entry = script.entries.get(entryId);
+  const within = (offset) => offset >= entry && offset < end;
+  const tags = trace.filter((tag) => tag.scene === chapter && within(tag.offset));
+  assert.ok(tags.length > 0, 'No tags in ' + chapter);
+  let candidates = [entry];
+  for (const {offset} of tags) {
+    const queue = [...candidates];
+    const visited = new Set();
+    let found = false;
+    while (queue.length) {
+      const address = queue.pop();
+      if (address === offset) {
+        found = true;
+        break;
+      }
+      if (visited.has(address) || script.tags.has(address)) continue;
+      visited.add(address);
+      queue.push(...(script.edges.get(address) ?? []));
+    }
+    assert.ok(found, chapter + ': unexpected tag at ' + offset.toString(16));
+    candidates = script.edges.get(offset) ?? [];
+  }
+  const expectedText = [...script.tags.values()].filter(
+    (tag) => within(tag.offset) && tag.tag === 'text',
+  );
+  assert.deepEqual(
+    tags.filter((tag) => tag.tag === 'text').map((tag) => digest(tag.value)),
+    expectedText.map((tag) => tag.hash),
+    chapter + ': text order and SHA-256',
+  );
+  return expectedText.length;
 }
 
 const profile = await mkdtemp(join(tmpdir(), 'vn-siglus-'));
@@ -601,45 +663,74 @@ verification: try {
       if (!(scale > 0)) throw new Error('Native dialogue is hidden at the alignment checkpoint ' +
         JSON.stringify({scene, offset, page: siglusSurface.dataset.page, mode: stage.dataset.textMode,
           selected: originalMode, canvas: canvas.height, canvasHidden: canvas.hidden, windowHidden: canvas.parentElement.hidden}));
-      context.save();
-      context.textBaseline = 'top';
-      const nativeBaseline = (element) => {
-        const style = getComputedStyle(element);
-        context.font = style.fontWeight + ' ' + style.fontSize + ' ' + style.fontFamily;
-        return parseFloat(element.style.top) - context.measureText('国').alphabeticBaseline;
-      };
-      const native = [nativeBaseline(text), speaker.textContent ? nativeBaseline(speaker) : null];
-      context.restore();
+      const draws = [];
+      const fillText = context.fillText;
+      let dom;
+      let domRows;
+      let ruby;
+      let readingAbove;
       setMode('dom');
       try {
-        const domBaseline = (element) => {
+        const domLayout = (element) => {
           const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
-          let first;
-          while ((first = walker.nextNode())) {
-            if (first.data.trim() && !first.parentElement.closest('rt')) break;
+          const nodes = [];
+          for (let node; (node = walker.nextNode()); ) {
+            if (node.data.trim() && !node.parentElement.closest('rt')) nodes.push(node);
           }
+          const [first] = nodes;
           if (!first) throw new Error('Missing base text for baseline measurement');
+          const range = document.createRange();
+          const tops = new Set();
+          for (const node of nodes) {
+            let start = 0;
+            for (const glyph of node.data) {
+              const end = start + glyph.length;
+              if (glyph.trim()) {
+                range.setStart(node, start);
+                range.setEnd(node, end);
+                tops.add(range.getBoundingClientRect().top);
+              }
+              start = end;
+            }
+          }
           const marker = document.createElement('span');
           marker.style.cssText = 'display:inline-block;width:0;height:0;vertical-align:baseline';
           first.before(marker);
           const y = (marker.getBoundingClientRect().top - canvasRect.top) / scale;
           marker.remove();
-          return y;
+          const rows = [...tops].sort((a, b) => a - b);
+          return rows.map((top) => y + (top - rows[0]) / scale);
         };
-        const dom = [domBaseline(text), speaker.textContent ? domBaseline(speaker) : null];
-        const ruby = text.querySelector('ruby');
-        let readingAbove;
+        domRows = domLayout(text);
+        dom = [domRows[0], speaker.textContent ? domLayout(speaker)[0] : null];
+        ruby = text.querySelector('ruby');
         if (ruby) {
           const range = document.createRange();
           range.selectNodeContents(ruby.firstChild);
           const reading = ruby.querySelector('rt').getBoundingClientRect();
           readingAbove = reading.height > 0 && reading.top < range.getBoundingClientRect().top;
         }
-        return {scene, offset, page: Number(siglusSurface.dataset.page), native, dom,
-          size: parseFloat(text.style.fontSize), ruby: Boolean(ruby), readingAbove};
       } finally {
-        setMode(originalMode);
+        context.fillText = function (value, x, y) {
+          if (value.trim()) {
+            const metrics = this.measureText(value);
+            draws.push({size: parseFloat(this.font.match(/([0-9.]+)px/)[1]),
+              baseline: y - metrics.alphabeticBaseline});
+          }
+          fillText.call(this, value, x, y);
+        };
+        try {
+          setMode(originalMode);
+        } finally {
+          delete context.fillText;
+        }
       }
+      const size = parseFloat(text.style.fontSize);
+      const name = speaker.textContent ? draws.shift().baseline : null;
+      const nativeRows = [...new Set(draws.filter((draw) => draw.size === size)
+        .map((draw) => draw.baseline))];
+      return {scene, offset, page: Number(siglusSurface.dataset.page),
+        native: [nativeRows[0], name], dom, nativeRows, domRows, size, ruby: Boolean(ruby), readingAbove};
     })()`);
     const results = [];
     async function compareBaselines() {
@@ -649,6 +740,12 @@ verification: try {
         if (native === null) continue;
         const difference = result.dom[index] - native;
         assert.ok(Math.abs(difference) <= 1, JSON.stringify({...result, difference}));
+      }
+      if (result.nativeRows.length === result.domRows.length) {
+        for (const [index, baseline] of result.nativeRows.entries()) {
+          const difference = result.domRows[index] - baseline;
+          assert.ok(Math.abs(difference) <= 1, JSON.stringify({...result, row: index, difference}));
+        }
       }
       if (result.ruby) assert.ok(result.readingAbove, JSON.stringify(result));
     }
@@ -711,17 +808,31 @@ verification: try {
       return Number(current.page) >= openingStart + 20;
     });
     const maxDifference = Math.max(
-      ...results.flatMap(({native, dom}) =>
-        native.flatMap((baseline, index) =>
-          baseline === null ? [] : [Math.abs(dom[index] - baseline)],
-        ),
-      ),
+      ...results.flatMap(({native, dom, nativeRows, domRows}) => {
+        const differences = [Math.abs(dom[0] - native[0])];
+        if (native[1] !== null) differences.push(Math.abs(dom[1] - native[1]));
+        if (nativeRows.length === domRows.length) {
+          differences.push(
+            ...nativeRows.map((baseline, index) => Math.abs(domRows[index] - baseline)),
+          );
+        }
+        return differences;
+      }),
     );
     console.log('Native and DOM baselines:', {
       pages: results.length,
       maxDifference,
       rubyPages: results.filter(({ruby}) => ruby).length,
       speakerPages: results.filter(({native}) => native[1] !== null).length,
+      multilinePages: results.filter(({nativeRows}) => nativeRows.length > 1).length,
+      differingLineCounts: results
+        .filter(({nativeRows, domRows}) => nativeRows.length !== domRows.length)
+        .map(({scene, offset, nativeRows, domRows}) => ({
+          scene,
+          offset,
+          native: nativeRows.length,
+          dom: domRows.length,
+        })),
     });
     assert.ok(results.length >= 80, 'Alignment probe did not cover the opening checkpoints');
     compareTags(
@@ -948,6 +1059,7 @@ verification: try {
       'The message frame started and stopped Read Skip through its configured script calls.',
     );
   } else if (frameExitOnly) {
+    const newGameButton = '#siglus-surface button[aria-label="New Game"]';
     const dialogue = "siglusSurface.querySelector('[data-siglus-dialogue]').textContent";
     const state = () => evaluate(`[siglusSurface.dataset.page, ${dialogue}]`);
     const returnToTitle = 'button[aria-label="Return to title"]';
@@ -962,11 +1074,50 @@ verification: try {
       await waitFor(`${loop} > ${start}`);
       await clickScriptMenu(loop, x, 566);
     }
-    async function newGame() {
-      await click('#siglus-surface button[aria-label="New Game"]');
+    async function newGame({checkHitArea = false} = {}) {
+      if (!checkHitArea) await click(newGameButton);
+      else {
+        const edge = await waitFor(`(() => {
+          const button = document.querySelector(${JSON.stringify(newGameButton)});
+          const canvas = button?.querySelector('canvas');
+          if (!canvas || button.disabled) return false;
+          const {width, height} = canvas;
+          const bounds = canvas.getBoundingClientRect();
+          const {data} = canvas.getContext('2d').getImageData(0, 0, width, height);
+          if (!bounds.width || !bounds.height) return false;
+          const point = (px, py) => ({
+            x: bounds.left + (px + 0.5) * bounds.width / width,
+            y: bounds.top + (py + 0.5) * bounds.height / height,
+          });
+          // The G00 cut for frame 0 starts at x=152 and has width 120.
+          const {x, y} = point(153, 13);
+          const outside = point(151, 13);
+          return {
+            x, y, alpha: data[(13 * width + 153) * 4 + 3],
+            insideHit: button.contains(document.elementFromPoint(x, y)),
+            outsideHit: button.contains(document.elementFromPoint(outside.x, outside.y)),
+          };
+        })()`);
+        assert.equal(edge.alpha, 0, 'The test point within the G00 cut is transparent');
+        assert.equal(
+          edge.insideHit,
+          true,
+          'The button accepts the transparent pixel within the cut',
+        );
+        assert.equal(edge.outsideHit, false, 'The button rejects a pixel beyond the cut');
+        for (const type of ['mousePressed', 'mouseReleased'])
+          await send('Input.dispatchMouseEvent', {
+            type,
+            x: edge.x,
+            y: edge.y,
+            button: 'left',
+            clickCount: 1,
+          });
+        console.log('Title hit area accepted a transparent edge pixel.');
+      }
       await waitForDialogueControls();
     }
-    await newGame();
+    await newGame({checkHitArea: true});
     const before = await state();
     await choose(returnToTitle, 0xdc3f, 1040);
     await waitForDialogueControls();
@@ -1527,7 +1678,14 @@ verification: try {
     await waitFor('siglusSurface.dataset.savedPage');
     const thumbnail = async () =>
       evaluate(asyncExpression(`${slotRecords()}.find(([slot]) => slot === 0)?.[1].thumbnail`));
-    assert.match(await thumbnail(), /^data:image\/jpeg;base64,/);
+    async function checkThumbnail() {
+      const url = await thumbnail();
+      assert.match(url, /^data:image\/png;base64,/);
+      const png = Buffer.from(url.split(',', 2)[1], 'base64');
+      assert.equal(png.subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
+      assert.deepEqual([png.readUInt32BE(16), png.readUInt32BE(20)], [354, 199]);
+    }
+    await checkThumbnail();
     await clickScriptMenu(slotLoop, 1540, 1023);
     await waitForDialogueControls();
     assert.equal(digest(await evaluate(dialogue)), originalText);
@@ -1572,7 +1730,7 @@ verification: try {
     await waitForDialogueControls();
     const saveCommands = await evaluate(`siglusTags.filter(({scene}) => scene === '${slotScene}')`);
     compareTags(saveCommands, scripts, {compareSourceLine: false});
-    assert.match(await thumbnail(), /^data:image\/jpeg;base64,/);
+    await checkThumbnail();
     await clickStage();
     await waitFor(`Number(siglusSurface.dataset.page) > ${savedState.page}`);
     const nextText = digest(await evaluate(dialogue));
@@ -2330,15 +2488,16 @@ verification: try {
     const total = await evaluate('siglusTags.length');
     for (let i = 0; i < total; i += 1024)
       trace.push(...(await evaluate('siglusTags.slice(' + i + ',' + (i + 1024) + ')')));
-    compareTags(
-      trace.filter(({scene}) => scene !== slotScene),
-      scripts,
-    );
-    compareTags(
-      trace.filter(({scene}) => scene === slotScene),
-      scripts,
-      {compareSourceLine: false},
-    );
+    const comparedArguments =
+      compareTags(
+        trace.filter(({scene}) => scene !== slotScene),
+        scripts,
+      ) +
+      compareTags(
+        trace.filter(({scene}) => scene === slotScene),
+        scripts,
+        {compareSourceLine: false},
+      );
     const chapters = [...scripts.keys()].filter((name) => /^0[1-8]_/.test(name)).sort();
     const calls = trace.filter(
       (tag) => tag.scene.startsWith('00') && tag.path?.length === 1 && tag.path[0] === 5,
@@ -2350,6 +2509,7 @@ verification: try {
       [chapters[0], ...chapters],
     );
     assert.equal(calls[1].args[1], 2);
+    const prologueLines = comparePrologue(trace, scripts, chapters[0]);
     compareChapterOrder(
       [...trace.slice(0, beforeLoad), ...trace.slice(afterLoad)],
       scripts,
@@ -2362,7 +2522,7 @@ verification: try {
       ),
     );
     console.log(
-      `${total} tags matched. ${media.audio.length} decoded audio buffers, console errors ${errors.length}.`,
+      `${total} tags and ${comparedArguments} literal command arguments matched. Prologue: ${prologueLines} text fragments. ${media.audio.length} decoded audio buffers, console errors ${errors.length}.`,
     );
     const music = '#siglus-surface button[aria-label="Music"]';
     await reopenPlayer();

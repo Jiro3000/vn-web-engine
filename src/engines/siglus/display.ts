@@ -1,7 +1,7 @@
 import type {ByteSource} from '../../core/source.js';
 import {BrowserWindowDisplayHost} from '../../platform/browser-window-display.js';
 import {readSfntFontMetadata} from '../../formats/sfnt.js';
-import {G00Image} from '../../formats/siglus/g00.js';
+import {G00Image, type G00Frame} from '../../formats/siglus/g00.js';
 import {siglusFontShadow, type SiglusFontChoice} from './configuration.js';
 
 export interface SiglusHistoryEntry {
@@ -25,6 +25,7 @@ export interface Graphic {
   y: number;
   centerX: number;
   centerY: number;
+  contentBounds?: G00Frame['contentBounds'];
 }
 
 export interface DrawObject {
@@ -108,7 +109,7 @@ export class SiglusDisplay {
   private messageShadow = 2;
   private readonly portrait = document.createElement('div');
   private readonly media = new Map<string, Promise<G00Image>>();
-  private readonly hitInsets = new WeakMap<Graphic, string>();
+  private readonly hitPaths = new WeakMap<Graphic, string>();
   private background?: HTMLElement;
   private objectLayer?: HTMLElement;
   private wipe?: Animation;
@@ -817,7 +818,7 @@ export class SiglusDisplay {
       const image = await createImageBitmap(new Blob([resource.jpeg()], {type: 'image/jpeg'}));
       return {image, width: image.width, height: image.height, x: 0, y: 0, centerX: 0, centerY: 0};
     }
-    const {width, height, x, y, centerX, centerY, bgra} = resource.frame(pattern);
+    const {width, height, x, y, centerX, centerY, contentBounds, bgra} = resource.frame(pattern);
     const rgba = new Uint8ClampedArray(bgra.length);
     for (let i = 0; i < bgra.length; i += 4) {
       rgba[i] = bgra[i + 2]!;
@@ -829,7 +830,7 @@ export class SiglusDisplay {
     image.width = width;
     image.height = height;
     image.getContext('2d')!.putImageData(new ImageData(rgba, width, height), 0, 0);
-    return {image, width, height, x, y, centerX, centerY};
+    return {image, width, height, x, y, centerX, centerY, contentBounds};
   }
 
   rectangle(
@@ -888,7 +889,9 @@ export class SiglusDisplay {
         );
       }
     }
-    return canvas.toDataURL('image/jpeg', 0.8);
+    return this.config.get('SAVE_THUMB.TYPE') === '1'
+      ? canvas.toDataURL('image/png')
+      : canvas.toDataURL('image/jpeg', 0.8);
   }
 
   async savedThumbnail(url: string): Promise<Graphic> {
@@ -921,27 +924,36 @@ export class SiglusDisplay {
     return canvas;
   }
 
-  private buttonHitInsets(frame: Graphic, canvas: HTMLCanvasElement): string {
-    const cached = this.hitInsets.get(frame);
-    if (cached) return cached;
+  private buttonHitPath(frame: Graphic, canvas: HTMLCanvasElement, object: DrawObject): string {
     const {width, height} = frame;
+    const clip = object.clip?.[0] ? object.clip : undefined;
+    const cached = object.alphaTest && !clip ? this.hitPaths.get(frame) : undefined;
+    if (cached !== undefined) return cached;
+    const [cutLeft, cutTop, cutRight, cutBottom] = frame.contentBounds ?? [0, 0, width, height];
+    const x = object.x + frame.x;
+    const y = object.y + frame.y;
+    const left = Math.max(0, cutLeft, (clip?.[1] ?? x) - x);
+    const top = Math.max(0, cutTop, (clip?.[2] ?? y) - y);
+    const right = Math.min(width, cutRight, (clip?.[3] ?? x + width) - x);
+    const bottom = Math.min(height, cutBottom, (clip?.[4] ?? y + height) - y);
+    if (right <= left || bottom <= top) return 'inset(100%)';
+    if (!object.alphaTest)
+      return `inset(${top}px ${width - right}px ${height - bottom}px ${left}px)`;
     const {data} = canvas.getContext('2d')!.getImageData(0, 0, width, height);
-    let left = width,
-      right = -1,
-      top = height,
-      bottom = -1;
-    for (let y = 0; y < height; y++) {
-      for (let x = 0; x < width; x++) {
-        if (!data[(y * width + x) * 4 + 3]) continue;
-        left = Math.min(left, x);
-        right = Math.max(right, x);
-        top = Math.min(top, y);
-        bottom = y;
+    const runs: string[] = [];
+    for (let row = top; row < bottom; row++) {
+      let column = left;
+      while (column < right) {
+        while (column < right && data[(row * width + column) * 4 + 3] === 0) column++;
+        const start = column;
+        while (column < right && data[(row * width + column) * 4 + 3] !== 0) column++;
+        const length = column - start;
+        if (length) runs.push(`M${start} ${row}h${length}v1h${-length}z`);
       }
     }
-    const inset = `inset(${top}px ${width - right - 1}px ${height - bottom - 1}px ${left}px)`;
-    this.hitInsets.set(frame, inset);
-    return inset;
+    const path = runs.length ? `path("${runs.join('')}")` : 'inset(100%)';
+    if (!clip) this.hitPaths.set(frame, path);
+    return path;
   }
 
   async show(
@@ -1069,8 +1081,7 @@ export class SiglusDisplay {
       }
       if (element instanceof HTMLButtonElement) {
         const target = object.button!;
-        if (object.alphaTest !== false)
-          element.style.clipPath = this.buttonHitInsets(frame, canvas);
+        element.style.clipPath = this.buttonHitPath(frame, canvas, object);
         const role = object.name.split('_').at(-1);
         const supported =
           !object.name.startsWith('__sys_title_btn_') ||
