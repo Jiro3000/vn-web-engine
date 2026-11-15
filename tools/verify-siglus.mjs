@@ -21,6 +21,7 @@ const loadOnly = process.env.SIGLUS_LOAD_ONLY === '1';
 const configOnly = process.env.SIGLUS_CONFIG_ONLY === '1';
 const freshConfiguration = configOnly && process.env.SIGLUS_CONFIG_FRESH === '1';
 const openingOnly = process.env.SIGLUS_OPENING_ONLY === '1';
+const alignmentOnly = process.env.SIGLUS_ALIGNMENT_ONLY === '1';
 const typingOnly = process.env.SIGLUS_TYPING_ONLY === '1';
 const digest = (value) => createHash('sha256').update(value).digest('hex');
 if (!folder || !browser || !disassemblyDirectory)
@@ -518,6 +519,61 @@ verification: try {
       await delay(70);
     }
     throw new Error('Siglus playback timed out');
+  }
+  if (alignmentOnly) {
+    // Prologue: the first ruby annotates the text at 0xf40 in chapter 01.
+    const offset = 0xf40;
+    const firstRuby = `siglusTags.find(({scene, tag, offset}) =>
+      scene === ${JSON.stringify(scene)} && tag === 'text' && offset === ${offset})`;
+    await runUntil(() =>
+      evaluate(`siglusTags.some(({scene, offset}) =>
+        scene === ${JSON.stringify(scene)} && offset === 0x1015)`),
+    );
+    assert.equal(
+      await evaluate(`siglusSurface.querySelector('[data-siglus-dialogue] rt')?.textContent`),
+      'スリーポイント',
+      'The prologue reading must survive the first text command of the page',
+    );
+    const measurements = await evaluate(`(() => {
+      const text = siglusSurface.querySelector('[data-siglus-dialogue]');
+      const canvas = siglusSurface.querySelector('[data-siglus-native-text]');
+      const context = canvas.getContext('2d');
+      const style = getComputedStyle(text);
+      const origin = Number.parseFloat(text.style.top);
+      context.save();
+      context.font = style.fontWeight + ' ' + style.fontSize + ' ' + style.fontFamily;
+      context.textBaseline = 'top';
+      const native = origin - context.measureText('国').alphabeticBaseline;
+      context.restore();
+      const select = document.querySelector('#text-mode');
+      select.value = 'dom';
+      select.dispatchEvent(new Event('change'));
+      const marker = document.createElement('span');
+      marker.style.cssText = 'display:inline-block;width:0;height:0;vertical-align:baseline';
+      text.prepend(marker);
+      const dom = Number.parseFloat(text.style.top) + marker.offsetTop;
+      marker.remove();
+      const ruby = text.querySelector('ruby');
+      const range = document.createRange();
+      range.selectNode(ruby.firstChild);
+      const base = range.getBoundingClientRect();
+      const reading = ruby.querySelector('rt').getBoundingClientRect();
+      return {native, dom, base: ruby.firstChild.textContent, readingAbove: reading.top < base.top,
+        readingHeight: reading.height, page: siglusSurface.dataset.page};
+    })()`);
+    console.log('Prologue ruby baseline in game pixels:', measurements);
+    compareTags(await evaluate(`[${firstRuby}]`), scripts);
+    assert.equal(digest(measurements.base), scripts.get(scene).tags.get(offset).hash);
+    assert.ok(
+      Math.abs(measurements.dom - measurements.native) <= 1,
+      'Ruby shifts the DOM baseline',
+    );
+    assert.ok(
+      measurements.readingAbove && measurements.readingHeight > 0,
+      'Ruby must render above its base',
+    );
+    assert.equal(errors.length, 0);
+    break verification;
   }
   if (typingOnly) {
     // The first prologue message_speed(60) covers these two consecutive replies.

@@ -63,7 +63,11 @@ the scene, bytecode offset, page and font size. The full pass requires
 at least one scripted `size()` reset to have been exercised.
 
 Set `SIGLUS_OPENING_ONLY=1` for the first 50 text tags and the DOM selection
-check. Set `SIGLUS_DIAGNOSTIC_PAGES=1000` for a focused regression check of the
+check. Set `SIGLUS_ALIGNMENT_ONLY=1` to compare the DOM and Native baselines
+in game pixels on the first prologue page with ruby. It checks that the
+reading appears above its base and that the base text matches the
+disassembly at chapter 01 offset `0x0f40`.
+Set `SIGLUS_DIAGNOSTIC_PAGES=1000` for a focused regression check of the
 first message size resets. The command advances the mandatory prologue
 with normal input, starts New Game and holds Control to reach the target.
 Set `SIGLUS_TYPING_ONLY=1` to measure character reveal on the first two

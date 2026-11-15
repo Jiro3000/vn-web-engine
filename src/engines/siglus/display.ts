@@ -1147,6 +1147,10 @@ export class SiglusDisplay {
     const pixels = size ?? this.defaultTextSize;
     this.text.style.fontSize = `${pixels}px`;
     this.text.style.lineHeight = `${pixels + this.textMetrics.lineSpace}px`;
+    this.text.style.setProperty(
+      '--siglus-ruby-offset',
+      `${pixels / 2 + this.textMetrics.rubySpace}px`,
+    );
     this.alignDomText();
     this.paintNativeText();
   }
@@ -1282,7 +1286,13 @@ export class SiglusDisplay {
     this.currentText.push(fragment);
     if (fragment.ruby) {
       const ruby = document.createElement('ruby');
+      // Place the reading above its base without increasing the line box.
+      ruby.style.cssText = 'position:relative;display:inline-block;white-space:nowrap';
       annotation = document.createElement('rt');
+      annotation.style.cssText =
+        'position:absolute;bottom:calc(50% + var(--siglus-ruby-offset));left:50%;' +
+        'transform:translateX(-50%);line-height:1';
+      annotation.style.fontSize = `${this.textMetrics.rubySize}px`;
       annotation.textContent = value ? fragment.ruby : '';
       ruby.append(node, annotation);
       this.text.append(ruby);

@@ -422,13 +422,7 @@ export class SiglusPlayer {
         trace: this.trace ?? (() => {}),
         yieldDelay: () => (this.systemOption('SLEEP_ONOFF') ? 16 : 0),
         message: (tag) => {
-          if (!this.pendingText) {
-            this.pageReadFlags = [];
-            this.display.clearText();
-            this.pendingText = true;
-            this.pageCharacters = 0;
-            this.revealWholePage = false;
-          }
+          this.beginMessage();
           if (tag.tag === 'name') this.display.name(tag.value);
           else {
             if (tag.readFlag !== undefined && tag.readFlag >= 0) {
@@ -732,6 +726,15 @@ export class SiglusPlayer {
     await this.waitAtPage();
     if (!this.systemOption('KOE_DONT_STOP_ONOFF')) this.audio.stop('voice');
     this.pendingText = false;
+  }
+
+  private beginMessage(): void {
+    if (this.pendingText) return;
+    this.pageReadFlags = [];
+    this.display.clearText();
+    this.pendingText = true;
+    this.pageCharacters = 0;
+    this.revealWholePage = false;
   }
 
   private print(value: string): void | Promise<void> {
@@ -1534,6 +1537,7 @@ export class SiglusPlayer {
         case 55:
           return this.delay(n(0), true);
         case 61:
+          if (s(0)) this.beginMessage();
           this.display.annotate(s(0));
           break;
         case 74:
