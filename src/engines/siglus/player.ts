@@ -127,6 +127,7 @@ interface PlayerSave {
   background?: string;
   bgm?: string;
   bgmPlayback?: SiglusBgmCheckpoint;
+  bgmLevel?: number;
   pcmPlayback?: SiglusPcmCheckpoint[];
   voiceLevel?: number;
   cast: string[];
@@ -1049,6 +1050,7 @@ export class SiglusPlayer {
       background,
       bgm: bgmPlayback?.name,
       bgmPlayback,
+      bgmLevel: this.audio.channelLevel('bgm'),
       pcmPlayback: this.audio.pcmCheckpoint(),
       voiceLevel: this.audio.channelLevel('voice'),
       cast: [...this.currentCast],
@@ -1196,10 +1198,8 @@ export class SiglusPlayer {
     this.pendingBackground = undefined;
     if (save.background) await this.display.setBackground(save.background, 0);
     await this.cast(save.cast, -1);
-    const music = save.bgmPlayback;
-    this.audio.setChannelLevel('bgm', music?.level ?? 255, 0);
-    if (music) await this.audio.bgm(music.name, music.loop);
-    else if (save.bgm) await this.audio.bgm(save.bgm);
+    const music = save.bgmPlayback ?? (save.bgm ? {name: save.bgm, loop: true} : undefined);
+    await this.audio.restoreBgm(music, save.bgmLevel);
     this.audio.setChannelLevel('voice', save.voiceLevel ?? 255, 0);
     await this.audio.restorePcm(save.pcmPlayback ?? []);
     this.speed = save.speed;
@@ -1703,6 +1703,7 @@ export class SiglusPlayer {
               thumbnail: this.display.captureThumbnail(),
               bgm: bgmPlayback?.name,
               bgmPlayback,
+              bgmLevel: this.audio.channelLevel('bgm'),
               pcmPlayback: this.audio.pcmCheckpoint(),
               voiceLevel: this.audio.channelLevel('voice'),
             };
@@ -2320,23 +2321,53 @@ export class SiglusPlayer {
       return sign + String(Math.abs(value)).padStart(Math.min(1024, n(1)) - sign.length, '0');
     }
     if (root === 39 && member === 10) return Math.min(Math.max(n(1), n(0)), n(2));
-    if (root === 42 && member === 19) return this.root.dataset.bgm ?? '';
-    if (root === 42 && member === 0) {
-      await this.playBgm(s(0));
-      return 0;
-    }
-    if (root === 42 && member === 4) {
-      this.audio.stop('bgm', n(0));
-      return 0;
-    }
-    if (root === 42 && member === 9) return this.audio.channelLevel('bgm');
-    if (root === 42 && (member === 6 || member === 7 || member === 8)) {
-      this.audio.setChannelLevel(
-        'bgm',
-        member === 6 ? n(0) : member === 7 ? 255 : 0,
-        n(member === 6 ? 1 : 0),
-      );
-      return 0;
+    if (root === 42) {
+      const positional = args.length - command.named.length;
+      const named = (id: number) => {
+        const index = command.named.indexOf(id);
+        return index < 0 ? undefined : args[positional + index];
+      };
+      if (member === 19) return this.audio.bgmName();
+      if (member === 4 || member === 10) {
+        if (member === 4) this.audio.stop('bgm', Math.max(0, n(0)));
+        else this.audio.pauseBgm(Math.max(0, n(0)));
+        return 0;
+      }
+      if (member === 11 && command.named.every((id) => id === 0)) {
+        this.audio.resumeBgm(positional ? n(0) : 0, Number(named(0) ?? 0));
+        return 0;
+      }
+      if (member === 0 && positional === 1 && !command.named.length) {
+        await this.playBgm(s(0));
+        return 0;
+      }
+      if (member === 0 || member === 1 || member === 16 || member === 17) {
+        const ready = member === 16 || member === 17;
+        if (command.named.every((id) => [0, 1, 3, 5, ...(ready ? [] : [4, 6])].includes(id))) {
+          const name = String(named(0) ?? s(0));
+          const loop = Boolean(named(1) ?? (member === 0 || member === 16));
+          const start = Number(named(3) ?? -1);
+          const fadeOut = Math.max(
+            0,
+            Number(named(5) ?? (ready && positional > 1 ? n(1) : positional > 2 ? n(2) : 0)),
+          );
+          if (ready) await this.audio.readyBgm(name, loop, fadeOut, start);
+          else {
+            const fadeIn = Math.max(0, Number(named(4) ?? (positional > 1 ? n(1) : 0)));
+            await this.audio.bgm(name, loop, fadeIn, fadeOut, Number(named(6) ?? 0), start);
+          }
+          return 0;
+        }
+      }
+      if (member === 9) return this.audio.channelLevel('bgm');
+      if (member === 6 || member === 7 || member === 8) {
+        this.audio.setChannelLevel(
+          'bgm',
+          member === 6 ? n(0) : member === 7 ? 255 : 0,
+          n(member === 6 ? 1 : 0),
+        );
+        return 0;
+      }
     }
     if (root === 44 && member === -1 && path.length === 4) {
       const channel = path[2]!;
@@ -2346,8 +2377,14 @@ export class SiglusPlayer {
         this.audio.stop(key, Math.max(0, n(0)));
         return 0;
       }
-      if (opcode === 9 && !command.named.length) {
-        this.audio.resumePcm(channel, Math.max(0, n(0)));
+      if (opcode === 9 && command.named.every((id) => id === 0)) {
+        const positional = args.length - command.named.length;
+        const delayed = command.named.includes(0);
+        this.audio.resumePcm(
+          channel,
+          positional ? Math.max(0, n(0)) : 0,
+          delayed ? n(positional) : 0,
+        );
         return 0;
       }
       if (opcode === 12) return this.audio.channelLevel(key);

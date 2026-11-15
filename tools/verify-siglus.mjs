@@ -1423,6 +1423,14 @@ verification: try {
       {channel: 6, level: 192, source: {resource: 'tin', loop: false}, ready: true},
       {channel: 7, level: 64},
     ];
+    const pendingPcm = {
+      channel: 8,
+      level: 255,
+      source: {resource: 'tin', loop: false},
+      pendingResume: true,
+    };
+    assert.equal(saved.bgmPlayback?.name, 'bgm02');
+    const preparedBgm = {name: saved.bgmPlayback.name, loop: true, level: 173, ready: true};
     await evaluate(`(async () => {
       const {name} = (await indexedDB.databases()).find(({name}) =>
         name?.startsWith('vn-runtime:["siglus:') && name.endsWith(',"slots"]'));
@@ -1440,7 +1448,9 @@ verification: try {
           const record = records.get('saves:0');
           record.onsuccess = () => {
             const data = JSON.parse(new TextDecoder().decode(record.result));
-            data.pcmPlayback = ${JSON.stringify(pcmPlayback)};
+            data.pcmPlayback = ${JSON.stringify([...pcmPlayback, pendingPcm])};
+            data.bgmPlayback = ${JSON.stringify(preparedBgm)};
+            data.bgmLevel = ${preparedBgm.level};
             data.voiceLevel = 128;
             records.put(new TextEncoder().encode(JSON.stringify(data)), 'saves:0');
           };
@@ -1455,25 +1465,37 @@ verification: try {
     const audio = await evaluate(
       "siglusAudio.filter(({channel, resource}) => channel.startsWith('pcm') && resource === 'tin')",
     );
-    assert.equal(audio.length, 1);
-    const [restored] = audio;
+    assert.equal(audio.length, 2);
+    const [restored, pending] = audio;
     assert.equal(restored.channel, 'pcm5');
     assert.equal(restored.loop, true);
     assert.equal(restored.startSample, 0);
     assert.equal(restored.frames, played.frames);
     assert.equal(restored.rms, played.rms);
     assert.ok(Math.abs(restored.gain - (played.gain * 161) / 255) < 1e-8);
+    assert.equal(pending.channel, 'pcm8');
+    assert.equal(pending.loop, false);
+    assert.equal(pending.startDelay, 0);
+    assert.equal(pending.startSample, 0);
+    assert.equal(
+      await evaluate(
+        "siglusAudio.some(({channel, resource}) => channel === 'bgm' && resource === 'bgm02')",
+      ),
+      false,
+    );
     await clickStage();
     await waitForDialogueControls();
     assert.equal(await selectSlot('save', 1), 'confirm');
     const again = await waitFor(asyncExpression(`${slotRecords()}.find(([id]) => id === 1)?.[1]`));
     assert.equal(again.voiceLevel, 128);
+    assert.equal(again.bgmLevel, preparedBgm.level);
+    assert.deepEqual(again.bgmPlayback, preparedBgm);
     assert.deepEqual(
       again.pcmPlayback.sort((a, b) => a.channel - b.channel),
       pcmPlayback,
     );
     console.log(
-      'The real one-shot was omitted. The saved loop restarted at sample 0, and the prepared sound and channel levels round-tripped.',
+      'The story one-shot was omitted. The saved loop and pending PCM started at sample 0, and prepared PCM and BGM stayed silent.',
     );
   } else if (loadOnly) {
     const newGame = '#siglus-surface button[aria-label="New Game"]';

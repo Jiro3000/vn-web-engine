@@ -252,10 +252,11 @@ at `0x1099d` and `syscom.end_game(0)` at `0x13816`.
 Set `SIGLUS_PCM_LOAD_ONLY=1` to check which audio state a slot preserves.
 The probe saves normally at the one-shot PCM effect `tin` in chapter 01
 and checks that the effect is omitted from the slot. The reachable story
-uses one-shot PCM, so the probe adds an active loop, a prepared sound
-and non-default levels to its test slot. It reopens the player, loads
-through the title menu, compares decoded length, sample start, RMS and
-gain, then saves to a second slot and compares the restored state.
+uses one-shot PCM. The probe adds a loop, a delayed one-shot PCM,
+prepared PCM and BGM, and non-default levels to its test slot. It
+reopens the player, loads through the title, and compares decoded
+length, sample start, RMS and gain. A second save checks the prepared
+sources and levels.
 
 Set `SIGLUS_HISTORY_ONLY=1` to open the original message history button,
 compare displayed text with script hashes, replay a stored voice, and verify
@@ -317,23 +318,27 @@ and Gameexe.dat SHA-256
   at the configured size. Dialogue and native capture effects are absent from
   that composite.
 - Loading restores the VM, current message, background and cast. Browser
-  saves record the active BGM track, loop mode and channel level. Playback
-  starts at the configured sample, including for older browser records
+  saves record the BGM level and preserve looping, prepared and queued
+  tracks. Playback starts at the configured sample, including for older browser records
   with a playback cursor. The embedded Windows PE writes the
-  track name at `0x6009f3`, followed by the level, stop countdown and
-  two playback flags. The reader at `0x600ae0` starts the saved track
-  with sample argument `-1` at `0x600c06`. The player resolves that
+  track name at `0x6009f3`, followed by the level, resume countdown
+  and loop and ready flags. The updater at `0x600c50` counts down to
+  resuming playback. The loader tests the countdown or flags at
+  `0x600bcd` and opens the saved track with zero delay and sample
+  argument `-1` at `0x600c06`. The player resolves that
   argument at `0x60527c` to the start sample from the BGM table populated
   by the Gameexe.dat parser at `0x695112`. The Windows sound loader
   applies the saved voice level at `0x5ff350`. The PCM reader at
-  `0x604440` restores levels and checks the saved loop and ready flags
-  at `0x604759` and `0x60476a`. The file playback helper skips
-  starting a prepared source at `0x604bb1`. The browser saves the
-  voice and PCM levels along with active loops and prepared PCM.
-  Loops restart at the beginning and prepared PCM stays silent until
-  the script resumes it. The browser still lacks the native pending
-  BGM stop state and delayed PCM resume state. In-flight animations
-  and transient voice playback continue with the next script command.
+  `0x604440` restores levels and checks the saved loop flag, ready flag
+  and resume countdown at `0x604759` through `0x604776`. The file
+  playback helper skips starting a prepared source at `0x604bb1`.
+  Both loaders reopen delayed tracks immediately. Prepared sources stay
+  silent until resumed. A BGM stop clears the registered name and loop
+  flag at `0x601000` through `0x601010`, so a stopped track fading out
+  does not reopen from the slot. The browser implements live delayed
+  playback with the Web Audio clock and approximates a live BGM pause
+  at the scheduled fade-out endpoint. In-flight animations and transient
+  voice playback continue with the next script command.
 - The browser's character layout, text layout, day cards, transition masks,
   recollection, shake, dizziness and motion effects approximate the script's
   native compositing. Effect timing and rendering have not been compared
