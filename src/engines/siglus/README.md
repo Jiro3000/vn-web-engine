@@ -51,6 +51,10 @@ also checks that the saved page's dialogue hash matches after loading and
 that the prologue, movie and cleared-title flags were written to browser
 storage. Audio checks use decoded PCM lengths, sample rates, peak amplitudes
 and RMS levels with browser output muted.
+The final title plays one of the ending-specific voice lines and clears
+the one-shot request G[1009]. The verifier then reopens the player in
+the same temporary profile, checks the regular cleared-title voice,
+enters the unlocked Music screen and returns to the title.
 The page audit checks dialogue at the VM's input checkpoints, including
 checkpoints reached with Control held. It checks the active text layer
 against the stage bounds and inspects the alpha channel in the Native
@@ -187,8 +191,8 @@ uses the original MSGBK resources and stores recent history and rewind
 checkpoints in each save. The probe reloads the slot after reopening the player
 and checks both No and Yes in the original resume confirmation.
 
-The clean-profile route matched 148,688 command and message tags and
-checked 8,553 decoded audio buffers with zero browser console errors.
+The clean-profile route matched 148,657 command and message tags and
+checked 8,552 decoded audio buffers with zero browser console errors.
 All 21,075 dialogue checkpoints passed the Native render check, including
 the pages following 40 scripted size resets. Save and load were exercised
 on page 67. `npm test` reported the same

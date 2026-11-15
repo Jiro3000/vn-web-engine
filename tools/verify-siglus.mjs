@@ -1645,6 +1645,8 @@ verification: try {
     await waitFor(
       "siglusSurface.dataset.phase === 'title' && siglusSurface.dataset.bgm === 'bgm12'",
     );
+    await waitFor(`siglusAudio.some(({channel, resource}) =>
+      channel === 'pcm0' && [990011, 990012, 990013, 990015].includes(resource))`);
     await verifyRenderedPages({requireReset: true});
     const flags = new Map(
       await evaluate(`(() => {
@@ -1655,6 +1657,7 @@ verification: try {
     for (const index of [1006, 1571, 1572, 1573, 1574, 1575])
       assert.equal(flags.get(index), 1, 'Persistent Siglus flag G[' + index + ']');
     assert.equal(flags.get(1007), 3, 'Cleared title layout G[1007]');
+    assert.equal(flags.get(1009), 0, 'The title consumes the one-shot clear voice request');
     assert.equal(await evaluate('siglusMovies.every((movie) => movie.frames > 0)'), true);
     const media = await evaluate('({audio: siglusAudio, movies: siglusMovies})');
     assert.deepEqual(
@@ -1711,6 +1714,20 @@ verification: try {
     console.log(
       `${total} tags matched. ${media.audio.length} decoded audio buffers, console errors ${errors.length}.`,
     );
+    const music = '#siglus-surface button[aria-label="Music"]';
+    await reopenPlayer();
+    await waitFor(`siglusSurface.dataset.phase === 'title' && siglusSurface.dataset.bgm === 'bgm12'
+      && document.querySelector(${JSON.stringify(music)})?.disabled === false`);
+    assert.equal(await evaluate('siglusSurface.dataset.page'), undefined);
+    await waitFor(`siglusAudio.some(({channel, resource}) =>
+      channel === 'pcm0' && [900019, 900020].includes(resource))`);
+    await click(music);
+    await waitFor(`siglusTags.some(({scene, path}) =>
+      scene === '_extra_music' && path?.join('.') === '38.6.-1.0.3')`);
+    await click('#siglus-surface [data-siglus-button="100"]');
+    await waitFor(`siglusSurface.dataset.phase === 'title' && siglusSurface.dataset.bgm === 'bgm12'
+      && document.querySelector(${JSON.stringify(music)})?.disabled === false`);
+    console.log('Reopened at the cleared title, entered the unlocked Music menu and returned.');
   }
 } finally {
   if (cdp?.socket.readyState === WebSocket.OPEN) {
