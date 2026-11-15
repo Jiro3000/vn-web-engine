@@ -992,6 +992,7 @@ export class SiglusPlayer {
       if (entry) this.historyPoints.set(entry, point);
     }
     this.pageVoices = [];
+    this.pageReadFlags = [];
     this.systemMenuEnabled = save.controls?.systemMenu ?? true;
     this.messageButtonsEnabled = save.controls?.messageButtons ?? true;
     this.disabledMessageButtons.clear();
@@ -1016,19 +1017,20 @@ export class SiglusPlayer {
     this.speed = save.speed;
     this.saveTitle = save.title ?? '';
     const waitsForInput = save.waitsForInput ?? true;
-    if (waitsForInput) await this.display.loadMessage(save.message);
-    else this.display.closeMessage();
+    if (waitsForInput) {
+      await this.display.loadMessage(save.message);
+      this.pageCharacters = save.message.text.reduce(
+        (count, {text}) => count + Array.from(text.replaceAll('\n', '')).length,
+        0,
+      );
+      this.pageAlreadyRead = true;
+    } else this.display.closeMessage();
     this.pendingText = waitsForInput;
     this.root.dataset.loaded = 'true';
     if (waitsForInput) {
       this.root.dataset.page = String(++this.pages);
       this.tracePage();
-      this.waitingForPage = true;
-      try {
-        await this.delay(undefined, true);
-      } finally {
-        this.waitingForPage = false;
-      }
+      await this.waitAtPage();
     }
     this.pendingText = false;
     this.vm.requestLoad(save.vm);

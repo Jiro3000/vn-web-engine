@@ -161,7 +161,9 @@ the player in the same private browser session and loads the same slot from the
 original title menu. The probe confirms the three types of prompts and checks
 thumbnail dimensions, dialogue hashes, stage identifiers and script tag offsets
 against the disassembly. Both loads verify the actual Web Audio start
-offset against the saved BGM checkpoint in source samples.
+offset against the saved BGM checkpoint in source samples. After loading
+from the title, the probe opens and closes both the message history and
+the original Save menu on the restored page before advancing.
 
 Set `SIGLUS_QUICK_ONLY=1` to check the original frame’s Quick Save and Quick
 Load controls. The probe uses the cleared-title checkpoint, confirms two

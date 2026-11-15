@@ -309,7 +309,9 @@ verification: try {
     await waitForDialogueControls();
   }
   async function waitForDialogueControls() {
-    await waitFor("!document.querySelector('[data-siglus-action=save]')?.parentElement.hidden");
+    await waitFor(
+      "document.querySelector('[data-siglus-action=save]')?.parentElement.hidden === false",
+    );
   }
   async function clickStage() {
     await click('#siglus-surface > div[tabindex="0"]');
@@ -1136,6 +1138,18 @@ verification: try {
     assert.equal(await evaluate('siglusSurface.dataset.cast'), savedState.cast);
     assert.equal(await evaluate('siglusSurface.dataset.bgm'), savedState.bgm);
     const restoredPage = await evaluate('Number(siglusSurface.dataset.page)');
+    await waitForDialogueControls();
+    await click('[data-siglus-action="msg_log"]');
+    await waitFor("document.querySelector('[data-siglus-history]')");
+    await click('[data-siglus-history] button[aria-label="Close message history"]');
+    await waitForDialogueControls();
+    const lastSlotFrame = await evaluate(slotLoop);
+    await click('[data-siglus-action="save"]');
+    await waitFor(`${slotLoop} > ${lastSlotFrame}`);
+    await closeSlotMenu();
+    assert.equal(await evaluate('Number(siglusSurface.dataset.page)'), restoredPage);
+    assert.equal(digest(await evaluate(dialogue)), savedText);
+    console.log('History and Save opened from the restored page before advancing.');
     await clickStage();
     await waitFor(`Number(siglusSurface.dataset.page) > ${restoredPage}`);
     assert.equal(
