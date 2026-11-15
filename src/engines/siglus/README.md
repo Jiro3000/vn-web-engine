@@ -66,11 +66,16 @@ Set `SIGLUS_TEXT_MODE=dom` on the full-route command to select DOM Text
 before Play and verify that it stays active throughout the route.
 
 Set `SIGLUS_OPENING_ONLY=1` for the first 50 text tags and the DOM selection
-check. Set `SIGLUS_ALIGNMENT_ONLY=1` to compare the DOM and Native baselines
-in game pixels on the first prologue page with ruby. It checks that the
-reading appears above its base and that the base text matches the
-disassembly at chapter 01 offset `0x0f40`. The same probe checks that a
-click at `pp()` at `0x0fc2` appends the next fragment to the same message.
+check. Set `SIGLUS_ALIGNMENT_ONLY=1` to compare the DOM and Native
+first-line baselines on the same pages through the prologue and the first
+20 input checkpoints after New Game. It measures dialogue and speaker
+names in game pixels and reports the largest difference. It also checks
+that ruby appears above its base, that the base text matches the
+disassembly at chapter 01 offset `0x0f40`, and that a click at `pp()` at
+`0x0fc2` appends the next fragment to the same message.
+On `c8533a1`, the probe measured 87 checkpoints, including 29 with a
+speaker name and two with ruby. The largest baseline difference was below
+0.001 game pixels.
 Set `SIGLUS_PAUSE_SAVE_ONLY=1` to save and load at `pp()` at `0x48c8`
 through the original slot menu and verify the restored prefix and following
 fragment by hash.
@@ -224,11 +229,12 @@ matched 147,119 tags and checked 8,552 audio buffers. The run completed
 all five movies, checked the clear flags and entered Music after
 reopening. It reported zero browser console errors and zero text failures.
 
-An earlier clean-profile Native route matched 148,657 command and message tags and
-checked 8,552 decoded audio buffers with zero browser console errors.
-All 21,075 dialogue checkpoints passed the Native render check, including
+The clean-profile Native route on `c8533a1` matched 148,655 command and message
+tags and checked 8,553 decoded audio buffers with zero browser console errors.
+All 21,210 dialogue checkpoints passed the Native render check, including
 the pages following 40 scripted size resets. Save and load were exercised
-on page 67. `npm test` reported the same
+on page 70. The run finished all five movies, verified the clear flags and
+entered Music after reopening. `npm test` reported the same
 48 failing test names as `main` at `15f2bee` (2,518 passed, 3 skipped).
 
 ## Scripted interface in the original

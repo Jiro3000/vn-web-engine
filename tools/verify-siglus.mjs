@@ -575,15 +575,88 @@ verification: try {
     throw new Error('Siglus playback timed out');
   }
   if (alignmentOnly) {
+    assert.ok(!domRoute, 'The alignment probe must start in Native mode');
+    const measureBaselines = () =>
+      evaluate(`(() => {
+      const stage = siglusSurface.firstElementChild;
+      const text = stage.querySelector('[data-siglus-dialogue]');
+      const speaker = text.previousElementSibling;
+      const canvas = stage.querySelector('[data-siglus-native-text]');
+      const selector = document.querySelector('#text-mode');
+      const originalMode = selector.value;
+      const setMode = (mode) => {
+        selector.value = mode;
+        selector.dispatchEvent(new Event('change'));
+      };
+      const context = canvas.getContext('2d');
+      const canvasRect = canvas.getBoundingClientRect();
+      const scale = canvasRect.height / canvas.height;
+      const {scene, offset} = siglusTags.at(-1);
+      if (!(scale > 0)) throw new Error('Native dialogue is hidden at the alignment checkpoint ' +
+        JSON.stringify({scene, offset, page: siglusSurface.dataset.page, mode: stage.dataset.textMode,
+          selected: originalMode, canvas: canvas.height, canvasHidden: canvas.hidden, windowHidden: canvas.parentElement.hidden}));
+      context.save();
+      context.textBaseline = 'top';
+      const nativeBaseline = (element) => {
+        const style = getComputedStyle(element);
+        context.font = style.fontWeight + ' ' + style.fontSize + ' ' + style.fontFamily;
+        return parseFloat(element.style.top) - context.measureText('国').alphabeticBaseline;
+      };
+      const native = [nativeBaseline(text), speaker.textContent ? nativeBaseline(speaker) : null];
+      context.restore();
+      setMode('dom');
+      try {
+        const domBaseline = (element) => {
+          const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+          let first;
+          while ((first = walker.nextNode())) {
+            if (first.data.trim() && !first.parentElement.closest('rt')) break;
+          }
+          if (!first) throw new Error('Missing base text for baseline measurement');
+          const marker = document.createElement('span');
+          marker.style.cssText = 'display:inline-block;width:0;height:0;vertical-align:baseline';
+          first.before(marker);
+          const y = (marker.getBoundingClientRect().top - canvasRect.top) / scale;
+          marker.remove();
+          return y;
+        };
+        const dom = [domBaseline(text), speaker.textContent ? domBaseline(speaker) : null];
+        const ruby = text.querySelector('ruby');
+        let readingAbove;
+        if (ruby) {
+          const range = document.createRange();
+          range.selectNodeContents(ruby.firstChild);
+          const reading = ruby.querySelector('rt').getBoundingClientRect();
+          readingAbove = reading.height > 0 && reading.top < range.getBoundingClientRect().top;
+        }
+        return {scene, offset, page: Number(siglusSurface.dataset.page), native, dom,
+          size: parseFloat(text.style.fontSize), ruby: Boolean(ruby), readingAbove};
+      } finally {
+        setMode(originalMode);
+      }
+    })()`);
+    const results = [];
+    async function compareBaselines() {
+      const result = await measureBaselines();
+      results.push(result);
+      for (const [index, native] of result.native.entries()) {
+        if (native === null) continue;
+        const difference = result.dom[index] - native;
+        assert.ok(Math.abs(difference) <= 1, JSON.stringify({...result, difference}));
+      }
+      if (result.ruby) assert.ok(result.readingAbove, JSON.stringify(result));
+    }
     // Prologue: the first ruby annotates the text at 0xf40 in chapter 01.
     const offset = 0xf40;
     const firstRuby = `siglusTags.find(({scene, tag, offset}) =>
       scene === ${JSON.stringify(scene)} && tag === 'text' && offset === ${offset})`;
-    await runUntil(() =>
-      evaluate(
+    await runUntil(async (current) => {
+      if (!(Number(current.page) > page)) return false;
+      await compareBaselines();
+      return evaluate(
         `siglusTags.at(-1)?.offset === 0xfc2 && siglusTags.at(-1)?.scene === ${JSON.stringify(scene)}`,
-      ),
-    );
+      );
+    });
     const pausePage = await evaluate('Number(siglusSurface.dataset.page)');
     assert.equal(
       digest(
@@ -616,43 +689,38 @@ verification: try {
       'スリーポイント',
       'The prologue reading must survive the first text command of the page',
     );
-    const measurements = await evaluate(`(() => {
-      const text = siglusSurface.querySelector('[data-siglus-dialogue]');
-      const canvas = siglusSurface.querySelector('[data-siglus-native-text]');
-      const context = canvas.getContext('2d');
-      const style = getComputedStyle(text);
-      const origin = Number.parseFloat(text.style.top);
-      context.save();
-      context.font = style.fontWeight + ' ' + style.fontSize + ' ' + style.fontFamily;
-      context.textBaseline = 'top';
-      const native = origin - context.measureText('国').alphabeticBaseline;
-      context.restore();
-      const select = document.querySelector('#text-mode');
-      select.value = 'dom';
-      select.dispatchEvent(new Event('change'));
-      const marker = document.createElement('span');
-      marker.style.cssText = 'display:inline-block;width:0;height:0;vertical-align:baseline';
-      text.prepend(marker);
-      const dom = Number.parseFloat(text.style.top) + marker.offsetTop;
-      marker.remove();
-      const ruby = text.querySelector('ruby');
-      const range = document.createRange();
-      range.selectNode(ruby.firstChild);
-      const base = range.getBoundingClientRect();
-      const reading = ruby.querySelector('rt').getBoundingClientRect();
-      return {native, dom, base: ruby.firstChild.textContent, readingAbove: reading.top < base.top,
-        readingHeight: reading.height, page: siglusSurface.dataset.page};
-    })()`);
-    console.log('Prologue ruby baseline in game pixels:', measurements);
+    await compareBaselines();
     compareTags(await evaluate(`[${firstRuby}]`), scripts);
-    assert.equal(digest(measurements.base), scripts.get(scene).tags.get(offset).hash);
-    assert.ok(
-      Math.abs(measurements.dom - measurements.native) <= 1,
-      'Ruby shifts the DOM baseline',
+    page = Number(await evaluate('siglusSurface.dataset.page'));
+    await clickStage();
+    await runUntil(async (current) => {
+      if (current.title) return true;
+      if (Number(current.page) > page) await compareBaselines();
+      return false;
+    });
+    await click('#siglus-surface button[aria-label="New Game"]');
+    const openingStart = page;
+    await runUntil(async (current) => {
+      if (Number(current.page) > page) await compareBaselines();
+      return Number(current.page) >= openingStart + 20;
+    });
+    const maxDifference = Math.max(
+      ...results.flatMap(({native, dom}) =>
+        native.flatMap((baseline, index) =>
+          baseline === null ? [] : [Math.abs(dom[index] - baseline)],
+        ),
+      ),
     );
-    assert.ok(
-      measurements.readingAbove && measurements.readingHeight > 0,
-      'Ruby must render above its base',
+    console.log('Native and DOM baselines:', {
+      pages: results.length,
+      maxDifference,
+      rubyPages: results.filter(({ruby}) => ruby).length,
+      speakerPages: results.filter(({native}) => native[1] !== null).length,
+    });
+    assert.ok(results.length >= 80, 'Alignment probe did not cover the opening checkpoints');
+    compareTags(
+      await evaluate("siglusTags.filter(({tag}) => tag === 'text' || tag === 'name')"),
+      scripts,
     );
     assert.equal(errors.length, 0);
     break verification;
