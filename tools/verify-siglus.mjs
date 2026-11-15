@@ -512,9 +512,10 @@ verification: try {
       let reason;
       let finalRowInk = 0;
       if (text.textContent.trim()) {
-        if (!size || !intersects(rect) || !rendered.checkVisibility({visibilityProperty: true}))
+        if (!size || !intersects(rect) ||
+            !rendered.checkVisibility({visibilityProperty: true, opacityProperty: true})) {
           reason = 'text or message window is invisible';
-        else if (native) {
+        } else if (native) {
           // Read only the dialogue area, below the separate speaker name.
           const x = Math.max(0, Math.floor((viewport.left - rect.left) * rendered.width / rect.width));
           const y = Math.max(Number.parseFloat(text.style.top),

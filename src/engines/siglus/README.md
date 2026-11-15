@@ -285,22 +285,26 @@ uses the original MSGBK resources and stores recent history and rewind
 checkpoints in each save. The probe reloads the slot after reopening the player
 and checks both No and Yes in the original resume confirmation.
 
-The clean-profile DOM Text route on `88f1b31` checked 21,210 input
+The clean-profile DOM Text route on `40f6abf` checked 21,210 input
 checkpoints, including nine scrolled messages and 40 size resets.
-The independent disassembly comparison matched 146,790 tags and
-70,851 literal command arguments, including all 68 prologue text
-fragments. The run checked 8,553 decoded audio buffers and used the
-scripted save and load menus. It completed all five movies, checked
-the clear flags and entered Music after reopening. It reported zero
-browser console errors and zero text failures.
+The independent disassembly comparison matched 147,969 tags and
+70,970 literal command arguments, including all 68 prologue text
+fragments. The run checked 8,552 decoded audio buffers and used the
+scripted save and load menus. It completed all five movies, matched
+their durations against FFprobe, verified the clear flags and entered
+Music after reopening. The player recorded no dropped frames or clock
+stalls. The run reported zero browser console errors and text failures.
 
-The clean-profile Native route on `4d57cdd` matched 149,412 command and
-message tags and 71,211 literal command arguments. It checked 8,553
+The clean-profile Native route on `40f6abf` matched 148,716 command and
+message tags and 71,091 literal command arguments. It checked 8,553
 decoded audio buffers with zero browser console errors. All 21,210
-dialogue checkpoints passed the Native render check, including the pages
-following 40 scripted size resets. Save and load were exercised on page 70. The run finished all five movies, verified the clear flags and
-entered Music after reopening. `npm test` reported the same 48 failing
-test names as `main` at `15f2bee` (2,518 passed, 3 skipped).
+dialogue checkpoints and 23,400 drawn rows passed the Native render
+check, including the pages following 40 scripted size resets. Save and
+load were exercised on page 70. The run finished all five movies,
+verified the clear flags and entered Music after reopening. All movie
+durations matched FFprobe. The player recorded no dropped frames or
+audio/video clock stalls. `npm test` reported the same 48 failing test
+names as `main` at `15f2bee` (2,518 passed, 3 skipped).
 
 ## Scripted interface in the original
 
@@ -327,16 +331,23 @@ and Gameexe.dat SHA-256
 ## Known differences
 
 - The return and exit confirmations use the script's original objects,
-  coordinates and input loop. The browser approximates object blending
-  and waits out the scripted fade duration in the confirmation scene.
+  coordinates and input loop. The browser uses alpha composition for
+  the tint layer. The native renderer uses blend mode 3 with
+  `SRCBLEND=ZERO` and `DESTBLEND=SRCCOLOR` at `0x6fa26e` through
+  `0x6fa2ab`. The browser waits out the scripted fade duration in the
+  confirmation scene.
 
 - History can resume a stored checkpoint from the current runtime or a newer
   browser save. The browser keeps checkpoints per page within the configured
   history limit. Native checkpoint sampling and line breaking still need
   comparison.
 
-- Day saves run the script’s rotation routine and resume after
-  the browser’s day transition. The native savepoint is inside the transition.
+- Day saves run the script’s rotation routine and resume after the
+  browser’s day transition. The native savepoint is at
+  `__sys_day_change:0x4d` inside that transition. The browser pans
+  the background and shows the four day-card graphics together.
+  The original script adds the white wipe, blurred background layer
+  and timed panel movements before capturing the day save.
   Thumbnails composite the visible graphical layers at the configured
   size. FORTUNE×WORLD sets `SAVE_THUMB.TYPE = 1`; the native filename
   resolver at `0x6828eb` selects PNG for that setting. Dialogue and native
