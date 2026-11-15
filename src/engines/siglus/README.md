@@ -23,7 +23,8 @@ scene sets `G[1007]=3` and `G[1009]=1` before `returnmenu`. The menu
 configured in Gameexe.dat is `_titlemenu` entry 0.
 
 The browser defaults to Native text. Select DOM text in the player options
-to highlight dialogue by dragging. Click or press Enter to advance a page.
+to highlight dialogue by dragging. Click or press Enter to reveal a page
+that is still printing. Use the next input to advance the completed page.
 Hold Control to skip where the script enables Control skip. The original Save
 and Load controls in the message frame open the scripted slot browser, which
 is also available from the title’s Load button. Saves and system flags are
@@ -61,6 +62,13 @@ Set `SIGLUS_OPENING_ONLY=1` for the first 50 text tags and the DOM selection
 check. Set `SIGLUS_DIAGNOSTIC_PAGES=1000` for a focused regression check of the
 first message size resets. The command advances the mandatory prologue
 with normal input, starts New Game and holds Control to reach the target.
+Set `SIGLUS_TYPING_ONLY=1` to measure character reveal on the first two
+prologue replies governed by `script.set_message_speed(60)`. It checks
+partial text, completion by click, natural completion in DOM Text and the
+finished dialogue SHA-256 values at Scene.pck offsets `0x2bdc` and
+`0x2c2f` in chapter 01. Configuration's text sample scales its counter
+duration by the character count. The browser applies that interval to
+story text, yields between characters and presents a ruby group together.
 Set `SIGLUS_MUSIC_ONLY=1` for the Music check. It uses a cleared-title
 checkpoint in the temporary browser profile and exercises track selection,
 Next, Stop, Play, the volume slider, and the return button with mouse input.

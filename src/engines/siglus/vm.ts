@@ -22,7 +22,7 @@ export type SiglusTag =
 export interface SiglusServices {
   command(command: SiglusCommand): Promise<Value | undefined>;
   property(path: number[], value?: Value): Value | undefined;
-  message(tag: Extract<SiglusTag, {tag: 'name' | 'text'}>): void;
+  message(tag: Extract<SiglusTag, {tag: 'name' | 'text'}>): void | Promise<void>;
   trace(tag: SiglusTag): void;
   yieldDelay?(): number;
 }
@@ -570,7 +570,8 @@ export class SiglusVm {
               readFlag,
             };
             this.services.trace(tag);
-            this.services.message(tag);
+            const writing = this.services.message(tag);
+            if (writing) await writing;
             break;
           }
           default:

@@ -1272,18 +1272,33 @@ export class SiglusDisplay {
   }
 
   append(value: string): void {
-    this.currentText.push({text: value, ruby: this.ruby || undefined});
-    if (this.ruby) {
+    this.appendRun(value);
+  }
+
+  appendRun(value: string) {
+    const fragment = {text: value, ruby: this.ruby || undefined};
+    const node = document.createTextNode(value);
+    let annotation: HTMLElement | undefined;
+    this.currentText.push(fragment);
+    if (fragment.ruby) {
       const ruby = document.createElement('ruby');
-      const rt = document.createElement('rt');
-      rt.textContent = this.ruby;
-      ruby.append(value, rt);
+      annotation = document.createElement('rt');
+      annotation.textContent = value ? fragment.ruby : '';
+      ruby.append(node, annotation);
       this.text.append(ruby);
       this.ruby = '';
-    } else this.text.append(value);
+    } else this.text.append(node);
     this.message.hidden = false;
     if (this.currentFace) this.root.dataset.sprite = this.currentFace;
     this.paintNativeText();
+    return {
+      ruby: Boolean(fragment.ruby),
+      reveal: (visible: string) => {
+        fragment.text = node.data = visible;
+        if (annotation) annotation.textContent = visible ? fragment.ruby! : '';
+        this.paintNativeText();
+      },
+    };
   }
 
   annotate(value: string): void {

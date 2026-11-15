@@ -21,6 +21,7 @@ const loadOnly = process.env.SIGLUS_LOAD_ONLY === '1';
 const configOnly = process.env.SIGLUS_CONFIG_ONLY === '1';
 const freshConfiguration = configOnly && process.env.SIGLUS_CONFIG_FRESH === '1';
 const openingOnly = process.env.SIGLUS_OPENING_ONLY === '1';
+const typingOnly = process.env.SIGLUS_TYPING_ONLY === '1';
 const digest = (value) => createHash('sha256').update(value).digest('hex');
 if (!folder || !browser || !disassemblyDirectory)
   throw new Error('Usage: node tools/verify-siglus.mjs GAME_FOLDER CHROMIUM DISASSEMBLY_DIRECTORY');
@@ -170,7 +171,7 @@ let child;
 let cdp;
 let browserClosed;
 const errors = [];
-try {
+verification: try {
   await new Promise((done, reject) => {
     server.once('error', reject);
     server.listen(0, '127.0.0.1', done);
@@ -503,7 +504,7 @@ try {
     const deadline = Date.now() + 180000;
     while (Date.now() < deadline) {
       const current = await state();
-      if (finished(current)) return current;
+      if (await finished(current)) return current;
       if (Number(current.page) > page) {
         page = Number(current.page);
         assert.ok(current.dialogue);
@@ -517,6 +518,53 @@ try {
       await delay(70);
     }
     throw new Error('Siglus playback timed out');
+  }
+  if (typingOnly) {
+    // The first prologue message_speed(60) covers these two consecutive replies.
+    const offsets = [0x2bdc, 0x2c2f];
+    const currentText = 'siglusSurface.querySelector("[data-siglus-dialogue]").textContent';
+    const textTag = (offset) => `siglusTags.find(({scene, tag, offset}) =>
+      scene === ${JSON.stringify(scene)} && tag === 'text' && offset === ${offset})`;
+    const partial = (offset) => `(() => {
+      const tag = ${textTag(offset)};
+      const text = ${currentText};
+      return tag && text.length > 0 && text.length < tag.value.length &&
+        tag.value.startsWith(text) && text.length;
+    })()`;
+    const before = await runUntil(() => evaluate(partial(offsets[0])));
+    const shown = await evaluate(partial(offsets[0]));
+    assert.ok(shown, 'Native text should still be printing');
+    await waitFor(`${partial(offsets[0])} > ${shown}`);
+    await clickStage();
+    await waitFor(`Number(siglusSurface.dataset.page) === ${Number(before.page) + 1}`);
+    assert.equal(digest(await evaluate(currentText)), scripts.get(scene).tags.get(offsets[0]).hash);
+    assert.equal(
+      await evaluate(textTag(offsets[1])),
+      undefined,
+      'The first click only reveals the text',
+    );
+    await evaluate(`(() => {
+      const select = document.querySelector('#text-mode');
+      select.value = 'dom';
+      select.dispatchEvent(new Event('change'));
+    })()`);
+    const started = await evaluate('performance.now()');
+    await clickStage();
+    await waitFor(partial(offsets[1]));
+    const partialPage = await evaluate('Number(siglusSurface.dataset.page)');
+    assert.equal(partialPage, Number(before.page) + 1);
+    await waitFor(`Number(siglusSurface.dataset.page) === ${partialPage + 1}`);
+    const written = await evaluate(currentText);
+    const elapsed = (await evaluate('performance.now()')) - started;
+    assert.equal(digest(written), scripts.get(scene).tags.get(offsets[1]).hash);
+    assert.ok(elapsed >= Array.from(written).length * 60 - 20, `Natural reveal took ${elapsed} ms`);
+    const trace = await evaluate(`[${textTag(offsets[0])}, ${textTag(offsets[1])}]`);
+    compareTags(trace, scripts);
+    await verifyRenderedPages();
+    console.log(
+      `Prologue: click completed the Native line without advancing. The next DOM line printed for ${Math.round(elapsed)} ms.`,
+    );
+    break verification;
   }
   await runUntil((current) => current.title);
   console.log(`Reached title after ${page} advances`);

@@ -180,6 +180,8 @@ export class SiglusPlayer {
   private objectsDirty = false;
   private pages = 0;
   private pendingText = false;
+  private printing = false;
+  private revealWholePage = false;
   private speed = 0;
   private readonly startScene: string;
   private readonly movies: BrowserFullscreenMoviePlayer;
@@ -365,7 +367,7 @@ export class SiglusPlayer {
         if (
           event.deltaY <= 0 ||
           this.userMessageHidden ||
-          !this.waitingForPage ||
+          (!this.waitingForPage && !this.printing) ||
           this.systemCallActive ||
           !this.systemOption('WHEEL_NEXT_MESSAGE_ONOFF')
         )
@@ -425,6 +427,7 @@ export class SiglusPlayer {
             this.display.clearText();
             this.pendingText = true;
             this.pageCharacters = 0;
+            this.revealWholePage = false;
           }
           if (tag.tag === 'name') this.display.name(tag.value);
           else {
@@ -433,8 +436,7 @@ export class SiglusPlayer {
               if (!this.skipUnread && !this.readFlags.get(tag.scene)?.has(tag.readFlag))
                 this.readSkipEnabled = false;
             }
-            this.display.append(tag.value);
-            this.pageCharacters += [...tag.value].length;
+            return this.print(tag.value);
           }
         },
       },
@@ -700,8 +702,7 @@ export class SiglusPlayer {
 
   private async pageInput(): Promise<void> {
     if (!this.pendingText) return;
-    const speed = this.speed || (this.playback.messageNowait ? 0 : this.playback.messageSpeed);
-    if (speed > 0) await this.delay(speed, true);
+    this.revealWholePage = false;
     this.pageAlreadyRead =
       this.pageReadFlags.length > 0 &&
       this.pageReadFlags.every(({scene, flag}) => this.readFlags.get(scene)?.has(flag));
@@ -731,6 +732,42 @@ export class SiglusPlayer {
     await this.waitAtPage();
     if (!this.systemOption('KOE_DONT_STOP_ONOFF')) this.audio.stop('voice');
     this.pendingText = false;
+  }
+
+  private print(value: string): void | Promise<void> {
+    const characters = Array.from(value);
+    this.pageCharacters += characters.length;
+    const speed = this.speed || (this.playback.messageNowait ? 0 : this.playback.messageSpeed);
+    if (speed <= 0 || !characters.length || this.skipping || this.revealWholePage) {
+      this.display.append(value);
+      return;
+    }
+    return this.revealRun(value, characters, speed);
+  }
+
+  private async revealRun(value: string, characters: string[], speed: number): Promise<void> {
+    const run = this.display.appendRun('');
+    const started = performance.now();
+    let visible = 0;
+    this.printing = true;
+    try {
+      while (visible < characters.length) {
+        const next = run.ruby ? characters.length : visible + 1;
+        const remaining = next * speed - (performance.now() - started);
+        if (await this.delay(Math.max(remaining, 0), true)) {
+          this.revealWholePage = true;
+          run.reveal(value);
+          return;
+        }
+        visible = Math.min(
+          characters.length,
+          Math.max(next, Math.floor((performance.now() - started) / speed)),
+        );
+        run.reveal(visible === characters.length ? value : characters.slice(0, visible).join(''));
+      }
+    } finally {
+      this.printing = false;
+    }
   }
 
   private revealMessage(): void {
@@ -1291,7 +1328,11 @@ export class SiglusPlayer {
         this.display.throb(n(2));
         break;
       case '$set_face':
-        if (!this.pendingText) this.display.clearText();
+        if (!this.pendingText) {
+          this.display.clearText();
+          this.pageCharacters = 0;
+          this.revealWholePage = false;
+        }
         await this.display.face(s(0));
         this.pendingText = true;
         break;
@@ -1452,9 +1493,12 @@ export class SiglusPlayer {
           this.pendingText = false;
           break;
         case 12:
-          this.display.append(s(0));
-          this.pageCharacters = (this.pendingText ? this.pageCharacters : 0) + [...s(0)].length;
+          if (!this.pendingText) {
+            this.pageCharacters = 0;
+            this.revealWholePage = false;
+          }
           this.pendingText = true;
+          await this.print(s(0));
           break;
         case 13:
         case 15:
