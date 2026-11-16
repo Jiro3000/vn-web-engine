@@ -207,10 +207,21 @@ restores the newest entry. The scripted Quick tab draws both thumbnails and
 loads the older entry through its confirmation dialog. Gameexe.dat places
 quick slots after the 1,010 regular and automatic slots in the menu’s numbering.
 
-Set `SIGLUS_AUTOSAVE_ONLY=1` to check the first two day saves. The probe uses
-the cleared-title checkpoint and Control skip to reach both day changes. It
-checks slot rotation and opens the original Auto tab to load slot 1000, then
-compares the resumed scene position and the next text hash with the disassembly.
+Set `SIGLUS_AUTOSAVE_ONLY=1` to check the first two day saves from the
+cleared-title checkpoint. The probe compares the original day-scene command
+order and arguments, reads the seven rendered layers and their motion
+durations, delays and distances, and verifies the two 354 × 199 PNG thumbnails.
+It loads slot 1000 through the original Auto tab in-game and after reopening
+the player. Both loads replay the day transition, preserve the rotated slots
+and continue at the next dialogue with the expected SHA-256 hash.
+
+The browser executes the original `__sys_day_change` scene, including the
+two wipes and the save rotation. In the embedded PE, native command 36 at
+`0x54cd3e` pushes 1 through `0x678ae0`, serializes the checkpoint via
+`0x659d80`, and replaces the live result with 0. The browser stores the same
+result at `__sys_day_change:0x5e` after `savepoint()` at `0x4d`.
+The pre-existing browser saves that resume after the day transition are
+still accepted.
 
 Set `SIGLUS_SLOT_MANAGEMENT_ONLY=1` to check the original comment editor,
 lock persistence after reopening the player, exchange of occupied slots, and
@@ -342,16 +353,13 @@ and Gameexe.dat SHA-256
   history limit. Native checkpoint sampling and line breaking still need
   comparison.
 
-- Day saves run the script’s rotation routine and resume after the
-  browser’s day transition. The native savepoint is at
-  `__sys_day_change:0x4d` inside that transition. The browser pans
-  the background and shows the four day-card graphics together.
-  The original script adds the white wipe, blurred background layer
-  and timed panel movements before capturing the day save.
-  Thumbnails composite the visible graphical layers at the configured
-  size. FORTUNE×WORLD sets `SAVE_THUMB.TYPE = 1`; the native filename
-  resolver at `0x6828eb` selects PNG for that setting. Dialogue and native
-  capture effects are absent from the browser composite.
+- Day transitions use the script's layers and motion parameters. The
+  browser maps easing mode 2 to CSS `ease-out` and blend mode 4 to
+  CSS/Canvas `screen`. The native colour interpolation and easing curves
+  still need comparison. Thumbnails composite the visible graphical layers
+  at the configured size. FORTUNE×WORLD sets `SAVE_THUMB.TYPE = 1`.
+  The native filename resolver at `0x6828eb` selects PNG for that setting.
+  Dialogue and native capture effects are absent from the browser composite.
 - Loading restores the VM, current message, background and cast. Browser
   saves record the BGM level and preserve looping, prepared and queued
   tracks. Playback starts at the configured sample, including for older browser records

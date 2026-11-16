@@ -192,6 +192,7 @@ export class SiglusPlayer {
   private moviePlayer: SiglusMoviePlayer = 'wmp';
   private readonly configuration: SiglusConfiguration;
   private readonly systemCounters = new Map<number, RealCounter>();
+  private readonly sceneCounters = new Map<number, RealCounter>();
   private waitingForPage = false;
   private systemMenuEnabled = true;
   private userMessageHidden = false;
@@ -219,6 +220,7 @@ export class SiglusPlayer {
   private readonly saves = new Map<number, PlayerSave>();
   private readonly quickSaves = new Map<number, PlayerSave>();
   private savePoint?: PlayerSave;
+  private dayStage = false;
   private selectedSave?: PlayerSave;
   private readonly system = new Map<number, number>();
   private movieError?: Error;
@@ -565,12 +567,13 @@ export class SiglusPlayer {
       this.windowDisplay.setFullscreen(this.screenSettings.fullscreen);
   }
 
-  private systemCounter(
+  private counter(
+    counters: Map<number, RealCounter>,
     id: number,
     member: number,
     args: SiglusCommand['args'],
   ): Value | undefined {
-    const counter = this.systemCounters.get(id);
+    const counter = counters.get(id);
     const now = performance.now();
     const elapsed = counter ? now - counter.start : 0;
     switch (member) {
@@ -583,13 +586,13 @@ export class SiglusPlayer {
         return from + Math.trunc(((range.to - from) * elapsed) / range.duration);
       }
       case 2: // reset
-        this.systemCounters.delete(id);
+        counters.delete(id);
         return 0;
       case 9: // start_real
-        this.systemCounters.set(id, {start: now, from: 0});
+        counters.set(id, {start: now, from: 0});
         return 0;
       case 11: // start_frame_real
-        this.systemCounters.set(id, {
+        counters.set(id, {
           start: now,
           from: Number(args[0]),
           range: {to: Number(args[1]), duration: Number(args[2])},
@@ -753,11 +756,16 @@ export class SiglusPlayer {
               ? 'y'
               : property === 27
                 ? 'transparency'
-                : undefined;
+                : property === 46
+                  ? 'blend'
+                  : undefined;
     if (!field) return;
-    if (value !== undefined && object[field] !== Number(value)) {
-      object[field] = Number(value);
-      this.markObjectsDirty(path);
+    if (value !== undefined) {
+      const next = field === 'blend' ? Math.min(4, Math.max(0, Number(value))) : Number(value);
+      if (object[field] !== next) {
+        object[field] = next;
+        this.markObjectsDirty(path);
+      }
     }
     return object[field] ?? (field === 'transparency' ? 255 : 0);
   }
@@ -1032,7 +1040,7 @@ export class SiglusPlayer {
     }
   }
 
-  private captureSave(waitsForInput = true, includeHistory = true): PlayerSave {
+  private captureSave(waitsForInput = true, includeHistory = true, commandResult = 0): PlayerSave {
     const {background} = this.root.dataset;
     const bgmPlayback = this.audio.bgmCheckpoint();
     const history = includeHistory
@@ -1050,7 +1058,7 @@ export class SiglusPlayer {
     }
     return {
       version: 1,
-      vm: this.vm.checkpoint(0),
+      vm: this.vm.checkpoint(commandResult),
       stage: [...this.stageProperties],
       message: this.display.saveMessage(),
       background,
@@ -1181,6 +1189,9 @@ export class SiglusPlayer {
     this.skip = false;
     this.readSkipEnabled = false;
     this.savePoint = save;
+    this.sceneCounters.clear();
+    this.clearDayObjects();
+    if (save.vm.frames.at(-1)?.scene === '__sys_day_change') this.beginDayObjects();
     this.backlog.splice(0, this.backlog.length, ...(save.history ?? []));
     for (const [index, point] of save.historyPoints ?? []) {
       const entry = this.backlog[index];
@@ -1322,6 +1333,19 @@ export class SiglusPlayer {
     this.objectsDirty = false;
   }
 
+  private beginDayObjects(): void {
+    this.dayStage = true;
+    this.objects[0]!.clear();
+    this.objects[1]!.clear();
+    this.objectsDirty = false;
+  }
+
+  private clearDayObjects(): void {
+    if (!this.dayStage) return;
+    this.beginDayObjects();
+    this.dayStage = false;
+  }
+
   private async renderObjects(): Promise<void> {
     await this.renderMessageObjects();
     if (this.systemObjectsDirty && this.systemObjects) {
@@ -1364,6 +1388,7 @@ export class SiglusPlayer {
   }
 
   private async fade(name: string, transition: number): Promise<void> {
+    this.clearDayObjects();
     this.pendingText = false;
     this.display.closeMessage();
     this.display.endEffect();
@@ -1380,6 +1405,7 @@ export class SiglusPlayer {
     fade: number,
     pan?: Parameters<SiglusDisplay['setBackground']>[2],
   ): Promise<void> {
+    this.clearDayObjects();
     this.pendingText = false;
     this.display.closeMessage();
     this.stageProperties.set('$bg_name.-1.0', name);
@@ -1539,20 +1565,9 @@ export class SiglusPlayer {
         this.stageProperties.set('$bg_type', exists ? 1 : 2);
         break;
       }
-      case '$change_days': {
-        await this.background(s(1), 3, {from: [-360, -360], to: [0, -360], time: 15000});
-        await this.display.dayCard(n(0));
-        await this.delay(2000, true);
-        await this.delay(4000, true);
-        if (this.saveEnabled && this.system.get(1330)) {
-          this.savePoint = this.captureSave(false);
-          this.savePoint.thumbnail = this.display.captureThumbnail();
-          await this.vm.callScene('__sys_system_call', '$sys_day_save');
-          await this.display.autosaveNotice();
-        }
-        this.display.removeDayCard();
+      case '$auto_save_disp':
+        await this.display.autosaveNotice();
         break;
-      }
       case '$scene_fade':
         this.audio.stop('bgm', n(3));
         this.audio.stopEffects();
@@ -1740,8 +1755,10 @@ export class SiglusPlayer {
     if (path.length === 1) {
       switch (root) {
         case 80: // capture
-          if (!this.systemCallActive) return undefined;
-          if (this.savePoint) {
+          if (!this.systemCallActive && !this.dayStage) return undefined;
+          if (this.savePoint && !this.systemCallActive) {
+            this.savePoint.thumbnail = this.display.captureThumbnail();
+          } else if (this.savePoint) {
             const bgmPlayback = this.audio.bgmCheckpoint();
             this.savePoint = {
               ...this.savePoint,
@@ -1755,7 +1772,7 @@ export class SiglusPlayer {
           }
           return 0;
         case 81: // capture_free
-          if (this.systemCallActive) return 0;
+          if (this.systemCallActive || this.dayStage) return 0;
           return undefined;
         case 6: // disp
         case 96: // frame
@@ -1857,7 +1874,8 @@ export class SiglusPlayer {
         case 116:
           return this.display.messageWindow;
         case 36:
-          this.savePoint = this.captureSave(false);
+          if (command.scene === '__sys_day_change') this.beginDayObjects();
+          this.savePoint = this.captureSave(false, true, 1);
           return 0;
         case 112:
           return Number(Boolean(this.savePoint));
@@ -1868,6 +1886,15 @@ export class SiglusPlayer {
           return undefined;
       }
       return 0;
+    }
+    if (root === 40 && member === -1 && path.length === 4) {
+      const id = path[2]!;
+      const operation = path[3]!;
+      if (operation === 6 || operation === 8) {
+        const elapsed = this.counter(this.sceneCounters, id, 1, []) ?? 0;
+        return this.delay(n(0) - Number(elapsed), operation === 8);
+      }
+      return this.counter(this.sceneCounters, id, operation, args);
     }
     if ((root === 37 || root === 38) && member === 2) return this.objectCommand(command);
     if (root === 38 && member === 3) {
@@ -1926,7 +1953,7 @@ export class SiglusPlayer {
         }
       }
       if (member === 6 && path.length === 5 && path[2] === -1)
-        return this.systemCounter(path[3]!, path[4]!, args);
+        return this.counter(this.systemCounters, path[3]!, path[4]!, args);
       if (path.length === 3 && member === 1 && path[2] === 2) return undefined;
       if (member === 1 && path[2] === 2) return this.objectCommand(command);
       if (path.length === 2 && member === 8) return Number(Boolean(this.systemObjects));
@@ -2255,6 +2282,8 @@ export class SiglusPlayer {
         this.pendingText = false;
         this.readSkipEnabled = this.autoEnabled = false;
         this.savePoint = undefined;
+        this.sceneCounters.clear();
+        this.clearDayObjects();
         this.vm.returnToMenu();
       }
       if (member === 11 || member === 12) {
@@ -2600,6 +2629,29 @@ export class SiglusPlayer {
       object.x = n(0);
       return 0;
     }
+    if (
+      (command === 51 || command === 64) &&
+      path.length === index + 4 &&
+      path[index + 3] === 0 &&
+      (args.length === 4 || (args.length === 5 && named[0] === 0))
+    ) {
+      const axis = command === 51 ? 'x' : 'y';
+      object.positionEvents = {
+        ...object.positionEvents,
+        [axis]: {
+          from: args.length === 5 ? n(4) : object[axis],
+          started: performance.now(),
+          time: {
+            duration: n(1),
+            delay: n(2),
+            easing: n(3) === 2 ? 'ease-out' : 'linear',
+            fill: 'backwards',
+          },
+        },
+      };
+      object[axis] = n(0);
+      return 0;
+    }
     if (command === 72 && path.length === index + 4) {
       const event = path[index + 3];
       if (event === 0 && (args.length === 4 || (args.length === 5 && named[0] === 0))) {
@@ -2636,7 +2688,8 @@ export class SiglusPlayer {
     else if (command === 48) {
       object.x = n(0);
       object.y = n(1);
-    } else if (command === 97) object.disabled = true;
+    } else if (command === 49) object.scale = [n(0), n(1)];
+    else if (command === 97) object.disabled = true;
     else if (command === 63 && path.at(-1) === 2) return 0;
     else if (path.at(-1) === 0 && args.length === 5) {
       const animation: NonNullable<DrawObject['opacity']> = [n(0), n(1), n(2), n(3), n(4)];

@@ -483,6 +483,20 @@ verification: try {
     let sizeOverride = false;
     let resetPending = false;
     siglusSurface.addEventListener('siglus-tag', (event) => siglusTags.push(event.detail));
+    window.siglusDayLayers = [];
+    if (${autoOnly}) siglusSurface.addEventListener('siglus-tag', ({detail}) => {
+      if (detail.scene !== '__sys_day_change' || detail.offset !== 0xd1a) return;
+      const scene = siglusSurface.firstElementChild.firstElementChild.lastElementChild;
+      siglusDayLayers.push([...scene.children].map(layer => ({
+        scale: layer.style.scale,
+        blend: layer.style.mixBlendMode,
+        animations: layer.getAnimations().map(({effect}) => ({
+          duration: effect.getTiming().duration,
+          delay: effect.getTiming().delay,
+          frames: effect.getKeyframes().map(({left, top, opacity}) => ({left, top, opacity})),
+        })),
+      })));
+    });
     siglusSurface.addEventListener('siglus-tag', ({detail: tag}) => {
       if (tag.path?.length !== 1 || tag.path[0] !== 16) return;
       resetPending = sizeOverride && tag.args.length === 0;
@@ -1505,42 +1519,138 @@ verification: try {
     }
     const slots = await evaluate(
       asyncExpression(`${slotsExpression}.map(([no, save]) =>
-      [no, {timestamp: save.timestamp, background: save.background, frame: save.vm.frames.at(-1)}])`),
+      [no, {timestamp: save.timestamp, background: save.background, frame: save.vm.frames.at(-1),
+        caller: save.vm.frames.at(-2), thumbnail: save.thumbnail}])`),
     );
     const records = new Map(slots);
     assert.ok(records.get(1000).timestamp >= records.get(1001).timestamp);
-    assert.notEqual(records.get(1000).frame.pc, records.get(1001).frame.pc);
-    assert.equal(records.get(1000).frame.scene, records.get(1001).frame.scene);
+    for (const slot of [1000, 1001]) {
+      const save = records.get(slot);
+      assert.equal(save.frame.scene, '__sys_day_change');
+      assert.equal(save.frame.pc, 0x5e);
+      assert.equal(
+        save.frame.stack.at(-1),
+        1,
+        'The checkpoint supplies the resumed savepoint result',
+      );
+      const png = Buffer.from(save.thumbnail.split(',')[1], 'base64');
+      assert.equal(png.subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
+      assert.deepEqual([png.readUInt32BE(16), png.readUInt32BE(20)], [354, 199]);
+    }
+    assert.notEqual(records.get(1000).caller.pc, records.get(1001).caller.pc);
+    assert.equal(records.get(1000).caller.scene, records.get(1001).caller.scene);
+    assert.notEqual(digest(records.get(1000).thumbnail), digest(records.get(1001).thumbnail));
+    const sceneLayers = await evaluate('siglusDayLayers');
+    assert.ok(sceneLayers.length >= 2, 'Both day scenes presented their object layers');
+    for (const layers of sceneLayers) {
+      assert.equal(layers.length, 7);
+      assert.deepEqual(
+        layers.slice(0, 2).map(({scale}) => scale),
+        ['1.5', '1.5'],
+      );
+      assert.equal(layers[1].blend, 'screen');
+      assert.deepEqual(
+        layers.map(({animations}) =>
+          animations.map(({duration, delay}) => [duration, delay]).sort(),
+        ),
+        [
+          [[15000, 0]],
+          [[15000, 0]],
+          [],
+          [[1500, 0]],
+          [[1500, 0]],
+          [
+            [1000, 2000],
+            [2000, 2000],
+          ],
+          [
+            [1000, 2000],
+            [2000, 2000],
+          ],
+        ],
+      );
+      const movement = (index, property) => {
+        const frames = layers[index].animations.find(({frames}) => frames[0][property]).frames;
+        return parseFloat(frames.at(-1)[property]) - parseFloat(frames[0][property]);
+      };
+      assert.deepEqual(
+        [
+          movement(0, 'left'),
+          movement(1, 'left'),
+          movement(3, 'top'),
+          movement(4, 'top'),
+          movement(5, 'left'),
+          movement(6, 'left'),
+        ],
+        [360, 360, 141, -141, 100, -100],
+      );
+    }
     await waitFor(
       "!document.querySelector('[data-siglus-action=load]')?.parentElement.hidden",
       60000,
     );
+    const dayScene = '__sys_day_change';
+    const dayOffsets = [...scripts.get(dayScene).tags.values()]
+      .filter(({tag, offset}) => tag === 'command' && offset >= 0x4d && offset <= 0xee6)
+      .map(({offset}) => offset);
+    const initialDays = await evaluate(`siglusTags.filter(({scene}) => scene === '${dayScene}')`);
+    compareTags(initialDays, scripts);
+    assert.deepEqual(
+      initialDays.map(({offset}) => offset),
+      [...dayOffsets, ...dayOffsets],
+    );
     const dialogue = "siglusSurface.querySelector('[data-siglus-dialogue]').textContent";
-    const beforeLoad = await evaluate('Number(siglusSurface.dataset.page)');
-    const start = await evaluate('siglusTags.length');
-    await click('[data-siglus-action="load"]');
-    await waitFor(slotLoop);
-    const frame = await evaluate(slotLoop);
-    await clickScriptMenu(slotLoop, 1654, 34);
-    await waitFor(`${slotLoop} > ${frame} && siglusTags.slice(${start}).some(
-      ({path, args}) => path?.join('.') === '63.69' && args[0] === 1000)`);
-    assert.equal(await chooseSlot('load', start), 'confirm');
-    await waitFor("siglusSurface.dataset.loaded === 'true'");
-    await waitFor(`Number(siglusSurface.dataset.page) > ${beforeLoad}`);
-    const restored = await evaluate(`({text: ${dialogue},
-      command: siglusTags.slice(${start}).find(({path}) => path?.join('.') === '63.256'),
-      firstText: siglusTags.slice(${start}).find(({tag}) => tag === 'text')})`);
-    assert.equal(restored.command.args[0], 1000);
-    assert.ok(restored.firstText.offset >= records.get(1000).frame.pc);
-    assert.equal(restored.firstText.scene, records.get(1000).frame.scene);
-    assert.ok(restored.text.includes(restored.firstText.value));
-    compareTags([restored.firstText], scripts, {compareSourceLine: false});
-    console.log('Autosave: the original Auto tab restored slot 1000 and resumed the day.');
-    const tags = await evaluate("siglusTags.filter(({scene}) => scene === '__sys_system_call')");
-    compareTags(tags, scripts, {compareSourceLine: false});
+    const {caller} = records.get(1000);
+    const expectedText = [...scripts.get(caller.scene).tags.values()].find(
+      ({tag, offset}) => tag === 'text' && offset >= caller.pc,
+    );
+    async function loadAuto(button) {
+      const beforeLoad = Number(await evaluate('siglusSurface.dataset.page')) || 0;
+      const start = await evaluate('siglusTags.length');
+      await click(button);
+      await waitFor(slotLoop);
+      const frame = await evaluate(slotLoop);
+      await clickScriptMenu(slotLoop, 1654, 34);
+      await waitFor(`${slotLoop} > ${frame} && siglusTags.slice(${start}).some(
+        ({path, args}) => path?.join('.') === '63.69' && args[0] === 1000)`);
+      assert.equal(await chooseSlot('load', start), 'confirm');
+      await waitFor("siglusSurface.dataset.loaded === 'true'");
+      await waitFor(`Number(siglusSurface.dataset.page) > ${beforeLoad}`);
+      const restored = await evaluate(`({text: ${dialogue},
+        command: siglusTags.slice(${start}).find(({path}) => path?.join('.') === '63.256'),
+        firstText: siglusTags.slice(${start}).find(({tag}) => tag === 'text')})`);
+      assert.equal(restored.command.args[0], 1000);
+      assert.equal(restored.firstText.scene, caller.scene);
+      assert.equal(restored.firstText.offset, expectedText.offset);
+      assert.ok(restored.text.includes(restored.firstText.value));
+      assert.equal(digest(restored.firstText.value), expectedText.hash);
+      const resumedDay = await evaluate(`siglusTags.slice(${start}).filter(
+        ({scene}) => scene === '${dayScene}')`);
+      compareTags(resumedDay, scripts);
+      assert.deepEqual(
+        resumedDay.map(({offset}) => offset),
+        dayOffsets.filter((offset) => offset > 0x4d && (offset < 0xe44 || offset >= 0xee6)),
+      );
+      const slotsAfterLoad = await evaluate(
+        asyncExpression(`${slotsExpression}.map(
+        ([no, save]) => [no, save.timestamp, save.thumbnail])`),
+      );
+      assert.deepEqual(
+        slotsAfterLoad,
+        slots.map(([no, save]) => [no, save.timestamp, save.thumbnail]),
+      );
+    }
+    await loadAuto('[data-siglus-action="load"]');
+    const systemTags = await evaluate(
+      "siglusTags.filter(({scene}) => scene === '__sys_system_call')",
+    );
+    compareTags(systemTags, scripts, {compareSourceLine: false});
+    await reopenPlayer();
+    await loadAuto('#siglus-surface button[aria-label="Load Game"]');
+    console.log('Autosave: the Auto tab resumed slot 1000 in-game and after reopening.');
     console.log(
-      'Autosave: authored rotation retained two distinct day checkpoints.',
-      slots.map(([slot, {background, frame}]) => [slot, background, frame.pc]),
+      'Autosave: two day checkpoints matched the original commands, layers and motions.',
+      slots.map(([slot, {caller}]) => [slot, caller.pc]),
     );
   } else if (quickOnly) {
     await click('#siglus-surface button[aria-label="New Game"]');

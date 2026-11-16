@@ -38,6 +38,18 @@ export interface DrawObject {
   layer?: number;
   transparency?: number;
   pattern: number;
+  scale?: readonly [number, number];
+  blend?: number;
+  positionEvents?: Partial<
+    Record<
+      'x' | 'y',
+      {
+        from: number;
+        started: number;
+        time: KeyframeAnimationOptions;
+      }
+    >
+  >;
   patternCycle?: {count: number; duration: number; started: number};
   button?: {id: number; group: number};
   children?: Map<number, DrawObject>;
@@ -73,7 +85,6 @@ export class SiglusDisplay {
   private readonly layers = document.createElement('div');
   private readonly cast = document.createElement('div');
   private readonly effect = document.createElement('div');
-  private readonly day = document.createElement('div');
   private readonly controls = document.createElement('div');
   private readonly frameActions: {
     action: SiglusFrameAction;
@@ -174,8 +185,7 @@ export class SiglusDisplay {
     }
     this.portrait.style.cssText = 'position:absolute;overflow:hidden';
     this.cast.style.cssText = 'position:absolute;inset:0;pointer-events:none';
-    for (const layer of [this.effect, this.day])
-      layer.style.cssText = 'position:absolute;inset:0;pointer-events:none';
+    this.effect.style.cssText = 'position:absolute;inset:0;pointer-events:none';
     this.controls.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:1';
     this.controls.hidden = true;
     this.systemLayer.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:2';
@@ -184,7 +194,6 @@ export class SiglusDisplay {
       this.layers,
       this.cast,
       this.effect,
-      this.day,
       this.message,
       this.controls,
       this.systemLayer,
@@ -333,7 +342,7 @@ export class SiglusDisplay {
   }
 
   setScenePaused(paused: boolean): void {
-    for (const layer of [this.layers, this.cast, this.effect, this.day])
+    for (const layer of [this.layers, this.cast, this.effect])
       for (const animation of layer.getAnimations({subtree: true})) {
         if (paused && animation.playState === 'running') animation.pause();
         else if (!paused && animation.playState === 'paused') animation.play();
@@ -864,9 +873,10 @@ export class SiglusDisplay {
     const context = canvas.getContext('2d')!;
     context.fillStyle = 'black';
     context.fillRect(0, 0, width, height);
-    for (const layer of [this.layers, this.cast, this.effect, this.day]) {
+    for (const layer of [this.layers, this.cast, this.effect]) {
       for (const source of layer.querySelectorAll('canvas')) {
         let opacity = 1;
+        let blend: GlobalCompositeOperation = 'source-over';
         for (
           let element: HTMLElement | null = source;
           element && element !== this.stage;
@@ -878,10 +888,12 @@ export class SiglusDisplay {
             break;
           }
           opacity *= Number(style.opacity);
+          if (style.mixBlendMode === 'screen') blend = 'screen';
         }
         if (opacity === 0) continue;
         const rect = source.getBoundingClientRect();
         context.globalAlpha = opacity;
+        context.globalCompositeOperation = blend;
         context.drawImage(
           source,
           ((rect.left - bounds.left) * width) / bounds.width,
@@ -1044,6 +1056,21 @@ export class SiglusDisplay {
       canvas.style.left = '0';
       canvas.style.top = '0';
       element.style.cssText = `position:absolute;left:${object.x + frame.x}px;top:${object.y + frame.y}px;width:${frame.width}px;height:${frame.height}px;border:0;padding:0;background:none`;
+      if (object.scale) {
+        element.style.scale = object.scale.map((axis) => axis / 1000).join(' ');
+        element.style.transformOrigin = `${frame.centerX}px ${frame.centerY}px`;
+      }
+      if (object.blend === 4) element.style.mixBlendMode = 'screen';
+      for (const axis of ['x', 'y'] as const) {
+        const event = object.positionEvents?.[axis];
+        if (!event) continue;
+        const property = axis === 'x' ? 'left' : 'top';
+        const animation = element.animate(
+          {[property]: [`${event.from + frame[axis]}px`, element.style[property]]},
+          event.time,
+        );
+        animation.currentTime = performance.now() - event.started;
+      }
       this.applyClip(
         element,
         object,
@@ -1329,26 +1356,28 @@ export class SiglusDisplay {
     this.text.style.clipPath = '';
   }
 
-  async dayCard(index: number): Promise<void> {
-    const frames = await Promise.all(
-      [0, 1, 2, 9 + index].map((pattern) => this.graphic('__sys_day_frame', pattern)),
-    );
-    this.day.replaceChildren(...frames.map((graphic) => this.node(graphic)));
-  }
-
   async autosaveNotice(): Promise<void> {
     const graphic = await this.graphic('__sys_mw_info00', 1);
     const node = this.node(graphic);
     node.style.left = `${1678 + graphic.x}px`;
     node.style.top = `${783 + graphic.y}px`;
     this.stage.append(node);
+    node.animate(
+      [
+        {opacity: 0, offset: 0, easing: 'ease-out'},
+        {opacity: 1, offset: 0.12},
+        {opacity: 1, offset: 0.32, easing: 'ease-out'},
+        {opacity: 0, offset: 0.44},
+        {opacity: 0, offset: 1},
+      ],
+      {duration: 2500, fill: 'both'},
+    );
     const animation = node.animate(
       [
-        {opacity: 0, transform: 'translateX(0px)', offset: 0},
-        {opacity: 1, transform: 'translateX(-30px)', offset: 0.12},
-        {opacity: 1, transform: 'translateX(-50px)', offset: 0.32},
-        {opacity: 0, transform: 'translateX(-47px)', offset: 0.44},
-        {opacity: 0, transform: 'translateX(0px)', offset: 1},
+        {translate: '0px', offset: 0, easing: 'ease-out'},
+        {translate: '-50px', offset: 0.2},
+        {translate: '-50px', offset: 0.8, easing: 'ease-out'},
+        {translate: '0px', offset: 1},
       ],
       {duration: 2500},
     );
@@ -1356,10 +1385,6 @@ export class SiglusDisplay {
       () => node.remove(),
       () => node.remove(),
     );
-  }
-
-  removeDayCard(): void {
-    this.day.replaceChildren();
   }
 
   async lineEffect(color: number): Promise<void> {
