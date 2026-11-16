@@ -78,6 +78,7 @@ export interface DrawObject {
 }
 
 export interface SiglusGanCheckpoint {
+  slot?: number;
   name: string;
   sequence: number;
   loop: boolean;
@@ -85,6 +86,15 @@ export interface SiglusGanCheckpoint {
   y: number;
   elapsed: number;
 }
+
+type GanLayer = {checkpoint: SiglusGanCheckpoint; layer: HTMLElement; animations: Animation[]};
+type BackgroundPan = {
+  from: [number, number];
+  to: [number, number];
+  time: number;
+  scale?: [number, number];
+};
+export type SiglusBackground = {name: string; pan?: BackgroundPan};
 
 export interface SiglusFrameAction {
   id: number;
@@ -114,7 +124,9 @@ export class SiglusDisplay {
   private readonly layers = document.createElement('div');
   private readonly cast = document.createElement('div');
   private readonly effect = document.createElement('div');
-  private activeGan?: SiglusGanCheckpoint;
+  private readonly activeGans = new Map<number, GanLayer>();
+  private readonly pendingGans = new Map<number, GanLayer | null>();
+  private castTransition?: Promise<void>;
   private readonly controls = document.createElement('div');
   private readonly frameActions: {
     action: SiglusFrameAction;
@@ -1017,21 +1029,28 @@ export class SiglusDisplay {
     button: (target: NonNullable<DrawObject['button']>) => void,
     fan?: FanWipe,
   ): Promise<void> {
+    await this.finishCastTransition();
     const next = await this.drawObjects(objects, button);
-    if (fan && duration > 0) this.layers.append(this.cast);
-    try {
-      await this.replaceLayer(next, duration, fan);
-    } finally {
-      if (fan && duration > 0) {
-        this.cast.inert = false;
-        this.layers.after(this.cast);
+    const title = next.querySelector('[aria-label="New Game"]');
+    if (title) this.clearGan();
+    if (this.pendingGans.size) {
+      await this.presentStage(next, [], duration, fan);
+    } else {
+      if (fan && duration > 0) this.layers.append(this.cast);
+      try {
+        await this.replaceLayer(next, duration, fan);
+      } finally {
+        if (fan && duration > 0) {
+          this.cast.inert = false;
+          this.layers.after(this.cast);
+        }
       }
     }
     this.objectLayer = next;
     this.cast.replaceChildren();
     delete this.root.dataset.cast;
     delete this.root.dataset.background;
-    this.root.dataset.phase = next.querySelector('[aria-label="New Game"]') ? 'title' : 'scene';
+    this.root.dataset.phase = title ? 'title' : 'scene';
   }
 
   async refreshObjects(
@@ -1387,8 +1406,23 @@ export class SiglusDisplay {
   async setBackground(
     name: string,
     duration: number,
-    pan?: {from: [number, number]; to: [number, number]; time: number; scale?: [number, number]},
+    pan?: BackgroundPan,
+    clearCast = false,
   ): Promise<void> {
+    await this.finishCastTransition();
+    const next = await this.backgroundLayer({name, pan}, duration);
+    if (this.pendingGans.size) {
+      const cast = clearCast ? [] : [...this.copyStageLayer(this.cast).children];
+      await this.presentStage(next, cast, duration);
+    } else await this.replaceLayer(next, duration);
+    this.root.dataset.background = name;
+    this.root.dataset.phase = 'scene';
+  }
+
+  private async backgroundLayer(
+    {name, pan}: SiglusBackground,
+    duration: number,
+  ): Promise<HTMLElement> {
     const graphic = await this.graphic(name);
     const next = document.createElement('div');
     next.style.cssText = 'position:absolute;inset:0';
@@ -1407,15 +1441,16 @@ export class SiglusDisplay {
         },
         {duration: pan.time, fill: 'both', delay: duration},
       );
-    await this.replaceLayer(next, duration);
-    this.root.dataset.background = name;
-    this.root.dataset.phase = 'scene';
+    return next;
   }
 
   async showCast(
     sprites: readonly {name: string; costume: string; position?: [number, number]}[],
     duration: number,
+    publish = false,
+    backdrop?: SiglusBackground,
   ): Promise<void> {
+    await this.finishCastTransition();
     const characters = await Promise.all(
       sprites.map(async ({name, costume, position}, index) => {
         const match = /^(bs\d_)?([a-z]{2})(\d\d)(\d\d)/i.exec(name);
@@ -1443,8 +1478,26 @@ export class SiglusDisplay {
       }),
     );
     this.signal.throwIfAborted();
-    this.cast.replaceChildren(...characters);
-    if (duration > 0 && characters.length) this.cast.animate({opacity: [0, 1]}, {duration});
+    if (publish && this.pendingGans.size) {
+      const next = backdrop
+        ? await this.backgroundLayer(backdrop, duration)
+        : this.background
+          ? this.copyStageLayer(this.background)
+          : document.createElement('div');
+      const transition = this.presentStage(next, characters, duration);
+      this.castTransition = transition;
+      void transition
+        .catch((error) => {
+          if (!this.signal.aborted) console.error(error);
+        })
+        .finally(() => {
+          if (this.castTransition === transition) this.castTransition = undefined;
+        });
+      if (backdrop) this.root.dataset.background = backdrop.name;
+    } else {
+      this.cast.replaceChildren(...characters);
+      if (duration > 0 && characters.length) this.cast.animate({opacity: [0, 1]}, {duration});
+    }
     this.root.dataset.cast = sprites.map(({name}) => name).join(',');
   }
 
@@ -1537,13 +1590,8 @@ export class SiglusDisplay {
     );
   }
 
-  private async ganAnimation({
-    name,
-    sequence,
-    loop,
-    x,
-    y,
-  }: SiglusGanCheckpoint): Promise<HTMLElement> {
+  private async ganAnimation(checkpoint: SiglusGanCheckpoint): Promise<GanLayer> {
+    const {name, sequence, loop, x, y} = checkpoint;
     const source = this.files.get(`gan/${name.toLowerCase()}.gan`);
     if (!source) throw new Error(`Missing Siglus GAN ${name}`);
     const frames = readGan(await source.read(0, source.size, this.signal))[sequence];
@@ -1554,6 +1602,7 @@ export class SiglusDisplay {
     layer.dataset.siglusGan = name;
     layer.style.cssText = 'position:absolute;inset:0;pointer-events:none';
     const patterns = new Map<number, Graphic | undefined>();
+    const animations: Animation[] = [];
     let elapsed = 0;
     for (const [index, frame] of frames.entries()) {
       // The native lookup selects the first cumulative end >= its integer clock.
@@ -1579,52 +1628,131 @@ export class SiglusDisplay {
         opacity: !loop && index + 1 === frames.length ? frame.alpha / 255 : 0,
         offset: !loop && index + 1 === frames.length ? 1 : offset(end),
       });
-      node.animate(
-        keyframes.map((keyframe) => ({...keyframe, easing: 'steps(1, end)'})),
-        {duration, iterations: loop ? Infinity : 1, fill: 'both'},
+      animations.push(
+        node.animate(
+          keyframes.map((keyframe) => ({...keyframe, easing: 'steps(1, end)'})),
+          {duration, iterations: loop ? Infinity : 1, fill: 'both'},
+        ),
       );
       layer.append(node);
     }
-    return layer;
+    return {checkpoint, layer, animations};
   }
 
-  async lineEffect(color: number): Promise<void> {
-    await this.loadGan({
-      name: color ? 'ef_line02' : 'ef_line01',
-      sequence: 0,
-      loop: true,
-      x: -64,
-      y: -60,
-      elapsed: 0,
-    });
+  get hasGanChanges(): boolean {
+    return this.pendingGans.size > 0;
   }
 
-  async loadGan(checkpoint: SiglusGanCheckpoint): Promise<void> {
-    const layer = await this.ganAnimation(checkpoint);
+  async stageGan(checkpoint: SiglusGanCheckpoint): Promise<void> {
+    const slot = checkpoint.slot ?? 200;
+    const gan = await this.ganAnimation(checkpoint);
     this.signal.throwIfAborted();
-    this.clearGan();
-    this.effect.append(layer);
+    const previous = this.pendingGans.get(slot);
+    if (previous) this.removeGan(previous);
+    this.pendingGans.set(slot, gan);
     const now = document.timeline.currentTime as number;
-    for (const animation of layer.getAnimations({subtree: true})) {
+    for (const animation of gan.animations) {
       animation.startTime = now;
       animation.currentTime = checkpoint.elapsed;
     }
-    this.activeGan = checkpoint;
   }
 
-  saveGan(): SiglusGanCheckpoint | undefined {
-    if (!this.activeGan) return;
-    const animation = this.effect.getAnimations({subtree: true})[0];
-    const time = Math.max(0, Math.floor(Number(animation?.currentTime ?? 0)));
-    const duration = Number(animation?.effect?.getTiming().duration ?? 0);
-    const elapsed = duration && this.activeGan.loop ? time % duration : time;
-    return {...this.activeGan, elapsed};
+  retireGans(first: number, count: number): void {
+    for (const slot of this.activeGans.keys())
+      if (slot >= first && slot < first + count && !this.pendingGans.has(slot))
+        this.pendingGans.set(slot, null);
+  }
+
+  async loadGans(checkpoints: readonly SiglusGanCheckpoint[]): Promise<void> {
+    for (const checkpoint of checkpoints) await this.stageGan(checkpoint);
+    this.applyGanChanges(this.effect);
+  }
+
+  saveGans(): SiglusGanCheckpoint[] | undefined {
+    if (!this.activeGans.size) return;
+    return Array.from(this.activeGans.values(), ({checkpoint, animations}) => {
+      const animation = animations[0];
+      const time = Math.max(0, Math.floor(Number(animation?.currentTime ?? 0)));
+      const duration = Number(animation?.effect?.getTiming().duration ?? 0);
+      const elapsed = duration && checkpoint.loop ? time % duration : time;
+      return {...checkpoint, elapsed};
+    });
+  }
+
+  private applyGanChanges(incoming: HTMLElement, outgoing?: HTMLElement): void {
+    for (const [slot, next] of this.pendingGans) {
+      const previous = this.activeGans.get(slot);
+      if (previous) {
+        if (outgoing) outgoing.append(previous.layer);
+        else this.removeGan(previous);
+        this.activeGans.delete(slot);
+      }
+      if (next) {
+        incoming.append(next.layer);
+        this.activeGans.set(slot, next);
+      }
+    }
+    this.pendingGans.clear();
+  }
+
+  private removeGan({layer, animations}: GanLayer): void {
+    for (const animation of animations) animation.cancel();
+    layer.remove();
   }
 
   private clearGan(): void {
-    for (const animation of this.effect.getAnimations({subtree: true})) animation.cancel();
-    this.effect.replaceChildren();
-    this.activeGan = undefined;
+    for (const gan of this.activeGans.values()) this.removeGan(gan);
+    for (const gan of this.pendingGans.values()) if (gan) this.removeGan(gan);
+    this.activeGans.clear();
+    this.pendingGans.clear();
+  }
+
+  private copyStageLayer(layer: HTMLElement): HTMLElement {
+    const copy = layer.cloneNode(true) as HTMLElement;
+    const originals = layer.querySelectorAll('canvas');
+    for (const [index, canvas] of [...copy.querySelectorAll('canvas')].entries()) {
+      const original = originals[index]!;
+      canvas.getContext('2d')!.drawImage(original, 0, 0);
+      canvas.style.transform = getComputedStyle(original).transform;
+    }
+    return copy;
+  }
+
+  private async finishCastTransition(): Promise<void> {
+    if (!this.castTransition) return;
+    this.finishWipe();
+    await this.castTransition;
+  }
+
+  private async presentStage(
+    next: HTMLElement,
+    characters: readonly Element[],
+    duration: number,
+    fan?: FanWipe,
+  ): Promise<void> {
+    const previous = this.background;
+    const retired = [...this.pendingGans.keys()].flatMap((slot) => this.activeGans.get(slot) ?? []);
+    next.style.position = 'absolute';
+    next.style.inset = '0';
+    next.style.backgroundColor = 'black';
+    next.style.pointerEvents ||= 'none';
+    if (previous && duration > 0) previous.append(this.cast);
+    const cast = document.createElement('div');
+    cast.style.cssText = this.cast.style.cssText;
+    cast.append(...characters);
+    next.append(cast);
+    this.applyGanChanges(next, duration > 0 ? previous : undefined);
+    try {
+      await this.replaceLayer(next, duration, fan);
+    } finally {
+      for (const gan of retired) this.removeGan(gan);
+      this.cast.replaceChildren(...cast.children);
+      if (this.cast.parentElement !== this.stage) this.layers.after(this.cast);
+      this.cast.inert = false;
+      cast.remove();
+      for (const {layer} of this.activeGans.values())
+        if (layer.parentElement === next) this.effect.append(layer);
+    }
   }
 
   private shakeAnimation?: Animation;
@@ -1658,6 +1786,10 @@ export class SiglusDisplay {
 
   endEffect(): void {
     this.clearGan();
+    this.endLayerEffects();
+  }
+
+  endLayerEffects(): void {
     for (const animation of this.layers.getAnimations()) animation.cancel();
     this.recollect(false);
   }

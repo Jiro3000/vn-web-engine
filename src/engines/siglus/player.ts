@@ -18,6 +18,7 @@ import {
   SiglusDisplay,
   orderedObjects,
   type DrawObject,
+  type SiglusBackground,
   type SiglusFrameAction,
   type SiglusGanCheckpoint,
   type SiglusHistoryEntry,
@@ -137,6 +138,7 @@ interface PlayerSave {
   cast: string[];
   castCostumes?: (string | null)[];
   gan?: SiglusGanCheckpoint;
+  gans?: SiglusGanCheckpoint[];
   speed: number;
   timestamp?: number;
   title?: string;
@@ -239,10 +241,9 @@ export class SiglusPlayer {
   private readonly castAnchors = new Map<string, Value>();
   private currentCast: string[] = [];
   private currentCastCostumes: (string | null)[] = [];
-  private pendingBackground?: {
-    name: string;
-    pan: NonNullable<Parameters<SiglusDisplay['setBackground']>[2]>;
-  };
+  private pendingBackground?: SiglusBackground;
+  private stagedBackground?: SiglusBackground;
+
   private get skipping(): boolean {
     return this.skipAllowed && !this.systemSkipDisabled && (this.skip || this.readSkipEnabled);
   }
@@ -1088,7 +1089,7 @@ export class SiglusPlayer {
       voiceLevel: this.audio.channelLevel('voice'),
       cast: [...this.currentCast],
       castCostumes: [...this.currentCastCostumes],
-      gan: this.display.saveGan(),
+      gans: this.display.saveGans(),
       speed: this.speed,
       title: this.saveTitle,
       waitsForInput,
@@ -1237,9 +1238,10 @@ export class SiglusPlayer {
     for (const [key, value] of save.stage) this.stageProperties.set(key, value);
     await this.restoreCastCostumes(save);
     this.pendingBackground = undefined;
+    this.stagedBackground = undefined;
     if (save.background) await this.display.setBackground(save.background, 0);
     await this.cast(save.cast, -1, save.castCostumes);
-    if (save.gan) await this.display.loadGan(save.gan);
+    await this.display.loadGans(save.gans ?? (save.gan ? [save.gan] : []));
     const music = save.bgmPlayback ?? (save.bgm ? {name: save.bgm, loop: true} : undefined);
     await this.audio.restoreBgm(music, save.bgmLevel);
     this.audio.setChannelLevel('voice', save.voiceLevel ?? 255, 0);
@@ -1432,6 +1434,7 @@ export class SiglusPlayer {
     this.stageProperties.set('$bg_set_ready', 0);
     this.stageProperties.set('$bs_name.-1.0', 'none');
     this.pendingBackground = undefined;
+    this.stagedBackground = undefined;
     await this.display.setBackground(name, this.wipeDuration(fadeTimes[transition] ?? 0));
     await this.cast([], -1);
   }
@@ -1439,17 +1442,20 @@ export class SiglusPlayer {
   private async background(
     name: string,
     fade: number,
-    pan?: Parameters<SiglusDisplay['setBackground']>[2],
+    pan?: SiglusBackground['pan'],
+    clearCast = false,
   ): Promise<void> {
     this.clearDayObjects();
     this.pendingText = false;
     this.display.closeMessage();
     this.stageProperties.set('$bg_name.-1.0', name);
     this.stageProperties.set('$bg_name_prev.-1.0', name);
+    this.stagedBackground = undefined;
     await this.display.setBackground(
       this.backgroundName(name),
       this.wipeDuration(fadeTimes[fade] ?? 0),
       pan,
+      clearCast,
     );
   }
 
@@ -1470,6 +1476,7 @@ export class SiglusPlayer {
     names: string[],
     fade: number,
     costumes?: readonly (string | null)[],
+    publish = false,
   ): Promise<void> {
     const resolved = names.map((name) =>
       /^[a-z]{2}$/i.test(name)
@@ -1488,7 +1495,14 @@ export class SiglusPlayer {
       this.currentCastCostumes[slot] = costume;
       sprites.push({name, costume, position: positions?.[slot]});
     }
-    await this.display.showCast(sprites, this.wipeDuration(fadeTimes[fade] ?? 0));
+    const backdrop = publish ? this.stagedBackground : undefined;
+    await this.display.showCast(
+      sprites,
+      this.wipeDuration(fadeTimes[fade] ?? 0),
+      publish,
+      backdrop,
+    );
+    if (publish) this.stagedBackground = undefined;
   }
 
   private async castPositions(names: readonly string[]): Promise<[number, number][] | undefined> {
@@ -1563,7 +1577,7 @@ export class SiglusPlayer {
         }
         return 0;
       case '$bg_disp_in':
-        await this.background(s(0), n(1));
+        await this.background(s(0), n(1), undefined, !n(4));
         if (!n(4)) await this.cast([], -1);
         break;
       case '$bg_set':
@@ -1579,7 +1593,12 @@ export class SiglusPlayer {
           const {name, pan} = this.pendingBackground;
           // The script uses both "none" and names containing it (for example
           // "b_none" from the blur macro) as empty background slots.
-          if (!name.includes('none')) await this.background(name, 0, pan);
+          if (!name.includes('none')) {
+            if (this.display.hasGanChanges) {
+              this.stagedBackground = {name: this.backgroundName(name), pan};
+              this.stageProperties.set('$bg_name_prev.-1.0', name);
+            } else await this.background(name, 0, pan);
+          }
           this.pendingBackground = undefined;
           this.stageProperties.set('$bg_set_ready', 0);
         }
@@ -1590,6 +1609,8 @@ export class SiglusPlayer {
             String(this.stageProperties.get('$bs_name.-1.' + i) ?? 'none'),
           ),
           Number(this.stageProperties.get('$bs_wipe_set') ?? 0),
+          undefined,
+          true,
         );
         break;
       case '$$change_bs_only_face': {
@@ -1601,7 +1622,7 @@ export class SiglusPlayer {
           const prefix = index < 0 ? undefined : /^bs\d_/.exec(names[index]!)?.[0];
           names[index < 0 ? i : index] = prefix && !face.startsWith('bs') ? prefix + face : face;
         }
-        await this.cast(names, 0);
+        await this.cast(names, 0, undefined, true);
         break;
       }
       case '$bg_pan':
@@ -1684,7 +1705,8 @@ export class SiglusPlayer {
         this.display.recollect(true);
         break;
       case '$ef_end':
-        this.display.endEffect();
+        this.display.retireGans(n(0), n(1));
+        this.display.endLayerEffects();
         break;
       case '$sc_sepia':
         this.display.sepia(Boolean(n(0)));
@@ -1703,7 +1725,15 @@ export class SiglusPlayer {
         if (n(2)) await this.delay(350, true);
         break;
       case '$ef_line_start1':
-        await this.display.lineEffect(n(2));
+        await this.display.stageGan({
+          slot: n(1),
+          name: n(2) ? 'ef_line02' : 'ef_line01',
+          sequence: 0,
+          loop: true,
+          x: -64,
+          y: -60,
+          elapsed: 0,
+        });
         break;
       case '$ef_dizzy_start':
         this.display.dizzy(n(1), n(2));
@@ -1818,7 +1848,7 @@ export class SiglusPlayer {
             this.savePoint = {
               ...this.savePoint,
               thumbnail: this.display.captureThumbnail(),
-              gan: this.display.saveGan(),
+              gans: this.display.saveGans(),
               bgm: bgmPlayback?.name,
               bgmPlayback,
               bgmLevel: this.audio.channelLevel('bgm'),

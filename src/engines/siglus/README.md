@@ -86,7 +86,10 @@ nine with multiple dialogue rows and two with ruby. All line counts
 matched. The largest measured baseline difference was 0.000104 game
 pixels. This measures baselines in the bundled font at those checkpoints.
 Set `SIGLUS_GAN_ONLY=1` to check the first Chapter 01 line effect.
-The probe uses a temporary slot at `0x15359`. It samples computed alpha
+The probe uses a temporary slot at `0x15359`. It checks that the GAN remains
+offscreen while the back page is prepared, belongs to the incoming page
+during the 1,000 ms wipe, and stays on the outgoing page during the 250 ms
+wipe after `$ef_end`. It also samples computed alpha
 and the active G00 pattern at each side of a frame boundary, checks the
 asset size and origin, and seeks to 121 ms before saving in another slot.
 It reloads that slot from the title after reopening the player, verifies
@@ -418,7 +421,7 @@ are addressed.
 | Cast stacking, relative pose offsets and animations                        | Difference         | The browser still approximates the remaining staging passes in `_bs_com`.                                                                                    |
 | Chapter 06 mode-60 wipe                                                    | Confirmed          | The checkpoint probe verifies the authored parameters, four interior mask bytes, half-time alpha and the following page in both text modes.                  |
 | Chapter 01 line-effect GAN frame sequence and save phase                   | Confirmed          | The checkpoint compares pattern order, clock boundaries, loop, alpha, G00 bounds and saved phase.                                                            |
-| Line-effect publication during stage transitions                           | Difference         | The original authors the effect on the back page. The browser mounts it immediately over the current cast.                                                   |
+| Chapter 01 line effect during stage transitions                            | Confirmed          | The checkpoint checks effect membership on both pages, wipe durations and the resulting layer opacity at half time.                                          |
 | Other transition masks, effects and in-flight audio and animation behavior | Difference         | The browser's documented approximations remain in the rendering and save paths.                                                                              |
 | DOM Text selection, click and focus                                        | Confirmed          | The opening probe checks drag and click. The history, menu and typing probes exercise input during continuation.                                             |
 | DOM Text hiding and restoration                                            | Confirmed          | The right-click probe checks pointer hits before hiding and after revealing the same page, and checks that the hidden text stops receiving hits.             |
@@ -456,15 +459,18 @@ The browser implements the boundaries as discrete opacity changes
 for each G00 pattern, with a 1 µs tolerance for browser rounding.
 The Save and Load menus preserve the loop phase.
 
-## Known differences
+The original sets the effect's back-page `wipe_copy` flag at
+`_effect:0x0623` and clears the front object's flag at `_effect:0x0183`.
+The Chapter 01 calls to `$bs_disp_in` at `0x15a3e` and `0x16153`
+run the wipe through `_bs_com:0x1891c`. Before each wipe the script
+sets `$wipe_wait` to zero at `_bs_com:0x188a6`. The wipe uses
+mode 0 with durations set at `_wipe:0x2178` and `0x1fda`.
+The incoming background, cast and new GAN share one fade layer.
+A retiring GAN stays with the outgoing background and cast until
+that layer is removed. The Chapter 01 script starts its explicit
+skippable wait at `0x15aed` while the incoming wipe is still active.
 
-- The original marks the Chapter 01 line effect for the next wipe on
-  the back page at `_effect:0x0623`, and clears the front object's
-  wipe flag at `_effect:0x0183`. The browser mounts and removes this
-  effect through its separate overlay. Compare the incoming and
-  outgoing layer presence around `$bs_disp_in` at `0x15a3e` and
-  `0x16153` to check publication and removal. The original
-  `_bs_com:0x1891c` calls the wipe with the selected mode.
+## Known differences
 
 - The browser uses fractional inherited opacity. The native renderer
   divides multiplied parent and child alpha by 255 with integer truncation

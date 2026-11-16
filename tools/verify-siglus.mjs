@@ -815,6 +815,32 @@ verification: try {
   }
   if (ganOnly) {
     const chapter = [...scripts.keys()].find((name) => name.startsWith('01_'));
+    const observeWipes = () =>
+      evaluate(`(() => {
+      const animate = Element.prototype.animate;
+      const hasGan = (layer) => Boolean(layer?.querySelector(':scope > [data-siglus-gan]'));
+      const renderTags = new Set([0x1585c, 0x15a3e, 0x15aed, 0x15d7f, 0x16153]);
+      window.siglusGanStage = [];
+      window.siglusGanWipes = [];
+      siglusSurface.addEventListener('siglus-tag', ({detail}) => {
+        if (detail.scene !== ${JSON.stringify(chapter)} || !renderTags.has(detail.offset)) return;
+        const gan = siglusSurface.querySelector('[data-siglus-gan]');
+        siglusGanStage.push([detail.offset, Boolean(gan), gan?.parentElement.getAnimations()
+          .some((animation) => animation.playState === 'running') ?? false]);
+      });
+      Element.prototype.animate = function (frames, timing) {
+        const animation = animate.call(this, frames, timing);
+        const incoming = hasGan(this);
+        const outgoing = hasGan(this.previousElementSibling);
+        if (incoming || outgoing) {
+          animation.currentTime = timing.duration / 2;
+          siglusGanWipes.push({incoming, outgoing, duration: timing.duration,
+            opacity: Number(getComputedStyle(this).opacity)});
+          animation.currentTime = 0;
+        }
+        return animation;
+      };
+    })()`);
     await click('#siglus-surface button[aria-label="New Game"]');
     await runUntil((current) => Number(current.page) >= 3);
     await selectSlot('save');
@@ -826,12 +852,21 @@ verification: try {
         stack: [], points: [], locals: [], declarations: []}]},
     })`);
     await reopenPlayer();
+    await observeWipes();
     await click('#siglus-surface button[aria-label="Load Game"]');
     await waitFor(slotLoop);
     assert.equal(await chooseSlot('load', 0), 'confirm');
     const stageTag = (offset) =>
       `siglusTags.some((tag) => tag.scene === ${JSON.stringify(chapter)} && tag.offset === ${offset})`;
     await waitFor(stageTag(0x15cb8));
+    assert.deepEqual(await evaluate('siglusGanStage'), [
+      [0x1585c, false, false],
+      [0x15a3e, false, false],
+      [0x15aed, true, true],
+    ]);
+    assert.deepEqual(await evaluate('siglusGanWipes'), [
+      {incoming: true, outgoing: false, duration: 1000, opacity: 0.5},
+    ]);
     const samples = await evaluate(`(async () => {
       const layer = siglusSurface.querySelector('[data-siglus-gan="ef_line01"]');
       if (!layer) throw new Error('Chapter 01 GAN layer missing');
@@ -868,16 +903,20 @@ verification: try {
     const saved = await waitFor(
       asyncExpression(`${slotRecords()}.find(([slot]) => slot === 1)?.[1]`),
     );
-    assert.deepEqual(saved.gan, {
-      name: 'ef_line01',
-      sequence: 0,
-      loop: true,
-      x: -64,
-      y: -60,
-      elapsed: 21,
-    });
+    assert.deepEqual(saved.gans, [
+      {
+        slot: 200,
+        name: 'ef_line01',
+        sequence: 0,
+        loop: true,
+        x: -64,
+        y: -60,
+        elapsed: 21,
+      },
+    ]);
     assert.deepEqual(errors, [], 'Browser console errors before reopening');
     await reopenPlayer();
+    await observeWipes();
     await evaluate(`(() => {
       const currentTime = Object.getOwnPropertyDescriptor(Animation.prototype, 'currentTime');
       window.siglusGanSeeks = [];
@@ -903,6 +942,14 @@ verification: try {
     await waitFor(stageTag(0x15d35));
     await advance();
     await waitFor(stageTag(0x1621b));
+    assert.deepEqual(await evaluate('siglusGanStage'), [
+      [0x15d7f, true, false],
+      [0x16153, true, false],
+    ]);
+    assert.deepEqual(await evaluate('siglusGanWipes'), [
+      {incoming: false, outgoing: true, duration: 250, opacity: 0.5},
+    ]);
+    await waitFor("!siglusSurface.querySelector('[data-siglus-gan]')");
     assert.equal(
       await evaluate("Boolean(siglusSurface.querySelector('[data-siglus-gan]'))"),
       false,
@@ -917,7 +964,7 @@ verification: try {
     await verifyRenderedPages();
     assert.deepEqual(errors, [], 'Browser console errors');
     console.log(
-      'Chapter 01 GAN patterns and alpha. Restored at 21 ms:',
+      'Chapter 01 GAN wipes, restored 21 ms phase and frame boundaries verified:',
       JSON.stringify(samples.samples),
     );
     break verification;
