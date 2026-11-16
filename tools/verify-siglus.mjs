@@ -1189,6 +1189,53 @@ verification: try {
       const start = await evaluate(loop);
       await click(button);
       await waitFor(`${loop} > ${start}`);
+      const blend = await waitFor(`(() => {
+        const stage = siglusSurface.firstElementChild;
+        const tint = stage.querySelector('[style*="mix-blend-mode: multiply"]');
+        const source = tint?.querySelector('canvas');
+        if (!source || Number(getComputedStyle(tint).opacity) < 0.995) return false;
+        const ancestors = [];
+        for (let element = tint.parentElement; element !== stage; element = element.parentElement) {
+          const style = getComputedStyle(element);
+          ancestors.push([style.opacity, style.zIndex, style.isolation, style.transform, style.filter]);
+        }
+        const x = Math.floor(source.width / 2);
+        const y = Math.floor(source.height / 2);
+        const sample = [...source.getContext('2d').getImageData(x, y, 1, 1).data];
+        const canvas = document.createElement('canvas');
+        canvas.width = canvas.height = 1;
+        const context = canvas.getContext('2d');
+        const background = [91, 127, 163];
+        context.fillStyle = 'rgb(' + background.join(',') + ')';
+        context.fillRect(0, 0, 1, 1);
+        context.globalCompositeOperation = getComputedStyle(tint).mixBlendMode;
+        context.drawImage(source, x, y, 1, 1, 0, 0, 1, 1);
+        const stageBounds = stage.getBoundingClientRect();
+        const clickX = stageBounds.left + stageBounds.width * ${x} / 1920;
+        const clickY = stageBounds.top + stageBounds.height * 566 / 1080;
+        const paintedButton = [...tint.parentElement.querySelectorAll('canvas')].some((canvas) => {
+          if (canvas === source || Number(getComputedStyle(canvas.parentElement).opacity) < 0.995)
+            return false;
+          const rect = canvas.getBoundingClientRect();
+          if (clickX < rect.left || clickX >= rect.right || clickY < rect.top || clickY >= rect.bottom)
+            return false;
+          const px = Math.floor((clickX - rect.left) * canvas.width / rect.width);
+          const py = Math.floor((clickY - rect.top) * canvas.height / rect.height);
+          return canvas.getContext('2d').getImageData(px, py, 1, 1).data[3] > 0;
+        });
+        return {ancestors, background, sample, paintedButton, opacity: tint.style.opacity,
+          result: [...context.getImageData(0, 0, 1, 1).data]};
+      })()`);
+      for (const style of blend.ancestors)
+        assert.deepEqual(style, ['1', 'auto', 'auto', 'none', 'none']);
+      assert.match(blend.opacity, /--siglus-group-opacity/);
+      assert.ok(blend.paintedButton, 'Confirmation button has no visible art at the click point');
+      assert.ok(blend.sample[3] > 0 && blend.sample[3] < 255);
+      const alpha = blend.sample[3] / 255;
+      for (const [index, background] of blend.background.entries()) {
+        const expected = background * (1 + alpha * (blend.sample[index] / 255 - 1));
+        assert.ok(Math.abs(blend.result[index] - expected) <= 1.5, JSON.stringify(blend));
+      }
       await clickScriptMenu(loop, x, 566);
     }
     async function newGame({checkHitArea = false} = {}) {
@@ -1264,7 +1311,7 @@ verification: try {
       ],
     );
     console.log(
-      `Return to Title and Exit used the original confirmations. Matched ${tags.length} tags.`,
+      `Return to Title and Exit used the original confirmations and multiplier tint. Matched ${tags.length} tags.`,
     );
   } else if (frameLockOnly) {
     const lock = (slot, enabled) => `[data-siglus-switch="${slot}"][aria-pressed="${enabled}"]`;

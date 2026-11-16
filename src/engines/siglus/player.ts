@@ -166,6 +166,8 @@ export class SiglusPlayer {
   private messageObjectsDirty = false;
   private systemObjects?: Map<number, DrawObject>;
   private systemObjectsDirty = false;
+  private systemFrontObjects?: Map<number, DrawObject>;
+  private systemFrontObjectsDirty = false;
   private systemFont?: {name?: string; bold?: boolean; shadow?: number};
   private messageHidden = false;
   private quakeStopped = false;
@@ -494,6 +496,7 @@ export class SiglusPlayer {
       this.quakeStopped,
     ] as const;
     this.systemCallActive = true;
+    this.systemFrontObjects = new Map();
     this.inputSampled = false;
     this.display.setSystemInput(true);
     try {
@@ -501,6 +504,9 @@ export class SiglusPlayer {
       if (this.objectsDirty) await this.renderObjects();
     } finally {
       this.systemCallActive = false;
+      this.systemFrontObjects = undefined;
+      this.systemFrontObjectsDirty = false;
+      this.display.clearSystemFrontObjects();
       this.releaseSystemObjects();
       this.systemCounters.clear();
       this.systemFont = undefined;
@@ -619,7 +625,7 @@ export class SiglusPlayer {
       page = this.systemObjects;
       index = 3;
     } else if ((path[0] === 37 || path[0] === 38) && path[1] === 2) {
-      page = this.objects[path[0] === 37 ? 1 : 0]!;
+      page = path[0] === 37 ? this.objects[1]! : (this.systemFrontObjects ?? this.objects[0]!);
       index = 2;
     } else if (path[0] === 38 && path[1] === 3 && path[2] === -1 && path[4] === 30) {
       const window = path[3]!;
@@ -638,6 +644,7 @@ export class SiglusPlayer {
 
   private markObjectsDirty([root, member]: readonly number[]): void {
     if (root === 38 && member === 3) this.messageObjectsDirty = true;
+    else if (root === 38 && this.systemFrontObjects) this.systemFrontObjectsDirty = true;
     else if (root === 38) this.objectsDirty = true;
     if (root === 65) this.systemObjectsDirty = true;
   }
@@ -1349,6 +1356,14 @@ export class SiglusPlayer {
 
   private async renderObjects(): Promise<void> {
     await this.renderMessageObjects();
+    if (this.systemFrontObjectsDirty && this.systemFrontObjects) {
+      this.systemFrontObjectsDirty = false;
+      await this.display.showSystemObjects(
+        orderedObjects(this.systemFrontObjects),
+        (button) => this.choose(button),
+        true,
+      );
+    }
     if (this.systemObjectsDirty && this.systemObjects) {
       this.systemObjectsDirty = false;
       await this.display.showSystemObjects(orderedObjects(this.systemObjects), (button) =>

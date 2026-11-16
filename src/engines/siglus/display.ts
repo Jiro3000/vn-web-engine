@@ -87,6 +87,14 @@ export function orderedObjects(objects: ReadonlyMap<number, DrawObject>): DrawOb
     .map(([, object]) => object);
 }
 
+const registeredOpacityProperties = new Set<string>();
+
+function registerOpacityProperty(name: string): void {
+  if (registeredOpacityProperties.has(name)) return;
+  CSS.registerProperty({name, syntax: '<number>', inherits: true, initialValue: '1'});
+  registeredOpacityProperties.add(name);
+}
+
 export class SiglusDisplay {
   readonly stage = document.createElement('div');
   private readonly layers = document.createElement('div');
@@ -107,6 +115,7 @@ export class SiglusDisplay {
   private readonly editLayer = document.createElement('div');
   private readonly edits = new Map<number, {input: HTMLInputElement; result: string}>();
   private readonly systemLayer = document.createElement('div');
+  private readonly systemFrontLayer = document.createElement('div');
   private readonly message = document.createElement('div');
   private readonly messageObjects = document.createElement('div');
   private readonly speaker = document.createElement('div');
@@ -178,7 +187,8 @@ export class SiglusDisplay {
   ) {
     root.replaceChildren(this.stage);
     this.stage.dataset.textMode = this.textMode;
-    this.stage.style.cssText = 'position:absolute;overflow:hidden;background:#000;color:white';
+    this.stage.style.cssText =
+      'position:absolute;overflow:hidden;isolation:isolate;background:#000;color:white';
     this.layers.style.cssText = 'position:absolute;inset:0;pointer-events:none';
     this.message.style.cssText = 'position:absolute;isolation:isolate;pointer-events:none';
     this.messageObjects.style.cssText = 'position:absolute;inset:0;pointer-events:none';
@@ -193,9 +203,10 @@ export class SiglusDisplay {
     this.portrait.style.cssText = 'position:absolute;overflow:hidden';
     this.cast.style.cssText = 'position:absolute;inset:0;pointer-events:none';
     this.effect.style.cssText = 'position:absolute;inset:0;pointer-events:none';
-    this.controls.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:1';
+    this.controls.style.cssText = 'position:absolute;inset:0;pointer-events:none';
     this.controls.hidden = true;
-    this.systemLayer.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:2';
+    this.systemLayer.style.cssText = 'position:absolute;inset:0;pointer-events:none';
+    this.systemFrontLayer.style.cssText = this.systemLayer.style.cssText;
     this.editLayer.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:3';
     this.stage.append(
       this.layers,
@@ -203,6 +214,7 @@ export class SiglusDisplay {
       this.effect,
       this.message,
       this.controls,
+      this.systemFrontLayer,
       this.systemLayer,
       this.editLayer,
     );
@@ -417,10 +429,11 @@ export class SiglusDisplay {
   async showSystemObjects(
     objects: Iterable<DrawObject>,
     button: (target: NonNullable<DrawObject['button']>) => void,
+    front = false,
   ): Promise<void> {
     const next = await this.drawObjects(objects, button);
     this.signal.throwIfAborted();
-    this.systemLayer.replaceChildren(next);
+    (front ? this.systemFrontLayer : this.systemLayer).replaceChildren(next);
   }
 
   editBox(
@@ -482,6 +495,10 @@ export class SiglusDisplay {
 
   clearSystemObjects(): void {
     this.systemLayer.replaceChildren();
+  }
+
+  clearSystemFrontObjects(): void {
+    this.systemFrontLayer.replaceChildren();
   }
 
   async prepare(): Promise<void> {
@@ -895,7 +912,9 @@ export class SiglusDisplay {
             break;
           }
           opacity *= Number(style.opacity);
-          if (style.mixBlendMode === 'screen') blend = 'screen';
+          if (style.mixBlendMode === 'screen' || style.mixBlendMode === 'multiply')
+            blend = style.mixBlendMode;
+          else if (style.mixBlendMode === 'plus-lighter') blend = 'lighter';
         }
         if (opacity === 0) continue;
         const rect = source.getBoundingClientRect();
@@ -1031,6 +1050,7 @@ export class SiglusDisplay {
     objects: Iterable<DrawObject>,
     button: (target: NonNullable<DrawObject['button']>) => void,
     animate: boolean,
+    parentOpacity: readonly string[] = [],
   ): Promise<void> {
     for (const object of objects) {
       if (!object.visible) continue;
@@ -1043,11 +1063,13 @@ export class SiglusDisplay {
         text.style.fontWeight = bold ? 'bold' : 'normal';
         if (shadow) text.style.textShadow = '1px 1px 2px black';
         this.applyClip(text, object, object.x, object.y, this.width, this.height);
+        this.applyLeafOpacity(text, object, animate, parentOpacity);
         parent.append(text);
         continue;
       }
       if (!object.name && !object.frames.length) {
-        if (object.children) await this.appendChildren(parent, object, button, animate);
+        if (object.children)
+          await this.appendChildren(parent, object, button, animate, parentOpacity);
         continue;
       }
       if (object.pattern < 0) continue;
@@ -1067,6 +1089,8 @@ export class SiglusDisplay {
         element.style.scale = object.scale.map((axis) => axis / 1000).join(' ');
         element.style.transformOrigin = `${frame.centerX}px ${frame.centerY}px`;
       }
+      if (object.blend === 1) element.style.mixBlendMode = 'plus-lighter';
+      if (object.blend === 3) element.style.mixBlendMode = 'multiply';
       if (object.blend === 4) element.style.mixBlendMode = 'screen';
       for (const axis of ['x', 'y'] as const) {
         const event = object.positionEvents?.[axis];
@@ -1109,8 +1133,6 @@ export class SiglusDisplay {
         }
       }
       parent.append(element);
-      if (object.transparency !== undefined)
-        element.style.opacity = String(object.transparency / 255);
       if (object.sourceClip) {
         const [x, y, width, height] = object.sourceClip;
         canvas.style.clipPath = `inset(${y}px ${frame.width - x - width}px ${frame.height - y - height}px ${x}px)`;
@@ -1173,14 +1195,7 @@ export class SiglusDisplay {
           animation.currentTime = elapsed;
         }
       }
-      if (object.opacityStarted !== undefined) this.systemObjectOpacity(element, object);
-      else if (animate && object.opacity) {
-        const [target, time, delay, mode, start] = object.opacity;
-        element.animate(
-          {opacity: [start / 255, target / 255]},
-          {duration: time, delay, easing: eventEasing(mode), fill: 'both'},
-        );
-      }
+      this.applyLeafOpacity(element, object, animate, parentOpacity);
       if (animate && object.movement) {
         const [target, time, delay, mode, start] = object.movement;
         element.animate(
@@ -1188,23 +1203,43 @@ export class SiglusDisplay {
           {duration: time, delay, easing: eventEasing(mode), fill: 'both'},
         );
       }
-      if (object.children) await this.appendChildren(parent, object, button, animate);
+      if (object.children)
+        await this.appendChildren(parent, object, button, animate, parentOpacity);
     }
   }
 
-  private systemObjectOpacity(element: HTMLElement, object: DrawObject): void {
-    if (!object.opacity || object.opacityStarted === undefined) return;
+  private applyLeafOpacity(
+    element: HTMLElement,
+    object: DrawObject,
+    animate: boolean,
+    parentOpacity: readonly string[],
+  ): void {
+    let property = 'opacity';
+    if (parentOpacity.length) {
+      property = '--siglus-object-opacity';
+      registerOpacityProperty(property);
+      const factor = [property, ...parentOpacity].map((name) => `var(${name})`).join(' * ');
+      element.style.opacity = `calc(${factor})`;
+    }
+    this.applyObjectOpacity(element, object, animate, property);
+  }
+
+  private applyObjectOpacity(
+    element: HTMLElement,
+    object: DrawObject,
+    animate: boolean,
+    property: string,
+  ): void {
+    if (object.transparency !== undefined)
+      element.style.setProperty(property, String(object.transparency / 255));
+    if (!object.opacity || (!animate && object.opacityStarted === undefined)) return;
     const [target, duration, delay, mode, start] = object.opacity;
-    const elapsed = performance.now() - object.opacityStarted;
+    const elapsed =
+      object.opacityStarted === undefined ? 0 : performance.now() - object.opacityStarted;
     if (duration + delay <= elapsed) return;
     const animation = element.animate(
-      {opacity: [start / 255, target / 255]},
-      {
-        duration,
-        delay,
-        easing: eventEasing(mode),
-        fill: 'both',
-      },
+      {[property]: [String(start / 255), String(target / 255)]},
+      {duration, delay, easing: eventEasing(mode), fill: 'both'},
     );
     animation.currentTime = elapsed;
   }
@@ -1214,15 +1249,25 @@ export class SiglusDisplay {
     object: DrawObject,
     button: (target: NonNullable<DrawObject['button']>) => void,
     animate: boolean,
+    parentOpacity: readonly string[],
   ): Promise<void> {
-    // Child graphics share their parent's origin without nesting interactive buttons.
+    // Applying the group alpha to its leaves keeps blending in the stage's backdrop.
     const children = document.createElement('div');
     children.style.cssText = `position:absolute;left:${object.x}px;top:${object.y}px;pointer-events:none`;
-    if (object.transparency !== undefined)
-      children.style.opacity = String(object.transparency / 255);
-    this.systemObjectOpacity(children, object);
+    if ((object.transparency ?? 255) !== 255 || object.opacity) {
+      const property = '--siglus-group-opacity-' + parentOpacity.length;
+      registerOpacityProperty(property);
+      this.applyObjectOpacity(children, object, animate, property);
+      parentOpacity = [...parentOpacity, property];
+    }
     parent.append(children);
-    await this.appendObjects(children, orderedObjects(object.children!), button, animate);
+    await this.appendObjects(
+      children,
+      orderedObjects(object.children!),
+      button,
+      animate,
+      parentOpacity,
+    );
   }
 
   finishWipe(): boolean {

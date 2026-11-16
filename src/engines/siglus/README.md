@@ -82,8 +82,8 @@ disassembly at chapter 01 offset `0x0f40`, and that a click at `pp()` at
 `0x0fc2` appends the next fragment to the same message.
 The probe measured 87 checkpoints, including 29 with a speaker name,
 nine with multiple dialogue rows and two with ruby. All line counts
-matched. The largest measured baseline difference was below 0.001 game
-pixels.
+matched. The largest measured baseline difference was 0.000104 game
+pixels. This measures baselines in the bundled font at those checkpoints.
 Set `SIGLUS_PAUSE_SAVE_ONLY=1` to save and load at `pp()` at `0x48c8`
 through the original slot menu and verify the restored prefix and following
 fragment by hash.
@@ -267,13 +267,22 @@ differ from the truncated native coordinates by less than one game pixel.
 Set `SIGLUS_FRAME_EXIT_ONLY=1` to check Return to Title and Exit from the
 message frame. The probe cancels both scripted confirmations, checks the
 unchanged dialogue, then confirms Return to Title and confirms Exit after
-starting another game. On Exit the browser returns to the player.
+starting another game. It checks that each click lands on drawn button art
+and tests the tint blend numerically with the original texture. On Exit the
+browser returns to the player.
 Gameexe.dat buttons 11 and 12 use `TYPE = "none"` with named calls to the
 shared Scene.pck exports `$sys_returnmenu_btn` and `$sys_gameend_btn`.
 The embedded PE resolves the two strings at `0x5f4620` and checks for a
 registered named call at `0x5f4d16` before dispatching the button type.
 The original confirmation scenes call `syscom.return_to_menu(0, 0, 0)`
 at `0x1099d` and `syscom.end_game(0)` at `0x13816`.
+They draw the dialog on the front page at `0xe2f0` and `0x11158`. The
+browser composites those objects above the active scene. Blend mode 3
+uses `ZERO` and `SRCCOLOR` at `0x6fa26e` through `0x6fa2ab`. The
+embedded `EFFECT` shader at file offset `0x870f70` multiplies the
+backdrop by `1 + alpha × (source RGB − 1)` for a white vertex tint.
+The browser uses `multiply` and applies the parent opacity to each leaf,
+following the per-object alpha inheritance in the PE at `0x5f0075`.
 Title object buttons use the rectangle recorded in the G00 cut.
 The embedded PE reads the rectangle at `0x6ddf98` through `0x6ddfb3`
 and sizes the cut texture to those bounds at `0x6f5d68` through
@@ -299,15 +308,17 @@ uses the original MSGBK resources and stores recent history and rewind
 checkpoints in each save. The probe reloads the slot after reopening the player
 and checks both No and Yes in the original resume confirmation.
 
-The clean-profile DOM Text route on `40f6abf` checked 21,210 input
+The clean-profile DOM Text route on `a1f48f3` checked 21,210 input
 checkpoints, including nine scrolled messages and 40 size resets.
-The independent disassembly comparison matched 147,969 tags and
-70,970 literal command arguments, including all 68 prologue text
-fragments. The run checked 8,552 decoded audio buffers and used the
-scripted save and load menus. It completed all five movies, matched
-their durations against FFprobe, verified the clear flags and entered
-Music after reopening. The player recorded no dropped frames or clock
-stalls. The run reported zero browser console errors and text failures.
+The independent disassembly comparison matched 153,447 tags,
+85,942 literal command arguments and all 158 day transitions with
+their automatic saves. The run checked 8,552 decoded audio buffers
+and used the scripted save and load menus. It completed all five movies,
+matched their durations against FFprobe, verified the clear flags and
+entered Music after reopening. The opening reported one dropped frame.
+The other movies reported zero dropped frames. All five reported zero
+audio or video clock stalls. The run reported zero browser console
+errors and text failures.
 
 The clean-profile Native route on `8ea10cd` matched 153,686 command and
 message tags and 86,063 literal command arguments. It checked 8,553
@@ -351,12 +362,10 @@ and Gameexe.dat SHA-256
 
 ## Known differences
 
-- The return and exit confirmations use the script's original objects,
-  coordinates and input loop. The browser uses alpha composition for
-  the tint layer. The native renderer uses blend mode 3 with
-  `SRCBLEND=ZERO` and `DESTBLEND=SRCCOLOR` at `0x6fa26e` through
-  `0x6fa2ab`. The browser waits out the scripted fade duration in the
-  confirmation scene.
+- The browser uses fractional inherited opacity. The native renderer
+  divides multiplied parent and child alpha by 255 with integer truncation
+  at each level. Mode 2 reverse subtraction remains unimplemented. The
+  return and exit scenes wait out the scripted confirmation fade.
 
 - History can resume a stored checkpoint from the current runtime or a newer
   browser save. The browser keeps checkpoints per page within the configured
@@ -365,9 +374,11 @@ and Gameexe.dat SHA-256
 
 - Day transitions use the script's layers and motion parameters. The
   browser uses the native quadratic easing curves and maps blend mode 4
-  to CSS/Canvas `screen`. The browser interpolates subpixel positions.
-  The native colour interpolation still needs comparison. Thumbnails composite the visible graphical layers
-  at the configured size. FORTUNE×WORLD sets `SAVE_THUMB.TYPE = 1`.
+  to CSS/Canvas `screen`. The native mode uses `ONE` and `INVSRCCOLOR`
+  with a premultiplied shader, which gives the screen equation over an
+  opaque backdrop. The browser interpolates subpixel positions.
+  Thumbnails composite the visible graphical layers at the configured
+  size. FORTUNE×WORLD sets `SAVE_THUMB.TYPE = 1`.
   The native filename resolver at `0x6828eb` selects PNG for that setting.
   Dialogue and native capture effects are absent from the browser composite.
 - Loading restores the VM, current message, background and cast. Browser
