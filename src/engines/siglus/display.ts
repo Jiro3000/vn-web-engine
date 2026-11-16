@@ -3,6 +3,7 @@ import {BrowserWindowDisplayHost} from '../../platform/browser-window-display.js
 import {readSfntFontMetadata} from '../../formats/sfnt.js';
 import {readGan} from '../../formats/siglus/gan.js';
 import {G00Image, type G00Frame} from '../../formats/siglus/g00.js';
+import {captureLayers} from './capture.js';
 import {siglusFontShadow, type SiglusFontChoice} from './configuration.js';
 import {eventEasing} from './timing.js';
 import {fanWipeMask, type FanWipe} from './wipe.js';
@@ -648,7 +649,10 @@ export class SiglusDisplay {
       this.text.style.clipPath = `inset(${offset - rubyRoom}px -8px ${-offset}px -8px)`;
       return;
     }
-    const canvas = this.nativeText;
+    this.drawNativeMessage(this.nativeText);
+  }
+
+  private drawNativeMessage(canvas: HTMLCanvasElement, slideOffset?: number): void {
     const context = canvas.getContext('2d')!;
     context.clearRect(0, 0, canvas.width, canvas.height);
     const family = this.message.style.fontFamily || 'sans-serif';
@@ -700,7 +704,7 @@ export class SiglusDisplay {
     }
     nextLine();
     const pitch = size + lineSpace;
-    const offset = this.updateSlide((lines.length - rows) * pitch);
+    const offset = slideOffset ?? this.updateSlide((lines.length - rows) * pitch);
     if (this.slideTime !== undefined) {
       context.save();
       context.beginPath();
@@ -918,44 +922,26 @@ export class SiglusDisplay {
     if (!width || !height || width > this.width || height > this.height) return;
     const bounds = this.stage.getBoundingClientRect();
     if (!bounds.width || !bounds.height) return;
+    let substitute: Parameters<typeof captureLayers>[4];
+    if (
+      this.textMode === 'dom' &&
+      !this.message.hidden &&
+      getComputedStyle(this.message).visibility !== 'hidden'
+    ) {
+      const image = document.createElement('canvas');
+      image.width = this.nativeText.width;
+      image.height = this.nativeText.height;
+      this.drawNativeMessage(image, this.slideOffset);
+      substitute = {target: this.nativeText, image, bounds: this.message.getBoundingClientRect()};
+    }
+    const layers = [this.layers, this.cast, this.effect, this.message, this.controls].filter(
+      (layer) => layer.parentElement === this.stage,
+    );
+    const stage = captureLayers(this.width, this.height, bounds, layers, substitute);
     const canvas = document.createElement('canvas');
     canvas.width = width;
     canvas.height = height;
-    const context = canvas.getContext('2d')!;
-    context.fillStyle = 'black';
-    context.fillRect(0, 0, width, height);
-    for (const layer of [this.layers, this.cast, this.effect]) {
-      for (const source of layer.querySelectorAll('canvas')) {
-        let opacity = 1;
-        let blend: GlobalCompositeOperation = 'source-over';
-        for (
-          let element: HTMLElement | null = source;
-          element && element !== this.stage;
-          element = element.parentElement
-        ) {
-          const style = getComputedStyle(element);
-          if (style.display === 'none' || style.visibility === 'hidden') {
-            opacity = 0;
-            break;
-          }
-          opacity *= Number(style.opacity);
-          if (style.mixBlendMode === 'screen' || style.mixBlendMode === 'multiply')
-            blend = style.mixBlendMode;
-          else if (style.mixBlendMode === 'plus-lighter') blend = 'lighter';
-        }
-        if (opacity === 0) continue;
-        const rect = source.getBoundingClientRect();
-        context.globalAlpha = opacity;
-        context.globalCompositeOperation = blend;
-        context.drawImage(
-          source,
-          ((rect.left - bounds.left) * width) / bounds.width,
-          ((rect.top - bounds.top) * height) / bounds.height,
-          (rect.width * width) / bounds.width,
-          (rect.height * height) / bounds.height,
-        );
-      }
-    }
+    canvas.getContext('2d')!.drawImage(stage, 0, 0, width, height);
     return this.config.get('SAVE_THUMB.TYPE') === '1'
       ? canvas.toDataURL('image/png')
       : canvas.toDataURL('image/jpeg', 0.8);

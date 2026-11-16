@@ -85,6 +85,12 @@ The probe measured 87 checkpoints, including 29 with a speaker name,
 nine with multiple dialogue rows and two with ruby. All line counts
 matched. The largest measured baseline difference was 0.000104 game
 pixels. This measures baselines in the bundled font at those checkpoints.
+Set `SIGLUS_THUMBNAIL_ONLY=1` to check normal Save and title Load in
+Chapter 01. The probe saves the same page with its message window visible
+and hidden, compares the PNG dimensions and changed pixel counts, and
+checks that Load draws both stored thumbnails and restores the dialogue.
+Run it with `SIGLUS_TEXT_MODE=dom` to exercise capture in DOM Text.
+
 Set `SIGLUS_GAN_ONLY=1` to check the first Chapter 01 line effect.
 The probe uses a temporary slot at `0x15359`. It checks that the GAN remains
 offscreen while the back page is prepared, belongs to the incoming page
@@ -413,7 +419,8 @@ are addressed.
 | Configuration dialog presentation and complete font list                   | Difference         | The browser dialog geometry and rasterization are approximate. Font choices cover the bundled fonts.                                                         |
 | Return, Exit, message frame locks and Music                                | Confirmed          | The scripted confirmation, lock and Music probes cover their input, persistence and return paths.                                                            |
 | Ordinary, quick and automatic slots and confirmations                      | Confirmed          | The respective probes use the game's slot menu and restore dialogue, stage and continuation on their sampled paths.                                          |
-| Thumbnail content                                                          | Difference         | Browser thumbnails composite the graphical layers. They omit the dialogue and native capture effects.                                                        |
+| Visible and hidden dialogue in save thumbnails                             | Confirmed          | The Chapter 01 probe checks the message layer and the two stored thumbnails after reopening in both text modes.                                              |
+| Native capture effects and resampling                                      | Needs verification | Compare transition masks, stage effects and the native reduction to the configured size.                                                                     |
 | Post-load sound, flags, settings and clear state                           | Confirmed          | Slot, PCM, Configuration and control-route probes check the documented persistence and source-sample behavior.                                               |
 | Native dialogue rows, ruby, reveal and slide                               | Confirmed          | The route render audit and targeted text probes check these behaviors in the covered states.                                                                 |
 | Native glyph rasterization and wrapping across all branches and settings   | Needs verification | The alignment probe compares the two browser text modes at the opening. Exact Windows glyph coverage and wrapping outside those samples need comparison.     |
@@ -487,10 +494,18 @@ skippable wait at `0x15aed` while the incoming wipe is still active.
   to CSS/Canvas `screen`. The native mode uses `ONE` and `INVSRCCOLOR`
   with a premultiplied shader, which gives the screen equation over an
   opaque backdrop. The browser interpolates subpixel positions.
-  Thumbnails composite the visible graphical layers at the configured
-  size. FORTUNE×WORLD sets `SAVE_THUMB.TYPE = 1`.
+- The slot script calls `capture()` at `__sys_system_call:0x6f` before
+  setting the message window off flag at `0x161`. Native capture at
+  `0x54ce1c` requests a redraw through `0x662300`. The capture pass
+  at `0x613e46` uses `0x614210`, which submits the message renderer
+  at `0x6142cb` when the window is visible. Browser capture composites
+  the scene and message at stage resolution and then reduces the result
+  to the configured slot dimensions. It uses the native dialogue canvas,
+  or rasterizes the current dialogue through the same drawing routine
+  when DOM Text is selected. FORTUNE×WORLD sets `SAVE_THUMB.TYPE = 1`.
   The native filename resolver at `0x6828eb` selects PNG for that setting.
-  Dialogue and native capture effects are absent from the browser composite.
+  The browser still needs the native capture pass for masks and stage
+  effects, and its reduction filter needs comparison with the original.
 - Loading restores the VM, current message, background and cast. Browser
   saves record the BGM level and preserve looping, prepared and queued
   tracks. Playback starts at the configured sample, including for older browser records

@@ -30,6 +30,7 @@ const freshConfiguration = configOnly && process.env.SIGLUS_CONFIG_FRESH === '1'
 const openingOnly = process.env.SIGLUS_OPENING_ONLY === '1';
 const alignmentOnly = process.env.SIGLUS_ALIGNMENT_ONLY === '1';
 const typingOnly = process.env.SIGLUS_TYPING_ONLY === '1';
+const thumbnailOnly = process.env.SIGLUS_THUMBNAIL_ONLY === '1';
 const ganOnly = process.env.SIGLUS_GAN_ONLY === '1';
 const fanWipeOnly = process.env.SIGLUS_FAN_WIPE_ONLY === '1';
 const digest = (value) => createHash('sha256').update(value).digest('hex');
@@ -743,6 +744,7 @@ verification: try {
     pauseSaveOnly ||
     loadOnly ||
     pcmLoadOnly ||
+    thumbnailOnly ||
     fanWipeOnly ||
     ganOnly ||
     quickOnly ||
@@ -813,7 +815,142 @@ verification: try {
     }
     throw new Error('Siglus playback timed out');
   }
-  if (ganOnly) {
+  if (thumbnailOnly) {
+    await click('#siglus-surface button[aria-label="New Game"]');
+    await runUntil((current) => Number(current.page) >= 3);
+    await waitForDialogueControls();
+    const dialogue = "siglusSurface.querySelector('[data-siglus-dialogue]').textContent";
+    const text = await evaluate(dialogue);
+    assert.ok(text.trim());
+    const nativeText = "siglusSurface.querySelector('[data-siglus-native-text]')";
+    await evaluate(`(() => {
+      const message = ${nativeText}.parentElement;
+      const rectangles = [message, ...message.querySelectorAll('canvas')].map((layer) =>
+        layer.getBoundingClientRect()).filter(({width, height}) => width > 0 && height > 0);
+      const stage = siglusSurface.firstElementChild.getBoundingClientRect();
+      const top = Math.min(...rectangles.map(({top}) => top));
+      const bottom = Math.max(...rectangles.map(({bottom}) => bottom));
+      window.siglusThumbnailBounds = {
+        top: Math.floor((top - stage.top) * 199 / stage.height) - 1,
+        bottom: Math.ceil((bottom - stage.top) * 199 / stage.height) + 1,
+      };
+      const drawImage = CanvasRenderingContext2D.prototype.drawImage;
+      window.siglusThumbnailTextLayers = [];
+      window.siglusThumbnailHide = false;
+      siglusSurface.addEventListener('siglus-tag', ({detail}) => {
+        if (siglusThumbnailHide && detail.path?.join('.') === '80')
+          message.style.visibility = 'hidden';
+      });
+      CanvasRenderingContext2D.prototype.drawImage = function (source, ...args) {
+        const native = ${nativeText};
+        if (source instanceof HTMLCanvasElement && this.canvas.width === 1920 &&
+            this.canvas.height === 1080 && (source === native ||
+              (!source.isConnected && source.width === native.width && source.height === native.height))) {
+          const pixels = source.getContext('2d').getImageData(0, 0, source.width, source.height).data;
+          let ink = 0;
+          for (let i = 3; i < pixels.length; i += 4) ink += pixels[i] > 0;
+          siglusThumbnailTextLayers.push({hidden: siglusThumbnailHide, connected: source.isConnected, ink});
+        }
+        return drawImage.call(this, source, ...args);
+      };
+    })()`);
+    await selectSlot('save');
+    const record = (slot) =>
+      asyncExpression(`${slotRecords()}.find(([id]) => id === ${slot})?.[1]`);
+    const visible = await waitFor(record(0));
+    await clickScriptMenu(slotLoop, 1540, 1023);
+    await waitForDialogueControls();
+    // Keep the VM on the same page while exercising the compositor's hidden-window case.
+    await evaluate('siglusThumbnailHide = true');
+    await selectSlot('save', 1);
+    const hidden = await waitFor(record(1));
+    assert.equal(digest(await evaluate(dialogue)), digest(text));
+    const proof = await evaluate(`(async () => {
+      const images = await Promise.all(${JSON.stringify([visible.thumbnail, hidden.thumbnail])}
+        .map(async (url) => {
+          const image = new Image();
+          image.src = url;
+          await image.decode();
+          return image;
+        }));
+      const canvas = document.createElement('canvas');
+      canvas.width = 354;
+      canvas.height = 199;
+      const context = canvas.getContext('2d');
+      const pixels = images.map((image) => {
+        context.drawImage(image, 0, 0);
+        return context.getImageData(0, 0, canvas.width, canvas.height).data;
+      });
+      const {top, bottom} = siglusThumbnailBounds;
+      let inside = 0;
+      let outside = 0;
+      for (let i = 0; i < pixels[0].length; i += 4) {
+        if (pixels[0].slice(i, i + 3).every((channel, c) => channel === pixels[1][i + c])) continue;
+        const y = Math.floor(i / 4 / canvas.width);
+        if (y >= top && y < bottom) inside++;
+        else outside++;
+      }
+      return {inside, outside, bounds: {top, bottom}, sizes: images.map((image) => [image.width, image.height]),
+        layers: siglusThumbnailTextLayers};
+    })()`);
+    assert.deepEqual(proof.sizes, [
+      [354, 199],
+      [354, 199],
+    ]);
+    assert.ok(proof.layers.length, JSON.stringify(proof));
+    for (const layer of proof.layers) {
+      assert.equal(layer.hidden, false, JSON.stringify(proof));
+      assert.equal(layer.connected, !domRoute);
+      assert.ok(layer.ink > 0, JSON.stringify(proof));
+    }
+    assert.ok(proof.inside > 0, JSON.stringify(proof));
+    const captureOrder = await evaluate(`siglusTags.filter(({scene, offset}) =>
+      scene === '__sys_system_call' && [0x6f, 0x161].includes(offset))`);
+    compareTags(captureOrder, scripts);
+    assert.deepEqual(
+      captureOrder.map(({offset}) => offset),
+      [0x6f, 0x161, 0x6f, 0x161],
+    );
+    assert.deepEqual(errors, [], 'Browser console errors before reopening');
+    await reopenPlayer();
+    await click('#siglus-surface button[aria-label="Load Game"]');
+    await waitFor(slotLoop);
+    await evaluate(`(async () => {
+      window.siglusStoredThumbnailPixels = await Promise.all(
+        ${JSON.stringify([visible.thumbnail, hidden.thumbnail])}.map(async (url) => {
+          const image = new Image();
+          image.src = url;
+          await image.decode();
+          const canvas = document.createElement('canvas');
+          canvas.width = image.width;
+          canvas.height = image.height;
+          const context = canvas.getContext('2d');
+          context.drawImage(image, 0, 0);
+          return context.getImageData(0, 0, canvas.width, canvas.height).data;
+        }));
+    })()`);
+    await waitFor(`(() => {
+      const thumbnails = [...siglusSurface.querySelectorAll('canvas')]
+        .filter(({width, height}) => width === 354 && height === 199);
+      if (thumbnails.length < 2) return false;
+      const drawn = thumbnails.map((canvas) =>
+        canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data);
+      return siglusStoredThumbnailPixels.every((stored) =>
+        drawn.some((pixels) => stored.every((sample, index) => sample === pixels[index])));
+    })()`);
+    assert.equal(await chooseSlot('load', 0), 'confirm');
+    await waitFor('siglusSurface.dataset.loaded === "true"');
+    await waitForDialogueControls();
+    assert.equal(digest(await evaluate(dialogue)), digest(text));
+    assert.deepEqual(errors, [], 'Browser console errors');
+    console.log(
+      'Chapter 01 thumbnail metrics:',
+      proof,
+      'PNG SHA-256:',
+      digest(Buffer.from(visible.thumbnail.split(',', 2)[1], 'base64')),
+    );
+    break verification;
+  } else if (ganOnly) {
     const chapter = [...scripts.keys()].find((name) => name.startsWith('01_'));
     const observeWipes = () =>
       evaluate(`(() => {
