@@ -539,14 +539,40 @@ export class SiglusVm {
             const member = path.at(-1)!;
             const form = this.propertyForm(frame, receiverPath);
             if (
-              member === 1 &&
               ((receiverPath[0] === localRoot && receiverPath.length === 2) ||
                 (elementOwner(receiverPath[0]!) === userProperty && receiverPath.length === 1)) &&
               (form === 11 || form === 14)
             ) {
-              this.setList(frame, receiverPath, args);
-              frame.stack.push(0);
-              break;
+              if (member === 1) {
+                this.setList(frame, receiverPath, args);
+                frame.stack.push(0);
+                break;
+              }
+              if (
+                member === 8 &&
+                form === 11 &&
+                elementOwner(receiverPath[0]!) === userProperty &&
+                args.length === 3
+              ) {
+                const [first, last, value] = args;
+                const sizeIndex = elementIndex(receiverPath[0]!) * 2 + 1;
+                const length =
+                  this.pack.properties[sizeIndex] ??
+                  frame.scene.properties[sizeIndex - this.pack.properties.length];
+                if (
+                  typeof first !== 'number' ||
+                  typeof last !== 'number' ||
+                  typeof value !== 'number' ||
+                  length === undefined ||
+                  first < 0 ||
+                  last >= length
+                )
+                  throw new Error('Invalid Siglus list clear range');
+                for (let index = first; index <= last; index++)
+                  this.property(frame, [...receiverPath, -1, index], value);
+                frame.stack.push(0);
+                break;
+              }
             }
             const receiver =
               path.length > 1 && (path[0] === localRoot || elementOwner(path[0]!) === userProperty)

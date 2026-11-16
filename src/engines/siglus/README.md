@@ -105,6 +105,13 @@ by comparing the body resource, dimensions and subsequent dialogue hash
 at `0x29486`.
 The browser calls the original `$bs_dress_init` and `$dress_control`
 commands for costume selection and preserves the resulting state in saves.
+It runs `$sys_set_gsd` from `__sys_scdata_init` to initialize the authored
+cast anchors and uses the local `$$bs_wipe_ready01` command from `_bs_com`
+to place the standing sprites. The diagnostic probe measures sprite
+origins in game pixels. The single formation is (960, 350), and the
+paired formation is (600, 350) and (1320, 350). The corresponding
+`_bs_com` assignments are at `0x8687`, `0x820e` and `0x83a6`, and
+`__sys_scdata_init:0x958` initializes the common y origin.
 Set `SIGLUS_TYPING_ONLY=1` to measure character reveal on the first two
 prologue replies governed by `script.set_message_speed(60)`. It checks
 partial text, completion by click, natural completion in DOM Text and the
@@ -186,7 +193,8 @@ The browser font list currently covers the installation's bundled fonts.
 Set `SIGLUS_LOAD_ONLY=1` for the Save and Load round trip. It starts at the
 cleared-title checkpoint and starts a new game. It uses the in-game Load
 menu to enter Configuration, then switches to Save and saves a live page
-in slot 0. It overwrites the slot on the next page, then goes from Save
+in slot 0. It overwrites the slot on the first page with a standing sprite,
+then goes from Save
 through Configuration to Load. These transitions use the script's bottom
 menu buttons and jumps within the current system call. The browser creates
 the thumbnail when the original `capture` command runs in
@@ -194,8 +202,9 @@ the thumbnail when the original `capture` command runs in
 Save is reached from a different menu. The probe reopens
 the player in the same private browser session and loads the same slot from the
 original title menu. The probe confirms the three types of prompts and checks
-thumbnail dimensions, dialogue hashes, stage identifiers and script tag offsets
-against the disassembly. Both loads verify that Web Audio starts the saved
+thumbnail dimensions, dialogue hashes, stage identifiers, the cast's
+restored coordinates and script tag offsets against the disassembly.
+Both loads verify that Web Audio starts the saved
 BGM track at the source sample configured in Gameexe.dat. After loading
 from the title, the probe opens and closes both the message history and
 the original Save menu on the restored page before advancing.
@@ -367,6 +376,42 @@ These entry points are from Scene.pck SHA-256
 and Gameexe.dat SHA-256
 `492bccbb33ca3ce6e6ff074fe66d52281bb1e80dca5d528696494574b3cb892f`.
 
+## Acceptance status
+
+The full-route results above are the control runs. Each targeted probe
+below covers a particular subsystem. Final acceptance uses one build and
+two fresh profiles after the open gameplay and presentation differences
+are addressed.
+
+| Requirement                                                              | Status             | Evidence or open comparison                                                                                                                                  |
+| ------------------------------------------------------------------------ | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Clean Play, mandatory prologue, first title and New Game                 | Confirmed          | The opening probe exercised the original startup and title through chapter 01.                                                                               |
+| Reachable story, movies, ending, clearing and reopening                  | Confirmed          | The control runs executed the linear chapter 01–08 flow, five movies, clear flags and Music unlock.                                                          |
+| Title resources, hit areas and input                                     | Confirmed          | The opening and frame exit probes use the title buttons and check the original G00 cut bounds.                                                               |
+| Configuration, history, quick menu, message hide, Auto and Read Skip     | Confirmed          | The individual probes exercise the original calls, availability, input and state changes.                                                                    |
+| Configuration dialog presentation and complete font list                 | Difference         | The browser dialog geometry and rasterization are approximate. Font choices cover the bundled fonts.                                                         |
+| Return, Exit, message frame locks and Music                              | Confirmed          | The scripted confirmation, lock and Music probes cover their input, persistence and return paths.                                                            |
+| Ordinary, quick and automatic slots and confirmations                    | Confirmed          | The respective probes use the game's slot menu and restore dialogue, stage and continuation on their sampled paths.                                          |
+| Thumbnail content                                                        | Difference         | Browser thumbnails composite the graphical layers. They omit the dialogue and native capture effects.                                                        |
+| Post-load sound, flags, settings and clear state                         | Confirmed          | Slot, PCM, Configuration and control-route probes check the documented persistence and source-sample behavior.                                               |
+| Native dialogue rows, ruby, reveal and slide                             | Confirmed          | The route render audit and targeted text probes check these behaviors in the covered states.                                                                 |
+| Native glyph rasterization and wrapping across all branches and settings | Needs verification | The alignment probe compares the two browser text modes at the opening. Exact Windows glyph coverage and wrapping outside those samples need comparison.     |
+| Cast formation and costume                                               | Confirmed          | The opening diagnostic measures standing sprite origins and verifies the scripted costume resource. The Load probe compares the restored origin numerically. |
+| Cast stacking, relative pose offsets and animations                      | Difference         | The browser still approximates the remaining staging passes in `_bs_com`.                                                                                    |
+| Transition masks, effects and in-flight audio and animation behavior     | Difference         | The browser's documented approximations remain in the rendering and save paths.                                                                              |
+| DOM Text selection, click and focus                                      | Confirmed          | The opening probe checks drag and click. The history, menu and typing probes exercise input during continuation.                                             |
+| DOM Text clipboard contents, dictionary extension and hidden state       | Needs verification | Selection and message hiding were tested separately. Check DOM visibility through the hide and reveal cycle, copied base text and extension hit targets.     |
+
+The next transition discrepancy is chapter 06 at `0x291be`. The call
+`$wipe(121)` selects native wipe mode 60 and 1,000 ms
+(`_wipe:0x8ba4` and `0x8be4`). The embedded PE dispatches these wipe
+commands through `0x54cfe7`, and mode 60 selects the mask constructor at
+`0x61b3a4`. Its generator at `0x646da0` builds a viewport-sized mask
+using four successive 64-value bands and the centers calculated by
+`0x646ab0`. The browser consumes the duration in a generic layer opacity
+fade. A short check can start immediately before the call and sample
+mask values in each sector and layer progress at fixed elapsed times.
+
 ## Known differences
 
 - The browser uses fractional inherited opacity. The native renderer
@@ -414,14 +459,11 @@ and Gameexe.dat SHA-256
   resources in this installation. When the requested size is absent,
   the browser uses the available `bs2_` body and face for the same costume
   and pose. Windows behavior for those missing resources is unverified.
-- The browser's character layout, text layout, day cards, transition masks,
+- Character stacking, relative pose offsets and motion still use browser
+  approximations. The browser's text layout, day cards, transition masks,
   recollection, shake, dizziness and motion effects approximate the script's
   native compositing. Effect timing and rendering have not been compared
   frame by frame.
-  The standard two-character formation puts the object origins at x=600
-  and x=1320 in `_bs_com` (`0x820e` and `0x83a6`) and y=350 from the
-  `$pos_m` initialization (`__sys_scdata_init:0x958`). The browser's
-  evenly spaced layout uses x=640 and x=1280 and y=346 for that formation.
   The embedded PE sets the message slide flag and duration at `0x550813`
   and schedules a line offset at `0x5da999`. The browser slides the text
   within the configured row count and keeps the full message for history.

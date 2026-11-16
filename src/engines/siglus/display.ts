@@ -1319,15 +1319,18 @@ export class SiglusDisplay {
   }
 
   async showCast(
-    sprites: readonly {name: string; costume: string}[],
+    sprites: readonly {name: string; costume: string; position?: [number, number]}[],
     duration: number,
   ): Promise<void> {
     const characters = await Promise.all(
-      sprites.map(async ({name, costume}, index) => {
+      sprites.map(async ({name, costume, position}, index) => {
         const match = /^(bs\d_)?([a-z]{2})(\d\d)(\d\d)/i.exec(name);
         if (!match) throw new Error(`Invalid Siglus sprite ${name}`);
         const [, prefix = 'bs2_', actor, pose, expression] = match;
-        const position = (this.width * (index + 1)) / (sprites.length + 1);
+        const [x, y] = position ?? [
+          (this.width * (index + 1)) / (sprites.length + 1),
+          Math.round(this.height * 0.32),
+        ];
         const bodyCode = `${actor}${costume}${pose}01`;
         const requested = prefix + bodyCode;
         const medium = 'bs2_' + bodyCode;
@@ -1339,7 +1342,7 @@ export class SiglusDisplay {
         const face = await this.spriteFace(useMedium ? 'bs2_' : prefix, actor!, pose!, expression!);
         const layer = document.createElement('div');
         layer.dataset.siglusCastBody = bodyName;
-        layer.style.cssText = `position:absolute;left:${position}px;top:${Math.round(this.height * 0.32)}px`;
+        layer.style.cssText = `position:absolute;left:${x}px;top:${y}px`;
         for (const graphic of [body, face])
           layer.append(this.node({...graphic, x: -graphic.centerX, y: -graphic.centerY}));
         return layer;

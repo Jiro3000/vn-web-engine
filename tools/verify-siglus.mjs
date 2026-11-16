@@ -502,6 +502,16 @@ verification: try {
     window.siglusMovies = [];
     window.siglusSurface = document.querySelector('#siglus-surface');
     window.siglusPageAudit = {pages: 0, native: 0, dom: 0, inkRows: 0, skipped: 0, slides: 0, textSizeResets: 0, failures: []};
+    window.siglusCastOrigins = () => {
+      const stage = siglusSurface.firstElementChild;
+      const {left, top, width, height} = stage.getBoundingClientRect();
+      return [...stage.querySelectorAll('[data-siglus-cast-body]')].map((layer) => {
+        const origin = layer.getBoundingClientRect();
+        return [(origin.left - left) * stage.offsetWidth / width,
+          (origin.top - top) * stage.offsetHeight / height];
+      });
+    };
+    window.siglusFormationSamples = {};
     const nativeRows = new Map();
     const canvas = CanvasRenderingContext2D.prototype;
     const fillText = canvas.fillText;
@@ -640,6 +650,10 @@ verification: try {
         const body = layer?.querySelector('canvas');
         window.siglusCostumeProof = {resource: layer?.dataset.siglusCastBody,
           width: body?.width, height: body?.height, text: text.textContent};
+      }
+      if (${diagnosticPages >= 1000}) {
+        const origins = siglusCastOrigins();
+        if (origins.length) siglusFormationSamples[origins.length] ??= origins;
       }
       if (slideCheckpoint) {
         window.siglusSlideProof = {text: text.textContent, translate: text.style.translate, finalRowInk, reason};
@@ -1964,10 +1978,15 @@ verification: try {
     assert.equal(digest(await evaluate(dialogue)), originalText);
     await clickStage();
     await waitFor(`Number(siglusSurface.dataset.page) > ${savedState.page}`);
-    savedState = await state();
+    savedState = await runUntil((current) => Number(current.page) > page && Boolean(current.cast));
+    const savedCastOrigins = await evaluate('siglusCastOrigins()');
+    assert.deepEqual(
+      savedCastOrigins.map((position) => position.map(Math.round)),
+      [[960, 350]],
+    );
     const savedText = digest(await evaluate(dialogue));
     assert.notEqual(savedText, originalText);
-    assert.equal(savedState.bgm, 'bgm02');
+    assert.equal(savedState.bgm, 'bgm06');
     await delay(400);
     assert.equal(await selectSlot('save'), 'confirm', 'Overwriting the slot requires confirmation');
     await waitFor(`siglusSurface.dataset.savedPage === '${savedState.page}'`);
@@ -1980,7 +1999,7 @@ verification: try {
     const restoredBgm = async (start) => {
       const played = await evaluate(`siglusAudio.slice(${start}).findLast(({channel, resource}) =>
         channel === 'bgm' && resource === ${JSON.stringify(savedBgm.name)})`);
-      assert.equal(played.startSample, 0, 'BGM02 starts at its configured Gameexe.dat sample');
+      assert.equal(played.startSample, 0, 'BGM06 starts at its configured Gameexe.dat sample');
       assert.equal(played.loop, savedBgm.loop);
       assert.ok(played.startSample < played.loopEndSample);
       return played;
@@ -2021,6 +2040,7 @@ verification: try {
       savedText,
       'In-game Load used the overwritten slot',
     );
+    assert.deepEqual(await evaluate('siglusCastOrigins()'), savedCastOrigins);
     const menuTrace = await evaluate(`siglusTags.slice(${fromLoad}).filter(({scene}) =>
       scene === '${configScene}' || scene === '${slotScene}' || scene === '__sys_system_call')`);
     compareTags(menuTrace, scripts, {compareSourceLine: false});
@@ -2058,6 +2078,7 @@ verification: try {
     assert.equal(digest(await evaluate(dialogue)), savedText);
     assert.equal(await evaluate('siglusSurface.dataset.background'), savedState.background);
     assert.equal(await evaluate('siglusSurface.dataset.cast'), savedState.cast);
+    assert.deepEqual(await evaluate('siglusCastOrigins()'), savedCastOrigins);
     assert.equal(await evaluate('siglusSurface.dataset.bgm'), savedState.bgm);
     const restoredPage = await evaluate('Number(siglusSurface.dataset.page)');
     await waitForDialogueControls();
@@ -2562,6 +2583,14 @@ verification: try {
     }
     await verifyRenderedPages({requireReset: diagnosticPages >= 1000});
     if (diagnosticPages >= 1000) {
+      const formations = await evaluate('siglusFormationSamples');
+      const origins = (count) => formations[count]?.map((position) => position.map(Math.round));
+      assert.deepEqual(origins(1), [[960, 350]]);
+      assert.deepEqual(origins(2), [
+        [600, 350],
+        [1320, 350],
+      ]);
+      console.log('Cast origins matched the single and paired formations:', origins(1), origins(2));
       const proof = await evaluate('siglusCostumeProof');
       assert.ok(proof, 'Expected the chapter 01 costume change checkpoint');
       assert.equal(proof.resource, 'bs2_ma020101');

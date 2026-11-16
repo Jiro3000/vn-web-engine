@@ -230,6 +230,7 @@ export class SiglusPlayer {
   private skip = false;
   private skipAllowed = true;
   private readonly stageProperties = new Map<string, Value>();
+  private readonly castAnchors = new Map<string, Value>();
   private currentCast: string[] = [];
   private currentCastCostumes: (string | null)[] = [];
   private pendingBackground?: {
@@ -705,9 +706,13 @@ export class SiglusPlayer {
     }
     if (page !== undefined && page >>> 24 === 127) {
       const name = this.game.pack.propertyNames[page & 0xffff];
+      if (name && /^\$pos_(fl|l|hl|nl|c|nr|hr|r|fr|m)$/.test(name)) {
+        if (value !== undefined) this.castAnchors.set(name, value);
+        return this.castAnchors.get(name) ?? 0;
+      }
       if (
         name &&
-        /^\$(bg_(?:name|name_prev|wipe|set_ready|type|file_exist)|bs_(?:name|name_info|dress_info|wipe_set)|cha_dress)$/.test(
+        /^\$(bg_(?:name|name_prev|wipe|set_ready|type|file_exist)|bs_(?:name|name_info|dress_info|wipe_set|exist_decide|size_info|posx_next|posy_next)|cha_dress)$/.test(
           name,
         )
       ) {
@@ -1458,14 +1463,39 @@ export class SiglusPlayer {
     );
     this.currentCast = resolved;
     this.currentCastCostumes = resolved.map(() => null);
+    const positions = resolved.some((name) => name && !name.startsWith('none'))
+      ? await this.castPositions(resolved)
+      : undefined;
     const sprites = [];
     for (const [slot, name] of resolved.entries()) {
       if (!name || name.startsWith('none')) continue;
       const costume = costumes?.[slot] ?? (await this.spriteCostume(name, slot, 0));
       this.currentCastCostumes[slot] = costume;
-      sprites.push({name, costume});
+      sprites.push({name, costume, position: positions?.[slot]});
     }
     await this.display.showCast(sprites, this.wipeDuration(fadeTimes[fade] ?? 0));
+  }
+
+  private async castPositions(names: readonly string[]): Promise<[number, number][] | undefined> {
+    const exportIndex = this.game.pack.commandNames.indexOf('$bs_disp_in');
+    const scene = this.game.pack.sceneNames[this.game.pack.commandScenes[exportIndex * 2]!];
+    const command = '$$bs_wipe_ready01';
+    if (
+      !this.castAnchors.size ||
+      !scene ||
+      !this.game.pack.scene(scene).commandNames.includes(command)
+    )
+      return;
+    for (let slot = 0; slot < 6; slot++) {
+      const name = names[slot] || 'none';
+      this.stageProperties.set('$bs_exist_decide.-1.' + slot, name.indexOf('none'));
+      this.stageProperties.set('$bs_size_info.-1.' + slot, /^bs([123])_/.exec(name)?.[1] ?? '2');
+    }
+    await this.vm.callScene(scene, command);
+    return names.map((_, slot) => [
+      Number(this.stageProperties.get('$bs_posx_next.-1.' + slot) ?? 0),
+      Number(this.stageProperties.get('$bs_posy_next.-1.' + slot) ?? 0),
+    ]);
   }
 
   private async spriteCostume(name: string, slot: number, portrait: number): Promise<string> {
@@ -1504,10 +1534,8 @@ export class SiglusPlayer {
     const n = (i: number) => Number(args[i] ?? 0);
     const s = (i: number) => String(args[i] ?? '');
     switch (command.name) {
-      // The browser initializes empty scene properties and owns the display and sound state.
       case '$sys_set_gsd':
-        for (let i = 0; i < 6; i++) this.stageProperties.set('$bs_name.-1.' + i, 'none');
-        await this.runOriginalCommand('$bs_dress_init');
+        await this.runOriginalCommand('$sys_set_gsd');
         // Earlier browser profiles may have an initialization flag without this setting.
         if (!this.system.has(1330)) this.property([31, -1, 1330], 1);
         for (const watcher of messageFrameWatchers) {
@@ -1517,11 +1545,6 @@ export class SiglusPlayer {
             this.globalExtraSwitches.set(slot, Boolean(this.system.get(flag)));
           if (this.system.get(flag) === 0 && this.game.pack.commandNames.includes(watcher.command))
             this.pendingFrameWatchers.add(watcher);
-        }
-        if (!this.property([31, -1, 1001])) {
-          // __sys_scdata_init enables the authored confirmation flags on first launch.
-          for (let flag = 1316; flag < 1324; flag++) this.system.set(flag, 1);
-          this.property([31, -1, 1001], 1);
         }
         return 0;
       case '$bg_disp_in':
@@ -2369,8 +2392,17 @@ export class SiglusPlayer {
       this.display.endShake(n(0));
       return 0;
     }
-    // Frame action callbacks are not currently scheduled by the browser host.
-    if (root === 53 && member === -1 && path[3] === 2) return 0;
+    if (root === 53 && member === -1 && path.length === 4) {
+      if (path[3] === 2) return 0;
+      // Input events drive the frame watchers. The release player has no debug shortcuts.
+      if (
+        path[3] === 1 &&
+        n(0) === -1 &&
+        (messageFrameWatchers.some(({command}) => command === s(1)) ||
+          s(1) === '$debug_key_shortcut')
+      )
+        return 0;
+    }
     if (root === 92 && member === 0)
       return Number(!this.root.ownerDocument.hidden && this.root.ownerDocument.hasFocus());
     if (root === 46 && member !== undefined && member >= 0 && member <= 3)
@@ -2595,7 +2627,11 @@ export class SiglusPlayer {
       });
       return 0;
     }
-    const object = page.get(id!);
+    let object = page.get(id!);
+    if (!object && command === 48) {
+      object = {name: '', frames: [], x: 0, y: 0, visible: false, pattern: 0};
+      page.set(id!, object);
+    }
     if (command === 24 || command === 25) {
       if (!object || object.pattern < 0) return 0;
       const frame =
