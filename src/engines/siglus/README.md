@@ -259,7 +259,10 @@ survive saving, reopening and loading. `__sys_system_call` updates switches
 runs the `__sys_scdata_init` watchers at `0xa3d8` and `0xb371` when the
 pointer or lock state changes at a dialogue checkpoint. They move the
 bottom row by 70 pixels and the side column by 150, with a 300 ms hide
-and a 250 ms reveal. The browser maps easing mode 2 to CSS `ease-out`.
+and a 250 ms reveal. The embedded PE evaluates the integer events at
+`0x5c2d50`. Modes 1 and 2 use quadratic progress, which the browser
+represents with cubic Bézier timing functions. Browser positions can
+differ from the truncated native coordinates by less than one game pixel.
 
 Set `SIGLUS_FRAME_EXIT_ONLY=1` to check Return to Title and Exit from the
 message frame. The probe cancels both scripted confirmations, checks the
@@ -306,16 +309,23 @@ their durations against FFprobe, verified the clear flags and entered
 Music after reopening. The player recorded no dropped frames or clock
 stalls. The run reported zero browser console errors and text failures.
 
-The clean-profile Native route on `40f6abf` matched 148,716 command and
-message tags and 71,091 literal command arguments. It checked 8,553
+The clean-profile Native route on `8ea10cd` matched 153,686 command and
+message tags and 86,063 literal command arguments. It checked 8,553
 decoded audio buffers with zero browser console errors. All 21,210
 dialogue checkpoints and 23,400 drawn rows passed the Native render
 check, including the pages following 40 scripted size resets. Save and
 load were exercised on page 70. The run finished all five movies,
 verified the clear flags and entered Music after reopening. All movie
-durations matched FFprobe. The player recorded no dropped frames or
-audio/video clock stalls. `npm test` reported the same 48 failing test
-names as `main` at `15f2bee` (2,518 passed, 3 skipped).
+durations matched FFprobe. The opening reported two dropped frames.
+The other movies reported zero dropped frames. All five reported zero
+audio or video clock stalls. `npm test` had the same 48 failing test
+names as `main` at `15f2bee`.
+
+The embedded PE implements `math.timetable` at `0x55a7cc`. Each list
+argument is a segment with its own start, end, target and optional
+interpolation mode. The command applies its time origin before evaluating
+the lists. It rounds the result to the nearest integer with half values
+away from zero, including positions used by the Configuration sliders.
 
 ## Scripted interface in the original
 
@@ -354,9 +364,9 @@ and Gameexe.dat SHA-256
   comparison.
 
 - Day transitions use the script's layers and motion parameters. The
-  browser maps easing mode 2 to CSS `ease-out` and blend mode 4 to
-  CSS/Canvas `screen`. The native colour interpolation and easing curves
-  still need comparison. Thumbnails composite the visible graphical layers
+  browser uses the native quadratic easing curves and maps blend mode 4
+  to CSS/Canvas `screen`. The browser interpolates subpixel positions.
+  The native colour interpolation still needs comparison. Thumbnails composite the visible graphical layers
   at the configured size. FORTUNE×WORLD sets `SAVE_THUMB.TYPE = 1`.
   The native filename resolver at `0x6828eb` selects PNG for that setting.
   Dialogue and native capture effects are absent from the browser composite.

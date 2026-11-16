@@ -226,6 +226,35 @@ function compareChapterOrder(trace, scripts, chapters, firstEntry) {
   }
 }
 
+const dayScene = '__sys_day_change';
+
+function dayCommandOffsets(scripts) {
+  return [...scripts.get(dayScene).tags.values()]
+    .filter(({tag, offset}) => tag === 'command' && offset >= 0x4d && offset <= 0xee6)
+    .map(({offset}) => offset);
+}
+
+function compareDayTransitions(trace, scripts) {
+  const transitions = [];
+  for (const tag of trace) {
+    if (tag.scene !== dayScene) continue;
+    if (tag.offset === 0x4d) transitions.push([]);
+    assert.ok(transitions.length, 'The day scene started at its savepoint');
+    transitions.at(-1).push(tag.offset);
+  }
+  assert.equal(transitions.length, trace.filter(({name}) => name === '$change_days').length);
+  const withSave = dayCommandOffsets(scripts);
+  const withoutSave = withSave.filter((offset) => offset < 0xe44 || offset >= 0xee6);
+  let autoSaves = 0;
+  for (const [index, offsets] of transitions.entries()) {
+    const saved = offsets.includes(0xe69);
+    assert.deepEqual(offsets, saved ? withSave : withoutSave, 'Day transition ' + (index + 1));
+    if (saved) autoSaves++;
+  }
+  assert.ok(autoSaves > 0, 'The route exercised automatic day saves');
+  return {dayTransitions: transitions.length, autoSaves};
+}
+
 function comparePrologue(trace, scripts, chapter) {
   const script = scripts.get(chapter);
   return compareStorySection(trace, chapter, script, 0, script.entries.get(2));
@@ -493,6 +522,7 @@ verification: try {
         animations: layer.getAnimations().map(({effect}) => ({
           duration: effect.getTiming().duration,
           delay: effect.getTiming().delay,
+          easing: effect.getTiming().easing,
           frames: effect.getKeyframes().map(({left, top, opacity}) => ({left, top, opacity})),
         })),
       })));
@@ -1569,6 +1599,17 @@ verification: try {
           ],
         ],
       );
+      for (const {animations} of layers) {
+        for (const {duration, easing} of animations) {
+          if (duration === 15000) assert.equal(easing, 'linear');
+          else {
+            const parameters = /^cubic-bezier\(([^)]+)\)$/.exec(easing)?.[1].split(',').map(Number);
+            assert.equal(parameters?.length, 4);
+            for (const [index, control] of [1 / 3, 2 / 3, 2 / 3, 1].entries())
+              assert.ok(Math.abs(parameters[index] - control) < 1e-5, easing);
+          }
+        }
+      }
       const movement = (index, property) => {
         const frames = layers[index].animations.find(({frames}) => frames[0][property]).frames;
         return parseFloat(frames.at(-1)[property]) - parseFloat(frames[0][property]);
@@ -1589,10 +1630,7 @@ verification: try {
       "!document.querySelector('[data-siglus-action=load]')?.parentElement.hidden",
       60000,
     );
-    const dayScene = '__sys_day_change';
-    const dayOffsets = [...scripts.get(dayScene).tags.values()]
-      .filter(({tag, offset}) => tag === 'command' && offset >= 0x4d && offset <= 0xee6)
-      .map(({offset}) => offset);
+    const dayOffsets = dayCommandOffsets(scripts);
     const initialDays = await evaluate(`siglusTags.filter(({scene}) => scene === '${dayScene}')`);
     compareTags(initialDays, scripts);
     assert.deepEqual(
@@ -2162,6 +2200,8 @@ verification: try {
       const start = await evaluate('siglusTags.length');
       const heldFrames = member === 49 || member === 97 ? 1 : 6;
       await clickConfig(x, y, 'left', heldFrames);
+      const released = await evaluate(configLoop);
+      await waitFor(`${configLoop} > ${released}`);
       return waitFor(`siglusTags.slice(${start}).findLast(({scene, path}) =>
         scene === '${configScene}' && path?.join('.') === '63.${member}')?.args`);
     };
@@ -2233,7 +2273,14 @@ verification: try {
     assert.equal(duckEnabled, 0);
     const storedSettings = `JSON.parse(localStorage.getItem(Object.keys(localStorage)
       .find((key) => /^siglus:.*:options$/.test(key))))`;
-    assert.deepEqual(await evaluate(`${storedSettings}.playback`), {
+    const playback = await evaluate(`${storedSettings}.playback`);
+    if (playback.autoMinimumWait !== minimumWait) {
+      const writes = await evaluate(`siglusTags.filter(
+        ({scene, path}) => scene === '${configScene}' && ['63.54', '63.55'].includes(path?.join('.'))
+      ).slice(-12).map(({offset, args}) => ({offset, args}))`);
+      console.log('Configuration minimum-wait writes:', writes);
+    }
+    assert.deepEqual(playback, {
       messageSpeed,
       messageNowait: false,
       autoCharacterWait: characterWait,
@@ -2288,13 +2335,13 @@ verification: try {
       })()`);
     };
     assert.deepEqual(await sliderPositions(1450, [234, 409, 473, 523]), [
-      794 + Math.trunc((-384 * messageSpeed) / 100),
-      410 + Math.trunc((384 * red) / 255),
-      1347 + Math.trunc((300 * characterWait) / 500),
-      1347 + Math.trunc((300 * minimumWait) / 5000),
+      Math.round(794 - (384 * messageSpeed) / 100),
+      Math.round(410 + (384 * red) / 255),
+      Math.round(1347 + (300 * characterWait) / 500),
+      Math.round(1347 + (300 * minimumWait) / 5000),
     ]);
     assert.deepEqual(await sliderPositions(1630, [374]), [
-      410 + Math.trunc((384 * duckLevel) / 255),
+      Math.round(410 + (384 * duckLevel) / 255),
     ]);
     console.log(
       'Configuration: Text and Sound rebuilt their sliders from settings restored after reopening.',
@@ -2725,6 +2772,7 @@ verification: try {
     );
     assert.equal(calls[1].args[1], 2);
     const prologueLines = comparePrologue(trace, scripts, chapters[0]);
+    console.log('Scripted day transitions:', compareDayTransitions(trace, scripts));
     compareChapterOrder(
       [...trace.slice(0, beforeLoad), ...trace.slice(afterLoad)],
       scripts,

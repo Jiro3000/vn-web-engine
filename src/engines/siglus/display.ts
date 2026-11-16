@@ -3,6 +3,7 @@ import {BrowserWindowDisplayHost} from '../../platform/browser-window-display.js
 import {readSfntFontMetadata} from '../../formats/sfnt.js';
 import {G00Image, type G00Frame} from '../../formats/siglus/g00.js';
 import {siglusFontShadow, type SiglusFontChoice} from './configuration.js';
+import {eventEasing} from './timing.js';
 
 export interface SiglusHistoryEntry {
   name: string;
@@ -61,7 +62,13 @@ export interface DrawObject {
   disabled?: boolean;
   opacity?: [target: number, duration: number, delay: number, easing: number, start: number];
   opacityStarted?: number;
-  horizontalMotion?: {from: number; duration: number; delay: number; started: number};
+  horizontalMotion?: {
+    from: number;
+    duration: number;
+    delay: number;
+    easing: number;
+    started: number;
+  };
   movement?: [target: number, duration: number, delay: number, easing: number, start: number];
 }
 
@@ -1156,29 +1163,29 @@ export class SiglusDisplay {
         });
       }
       if (object.horizontalMotion) {
-        const {from, duration, delay, started} = object.horizontalMotion;
+        const {from, duration, delay, easing, started} = object.horizontalMotion;
         const elapsed = performance.now() - started;
         if (elapsed < duration + delay) {
           const animation = element.animate(
             {transform: [`translateX(${from - object.x}px)`, 'translateX(0px)']},
-            {duration, delay, easing: 'ease-out', fill: 'both'},
+            {duration, delay, easing: eventEasing(easing), fill: 'both'},
           );
           animation.currentTime = elapsed;
         }
       }
       if (object.opacityStarted !== undefined) this.systemObjectOpacity(element, object);
       else if (animate && object.opacity) {
-        const [target, time, delay, , start] = object.opacity;
+        const [target, time, delay, mode, start] = object.opacity;
         element.animate(
           {opacity: [start / 255, target / 255]},
-          {duration: time, delay, fill: 'both'},
+          {duration: time, delay, easing: eventEasing(mode), fill: 'both'},
         );
       }
       if (animate && object.movement) {
-        const [target, time, delay, , start] = object.movement;
+        const [target, time, delay, mode, start] = object.movement;
         element.animate(
           {transform: [`translateY(${start}px)`, `translateY(${target}px)`]},
-          {duration: time, delay, fill: 'both'},
+          {duration: time, delay, easing: eventEasing(mode), fill: 'both'},
         );
       }
       if (object.children) await this.appendChildren(parent, object, button, animate);
@@ -1187,7 +1194,7 @@ export class SiglusDisplay {
 
   private systemObjectOpacity(element: HTMLElement, object: DrawObject): void {
     if (!object.opacity || object.opacityStarted === undefined) return;
-    const [target, duration, delay, , start] = object.opacity;
+    const [target, duration, delay, mode, start] = object.opacity;
     const elapsed = performance.now() - object.opacityStarted;
     if (duration + delay <= elapsed) return;
     const animation = element.animate(
@@ -1195,6 +1202,7 @@ export class SiglusDisplay {
       {
         duration,
         delay,
+        easing: eventEasing(mode),
         fill: 'both',
       },
     );
@@ -1364,9 +1372,9 @@ export class SiglusDisplay {
     this.stage.append(node);
     node.animate(
       [
-        {opacity: 0, offset: 0, easing: 'ease-out'},
+        {opacity: 0, offset: 0, easing: eventEasing(2)},
         {opacity: 1, offset: 0.12},
-        {opacity: 1, offset: 0.32, easing: 'ease-out'},
+        {opacity: 1, offset: 0.32, easing: eventEasing(2)},
         {opacity: 0, offset: 0.44},
         {opacity: 0, offset: 1},
       ],
@@ -1374,9 +1382,9 @@ export class SiglusDisplay {
     );
     const animation = node.animate(
       [
-        {translate: '0px', offset: 0, easing: 'ease-out'},
+        {translate: '0px', offset: 0, easing: eventEasing(2)},
         {translate: '-50px', offset: 0.2},
-        {translate: '-50px', offset: 0.8, easing: 'ease-out'},
+        {translate: '-50px', offset: 0.8, easing: eventEasing(2)},
         {translate: '0px', offset: 1},
       ],
       {duration: 2500},

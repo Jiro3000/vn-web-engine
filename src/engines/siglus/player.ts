@@ -21,6 +21,7 @@ import {
   type SiglusFrameAction,
   type SiglusHistoryEntry,
 } from './display.js';
+import {eventEasing, timetable} from './timing.js';
 import {
   SiglusVm,
   type SiglusCheckpoint,
@@ -1755,7 +1756,7 @@ export class SiglusPlayer {
     if (path.length === 1) {
       switch (root) {
         case 80: // capture
-          if (!this.systemCallActive && !this.dayStage) return undefined;
+          if (!this.systemCallActive && command.scene !== '__sys_day_change') return undefined;
           if (this.savePoint && !this.systemCallActive) {
             this.savePoint.thumbnail = this.display.captureThumbnail();
           } else if (this.savePoint) {
@@ -1772,7 +1773,7 @@ export class SiglusPlayer {
           }
           return 0;
         case 81: // capture_free
-          if (this.systemCallActive || this.dayStage) return 0;
+          if (this.systemCallActive || command.scene === '__sys_day_change') return 0;
           return undefined;
         case 6: // disp
         case 96: // frame
@@ -1925,7 +1926,7 @@ export class SiglusPlayer {
               ? {
                   duration,
                   delay: n(2),
-                  easing: n(3) === 2 ? 'ease-out' : 'linear',
+                  easing: eventEasing(n(3)),
                   fill: 'backwards',
                 }
               : undefined,
@@ -2366,24 +2367,9 @@ export class SiglusPlayer {
     if (root === 39 && member === 0)
       return n(0) + Math.floor(Math.random() * (Math.max(0, n(1) - n(0)) + 1));
     if (root === 39 && member === 1 && args.length === 1) return String(n(0));
-    if (root === 39 && member === 2 && Array.isArray(args[3])) {
-      const previousTime = n(1);
-      let previousValue = n(2);
-      const time = n(0);
-      if (time <= previousTime) return previousValue;
-      const table = args[3];
-      for (let index = 0; index + 2 < table.length; index += 3) {
-        const start = table[index]!;
-        const end = table[index + 1]!;
-        const value = table[index + 2]!;
-        if (time <= start) return previousValue;
-        if (time < end)
-          return (
-            previousValue + Math.trunc(((value - previousValue) * (time - start)) / (end - start))
-          );
-        previousValue = value;
-      }
-      return previousValue;
+    if (root === 39 && member === 2 && args.length >= 3) {
+      const segments = args.slice(3);
+      if (segments.every(Array.isArray)) return timetable(n(0) - n(1), n(2), segments);
     }
     if (root === 39 && member === 9)
       return n(3) === n(1)
@@ -2624,6 +2610,7 @@ export class SiglusPlayer {
         from: args.length === 5 ? n(4) : object.x,
         duration: n(1),
         delay: n(2),
+        easing: n(3),
         started: performance.now(),
       };
       object.x = n(0);
@@ -2644,7 +2631,7 @@ export class SiglusPlayer {
           time: {
             duration: n(1),
             delay: n(2),
-            easing: n(3) === 2 ? 'ease-out' : 'linear',
+            easing: eventEasing(n(3)),
             fill: 'backwards',
           },
         },
