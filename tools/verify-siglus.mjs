@@ -234,7 +234,16 @@ function dayCommandOffsets(scripts) {
     .map(({offset}) => offset);
 }
 
-function compareDayTransitions(trace, scripts) {
+function compareDayTransitions(trace, scripts, chapters) {
+  const callers = trace
+    .filter(({name}) => name === '$change_days')
+    .map(({scene, offset}) => [scene, offset]);
+  const referenceCallers = chapters.flatMap((scene) =>
+    [...scripts.get(scene).tags.values()]
+      .filter(({code}) => code === 0x7e000002) // $change_days in this Scene.pck
+      .map(({offset}) => [scene, offset]),
+  );
+  assert.deepEqual(callers, referenceCallers, 'Every scripted date change runs in chapter order');
   const transitions = [];
   for (const tag of trace) {
     if (tag.scene !== dayScene) continue;
@@ -242,7 +251,7 @@ function compareDayTransitions(trace, scripts) {
     assert.ok(transitions.length, 'The day scene started at its savepoint');
     transitions.at(-1).push(tag.offset);
   }
-  assert.equal(transitions.length, trace.filter(({name}) => name === '$change_days').length);
+  assert.equal(transitions.length, callers.length);
   const withSave = dayCommandOffsets(scripts);
   const withoutSave = withSave.filter((offset) => offset < 0xe44 || offset >= 0xee6);
   let autoSaves = 0;
@@ -850,19 +859,25 @@ verification: try {
         native: [nativeRows[0], name], dom, nativeRows, domRows, size, ruby: Boolean(ruby), readingAbove};
     })()`);
     const results = [];
+    const baselineTolerance = 1 / 32;
     async function compareBaselines() {
       const result = await measureBaselines();
       results.push(result);
       for (const [index, native] of result.native.entries()) {
         if (native === null) continue;
         const difference = result.dom[index] - native;
-        assert.ok(Math.abs(difference) <= 1, JSON.stringify({...result, difference}));
+        assert.ok(
+          Math.abs(difference) <= baselineTolerance,
+          JSON.stringify({...result, difference}),
+        );
       }
-      if (result.nativeRows.length === result.domRows.length) {
-        for (const [index, baseline] of result.nativeRows.entries()) {
-          const difference = result.domRows[index] - baseline;
-          assert.ok(Math.abs(difference) <= 1, JSON.stringify({...result, row: index, difference}));
-        }
+      assert.equal(result.domRows.length, result.nativeRows.length, JSON.stringify(result));
+      for (const [index, baseline] of result.nativeRows.entries()) {
+        const difference = result.domRows[index] - baseline;
+        assert.ok(
+          Math.abs(difference) <= baselineTolerance,
+          JSON.stringify({...result, row: index, difference}),
+        );
       }
       if (result.ruby) assert.ok(result.readingAbove, JSON.stringify(result));
     }
@@ -928,11 +943,9 @@ verification: try {
       ...results.flatMap(({native, dom, nativeRows, domRows}) => {
         const differences = [Math.abs(dom[0] - native[0])];
         if (native[1] !== null) differences.push(Math.abs(dom[1] - native[1]));
-        if (nativeRows.length === domRows.length) {
-          differences.push(
-            ...nativeRows.map((baseline, index) => Math.abs(domRows[index] - baseline)),
-          );
-        }
+        differences.push(
+          ...nativeRows.map((baseline, index) => Math.abs(domRows[index] - baseline)),
+        );
         return differences;
       }),
     );
@@ -942,14 +955,6 @@ verification: try {
       rubyPages: results.filter(({ruby}) => ruby).length,
       speakerPages: results.filter(({native}) => native[1] !== null).length,
       multilinePages: results.filter(({nativeRows}) => nativeRows.length > 1).length,
-      differingLineCounts: results
-        .filter(({nativeRows, domRows}) => nativeRows.length !== domRows.length)
-        .map(({scene, offset, nativeRows, domRows}) => ({
-          scene,
-          offset,
-          native: nativeRows.length,
-          dom: domRows.length,
-        })),
     });
     assert.ok(results.length >= 80, 'Alignment probe did not cover the opening checkpoints');
     compareTags(
@@ -2739,6 +2744,8 @@ verification: try {
       const expected = originalMovieDurations.get(name);
       assert.ok(movie.frames > 0 && movie.duration > 0, name + ' produced no video frames');
       assert.ok(movie.position >= movie.duration - 0.5, name + ' stopped before the end');
+      assert.equal(movie.decoding.audioStalls, 0, name + ' audio clock stalled');
+      assert.equal(movie.decoding.videoStalls, 0, name + ' video clock stalled');
       if (expected !== undefined) {
         assert.ok(
           Math.abs(movie.duration - expected) <= 0.1,
@@ -2819,7 +2826,7 @@ verification: try {
     );
     assert.equal(calls[1].args[1], 2);
     const prologueLines = comparePrologue(trace, scripts, chapters[0]);
-    console.log('Scripted day transitions:', compareDayTransitions(trace, scripts));
+    console.log('Scripted day transitions:', compareDayTransitions(trace, scripts, chapters));
     compareChapterOrder(
       [...trace.slice(0, beforeLoad), ...trace.slice(afterLoad)],
       scripts,

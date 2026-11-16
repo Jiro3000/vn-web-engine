@@ -46,16 +46,17 @@ The verifier launches headless Chromium-compatible Brave with a temporary
 profile, `--incognito`, and `--mute-audio`. It uses browser input events,
 checks browser errors, and compares script tag positions, named argument
 IDs, literal command arguments and text SHA-256 values against the
-disassembly. The route check includes save and load,
-movie completion, chapter order, and the return to the cleared title. It
-also checks that the saved page's dialogue hash matches after loading and
-that the prologue, movie and cleared-title flags were written to browser
-storage. Audio checks use decoded PCM lengths, sample rates, peak amplitudes
+disassembly. The route check includes save and load, movie completion,
+chapter order, all scripted day-change call sites, and the return to the
+cleared title. It checks the saved dialogue hash after loading and verifies
+persistence of the prologue, movie and clear flags. Audio checks use decoded
+PCM lengths, sample rates, peak amplitudes
 and RMS levels with browser output muted. The route checks that each
 movie drew frames and reached the end of its decoded duration. Set
 `SIGLUS_FFPROBE=ffprobe` to compare the original WMV durations independently.
 The verifier reports decoded movie positions, displayed and dropped frames,
-clock stalls and maximum presentation lateness.
+clock stalls and maximum presentation lateness. It fails on audio or video
+clock stalls.
 The final title plays one of the ending-specific voice lines and clears
 the one-shot request G[1009]. The verifier then reopens the player in
 the same temporary profile, checks the regular cleared-title voice,
@@ -75,8 +76,8 @@ check. Set `SIGLUS_ALIGNMENT_ONLY=1` to compare the DOM and Native
 baselines on the same pages through the prologue and the first 20 input
 checkpoints after New Game. It uses the canvas draw calls and browser
 text ranges to measure dialogue rows and speaker names in game pixels.
-It reports line-count differences and the largest baseline difference
-for matching rows. It also checks
+It requires matching line counts and a baseline difference of at most
+1/32 of a game pixel for each row and speaker name. It also checks
 that ruby appears above its base, that the base text matches the
 disassembly at chapter 01 offset `0x0f40`, and that a click at `pp()` at
 `0x0fc2` appends the next fragment to the same message.
@@ -95,8 +96,13 @@ bounds with `SIGLUS_TEXT_MODE=dom`.
 Set `SIGLUS_DIAGNOSTIC_PAGES=1000` for a focused regression check of the
 first message size resets. The command advances the mandatory prologue
 with normal input, starts New Game and holds Control to reach the target.
-It checks the chapter 01 costume change at `0x28f75` by comparing the
-body resource, dimensions and subsequent dialogue hash at `0x29486`.
+The 50th fragment in the opening-only check is at chapter 01 offset
+`0x50d4`. The first `size()` reset is at `0xc30d`, after `size(48)` at
+`0xc228`. An empty argument list restores the message window's configured
+font size.
+The diagnostic probe also checks the chapter 01 costume change at `0x28f75`
+by comparing the body resource, dimensions and subsequent dialogue hash
+at `0x29486`.
 The browser calls the original `$bs_dress_init` and `$dress_control`
 commands for costume selection and preserves the resulting state in saves.
 Set `SIGLUS_TYPING_ONLY=1` to measure character reveal on the first two
@@ -281,6 +287,7 @@ browser composites those objects above the active scene. Blend mode 3
 uses `ZERO` and `SRCCOLOR` at `0x6fa26e` through `0x6fa2ab`. The
 embedded `EFFECT` shader at file offset `0x870f70` multiplies the
 backdrop by `1 + alpha × (source RGB − 1)` for a white vertex tint.
+Here `alpha` is texture alpha multiplied by vertex alpha.
 The browser uses `multiply` and applies the parent opacity to each leaf,
 following the per-object alpha inheritance in the PE at `0x5f0075`.
 Title object buttons use the rectangle recorded in the G00 cut.
@@ -308,10 +315,10 @@ uses the original MSGBK resources and stores recent history and rewind
 checkpoints in each save. The probe reloads the slot after reopening the player
 and checks both No and Yes in the original resume confirmation.
 
-The clean-profile DOM Text route on `a1f48f3` checked 21,210 input
+The clean-profile DOM Text route on `b71bce8` checked 21,210 input
 checkpoints, including nine scrolled messages and 40 size resets.
-The independent disassembly comparison matched 153,447 tags,
-85,942 literal command arguments and all 158 day transitions with
+The independent disassembly comparison matched 154,497 tags,
+86,182 literal command arguments and all 158 day-change call sites with
 their automatic saves. The run checked 8,552 decoded audio buffers
 and used the scripted save and load menus. It completed all five movies,
 matched their durations against FFprobe, verified the clear flags and
@@ -320,17 +327,17 @@ The other movies reported zero dropped frames. All five reported zero
 audio or video clock stalls. The run reported zero browser console
 errors and text failures.
 
-The clean-profile Native route on `8ea10cd` matched 153,686 command and
-message tags and 86,063 literal command arguments. It checked 8,553
-decoded audio buffers with zero browser console errors. All 21,210
-dialogue checkpoints and 23,400 drawn rows passed the Native render
-check, including the pages following 40 scripted size resets. Save and
-load were exercised on page 70. The run finished all five movies,
-verified the clear flags and entered Music after reopening. All movie
-durations matched FFprobe. The opening reported two dropped frames.
-The other movies reported zero dropped frames. All five reported zero
-audio or video clock stalls. `npm test` had the same 48 failing test
-names as `main` at `15f2bee`.
+The clean-profile Native route on `b71bce8` matched 152,295 command and
+message tags, 85,823 literal command arguments and 158 day changes with
+their automatic saves. It checked 8,553 decoded audio buffers with zero
+browser console errors. All 21,210 dialogue checkpoints and 23,400 drawn
+rows passed the Native render check, including the pages following 40
+scripted size resets. Save and load were exercised on page 70. The run
+finished all five movies, verified the clear flags and entered Music
+after reopening. All movie durations matched FFprobe. The opening reported
+one dropped frame. The other movies reported zero dropped frames. All
+five reported zero audio or video clock stalls. `npm test` had the same
+48 failing test names as `main` at `15f2bee`.
 
 The embedded PE implements `math.timetable` at `0x55a7cc`. Each list
 argument is a segment with its own start, end, target and optional
@@ -411,6 +418,10 @@ and Gameexe.dat SHA-256
   recollection, shake, dizziness and motion effects approximate the script's
   native compositing. Effect timing and rendering have not been compared
   frame by frame.
+  The standard two-character formation puts the object origins at x=600
+  and x=1320 in `_bs_com` (`0x820e` and `0x83a6`) and y=350 from the
+  `$pos_m` initialization (`__sys_scdata_init:0x958`). The browser's
+  evenly spaced layout uses x=640 and x=1280 and y=346 for that formation.
   The embedded PE sets the message slide flag and duration at `0x550813`
   and schedules a line offset at `0x5da999`. The browser slides the text
   within the configured row count and keeps the full message for history.
