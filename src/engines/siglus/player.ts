@@ -19,6 +19,7 @@ import {
   orderedObjects,
   type DrawObject,
   type SiglusFrameAction,
+  type SiglusGanCheckpoint,
   type SiglusHistoryEntry,
 } from './display.js';
 import {eventEasing, timetable} from './timing.js';
@@ -135,6 +136,7 @@ interface PlayerSave {
   voiceLevel?: number;
   cast: string[];
   castCostumes?: (string | null)[];
+  gan?: SiglusGanCheckpoint;
   speed: number;
   timestamp?: number;
   title?: string;
@@ -1086,6 +1088,7 @@ export class SiglusPlayer {
       voiceLevel: this.audio.channelLevel('voice'),
       cast: [...this.currentCast],
       castCostumes: [...this.currentCastCostumes],
+      gan: this.display.saveGan(),
       speed: this.speed,
       title: this.saveTitle,
       waitsForInput,
@@ -1236,6 +1239,7 @@ export class SiglusPlayer {
     this.pendingBackground = undefined;
     if (save.background) await this.display.setBackground(save.background, 0);
     await this.cast(save.cast, -1, save.castCostumes);
+    if (save.gan) await this.display.loadGan(save.gan);
     const music = save.bgmPlayback ?? (save.bgm ? {name: save.bgm, loop: true} : undefined);
     await this.audio.restoreBgm(music, save.bgmLevel);
     this.audio.setChannelLevel('voice', save.voiceLevel ?? 255, 0);
@@ -1814,6 +1818,7 @@ export class SiglusPlayer {
             this.savePoint = {
               ...this.savePoint,
               thumbnail: this.display.captureThumbnail(),
+              gan: this.display.saveGan(),
               bgm: bgmPlayback?.name,
               bgmPlayback,
               bgmLevel: this.audio.channelLevel('bgm'),

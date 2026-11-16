@@ -30,6 +30,7 @@ const freshConfiguration = configOnly && process.env.SIGLUS_CONFIG_FRESH === '1'
 const openingOnly = process.env.SIGLUS_OPENING_ONLY === '1';
 const alignmentOnly = process.env.SIGLUS_ALIGNMENT_ONLY === '1';
 const typingOnly = process.env.SIGLUS_TYPING_ONLY === '1';
+const ganOnly = process.env.SIGLUS_GAN_ONLY === '1';
 const fanWipeOnly = process.env.SIGLUS_FAN_WIPE_ONLY === '1';
 const digest = (value) => createHash('sha256').update(value).digest('hex');
 if (!folder || !browser || !disassemblyDirectory)
@@ -743,6 +744,7 @@ verification: try {
     loadOnly ||
     pcmLoadOnly ||
     fanWipeOnly ||
+    ganOnly ||
     quickOnly ||
     autoOnly ||
     manageOnly ||
@@ -811,7 +813,115 @@ verification: try {
     }
     throw new Error('Siglus playback timed out');
   }
-  if (fanWipeOnly) {
+  if (ganOnly) {
+    const chapter = [...scripts.keys()].find((name) => name.startsWith('01_'));
+    await click('#siglus-surface button[aria-label="New Game"]');
+    await runUntil((current) => Number(current.page) >= 3);
+    await selectSlot('save');
+    await waitFor('siglusSurface.dataset.savedPage');
+    await updateSaveFixture(`(slot) => ({
+      ...slot,
+      waitsForInput: false,
+      vm: {...slot.vm, frames: [{scene: ${JSON.stringify(chapter)}, pc: 0x15359, line: 998,
+        stack: [], points: [], locals: [], declarations: []}]},
+    })`);
+    await reopenPlayer();
+    await click('#siglus-surface button[aria-label="Load Game"]');
+    await waitFor(slotLoop);
+    assert.equal(await chooseSlot('load', 0), 'confirm');
+    const stageTag = (offset) =>
+      `siglusTags.some((tag) => tag.scene === ${JSON.stringify(chapter)} && tag.offset === ${offset})`;
+    await waitFor(stageTag(0x15cb8));
+    const samples = await evaluate(`(async () => {
+      const layer = siglusSurface.querySelector('[data-siglus-gan="ef_line01"]');
+      if (!layer) throw new Error('Chapter 01 GAN layer missing');
+      const frames = [...layer.querySelectorAll('canvas')];
+      const animations = frames.map((frame) => frame.getAnimations()[0]);
+      for (const animation of animations) animation.pause();
+      const timing = animations.map(({effect}) => effect.getTiming().duration);
+      const samples = [];
+      for (const time of [0, 20, 21, 40, 41, 60, 61, 80, 81, 99, 100, 121]) {
+        for (const animation of animations) animation.currentTime = time;
+        const alpha = frames.map((frame) => Number(getComputedStyle(frame).opacity));
+        samples.push({time, visible: frames.flatMap((frame, i) => alpha[i]
+          ? [[Number(frame.dataset.siglusGanPattern), alpha[i]]]
+          : [])});
+      }
+      const bounds = frames.map((frame) => [frame.width, frame.height, frame.offsetLeft, frame.offsetTop]);
+      return {timing, bounds, samples};
+    })()`);
+    assert.deepEqual(samples.timing, [100, 100, 100, 100, 100]);
+    assert.deepEqual(
+      samples.samples.map(({visible}) => visible),
+      [0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 0, 1].map((index) => [[index, 1]]),
+    );
+    assert.deepEqual(
+      samples.bounds,
+      Array.from({length: 5}, () => [2048, 1200, -64, -60]),
+    );
+    await verifyRenderedPages();
+    const before = await evaluate(`siglusTags.filter(({scene, offset}) =>
+      scene === ${JSON.stringify(chapter)} && offset >= 0x15359 && offset <= 0x15cb8)`);
+    compareTags(before, scripts);
+    await waitForDialogueControls();
+    await selectSlot('save', 1);
+    const saved = await waitFor(
+      asyncExpression(`${slotRecords()}.find(([slot]) => slot === 1)?.[1]`),
+    );
+    assert.deepEqual(saved.gan, {
+      name: 'ef_line01',
+      sequence: 0,
+      loop: true,
+      x: -64,
+      y: -60,
+      elapsed: 21,
+    });
+    assert.deepEqual(errors, [], 'Browser console errors before reopening');
+    await reopenPlayer();
+    await evaluate(`(() => {
+      const currentTime = Object.getOwnPropertyDescriptor(Animation.prototype, 'currentTime');
+      window.siglusGanSeeks = [];
+      Object.defineProperty(Animation.prototype, 'currentTime', {...currentTime, set(time) {
+        const frame = this.effect?.target;
+        if (frame?.dataset?.siglusGanPattern !== undefined)
+          siglusGanSeeks.push([Number(frame.dataset.siglusGanPattern), time]);
+        currentTime.set.call(this, time);
+      }});
+    })()`);
+    await click('#siglus-surface button[aria-label="Load Game"]');
+    await waitFor(slotLoop);
+    assert.equal(await chooseSlot('load', 0, 1), 'confirm');
+    await waitFor('siglusSurface.dataset.loaded === "true"');
+    await waitForDialogueControls();
+    assert.deepEqual(
+      await evaluate('siglusGanSeeks'),
+      [0, 1, 2, 3, 4].map((pattern) => [pattern, 21]),
+    );
+    const dialogue = "siglusSurface.querySelector('[data-siglus-dialogue]').textContent";
+    assert.equal(digest(await evaluate(dialogue)), scripts.get(chapter).tags.get(0x15ca4).hash);
+    await advance();
+    await waitFor(stageTag(0x15d35));
+    await advance();
+    await waitFor(stageTag(0x1621b));
+    assert.equal(
+      await evaluate("Boolean(siglusSurface.querySelector('[data-siglus-gan]'))"),
+      false,
+    );
+    const pageAfter = await evaluate(
+      "siglusSurface.querySelector('[data-siglus-dialogue]').textContent",
+    );
+    assert.equal(digest(pageAfter), scripts.get(chapter).tags.get(0x16207).hash);
+    const trace = await evaluate(`siglusTags.filter(({scene, offset}) =>
+      scene === ${JSON.stringify(chapter)} && offset >= 0x15cb8 && offset <= 0x1621b)`);
+    compareTags(trace, scripts);
+    await verifyRenderedPages();
+    assert.deepEqual(errors, [], 'Browser console errors');
+    console.log(
+      'Chapter 01 GAN patterns and alpha. Restored at 21 ms:',
+      JSON.stringify(samples.samples),
+    );
+    break verification;
+  } else if (fanWipeOnly) {
     const chapter = [...scripts.keys()].find((name) => name.startsWith('06_'));
     await click('#siglus-surface button[aria-label="New Game"]');
     await runUntil((current) => Number(current.page) >= 3);

@@ -1,6 +1,7 @@
 import type {ByteSource} from '../../core/source.js';
 import {BrowserWindowDisplayHost} from '../../platform/browser-window-display.js';
 import {readSfntFontMetadata} from '../../formats/sfnt.js';
+import {readGan} from '../../formats/siglus/gan.js';
 import {G00Image, type G00Frame} from '../../formats/siglus/g00.js';
 import {siglusFontShadow, type SiglusFontChoice} from './configuration.js';
 import {eventEasing} from './timing.js';
@@ -76,6 +77,15 @@ export interface DrawObject {
   movement?: [target: number, duration: number, delay: number, easing: number, start: number];
 }
 
+export interface SiglusGanCheckpoint {
+  name: string;
+  sequence: number;
+  loop: boolean;
+  x: number;
+  y: number;
+  elapsed: number;
+}
+
 export interface SiglusFrameAction {
   id: number;
   type: string;
@@ -104,6 +114,7 @@ export class SiglusDisplay {
   private readonly layers = document.createElement('div');
   private readonly cast = document.createElement('div');
   private readonly effect = document.createElement('div');
+  private activeGan?: SiglusGanCheckpoint;
   private readonly controls = document.createElement('div');
   private readonly frameActions: {
     action: SiglusFrameAction;
@@ -1526,9 +1537,94 @@ export class SiglusDisplay {
     );
   }
 
+  private async ganAnimation({
+    name,
+    sequence,
+    loop,
+    x,
+    y,
+  }: SiglusGanCheckpoint): Promise<HTMLElement> {
+    const source = this.files.get(`gan/${name.toLowerCase()}.gan`);
+    if (!source) throw new Error(`Missing Siglus GAN ${name}`);
+    const frames = readGan(await source.read(0, source.size, this.signal))[sequence];
+    const duration = frames?.reduce((time, frame) => time + frame.duration, 0) ?? 0;
+    if (!frames?.length || duration <= 0)
+      throw new Error(`Invalid Siglus GAN sequence ${sequence}`);
+    const layer = document.createElement('div');
+    layer.dataset.siglusGan = name;
+    layer.style.cssText = 'position:absolute;inset:0;pointer-events:none';
+    const patterns = new Map<number, Graphic | undefined>();
+    let elapsed = 0;
+    for (const [index, frame] of frames.entries()) {
+      // The native lookup selects the first cumulative end >= its integer clock.
+      // Looping reduces that clock modulo the total before looking up the frame.
+      const start = elapsed === 0 && index === 0 ? 0 : Math.min(duration, elapsed + 1);
+      elapsed += frame.duration;
+      const end = Math.min(duration, elapsed + 1);
+      if (frame.pattern < 0 || (end <= start && (loop || index + 1 < frames.length))) continue;
+      if (!patterns.has(frame.pattern))
+        patterns.set(frame.pattern, await this.objectGraphic(name, frame.pattern));
+      const graphic = patterns.get(frame.pattern);
+      if (!graphic) continue;
+      const node = this.node({...graphic, x: x + frame.x + graphic.x, y: y + frame.y + graphic.y});
+      node.dataset.siglusGanPattern = String(frame.pattern);
+      node.style.opacity = '0';
+      const keyframes: Keyframe[] = [{opacity: start ? 0 : frame.alpha / 255, offset: 0}];
+      // Keep an exact integer sample on the new side of a boundary even
+      // when the browser computes iteration progress just below the keyframe.
+      const offset = (time: number) => (time < duration ? (time - 0.001) / duration : 1);
+      if (start > 0 && start < duration)
+        keyframes.push({opacity: frame.alpha / 255, offset: offset(start)});
+      keyframes.push({
+        opacity: !loop && index + 1 === frames.length ? frame.alpha / 255 : 0,
+        offset: !loop && index + 1 === frames.length ? 1 : offset(end),
+      });
+      node.animate(
+        keyframes.map((keyframe) => ({...keyframe, easing: 'steps(1, end)'})),
+        {duration, iterations: loop ? Infinity : 1, fill: 'both'},
+      );
+      layer.append(node);
+    }
+    return layer;
+  }
+
   async lineEffect(color: number): Promise<void> {
-    const frame = await this.graphic(color ? 'ef_line02' : 'ef_line01');
-    this.effect.replaceChildren(this.node({...frame, x: frame.x - 64, y: frame.y - 60}));
+    await this.loadGan({
+      name: color ? 'ef_line02' : 'ef_line01',
+      sequence: 0,
+      loop: true,
+      x: -64,
+      y: -60,
+      elapsed: 0,
+    });
+  }
+
+  async loadGan(checkpoint: SiglusGanCheckpoint): Promise<void> {
+    const layer = await this.ganAnimation(checkpoint);
+    this.signal.throwIfAborted();
+    this.clearGan();
+    this.effect.append(layer);
+    const now = document.timeline.currentTime as number;
+    for (const animation of layer.getAnimations({subtree: true})) {
+      animation.startTime = now;
+      animation.currentTime = checkpoint.elapsed;
+    }
+    this.activeGan = checkpoint;
+  }
+
+  saveGan(): SiglusGanCheckpoint | undefined {
+    if (!this.activeGan) return;
+    const animation = this.effect.getAnimations({subtree: true})[0];
+    const time = Math.max(0, Math.floor(Number(animation?.currentTime ?? 0)));
+    const duration = Number(animation?.effect?.getTiming().duration ?? 0);
+    const elapsed = duration && this.activeGan.loop ? time % duration : time;
+    return {...this.activeGan, elapsed};
+  }
+
+  private clearGan(): void {
+    for (const animation of this.effect.getAnimations({subtree: true})) animation.cancel();
+    this.effect.replaceChildren();
+    this.activeGan = undefined;
   }
 
   private shakeAnimation?: Animation;
@@ -1561,7 +1657,7 @@ export class SiglusDisplay {
   }
 
   endEffect(): void {
-    this.effect.replaceChildren();
+    this.clearGan();
     for (const animation of this.layers.getAnimations()) animation.cancel();
     this.recollect(false);
   }
@@ -1992,6 +2088,7 @@ export class SiglusDisplay {
   }
 
   dispose(): void {
+    this.clearGan();
     this.resetSlide();
     this.windowDisplay.dispose();
     this.stage.removeEventListener('click', this.click);

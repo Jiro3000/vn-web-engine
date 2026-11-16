@@ -85,6 +85,14 @@ The probe measured 87 checkpoints, including 29 with a speaker name,
 nine with multiple dialogue rows and two with ruby. All line counts
 matched. The largest measured baseline difference was 0.000104 game
 pixels. This measures baselines in the bundled font at those checkpoints.
+Set `SIGLUS_GAN_ONLY=1` to check the first Chapter 01 line effect.
+The probe uses a temporary slot at `0x15359`. It samples computed alpha
+and the active G00 pattern at each side of a frame boundary, checks the
+asset size and origin, and seeks to 121 ms before saving in another slot.
+It reloads that slot from the title after reopening the player, verifies
+the restored 21 ms phase, and checks the dialogue around the effect by
+SHA-256.
+
 Set `SIGLUS_FAN_WIPE_ONLY=1` to check the chapter 06 transition at
 `0x291be`. The probe loads a temporary slot at `0x29112` through the
 original title menu. It checks the mode and arguments emitted by
@@ -409,6 +417,8 @@ are addressed.
 | Cast formation and costume                                                 | Confirmed          | The opening diagnostic measures standing sprite origins and verifies the scripted costume resource. The Load probe compares the restored origin numerically. |
 | Cast stacking, relative pose offsets and animations                        | Difference         | The browser still approximates the remaining staging passes in `_bs_com`.                                                                                    |
 | Chapter 06 mode-60 wipe                                                    | Confirmed          | The checkpoint probe verifies the authored parameters, four interior mask bytes, half-time alpha and the following page in both text modes.                  |
+| Chapter 01 line-effect GAN frame sequence and save phase                   | Confirmed          | The checkpoint compares pattern order, clock boundaries, loop, alpha, G00 bounds and saved phase.                                                            |
+| Line-effect publication during stage transitions                           | Difference         | The original authors the effect on the back page. The browser mounts it immediately over the current cast.                                                   |
 | Other transition masks, effects and in-flight audio and animation behavior | Difference         | The browser's documented approximations remain in the rendering and save paths.                                                                              |
 | DOM Text selection, click and focus                                        | Confirmed          | The opening probe checks drag and click. The history, menu and typing probes exercise input during continuation.                                             |
 | DOM Text hiding and restoration                                            | Confirmed          | The right-click probe checks pointer hits before hiding and after revealing the same page, and checks that the hidden text stops receiving hits.             |
@@ -432,15 +442,29 @@ The browser applies this transfer to the incoming layer when the wipe
 is active. The preshader operand and opcode decoding follows the
 [MojoShader decoder](https://github.com/icculus/mojoshader/blob/main/mojoshader.c#L2442).
 
+Chapter 01 calls `$ef_line_start1(0, 200, 0)` at `0x15396`.
+The original `_effect` routine creates the back object at `(-64, -60)`,
+then issues `load_gan` and `start_gan(0, 1)` at `0x04ed` and `0x0557`.
+The selected GAN contains five G00 patterns and five 20 ms durations.
+The native dispatcher at `0x557d2f` reads the repeat argument.
+The update at `0x68809e` reduces elapsed milliseconds modulo the
+sequence duration and selects the first frame with a cumulative
+end greater than or equal to that phase. The native clock derives
+integer deltas from `timeGetTime` at `0x624a3b` through `0x624e08`.
+The save reader restores the elapsed counter at `0x687ce2`.
+The browser implements the boundaries as discrete opacity changes
+for each G00 pattern, with a 1 µs tolerance for browser rounding.
+The Save and Load menus preserve the loop phase.
+
 ## Known differences
 
-Chapter 01 calls `$ef_line_start1(0, 200, 0)` at `0x15396`.
-The original `_effect` routine issues `load_gan` and `start_gan(0, 1)`
-at `0x04ed` and `0x0557`. The selected `ef_line01.gan` contains
-five frames with G00 patterns 0–4 and durations of 20 in the authored
-units. The browser currently displays one static pattern. A short
-Chapter 01 check can verify the rendered pattern sequence, its timing
-and alpha numerically.
+- The original marks the Chapter 01 line effect for the next wipe on
+  the back page at `_effect:0x0623`, and clears the front object's
+  wipe flag at `_effect:0x0183`. The browser mounts and removes this
+  effect through its separate overlay. Compare the incoming and
+  outgoing layer presence around `$bs_disp_in` at `0x15a3e` and
+  `0x16153` to check publication and removal. The original
+  `_bs_com:0x1891c` calls the wipe with the selected mode.
 
 - The browser uses fractional inherited opacity. The native renderer
   divides multiplied parent and child alpha by 255 with integer truncation
@@ -481,7 +505,8 @@ and alpha numerically.
   flag at `0x601000` through `0x601010`, so a stopped track fading out
   does not reopen from the slot. The browser implements live delayed
   playback with the Web Audio clock and approximates a live BGM pause
-  at the scheduled fade-out endpoint. In-flight animations and transient
+  at the scheduled fade-out endpoint. The slot format preserves the
+  line-effect GAN phase. Other in-flight animations and transient
   voice playback continue with the next script command.
 - Two close-up body poses for the `ko` costume `04` have no `bs3_`
   resources in this installation. When the requested size is absent,
