@@ -1834,7 +1834,7 @@ export class SiglusDisplay {
       annotation = document.createElement('rt');
       annotation.style.cssText =
         'position:absolute;bottom:calc(50% + var(--siglus-ruby-offset));left:50%;' +
-        'transform:translateX(-50%);line-height:1';
+        'transform:translateX(-50%);line-height:1;user-select:none';
       annotation.style.fontSize = `${this.textMetrics.rubySize}px`;
       annotation.textContent = value ? fragment.ruby : '';
       ruby.append(node, annotation);

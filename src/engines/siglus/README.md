@@ -85,6 +85,13 @@ The probe measured 87 checkpoints, including 29 with a speaker name,
 nine with multiple dialogue rows and two with ruby. All line counts
 matched. The largest measured baseline difference was 0.000104 game
 pixels. This measures baselines in the bundled font at those checkpoints.
+Set `SIGLUS_CLIPBOARD_ONLY=1` to check DOM Text at the first ruby in the
+prologue. It drags across the base and following fragment, reads the
+browser's clipboard after the Copy shortcut, and compares the contents
+with the two original text tags at `0xf40` and `0xfae`. The caret at the
+base glyph resolves to the original text node. Copy keeps the page at
+`0xfc2`, and an ordinary click continues to `0x1015`.
+
 Set `SIGLUS_THUMBNAIL_ONLY=1` to check normal Save and title Load in
 Chapter 01. The probe saves the same page with its message window visible
 and hidden, compares the PNG dimensions and changed pixel counts, and
@@ -432,7 +439,8 @@ are addressed.
 | Other transition masks, effects and in-flight audio and animation behavior | Difference         | The browser's documented approximations remain in the rendering and save paths.                                                                              |
 | DOM Text selection, click and focus                                        | Confirmed          | The opening probe checks drag and click. The history, menu and typing probes exercise input during continuation.                                             |
 | DOM Text hiding and restoration                                            | Confirmed          | The right-click probe checks pointer hits before hiding and after revealing the same page, and checks that the hidden text stops receiving hits.             |
-| DOM Text clipboard contents and dictionary extension                       | Needs verification | Check copied base text and extension hit targets.                                                                                                            |
+| DOM Text clipboard and ruby base hit target                                | Confirmed          | The prologue probe compares the trusted Copy result and the browser caret hit with the original base text.                                                   |
+| Dictionary extension integration                                           | Needs verification | The probe checks the browser's text hit target. A dictionary extension session still needs verification.                                                     |
 
 The chapter 06 call `$wipe(121)` runs the original command in
 `_wipe`. It selects native wipe mode 60 and 1,000 ms

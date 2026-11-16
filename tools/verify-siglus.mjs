@@ -11,7 +11,8 @@ import {createStaticServer} from './serve-static.mjs';
 
 const [folder, browser, disassemblyDirectory] = process.argv.slice(2);
 const diagnosticPages = Number(process.env.SIGLUS_DIAGNOSTIC_PAGES ?? 0);
-const domRoute = process.env.SIGLUS_TEXT_MODE === 'dom';
+const clipboardOnly = process.env.SIGLUS_CLIPBOARD_ONLY === '1';
+const domRoute = clipboardOnly || process.env.SIGLUS_TEXT_MODE === 'dom';
 const slideOnly = process.env.SIGLUS_SLIDE_ONLY === '1';
 const pauseSaveOnly = process.env.SIGLUS_PAUSE_SAVE_ONLY === '1';
 const musicOnly = process.env.SIGLUS_MUSIC_ONLY === '1';
@@ -815,7 +816,103 @@ verification: try {
     }
     throw new Error('Siglus playback timed out');
   }
-  if (thumbnailOnly) {
+  if (clipboardOnly) {
+    const atOffset = (offset) =>
+      `siglusTags.at(-1)?.scene === ${JSON.stringify(scene)} && siglusTags.at(-1)?.offset === ${offset}`;
+    await runUntil(() => evaluate(atOffset(0xfc2)));
+    const bounds = await evaluate(`(() => {
+      const dialogue = siglusSurface.querySelector('[data-siglus-dialogue]');
+      const ruby = dialogue.querySelector('ruby');
+      const base = ruby.firstChild;
+      const tail = ruby.nextSibling;
+      const glyph = (node, offset) => {
+        const range = new Range();
+        range.setStart(node, offset);
+        range.setEnd(node, offset + 1);
+        return range.getBoundingClientRect();
+      };
+      const first = glyph(base, 0);
+      const last = glyph(tail, tail.length - 1);
+      const y = (first.top + first.bottom) / 2;
+      const start = first.left + first.width / 4;
+      const end = last.right - last.width / 4;
+      const caret = document.caretPositionFromPoint(first.left + first.width / 2, y);
+      return {start, end, y, lastTop: last.top, firstTop: first.top,
+        base: base.data, tail: tail.data, hit: caret?.offsetNode === base,
+        offset: caret?.offset};
+    })()`);
+    assert.ok(bounds.hit, 'Dictionary point resolves to the ruby base text node');
+    assert.ok(bounds.offset <= 1);
+    assert.equal(bounds.firstTop, bounds.lastTop);
+    assert.equal(digest(bounds.base), scripts.get(scene).tags.get(0xf40).hash);
+    assert.equal(digest(bounds.tail), scripts.get(scene).tags.get(0xfae).hash);
+    const pausedPage = await evaluate('siglusSurface.dataset.page');
+    const {start, end, y} = bounds;
+    await send('Input.dispatchMouseEvent', {
+      type: 'mousePressed',
+      x: start,
+      y,
+      button: 'left',
+      clickCount: 1,
+    });
+    for (const fraction of [0.33, 0.66, 1])
+      await send('Input.dispatchMouseEvent', {
+        type: 'mouseMoved',
+        x: start + (end - start) * fraction,
+        y,
+        button: 'left',
+        buttons: 1,
+      });
+    await send('Input.dispatchMouseEvent', {
+      type: 'mouseReleased',
+      x: end,
+      y,
+      button: 'left',
+      clickCount: 1,
+    });
+    assert.equal(await evaluate('siglusSurface.dataset.page'), pausedPage);
+    assert.deepEqual(
+      await evaluate(`[getSelection().anchorOffset, getSelection().focusOffset,
+        getSelection().anchorNode === siglusSurface.querySelector('[data-siglus-dialogue] ruby').firstChild,
+        getSelection().focusNode === siglusSurface.querySelector('[data-siglus-dialogue] ruby').nextSibling]`),
+      [0, bounds.tail.length, true, true],
+    );
+    const {targetInfo} = await cdp.command('Target.getTargetInfo', {targetId});
+    await cdp.command('Browser.grantPermissions', {
+      browserContextId: targetInfo.browserContextId,
+      origin: new URL(targetInfo.url).origin,
+      permissions: ['clipboardReadWrite'],
+    });
+    // Chromium's headless browser owns its clipboard within this test process.
+    await send('Input.dispatchKeyEvent', {
+      type: 'rawKeyDown',
+      key: 'c',
+      code: 'KeyC',
+      windowsVirtualKeyCode: 67,
+      modifiers: process.platform === 'darwin' ? 4 : 2,
+      commands: ['Copy'],
+    });
+    await send('Input.dispatchKeyEvent', {
+      type: 'keyUp',
+      key: 'c',
+      code: 'KeyC',
+      windowsVirtualKeyCode: 67,
+    });
+    const clipboard = await waitFor('navigator.clipboard.readText()');
+    assert.equal(
+      digest(clipboard),
+      digest(bounds.base + bounds.tail),
+      `Copied ${clipboard.length} UTF-16 units for ${bounds.base.length + bounds.tail.length} base units`,
+    );
+    assert.equal(await evaluate('siglusSurface.dataset.page'), pausedPage);
+    for (const type of ['mousePressed', 'mouseReleased'])
+      await send('Input.dispatchMouseEvent', {type, x: start, y, button: 'left', clickCount: 1});
+    await waitFor(atOffset(0x1015));
+    assert.ok(Number(await evaluate('siglusSurface.dataset.page')) > Number(pausedPage));
+    await verifyRenderedPages();
+    console.log('DOM Text clipboard SHA-256:', digest(clipboard));
+    break verification;
+  } else if (thumbnailOnly) {
     await click('#siglus-surface button[aria-label="New Game"]');
     await runUntil((current) => Number(current.page) >= 3);
     await waitForDialogueControls();
