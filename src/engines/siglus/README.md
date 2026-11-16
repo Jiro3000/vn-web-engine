@@ -85,6 +85,11 @@ The probe measured 87 checkpoints, including 29 with a speaker name,
 nine with multiple dialogue rows and two with ruby. All line counts
 matched. The largest measured baseline difference was 0.000104 game
 pixels. This measures baselines in the bundled font at those checkpoints.
+Set `SIGLUS_CAST_LAYERS_ONLY=1` to check the two-character formation at
+Chapter 07 offset `0x22888`. The temporary slot starts at `0x22476`.
+The probe checks numeric layer order, the sprite origins, and the
+dialogue hash before and after saving and reopening through title Load.
+
 Set `SIGLUS_CLIPBOARD_ONLY=1` to check DOM Text at the first ruby in the
 prologue. It drags across the base and following fragment, reads the
 browser's clipboard after the Copy shortcut, and compares the contents
@@ -432,7 +437,8 @@ are addressed.
 | Native dialogue rows, ruby, reveal and slide                               | Confirmed          | The route render audit and targeted text probes check these behaviors in the covered states.                                                                 |
 | Native glyph rasterization and wrapping across all branches and settings   | Needs verification | The alignment probe compares the two browser text modes at the opening. Exact Windows glyph coverage and wrapping outside those samples need comparison.     |
 | Cast formation and costume                                                 | Confirmed          | The opening diagnostic measures standing sprite origins and verifies the scripted costume resource. The Load probe compares the restored origin numerically. |
-| Cast stacking, relative pose offsets and animations                        | Difference         | The browser still approximates the remaining staging passes in `_bs_com`.                                                                                    |
+| Cast body layers in standard formations                                    | Confirmed          | The Chapter 07 probe checks script-derived layers 220 and 248 and verifies the same result after title Load.                                                 |
+| Relative pose offsets and cast animations                                  | Difference         | The browser still approximates the remaining staging passes in `_bs_com`.                                                                                    |
 | Chapter 06 mode-60 wipe                                                    | Confirmed          | The checkpoint probe verifies the authored parameters, four interior mask bytes, half-time alpha and the following page in both text modes.                  |
 | Chapter 01 line-effect GAN frame sequence and save phase                   | Confirmed          | The checkpoint compares pattern order, clock boundaries, loop, alpha, G00 bounds and saved phase.                                                            |
 | Chapter 01 line effect during stage transitions                            | Confirmed          | The checkpoint checks effect membership on both pages, wipe durations and the resulting layer opacity at half time.                                          |
@@ -473,6 +479,15 @@ The save reader restores the elapsed counter at `0x687ce2`.
 The browser implements the boundaries as discrete opacity changes
 for each G00 pattern, with a 1 µs tolerance for browser rounding.
 The Save and Load menus preserve the loop phase.
+
+Standing cast placement uses the original `$$bs_far_decide`,
+`$$bs_repeat_decide`, and `$$bs_wipe_ready01` routines. The initial
+body layers for `hm` and `hh` are 20 and 48 in
+`__sys_scdata_init:0x13ce` and `0x1596`. The medium-size branch at
+`_bs_com:0x89ee` adds 200, and `0x8b40` records the resulting layer
+used at `0xd4a2`. The native render-list comparator at `0x6143c0`
+sorts in ascending layer order. The browser maps those layers onto
+body-and-face groups while preserving each sprite's original slot origin.
 
 The original sets the effect's back-page `wipe_copy` flag at
 `_effect:0x0623` and clears the front object's flag at `_effect:0x0183`.

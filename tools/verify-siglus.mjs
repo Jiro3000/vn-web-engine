@@ -32,6 +32,7 @@ const openingOnly = process.env.SIGLUS_OPENING_ONLY === '1';
 const alignmentOnly = process.env.SIGLUS_ALIGNMENT_ONLY === '1';
 const typingOnly = process.env.SIGLUS_TYPING_ONLY === '1';
 const thumbnailOnly = process.env.SIGLUS_THUMBNAIL_ONLY === '1';
+const castLayersOnly = process.env.SIGLUS_CAST_LAYERS_ONLY === '1';
 const ganOnly = process.env.SIGLUS_GAN_ONLY === '1';
 const fanWipeOnly = process.env.SIGLUS_FAN_WIPE_ONLY === '1';
 const digest = (value) => createHash('sha256').update(value).digest('hex');
@@ -748,6 +749,7 @@ verification: try {
     thumbnailOnly ||
     fanWipeOnly ||
     ganOnly ||
+    castLayersOnly ||
     quickOnly ||
     autoOnly ||
     manageOnly ||
@@ -816,7 +818,55 @@ verification: try {
     }
     throw new Error('Siglus playback timed out');
   }
-  if (clipboardOnly) {
+  if (castLayersOnly) {
+    const chapter = [...scripts.keys()].find((name) => name.startsWith('07_'));
+    await click('#siglus-surface button[aria-label="New Game"]');
+    await runUntil((current) => Number(current.page) >= 3);
+    await selectSlot('save');
+    await waitFor('siglusSurface.dataset.savedPage');
+    await updateSaveFixture(`(slot) => ({
+      ...slot,
+      waitsForInput: false,
+      vm: {...slot.vm, frames: [{scene: ${JSON.stringify(chapter)}, pc: 0x22476, line: 1510,
+        stack: [], points: [], locals: [], declarations: []}]},
+    })`);
+    await reopenPlayer();
+    await click('#siglus-surface button[aria-label="Load Game"]');
+    await waitFor(slotLoop);
+    assert.equal(await chooseSlot('load', 0), 'confirm');
+    await waitFor(`siglusTags.at(-1)?.scene === ${JSON.stringify(chapter)} &&
+      siglusTags.at(-1)?.offset === 0x22904`);
+    const castPlacement = `Array.from(siglusSurface.querySelectorAll('[data-siglus-cast-body]'),
+      ({dataset, style}) => [dataset.siglusCastBody.slice(4, 6), Number(dataset.siglusCastLayer),
+        parseFloat(style.left), parseFloat(style.top)])`;
+    const order = await evaluate(castPlacement);
+    assert.deepEqual(order, [
+      ['hm', 220, 1320, 350],
+      ['hh', 248, 600, 350],
+    ]);
+    const dialogue = "siglusSurface.querySelector('[data-siglus-dialogue]').textContent";
+    const hash = scripts.get(chapter).tags.get(0x228f0).hash;
+    assert.equal(digest(await evaluate(dialogue)), hash);
+    const trace = await evaluate(`siglusTags.filter(({scene, offset}) =>
+      (scene === ${JSON.stringify(chapter)} && offset >= 0x22476 && offset <= 0x22904) ||
+      scene === '_bs_com')`);
+    compareTags(trace, scripts);
+    await verifyRenderedPages();
+    await waitForDialogueControls();
+    await selectSlot('save', 1);
+    await waitFor(asyncExpression(`${slotRecords()}.some(([slot]) => slot === 1)`));
+    await reopenPlayer();
+    await click('#siglus-surface button[aria-label="Load Game"]');
+    await waitFor(slotLoop);
+    assert.equal(await chooseSlot('load', 0, 1), 'confirm');
+    await waitFor('siglusSurface.dataset.loaded === "true"');
+    await waitForDialogueControls();
+    assert.deepEqual(await evaluate(castPlacement), order);
+    assert.equal(digest(await evaluate(dialogue)), hash);
+    assert.deepEqual(errors, [], 'Browser console errors');
+    console.log('Chapter 07 cast layers, including after title Load:', order);
+    break verification;
+  } else if (clipboardOnly) {
     const atOffset = (offset) =>
       `siglusTags.at(-1)?.scene === ${JSON.stringify(scene)} && siglusTags.at(-1)?.offset === ${offset}`;
     await runUntil(() => evaluate(atOffset(0xfc2)));

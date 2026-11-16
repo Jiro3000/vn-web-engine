@@ -97,6 +97,11 @@ type BackgroundPan = {
 };
 export type SiglusBackground = {name: string; pan?: BackgroundPan};
 
+export interface SiglusCastPlacement {
+  position: [x: number, y: number];
+  drawOrder?: [layer: number, objectId: number];
+}
+
 export interface SiglusFrameAction {
   id: number;
   type: string;
@@ -1431,14 +1436,14 @@ export class SiglusDisplay {
   }
 
   async showCast(
-    sprites: readonly {name: string; costume: string; position?: [number, number]}[],
+    sprites: readonly ({name: string; costume: string} & Partial<SiglusCastPlacement>)[],
     duration: number,
     publish = false,
     backdrop?: SiglusBackground,
   ): Promise<void> {
     await this.finishCastTransition();
     const characters = await Promise.all(
-      sprites.map(async ({name, costume, position}, index) => {
+      sprites.map(async ({name, costume, position, drawOrder}, index) => {
         const match = /^(bs\d_)?([a-z]{2})(\d\d)(\d\d)/i.exec(name);
         if (!match) throw new Error(`Invalid Siglus sprite ${name}`);
         const [, prefix = 'bs2_', actor, pose, expression] = match;
@@ -1457,11 +1462,16 @@ export class SiglusDisplay {
         const face = await this.spriteFace(useMedium ? 'bs2_' : prefix, actor!, pose!, expression!);
         const layer = document.createElement('div');
         layer.dataset.siglusCastBody = bodyName;
+        if (drawOrder) layer.dataset.siglusCastLayer = String(drawOrder[0]);
         layer.style.cssText = `position:absolute;left:${x}px;top:${y}px`;
         for (const graphic of [body, face])
           layer.append(this.node({...graphic, x: -graphic.centerX, y: -graphic.centerY}));
-        return layer;
+        return {layer, drawOrder: drawOrder ?? [0, index]};
       }),
+    ).then((layers) =>
+      layers
+        .sort((a, b) => a.drawOrder[0]! - b.drawOrder[0]! || a.drawOrder[1]! - b.drawOrder[1]!)
+        .map(({layer}) => layer),
     );
     this.signal.throwIfAborted();
     if (publish && this.pendingGans.size) {

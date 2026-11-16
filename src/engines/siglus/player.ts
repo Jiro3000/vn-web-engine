@@ -19,6 +19,7 @@ import {
   orderedObjects,
   type DrawObject,
   type SiglusBackground,
+  type SiglusCastPlacement,
   type SiglusFrameAction,
   type SiglusGanCheckpoint,
   type SiglusHistoryEntry,
@@ -719,7 +720,7 @@ export class SiglusPlayer {
       }
       if (
         name &&
-        /^\$(bg_(?:name|name_prev|wipe|set_ready|type|file_exist)|bs_(?:name|name_info|dress_info|wipe_set|exist_decide|size_info|posx_next|posy_next)|cha_dress)$/.test(
+        /^\$(bg_(?:name|name_prev|wipe|set_ready|type|file_exist)|bs_(?:name|name_info|dress_info|wipe_set|exist_decide|size_info|posx_next|posy_next|cha_num)|cha_dress|chara_layer_next)$/.test(
           name,
         )
       ) {
@@ -1485,15 +1486,15 @@ export class SiglusPlayer {
     );
     this.currentCast = resolved;
     this.currentCastCostumes = resolved.map(() => null);
-    const positions = resolved.some((name) => name && !name.startsWith('none'))
-      ? await this.castPositions(resolved)
+    const placements = resolved.some((name) => name && !name.startsWith('none'))
+      ? await this.castPlacements(resolved)
       : undefined;
     const sprites = [];
     for (const [slot, name] of resolved.entries()) {
       if (!name || name.startsWith('none')) continue;
       const costume = costumes?.[slot] ?? (await this.spriteCostume(name, slot, 0));
       this.currentCastCostumes[slot] = costume;
-      sprites.push({name, costume, position: positions?.[slot]});
+      sprites.push({name, costume, ...placements?.[slot]});
     }
     const backdrop = publish ? this.stagedBackground : undefined;
     await this.display.showCast(
@@ -1505,26 +1506,55 @@ export class SiglusPlayer {
     if (publish) this.stagedBackground = undefined;
   }
 
-  private async castPositions(names: readonly string[]): Promise<[number, number][] | undefined> {
+  private async castPlacements(
+    names: readonly string[],
+  ): Promise<SiglusCastPlacement[] | undefined> {
     const exportIndex = this.game.pack.commandNames.indexOf('$bs_disp_in');
     const scene = this.game.pack.sceneNames[this.game.pack.commandScenes[exportIndex * 2]!];
-    const command = '$$bs_wipe_ready01';
-    if (
-      !this.castAnchors.size ||
-      !scene ||
-      !this.game.pack.scene(scene).commandNames.includes(command)
-    )
-      return;
+    if (!this.castAnchors.size || !scene) return;
+    const commands = this.game.pack.scene(scene).commandNames;
+    const formation = '$$bs_wipe_ready01';
+    if (!commands.includes(formation)) return;
+    const identifyCast = ['$$bs_far_decide', '$$bs_repeat_decide'];
+    const hasLayerCommands = identifyCast.every((command) => commands.includes(command));
     for (let slot = 0; slot < 6; slot++) {
       const name = names[slot] || 'none';
       this.stageProperties.set('$bs_exist_decide.-1.' + slot, name.indexOf('none'));
       this.stageProperties.set('$bs_size_info.-1.' + slot, /^bs([123])_/.exec(name)?.[1] ?? '2');
     }
-    await this.vm.callScene(scene, command);
-    return names.map((_, slot) => [
-      Number(this.stageProperties.get('$bs_posx_next.-1.' + slot) ?? 0),
-      Number(this.stageProperties.get('$bs_posy_next.-1.' + slot) ?? 0),
-    ]);
+    if (hasLayerCommands) {
+      // Loading and face-only updates can supply a resolved cast independently
+      // of the scenario's pending slot names.
+      const previous = new Map<string, Value | undefined>();
+      for (let slot = 0; slot < 6; slot++) {
+        const key = '$bs_name.-1.' + slot;
+        previous.set(key, this.stageProperties.get(key));
+        this.stageProperties.set(key, names[slot] || 'none');
+      }
+      try {
+        for (const command of identifyCast) await this.vm.callScene(scene, command);
+      } finally {
+        for (const [key, name] of previous) {
+          if (name === undefined) this.stageProperties.delete(key);
+          else this.stageProperties.set(key, name);
+        }
+      }
+    }
+    await this.vm.callScene(scene, formation);
+    return names.map((_, slot) => {
+      const objectId = Number(this.stageProperties.get('$bs_cha_num.-1.' + slot) ?? 0);
+      const layer = this.stageProperties.get('$chara_layer_next.-1.' + objectId);
+      return {
+        position: [
+          Number(this.stageProperties.get('$bs_posx_next.-1.' + slot) ?? 0),
+          Number(this.stageProperties.get('$bs_posy_next.-1.' + slot) ?? 0),
+        ],
+        drawOrder:
+          hasLayerCommands && objectId && layer !== undefined
+            ? [Number(layer), objectId]
+            : undefined,
+      };
+    });
   }
 
   private async spriteCostume(name: string, slot: number, portrait: number): Promise<string> {
