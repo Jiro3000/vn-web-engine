@@ -85,6 +85,14 @@ The probe measured 87 checkpoints, including 29 with a speaker name,
 nine with multiple dialogue rows and two with ruby. All line counts
 matched. The largest measured baseline difference was 0.000104 game
 pixels. This measures baselines in the bundled font at those checkpoints.
+Set `SIGLUS_FAN_WIPE_ONLY=1` to check the chapter 06 transition at
+`0x291be`. The probe loads a temporary slot at `0x29112` through the
+original title menu. It checks the mode and arguments emitted by
+`_wipe:0x1930b`, the 1,000 ms duration, the four interior mask bytes,
+and the alpha produced at 500 ms. The synthetic alpha sample contains
+no game imagery. The following dialogue must match Scene.pck at
+`0x2938a` and appear over `bg12a`. The probe accepts both text modes.
+
 Set `SIGLUS_PAUSE_SAVE_ONLY=1` to save and load at `pp()` at `0x48c8`
 through the original slot menu and verify the restored prefix and following
 fragment by hash.
@@ -248,7 +256,9 @@ through the quick menu and through the message frame's two configured buttons,
 then opens Configuration from the message frame and assigns right-click to
 Hide. It verifies that a normal click reveals the same page. The probe checks
 that Return to Selection is disabled on the linear route and that Read Skip
-is disabled on an unread page.
+is disabled on an unread page. With `SIGLUS_TEXT_MODE=dom`, it checks that
+the dialogue stops receiving pointer hits while hidden and that revealing it
+restores the same text hash and pointer hits.
 
 Set `SIGLUS_READ_SKIP_ONLY=1` to verify the quick menu’s Read Skip. The probe
 reads ahead of a save, reopens the player in the same profile, loads the save,
@@ -383,36 +393,54 @@ below covers a particular subsystem. Final acceptance uses one build and
 two fresh profiles after the open gameplay and presentation differences
 are addressed.
 
-| Requirement                                                              | Status             | Evidence or open comparison                                                                                                                                  |
-| ------------------------------------------------------------------------ | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Clean Play, mandatory prologue, first title and New Game                 | Confirmed          | The opening probe exercised the original startup and title through chapter 01.                                                                               |
-| Reachable story, movies, ending, clearing and reopening                  | Confirmed          | The control runs executed the linear chapter 01–08 flow, five movies, clear flags and Music unlock.                                                          |
-| Title resources, hit areas and input                                     | Confirmed          | The opening and frame exit probes use the title buttons and check the original G00 cut bounds.                                                               |
-| Configuration, history, quick menu, message hide, Auto and Read Skip     | Confirmed          | The individual probes exercise the original calls, availability, input and state changes.                                                                    |
-| Configuration dialog presentation and complete font list                 | Difference         | The browser dialog geometry and rasterization are approximate. Font choices cover the bundled fonts.                                                         |
-| Return, Exit, message frame locks and Music                              | Confirmed          | The scripted confirmation, lock and Music probes cover their input, persistence and return paths.                                                            |
-| Ordinary, quick and automatic slots and confirmations                    | Confirmed          | The respective probes use the game's slot menu and restore dialogue, stage and continuation on their sampled paths.                                          |
-| Thumbnail content                                                        | Difference         | Browser thumbnails composite the graphical layers. They omit the dialogue and native capture effects.                                                        |
-| Post-load sound, flags, settings and clear state                         | Confirmed          | Slot, PCM, Configuration and control-route probes check the documented persistence and source-sample behavior.                                               |
-| Native dialogue rows, ruby, reveal and slide                             | Confirmed          | The route render audit and targeted text probes check these behaviors in the covered states.                                                                 |
-| Native glyph rasterization and wrapping across all branches and settings | Needs verification | The alignment probe compares the two browser text modes at the opening. Exact Windows glyph coverage and wrapping outside those samples need comparison.     |
-| Cast formation and costume                                               | Confirmed          | The opening diagnostic measures standing sprite origins and verifies the scripted costume resource. The Load probe compares the restored origin numerically. |
-| Cast stacking, relative pose offsets and animations                      | Difference         | The browser still approximates the remaining staging passes in `_bs_com`.                                                                                    |
-| Transition masks, effects and in-flight audio and animation behavior     | Difference         | The browser's documented approximations remain in the rendering and save paths.                                                                              |
-| DOM Text selection, click and focus                                      | Confirmed          | The opening probe checks drag and click. The history, menu and typing probes exercise input during continuation.                                             |
-| DOM Text clipboard contents, dictionary extension and hidden state       | Needs verification | Selection and message hiding were tested separately. Check DOM visibility through the hide and reveal cycle, copied base text and extension hit targets.     |
+| Requirement                                                                | Status             | Evidence or open comparison                                                                                                                                  |
+| -------------------------------------------------------------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Clean Play, mandatory prologue, first title and New Game                   | Confirmed          | The opening probe exercised the original startup and title through chapter 01.                                                                               |
+| Reachable story, movies, ending, clearing and reopening                    | Confirmed          | The control runs executed the linear chapter 01–08 flow, five movies, clear flags and Music unlock.                                                          |
+| Title resources, hit areas and input                                       | Confirmed          | The opening and frame exit probes use the title buttons and check the original G00 cut bounds.                                                               |
+| Configuration, history, quick menu, message hide, Auto and Read Skip       | Confirmed          | The individual probes exercise the original calls, availability, input and state changes.                                                                    |
+| Configuration dialog presentation and complete font list                   | Difference         | The browser dialog geometry and rasterization are approximate. Font choices cover the bundled fonts.                                                         |
+| Return, Exit, message frame locks and Music                                | Confirmed          | The scripted confirmation, lock and Music probes cover their input, persistence and return paths.                                                            |
+| Ordinary, quick and automatic slots and confirmations                      | Confirmed          | The respective probes use the game's slot menu and restore dialogue, stage and continuation on their sampled paths.                                          |
+| Thumbnail content                                                          | Difference         | Browser thumbnails composite the graphical layers. They omit the dialogue and native capture effects.                                                        |
+| Post-load sound, flags, settings and clear state                           | Confirmed          | Slot, PCM, Configuration and control-route probes check the documented persistence and source-sample behavior.                                               |
+| Native dialogue rows, ruby, reveal and slide                               | Confirmed          | The route render audit and targeted text probes check these behaviors in the covered states.                                                                 |
+| Native glyph rasterization and wrapping across all branches and settings   | Needs verification | The alignment probe compares the two browser text modes at the opening. Exact Windows glyph coverage and wrapping outside those samples need comparison.     |
+| Cast formation and costume                                                 | Confirmed          | The opening diagnostic measures standing sprite origins and verifies the scripted costume resource. The Load probe compares the restored origin numerically. |
+| Cast stacking, relative pose offsets and animations                        | Difference         | The browser still approximates the remaining staging passes in `_bs_com`.                                                                                    |
+| Chapter 06 mode-60 wipe                                                    | Confirmed          | The checkpoint probe verifies the authored parameters, four interior mask bytes, half-time alpha and the following page in both text modes.                  |
+| Other transition masks, effects and in-flight audio and animation behavior | Difference         | The browser's documented approximations remain in the rendering and save paths.                                                                              |
+| DOM Text selection, click and focus                                        | Confirmed          | The opening probe checks drag and click. The history, menu and typing probes exercise input during continuation.                                             |
+| DOM Text hiding and restoration                                            | Confirmed          | The right-click probe checks pointer hits before hiding and after revealing the same page, and checks that the hidden text stops receiving hits.             |
+| DOM Text clipboard contents and dictionary extension                       | Needs verification | Check copied base text and extension hit targets.                                                                                                            |
 
-The next transition discrepancy is chapter 06 at `0x291be`. The call
-`$wipe(121)` selects native wipe mode 60 and 1,000 ms
-(`_wipe:0x8ba4` and `0x8be4`). The embedded PE dispatches these wipe
-commands through `0x54cfe7`, and mode 60 selects the mask constructor at
-`0x61b3a4`. Its generator at `0x646da0` builds a viewport-sized mask
-using four successive 64-value bands and the centers calculated by
-`0x646ab0`. The browser consumes the duration in a generic layer opacity
-fade. A short check can start immediately before the call and sample
-mask values in each sector and layer progress at fixed elapsed times.
+The chapter 06 call `$wipe(121)` runs the original command in
+`_wipe`. It selects native wipe mode 60 and 1,000 ms
+(`0x8ba4` and `0x8be4`). The embedded PE dispatches the global wipe
+command through `0x54cfe7`. Mode 60 selects the mask constructor at
+`0x61b3a4`. The mask generator at `0x646da0` uses four successive
+64-value bands and the integer centers calculated by `0x646ab0`.
+The browser generates the same fan geometry. Its scanline edge
+rounding still needs a pixel-level comparison with `0x64e8f0`.
+
+The pixel shader at file offset `0x7bb8ac` and its `FXLC` block
+compute the incoming alpha from mask value `m`, normalized time `p`,
+and softness `s`. The coefficient is `k = 255 - 254 × s`, and the
+alpha multiplier is `clamp(k × m + (k + 1) × p - k, 0, 1)`. The
+embedded renderer converts 16.16 time to a fraction at `0x61c7c1`.
+The browser applies this transfer to the incoming layer when the wipe
+is active. The preshader operand and opcode decoding follows the
+[MojoShader decoder](https://github.com/icculus/mojoshader/blob/main/mojoshader.c#L2442).
 
 ## Known differences
+
+Chapter 01 calls `$ef_line_start1(0, 200, 0)` at `0x15396`.
+The original `_effect` routine issues `load_gan` and `start_gan(0, 1)`
+at `0x04ed` and `0x0557`. The selected `ef_line01.gan` contains
+five frames with G00 patterns 0–4 and durations of 20 in the authored
+units. The browser currently displays one static pattern. A short
+Chapter 01 check can verify the rendered pattern sequence, its timing
+and alpha numerically.
 
 - The browser uses fractional inherited opacity. The native renderer
   divides multiplied parent and child alpha by 255 with integer truncation

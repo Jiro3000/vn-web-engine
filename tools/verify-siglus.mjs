@@ -30,6 +30,7 @@ const freshConfiguration = configOnly && process.env.SIGLUS_CONFIG_FRESH === '1'
 const openingOnly = process.env.SIGLUS_OPENING_ONLY === '1';
 const alignmentOnly = process.env.SIGLUS_ALIGNMENT_ONLY === '1';
 const typingOnly = process.env.SIGLUS_TYPING_ONLY === '1';
+const fanWipeOnly = process.env.SIGLUS_FAN_WIPE_ONLY === '1';
 const digest = (value) => createHash('sha256').update(value).digest('hex');
 if (!folder || !browser || !disassemblyDirectory)
   throw new Error('Usage: node tools/verify-siglus.mjs GAME_FOLDER CHROMIUM DISASSEMBLY_DIRECTORY');
@@ -697,6 +698,33 @@ verification: try {
     }
   })())`;
   const asyncExpression = (expression) => `(async () => (${expression}))()`;
+  async function updateSaveFixture(update) {
+    await evaluate(`(async () => {
+      const {name} = (await indexedDB.databases()).find(({name}) =>
+        name?.startsWith('vn-runtime:["siglus:') && name.endsWith(',"slots"]'));
+      const open = indexedDB.open(name);
+      const db = await new Promise((resolve, reject) => {
+        open.onsuccess = () => resolve(open.result);
+        open.onerror = () => reject(open.error);
+      });
+      try {
+        await new Promise((resolve, reject) => {
+          const transaction = db.transaction('records', 'readwrite');
+          transaction.oncomplete = resolve;
+          transaction.onabort = () => reject(transaction.error);
+          const records = transaction.objectStore('records');
+          const record = records.get('saves:0');
+          record.onsuccess = () => {
+            const slot = JSON.parse(new TextDecoder().decode(record.result));
+            const updated = (${update})(slot);
+            records.put(new TextEncoder().encode(JSON.stringify(updated)), 'saves:0');
+          };
+        });
+      } finally {
+        db.close();
+      }
+    })()`);
+  }
   async function reopenPlayer() {
     const previousTab = targetId;
     ({targetId} = await cdp.command('Target.createTarget', {url: 'about:blank'}));
@@ -714,6 +742,7 @@ verification: try {
     pauseSaveOnly ||
     loadOnly ||
     pcmLoadOnly ||
+    fanWipeOnly ||
     quickOnly ||
     autoOnly ||
     manageOnly ||
@@ -782,7 +811,104 @@ verification: try {
     }
     throw new Error('Siglus playback timed out');
   }
-  if (alignmentOnly) {
+  if (fanWipeOnly) {
+    const chapter = [...scripts.keys()].find((name) => name.startsWith('06_'));
+    await click('#siglus-surface button[aria-label="New Game"]');
+    await runUntil((current) => Number(current.page) >= 3);
+    await selectSlot('save');
+    await waitFor('siglusSurface.dataset.savedPage');
+    // Use a checkpoint in the disposable profile at the first stack-clean
+    // instruction before the chapter's original wipe. This leaves the
+    // installation and the user's slots outside the test.
+    await updateSaveFixture(`(slot) => ({
+      ...slot,
+      waitsForInput: false,
+      vm: {...slot.vm, frames: [{scene: ${JSON.stringify(chapter)}, pc: 0x29112, line: 1410,
+        stack: [], points: [], locals: [], declarations: []}]},
+    })`);
+    await reopenPlayer();
+    await click('#siglus-surface button[aria-label="Load Game"]');
+    await waitFor(slotLoop);
+    assert.equal(await chooseSlot('load', 0), 'confirm');
+    const active = await waitFor(`(() => {
+      const mask = siglusSurface.querySelector('mask[id^="siglus-wipe-mask-"]');
+      if (!mask) return false;
+      const layer = [...siglusSurface.querySelectorAll('div')].find((node) =>
+        node.style.maskImage.includes(mask.id));
+      const animation = layer?.getAnimations().find(({effect}) => effect.target === layer);
+      if (!animation) return false;
+      animation.pause();
+      window.siglusFanWipe = {layer, animation, mask, svg: mask.parentElement};
+      return {duration: animation.effect.getTiming().duration, applied: getComputedStyle(layer).maskImage};
+    })()`);
+    assert.equal(active.duration, 1000);
+    assert.match(active.applied, /siglus-wipe-mask-/);
+    const proof = await evaluate(`(async () => {
+      const {animation, svg, mask} = siglusFanWipe;
+      const alpha = svg.querySelector('feFuncA');
+      const source = svg.querySelector('image');
+      const image = new Image();
+      image.src = source.getAttribute('href');
+      await image.decode();
+      const points = [[1200, 380], [1200, 700], [720, 700], [720, 380]];
+      const canvas = document.createElement('canvas');
+      canvas.width = image.width;
+      canvas.height = image.height;
+      const context = canvas.getContext('2d');
+      context.drawImage(image, 0, 0);
+      const sample = () => points.map(([x, y]) => context.getImageData(x, y, 1, 1).data[3]);
+      const maskValues = sample();
+      animation.currentTime = 500;
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const slope = Number(alpha.getAttribute('slope'));
+      const intercept = Number(alpha.getAttribute('intercept'));
+      // Apply the live mask and its filter to a synthetic white rectangle.
+      const fixture = svg.cloneNode(true);
+      fixture.removeAttribute('style');
+      fixture.setAttribute('width', String(canvas.width));
+      fixture.setAttribute('height', String(canvas.height));
+      const rectangle = document.createElementNS(fixture.namespaceURI, 'rect');
+      rectangle.setAttribute('width', String(canvas.width));
+      rectangle.setAttribute('height', String(canvas.height));
+      rectangle.setAttribute('fill', 'white');
+      rectangle.setAttribute('mask', 'url(#' + mask.id + ')');
+      fixture.append(rectangle);
+      const url = URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(fixture)],
+        {type: 'image/svg+xml'}));
+      try {
+        image.src = url;
+        await image.decode();
+        context.clearRect(0, 0, canvas.width, canvas.height);
+        context.drawImage(image, 0, 0);
+        return {maskValues, appliedValues: sample(), slope, intercept};
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+    })()`);
+    for (const [i, expected] of [215, 167, 87, 39].entries())
+      assert.ok(Math.abs(proof.maskValues[i] - expected) <= 1, JSON.stringify(proof));
+    assert.equal(proof.slope, 255);
+    assert.equal(proof.intercept, -127);
+    assert.deepEqual(proof.appliedValues, [255, 255, 0, 0]);
+    await evaluate('siglusFanWipe.animation.play()');
+    await waitFor("!siglusSurface.querySelector('mask[id^=siglus-wipe-mask-]')");
+    await waitFor(`siglusSurface.dataset.page && siglusTags.at(-1)?.scene === ${JSON.stringify(chapter)}
+      && siglusTags.at(-1)?.offset === 0x2939e`);
+    const pageAfter = await evaluate(
+      "siglusSurface.querySelector('[data-siglus-dialogue]').textContent",
+    );
+    assert.equal(digest(pageAfter), scripts.get(chapter).tags.get(0x2938a).hash);
+    assert.equal(await evaluate('siglusSurface.dataset.background'), 'bg12a');
+    await verifyRenderedPages();
+    const trace = await evaluate(`siglusTags.filter(({scene, offset}) => scene === '_wipe' ||
+      (scene === ${JSON.stringify(chapter)} && offset >= 0x29112 && offset <= 0x2939e))`);
+    compareTags(trace, scripts);
+    const command = trace.find(({scene, path}) => scene === '_wipe' && path?.join('.') === '7');
+    assert.deepEqual(command?.args.slice(0, 4), [60, 1000, 0, [0, 1, 0, 0, 0, 0, 0, 0]]);
+    console.log('Chapter 06 mode-60 mask lanes and half-time alpha:', proof);
+    assert.deepEqual(errors, [], 'Browser console errors');
+    break verification;
+  } else if (alignmentOnly) {
     assert.ok(!domRoute, 'The alignment probe must start in Native mode');
     const measureBaselines = () =>
       evaluate(`(() => {
@@ -1513,11 +1639,29 @@ verification: try {
     await clickScriptMenu(configLoop, 960, 540, 'right');
     await waitForDialogueControls();
     const dialogue = "siglusSurface.querySelector('[data-siglus-dialogue]')";
+    const textBeforeHide = digest(await evaluate(`${dialogue}.textContent`));
+    const hit = domRoute
+      ? await evaluate(`(() => {
+        const text = ${dialogue};
+        const range = document.createRange();
+        range.selectNodeContents(text);
+        for (const rect of range.getClientRects()) {
+          const point = [(rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2];
+          if (text.contains(document.elementFromPoint(...point))) return point;
+        }
+        return null;
+      })()`)
+      : undefined;
+    if (domRoute) assert.ok(hit, 'The visible DOM dialogue accepts pointer hits');
+    const hitDialogue = `${dialogue}.contains(document.elementFromPoint(...${JSON.stringify(hit)}))`;
     await clickScriptMenu(undefined, 960, 540, 'right');
     await waitFor(`getComputedStyle(${dialogue}).visibility === 'hidden'`);
+    if (hit) assert.equal(await evaluate(hitDialogue), false);
     await clickStage();
     await waitFor(`getComputedStyle(${dialogue}).visibility === 'visible'`);
     assert.equal(await evaluate('siglusSurface.dataset.page'), stopped);
+    assert.equal(digest(await evaluate(`${dialogue}.textContent`)), textBeforeHide);
+    if (hit) assert.equal(await evaluate(hitDialogue), true);
     const tags = await evaluate(`siglusTags.filter((tag) => tag.scene === '${scene}')`);
     compareTags(tags, scripts, {compareSourceLine: false});
     console.log(
@@ -1869,32 +2013,13 @@ verification: try {
     };
     assert.equal(saved.bgmPlayback?.name, 'bgm02');
     const preparedBgm = {name: saved.bgmPlayback.name, loop: true, level: 173, ready: true};
-    await evaluate(`(async () => {
-      const {name} = (await indexedDB.databases()).find(({name}) =>
-        name?.startsWith('vn-runtime:["siglus:') && name.endsWith(',"slots"]'));
-      const open = indexedDB.open(name);
-      const db = await new Promise((resolve, reject) => {
-        open.onsuccess = () => resolve(open.result);
-        open.onerror = () => reject(open.error);
-      });
-      try {
-        await new Promise((resolve, reject) => {
-          const transaction = db.transaction('records', 'readwrite');
-          transaction.oncomplete = resolve;
-          transaction.onabort = () => reject(transaction.error);
-          const records = transaction.objectStore('records');
-          const record = records.get('saves:0');
-          record.onsuccess = () => {
-            const data = JSON.parse(new TextDecoder().decode(record.result));
-            data.pcmPlayback = ${JSON.stringify([...pcmPlayback, pendingPcm])};
-            data.bgmPlayback = ${JSON.stringify(preparedBgm)};
-            data.bgmLevel = ${preparedBgm.level};
-            data.voiceLevel = 128;
-            records.put(new TextEncoder().encode(JSON.stringify(data)), 'saves:0');
-          };
-        });
-      } finally { db.close(); }
-    })()`);
+    await updateSaveFixture(`(data) => ({
+      ...data,
+      pcmPlayback: ${JSON.stringify([...pcmPlayback, pendingPcm])},
+      bgmPlayback: ${JSON.stringify(preparedBgm)},
+      bgmLevel: ${preparedBgm.level},
+      voiceLevel: 128,
+    })`);
     await reopenPlayer();
     await click('#siglus-surface button[aria-label="Load Game"]');
     await waitFor(slotLoop);

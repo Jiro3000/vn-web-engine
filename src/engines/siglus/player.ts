@@ -22,8 +22,10 @@ import {
   type SiglusHistoryEntry,
 } from './display.js';
 import {eventEasing, timetable} from './timing.js';
+import type {FanWipe} from './wipe.js';
 import {
   SiglusVm,
+  type Argument,
   type SiglusCheckpoint,
   type SiglusCommand,
   type SiglusTag,
@@ -153,6 +155,7 @@ interface PlayerSave {
     load: boolean;
     controlSkip: boolean;
     skipUnread?: boolean;
+    messageAnimationsOff?: boolean;
   };
 }
 
@@ -179,6 +182,7 @@ export class SiglusPlayer {
   private readonly globalExtraSwitches = new Map<number, boolean>();
   private readonly pendingFrameWatchers = new Set<(typeof messageFrameWatchers)[number]>();
   private skipUnreadOverride?: boolean;
+  private scriptMessageAnimationsDisabled = false;
   private pageReadFlags: {scene: string; flag: number}[] = [];
   private readonly readFlags = new Map<string, Set<number>>();
   private pageAlreadyRead = false;
@@ -976,7 +980,7 @@ export class SiglusPlayer {
     if (queued.length) await this.renderMessageObjects();
   }
 
-  private async runOriginalCommand(command: string, parameters: Value[] = []): Promise<void> {
+  private async runOriginalCommand(command: string, parameters: Argument[] = []): Promise<void> {
     const index = this.game.pack.commandNames.indexOf(command);
     const scene = this.game.pack.sceneNames[this.game.pack.commandScenes[index * 2]!];
     if (scene) await this.vm.callScene(scene, command, parameters);
@@ -1095,6 +1099,7 @@ export class SiglusPlayer {
         load: this.loadEnabled,
         controlSkip: this.skipAllowed,
         skipUnread: this.skipUnreadOverride,
+        messageAnimationsOff: this.scriptMessageAnimationsDisabled || undefined,
       },
     };
   }
@@ -1221,6 +1226,7 @@ export class SiglusPlayer {
     this.loadEnabled = save.controls?.load ?? true;
     this.skipAllowed = save.controls?.controlSkip ?? true;
     this.skipUnreadOverride = save.controls?.skipUnread;
+    this.scriptMessageAnimationsDisabled = save.controls?.messageAnimationsOff ?? false;
     this.audio.resetPlayback();
     this.display.endEffect();
     this.display.cinema(0);
@@ -1335,13 +1341,18 @@ export class SiglusPlayer {
     return this.skipping || this.systemOption('NO_WIPE_ANIME_ONOFF') ? 0 : ms;
   }
 
-  private async wipe(ms: number): Promise<void> {
+  private async wipe(ms: number, fan?: FanWipe): Promise<void> {
     const back = this.objects[1]!;
     this.display.closeMessage();
     this.pageVoices = [];
     this.currentCast = [];
     this.currentCastCostumes = [];
-    await this.display.show(orderedObjects(back), this.wipeDuration(ms), (id) => this.choose(id));
+    await this.display.show(
+      orderedObjects(back),
+      this.wipeDuration(ms),
+      (id) => this.choose(id),
+      fan,
+    );
     this.objects[0] = this.copyObjects(back);
     this.objectsDirty = false;
   }
@@ -1707,7 +1718,8 @@ export class SiglusPlayer {
         await this.delay(n(0), true);
         break;
       case '$wipe':
-        await this.wipe(fadeTimes[n(0)] ?? (n(0) === 121 ? 1000 : 0));
+        if (n(0) === 121) await this.runOriginalCommand('$wipe', [...args]);
+        else await this.wipe(fadeTimes[n(0)] ?? 0);
         break;
       default:
         return undefined;
@@ -1823,7 +1835,14 @@ export class SiglusPlayer {
           this.inputSampled = false;
           break;
         case 7:
-          await this.wipe(n(1));
+          if (n(0) === 60 && Array.isArray(args[3])) {
+            const [softness = 0, quadrant = 0, reverse = 0] = args[3];
+            await this.wipe(n(1), {
+              softness: softness < 0 || softness >= 8 ? 1 : 1 - 2 ** -softness,
+              quadrant: quadrant >= 0 && quadrant < 4 ? quadrant : 0,
+              reverse: Boolean(reverse),
+            });
+          } else await this.wipe(n(1));
           break;
         case 8:
           this.display.selectMessageWindow(n(0));
@@ -1884,7 +1903,11 @@ export class SiglusPlayer {
         case 95:
           break; // Subsequent message blocks share the active message window.
         case 120:
-          this.display.setMessageSlide(this.systemOption('NO_MWND_ANIME_ONOFF') ? 0 : n(0));
+          this.display.setMessageSlide(
+            this.scriptMessageAnimationsDisabled || this.systemOption('NO_MWND_ANIME_ONOFF')
+              ? 0
+              : n(0),
+          );
           break;
         case 122:
           this.display.setMessageSlide();
@@ -2362,6 +2385,10 @@ export class SiglusPlayer {
     }
     if (root === 64 && (member === 2 || member === 5)) {
       this.systemSkipDisabled = member === 2;
+      return 0;
+    }
+    if (root === 64 && member === 3) {
+      this.scriptMessageAnimationsDisabled = Boolean(n(0));
       return 0;
     }
     if (root === 20 && (member === 2 || member === 3)) return this.movie(s(0), member === 3);

@@ -4,6 +4,10 @@ import {readSfntFontMetadata} from '../../formats/sfnt.js';
 import {G00Image, type G00Frame} from '../../formats/siglus/g00.js';
 import {siglusFontShadow, type SiglusFontChoice} from './configuration.js';
 import {eventEasing} from './timing.js';
+import {fanWipeMask, type FanWipe} from './wipe.js';
+
+const svgNamespace = 'http://www.w3.org/2000/svg';
+let nextWipeMaskId = 0;
 
 export interface SiglusHistoryEntry {
   name: string;
@@ -1000,9 +1004,18 @@ export class SiglusDisplay {
     objects: Iterable<DrawObject>,
     duration: number,
     button: (target: NonNullable<DrawObject['button']>) => void,
+    fan?: FanWipe,
   ): Promise<void> {
     const next = await this.drawObjects(objects, button);
-    await this.replaceLayer(next, duration);
+    if (fan && duration > 0) this.layers.append(this.cast);
+    try {
+      await this.replaceLayer(next, duration, fan);
+    } finally {
+      if (fan && duration > 0) {
+        this.cast.inert = false;
+        this.layers.after(this.cast);
+      }
+    }
     this.objectLayer = next;
     this.cast.replaceChildren();
     delete this.root.dataset.cast;
@@ -1276,18 +1289,88 @@ export class SiglusDisplay {
     return true;
   }
 
-  private async replaceLayer(next: HTMLElement, duration: number): Promise<void> {
+  private async replaceLayer(next: HTMLElement, duration: number, fan?: FanWipe): Promise<void> {
     this.signal.throwIfAborted();
     const previous = [...this.layers.children];
     for (const child of previous) (child as HTMLElement).inert = true;
     this.layers.append(next);
     this.background = next;
     if (duration > 0) {
-      this.wipe = next.animate({opacity: [0, 1]}, {duration});
-      await this.wipe.finished;
-      this.wipe = undefined;
+      if (fan) await this.animateFanWipe(next, duration, fan);
+      else {
+        this.wipe = next.animate({opacity: [0, 1]}, {duration});
+        await this.wipe.finished;
+        this.wipe = undefined;
+      }
     }
     for (const child of previous) child.remove();
+  }
+
+  private async animateFanWipe(layer: HTMLElement, duration: number, fan: FanWipe): Promise<void> {
+    const {width, height} = this;
+    const values = fanWipeMask(width, height, fan);
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext('2d')!;
+    const pixels = context.createImageData(width, height);
+    for (let index = 0; index < values.length; index++) {
+      pixels.data[index * 4 + 3] = values[index]!;
+    }
+    context.putImageData(pixels, 0, 0);
+    const svg = document.createElementNS(svgNamespace, 'svg');
+    svg.style.cssText = 'position:absolute;width:0;height:0;pointer-events:none';
+    const mask = document.createElementNS(svgNamespace, 'mask');
+    const filter = document.createElementNS(svgNamespace, 'filter');
+    const image = document.createElementNS(svgNamespace, 'image');
+    const transfer = document.createElementNS(svgNamespace, 'feComponentTransfer');
+    const alpha = document.createElementNS(svgNamespace, 'feFuncA');
+    mask.id = 'siglus-wipe-mask-' + nextWipeMaskId++;
+    filter.id = mask.id + '-filter';
+    mask.setAttribute('maskUnits', 'userSpaceOnUse');
+    mask.setAttribute('mask-type', 'alpha');
+    filter.setAttribute('filterUnits', 'userSpaceOnUse');
+    for (const node of [mask, filter, image]) {
+      node.setAttribute('x', '0');
+      node.setAttribute('y', '0');
+      node.setAttribute('width', String(width));
+      node.setAttribute('height', String(height));
+    }
+    alpha.setAttribute('type', 'linear');
+    // The embedded tex2_mask preshader derives the coefficient and offset
+    // from the softness and 16.16 time progress.
+    const slope = 255 - 254 * fan.softness;
+    alpha.setAttribute('slope', String(slope));
+    image.setAttribute('href', canvas.toDataURL());
+    image.setAttribute('filter', `url(#${filter.id})`);
+    transfer.append(alpha);
+    filter.append(transfer);
+    mask.append(image);
+    svg.append(filter, mask);
+    this.stage.append(svg);
+    layer.style.backgroundColor = 'black';
+    layer.style.maskImage = `url(#${mask.id})`;
+    const animation = layer.animate([], {duration, fill: 'both'});
+    this.wipe = animation;
+    const stop = () => animation.cancel();
+    this.signal.addEventListener('abort', stop, {once: true});
+    let frame = 0;
+    const render = () => {
+      const time = Number(animation.currentTime ?? 0);
+      const progress = Math.min(65536, Math.floor((time * 65536) / duration)) / 65536;
+      alpha.setAttribute('intercept', String((slope + 1) * progress - slope));
+      frame = requestAnimationFrame(render);
+    };
+    render();
+    try {
+      await animation.finished;
+    } finally {
+      cancelAnimationFrame(frame);
+      this.signal.removeEventListener('abort', stop);
+      layer.style.removeProperty('mask-image');
+      svg.remove();
+      this.wipe = undefined;
+    }
   }
 
   async setBackground(
