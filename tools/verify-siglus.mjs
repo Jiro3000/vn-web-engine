@@ -33,6 +33,7 @@ const alignmentOnly = process.env.SIGLUS_ALIGNMENT_ONLY === '1';
 const typingOnly = process.env.SIGLUS_TYPING_ONLY === '1';
 const thumbnailOnly = process.env.SIGLUS_THUMBNAIL_ONLY === '1';
 const castLayersOnly = process.env.SIGLUS_CAST_LAYERS_ONLY === '1';
+const recollectOnly = process.env.SIGLUS_RECOLLECT_ONLY === '1';
 const ganOnly = process.env.SIGLUS_GAN_ONLY === '1';
 const fanWipeOnly = process.env.SIGLUS_FAN_WIPE_ONLY === '1';
 const digest = (value) => createHash('sha256').update(value).digest('hex');
@@ -749,6 +750,7 @@ verification: try {
     thumbnailOnly ||
     fanWipeOnly ||
     ganOnly ||
+    recollectOnly ||
     castLayersOnly ||
     quickOnly ||
     autoOnly ||
@@ -1096,6 +1098,135 @@ verification: try {
       'PNG SHA-256:',
       digest(Buffer.from(visible.thumbnail.split(',', 2)[1], 'base64')),
     );
+    break verification;
+  } else if (recollectOnly) {
+    const {SiglusOmv} = await import('../dist/formats/siglus/omv.js');
+    const referenceMovie = async (name) => {
+      const file = 'mov/' + name + '.omv';
+      const bytes = await readFile(join(resolve(folder), 'StartData', 'GameData', file)).catch(
+        () => readFile(join(resolve(folder), file)),
+      );
+      return new SiglusOmv(bytes);
+    };
+    const observeMovie = () => evaluate(`(() => {
+      const paint = CanvasRenderingContext2D.prototype.putImageData;
+      const animate = Element.prototype.animate;
+      window.recollectFrames = {};
+      window.recollectPaints = 0;
+      window.recollectWipes = [];
+      const find = (layer) => layer?.querySelector('[data-siglus-movie-effect]');
+      CanvasRenderingContext2D.prototype.putImageData = function (image, ...args) {
+        const name = this.canvas.dataset.siglusMovieEffect;
+        if (name) recollectPaints++;
+        if (name && !(name in recollectFrames)) {
+          recollectFrames[name] = null;
+          crypto.subtle.digest('SHA-256', image.data).then((digest) => {
+            recollectFrames[name] = Array.from(new Uint8Array(digest), (b) =>
+              b.toString(16).padStart(2, '0')).join('');
+          });
+        }
+        return paint.call(this, image, ...args);
+      };
+      Element.prototype.animate = function (keyframes, timing) {
+        const incoming = find(this);
+        const outgoing = find(this.previousElementSibling);
+        if ((incoming || outgoing) && keyframes?.opacity?.[0] === 0)
+          recollectWipes.push([incoming?.dataset.siglusMovieEffect ?? null,
+            outgoing?.dataset.siglusMovieEffect ?? null, timing.duration]);
+        return animate.call(this, keyframes, timing);
+      };
+    })()`);
+    await click('#siglus-surface button[aria-label="New Game"]');
+    await runUntil((current) => Number(current.page) >= 3);
+    await selectSlot('save');
+    await waitFor('siglusSurface.dataset.savedPage');
+    const slotAt = (slot) =>
+      `(async () => (${slotRecords()}).find(([id]) => id === ${slot})?.[1])()`;
+    const at = (offset) =>
+      `siglusTags.at(-1)?.scene === ${JSON.stringify(scene)} && siglusTags.at(-1)?.offset === ${offset}`;
+    const movieCanvas = "siglusSurface.querySelector('[data-siglus-movie-effect]')";
+    const dialogue = "siglusSurface.querySelector('[data-siglus-dialogue]').textContent";
+    const openSlot = async (id) => {
+      await reopenPlayer();
+      await observeMovie();
+      await click('#siglus-surface button[aria-label="Load Game"]');
+      await waitFor(slotLoop);
+      assert.equal(await chooseSlot('load', 0, id), 'confirm');
+      await waitFor('siglusSurface.dataset.loaded === "true"');
+    };
+    const geometry = () => evaluate(`(() => {
+      const {width, height, dataset, style} = ${movieCanvas};
+      return [dataset.siglusMovieEffect, Number(dataset.siglusMovieEffectSlot),
+        width, height, parseFloat(style.width), parseFloat(style.height)];
+    })()`);
+    for (const fixture of [
+      {name: 'ef_rec_white00', color: '白', pc: 0x4451, line: 315, call: 0x4485,
+        first: 0x456b, text: 0x4557, next: [0x45be, 0x4611], last: 0x47cf, finalText: 0x47bb, slot: 1},
+      {name: 'ef_rec_black00', color: '黒', pc: 0x4dc63, line: 3470, call: 0x4dc97,
+        first: 0x4de05, text: 0x4ddf1, next: [0x4dee0], last: 0x4e075, finalText: 0x4e061, slot: 2},
+    ]) {
+      const {name, color, pc, line, call, first, text, next, last, finalText, slot} = fixture;
+      const reference = await referenceMovie(name);
+      const firstFrame = digest(reference.frame(0));
+      const expectedGeometry = [name, 210, 1024, 512, 1920, 1079.81];
+      await updateSaveFixture(`(slot) => ({
+        ...slot, waitsForInput: false, movieEffects: undefined,
+        vm: {...slot.vm, frames: [{scene: ${JSON.stringify(scene)}, pc: ${pc}, line: ${line},
+          stack: [], points: [], locals: [], declarations: []}]},
+      })`);
+      await openSlot(0);
+      let hash;
+      try {
+        hash = await waitFor(`recollectFrames[${JSON.stringify(name)}]`, 8000);
+      } catch (error) {
+        console.log('Recollection checkpoint state:', await evaluate(`({
+          tags: siglusTags.slice(-10).map(({scene, offset}) => [scene, offset.toString(16)]),
+          status: document.querySelector('#status')?.textContent,
+          dataset: {...siglusSurface.dataset},
+          frames: recollectFrames, wipes: recollectWipes,
+          secure: isSecureContext,
+        })`));
+        throw error;
+      }
+      assert.equal(hash, firstFrame);
+      await waitFor(at(first));
+      const bounds = await geometry();
+      assert.deepEqual(bounds.slice(0, 5), expectedGeometry.slice(0, 5));
+      assert.ok(Math.abs(bounds[5] - expectedGeometry[5]) < 0.02);
+      assert.equal(digest(await evaluate(dialogue)), scripts.get(scene).tags.get(text).hash);
+      const atFirst = await evaluate(`siglusTags.filter(({scene, offset}) =>
+        scene === ${JSON.stringify(scene)} && offset >= ${pc} && offset <= ${first})`);
+      compareTags(atFirst, scripts);
+      assert.deepEqual(atFirst.find(({offset}) => offset === call)?.args, [color, 210]);
+      await waitForDialogueControls();
+      await selectSlot('save', slot);
+      const saved = await waitFor(slotAt(slot));
+      assert.equal(saved.movieEffects.length, 1);
+      const checkpoint = saved.movieEffects[0];
+      assert.deepEqual({...checkpoint, elapsed: 0}, {
+        slot: 210, name, layer: 5000, loop: true, elapsed: 0, scale: [1875, 2109],
+      });
+      const index = Math.floor(checkpoint.elapsed / reference.frameTime);
+      assert.ok(index > 0 && index < reference.frames, 'Save must retain a nonzero movie phase');
+      const paints = await evaluate('recollectPaints');
+      await clickScriptMenu(slotLoop, 1540, 1023);
+      await waitForDialogueControls();
+      await waitFor(`recollectPaints > ${paints} + 2`);
+      await openSlot(slot);
+      const restored = await waitFor(`recollectFrames[${JSON.stringify(name)}]`);
+      assert.equal(restored, digest(reference.frame(index)));
+      assert.deepEqual(await geometry(), bounds);
+      assert.equal(digest(await evaluate(dialogue)), scripts.get(scene).tags.get(text).hash);
+      for (const offset of [...next, last]) {
+        await clickStage();
+        await waitFor(at(offset));
+      }
+      assert.equal(digest(await evaluate(dialogue)), scripts.get(scene).tags.get(finalText).hash);
+      assert.equal(await evaluate(`Boolean(${movieCanvas})`), false);
+      assert.deepEqual(await evaluate('recollectWipes'), [[null, name, 1000]]);
+      console.log('Recollection OMV', name, bounds, 'first SHA-256', firstFrame, 'loaded frame', index);
+    }
+    assert.deepEqual(errors, [], 'Browser console errors');
     break verification;
   } else if (ganOnly) {
     const chapter = [...scripts.keys()].find((name) => name.startsWith('01_'));

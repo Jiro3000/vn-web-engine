@@ -22,6 +22,7 @@ import {
   type SiglusCastPlacement,
   type SiglusFrameAction,
   type SiglusGanCheckpoint,
+  type SiglusMovieEffectCheckpoint,
   type SiglusHistoryEntry,
 } from './display.js';
 import {eventEasing, timetable} from './timing.js';
@@ -140,6 +141,7 @@ interface PlayerSave {
   castCostumes?: (string | null)[];
   gan?: SiglusGanCheckpoint;
   gans?: SiglusGanCheckpoint[];
+  movieEffects?: SiglusMovieEffectCheckpoint[];
   speed: number;
   timestamp?: number;
   title?: string;
@@ -1091,6 +1093,7 @@ export class SiglusPlayer {
       cast: [...this.currentCast],
       castCostumes: [...this.currentCastCostumes],
       gans: this.display.saveGans(),
+      movieEffects: this.display.saveMovieEffects(),
       speed: this.speed,
       title: this.saveTitle,
       waitsForInput,
@@ -1242,7 +1245,10 @@ export class SiglusPlayer {
     this.stagedBackground = undefined;
     if (save.background) await this.display.setBackground(save.background, 0);
     await this.cast(save.cast, -1, save.castCostumes);
-    await this.display.loadGans(save.gans ?? (save.gan ? [save.gan] : []));
+    await this.display.loadStageEffects(
+      save.gans ?? (save.gan ? [save.gan] : []),
+      save.movieEffects ?? [],
+    );
     const music = save.bgmPlayback ?? (save.bgm ? {name: save.bgm, loop: true} : undefined);
     await this.audio.restoreBgm(music, save.bgmLevel);
     this.audio.setChannelLevel('voice', save.voiceLevel ?? 255, 0);
@@ -1624,7 +1630,7 @@ export class SiglusPlayer {
           // The script uses both "none" and names containing it (for example
           // "b_none" from the blur macro) as empty background slots.
           if (!name.includes('none')) {
-            if (this.display.hasGanChanges) {
+            if (this.display.hasStageEffectChanges) {
               this.stagedBackground = {name: this.backgroundName(name), pan};
               this.stageProperties.set('$bg_name_prev.-1.0', name);
             } else await this.background(name, 0, pan);
@@ -1732,10 +1738,22 @@ export class SiglusPlayer {
         this.pendingText = true;
         break;
       case '$sc_recollect':
-        this.display.recollect(true);
+        // _effect creates a looping child in the requested back-page slot,
+        // with the 1024 × 512 frame scaled in thousandths by the scene.
+        await this.display.stageMovieEffect({
+          slot: n(1),
+          name: s(0) === '白' ? 'ef_rec_white00' : 'ef_rec_black00',
+          layer: 5000,
+          loop: true,
+          scale: [
+            Math.trunc((this.display.width * 1000) / 1024),
+            Math.trunc((this.display.height * 1000) / 512),
+          ],
+          elapsed: 0,
+        });
         break;
       case '$ef_end':
-        this.display.retireGans(n(0), n(1));
+        this.display.retireStageEffects(n(0), n(1));
         this.display.endLayerEffects();
         break;
       case '$sc_sepia':
@@ -1881,6 +1899,7 @@ export class SiglusPlayer {
               ...this.savePoint,
               thumbnail: this.display.captureThumbnail(),
               gans: this.display.saveGans(),
+              movieEffects: this.display.saveMovieEffects(),
               bgm: bgmPlayback?.name,
               bgmPlayback,
               bgmLevel: this.audio.channelLevel('bgm'),

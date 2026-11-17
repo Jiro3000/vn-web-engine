@@ -120,6 +120,14 @@ inside the fixed viewport. The curve, decay and translation are derived
 from the embedded Siglus PE at `0x5fd210` and `0x5fd940`. The story
 chapters contain 174 calls with this preset.
 
+Set `SIGLUS_RECOLLECT_ONLY=1` to load the two Chapter 01 recollections from
+temporary slots at `0x4451` and `0x4dc63`. The probe follows the original
+background wipe, checks the movie name, slot and dimensions, saves each
+effect and reloads it from the title. It compares dialogue SHA-256 values
+and the exact decoded RGBA of the first and restored movie frame. It also
+checks that the outgoing page keeps the movie until the 1,000 ms exit wipe
+finishes. `SIGLUS_TEXT_MODE=dom` runs the same checks with selectable text.
+
 Set `SIGLUS_FAN_WIPE_ONLY=1` to check the chapter 06 transition at
 `0x291be`. The probe loads a temporary slot at `0x29112` through the
 original title menu. It checks the mode and arguments emitted by
@@ -449,6 +457,8 @@ are addressed.
 | Chapter 01 line-effect GAN frame sequence and save phase                   | Confirmed          | The checkpoint compares pattern order, clock boundaries, loop, alpha, G00 bounds and saved phase.                                                            |
 | Chapter 01 line effect during stage transitions                            | Confirmed          | The checkpoint checks effect membership on both pages, wipe durations and the resulting layer opacity at half time.                                          |
 | Story screen quake preset 0                                               | Confirmed          | The Chapter 01 probe checks the original command chain, 200 ms duration and integer translations of the background and cast.                                 |
+| Recollection OMV effects                                                   | Confirmed          | The Chapter 01 probe checks both original clips, alpha, scripted scale, slot, wipe membership and the frame restored after title Load.                         |
+| Cinemascope bars during scene wipes                                         | Difference         | Chapter 01 at `0x7010` stages two 1920 × 150 black rectangles on the back page. The browser clips the current background immediately.                         |
 | Other transition masks, effects and in-flight audio and animation behavior | Difference         | The browser's documented approximations remain in the rendering and save paths.                                                                              |
 | DOM Text selection, click and focus                                        | Confirmed          | The opening probe checks drag and click. The history, menu and typing probes exercise input during continuation.                                             |
 | DOM Text hiding and restoration                                            | Confirmed          | The right-click probe checks pointer hits before hiding and after revealing the same page, and checks that the hidden text stops receiving hits.             |
@@ -566,10 +576,7 @@ skippable wait at `0x15aed` while the incoming wipe is still active.
 - Character stacking, relative pose offsets and motion still use browser
   approximations. The browser's text layout, day cards, transition masks,
   dizziness and motion effects approximate the script's native
-  compositing. The 54 story calls to `$sc_recollect` select a looping
-  `ef_rec_white00.omv` or `ef_rec_black00.omv` in back-page slot 210.
-  Both resources have alpha and are 1024 × 512 at roughly 30 fps. The
-  browser applies a white inset shadow and color filter for both colors. Flash and zoom quake presets retain the earlier
+  compositing. Flash and zoom quake presets retain the earlier
   browser approximation. Range-scoped quakes and the exact result of
   opening a system menu during a quake need verification.
   The embedded PE sets the message slide flag and duration at `0x550813`
@@ -579,6 +586,18 @@ skippable wait at `0x15aed` while the incoming wipe is still active.
   PE dispatches `pp()` at `0x54d4dd` to the message wait handler at
   `0x672a20`. The browser waits on the current text and keeps the current
   message open for the next fragment.
+
+The 54 story calls to `$sc_recollect` select a looping
+`ef_rec_white00.omv` or `ef_rec_black00.omv` in back-page slot 210.
+The independent `_effect` disassembly sets layer 5000 at `0x355c`,
+retains the effect across wipes at `0x361a`, creates the selected
+movie at `0x36c3` or `0x3751`, and applies scale 1875 × 2109 in
+thousandths at `0x3826`. The two mode-1 resources are 1024 × 512
+with a 33,333 µs frame period. Independent FFmpeg decoding of the Ogg
+payload and the browser decoder agree byte for byte on all RGBA
+channels of the first frame of each clip. The browser saves the
+loop phase and decodes the saved frame before presenting the loaded
+scene. Browser presentation cadence under load still needs comparison.
 
 The browser renders system-call objects above the retained game stage. This
 keeps scene animations and message visibility separate from the system menu.
