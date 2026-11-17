@@ -112,7 +112,13 @@ and the active G00 pattern at each side of a frame boundary, checks the
 asset size and origin, and seeks to 121 ms before saving in another slot.
 It reloads that slot from the title after reopening the player, verifies
 the restored 21 ms phase, and checks the dialogue around the effect by
-SHA-256.
+SHA-256. It checks the subsequent screen quake at Chapter 01 offset
+`0x161bc` and follows it through `_effect_basic:0x8fbc` to
+`screen.quake[0].start_all(1,100,1,1,[60,0])` at `0x375`. At 14 time
+samples the background and cast move by the same integer pixel offsets
+inside the fixed viewport. The curve, decay and translation are derived
+from the embedded Siglus PE at `0x5fd210` and `0x5fd940`. The story
+chapters contain 174 calls with this preset.
 
 Set `SIGLUS_FAN_WIPE_ONLY=1` to check the chapter 06 transition at
 `0x291be`. The probe loads a temporary slot at `0x29112` through the
@@ -442,6 +448,7 @@ are addressed.
 | Chapter 06 mode-60 wipe                                                    | Confirmed          | The checkpoint probe verifies the authored parameters, four interior mask bytes, half-time alpha and the following page in both text modes.                  |
 | Chapter 01 line-effect GAN frame sequence and save phase                   | Confirmed          | The checkpoint compares pattern order, clock boundaries, loop, alpha, G00 bounds and saved phase.                                                            |
 | Chapter 01 line effect during stage transitions                            | Confirmed          | The checkpoint checks effect membership on both pages, wipe durations and the resulting layer opacity at half time.                                          |
+| Story screen quake preset 0                                               | Confirmed          | The Chapter 01 probe checks the original command chain, 200 ms duration and integer translations of the background and cast.                                 |
 | Other transition masks, effects and in-flight audio and animation behavior | Difference         | The browser's documented approximations remain in the rendering and save paths.                                                                              |
 | DOM Text selection, click and focus                                        | Confirmed          | The opening probe checks drag and click. The history, menu and typing probes exercise input during continuation.                                             |
 | DOM Text hiding and restoration                                            | Confirmed          | The right-click probe checks pointer hits before hiding and after revealing the same page, and checks that the hidden text stops receiving hits.             |
@@ -558,9 +565,13 @@ skippable wait at `0x15aed` while the incoming wipe is still active.
   and pose. Windows behavior for those missing resources is unverified.
 - Character stacking, relative pose offsets and motion still use browser
   approximations. The browser's text layout, day cards, transition masks,
-  recollection, shake, dizziness and motion effects approximate the script's
-  native compositing. Effect timing and rendering have not been compared
-  frame by frame.
+  dizziness and motion effects approximate the script's native
+  compositing. The 54 story calls to `$sc_recollect` select a looping
+  `ef_rec_white00.omv` or `ef_rec_black00.omv` in back-page slot 210.
+  Both resources have alpha and are 1024 × 512 at roughly 30 fps. The
+  browser applies a white inset shadow and color filter for both colors. Flash and zoom quake presets retain the earlier
+  browser approximation. Range-scoped quakes and the exact result of
+  opening a system menu during a quake need verification.
   The embedded PE sets the message slide flag and duration at `0x550813`
   and schedules a line offset at `0x5da999`. The browser slides the text
   within the configured row count and keeps the full message for history.

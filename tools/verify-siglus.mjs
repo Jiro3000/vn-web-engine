@@ -1106,6 +1106,7 @@ verification: try {
       const renderTags = new Set([0x1585c, 0x15a3e, 0x15aed, 0x15d7f, 0x16153]);
       window.siglusGanStage = [];
       window.siglusGanWipes = [];
+      window.siglusQuake = undefined;
       siglusSurface.addEventListener('siglus-tag', ({detail}) => {
         if (detail.scene !== ${JSON.stringify(chapter)} || !renderTags.has(detail.offset)) return;
         const gan = siglusSurface.querySelector('[data-siglus-gan]');
@@ -1114,6 +1115,24 @@ verification: try {
       });
       Element.prototype.animate = function (frames, timing) {
         const animation = animate.call(this, frames, timing);
+        if (this.hasAttribute('data-siglus-scene-layers')) {
+          const stage = this.parentElement;
+          const scale = stage.getBoundingClientRect().height / stage.offsetHeight;
+          const background = this.firstElementChild;
+          const cast = this.querySelector('[data-siglus-cast-body]');
+          const base = [stage, background, cast].map((layer) => layer?.getBoundingClientRect());
+          const offsets = [0, 12, 25, 38, 50, 62, 75, 88, 100, 125, 150, 162, 175, 200];
+          const samples = offsets.map((time) => {
+            animation.currentTime = time + 0.01;
+            return [stage, background, cast].map((layer, index) => {
+              if (!layer) return null;
+              const {x, y} = layer.getBoundingClientRect();
+              return [Math.round((x - base[index].x) / scale), Math.round((y - base[index].y) / scale)];
+            });
+          });
+          window.siglusQuake = {duration: timing.duration, offsets, samples};
+          animation.currentTime = 0;
+        }
         const incoming = hasGan(this);
         const outgoing = hasGan(this.previousElementSibling);
         if (incoming || outgoing) {
@@ -1243,8 +1262,21 @@ verification: try {
     );
     assert.equal(digest(pageAfter), scripts.get(chapter).tags.get(0x16207).hash);
     const trace = await evaluate(`siglusTags.filter(({scene, offset}) =>
-      scene === ${JSON.stringify(chapter)} && offset >= 0x15cb8 && offset <= 0x1621b)`);
+      (scene === ${JSON.stringify(chapter)} && offset >= 0x15cb8 && offset <= 0x1621b) ||
+      (scene === '_effect_basic' && [0x8fbc, 0x375].includes(offset)))`);
     compareTags(trace, scripts);
+    const quakeTags = trace.filter(({offset}) => [0x161bc, 0x8fbc, 0x375].includes(offset));
+    assert.deepEqual(quakeTags.map(({offset, args}) => [offset, args]), [
+      [0x161bc, [0, 0, 0]],
+      [0x8fbc, [100, 1, 1, 60, -1, 0, 0, 1]],
+      [0x375, [1, 100, 1, 1, [60, 0]]],
+    ]);
+    const quake = await evaluate('siglusQuake');
+    assert.equal(quake?.duration, 200);
+    // Integer pixel offsets from the embedded engine at 0x5fd210 and 0x5fd940.
+    const vertical = [0, -6, -30, -53, -60, -53, -30, -6, 0, -22, -30, -20, -7, 0];
+    assert.deepEqual(quake.samples, vertical.map((y) => [[0, 0], [0, y], [0, y]]));
+    console.log('Chapter 01 screen quake checked at milliseconds:', quake.offsets);
     await verifyRenderedPages();
     assert.deepEqual(errors, [], 'Browser console errors');
     console.log(

@@ -127,6 +127,7 @@ function registerOpacityProperty(name: string): void {
 
 export class SiglusDisplay {
   readonly stage = document.createElement('div');
+  private readonly sceneLayers = document.createElement('div');
   private readonly layers = document.createElement('div');
   private readonly cast = document.createElement('div');
   private readonly effect = document.createElement('div');
@@ -241,7 +242,9 @@ export class SiglusDisplay {
     this.systemLayer.style.cssText = 'position:absolute;inset:0;pointer-events:none';
     this.systemFrontLayer.style.cssText = this.systemLayer.style.cssText;
     this.editLayer.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:3';
-    this.stage.append(
+    this.sceneLayers.style.cssText = 'position:absolute;inset:0;pointer-events:none';
+    this.sceneLayers.dataset.siglusSceneLayers = '';
+    this.sceneLayers.append(
       this.layers,
       this.cast,
       this.effect,
@@ -251,6 +254,7 @@ export class SiglusDisplay {
       this.systemLayer,
       this.editLayer,
     );
+    this.stage.append(this.sceneLayers);
     this.nativeText.style.cssText = 'position:absolute;inset:0;pointer-events:none';
     this.nativeText.dataset.siglusNativeText = '';
     this.nativeText.hidden = true;
@@ -394,11 +398,16 @@ export class SiglusDisplay {
   }
 
   setScenePaused(paused: boolean): void {
-    for (const layer of [this.layers, this.cast, this.effect])
-      for (const animation of layer.getAnimations({subtree: true})) {
-        if (paused && animation.playState === 'running') animation.pause();
-        else if (!paused && animation.playState === 'paused') animation.play();
-      }
+    const animations = [
+      ...this.sceneLayers.getAnimations(),
+      ...[this.layers, this.cast, this.effect].flatMap((layer) =>
+        layer.getAnimations({subtree: true}),
+      ),
+    ];
+    for (const animation of new Set(animations)) {
+      if (paused && animation.playState === 'running') animation.pause();
+      else if (!paused && animation.playState === 'paused') animation.play();
+    }
   }
 
   private inputKey(): {
@@ -940,7 +949,7 @@ export class SiglusDisplay {
       substitute = {target: this.nativeText, image, bounds: this.message.getBoundingClientRect()};
     }
     const layers = [this.layers, this.cast, this.effect, this.message, this.controls].filter(
-      (layer) => layer.parentElement === this.stage,
+      (layer) => layer.parentElement === this.sceneLayers,
     );
     const stage = captureLayers(this.width, this.height, bounds, layers, substitute);
     const canvas = document.createElement('canvas');
@@ -1743,7 +1752,7 @@ export class SiglusDisplay {
     } finally {
       for (const gan of retired) this.removeGan(gan);
       this.cast.replaceChildren(...cast.children);
-      if (this.cast.parentElement !== this.stage) this.layers.after(this.cast);
+      if (this.cast.parentElement !== this.sceneLayers) this.layers.after(this.cast);
       this.cast.inert = false;
       cast.remove();
       for (const {layer} of this.activeGans.values())
@@ -1753,7 +1762,92 @@ export class SiglusDisplay {
 
   private shakeAnimation?: Animation;
 
-  endShake(duration: number): void {
+  private readonly quakes = new Map<
+    number,
+    {
+      animation: Animation;
+      duration: number;
+      displacement: (elapsed: number) => readonly [number, number];
+    }
+  >();
+
+  private animateQuake(
+    slot: number,
+    duration: number,
+    displacement: (elapsed: number) => readonly [number, number],
+  ): void {
+    // Sample integer milliseconds for short effects without allocating
+    // a frame per millisecond for an arbitrarily long script duration.
+    const samples = Math.min(duration, 2000);
+    const keyframes = Array.from({length: samples + 1}, (_, index) => {
+      const offset = index / samples;
+      const [x, y] = displacement(Math.round(duration * offset));
+      return {offset, translate: `${x}px ${y}px`, easing: 'steps(1, end)'};
+    });
+    const animation = this.sceneLayers.animate(keyframes, {duration, composite: 'add'});
+    this.quakes.set(slot, {animation, duration, displacement});
+    animation.onfinish = () => {
+      if (this.quakes.get(slot)?.animation === animation) this.quakes.delete(slot);
+    };
+  }
+
+  startQuake(
+    slot: number,
+    period: number,
+    cycles: number,
+    decayCycles: number,
+    power: number,
+    direction: readonly [number, number],
+  ): number {
+    this.quakes.get(slot)?.animation.cancel();
+    this.quakes.delete(slot);
+    const duration = period * (cycles + decayCycles);
+    if (period <= 0 || duration <= 0) return 0;
+    // Four quadratic quarters. The last cycles decay linearly in amplitude.
+    const quarter = Math.trunc(period / 4);
+    const half = Math.trunc(period / 2);
+    const lastQuarter = Math.trunc((period * 3) / 4);
+    const halfPower = Math.trunc(power / 2);
+    const easeIn = (from: number, to: number, time: number) => {
+      const elapsed = Math.max(0, Math.min(quarter, time));
+      return quarter ? Math.trunc(from + ((to - from) * elapsed ** 2) / quarter ** 2) : to;
+    };
+    const easeOut = (from: number, to: number, time: number) => easeIn(to, from, quarter - time);
+    this.animateQuake(slot, duration, (elapsed) => {
+      const phase = elapsed % period;
+      let amplitude = 0;
+      if (phase < quarter) amplitude = easeIn(0, halfPower, phase);
+      else if (phase < half) amplitude = easeOut(halfPower, power, phase - quarter);
+      else if (phase < lastQuarter) amplitude = easeIn(power, halfPower, phase - half);
+      else amplitude = easeOut(halfPower, 0, phase - lastQuarter);
+      if (decayCycles > 0 && elapsed >= period * cycles) {
+        const remaining = 1 - (elapsed - period * cycles) / (period * decayCycles);
+        amplitude = Math.trunc(amplitude * remaining);
+      }
+      return [direction[0] * amplitude, direction[1] * amplitude];
+    });
+    return duration;
+  }
+
+  endShake(slot: number, duration: number): void {
+    const quake = this.quakes.get(slot);
+    if (quake) {
+      const {animation, displacement} = quake;
+      const elapsed = Math.floor(Number(animation.currentTime ?? 0));
+      const remaining = Math.min(quake.duration - elapsed, duration);
+      const paused = animation.playState === 'paused';
+      animation.cancel();
+      this.quakes.delete(slot);
+      if (remaining > 0) {
+        this.animateQuake(slot, remaining, (time) => {
+          const [x, y] = displacement(elapsed + time);
+          const factor = 1 - time / duration;
+          return [Math.trunc(x * factor), Math.trunc(y * factor)];
+        });
+        if (paused) this.quakes.get(slot)?.animation.pause();
+      }
+      return;
+    }
     const animation = this.shakeAnimation;
     if (!animation || animation.playState !== 'running') return;
     if (duration <= 0) animation.cancel();

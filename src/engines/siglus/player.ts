@@ -1751,6 +1751,8 @@ export class SiglusPlayer {
         this.display.cinema(0);
         break;
       case '$screen_shake':
+        // Let the scene select the original parameters for translation quakes.
+        if (!n(1) && [0, 1, 3, 4].includes(n(0))) return undefined;
         if (!this.skipping) this.display.shake(n(0));
         if (n(2)) await this.delay(350, true);
         break;
@@ -2480,9 +2482,39 @@ export class SiglusPlayer {
     }
     if (root === 86 && (member === 0 || member === 1) && path.length === 3)
       return this.display.inputState(member, path[2]!);
-    if (root === 70 && member === 25 && path[2] === -1 && path[4] === 8) {
-      this.display.endShake(n(0));
-      return 0;
+    if (root === 70 && member === 25 && path[2] === -1 && path.length === 5) {
+      const slot = path[3]!;
+      const operation = path[4];
+      if (operation === 8) {
+        this.display.endShake(slot, n(0));
+        return 0;
+      }
+      const directions = [
+        [0, -1],
+        [1, -1],
+        [1, 0],
+        [1, 1],
+        [0, 1],
+        [-1, 1],
+        [-1, 0],
+        [-1, -1],
+      ] as const;
+      const parameters = args[4];
+      if ((operation === 4 || operation === 5) && n(0) === 1 && typeof parameters === 'object') {
+        const direction = directions[parameters[1] ?? 0];
+        if (!direction || n(2) + n(3) <= 0) return undefined;
+        if (this.skipping || this.quakeStopped) return 0;
+        const duration = this.display.startQuake(
+          slot,
+          n(1),
+          n(2),
+          n(3),
+          parameters[0] ?? 0,
+          direction,
+        );
+        if (operation === 5) await this.delay(duration, true);
+        return 0;
+      }
     }
     if (root === 53 && member === -1 && path.length === 4) {
       if (path[3] === 2) return 0;
