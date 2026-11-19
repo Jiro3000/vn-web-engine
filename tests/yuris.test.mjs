@@ -2607,6 +2607,7 @@ test('YU-RIS lookahead follows macro images, labels and jumps into other files',
   assert.deepEqual(reads, ['scenario\\b.txt']);
   await new Promise((resolve) => setTimeout(resolve));
   assert.deepEqual(lookahead.update(), ['cg/bg/bg01', 'cg/item/x', 'cg/bg/bg02']);
+  assert.deepEqual(lookahead.nextUnvoicedDialogue(0), ['second']);
   assert.equal(reads.length, 1);
   // A jump within the file resumes at its label's line; an unknown label ends the scan.
   const local = [`first`, `\\GO(near)`, `unreached`, `#near`, `\\BG(bg03)`, `third`];
@@ -2616,6 +2617,79 @@ test('YU-RIS lookahead follows macro images, labels and jumps into other files',
   entries[2904].strings[0] = 'none';
   entries[2899] = {strings: [...local], dimensions: [100]};
   assert.deepEqual(lookahead.update(), []);
+});
+
+test('YU-RIS speech forecast divides a choice window between its reachable branches', async () => {
+  const {YurisSceneLookahead} = await import('../dist/engines/yuris/vm/scene-lookahead.js');
+  const entries = [];
+  const source = ['current', 'before the choice', '\\SEL.GO(a,b)', '\\SEL(One,Two)', 'unreached'];
+  const labels = ['a', 'b', 'c', 'd', 'e', 'f'];
+  const targets = labels.map((label) => {
+    const at = source.length;
+    source.push(
+      '#' + label,
+      label + '1',
+      label + '2',
+      label + '3',
+      label + '4',
+      label + '5',
+      '\\GO(missing)',
+    );
+    return BigInt(at);
+  });
+  entries[3038] = {strings: ['a.txt']};
+  entries[2899] = {strings: source};
+  entries[2909] = {ints: [6n]};
+  entries[2904] = {strings: labels};
+  entries[2907] = {ints: targets};
+  entries[2905] = {ints: Array(6).fill(0n)};
+  entries[2966] = {strings: ['a.txt']};
+  const lookahead = new YurisSceneLookahead({variables: {entries}}, false, []);
+  lookahead.calls = {images: new Map(), jumps: new Map([['GO', 0]])};
+  assert.deepEqual(lookahead.nextUnvoicedDialogue(0), [
+    'before the choice',
+    'a1',
+    'b1',
+    'a2',
+    'b2',
+    'a3',
+    'b3',
+  ]);
+
+  // The game may filter an authored choice before opening the menu.
+  source[3] = '\\SEL.E2(1002,"==",1)\\SEL(One,Two)';
+  assert.deepEqual(lookahead.nextUnvoicedDialogue(0), ['before the choice']);
+  lookahead.choiceVariables = {count: 700, titles: 701, targets: 702};
+  entries[1221] = {ints: [1n]};
+  entries[700] = {ints: [1n]};
+  entries[701] = {strings: ['', 'One']};
+  entries[702] = {strings: ['', 'a']};
+  assert.deepEqual(lookahead.activeDialogueChoices(), ['a']);
+  assert.deepEqual(lookahead.nextUnvoicedDialogue(-1, lookahead.activeDialogueChoices()), [
+    'a1',
+    'a2',
+    'a3',
+    'a4',
+    'a5',
+  ]);
+  assert.deepEqual(lookahead.nextUnvoicedDialogue(-1, labels.slice(0, 4)), [
+    'a1',
+    'b1',
+    'c1',
+    'd1',
+    'a2',
+    'b2',
+    'c2',
+    'd2',
+  ]);
+  assert.deepEqual(lookahead.nextUnvoicedDialogue(-1, labels), [
+    'a1',
+    'b1',
+    'c1',
+    'd1',
+    'e1',
+    'f1',
+  ]);
 });
 
 test('YU-RIS lookahead locates the scenario library variables in its routines', async () => {
@@ -3557,6 +3631,28 @@ test('YU-RIS lookahead reads the current dialogue line for the clipboard text ho
   entries[1221].ints[0] = 1n;
   assert.equal(at(0), undefined);
 
+  entries[2899].strings = [
+    'current',
+    String.raw`\VO(ABC_0001)voiced`,
+    '/* ignored',
+    'still ignored */',
+    'one',
+    'two',
+    'three',
+    'four',
+    'five',
+    'six',
+    String.raw`\SEL(choice)`,
+    'branch',
+  ];
+  assert.deepEqual(lookahead.nextUnvoicedDialogue(0), ['one', 'two', 'three', 'four', 'five']);
+  assert.deepEqual(lookahead.nextUnvoicedDialogue(4), ['two', 'three', 'four', 'five', 'six']);
+  assert.deepEqual(lookahead.nextUnvoicedDialogue(5), ['three', 'four', 'five', 'six']);
+  entries[2899].strings[10] = String.raw`\GO(elsewhere)`;
+  assert.deepEqual(lookahead.nextUnvoicedDialogue(8), ['six']);
+  entries[2899].strings[9] = String.raw`\unknown`;
+  assert.deepEqual(lookahead.nextUnvoicedDialogue(8), []);
+
   const written = [];
   const clipboard = {writeText: async (text) => void written.push(text)};
   const voiced = {text: 'a', voiced: true},
@@ -3572,4 +3668,282 @@ test('YU-RIS lookahead reads the current dialogue line for the clipboard text ho
   assert.equal(publishTextHookLine(unvoiced, refused), true);
   setTextHookMode('off');
   assert.deepEqual(written, ['b', '\u2063', 'a']);
+});
+
+test('YU-RIS atlas DOM text cancels TX.TMP padding and draw shifts and reads linePitch from es.TX.BUFSET.XY', async () => {
+  const {analyzeAtlasLibrary, recordAtlasGlyph, yurisRasterBitmap} =
+    await import('../dist/engines/yuris/vm/raster-text.js');
+  const {readRasterText} = await import('../dist/text/raster-text.js');
+  const {rasterTextSlots} = await import('../dist/text/browser-raster-text.js');
+  const {encodeCp932} = await import('../dist/text/cp932.js');
+
+  const H = (id, type = 0x40) => ({op: 0x48, payload: Uint8Array.of(type, id & 255, id >> 8)});
+  const V = (id, type = 0x40) => ({op: 0x56, payload: Uint8Array.of(type, id & 255, id >> 8)});
+  const lit = (text) => ({op: 0x4d, payload: new TextEncoder().encode(`"${text}"`)});
+  const i8 = (n) => ({op: 0x42, payload: Uint8Array.of(n & 255)});
+  const op = (ch) => ({op: ch.charCodeAt(0), payload: new Uint8Array()});
+
+  // Commands: 0=GOSUB, 1=VARINFO, 2=CGACT, 3=LET, 4=RETURN
+  const commands = [
+    {
+      name: 'GOSUB',
+      args: [
+        {name: '#'},
+        {name: 'PINT2'},
+        {name: 'PINT3'},
+        {name: 'PINT5'},
+        {name: 'PINT6'},
+        {name: 'PINT9'},
+      ],
+    },
+    {name: 'VARINFO', args: [{name: 'SJISCODE'}, {name: 'SET'}]},
+    {name: 'CGACT', args: [{name: 'MERGE'}]},
+    {name: 'LET', args: [{name: ''}, {name: ''}]},
+    {name: 'RETURN', args: []},
+  ];
+  const scripts = {
+    'es.ZENKAKU.LOAD': [
+      {
+        command: 3,
+        args: [
+          {id: 0, tokens: [V(5500, 0x24)]},
+          {id: 1, tokens: [lit('MS Gothic')]},
+        ],
+      },
+      {command: 4, args: []},
+    ],
+    'es.ZENKAKU.DRAW.ONE': [
+      {
+        command: 1,
+        args: [
+          {id: 0, tokens: [i8(1)]},
+          {id: 1, tokens: [H(200, 0x24)]},
+        ],
+      },
+      {
+        command: 0,
+        args: [
+          {id: 0, tokens: [lit('es.SJISCODE.DRAW.ONE')]},
+          {id: 1, tokens: [H(202)]},
+          {id: 2, tokens: [H(203)]},
+          {id: 3, tokens: [H(205)]},
+          {id: 4, tokens: [H(206)]},
+          {id: 5, tokens: [H(209)]},
+        ],
+      },
+      {command: 4, args: []},
+    ],
+    'es.SJISCODE.DRAW.ONE': [
+      {
+        command: 3,
+        args: [
+          {id: 0, tokens: [H(210, 0x24)]},
+          {id: 1, tokens: [lit('CGFTX.'), H(211)]},
+        ],
+      },
+      {command: 2, args: [{id: 0, tokens: [i8(1)]}]},
+      {command: 4, args: []},
+    ],
+    'es.TX.OUTPUT.ONE': [
+      {
+        command: 3,
+        args: [
+          {id: 0, tokens: [H(300)]},
+          {id: 1, tokens: [V(1173), i8(36), op(','), i8(19), op(')')]},
+        ],
+      },
+      {command: 0, args: [{id: 0, tokens: [lit('es.BT.FONT.CG.DRAW.SET')]}]},
+      {command: 4, args: []},
+    ],
+    'es.TX.BUFSET.XY': [
+      {
+        command: 3,
+        args: [
+          {id: 0, tokens: [H(400)]},
+          {id: 1, tokens: [H(401), V(1173), i8(36), op(','), i8(24), op(')'), op('+')]},
+        ],
+      },
+      {command: 4, args: []},
+    ],
+  };
+  const names = Object.keys(scripts);
+  const vars = new Map();
+  const cols = 30;
+  const settingsInts = new BigInt64Array(40 * cols);
+  settingsInts[36 * cols + 19] = 1n; // horizontal spacing
+  settingsInts[36 * cols + 20] = 10n; // vertical spacing
+  settingsInts[36 * cols + 21] = 0n; // ruby disabled
+  settingsInts[36 * cols + 24] = 2n; // ruby gap
+  vars.set(1173, {ints: settingsInts, dimensions: [40, cols]});
+  vars.set(5500, {strings: ['MS Gothic']});
+  vars.set(200, {strings: [String.fromCharCode(...encodeCp932('あ'))]});
+  vars.set(202, {ints: [382n]}); // logical x
+  vars.set(203, {ints: [900n]}); // logical y
+  vars.set(205, {ints: [2n]}); // pass 2 (main ink)
+  vars.set(206, {ints: [38n]}); // size
+  vars.set(209, {ints: [0xffffffn]});
+  vars.set(211, {ints: [0n]});
+  vars.set(401, {ints: [14n]}); // ruby height
+
+  const machine = {
+    tracksRasterText: true,
+    position: 1, // CGACT MERGE in es.SJISCODE.DRAW.ONE
+    task: {
+      script: names.indexOf('es.SJISCODE.DRAW.ONE'),
+      gosubDepth: 3,
+      frames: [
+        {returnScript: names.indexOf('es.TX.OUTPUT.ONE'), returnPosition: 2},
+        {returnScript: 99, returnPosition: 1},
+        {returnScript: names.indexOf('es.ZENKAKU.DRAW.ONE'), returnPosition: 2},
+      ],
+    },
+    variables: {get: (id) => vars.get(id) ?? {}},
+    label: (bytes) => names.indexOf(new TextDecoder().decode(bytes)),
+    commandName: (id) => commands[id]?.name ?? '',
+    scriptInstructions: (script) => scripts[names[script]],
+    project: {
+      commands: {commands},
+      labels: {
+        labels: names.map((name, script) => ({
+          script,
+          position: 0,
+          name: new TextEncoder().encode(name),
+        })),
+      },
+    },
+  };
+
+  const analyzed = analyzeAtlasLibrary(machine);
+  assert.equal(analyzed.x, 202);
+  assert.equal(analyzed.y, 203);
+  assert.equal(analyzed.dialogue.rubyHeight, 401);
+
+  // Normal glyph: TX.TMP is 48x48 (5px padding around 38x38), merged at (377, 895).
+  const normalBuf = new Uint8Array(48 * 48 * 4);
+  const normalBmp = yurisRasterBitmap(normalBuf, 48, 48);
+  recordAtlasGlyph(machine, 'TX.TMP', normalBmp, 377, 895);
+  const [gNormal] = readRasterText(normalBmp);
+  assert.equal(gNormal.x, 5);
+  assert.equal(gNormal.y, 5);
+  assert.equal(gNormal.pitch, 39);
+  assert.equal(gNormal.linePitch, 48);
+
+  // Shifted punctuation (e.g. ellipsis with -30% Y draw offset -> mergeY = 900 - 5 - 11 = 884):
+  // glyph records y = 16 in TX.TMP so after merging at y = 884 it sits at logical y = 900.
+  vars.set(200, {strings: [String.fromCharCode(...encodeCp932('…'))]});
+  vars.set(202, {ints: [421n]});
+  const shiftedBuf = new Uint8Array(48 * 48 * 4);
+  const shiftedBmp = yurisRasterBitmap(shiftedBuf, 48, 48);
+  recordAtlasGlyph(machine, 'TX.TMP', shiftedBmp, 416, 884);
+  const [gShifted] = readRasterText(shiftedBmp);
+  assert.equal(gShifted.x, 5);
+  assert.equal(gShifted.y, 16);
+  // Translated to destination coords, both glyphs sit on row y = 900 and form one DOM slot.
+  const placed = [
+    {
+      ...gNormal,
+      x: gNormal.x + 377,
+      y: gNormal.y + 895,
+      clip: {...gNormal.clip, x: gNormal.clip.x + 377, y: gNormal.clip.y + 895},
+    },
+    {
+      ...gShifted,
+      x: gShifted.x + 416,
+      y: gShifted.y + 884,
+      clip: {...gShifted.clip, x: gShifted.clip.x + 416, y: gShifted.clip.y + 884},
+    },
+  ];
+  const slots = rasterTextSlots(placed);
+  assert.equal(slots.length, 1);
+  assert.equal(slots[0].slot.linePitch, 48);
+  assert.equal(slots[0].slot.glyphs.map((g) => g.text).join(''), 'あ…');
+
+  // With ruby enabled (settings[36,21] != 0), linePitch includes rubyHeight + settings[36,24].
+  settingsInts[36 * cols + 21] = 1n;
+  const rubyBmp = yurisRasterBitmap(new Uint8Array(48 * 48 * 4), 48, 48);
+  recordAtlasGlyph(machine, 'TX.TMP', rubyBmp, 416, 884);
+  assert.equal(readRasterText(rubyBmp)[0].linePitch, 64);
+});
+
+test('CGACT RECTPAINT2 preserves raster text provenance for screen captures while RGB fill and zero alpha clear it', async () => {
+  const {yurisRasterBitmap} = await import('../dist/engines/yuris/vm/raster-text.js');
+  const {hasRasterText, rasterTextBitmap, recordRasterText, visibleRasterText} =
+    await import('../dist/text/raster-text.js');
+  const commands = new Map();
+  let id0 = 'SRC',
+    id1 = 'CGS100';
+  const values = new Map();
+  const machine = {
+    screenWidth: 8,
+    screenHeight: 8,
+    system: {names: ['']},
+    define: (id, fn) => commands.set(id, fn),
+    decode() {},
+    commandName: () => 'CGACT',
+    argName: () => 'RECTPAINT2',
+    expression: {intOf: () => values.get(9) ?? 0n},
+    args: {
+      has: (id) => (id === 0 || (id === 1 && id1) || values.has(id) ? 1 : 0),
+      text: (id) => (id === 0 ? id0 : id1),
+      int: (id) => values.get(id) ?? 0n,
+      type: [0, 1],
+      expression: [null, new Uint8Array()],
+    },
+  };
+  const layers = new YurisLayers(machine, {}, {});
+  layers.install();
+  const src = new YurisCg(),
+    cgs100 = new YurisCg(),
+    cgs1 = new YurisCg();
+  for (const cg of [src, cgs100, cgs1]) cg.allocate(4, 4);
+  layers.tree.create('SRC', false, 1n, src);
+  layers.tree.create('CGS100', false, 2n, cgs100);
+  layers.tree.create('CGS1', false, 3n, cgs1);
+
+  // Put a text glyph with visible ink difference on SRC (alpha 128).
+  for (let i = 0; i < src.pixels.length; i += 4) src.pixels.set([255, 255, 255, 128], i);
+  recordRasterText(yurisRasterBitmap(src.pixels, 4, 4), 'あ', {size: 4, width: 4, height: 4});
+
+  // 1. COPY2 SRC -> CGS100 (like es.CGTSS capturing W0 into CGS100).
+  values.clear();
+  values.set(66, 1n); // Act.Copy2
+  id0 = 'SRC';
+  id1 = 'CGS100';
+  commands.get(2)();
+  assert.equal(visibleRasterText(yurisRasterBitmap(cgs100.pixels, 4, 4)).length, 1);
+
+  // 2. In-place RECTPAINT2 SET=255 on CGS100 must keep raster text and update blank alpha to 255.
+  values.clear();
+  values.set(59, 1n); // Act.RectPaint2
+  values.set(9, 255n); // Act.Set
+  id0 = 'CGS100';
+  id1 = '';
+  commands.get(2)();
+  const capBmp = yurisRasterBitmap(cgs100.pixels, 4, 4);
+  assert.equal(hasRasterText(capBmp), true);
+  assert.equal(visibleRasterText(capBmp).length, 1);
+  assert.equal(rasterTextBitmap(capBmp).storage.bytes[3], 255);
+  assert.equal(cgs100.pixels[3], 255);
+
+  // 3. Destination RECTPAINT2 SET=255 from CGS100 -> CGS1 also preserves provenance.
+  id0 = 'CGS100';
+  id1 = 'CGS1';
+  commands.get(2)();
+  assert.equal(visibleRasterText(yurisRasterBitmap(cgs1.pixels, 4, 4)).length, 1);
+
+  // 4. RECTPAINT2 SET=0 hides glyphs in the cleared region.
+  values.set(9, 0n);
+  id0 = 'CGS1';
+  id1 = '';
+  commands.get(2)();
+  assert.equal(visibleRasterText(yurisRasterBitmap(cgs1.pixels, 4, 4)).length, 0);
+
+  // 5. RGB RECTPAINT (mode 1) overwrites pixels and clears raster text presentation.
+  values.clear();
+  values.set(58, 1n); // Act.RectPaint
+  values.set(9, 0x112233n);
+  id0 = 'CGS100';
+  id1 = '';
+  commands.get(2)();
+  assert.equal(hasRasterText(yurisRasterBitmap(cgs100.pixels, 4, 4)), false);
 });

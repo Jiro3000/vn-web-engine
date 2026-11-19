@@ -55,7 +55,9 @@ interface AtlasLibrary {
   /** The instruction after es.ZENKAKU.DRAW.ONE's GOSUB es.SJISCODE.DRAW.ONE. */
   readonly returnScript: number;
   readonly returnPosition: number;
-  /** es.ZENKAKU.DRAW.ONE's variables passed as PINT5 (pass), PINT6 (cell size), PINT9 (colour). */
+  /** es.ZENKAKU.DRAW.ONE's variables passed as PINT2/3 (cell x/y), PINT5 (pass), PINT6 (cell size), PINT9 (colour). */
+  readonly x: number;
+  readonly y: number;
   readonly pass: number;
   readonly size: number;
   readonly color: number;
@@ -64,8 +66,13 @@ interface AtlasLibrary {
   /** The atlas index in the "CGFTX." layer name and the atlas name array of es.ZENKAKU.LOAD. */
   readonly atlasIndex: number;
   readonly atlasNames: number;
-  /** es.TX.OUTPUT.ONE's GOSUB es.BT.FONT.CG.DRAW.SET and its text settings array. */
-  readonly dialogue: {script: number; returnPosition: number; settings: number} | null;
+  /** es.TX.OUTPUT.ONE's GOSUB es.BT.FONT.CG.DRAW.SET, text settings array, and ruby height variable. */
+  readonly dialogue: {
+    script: number;
+    returnPosition: number;
+    settings: number;
+    rubyHeight: number;
+  } | null;
 }
 
 const H = 0x48,
@@ -130,7 +137,9 @@ export function analyzeAtlasLibrary(m: YurisMachine): AtlasLibrary | null {
   if (!glyph || !draw || !load) return null;
   const call = gosub(glyph, 'es.SJISCODE.DRAW.ONE');
   if (!call) return null;
-  const pass = single(call[1], 'PINT5', INT),
+  const x = single(call[1], 'PINT2', INT),
+    y = single(call[1], 'PINT3', INT),
+    pass = single(call[1], 'PINT5', INT),
     size = single(call[1], 'PINT6', INT),
     color = single(call[1], 'PINT9', INT);
   let raw = -1;
@@ -168,13 +177,37 @@ export function analyzeAtlasLibrary(m: YurisMachine): AtlasLibrary | null {
         for (let t = 0; tokens && t + 2 < tokens.length && settings < 0; t++)
           if (integer(tokens[t + 1]) === 36 && tokens[t + 2]!.op === 0x2c)
             settings = variable(tokens[t], V, INT);
-    if (settings >= 0) dialogue = {script: output.script, returnPosition: button[0] + 1, settings};
+    // es.TX.BUFSET.XY advances rows by size + settings[36,20] and, when ruby is
+    // enabled (settings[36,21]), adds rubyHeight + settings[36,24].
+    let rubyHeight = -1;
+    const layout = settings >= 0 ? routine('es.TX.BUFSET.XY') : null;
+    if (layout) {
+      for (let i = layout.start; i < layout.end && rubyHeight < 0; i++) {
+        const instruction = layout.code[i]!;
+        if (m.commandName(instruction.command) !== 'LET') continue;
+        const tokens = instruction.args[1]?.tokens;
+        if (
+          tokens?.length === 7 &&
+          variable(tokens[1], V, INT) === settings &&
+          integer(tokens[2]) === 36 &&
+          tokens[3]!.op === 0x2c &&
+          integer(tokens[4]) === 24 &&
+          tokens[5]!.op === 0x29 &&
+          tokens[6]!.op === 0x2b
+        )
+          rubyHeight = variable(tokens[0], H, INT);
+      }
+    }
+    if (settings >= 0)
+      dialogue = {script: output.script, returnPosition: button[0] + 1, settings, rubyHeight};
   }
   return {
     script: draw.script,
     position: draw.end - 1,
     returnScript: glyph.script,
     returnPosition: call[0] + 1,
+    x,
+    y,
     pass,
     size,
     color,
@@ -213,6 +246,8 @@ export function recordAtlasGlyph(
   m: YurisMachine,
   sourceName: string,
   bitmap: RasterTextBitmap,
+  mergeX = 0,
+  mergeY = 0,
 ): void {
   if (!m.tracksRasterText || sourceName !== 'TX.TMP') return;
   let library = atlasLibrary.get(m);
@@ -241,22 +276,39 @@ export function recordAtlasGlyph(
   const size = int(library.size) || 8;
   if (!text) return;
   // es.TX.OUTPUT.ONE draws one glyph per button blit. The dialogue layout advances
-  // a full-width cell by its size plus the spacing in settings[36,19].
+  // a full-width cell by its size plus settings[36,19] horizontally and settings[36,20]
+  // (plus ruby height + settings[36,24] when settings[36,21] is set) vertically.
   const dialogue = library.dialogue,
     parent = m.task.frames[m.task.gosubDepth - 3];
-  let pitch = 0;
+  let pitch = 0,
+    linePitch = 0;
   if (
     dialogue &&
     parent?.returnScript === dialogue.script &&
     parent.returnPosition === dialogue.returnPosition
   ) {
     const settings = m.variables.get(dialogue.settings);
-    pitch = size + Number(settings.ints?.[36 * (settings.dimensions[1] ?? 0) + 19] ?? 0n);
+    const cols = settings.dimensions[1] ?? 0;
+    const setting = (k: number) => Number(settings.ints?.[36 * cols + k] ?? 0n);
+    pitch = size + setting(19);
+    linePitch =
+      size +
+      setting(20) +
+      (dialogue.rubyHeight >= 0 && setting(21) ? int(dialogue.rubyHeight) + setting(24) : 0);
   }
+  const width = raw.length === 1 ? size / 2 : size;
+  // TX.TMP is cropped with padding around the cell and shifted by per-character offsets
+  // (such as ellipsis vertical adjustment) before MERGE. Placing the glyph at the logical
+  // cell origin cancels both so DOM text aligns with the cell and keeps one row.
+  const gx = library.x >= 0 ? int(library.x) - mergeX : 0;
+  const gy = library.y >= 0 ? int(library.y) - mergeY : 0;
+  const intersects = gx + width > 0 && gx < bitmap.width && gy + size > 0 && gy < bitmap.height;
   recordRasterText(bitmap, text, {
     size,
     ...(pitch > 0 ? {pitch} : {}),
-    width: raw.length === 1 ? size / 2 : size,
+    ...(linePitch > 0 ? {linePitch} : {}),
+    ...(intersects ? {x: gx, y: gy} : {}),
+    width,
     height: size,
     family: face.family,
     bold: face.bold,

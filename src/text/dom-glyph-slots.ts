@@ -129,7 +129,14 @@ export class DomGlyphSlots {
       tint?: {filter: SVGFilterElement; id: string; key: string};
     }
   >();
-  private readonly measure = document.createElement('canvas').getContext('2d')!;
+  // Match the text span's `lang="ja"` so fallback glyph widths agree with DOM layout.
+  private readonly measure = (() => {
+    const canvas = document.createElement('canvas');
+    canvas.lang = 'ja';
+    const context = canvas.getContext('2d')!;
+    (context as CanvasRenderingContext2D & {lang?: string}).lang = 'ja';
+    return context;
+  })();
   private probe: HTMLSpanElement | undefined;
   private selectionFrame = 0;
   private width = 1920;
@@ -337,7 +344,9 @@ export class DomGlyphSlots {
       nativeLineHeight =
         positioned.length > 1
           ? (lastPosition.top - firstPosition.top) / (lastPosition.line - firstPosition.line)
-          : size,
+          : slot.linePitch && slot.linePitch > 0
+            ? slot.linePitch
+            : size,
       // A larger reader font spaces its rows apart instead of overlapping them.
       lineHeight = natural ? Math.max(nativeLineHeight, size * 1.25) : nativeLineHeight;
     // The first row can hang to the left of subsequent rows (dialogue quotes).
@@ -393,7 +402,7 @@ export class DomGlyphSlots {
     // Selections and dictionary highlights paint the line boxes, and the font's ascent and
     // descent where they exceed the line height; both pass the glyph cells. Text without a
     // native clip keeps them inside its box, with room for a highlight border.
-    const lineTop = slot.vertical ? bounds.y : bounds.y - (lineHeight - size) / 2,
+    const lineTop = slot.vertical ? bounds.y : bounds.y - Math.floor((lineHeight - size) / 2),
       textBottom = slot.vertical ? bounds.y + bounds.height : lineTop + lines * lineHeight,
       textRight = slot.vertical ? bounds.x + bounds.width : origin + wrapWidth * scale;
     const metrics = this.measure.measureText('国'),

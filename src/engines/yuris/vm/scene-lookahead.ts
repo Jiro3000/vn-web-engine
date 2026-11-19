@@ -124,6 +124,16 @@ const DEFAULT_VARIABLES: LookaheadVariables = {
 /** An `ML.TEXT` macro or a TEXT token: the parser shows a dialogue and waits for a click. */
 /** Scenario lines a forecast reads ahead; scripted scenes run long macro sequences. */
 const SCAN_LINES = 256;
+const DIALOGUE_LOOKAHEAD = 5;
+
+interface ScenarioPosition {
+  readonly file: string;
+  readonly lines: readonly string[];
+  readonly next: number;
+}
+
+const macroArguments = (args: string) =>
+  args.split(',').map((arg) => arg.trim().replace(/^"(.*)"$/, '$1'));
 
 const dialogue = (tag: string | undefined) => tag === 'ML.TEXT' || tag === 'TEXT';
 
@@ -470,6 +480,8 @@ export class YurisSceneLookahead {
   /** The library splits scenario lines for ML.TEXT (es.SCENARIO.LOAD, see `installText`). */
   private bilingual = false;
   private dialogueDecoder?: TextDecoder;
+  private choiceVariables?: {count: number; titles: number; targets: number};
+  dialogueForecastVersion = 0;
   /** Settles when the macro analysis has finished. */
   macrosRead: Promise<void> = Promise.resolve();
 
@@ -634,6 +646,17 @@ export class YurisSceneLookahead {
             }
           }
         }
+    // ES.SEL compacts the enabled options at +16/+17, indexed from 1 by the count at +1.
+    const selection = await routine('ES.SEL');
+    const [choiceCount] = single(selection?.at(1, 0x48) ?? []);
+    const [choiceTitles] = selection?.at(16, 0x56) ?? [];
+    const [choiceTargets] = selection?.at(17, 0x56) ?? [];
+    if (choiceCount !== undefined && choiceTitles !== undefined && choiceTargets !== undefined)
+      lookahead.choiceVariables = {
+        count: choiceCount,
+        titles: choiceTitles,
+        targets: choiceTargets,
+      };
     lookahead.bilingual = !!label('es.SCENARIO.LOAD') && !!label('es.ScenarioMacro.ML.TEXT');
     // es.ZENKAKU.LOAD+5 assigns the first atlas name. The Sarasa SC atlas library uses GBK
     // for both language arguments to ML.TEXT, even when the script displays Japanese.
@@ -662,7 +685,7 @@ export class YurisSceneLookahead {
         (calls) => void (lookahead.calls = calls),
         () => undefined,
       ),
-    ]).then(() => undefined);
+    ]).then(() => void lookahead.dialogueForecastVersion++);
     return lookahead;
   }
 
@@ -748,8 +771,104 @@ export class YurisSceneLookahead {
     if (!source || line < 0) return;
     const tags = macros(source[line] ?? '');
     if (!tags?.some(([tag]) => dialogue(tag))) return;
-    const lang = vars[1176],
-      language = Number(lang?.ints?.[255 * (lang.dimensions[1] ?? 0)] ?? -1n);
+    const text = this.dialogueText(tags);
+    return text ? {file, line, text, voiced: voices(tags).length > 0} : undefined;
+  }
+
+  /** The actual choices once ES.SEL has applied the scenario conditions. */
+  activeDialogueChoices(): readonly string[] | undefined {
+    const vars = this.machine.variables.entries;
+    const choices = this.choiceVariables;
+    if (!choices || !vars[this.v.stopped]?.ints?.[0]) return;
+    const count = Number(vars[choices.count]?.ints?.[0] ?? 0n);
+    const titles = vars[choices.titles]?.strings;
+    const targets = vars[choices.targets]?.strings;
+    if (!titles?.[1] || !targets || count < 1 || count > 9) return;
+    return Array.from({length: count}, (_, i) => targets[i + 1] ?? '');
+  }
+
+  /** Predict through direct jumps and divide the remaining work between the options at a menu. */
+  nextUnvoicedDialogue(line: number, choices?: readonly string[]): string[] {
+    const vars = this.machine.variables.entries;
+    const lines = vars[this.v.source]?.strings;
+    if (!lines) return [];
+    const position = {file: vars[this.v.file]?.strings?.[0] ?? '', lines, next: line + 1};
+    if (choices) return this.branchDialogue(position, choices);
+    const current = macros(lines[line] ?? '');
+    const lastDialogue = current?.map(([tag]) => dialogue(tag)).lastIndexOf(true) ?? -1;
+    if (lastDialogue < 0) return [];
+    return this.scanDialogue(position, DIALOGUE_LOOKAHEAD, current!.slice(lastDialogue + 1), true);
+  }
+
+  private branchDialogue(position: ScenarioPosition, choices: readonly string[]): string[] {
+    if (!choices.length) return [];
+    const limit = Math.ceil(DIALOGUE_LOOKAHEAD / choices.length);
+    const branches = choices.map((label) => {
+      const target = this.jumpTarget(label, position.file, position.lines);
+      return target ? this.scanDialogue(target, limit) : [];
+    });
+    const result: string[] = [];
+    for (let i = 0; i < limit; i++)
+      for (const branch of branches) if (branch[i]) result.push(branch[i]!);
+    return result;
+  }
+
+  private scanDialogue(
+    start: ScenarioPosition,
+    limit: number,
+    suffix?: [string, string][],
+    allowChoices = false,
+  ): string[] {
+    let {file, lines, next} = start;
+    let choiceTargets: string[] | undefined;
+    const result: string[] = [];
+    const state: LexerState = {comment: false};
+    const language = this.dialogueLanguage();
+    for (let step = 0; step < SCAN_LINES && result.length < limit; step++) {
+      const tags = step === 0 && suffix !== undefined ? suffix : macros(lines[next++] ?? '', state);
+      if (!tags || next > lines.length) break;
+      let target: ScenarioPosition | undefined;
+      for (const [tag, args] of tags) {
+        if (tag === 'SEL.GO') {
+          choiceTargets = macroArguments(args).slice(0, 8).filter(Boolean);
+          continue;
+        }
+        if (tag === 'SEL' || tag === 'SEL.JP' || tag === 'SEL.CN') {
+          if ((tag === 'SEL.JP' && language !== 1) || (tag === 'SEL.CN' && language !== 0))
+            continue;
+          if (allowChoices && choiceTargets)
+            result.push(...this.branchDialogue({file, lines, next}, choiceTargets));
+          return result;
+        }
+        // Conditional option macros are evaluated by the game. Forecast from the live menu then.
+        if (tag.startsWith('SEL.')) return result;
+        const argument = this.calls?.jumps.get(tag);
+        if (argument !== undefined) {
+          target = this.jumpTarget(macroArguments(args)[argument] ?? '', file, lines);
+          if (!target) return result;
+          break;
+        }
+        if (!dialogue(tag) && tag !== 'R' && !this.linear(tag)) return result;
+      }
+      if (target) {
+        ({file, lines, next} = target);
+        choiceTargets = undefined;
+        state.comment = false;
+      } else if (!voices(tags).length && tags.some(([tag]) => dialogue(tag))) {
+        const text = this.dialogueText(tags);
+        if (text) result.push(text);
+      }
+    }
+    return result;
+  }
+
+  private dialogueLanguage(): number {
+    const lang = this.machine.variables.entries[1176];
+    return Number(lang?.ints?.[255 * (lang.dimensions[1] ?? 0)] ?? -1n);
+  }
+
+  private dialogueText(tags: readonly [string, string][]): string {
+    const language = this.dialogueLanguage();
     let text = '';
     for (const [tag, args] of tags) {
       if (tag === 'TEXT') text += args;
@@ -762,10 +881,9 @@ export class YurisSceneLookahead {
     // A bilingual argument keeps its inline macros; a voice cue there is in `tags` already.
     // Decoded first, so that a DBCS trail byte 0x5C does not read as a macro.
     const bytes = latin1(text);
-    text = (this.dialogueDecoder ? this.dialogueDecoder.decode(bytes) : decodeCp932(bytes))
+    return (this.dialogueDecoder ? this.dialogueDecoder.decode(bytes) : decodeCp932(bytes))
       .replace(/\\[A-Z][A-Z0-9_.]*(?:\([^)]*\))?/g, '')
       .trim();
-    return text ? {file, line, text, voiced: voices(tags).length > 0} : undefined;
   }
 
   /** A transition's rule image: es.TRDEF maps transition names to rules (es.TRDEF.CHECK). */
@@ -790,7 +908,7 @@ export class YurisSceneLookahead {
     name: string,
     file: string,
     source: readonly string[],
-  ): {lines: readonly string[]; next: number} | undefined {
+  ): ScenarioPosition | undefined {
     const vars = this.machine.variables.entries,
       v = this.v;
     if (v.labelNames < 0 || !name) return;
@@ -801,11 +919,12 @@ export class YurisSceneLookahead {
       number = vars[v.labelFile]?.ints?.[index];
     const target = number === undefined ? undefined : vars[v.fileNames]?.strings?.[Number(number)];
     if (at < 0 || !target) return;
-    if (target === file) return {lines: source, next: at};
+    if (target === file) return {file, lines: source, next: at};
     const lines = this.sources.get(target);
-    if (Array.isArray(lines)) return {lines, next: at};
+    if (Array.isArray(lines)) return {file: target, lines, next: at};
     if (lines === undefined) {
-      if (this.sources.size >= 8) this.sources.clear();
+      const oldest = this.sources.keys().next().value;
+      if (this.sources.size >= 16 && oldest !== undefined) this.sources.delete(oldest);
       this.sources.set(target, this.readSource(target));
     }
   }
@@ -822,6 +941,7 @@ export class YurisSceneLookahead {
     }
     this.sources.set(name, lines);
     this.line = -1;
+    this.dialogueForecastVersion++;
   }
 
   /** Undefined means that the previous priority window still applies. */
@@ -888,6 +1008,7 @@ export class YurisSceneLookahead {
     // The scan follows unconditional jumps into the lines they continue at, within
     // SCAN_LINES lines, and skips block comments.
     let lines: readonly string[] = source,
+      scanFile = file,
       next = line + 1,
       jumped = false;
     const state: LexerState = {comment: false};
@@ -896,7 +1017,7 @@ export class YurisSceneLookahead {
       const tags = macros(lines[next] ?? '', state);
       if (!tags) return [];
       cues.push(...voices(tags));
-      let target: {lines: readonly string[]; next: number} | undefined;
+      let target: ScenarioPosition | undefined;
       for (const [tag, args] of tags) {
         if (dialogue(tag)) {
           if (!dialogue(tags.at(-1)?.[0])) return [];
@@ -928,11 +1049,11 @@ export class YurisSceneLookahead {
           }
           return [...assets].slice(0, 20);
         }
-        const values = args.split(',').map((arg) => arg.trim().replace(/^"(.*)"$/, '$1'));
+        const values = macroArguments(args);
         if (!this.linear(tag)) {
           const jump = this.calls?.jumps.get(tag);
           target =
-            jump === undefined ? undefined : this.jumpTarget(values[jump] ?? '', file, source);
+            jump === undefined ? undefined : this.jumpTarget(values[jump] ?? '', scanFile, lines);
           if (!target) return [];
           break;
         }
@@ -979,6 +1100,7 @@ export class YurisSceneLookahead {
           assets.add((tag === 'ML.S' ? 'cg/' : 'cg/bg/') + name + (language === 0 ? '_c' : ''));
       }
       if (target) {
+        scanFile = target.file;
         lines = target.lines;
         next = target.next - 1;
         jumped = true;
@@ -1050,6 +1172,7 @@ function macros(line: string, state?: LexerState): [string, string][] | undefine
         continue;
       }
       const end = syntax.indexOf('\\', start);
+      if (end === start) return; // An unrecognized escape cannot advance the lexer.
       tags.push(['TEXT', line.slice(start, end < 0 ? syntax.length : end)]);
       i = end < 0 ? syntax.length : end;
       continue;

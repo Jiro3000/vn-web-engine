@@ -36,6 +36,7 @@ export function rasterTextSlots(
       g.weight,
       g.stretch,
       g.pitch ?? null,
+      g.linePitch ?? null,
       g.outline ?? null,
       g.shadows ?? null,
     ]);
@@ -75,6 +76,7 @@ export function rasterTextSlots(
           weight: first.weight,
           stretch: first.stretch,
           pitch: first.pitch,
+          linePitch: first.linePitch,
         },
         family: first.family,
         style: style(first),

@@ -574,3 +574,108 @@ test('overlay slots stay transparent without effects until a reader style shows 
     globalThis.document = original;
   }
 });
+
+test('DomGlyphSlots sets Japanese measurement language and keeps line pitch stable across row transitions', async () => {
+  const original = globalThis.document;
+  const canvases = [];
+  class Node {
+    constructor(tag) {
+      this.tag = tag;
+      this.children = [];
+      this.style = {};
+      this.dataset = {};
+    }
+    append(...children) {
+      for (const child of children) {
+        child.parent = this;
+        this.children.push(child);
+      }
+    }
+    getContext() {
+      this.ctx = {measureText: (text) => ({width: [...text].length * 38})};
+      return this.ctx;
+    }
+    setAttribute() {}
+    replaceChildren() {
+      this.children = [];
+    }
+  }
+  globalThis.document = {
+    createElement: (tag) => {
+      const node = new Node(tag);
+      if (tag === 'canvas') canvases.push(node);
+      return node;
+    },
+    createElementNS: () => new Node('svg'),
+    createTextNode: (data) => ({data, length: data.length, replaceData() {}}),
+    addEventListener() {},
+    removeEventListener() {},
+    getSelection: () => null,
+  };
+  try {
+    const {DomGlyphSlots} = await import('../dist/text/dom-glyph-slots.js');
+    const px = (css, name) => Number(new RegExp(`(?:^|;)${name}:(-?[0-9.]+)px`).exec(css)[1]);
+    const layer = new DomGlyphSlots(new Node('div'));
+    // Measurement canvas and 2D context match the text span's lang="ja".
+    assert.equal(canvases.at(-1).lang, 'ja');
+    assert.equal(canvases.at(-1).ctx.lang, 'ja');
+
+    // A single-line prefix with explicit linePitch=48 already uses line-height 48 and top -5,
+    // matching the two-line layout when row 1 begins revealing.
+    const g0 = {
+      id: 1,
+      text: '日',
+      line: 0,
+      x: 382,
+      y: 900,
+      width: 38,
+      height: 38,
+      size: 38,
+      color: 0xffffff,
+      alpha: 255,
+      clip: {x: 382, y: 900, width: 38, height: 38},
+    };
+    const g1 = {
+      id: 2,
+      text: '本',
+      line: 1,
+      x: 382,
+      y: 948,
+      width: 38,
+      height: 38,
+      size: 38,
+      color: 0xffffff,
+      alpha: 255,
+      clip: {x: 382, y: 948, width: 38, height: 38},
+    };
+    layer.show(
+      {id: 'dlg', explicitLines: true, pitch: 39, linePitch: 48, glyphs: [g0]},
+      1,
+      'sans-serif',
+      false,
+    );
+    const span = layer.element.children[0].children[0];
+    const oneLine = [px(span.style.cssText, 'line-height'), px(span.style.cssText, 'top')];
+    layer.show(
+      {id: 'dlg', explicitLines: true, pitch: 39, linePitch: 48, glyphs: [g0, g1]},
+      1,
+      'sans-serif',
+      false,
+    );
+    const twoLines = [px(span.style.cssText, 'line-height'), px(span.style.cssText, 'top')];
+    assert.deepEqual(oneLine, [48, -5]);
+    assert.deepEqual(twoLines, [48, -5]);
+
+    // Odd lineHeight - size (e.g. 53 - 38 = 15) floors half-leading to 7px instead of 7.5px
+    // so Chromium's integer half-leading keeps row 0 aligned without a -0.5px shift.
+    const odd1 = {...g1, y: 953, clip: {x: 382, y: 953, width: 38, height: 38}};
+    layer.show({id: 'odd', explicitLines: true, glyphs: [g0, odd1]}, 1, 'sans-serif', false);
+    const oddSpan = layer.element.children[1].children[0];
+    assert.deepEqual(
+      [px(oddSpan.style.cssText, 'line-height'), px(oddSpan.style.cssText, 'top')],
+      [53, -7],
+    );
+  } finally {
+    globalThis.document = original;
+  }
+});

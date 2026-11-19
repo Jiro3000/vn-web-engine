@@ -36,7 +36,11 @@ import type {YurisCgNode, YurisLayers} from '../vm/cg.js';
 import {YurisIntegerWindow} from './integer-window.js';
 import {BrowserYmvDecoder} from './ymv-decode.js';
 import {YurisSceneLookahead} from '../vm/scene-lookahead.js';
-import {getTextHookMode, publishTextHookLine} from '../../../text/text-hook.js';
+import {
+  getTextHookMode,
+  publishTextHookForecast,
+  publishTextHookLine,
+} from '../../../text/text-hook.js';
 
 const bytes = (s: string): Uint8Array => Uint8Array.from(s, (c) => c.charCodeAt(0));
 const decode = (s: string): string => decodeCp932(bytes(s));
@@ -140,6 +144,8 @@ export class YurisBrowserPlayer {
   private lookahead?: YurisSceneLookahead;
   /** The dialogue line last handed to the text hook. */
   private dialogueKey = '';
+  private dialogueForecastKey = '';
+  private dialogueForecastVersion = -1;
   private readonly preloading = new Set<string>();
   /** The preloads of `preloading` the next click needs, which have slots of their own. */
   private readonly urgentPreloads = new Set<string>();
@@ -702,12 +708,29 @@ export class YurisBrowserPlayer {
   }
   /** Hands each new dialogue line of the scenario parser to the clipboard text hook. */
   private publishDialogue(): void {
-    if (!this.lookahead || getTextHookMode() === 'off') return;
-    const line = this.lookahead.currentDialogue();
-    const key = line ? line.file + '\0' + line.line + '\0' + line.text : '';
-    if (key === this.dialogueKey) return;
+    const mode = getTextHookMode();
+    const lookahead = this.lookahead;
+    if (!lookahead || mode === 'off') return;
+    const line = lookahead.currentDialogue();
+    const choices = !line && mode === 'unvoiced' ? lookahead.activeDialogueChoices() : undefined;
+    const key = line
+      ? mode + '\0' + line.file + '\0' + line.line + '\0' + line.text
+      : choices
+        ? JSON.stringify(choices)
+        : '';
+    const changed = key !== this.dialogueKey;
+    const version = lookahead.dialogueForecastVersion;
+    if (!changed && version === this.dialogueForecastVersion) return;
     this.dialogueKey = key;
-    if (line) publishTextHookLine(line);
+    this.dialogueForecastVersion = version;
+    if (!line && !choices) return;
+
+    const upcoming =
+      mode === 'unvoiced' ? lookahead.nextUnvoicedDialogue(line?.line ?? -1, choices) : [];
+    const forecast = JSON.stringify(upcoming);
+    if (line && changed) publishTextHookLine({...line, upcoming});
+    else if (forecast !== this.dialogueForecastKey) publishTextHookForecast(upcoming);
+    this.dialogueForecastKey = forecast;
   }
   private async loop(): Promise<void> {
     try {

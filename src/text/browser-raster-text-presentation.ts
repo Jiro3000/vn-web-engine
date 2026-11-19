@@ -49,6 +49,9 @@ export function mapRasterTextGlyphs(
             clip: clipped,
             size: glyph.size * Math.abs(scaleY),
             ...(glyph.pitch !== undefined ? {pitch: glyph.pitch * Math.abs(scaleX)} : {}),
+            ...(glyph.linePitch !== undefined
+              ? {linePitch: glyph.linePitch * Math.abs(scaleY)}
+              : {}),
           },
         ]
       : [];

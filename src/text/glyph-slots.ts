@@ -57,6 +57,8 @@ export interface GlyphSlot {
   stretch?: number;
   /** Fixed advance of a full-width cell, independent of the visible text. */
   pitch?: number;
+  /** Fixed row-to-row vertical advance, independent of how many rows are visible. */
+  linePitch?: number;
   id: string;
   glyphs: readonly TextGlyph[];
   /**

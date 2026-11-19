@@ -1,6 +1,9 @@
 import {
+  clearRasterTextGlyphs,
   clearRasterTextPresentation,
   copyRasterTextPresentation,
+  hasRasterText,
+  rasterTextBitmap,
   withRasterText,
   type RasterTextBitmap,
 } from '../../../text/raster-text.js';
@@ -542,7 +545,7 @@ function merge(
     right = Math.min(x + s.width, d.width) - 1,
     bottom = Math.min(y + s.height, d.height) - 1;
   if (left <= right && top <= bottom) layers.markPixelsChanged(dst, [left, top, right, bottom]);
-  recordAtlasGlyph(m, src.name, source);
+  recordAtlasGlyph(m, src.name, source, x, y);
   mergeText(target, source, x, y, s.a, d.a, attenuateDestination);
   return 0;
 }
@@ -919,13 +922,17 @@ function regionOp(
   if (!hasDestination) {
     if (op === Op.Mono || op === Op.RectPaint || op === Op.Gradation) {
       run(op, from, from, s, p, tw, th, rw, rh, mode);
-      if (op === Op.RectPaint)
-        clearRasterTextPresentation(yurisRasterBitmap(from, tw, rh, p.x, p.y, rw));
+      if (op === Op.RectPaint) rectPaintRasterText(from, tw, p, mode);
       layers.markPixelsChanged(src);
       return 0;
     }
     const buffer = allocate(rw, rh);
     run(op, buffer, from, s, p, tw, th, rw, rh, mode);
+    if (op === Op.Copy || op === Op.Copy2)
+      copyRasterTextPresentation(
+        yurisRasterBitmap(buffer, rw, rh),
+        yurisRasterBitmap(from, tw, rh, p.x, p.y, rw),
+      );
     layers.markPixelsChanged(src);
     s.replace(buffer, rw, rh);
     layers.markPixelsChanged(src);
@@ -944,6 +951,10 @@ function regionOp(
       yurisRasterBitmap(buffer, rw, rh),
       yurisRasterBitmap(from, tw, rh, p.x, p.y, rw),
     );
+  else if (op === Op.RectPaint) {
+    copyRasterTextPresentation(yurisRasterBitmap(buffer, rw, rh), yurisRasterBitmap(from, tw, th));
+    rectPaintRasterText(buffer, rw, p, mode);
+  }
   d.replace(buffer, rw, rh);
   if (op === Op.Copy) {
     layers.markDirty(dst);
@@ -954,16 +965,33 @@ function regionOp(
 }
 
 /**
+ * Mode 2 (`RECTPAINT2`, alpha-only) preserves RGB text pixels and updates the textless plane's
+ * alpha to match so screen captures like `es.CGTSS` (`COPY2` + `RECTPAINT2 SET=255`) keep DOM
+ * text provenance; zero alpha hides those glyphs. RGB fills overwrite text in the region.
+ */
+function rectPaintRasterText(buffer: Uint8Array, stride: number, p: ActParams, mode: number): void {
+  const region = yurisRasterBitmap(buffer, stride, p.y2 - p.y + 1, p.x, p.y, p.x2 - p.x + 1);
+  if (mode !== 2) {
+    clearRasterTextPresentation(region);
+    return;
+  }
+  if (!hasRasterText(region)) return;
+  const alpha = p.set & 0xff;
+  const blank = rasterTextBitmap(region);
+  const bytes = blank.storage?.bytes;
+  if (bytes) {
+    for (let y = 0, row = blank.offset; y < blank.height; y++, row += blank.stride)
+      for (let x = 0; x < blank.width; x++) bytes[row + x * 4 + 3] = alpha;
+  }
+  if (alpha === 0) clearRasterTextGlyphs(region);
+}
+
+/**
  * A zeroed buffer for a region result. With `target`, the layer the result replaces, its own
  * buffer is cleared and reused when it has the size and only that layer uses it (see
  * `YurisCg.overwritablePixels`).
  */
-function allocate(
-  width: number,
-  height: number,
-  target?: YurisCg,
-  from?: Uint8Array,
-): Uint8Array {
+function allocate(width: number, height: number, target?: YurisCg, from?: Uint8Array): Uint8Array {
   if (width > REGION_WIDTH) throw new YurisError(0x186aa, [width, height]);
   const length = Math.max(width, 0) * Math.max(height, 0) * 4;
   const own = target && from ? target.overwritablePixels(length, from) : null;

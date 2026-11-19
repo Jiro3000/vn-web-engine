@@ -12,17 +12,21 @@ export interface TextHookLine {
   readonly text: string;
   /** The game plays a voice with this line. */
   readonly voiced: boolean;
+  readonly upcoming?: readonly string[];
 }
 
 /** The part of the async Clipboard API the hook writes through. */
 export interface TextHookClipboard {
   writeText(text: string): Promise<void>;
+  write?(items: ClipboardItem[]): Promise<void>;
 }
 
 const modes: readonly TextHookMode[] = ['off', 'all', 'unvoiced'];
 /** Invisible clipboard signal recognized by Japanese Reader's Speech.js. */
 const stopSpeechSignal = '\u2063';
+const forecastSignal = '\u2064';
 let mode: TextHookMode = 'off';
+let writeSequence = 0;
 
 export function normalizeTextHookMode(value: unknown): TextHookMode {
   return modes.includes(value as TextHookMode) ? (value as TextHookMode) : 'off';
@@ -45,10 +49,63 @@ export function publishTextHookLine(
   clipboard: TextHookClipboard | undefined = globalThis.navigator?.clipboard,
 ): boolean {
   if (mode === 'off' || !line.text || !clipboard) return false;
-  clipboard
-    .writeText(mode === 'unvoiced' && line.voiced ? stopSpeechSignal : line.text)
-    .catch(() => {
-      /* An unfocused page or a denied permission loses this line, not the next one. */
-    });
+  const text = mode === 'unvoiced' && line.voiced ? stopSpeechSignal : line.text;
+  const sequence = ++writeSequence;
+  const writePlain = () => {
+    if (sequence === writeSequence) void clipboard.writeText(text).catch(() => {});
+  };
+  if (
+    mode !== 'unvoiced' ||
+    !line.upcoming?.length ||
+    !writeForecast(clipboard, text, line.upcoming, writePlain)
+  ) {
+    writePlain();
+  }
   return true;
+}
+
+/** Refreshes future audio while a choice is displayed or a target file finishes loading. */
+export function publishTextHookForecast(
+  upcoming: readonly string[],
+  clipboard: TextHookClipboard | undefined = globalThis.navigator?.clipboard,
+): void {
+  if (mode === 'unvoiced' && clipboard && writeForecast(clipboard, forecastSignal, upcoming)) {
+    writeSequence++;
+  }
+}
+
+function writeForecast(
+  clipboard: TextHookClipboard,
+  text: string,
+  upcoming: readonly string[],
+  onFailure: () => void = () => {},
+): boolean {
+  if (!clipboard.write || typeof ClipboardItem === 'undefined') return false;
+  // Keep regular copy-paste on the plain current line. Reader reads the extra attribute.
+  const lines = upcoming.slice(0, 16).filter((next) => next.length <= 4096);
+  const bytes = new TextEncoder().encode(JSON.stringify(lines));
+  const hints = btoa(Array.from(bytes, (byte) => String.fromCharCode(byte)).join(''));
+  const html = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  try {
+    void clipboard
+      .write([
+        new ClipboardItem({
+          'text/plain': new Blob([text], {type: 'text/plain'}),
+          'text/html': new Blob(
+            [
+              '<span data-japanese-reader-upcoming="' +
+                hints +
+                '">' +
+                html.replace(/\n/g, '<br>') +
+                '</span>',
+            ],
+            {type: 'text/html'},
+          ),
+        }),
+      ])
+      .catch(onFailure);
+    return true;
+  } catch {
+    return false;
+  }
 }
