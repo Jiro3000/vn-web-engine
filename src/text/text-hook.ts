@@ -25,8 +25,29 @@ const modes: readonly TextHookMode[] = ['off', 'all', 'unvoiced'];
 /** Invisible clipboard signal recognized by Japanese Reader's Speech.js. */
 const stopSpeechSignal = '\u2063';
 const forecastSignal = '\u2064';
+/** Horizontal bars/dashes (――, ——, ──, ━━) that TTS engines read inconsistently. */
+const horizontalDash = /[―—─━⸺⸻]+/g;
+const beforePausePunct = /^[。、，．,.！？!?…‥\s」』）)\]】]/;
+const afterPausePunct = /[。、，．,.！？!?…‥\s「『（(\[【】]$/;
 let mode: TextHookMode = 'off';
 let writeSequence = 0;
+
+/**
+ * Strips decorative horizontal bars/dashes so TTS readers do not pronounce them.
+ * Mid-phrase dashes become a brief pause comma; dashes at boundaries or beside
+ * punctuation are removed. Katakana prolonged sound marks (`ー`) are kept.
+ */
+export function sanitizeTextHookText(text: string): string {
+  return text
+    .replace(horizontalDash, (match, offset: number, source: string) => {
+      const before = source.slice(0, offset);
+      const after = source.slice(offset + match.length);
+      if (!before || !after) return '';
+      if (afterPausePunct.test(before) || beforePausePunct.test(after)) return '';
+      return '、';
+    })
+    .trim();
+}
 
 export function normalizeTextHookMode(value: unknown): TextHookMode {
   return modes.includes(value as TextHookMode) ? (value as TextHookMode) : 'off';
@@ -49,7 +70,9 @@ export function publishTextHookLine(
   clipboard: TextHookClipboard | undefined = globalThis.navigator?.clipboard,
 ): boolean {
   if (mode === 'off' || !line.text || !clipboard) return false;
-  const text = mode === 'unvoiced' && line.voiced ? stopSpeechSignal : line.text;
+  const text =
+    mode === 'unvoiced' && line.voiced ? stopSpeechSignal : sanitizeTextHookText(line.text);
+  if (!text) return false;
   const sequence = ++writeSequence;
   const writePlain = () => {
     if (sequence === writeSequence) void clipboard.writeText(text).catch(() => {});
@@ -82,7 +105,10 @@ function writeForecast(
 ): boolean {
   if (!clipboard.write || typeof ClipboardItem === 'undefined') return false;
   // Keep regular copy-paste on the plain current line. Reader reads the extra attribute.
-  const lines = upcoming.slice(0, 16).filter((next) => next.length <= 4096);
+  const lines = upcoming
+    .slice(0, 16)
+    .map(sanitizeTextHookText)
+    .filter((next) => next.length > 0 && next.length <= 4096);
   const bytes = new TextEncoder().encode(JSON.stringify(lines));
   const hints = btoa(Array.from(bytes, (byte) => String.fromCharCode(byte)).join(''));
   const html = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');

@@ -4126,3 +4126,62 @@ test('CGACT SIZE and SIZE2 defer nearest, REMALLOC shrink and lazy targets with 
   sizeBilinear(expected, src.pixels, 300, 300, 0, 0, 29900, 29900, 27000, 25000, true);
   assert.deepEqual(dst.pixels.subarray(0, expected.length), expected);
 });
+
+test('clipboard text hook strips decorative horizontal dashes for TTS while keeping katakana prolonged marks', async () => {
+  const {publishTextHookLine, sanitizeTextHookText, setTextHookMode} =
+    await import('../dist/text/text-hook.js');
+  assert.equal(sanitizeTextHookText('――そして朝が来た。'), 'そして朝が来た。');
+  assert.equal(sanitizeTextHookText('「――そうか」'), '「そうか」');
+  assert.equal(sanitizeTextHookText('「待って――！」'), '「待って！」');
+  assert.equal(sanitizeTextHookText('「そんな——」'), '「そんな」');
+  assert.equal(sanitizeTextHookText('そうだ――と思った'), 'そうだ、と思った');
+  assert.equal(sanitizeTextHookText('「いや──なんでもない」'), '「いや、なんでもない」');
+  assert.equal(sanitizeTextHookText('「……――そうか」'), '「……そうか」');
+  assert.equal(sanitizeTextHookText('【アリス】――そうか'), '【アリス】そうか');
+  assert.equal(sanitizeTextHookText('そうだ――\nと思った'), 'そうだ\nと思った');
+  assert.equal(sanitizeTextHookText('ラーメンとコーヒー'), 'ラーメンとコーヒー');
+  assert.equal(sanitizeTextHookText('――'), '');
+
+  const written = [];
+  const forecastPayloads = [];
+  const clipboard = {
+    writeText: async (text) => void written.push(text),
+    write: async (items) => {
+      for (const item of items) forecastPayloads.push(item.data);
+    },
+  };
+  const prevClipboardItem = globalThis.ClipboardItem;
+  globalThis.ClipboardItem = class {
+    constructor(data) {
+      this.data = data;
+    }
+  };
+  try {
+    setTextHookMode('unvoiced');
+    assert.equal(publishTextHookLine({text: '――', voiced: false}, clipboard), false);
+    assert.equal(publishTextHookLine({text: '――', voiced: true}, clipboard), true);
+    assert.equal(
+      publishTextHookLine(
+        {
+          text: 'そうだ――と思った',
+          voiced: false,
+          upcoming: ['――', '――次の一行', 'いや——待て'],
+        },
+        clipboard,
+      ),
+      true,
+    );
+  } finally {
+    setTextHookMode('off');
+    if (prevClipboardItem === undefined) delete globalThis.ClipboardItem;
+    else globalThis.ClipboardItem = prevClipboardItem;
+  }
+  assert.deepEqual(written, ['\u2063']);
+  assert.equal(forecastPayloads.length, 1);
+  assert.equal(await forecastPayloads[0]['text/plain'].text(), 'そうだ、と思った');
+  const html = await forecastPayloads[0]['text/html'].text();
+  const match = html.match(/data-japanese-reader-upcoming="([^"]+)"/);
+  assert.ok(match);
+  const upcoming = JSON.parse(Buffer.from(match[1], 'base64').toString('utf8'));
+  assert.deepEqual(upcoming, ['次の一行', 'いや、待て']);
+});
