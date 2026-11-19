@@ -238,6 +238,12 @@ export class YurisSounds {
   device = 0;
   /** 0x872264: the program is in the background and its sounds are paused. */
   muted = false;
+  private depth = 0;
+
+  /** True while a sound command or update pass is active (prevents concurrent background ticks). */
+  get busy(): boolean {
+    return this.depth > 0;
+  }
 
   constructor(
     private readonly machine: YurisMachine,
@@ -310,71 +316,81 @@ export class YurisSounds {
       a = m.args;
     m.decode();
     if (this.device === 0) return 0;
-    const found = this.find(),
-      {path, group} = found;
-    let node = found.node;
-    const file = a.has(Arg.File);
-    if (!node) {
-      if (!group) {
-        if (!file) return 0;
-      } else if (file) throw new YurisError(0x18bac, [m.commandName(SOUND)]);
-      node = this.tree.create(path, group, 1n, new YurisSound());
-    }
-    const s = node.payload!;
-    const value = (id: number) => i32(Number(BigInt.asIntN(32, a.value[a.has(id)]!)));
-    if (file) {
-      const name = a.string[file]!;
-      if (s.state !== State.Idle) this.unload(node);
-      const resolved = this.files.resolve(name, YurisFileKind.Sound);
-      if (!resolved.found) return 0;
-      if (resolved.type === YurisFileType.Wav) s.type = SoundType.Wav;
-      else if (resolved.type === YurisFileType.Ogg) s.type = SoundType.Ogg;
-      else if (resolved.type === YurisFileType.Opus) s.type = SoundType.Opus;
-      else throw new YurisError(0x186be, [m.commandName(SOUND), name]);
-      await this.load(node, resolved.path);
-    }
-    if (a.has(Arg.E)) {
-      s.enabled = (value(Arg.E) << 24) >> 24;
-      this.setVolume(node, s.volume);
-    }
-    if (a.has(Arg.Start)) this.setStart(node, value(Arg.Start));
-    if (a.has(Arg.Restart)) this.setRestart(node, value(Arg.Restart));
-    if (a.has(Arg.End)) this.setEnd(node, value(Arg.End));
-    if (a.has(Arg.Loop)) {
-      s.loop = value(Arg.Loop);
-      if (s.state !== State.Idle) s.loopsLeft = s.loop; // 0x41F2B0
-    }
-    if (a.has(Arg.Pan)) this.setPan(node, value(Arg.Pan));
-    if (a.has(Arg.Pitch)) this.setPitch(node, value(Arg.Pitch));
-    // SPEED queues 0x41F4B4, which does nothing.
-    const play = a.has(Arg.Play);
-    if (a.has(Arg.Volume)) {
-      const volume = value(Arg.Volume);
-      if (!play) this.setVolume(node, volume);
-      else {
-        // 0x41F278: the fade of the next PLAY goes from the current target to VOLUME.
-        s.target = s.fadeTo;
-        s.fadeTo = volume;
+    this.depth++;
+    try {
+      const found = this.find(),
+        {path, group} = found;
+      let node = found.node;
+      const file = a.has(Arg.File);
+      if (!node) {
+        if (!group) {
+          if (!file) return 0;
+        } else if (file) throw new YurisError(0x18bac, [m.commandName(SOUND)]);
+        node = this.tree.create(path, group, 1n, new YurisSound());
       }
+      const s = node.payload!;
+      const value = (id: number) => i32(Number(BigInt.asIntN(32, a.value[a.has(id)]!)));
+      if (file) {
+        const name = a.string[file]!;
+        if (s.state !== State.Idle) this.unload(node);
+        const resolved = this.files.resolve(name, YurisFileKind.Sound);
+        if (!resolved.found) return 0;
+        if (resolved.type === YurisFileType.Wav) s.type = SoundType.Wav;
+        else if (resolved.type === YurisFileType.Ogg) s.type = SoundType.Ogg;
+        else if (resolved.type === YurisFileType.Opus) s.type = SoundType.Opus;
+        else throw new YurisError(0x186be, [m.commandName(SOUND), name]);
+        await this.load(node, resolved.path);
+      }
+      if (a.has(Arg.E)) {
+        s.enabled = (value(Arg.E) << 24) >> 24;
+        this.setVolume(node, s.volume);
+      }
+      if (a.has(Arg.Start)) this.setStart(node, value(Arg.Start));
+      if (a.has(Arg.Restart)) this.setRestart(node, value(Arg.Restart));
+      if (a.has(Arg.End)) this.setEnd(node, value(Arg.End));
+      if (a.has(Arg.Loop)) {
+        s.loop = value(Arg.Loop);
+        if (s.state !== State.Idle) s.loopsLeft = s.loop; // 0x41F2B0
+      }
+      if (a.has(Arg.Pan)) this.setPan(node, value(Arg.Pan));
+      if (a.has(Arg.Pitch)) this.setPitch(node, value(Arg.Pitch));
+      // SPEED queues 0x41F4B4, which does nothing.
+      const play = a.has(Arg.Play);
+      if (a.has(Arg.Volume)) {
+        const volume = value(Arg.Volume);
+        if (!play) this.setVolume(node, volume);
+        else {
+          // 0x41F278: the fade of the next PLAY goes from the current target to VOLUME.
+          s.target = s.fadeTo;
+          s.fadeTo = volume;
+        }
+      }
+      if (play) {
+        const fade = a.has(Arg.Fade) ? value(Arg.Fade) : 0;
+        if (a.value[play] === 1n) await this.play(node, fade);
+        else this.stop(node, fade);
+      }
+      if (a.has(Arg.Pause)) await this.pause(node, a.value[a.has(Arg.Pause)] === 1n ? 1 : 0);
+      return 0;
+    } finally {
+      this.depth--;
     }
-    if (play) {
-      const fade = a.has(Arg.Fade) ? value(Arg.Fade) : 0;
-      if (a.value[play] === 1n) await this.play(node, fade);
-      else this.stop(node, fade);
-    }
-    if (a.has(Arg.Pause)) await this.pause(node, a.value[a.has(Arg.Pause)] === 1n ? 1 : 0);
-    return 0;
   }
 
   /** SOUNDEND 0x44ED94: unloads and removes a leaf, or a group with everything below it. */
   private soundEnd(): number {
     const m = this.machine;
     m.decode();
-    const {node, group} = this.find();
-    if (!node) return 0;
-    if (group) this.endChildren(node);
-    this.endNode(node);
-    return 0;
+    this.depth++;
+    try {
+      const {node, group} = this.find();
+      if (!node) return 0;
+      if (group) this.endChildren(node);
+      this.endNode(node);
+      return 0;
+    } finally {
+      this.depth--;
+    }
   }
 
   /** 0x44EE34. */
@@ -851,9 +867,19 @@ export class YurisSounds {
         s.half = 1;
         s.writeOffset = 0;
         if ((await this.fill(s)) < 0) return;
-        this.silence(node);
         this.applyPan(s, s.pan);
         if (!s.buffer) return;
+        if (s.fadeTime === 0 && s.paused === 0 && !this.muted) {
+          // Natively the separate sound thread unmutes a zero-fade play within 3-20 ms;
+          // applying the target volume before Play prevents slow same-frame asset reads
+          // from eating the beginning of a voice line in silence.
+          s.volume = s.fadeTo;
+          this.setVolumeOf(node, s.fadeTo);
+          s.buffer.play();
+          s.state = State.Playing;
+          return;
+        }
+        this.silence(node);
         s.buffer.play();
         s.fadeFrom = 0;
         s.slope = s.fadeTime === 0 ? s.fadeTo << 10 : div(s.fadeTo << 10, s.fadeTime);
@@ -861,6 +887,12 @@ export class YurisSounds {
         return;
       }
       case State.FadingIn:
+        if (s.fadeTime === 0 && s.paused === 0 && !this.muted) {
+          s.volume = s.fadeTo;
+          this.setVolumeOf(node, s.fadeTo);
+          s.state = State.Playing;
+          return;
+        }
         s.fadeStart = i32(now);
         s.fadeDone = 0;
         s.fadeFrom = s.volume;
@@ -870,6 +902,11 @@ export class YurisSounds {
             : div((s.fadeTo - s.target) * 0x400, s.fadeTime);
         return;
       case State.Playing:
+        if (s.fadeTime === 0 && s.paused === 0 && !this.muted) {
+          s.volume = s.fadeTo;
+          this.setVolumeOf(node, s.fadeTo);
+          return;
+        }
         s.fadeStart = i32(now);
         s.fadeDone = 0;
         s.fadeFrom = s.volume;
@@ -1126,27 +1163,32 @@ export class YurisSounds {
    * fades (0x41D944), the positions (0x46B190) and the refills (0x41DBF4).
    */
   async update(): Promise<void> {
-    if (this.device === 0) return;
-    const system = this.machine.system,
-      active = this.machine.windows.windows[0]!.active;
-    if (system.backgroundExec === 0) {
-      if (system.suspended || (!active && !this.muted)) {
+    if (this.device === 0 || this.depth > 0) return;
+    this.depth++;
+    try {
+      const system = this.machine.system,
+        active = this.machine.windows.windows[0]!.active;
+      if (system.backgroundExec === 0) {
+        if (system.suspended || (!active && !this.muted)) {
+          this.muted = true;
+          await this.pauseBelow(this.tree.root, 1);
+        } else if (!system.suspended && active && this.muted) {
+          this.muted = false;
+          await this.pauseBelow(this.tree.root, 0);
+        }
+      } else if (system.suspended && !this.muted) {
         this.muted = true;
         await this.pauseBelow(this.tree.root, 1);
-      } else if (!system.suspended && active && this.muted) {
+      } else if (!system.suspended && this.muted) {
         this.muted = false;
         await this.pauseBelow(this.tree.root, 0);
       }
-    } else if (system.suspended && !this.muted) {
-      this.muted = true;
-      await this.pauseBelow(this.tree.root, 1);
-    } else if (!system.suspended && this.muted) {
-      this.muted = false;
-      await this.pauseBelow(this.tree.root, 0);
+      this.fades(this.tree.root);
+      this.positions(this.tree.root);
+      await this.refills(this.tree.root);
+    } finally {
+      this.depth--;
     }
-    this.fades(this.tree.root);
-    this.positions(this.tree.root);
-    await this.refills(this.tree.root);
   }
 
   /** 0x41D944: volume fades, frozen while paused or muted. */

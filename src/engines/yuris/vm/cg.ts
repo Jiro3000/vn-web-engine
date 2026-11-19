@@ -89,7 +89,8 @@ export class YurisCg {
     /** The layer whose buffer `from` is, until that layer changes it. */
     source?: YurisCg;
     from: Uint8Array;
-    target: Uint8Array;
+    /** Null until CPU pixels are actually read, avoiding per-frame allocations during GPU zooms. */
+    target: Uint8Array | null;
     write: PixelWriter;
     direct: boolean;
     scale?: DeferredScale;
@@ -111,12 +112,17 @@ export class YurisCg {
     return this.inputPixels;
   }
   get hasPixels(): boolean {
+    return this.displayedPixels !== null || this.pendingPixels !== undefined;
+  }
+  get hasBackingPixels(): boolean {
     return this.displayedPixels !== null;
   }
   get deferredScale(): DeferredScale | undefined {
+    const scale = this.pendingPixels?.scale;
+    if (!scale) return undefined;
     const source = this.displayedPixels;
-    return source && !hasRasterText(yurisRasterBitmap(source, this.width, this.height))
-      ? this.pendingPixels?.scale
+    return !source || !hasRasterText(yurisRasterBitmap(source, this.width, this.height))
+      ? scale
       : undefined;
   }
 
@@ -139,7 +145,11 @@ export class YurisCg {
   }
   pixelsForRect(x: number, y: number, width: number, height: number): Uint8Array | null {
     if (this.pendingPixels) {
-      if (x === 0 && y === 0 && width === this.width && height === this.height)
+      if (
+        !this.pendingPixels.direct ||
+        !this.pendingPixels.target ||
+        (x === 0 && y === 0 && width === this.width && height === this.height)
+      )
         this.resolvePixels();
       else {
         const {target, from, write} = this.pendingPixels;
@@ -153,8 +163,7 @@ export class YurisCg {
     const source = this.displayedPixels;
     return (
       !!pending?.direct &&
-      !!source &&
-      !hasRasterText(yurisRasterBitmap(source, this.width, this.height)) &&
+      (!source || !hasRasterText(yurisRasterBitmap(source, this.width, this.height))) &&
       pending.write(pixels, pending.from, clip, {stride, x, y}) === true
     );
   }
@@ -223,7 +232,12 @@ export class YurisCg {
    */
   private exclusivePixels(): Uint8Array | null {
     const pixels = this.inputPixels;
-    if (!pixels || pixels !== this.displayedPixels || this.windowReadback || this.pixelReaders?.size)
+    if (
+      !pixels ||
+      pixels !== this.displayedPixels ||
+      this.windowReadback ||
+      this.pixelReaders?.size
+    )
       return null;
     return hasRasterText(yurisRasterBitmap(pixels, this.width, this.height)) ? null : pixels;
   }
@@ -295,6 +309,55 @@ export class YurisCg {
   }
 
   /**
+   * Defers a CGACT SIZE/SIZE2 resize. When `reuseTarget` is false (size changed), no CPU buffer
+   * is allocated unless the pixels are later read on the CPU; GPU compositing samples `from`
+   * directly. When `reuseTarget` is true (same size or REMALLOC shrink), the existing backing
+   * buffer is kept in place.
+   */
+  deferResize(
+    width: number,
+    height: number,
+    reuseTarget: boolean,
+    source: YurisCg,
+    from: Uint8Array,
+    write: PixelWriter,
+    direct: boolean,
+    scale: DeferredScale,
+  ): boolean {
+    if (reuseTarget) {
+      const target = this.inputPixels;
+      if (
+        !target ||
+        target !== this.displayedPixels ||
+        from.buffer === target.buffer ||
+        target.length < width * height * 4
+      )
+        return false;
+      this.releaseReaders(true);
+      this.cancelPixelWrite();
+      this.width = this.textureWidth = width;
+      this.height = this.textureHeight = height;
+      this.pixelRevision++;
+      this.pendingPixels = {source, from, target, write, direct, scale};
+      (source.pixelReaders ??= new Set()).add(this);
+      return true;
+    }
+    this.released = undefined;
+    this.releaseReaders(false);
+    this.cancelPixelWrite();
+    this.windowReadback = undefined;
+    this.displayedPixels = this.inputPixels = null;
+    this.filtered = null;
+    this.filterFrame = 0n;
+    this.width = this.textureWidth = width;
+    this.height = this.textureHeight = height;
+    this.pixelRevision++;
+    this.pendingPixels = {source, from, target: null, write, direct, scale};
+    (source.pixelReaders ??= new Set()).add(this);
+    return true;
+  }
+
+  /**
    * Before this layer's pixels change, its deferred readers stop following it. They keep the
    * buffer they captured, or a copy of it when `copy` (the buffer is written in place), so the
    * transform still sees the pixels of its CGACT and runs only when its result is read. A
@@ -339,7 +402,10 @@ export class YurisCg {
     if (!pending) return;
     pending.source?.pixelReaders?.delete(this);
     this.pendingPixels = undefined;
-    pending.write(pending.target, pending.from);
+    const target =
+      pending.target ??
+      (this.displayedPixels = this.inputPixels = new Uint8Array(this.width * this.height * 4));
+    pending.write(target, pending.from);
     releaseReaderCopy(pending.from);
   }
 
@@ -376,6 +442,7 @@ function releaseReaderCopy(pixels: Uint8Array): void {
 }
 
 export interface DeferredScale {
+  readonly kind: 'bilinear' | 'nearest';
   readonly pixels: Uint8Array;
   readonly width: number;
   readonly height: number;

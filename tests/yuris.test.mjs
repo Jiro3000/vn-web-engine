@@ -3947,3 +3947,182 @@ test('CGACT RECTPAINT2 preserves raster text provenance for screen captures whil
   commands.get(2)();
   assert.equal(hasRasterText(yurisRasterBitmap(cgs100.pixels, 4, 4)), false);
 });
+
+test('YU-RIS SOUND with zero fade applies volume before play so slow asset loads do not mute voice starts', async () => {
+  const {YurisSounds} = await import('../dist/engines/yuris/vm/sound.js');
+  const {YurisFileType} = await import('../dist/engines/yuris/vm/files.js');
+  const commands = new Map();
+  let now = 1000;
+  const argValues = new Map();
+  const argStrings = new Map();
+  const wav = new Uint8Array(44 + 4000);
+  const view = new DataView(wav.buffer);
+  view.setUint32(0, 0x46464952, true); // RIFF
+  view.setUint32(4, wav.length - 8, true);
+  view.setUint32(8, 0x45564157, true); // WAVE
+  view.setUint32(12, 0x20746d66, true); // fmt
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true); // PCM
+  view.setUint16(22, 1, true); // mono
+  view.setUint32(24, 8000, true);
+  view.setUint32(28, 8000, true);
+  view.setUint16(32, 1, true);
+  view.setUint16(34, 8, true);
+  view.setUint32(36, 0x61746164, true); // data
+  view.setUint32(40, 4000, true);
+  wav.fill(0x80, 44);
+
+  const events = [];
+  const machine = {
+    quit: false,
+    now: () => now,
+    system: {names: ['', ''], backgroundExec: 1, suspended: false},
+    windows: {windows: [{active: true}]},
+    define: (id, fn) => commands.set(id, fn),
+    decode() {},
+    commandName: () => 'SOUND',
+    args: {
+      has: (id) => (argValues.has(id) || argStrings.has(id) ? id + 1 : 0),
+      text: (id) => argStrings.get(id) ?? '',
+      get value() {
+        const arr = [];
+        for (const [k, v] of argValues) arr[k + 1] = v;
+        return arr;
+      },
+      get string() {
+        const arr = [];
+        for (const [k, v] of argStrings) arr[k + 1] = v;
+        return arr;
+      },
+    },
+  };
+  const files = {
+    resolve: (name) => ({found: true, type: YurisFileType.Wav, path: name}),
+    read: async () => wav,
+  };
+  const host = {
+    openSoundDevice: () => 0,
+    createSoundBuffer: () => ({
+      playCursor: () => 0,
+      write() {},
+      play: () => events.push('play'),
+      stop: () => events.push('stop'),
+      setVolume: (db) => events.push(`vol:${db}`),
+      setPan() {},
+      setFrequency() {},
+      release() {},
+    }),
+  };
+  const sounds = new YurisSounds(machine, files, host, 1);
+  sounds.install();
+  // Zero-fade play (voice / SE): volume 256 (0 dB) must be applied BEFORE play, never -10000.
+  argStrings.set(0, 'VO1');
+  argStrings.set(2, 'voice.wav');
+  argValues.set(10, 256n); // Volume
+  argValues.set(3, 1n); // Play
+  await commands.get(0x59)();
+  const playAt = events.indexOf('play');
+  assert.ok(playAt > 0);
+  assert.equal(events[playAt - 1], 'vol:0');
+  assert.ok(!events.includes('vol:-10000'));
+
+  // Non-zero fade still starts silent (-10000 dB) before play and ramps during update().
+  events.length = 0;
+  argStrings.set(0, 'BGM1');
+  argStrings.set(2, 'bgm.wav');
+  argValues.set(5, 200n); // Fade = 200 ms
+  argValues.set(10, 256n);
+  argValues.set(3, 1n);
+  await commands.get(0x59)();
+  const fadePlay = events.indexOf('play');
+  assert.ok(fadePlay > 0);
+  assert.equal(events[fadePlay - 1], 'vol:-10000');
+  now += 250;
+  await sounds.update();
+  assert.equal(events.at(-1), 'vol:0');
+});
+
+test('CGACT SIZE and SIZE2 defer nearest, REMALLOC shrink and lazy targets with bit-exact readback', async () => {
+  const {nearestCoordinates} = await import('../dist/engines/yuris/vm/resize.js');
+  const commands = new Map();
+  let id0 = 'SRC',
+    id1 = 'DST';
+  const values = new Map();
+  const machine = {
+    screenWidth: 512,
+    screenHeight: 512,
+    system: {names: [''], simd: true},
+    define: (id, fn) => commands.set(id, fn),
+    decode() {},
+    commandName: () => 'CGACT',
+    argName: () => 'SIZE',
+    expression: {intOf: () => 0n},
+    args: {
+      has: (id) => (id === 0 || (id === 1 && id1) || values.has(id) ? 1 : 0),
+      text: (id) => (id === 0 ? id0 : id1),
+      int: (id) => values.get(id) ?? 0n,
+      type: [0, 1],
+      expression: [null, new Uint8Array()],
+    },
+  };
+  const layers = new YurisLayers(machine, {}, {});
+  layers.install();
+  const src = new YurisCg(),
+    dst = new YurisCg();
+  src.allocate(300, 300);
+  for (let i = 0; i < src.pixels.length; i++) src.pixels[i] = (i * 37 + 13) & 255;
+  dst.allocate(1, 1);
+  layers.tree.create('SRC', false, 1n, src);
+  layers.tree.create('DST', false, 2n, dst);
+
+  // 1. SIZE (nearest) with size change (reuse === 0): lazy target, no CPU buffer allocated yet.
+  values.set(24, 1n); // Act.Size
+  values.set(12, 10n); // X
+  values.set(13, 20n); // Y
+  values.set(14, 289n); // X2
+  values.set(15, 299n); // Y2
+  values.set(16, 280n); // SX
+  values.set(17, 260n); // SY (280*260 = 72800 >= 65536)
+  commands.get(2)();
+  assert.equal(dst.hasPixels, true);
+  assert.equal(dst.hasBackingPixels, false);
+  assert.equal(dst.deferredScale?.kind, 'nearest');
+  // Clipped direct write matches full sizeNearest byte for byte.
+  const full = new Uint8Array(280 * 260 * 4);
+  sizeNearest(full, 280, 260, src.pixels, 300, 300, 10, 20, 289, 299);
+  const direct = new Uint8Array(280 * 260 * 4);
+  assert.equal(dst.drawPendingTo(direct, 280, [15, 25, 114, 124], 15, 25), true);
+  for (let y = 25; y <= 124; y++) {
+    const start = (y * 280 + 15) * 4;
+    assert.deepEqual(
+      direct.subarray(start, start + 100 * 4),
+      full.subarray(start, start + 100 * 4),
+    );
+  }
+  // GPU nearestCoordinates table matches the source taps.
+  const cols = nearestCoordinates(10, 289, 280, 300);
+  assert.equal(cols[0], 10);
+  assert.equal(cols[1], 0);
+  assert.equal(cols[(280 - 1) * 2], 289);
+  // CPU readback materializes lazily and matches exact sizeNearest bytes.
+  assert.deepEqual(dst.pixels, full);
+  assert.equal(dst.hasBackingPixels, true);
+
+  // 2. SIZE2 (bilinear) with REMALLOC=1 shrink (reuse === 2): stays deferred to GPU.
+  dst.remalloc = 1;
+  values.clear();
+  values.set(25, 1n); // Act.Size2
+  values.set(18, 0n); // FX
+  values.set(19, 0n); // FY
+  values.set(20, 29900n); // FX2
+  values.set(21, 29900n); // FY2
+  values.set(22, 27000n); // FSX (270 < 280)
+  values.set(23, 25000n); // FSY (250 < 260, 67500 >= 65536)
+  commands.get(2)();
+  assert.equal(dst.width, 270);
+  assert.equal(dst.height, 250);
+  assert.equal(dst.deferredScale?.kind, 'bilinear');
+  const expected = new Uint8Array(270 * 250 * 4);
+  sizeBilinear(expected, src.pixels, 300, 300, 0, 0, 29900, 29900, 27000, 25000, true);
+  assert.deepEqual(dst.pixels.subarray(0, expected.length), expected);
+});

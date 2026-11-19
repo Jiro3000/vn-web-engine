@@ -16,7 +16,7 @@ import {ruleWeights} from '../vm/blend.js';
 import type {DeferredScale, YurisCgNode, YurisLayers} from '../vm/cg.js';
 import {compose, type Rect} from '../vm/compose.js';
 import {yurisRasterBitmap} from '../vm/raster-text.js';
-import {bilinearCoordinates} from '../vm/resize.js';
+import {bilinearCoordinates, nearestCoordinates} from '../vm/resize.js';
 
 function include(
   bounds: Rect | undefined,
@@ -85,13 +85,17 @@ export class YurisIntegerWindow {
     const last = this.horizontal;
     if (
       last &&
+      last.scale.kind === scale.kind &&
       last.scale.fx === scale.fx &&
       last.scale.fx2 === scale.fx2 &&
       last.scale.fsx === scale.fsx &&
       last.scale.width === scale.width
     )
       return last.coordinates;
-    const coordinates = bilinearCoordinates(scale.fx, scale.fx2, scale.fsx, scale.width, true);
+    const coordinates =
+      scale.kind === 'nearest'
+        ? nearestCoordinates(scale.fx, scale.fx2, scale.fsx, scale.width)
+        : bilinearCoordinates(scale.fx, scale.fx2, scale.fsx, scale.width, true);
     this.horizontal = {scale, coordinates};
     return coordinates;
   }
@@ -100,13 +104,17 @@ export class YurisIntegerWindow {
     const last = this.vertical;
     if (
       last &&
+      last.scale.kind === scale.kind &&
       last.scale.fy === scale.fy &&
       last.scale.fy2 === scale.fy2 &&
       last.scale.fsy === scale.fsy &&
       last.scale.height === scale.height
     )
       return last.coordinates;
-    const coordinates = bilinearCoordinates(scale.fy, scale.fy2, scale.fsy, scale.height, false);
+    const coordinates =
+      scale.kind === 'nearest'
+        ? nearestCoordinates(scale.fy, scale.fy2, scale.fsy, scale.height)
+        : bilinearCoordinates(scale.fy, scale.fy2, scale.fsy, scale.height, false);
     this.vertical = {scale, coordinates};
     return coordinates;
   }

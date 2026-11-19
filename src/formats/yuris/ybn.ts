@@ -668,6 +668,7 @@ export async function loadYurisProject(
   }
   if (!key) throw new Error('No script carries arguments to derive the YSTB key from');
   const scriptKey = key;
+  const scriptCache = new Map<number, Promise<YurisScript>>();
   return {
     commands,
     labels,
@@ -677,8 +678,19 @@ export async function loadYurisProject(
     config,
     errors,
     key: scriptKey,
-    async script(index: number): Promise<YurisScript> {
-      return parseYstb(await read(yurisScriptPath(index)), scriptKey, commands);
+    script(index: number): Promise<YurisScript> {
+      let cached = scriptCache.get(index);
+      if (!cached) {
+        cached = read(yurisScriptPath(index)).then(
+          (bytes) => parseYstb(bytes, scriptKey, commands),
+          (error) => {
+            scriptCache.delete(index);
+            throw error;
+          },
+        );
+        scriptCache.set(index, cached);
+      }
+      return cached;
     },
   };
 }

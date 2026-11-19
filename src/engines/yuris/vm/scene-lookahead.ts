@@ -30,6 +30,7 @@ const LINEAR_MACROS = new Set([
   'ML.BG',
   'BG.CMXYZ',
   'EV',
+  'EV.CMXYZ',
   'ML.CG.SET',
   'BGM',
   'FIN',
@@ -1078,7 +1079,7 @@ export class YurisSceneLookahead {
         const movieFolder = folders?.[6];
         if (tag === 'S.MV' && movieFolder && second && !/["',()\\]/.test(second))
           movies.push(windowsPath(movieFolder + second + '.ymv'));
-        if (tag === 'C.XYZ') {
+        if (tag === 'C.XYZ' || tag === 'BG.CMXYZ' || tag === 'EV.CMXYZ') {
           standScale = '';
           cameraMoved = true;
         }

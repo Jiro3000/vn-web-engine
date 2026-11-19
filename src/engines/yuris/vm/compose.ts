@@ -224,7 +224,7 @@ export function compose(
       child.mode === 0 &&
       child.a === 256 &&
       child.masked === 0 &&
-      part.width * part.height >= 65536 &&
+      (part.width * part.height >= 65536 || !child.hasBackingPixels) &&
       part.width === area[2] - area[0] + 1 &&
       part.height === area[3] - area[1] + 1 &&
       child.drawPendingTo(

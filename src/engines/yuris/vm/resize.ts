@@ -96,6 +96,26 @@ function clearOutside(
 const at = (src: Uint8Array, index: number): number => src[index] ?? 0;
 
 /**
+ * Column or row table for GPU nearest sampling, matching `sizeNearest`: pairs of
+ * [sourceIndex, 0], with sourceIndex -1 outside the valid source bounds.
+ */
+export function nearestCoordinates(
+  start: number,
+  end: number,
+  count: number,
+  limit: number,
+): Int32Array {
+  const n = Math.max(count, 0);
+  const table = new Int32Array(n * 2);
+  const taps = new Int32Array(n);
+  const step = div(Math.imul(end - start + 1, 0x10000), count);
+  for (let i = 0, acc = 0; i < n; i++, acc = (acc + step) >>> 0) taps[i] = (acc >>> 16) + start;
+  const [lo, hi] = validRange(n, (i) => taps[i]!, limit);
+  for (let i = 0; i < n; i++) table[i * 2] = i >= lo && i < hi ? taps[i]! : -1;
+  return table;
+}
+
+/**
  * SIZE 0x4610B0 and its job 0xB (0x4208A0): nearest-neighbour sampling of the pixel region
  * x0..x1, y0..y1. Output column i reads source column x0 + (i * ((x1 - x0 + 1) << 16) / width
  * accumulated) >> 16, and rows likewise.
@@ -111,7 +131,9 @@ export function sizeNearest(
   y0: number,
   x1: number,
   y1: number,
-): void {
+  clip?: Rect,
+  output?: {stride: number; x: number; y: number},
+): boolean {
   const columns = new Int32Array(Math.max(width, 0)),
     lines = new Int32Array(Math.max(height, 0));
   for (
@@ -128,9 +150,35 @@ export function sizeNearest(
     lines[i] = acc >>> 16;
   const [top, bottom] = validRange(height, (i) => lines[i]! + y0, rows);
   const [left, right] = validRange(width, (i) => columns[i]! + x0, stride);
-  clearOutside(dst, width, height, top, bottom, left, right);
   const out = new Uint32Array(dst.buffer, dst.byteOffset, dst.byteLength >> 2);
   const from = new Uint32Array(src.buffer, src.byteOffset, src.byteLength >> 2);
+  if (clip) {
+    const cx0 = Math.max(0, clip[0]),
+      cy0 = Math.max(0, clip[1]),
+      cx1 = Math.min(width - 1, clip[2]),
+      cy1 = Math.min(height - 1, clip[3]);
+    if (cx0 > cx1 || cy0 > cy1) return true;
+    const outStride = output?.stride ?? width;
+    const ox = output ? output.x : cx0;
+    const oy = output ? output.y : cy0;
+    const span = cx1 - cx0 + 1;
+    const inLeft = Math.max(left, cx0),
+      inRight = Math.min(right, cx1 + 1);
+    for (let y = cy0; y <= cy1; y++) {
+      const dstRow = (oy + y - cy0) * outStride + ox;
+      if (y < top || y >= bottom || inLeft >= inRight) {
+        out.fill(0, dstRow, dstRow + span);
+        continue;
+      }
+      if (inLeft > cx0) out.fill(0, dstRow, dstRow + (inLeft - cx0));
+      if (inRight <= cx1) out.fill(0, dstRow + (inRight - cx0), dstRow + span);
+      const srcRow = (lines[y]! + y0) * stride + x0;
+      for (let x = inLeft; x < inRight; x++)
+        out[dstRow + (x - cx0)] = from[srcRow + columns[x]!] ?? 0;
+    }
+    return true;
+  }
+  clearOutside(dst, width, height, top, bottom, left, right);
   if (
     dst.buffer !== src.buffer &&
     width <= 0x7fff &&
@@ -150,7 +198,7 @@ export function sizeNearest(
         const start = (lines[y]! + y0) * stride + x0 + left;
         out.set(from.subarray(start, start + count), y * width + left);
       }
-      return;
+      return true;
     }
   }
   if (dst.buffer !== src.buffer && left < right && from.length >= stride * rows) {
@@ -187,13 +235,14 @@ export function sizeNearest(
         }
       } else for (let x = 0; x < count; x++) out[o + x] = from[row + taps[x]!]!;
     }
-    return;
+    return true;
   }
   for (let y = top; y < bottom; y++) {
     const row = (lines[y]! + y0) * stride + x0;
     for (let x = left, o = y * width + left; x < right; x++, o++)
       out[o] = from[row + columns[x]!] ?? 0;
   }
+  return true;
 }
 
 /**

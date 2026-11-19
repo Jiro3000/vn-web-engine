@@ -68,6 +68,9 @@ const preloadable = (type: YurisFileType): boolean =>
 const frameImage = (type: YurisFileType): boolean =>
   type === YurisFileType.Png || type === YurisFileType.Ydg || type === YurisFileType.Qoi;
 const PRELOADED_ARCHIVE_BYTES = 32 * 1024 * 1024;
+/** Small immutable archive files (fades, transition rules, SEs) retained to avoid repeat seeks. */
+const SMALL_ARCHIVE_ENTRY_BYTES = 512 * 1024;
+const SMALL_ARCHIVE_CACHE_BYTES = 16 * 1024 * 1024;
 
 /** StretchDIBits with SRCCOPY (0x45ECF4) treats the composed window as BGRX. */
 function updateBgrx(
@@ -149,10 +152,20 @@ export class YurisBrowserPlayer {
   private readonly preloading = new Set<string>();
   /** The preloads of `preloading` the next click needs, which have slots of their own. */
   private readonly urgentPreloads = new Set<string>();
+  /** In-flight archive reads shared between preloads and foreground requests. */
+  private readonly inFlightArchiveReads = new Map<string, Promise<Uint8Array>>();
+  /** Active foreground asset reads; background preloads defer while these read slow storage. */
+  private foregroundReads = 0;
   /** Ends the current frame pacing sleep (see `paceSleep`). */
   private wakePace?: () => void;
+  /** Periodic sound-thread pump while `machine.frame()` awaits slow I/O (mirrors 0x41C6DC). */
+  private soundPumpTimer?: ReturnType<typeof setInterval>;
+  private soundPumpActive?: Promise<void>;
+  private inFrame = false;
   private readonly preloadedArchiveFiles = new Map<string, Uint8Array>();
   private preloadedArchiveBytes = 0;
+  private readonly smallArchiveCache = new Map<string, Uint8Array>();
+  private smallArchiveCacheBytes = 0;
   /** Archive files read ahead progressively (S.MV movies), with their inflated sizes. */
   private readonly progressiveArchiveFiles = new Map<
     string,
@@ -498,34 +511,65 @@ export class YurisBrowserPlayer {
     void this.loop();
   }
   private async readAsset(path: string, preload = false): Promise<Uint8Array> {
-    // Loose files and their save overlay retain precedence over the mounted archive.
-    const loose = await this.folder.readFile(path);
-    if (loose) return loose;
-    const cached = this.preloadedArchiveFiles.get(path);
-    if (cached) {
+    if (!preload) this.foregroundReads++;
+    try {
+      // Loose files and their save overlay retain precedence over the mounted archive.
+      const loose = await this.folder.readFile(path);
+      if (loose) return loose;
+      const small = this.smallArchiveCache.get(path);
+      if (small) {
+        this.smallArchiveCache.delete(path);
+        this.smallArchiveCache.set(path, small);
+        return small;
+      }
+      const cached = this.preloadedArchiveFiles.get(path);
+      if (cached) {
+        if (!preload) {
+          this.preloadedArchiveFiles.delete(path);
+          this.preloadedArchiveBytes -= cached.length;
+        }
+        return cached;
+      }
+      const progressive = this.claimProgressive(path);
+      if (progressive) {
+        const file = await progressive;
+        await file.until(file.bytes.length);
+        return file.bytes;
+      }
+      let reading = this.inFlightArchiveReads.get(path);
+      if (!reading) {
+        reading = this.files.read(path).finally(() => {
+          this.inFlightArchiveReads.delete(path);
+        });
+        this.inFlightArchiveReads.set(path, reading);
+      }
+      const bytes = await reading;
+      if (bytes.length <= SMALL_ARCHIVE_ENTRY_BYTES && !this.abort.signal.aborted) {
+        if (!this.smallArchiveCache.has(path)) {
+          for (const [old, contents] of this.smallArchiveCache) {
+            if (this.smallArchiveCacheBytes + bytes.length <= SMALL_ARCHIVE_CACHE_BYTES) break;
+            this.smallArchiveCache.delete(old);
+            this.smallArchiveCacheBytes -= contents.length;
+          }
+          this.smallArchiveCache.set(path, bytes);
+          this.smallArchiveCacheBytes += bytes.length;
+        }
+      } else if (preload && bytes.length <= PRELOADED_ARCHIVE_BYTES && !this.abort.signal.aborted) {
+        for (const [old, contents] of this.preloadedArchiveFiles) {
+          if (this.preloadedArchiveBytes + bytes.length <= PRELOADED_ARCHIVE_BYTES) break;
+          this.preloadedArchiveFiles.delete(old);
+          this.preloadedArchiveBytes -= contents.length;
+        }
+        this.preloadedArchiveFiles.set(path, bytes);
+        this.preloadedArchiveBytes += bytes.length;
+      }
+      return bytes;
+    } finally {
       if (!preload) {
-        this.preloadedArchiveFiles.delete(path);
-        this.preloadedArchiveBytes -= cached.length;
+        this.foregroundReads--;
+        if (this.foregroundReads === 0) this.drainPreloadQueue();
       }
-      return cached;
     }
-    const progressive = this.claimProgressive(path);
-    if (progressive) {
-      const file = await progressive;
-      await file.until(file.bytes.length);
-      return file.bytes;
-    }
-    const bytes = await this.files.read(path);
-    if (preload && bytes.length <= PRELOADED_ARCHIVE_BYTES && !this.abort.signal.aborted) {
-      for (const [old, contents] of this.preloadedArchiveFiles) {
-        if (this.preloadedArchiveBytes + bytes.length <= PRELOADED_ARCHIVE_BYTES) break;
-        this.preloadedArchiveFiles.delete(old);
-        this.preloadedArchiveBytes -= contents.length;
-      }
-      this.preloadedArchiveFiles.set(path, bytes);
-      this.preloadedArchiveBytes += bytes.length;
-    }
-    return bytes;
   }
   /** Like `readAsset`, but readable from the start while an archived file inflates. */
   private async readProgressiveAsset(path: string): Promise<ProgressiveBytes> {
@@ -657,6 +701,8 @@ export class YurisBrowserPlayer {
    * own, so a long CGCASH queue never delays them.
    */
   private drainPreloadQueue(): void {
+    // Let foreground asset reads finish before starting new background disk seeks.
+    if (this.foregroundReads > 0) return;
     while (this.urgentPreloads.size < 2 && !this.abort.signal.aborted) {
       const next = this.nextClickQueue.entries().next().value;
       if (next === undefined) break;
@@ -666,6 +712,7 @@ export class YurisBrowserPlayer {
       this.urgentPreloads.add(path);
       this.startPreload(path, mime, true);
     }
+    if (this.urgentPreloads.size > 0) return;
     while (this.preloading.size - this.urgentPreloads.size < 2 && !this.abort.signal.aborted) {
       const next = this.preloadQueue.entries().next().value;
       if (next === undefined) return;
@@ -732,13 +779,42 @@ export class YurisBrowserPlayer {
     else if (forecast !== this.dialogueForecastKey) publishTextHookForecast(upcoming);
     this.dialogueForecastKey = forecast;
   }
+  private pumpSoundsInBackground(): void {
+    if (
+      !this.running ||
+      !this.inFrame ||
+      this.soundPumpActive ||
+      !this.machine ||
+      this.machine.quit ||
+      this.machine.sounds.busy
+    )
+      return;
+    this.soundPumpActive = (async () => {
+      try {
+        await this.device.flush();
+        if (this.running && !this.machine.quit && !this.machine.sounds.busy)
+          await this.machine.sounds.update();
+      } catch {
+        // The main frame loop surfaces any device failure on its next flush.
+      } finally {
+        this.soundPumpActive = undefined;
+      }
+    })();
+  }
   private async loop(): Promise<void> {
+    this.soundPumpTimer = setInterval(() => this.pumpSoundsInBackground(), 20);
     try {
       while (this.running && !this.machine.quit) {
         await this.menus.waitForMenu();
         if (!this.running) break;
+        if (this.soundPumpActive) await this.soundPumpActive;
         await this.device.flush();
-        await this.machine.frame();
+        this.inFrame = true;
+        try {
+          await this.machine.frame();
+        } finally {
+          this.inFrame = false;
+        }
         this.publishDialogue();
         const next = this.machine.system.preloadEnabled ? this.lookahead?.update() : undefined;
         if (next) this.prioritizeNextClick(next);
@@ -753,6 +829,9 @@ export class YurisBrowserPlayer {
     } catch (e) {
       this.running = false;
       this.stopped(e);
+    } finally {
+      clearInterval(this.soundPumpTimer);
+      this.soundPumpTimer = undefined;
     }
   }
   setTextMode(mode: BrowserTextMode): void {
@@ -920,11 +999,18 @@ export class YurisBrowserPlayer {
   }
   async dispose(): Promise<void> {
     this.running = false;
+    this.inFrame = false;
+    clearInterval(this.soundPumpTimer);
+    this.soundPumpTimer = undefined;
+    if (this.soundPumpActive) await this.soundPumpActive;
     this.abort.abort();
     this.preloadQueue.clear();
     this.nextClickQueue.clear();
+    this.inFlightArchiveReads.clear();
     this.preloadedArchiveFiles.clear();
     this.preloadedArchiveBytes = 0;
+    this.smallArchiveCache.clear();
+    this.smallArchiveCacheBytes = 0;
     this.menus.dispose();
     this.textPresentation.dispose();
     this.integerWindow.dispose();

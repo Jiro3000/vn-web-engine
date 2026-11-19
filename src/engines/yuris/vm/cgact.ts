@@ -718,45 +718,71 @@ function resize(
   if (t.remalloc === 1 && hasDestination && width < t.textureWidth && height < t.textureHeight)
     reuse = 2;
   if (
-    mode === 0x15 &&
-    reuse !== 2 &&
+    (mode === 0x0a || mode === 0x15) &&
     hasDestination &&
     s !== t &&
     from &&
     width * height >= 65536
   ) {
-    if (reuse === 0) {
-      layers.markDirty(node);
-      t.replace(allocate(width, height), width, height);
-      layers.markDirty(node);
-    }
+    if (reuse === 0 && width > REGION_WIDTH) throw new YurisError(0x186aa, [width, height]);
+    if (reuse !== 1) layers.markDirty(node);
     const revision = s.pixelRevision;
-    const deferred = t.deferPixelWrite(
-      s,
-      from,
-      (to, from, clip, output) =>
-        sizeBilinear(
-          to,
-          from,
-          tw,
-          th,
-          f.fx,
-          f.fy,
-          f.fx2,
-          f.fy2,
-          f.fsx,
-          f.fsy,
-          simd,
-          revision,
-          clip,
-          output,
-        ),
-      true,
-      {pixels: from, width: tw, height: th, revision, ...f, sse: simd},
-    );
+    const deferred =
+      mode === 0x0a
+        ? t.deferResize(
+            width,
+            height,
+            reuse !== 0,
+            s,
+            from,
+            (to, srcPixels, clip, output) =>
+              sizeNearest(to, width, height, srcPixels, tw, th, px, py, px2, py2, clip, output),
+            true,
+            {
+              kind: 'nearest',
+              pixels: from,
+              width: tw,
+              height: th,
+              revision,
+              fx: px,
+              fy: py,
+              fx2: px2,
+              fy2: py2,
+              fsx: width,
+              fsy: height,
+              sse: false,
+            },
+          )
+        : t.deferResize(
+            width,
+            height,
+            reuse !== 0,
+            s,
+            from,
+            (to, srcPixels, clip, output) =>
+              sizeBilinear(
+                to,
+                srcPixels,
+                tw,
+                th,
+                f.fx,
+                f.fy,
+                f.fx2,
+                f.fy2,
+                f.fsx,
+                f.fsy,
+                simd,
+                revision,
+                clip,
+                output,
+              ),
+            true,
+            {kind: 'bilinear', pixels: from, width: tw, height: th, revision, ...f, sse: simd},
+          );
     if (deferred) {
       t.masked = s.masked;
       if (reuse === 1) layers.markCoveredPixelWrite(node);
+      else layers.markDirty(node);
       remember();
       return 0;
     }
