@@ -332,6 +332,8 @@ export class SiglusPlayer {
   private selectedSave?: PlayerSave;
   private readonly system = new Map<number, number>();
   private readonly galleryFlags = new Map<number, number>();
+  private readonly unhandledCommands = new Map<string, {count: number; scene: string; line: number}>();
+  private readonly unhandledProperties = new Map<string, {count: number; scene: string; line: number}>();
   private movieError?: Error;
   private skip = false;
   private skipAllowed = true;
@@ -660,7 +662,45 @@ export class SiglusPlayer {
       systemFlags: [...this.system],
       galleryFlags: [...this.galleryFlags],
       usesWipeCopy: this.usesWipeCopy,
+      unhandledCommands: [...this.unhandledCommands],
+      unhandledProperties: [...this.unhandledProperties],
     };
+  }
+
+  private normalizePathKey(path: readonly number[]): string {
+    const out: string[] = [];
+    for (let i = 0; i < path.length; i++) {
+      out.push(i > 0 && path[i - 1] === -1 ? '*' : String(path[i]));
+    }
+    return out.join('.');
+  }
+
+  private recordUnhandled(
+    bucket: Map<string, {count: number; scene: string; line: number}>,
+    path: readonly number[],
+    scene?: string,
+    line?: number,
+  ): void {
+    const key = this.normalizePathKey(path);
+    const existing = bucket.get(key);
+    if (existing) {
+      existing.count++;
+      return;
+    }
+    if (bucket.size >= 256) return;
+    const pos = this.vm?.currentPosition();
+    bucket.set(key, {
+      count: 1,
+      scene: scene ?? pos?.scene ?? '',
+      line: line ?? pos?.line ?? -1,
+    });
+  }
+
+  private isBuiltinPropertyRoot(root: number | undefined): boolean {
+    if (root === undefined || root < 0 || root >= 0x10000) return false;
+    if (root >= 23 && root <= 35) return false;
+    if (root === 83 || root === 106 || root === 107 || root === 108) return false;
+    return true;
   }
 
   get windowDisplay(): SiglusDisplay['windowDisplay'] {
@@ -1077,7 +1117,10 @@ export class SiglusPlayer {
       return this.groupProps.get(key) ?? 0;
     }
     const address = this.objectAddress(path);
-    if (!address || path[address.index] !== -1) return;
+    if (!address || path[address.index] !== -1) {
+      if (this.isBuiltinPropertyRoot(page)) this.recordUnhandled(this.unhandledProperties, path);
+      return;
+    }
     const property = path[address.index + 2];
     const id = path[address.index + 1]!;
     let object = address.page.get(id);
@@ -1259,7 +1302,10 @@ export class SiglusPlayer {
                 : property === 46
                   ? 'blend'
                   : undefined;
-    if (!field) return;
+    if (!field) {
+      this.recordUnhandled(this.unhandledProperties, path);
+      return;
+    }
     if (value !== undefined) {
       const next = field === 'blend' ? Math.min(4, Math.max(0, Number(value))) : Number(value);
       if (object[field] !== next) {
@@ -1551,6 +1597,7 @@ export class SiglusPlayer {
   }
 
   private async waitAtPage(): Promise<void> {
+    if (!this.systemCallActive) this.pruneDeadButtonGroups(true);
     for (;;) {
       const readSkipping = this.skipping && this.readSkipEnabled && !this.skip;
       const showControls = this.messageButtonsEnabled && (!this.skipping || readSkipping);
@@ -2242,24 +2289,7 @@ export class SiglusPlayer {
     );
     this.objects[0] = this.copyObjects(back);
     if (this.usesWipeCopy) back.clear();
-    if (this.activeGroups.size || this.cancelGroups.size) {
-      const liveGroups = new Set<number>();
-      const collectGroups = (map?: ReadonlyMap<number, DrawObject>) => {
-        if (!map) return;
-        for (const obj of map.values()) {
-          if (obj.button) liveGroups.add(obj.button.group);
-          if (obj.children) collectGroups(obj.children);
-        }
-      };
-      collectGroups(this.objects[0]);
-      for (const group of [...this.activeGroups]) {
-        if (group < 100_000 && !liveGroups.has(group)) {
-          this.activeGroups.delete(group);
-          this.cancelGroups.delete(group);
-          this.decisions.delete(group);
-        }
-      }
-    }
+    this.pruneDeadButtonGroups();
     // Promote back-stage object frame_actions (37.2.-1.<id>...) to front-stage (38.2.-1.<id>...)
     // and drop overwritten front-stage object frame_actions unless preserved via wipeCopy.
     if (this.frameActions.size) {
@@ -2290,11 +2320,32 @@ export class SiglusPlayer {
     this.releaseUnusedObjectMovies();
   }
 
+  private pruneDeadButtonGroups(visibleOnly = false): void {
+    if (!this.activeGroups.size && !this.cancelGroups.size) return;
+    const liveGroups = new Set<number>();
+    const collectGroups = (map?: ReadonlyMap<number, DrawObject>) => {
+      if (!map) return;
+      for (const obj of map.values()) {
+        if (obj.button && (!visibleOnly || obj.visible)) liveGroups.add(obj.button.group);
+        if (obj.children) collectGroups(obj.children);
+      }
+    };
+    collectGroups(this.objects[0]);
+    for (const group of [...this.activeGroups]) {
+      if (group < 100_000 && !liveGroups.has(group)) {
+        this.activeGroups.delete(group);
+        this.cancelGroups.delete(group);
+        this.decisions.delete(group);
+      }
+    }
+  }
+
   private beginDayObjects(): void {
     this.dayStage = true;
     this.objects[0]!.clear();
     this.objects[1]!.clear();
     this.objectsDirty = false;
+    this.pruneDeadButtonGroups();
   }
 
   private clearDayObjects(): void {
@@ -2398,8 +2449,19 @@ export class SiglusPlayer {
     return /^(?:b_)?bg\d\d$/.test(key) ? key + 'a' : key;
   }
 
+  private clearMainButtonGroups(): void {
+    for (const group of [...this.activeGroups]) {
+      if (group < 100_000) {
+        this.activeGroups.delete(group);
+        this.cancelGroups.delete(group);
+        this.decisions.delete(group);
+      }
+    }
+  }
+
   private async fade(name: string, transition: number): Promise<void> {
     this.clearDayObjects();
+    this.clearMainButtonGroups();
     this.pendingText = false;
     this.display.closeMessage();
     this.display.fadeStageEffects();
@@ -2425,6 +2487,7 @@ export class SiglusPlayer {
     clearCast = false,
   ): Promise<void> {
     this.clearDayObjects();
+    this.clearMainButtonGroups();
     this.pendingText = false;
     this.display.closeMessage();
     this.stageProperties.set('$bg_name.-1.0', name);
@@ -5003,6 +5066,7 @@ export class SiglusPlayer {
       if (member === 11) return this.audio.channelState('se');
     }
     if (root !== undefined && root >= 23 && root <= 28 && member === 10) return 0;
+    this.recordUnhandled(this.unhandledCommands, path, command.scene, command.line);
     return undefined;
   }
 

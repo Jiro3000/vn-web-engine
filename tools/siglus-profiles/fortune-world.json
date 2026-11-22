@@ -1,0 +1,21 @@
+{
+  "name": "FORTUNE×WORLD",
+  "gameDir": "/Volumes/Transcend/Torrents/1GAMES/FORTUNE×WORLD",
+  "title": {
+    "scene": "_titlemenu_dmy",
+    "skipPrologue": true,
+    "startButton": { "aria": "New Game" }
+  },
+  "gameplay": {
+    "minPages": 4,
+    "requireSpeaker": true,
+    "requireBgm": false,
+    "minVisuals": 1,
+    "mwndAutoHideBar": false
+  },
+  "quickMenu": null,
+  "movies": {
+    "wmv": ["OP"],
+    "omv": []
+  }
+}

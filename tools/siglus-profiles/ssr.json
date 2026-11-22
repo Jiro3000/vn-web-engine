@@ -1,0 +1,39 @@
+{
+  "name": "Tsuki no Kanata de Aimashou SweetSummerRainbow",
+  "gameDir": "/Users/paul/Torrents/Games/tsuki no kanata fan disk",
+  "title": {
+    "dismissDialog": { "scene": "_00dialog", "confirmButtonId": "1" },
+    "startButton": { "group": "0", "id": "2" },
+    "routeSubmenu": { "group": "2", "id": "1" },
+    "configButton": { "group": "0", "id": "3" },
+    "extraButton": { "group": "0", "id": "4" }
+  },
+  "gameplay": {
+    "minPages": 5,
+    "requireSpeaker": true,
+    "requireBgm": true,
+    "minVisuals": 2,
+    "mwndAutoHideBar": true
+  },
+  "quickMenu": {
+    "closeButtonId": "11",
+    "qsaveButtonId": "0",
+    "qloadButtonId": "1",
+    "saveButtonId": "2",
+    "loadButtonId": "3",
+    "configButtonId": "7",
+    "confirmDialog": { "scene": "_00dialog", "yesAria": "_cw_yes", "noAria": "_cw_no", "group": "100008" },
+    "slotButtonMin": 0,
+    "slotButtonMax": 9
+  },
+  "movies": {
+    "wmv": ["logo", "OP"],
+    "omv": []
+  },
+  "extras": {
+    "expectedScene": "_03_cgm",
+    "tabs": [
+      { "buttonId": "103", "expectedScene": "_03_mus" }
+    ]
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "name": "Tsuki no Kanata de Aimashou",
+  "gameDir": "/Volumes/Transcend/Torrents/1GAMES/Tsuki no Kanata de Aimashou",
+  "title": {
+    "dismissDialog": { "scene": "_00dialog", "confirmButtonId": "1" },
+    "startButton": { "group": "0", "id": "2" },
+    "configButton": { "group": "0", "id": "3" },
+    "extraButton": { "group": "0", "id": "4" }
+  },
+  "gameplay": {
+    "minPages": 5,
+    "requireSpeaker": true,
+    "requireBgm": true,
+    "minVisuals": 2,
+    "mwndAutoHideBar": true
+  },
+  "quickMenu": {
+    "closeButtonId": "11",
+    "qsaveButtonId": "0",
+    "qloadButtonId": "1",
+    "saveButtonId": "2",
+    "loadButtonId": "3",
+    "configButtonId": "7",
+    "confirmDialog": { "scene": "_00dialog", "yesAria": "_cw_yes", "noAria": "_cw_no", "group": "100008" },
+    "slotButtonMin": 0,
+    "slotButtonMax": 9
+  },
+  "movies": {
+    "wmv": ["logo", "OP"],
+    "omv": ["ef_sun01", "SR_TK"]
+  },
+  "extras": {
+    "systemFlags": [[1, 1], [2, 1], [3, 1], [4, 1], [5, 1], [6, 1], [7, 1], [11, 1], [99, 1]],
+    "cgFlags": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+    "bgmListened": ["bgm01", "bgm02", "bgm03", "bgm04", "bgm05", "bgm111", "bgm112"],
+    "expectedScene": "_03_cgm",
+    "tabs": [
+      { "buttonId": "103", "expectedScene": "_03_mus" },
+      { "buttonId": "102", "expectedScene": "_03_scn" }
+    ]
+  }
+}

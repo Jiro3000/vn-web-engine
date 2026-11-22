@@ -302,6 +302,11 @@ export class SiglusVm {
     throw new ReturnFromHostScene();
   }
 
+  currentPosition(): {scene: string; line: number} | undefined {
+    const frame = this.frames.at(-1);
+    return frame ? {scene: frame.scene.name, line: frame.line} : undefined;
+  }
+
   returnToMenu(scene = this.menu?.scene, entry = this.menu?.entry): never {
     if (scene === undefined || entry === undefined)
       throw new Error('Siglus menu scene is undefined');
