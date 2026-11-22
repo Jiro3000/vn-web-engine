@@ -185,6 +185,34 @@ test('SSR object GAN load resumes the saved phase, including child objects and l
   assert.deepEqual(await phase(legacy.children.get(0)), [0, 0]);
 });
 
+test('Siglus object.exist_type returns a script boolean for root and child objects', async () => {
+  const player = Object.create(SiglusPlayer.prototype);
+  const empty = {name: '', frames: [], x: 0, y: 0, visible: false, pattern: 0};
+  const children = new Map([
+    [0, {...empty, name: 'legacy-picture'}],
+    [1, {...empty}],
+  ]);
+  const objects = new Map([
+    [0, {...empty, type: 0, children}],
+    ...[1, 2, 3, 4, 5, 6].map((type) => [type, {...empty, type}]),
+  ]);
+  player.objects = [objects, new Map()];
+  const exists = (id, child) =>
+    player.objectCommand({
+      path: [38, 2, -1, id, ...(child === undefined ? [] : [93, -1, child]), 174],
+      args: [],
+      named: [],
+    });
+
+  assert.equal(await exists(0), 0);
+  assert.equal(await exists(7), 0);
+  for (const id of [1, 2, 3, 4, 5, 6]) assert.equal(await exists(id), 1, `object type ${id}`);
+  assert.equal(await exists(0, 0), 1);
+  assert.equal(await exists(0, 1), 0);
+  assert.equal(await exists(0, 2), 0);
+  assert.equal(player.objectsDirty, undefined);
+});
+
 test('Phase 3 display orderedObjects sorts by order, then layer, then slot id', () => {
   const m = new Map([
     [10, {name: 'a', frames: [], x: 0, y: 0, visible: true, pattern: 0, order: 2, layer: 0}],

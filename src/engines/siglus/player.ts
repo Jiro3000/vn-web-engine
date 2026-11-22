@@ -4916,14 +4916,14 @@ export class SiglusPlayer {
       return 0;
     }
     if (command === 174) {
-      // object.exist_type (0x5553c0): 0=empty, 1=rect, 2=graphic, 3=string, 4=weather, 5=movie, 6=number
+      // Siglus 1.1.134.0 tests the type field with SETNZ at 0x557448.
       const existing = page.get(id!);
       if (!existing) return 0;
-      if (existing.type !== undefined) return existing.type;
-      if (existing.text) return 3;
-      if (existing.number) return 6;
-      if (existing.movie) return 5;
-      return existing.frames.length || existing.name ? 2 : 0;
+      if (existing.type !== undefined) return Number(existing.type !== 0);
+      // Some browser save records omit the type field.
+      const drawable =
+        existing.text || existing.number || existing.movie || existing.frames.length || existing.name;
+      return drawable ? 1 : 0;
     }
     if (command !== 175 && command !== 63) this.markObjectsDirty(path);
     const n = (index: number) => Number(args[index] ?? 0);
