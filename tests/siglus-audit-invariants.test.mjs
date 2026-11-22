@@ -370,6 +370,9 @@ test('Full-route crawl regressions: frame_action owner ref, mask intevents, skip
   assert.match(displaySrc, /const pushKey = \(index: number, down: boolean\): void =>/);
   // 6. Zero-dimension drawImage guards
   assert.match(displaySrc, /if \(graphic\.width > 0 && graphic\.height > 0\)/);
+  // 7. Native 0x6a7cd0 EXCALL wipe isolation: wiping while excallAllocated only updates systemLayer
+  assert.match(playerSrc, /if \(this\.excallAllocated && this\.systemBackObjects\) \{[\s\S]*?return;\s*\}/);
+  assert.match(displaySrc, /async showSystemObjects\([\s\S]*?duration = 0/);
 });
 
 test(

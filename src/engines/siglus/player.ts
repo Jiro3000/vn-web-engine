@@ -511,9 +511,15 @@ export class SiglusPlayer {
         if (active && this.skipping && this.pendingText) this.wait?.(1);
       },
       () => {
-        if (this.cancelGroups.size && !this.systemCallActive) {
-          for (const group of this.cancelGroups) this.choose({id: -1, group});
-          return true;
+        if (this.cancelGroups.size && (!this.waitingForPage || this.systemCallActive)) {
+          let cancelled = false;
+          for (const group of this.cancelGroups) {
+            if (!this.systemCallActive || group >= 100_000) {
+              this.choose({id: -1, group});
+              cancelled = true;
+            }
+          }
+          if (cancelled) return true;
         }
         if (!this.waitingForPage || !this.systemMenuEnabled || this.systemCallActive) return false;
         if (this.userMessageHidden) this.revealMessage();
@@ -829,6 +835,13 @@ export class SiglusPlayer {
     this.systemBackObjects = undefined;
     this.systemObjectsDirty = false;
     this.excallFlags.clear();
+    for (const group of [...this.activeGroups]) {
+      if (group >= 100_000) {
+        this.activeGroups.delete(group);
+        this.cancelGroups.delete(group);
+        this.decisions.delete(group);
+      }
+    }
     this.display.clearSystemObjects();
   }
 
@@ -2106,6 +2119,30 @@ export class SiglusPlayer {
   }
 
   private async wipe(ms: number, fan?: WipeSpec): Promise<void> {
+    if (this.excallAllocated && this.systemBackObjects) {
+      // Native 0x6a7cd0 (C_tnm_wipe::start): when EXCALL is allocated (target=1),
+      // wipe exclusively updates G_excall.m_stage_list (systemBackObjects -> systemObjects)
+      // without touching the underlying main stage, cast, or message window.
+      const back = this.systemBackObjects;
+      if (this.usesWipeCopy && this.systemObjects) {
+        for (const [id, object] of this.systemObjects) {
+          if (object.wipeCopy && !back.has(id)) {
+            back.set(id, this.copyObject(object));
+          }
+        }
+      }
+      this.systemObjects = this.copyObjects(back);
+      if (this.usesWipeCopy) back.clear();
+      this.systemObjectsDirty = false;
+      await this.display.showSystemObjects(
+        orderedObjects(this.systemObjects),
+        (button) => this.choose(button),
+        false,
+        this.wipeDuration(ms),
+      );
+      this.releaseUnusedObjectMovies();
+      return;
+    }
     const back = this.objects[1]!;
     const copiedIds = new Set<number>();
     if (this.usesWipeCopy)
@@ -2126,6 +2163,24 @@ export class SiglusPlayer {
     );
     this.objects[0] = this.copyObjects(back);
     if (this.usesWipeCopy) back.clear();
+    if (this.activeGroups.size || this.cancelGroups.size) {
+      const liveGroups = new Set<number>();
+      const collectGroups = (map?: ReadonlyMap<number, DrawObject>) => {
+        if (!map) return;
+        for (const obj of map.values()) {
+          if (obj.button) liveGroups.add(obj.button.group);
+          if (obj.children) collectGroups(obj.children);
+        }
+      };
+      collectGroups(this.objects[0]);
+      for (const group of [...this.activeGroups]) {
+        if (group < 100_000 && !liveGroups.has(group)) {
+          this.activeGroups.delete(group);
+          this.cancelGroups.delete(group);
+          this.decisions.delete(group);
+        }
+      }
+    }
     // Promote back-stage object frame_actions (37.2.-1.<id>...) to front-stage (38.2.-1.<id>...)
     // and drop overwritten front-stage object frame_actions unless preserved via wipeCopy.
     if (this.frameActions.size) {

@@ -648,10 +648,6 @@ export class SiglusDisplay {
       if (keyIndex !== -1 && !event.repeat) {
         pushKey(keyIndex, event.type === 'keydown');
       }
-      if (this.systemInput && event.target === this.stage && keyIndex !== -1) {
-        event.preventDefault();
-        return;
-      }
       if (
         event.key === 'Escape' &&
         event.type === 'keydown' &&
@@ -659,6 +655,10 @@ export class SiglusDisplay {
         !event.repeat &&
         cancel()
       ) {
+        event.preventDefault();
+        return;
+      }
+      if (this.systemInput && event.target === this.stage && keyIndex !== -1) {
         event.preventDefault();
         return;
       }
@@ -704,7 +704,11 @@ export class SiglusDisplay {
         }
       });
     this.stage.addEventListener('contextmenu', (event) => {
-      if (this.systemInput || (!this.hasTextSelection() && cancel())) event.preventDefault();
+      if (!this.hasTextSelection() && cancel()) {
+        event.preventDefault();
+        return;
+      }
+      if (this.systemInput) event.preventDefault();
     });
     this.stage.addEventListener(
       'wheel',
@@ -879,11 +883,43 @@ export class SiglusDisplay {
     objects: Iterable<DrawObject>,
     button: (target: NonNullable<DrawObject['button']>) => void,
     front = false,
+    duration = 0,
   ): Promise<void> {
     const next = await this.drawObjects(objects, button);
     this.signal.throwIfAborted();
+    const container = front ? this.systemFrontLayer : this.systemLayer;
+    if (duration > 0 && typeof next.animate === 'function') {
+      const previous = [...container.children] as HTMLElement[];
+      this.preserveStageFocus(() => {
+        for (const child of previous) child.inert = true;
+        if (next.childElementCount > 0) container.append(next);
+      });
+      const animations: Animation[] = [];
+      if (next.childElementCount > 0) {
+        animations.push(next.animate({opacity: [0, 1]}, {duration}));
+      }
+      if (previous.length > 0 && next.childElementCount === 0) {
+        for (const child of previous) {
+          animations.push(child.animate({opacity: [1, 0]}, {duration, fill: 'forwards'}));
+        }
+      }
+      if (animations.length > 0) {
+        const primary = animations[0]!;
+        this.wipe = primary;
+        try {
+          await Promise.all(animations.map((a) => a.finished));
+        } finally {
+          if (this.wipe === primary) this.wipe = undefined;
+        }
+      }
+      this.preserveStageFocus(() => {
+        for (const child of previous) child.remove();
+        if (next.childElementCount === 0) container.replaceChildren();
+      });
+      return;
+    }
     this.preserveStageFocus(() => {
-      (front ? this.systemFrontLayer : this.systemLayer).replaceChildren(next);
+      container.replaceChildren(next);
     });
   }
 
