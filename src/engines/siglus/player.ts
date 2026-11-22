@@ -532,6 +532,20 @@ export class SiglusPlayer {
       (seNo, kind) => {
         void this.playButtonSound(seNo, kind);
       },
+      () => {
+        // Native SiglusEngine 0x623b80: VK_SPACE (0x20) toggles hide_mwnd during message display
+        // without advancing dialogue; pressing Space while hidden restores the message window.
+        if (this.systemCallActive) return false;
+        if (this.userMessageHidden) {
+          this.revealMessage();
+          return true;
+        }
+        if ((this.waitingForPage || this.printing) && this.hideMwndEnabled && !this.messageHidden) {
+          this.setUserMessageHidden(true);
+          return true;
+        }
+        return false;
+      },
     );
     this.display.stage.addEventListener(
       'wheel',
@@ -3226,6 +3240,81 @@ export class SiglusPlayer {
     void step();
   }
 
+  private startPcmEventSequence(
+    slot: number,
+    pcmchNo: number,
+    entries: readonly {file: string; minTime: number; maxTime: number}[],
+    options: {volumeType?: number; bgmFadeTarget?: boolean; character?: number},
+    loop: boolean,
+  ): void {
+    // Native 0x55fe50 modes 0 (start_oneshot) and 1 (start_loop)
+    this.stopPcmEvent(slot);
+    if (!entries.length) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let index = 0;
+    const cancel = (): void => {
+      cancelled = true;
+      if (timer !== undefined) clearTimeout(timer);
+      if (pcmchNo >= 0) this.audio.stop(`pcm${pcmchNo}`);
+    };
+    const entry = {
+      cancel,
+      config: {
+        pcmchNo,
+        entries: entries.map((e) => ({...e, probability: 1})),
+        options: {...options},
+      },
+    };
+    this.pcmEvents.set(slot, entry);
+
+    const step = async (): Promise<void> => {
+      if (cancelled || this.controller.signal.aborted) return;
+      if (index >= entries.length) {
+        if (!loop) {
+          if (this.pcmEvents.get(slot) === entry) this.pcmEvents.delete(slot);
+          return;
+        }
+        index = 0;
+      }
+      const chosen = entries[index++]!;
+      try {
+        if (pcmchNo >= 0) {
+          await this.audio.pcm(
+            pcmchNo,
+            {
+              resource: chosen.file,
+              loop: false,
+              volumeType: options.volumeType,
+              character: options.character,
+              bgmFadeTarget: options.bgmFadeTarget,
+            },
+            false,
+            0,
+          );
+        } else {
+          await this.audio.effect('se', chosen.file);
+        }
+      } catch {
+        // Ignore missing optional clip
+      }
+      if (cancelled || this.controller.signal.aborted) return;
+      const lo = Math.max(0, chosen.minTime);
+      const hi = Math.max(lo, chosen.maxTime);
+      const gap = hi > lo ? lo + Math.floor(Math.random() * (hi - lo)) : lo;
+      const clipMs = await this.audio.effectDurationMs(chosen.file);
+      if (cancelled || this.controller.signal.aborted) return;
+      if (!loop && index >= entries.length) {
+        timer = setTimeout(() => {
+          if (this.pcmEvents.get(slot) === entry) this.pcmEvents.delete(slot);
+        }, Math.max(16, clipMs + gap));
+        return;
+      }
+      timer = setTimeout(() => void step(), Math.max(16, clipMs + gap));
+    };
+    void step();
+  }
+
   private async runSelbtn(command: SiglusCommand, cancelable: boolean): Promise<number> {
     await this.renderObjects();
     const call = parseSelbtnArgs(command.args, command.named);
@@ -3427,6 +3516,7 @@ export class SiglusPlayer {
           await this.printMessage(s(0));
           break;
         case 13:
+        case 115: // global.pp / mwnd 0x36 (0x54b340 -> 0x54f140 -> 0x650bd0)
           await this.pageInput(true);
           break;
         case 15:
@@ -4520,12 +4610,43 @@ export class SiglusPlayer {
       if (path[3] === 1) return db ? db.getStr(n(0), n(1)) : '';
     }
     if (root === 78) {
-      // cgtable (CGTABLE / CGTABLE2)
+      // cgtable (CGTABLE / CGTABLE2, native 0x559a80)
       await this.loadCgTable();
+      if (member === 1) {
+        return this.cgTable.get(s(0).toLowerCase()) ?? -1;
+      }
       if (member === 2) {
         const flagNo = this.cgTable.get(s(0).toLowerCase());
         if (flagNo === undefined) return -1;
         return Number(this.cgFlags.has(flagNo));
+      }
+      if (member === 3) {
+        // cgtable.set_flag_value_by_name (0x67e980)
+        const flagNo = this.cgTable.get(s(0).toLowerCase());
+        if (flagNo !== undefined) {
+          if (n(1)) this.cgFlags.add(flagNo);
+          else this.cgFlags.delete(flagNo);
+          localStorage.setItem(this.game.saveKey + ':cgtable', JSON.stringify([...this.cgFlags]));
+        }
+        return 0;
+      }
+      if (member === 4) return this.cgTable.size;
+      if (member === 5) return this.cgFlags.size;
+      if (member === 6) {
+        const total = this.cgTable.size;
+        const look = this.cgFlags.size;
+        if (!total || !look) return 0;
+        return Math.max(1, Math.trunc((look * 100) / total));
+      }
+      if (member === 7 || member === 8) return 0;
+      if (member === 9) {
+        if (n(0)) {
+          for (const flagNo of this.cgTable.values()) this.cgFlags.add(flagNo);
+        } else {
+          this.cgFlags.clear();
+        }
+        localStorage.setItem(this.game.saveKey + ':cgtable', JSON.stringify([...this.cgFlags]));
+        return 0;
       }
     }
     if (root === 123) {
@@ -4566,36 +4687,61 @@ export class SiglusPlayer {
       }
     }
     if (root === 52 && member === -1 && path.length === 4) {
+      // pcmevent[slot] (native 0x55fe50)
       const slot = path[2]!;
       const op = path[3];
       if (op === 3) {
         this.stopPcmEvent(slot);
         return 0;
       }
-      if (op === 2) {
+      if (op === 5) return Number(this.pcmEvents.has(slot));
+      if (op === 4 || op === 6) {
+        if (!this.skipping && this.pcmEvents.has(slot)) {
+          await this.delay(16, op === 6);
+        }
+        return 0;
+      }
+      if (op === 0 || op === 1 || op === 2) {
         const positional = args.length - command.named.length;
         const namedNumber = (id: number): number | undefined => {
           const idx = command.named.indexOf(id);
           return idx < 0 ? undefined : n(positional + idx);
         };
-        const pcmchNo = n(0);
-        const entries: {file: string; minTime: number; maxTime: number; probability: number}[] = [];
-        for (let i = 1; i < positional; i++) {
-          const entry = args[i];
-          if (Array.isArray(entry) && typeof entry[0] === 'string') {
-            entries.push({
-              file: entry[0],
-              minTime: Number(entry[1] ?? 0),
-              maxTime: Number(entry[2] ?? 0),
-              probability: Number(entry[3] ?? 1),
-            });
-          }
-        }
-        this.startPcmEventRandom(slot, pcmchNo, entries, {
+        const hasChannel = positional > 0 && typeof args[0] === 'number';
+        const pcmchNo = hasChannel ? n(0) : -1;
+        const startIdx = hasChannel ? 1 : 0;
+        const opts = {
           volumeType: namedNumber(3),
           bgmFadeTarget: Boolean(namedNumber(5)),
           character: namedNumber(6),
-        });
+        };
+        if (op === 2) {
+          const entries: {file: string; minTime: number; maxTime: number; probability: number}[] =
+            [];
+          for (let i = startIdx; i < positional; i++) {
+            const entry = args[i];
+            if (Array.isArray(entry) && typeof entry[0] === 'string') {
+              entries.push({
+                file: entry[0],
+                minTime: Number(entry[1] ?? 0),
+                maxTime: Number(entry[2] ?? 0),
+                probability: Number(entry[3] ?? 1),
+              });
+            }
+          }
+          this.startPcmEventRandom(slot, pcmchNo, entries, opts);
+        } else {
+          const entries: {file: string; minTime: number; maxTime: number}[] = [];
+          for (let i = startIdx; i < positional; i++) {
+            const entry = args[i];
+            if (Array.isArray(entry) && typeof entry[0] === 'string') {
+              const minTime = entry.length >= 2 ? Number(entry[1] ?? 0) : 0;
+              const maxTime = entry.length >= 3 ? Number(entry[2] ?? minTime) : minTime;
+              entries.push({file: entry[0], minTime, maxTime});
+            }
+          }
+          this.startPcmEventSequence(slot, pcmchNo, entries, opts, op === 1);
+        }
         return 0;
       }
     }

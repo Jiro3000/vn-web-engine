@@ -574,6 +574,7 @@ export class SiglusDisplay {
     skip: (active: boolean) => void,
     cancel: () => boolean,
     private readonly onButtonSound?: (seNo: number, kind: 'hit' | 'push' | 'decide') => void,
+    toggleHideMessage?: () => boolean,
   ) {
     this.spaceHideIds = parseSpaceHideObjectIds(config);
     root.replaceChildren(this.stage);
@@ -664,6 +665,17 @@ export class SiglusDisplay {
           this.vkDown.delete(vk);
           this.vkReleased.add(vk);
         }
+      }
+      if (
+        event.key === ' ' &&
+        event.type === 'keydown' &&
+        event.target === this.stage &&
+        !event.repeat &&
+        !this.systemInput &&
+        toggleHideMessage?.()
+      ) {
+        event.preventDefault();
+        return;
       }
       const keyIndex =
         event.key === 'Escape' ? 1 : event.key === 'Enter' || event.key === ' ' ? 0 : -1;
@@ -4492,10 +4504,6 @@ export class SiglusDisplay {
       scroll.append(row);
     }
     const step = (direction: number) => scroll.scrollBy(0, direction * (fontSize + lineSpace!));
-    const up = await makeButton('MSG_UP_BTN', 'Scroll history up', () => step(-1));
-    const down = await makeButton('MSG_DOWN_BTN', 'Scroll history down', () => step(1));
-    if (up) overlay.append(up);
-    if (down) overlay.append(down);
     const sliderFile = quoted('MSGBK_ITEM.SLIDER.FILE');
     if (sliderFile && this.files.has(`g00/${sliderFile.toLowerCase()}.g00`)) {
       const [sx, from, to] = numbers('MSGBK_ITEM.SLIDER.POS', [0, 0, 0]);
@@ -4529,6 +4537,10 @@ export class SiglusDisplay {
       overlay.append(track);
       queueMicrotask(update);
     }
+    const up = await makeButton('MSG_UP_BTN', 'Scroll history up', () => step(-1));
+    const down = await makeButton('MSG_DOWN_BTN', 'Scroll history down', () => step(1));
+    if (up) overlay.append(up);
+    if (down) overlay.append(down);
     this.signal.throwIfAborted();
     const close = await makeButton('CLOSE_BTN', 'Close message history', () => closeHistory());
     if (close) overlay.append(close);

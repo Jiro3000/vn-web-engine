@@ -394,6 +394,11 @@ test('Native G_excall / excall_flag / G_syscom xref sweep invariants in player.t
   assert.match(playerSrc, /case 95:\s*return font\.shadow \?\? -1;/);
   // 7. Native 0x625960 / 0x624dd0 / 0x6614b0 / 0x6615a0: cancel skip & auto on right-click, hide, backlog
   assert.match(playerSrc, /if \(result === 3\) \{\s*this\.readSkipEnabled = this\.autoEnabled = false;/);
+  // 8. Native 0x623b80: VK_SPACE (0x20) toggles hide_mwnd without advancing dialogue
+  assert.match(playerSrc, /0x623b80[\s\S]{0,600}this\.setUserMessageHidden\(true\)/);
+  // 9. Native 0x54f140 / 0x650bd0 (global 115), 0x559a80 (cgtable 78.*), 0x55fe50 (pcmevent 52.* oneshot/loop)
+  assert.match(playerSrc, /case 115:[\s\S]{0,200}await this\.pageInput\(true\)/);
+  assert.match(playerSrc, /private startPcmEventSequence\(/);
 });
 
 test(
