@@ -1,11 +1,45 @@
 # SiglusEngine
 
+## 月の彼方で逢いましょう SweetSummerRainbow
+
+Build with `npm run build`, serve with `npm start`, and open the
+[SiglusEngine player](http://127.0.0.1:8000/siglus.html). Choose the original
+folder containing `Scene.pck`, `Gameexe.dat`, and `SiglusEngine.exe`, then
+click **Play**. After the logo, warning and first-run prompt, **New Game**
+opens the original four-story menu.
+
+The tested installation has `Scene.pck` SHA-256
+`980950e0c439c9fdba57b6e990c82a60e9f930e23ed8b6315bb8b916f9e27553`.
+The player reads the key embedded in the archive. The VM executes the
+original `__start`, `_01menu` and `_01story` scenes. The Gameexe table
+configures BGM looping for the installation's OWP files. Sound effects
+can use NWA or Ogg, and voices use the original OVK banks.
+
+The player composites split G00 cuts and decodes OMV 1.1 scene effects
+with the shared Theora decoder. Siglus OMV modes 0 and 1 store B, G and R
+directly in the decoded planes. Mode 1 stores alpha after the visible
+rows, and mode 2 uses full-range BT.601.
+[OMV format and native decode notes](https://github.com/N0zoM1z0/siglusengine-reverse-engineering/blob/main/docs/RE_NOTES.md#video-omv)
+
+Headless Brave tests cover the first-run prompt, title, story chooser and
+at least 12 pages from each of the four stories. The probes check decoded
+audio and the first transparent magic effect in the school story.
+
+Later story scenes and menus need further coverage. The VM still needs the
+scripted `selbtn` choice interface. A save round trip for this title also
+needs to capture and restore the scripted stage objects and portraits.
+For further scene coverage, extract a local disassembly with
+`siglus-ssu --const-profile 2 -x --disam` and use the `siglus-trace` query
+parameter. Errors report the scene and bytecode offset of each fault.
+
+## FORTUNE×WORLD
+
 Build with `npm run build`, run `npm start`, and select the original
 FORTUNE×WORLD folder in the SiglusEngine player. The player also accepts
 `StartData/GameData`. The executable for the tested installation has SHA-256
 `5a8d3539530e73ad10c07a3757d2081ccb9265cb08455df998ac2a66d3da18a2`.
 
-## Route from a fresh profile
+### Route from a fresh profile
 
 1. Click **Play**. Advance the startup prompts and mandatory prologue.
 2. Click **New Game** at the first title screen.
@@ -31,7 +65,7 @@ is also available from the title’s Load button. Saves and system flags are
 stored in the browser under the SHA-256 of Scene.pck. Slots use IndexedDB.
 The player migrates earlier browser-only slot records on first opening.
 
-## Verification
+### Verification
 
 Use [SiglusSceneScriptUtility](https://github.com/Jirehlov/SiglusSceneScriptUtility)
 to disassemble the original archive independently.
@@ -127,6 +161,15 @@ effect and reloads it from the title. It compares dialogue SHA-256 values
 and the exact decoded RGBA of the first and restored movie frame. It also
 checks that the outgoing page keeps the movie until the 1,000 ms exit wipe
 finishes. `SIGLUS_TEXT_MODE=dom` runs the same checks with selectable text.
+
+Set `SIGLUS_CINEMA_ONLY=1` to compare the first wide-screen transition
+in Chapter 01 at `0x7010`. The probe checks the two opaque 1920 × 150
+rectangles at (0, 0) and (0, 930) on the incoming page. It saves and
+restores them through title Load. After `$sc_cinemascope_off` at
+`0x7628`, it checks that the outgoing page retains the rectangles
+until the background wipe finishes. A Chapter 03 checkpoint at
+`0xaa42` also checks that a black fade at `0xaa91` covers the
+rectangles while their object remains on both wipe pages.
 
 Set `SIGLUS_FAN_WIPE_ONLY=1` to check the chapter 06 transition at
 `0x291be`. The probe loads a temporary slot at `0x29112` through the
@@ -407,7 +450,7 @@ interpolation mode. The command applies its time origin before evaluating
 the lists. It rounds the result to the nearest integer with half values
 away from zero, including positions used by the Configuration sliders.
 
-## Scripted interface in the original
+### Scripted interface in the original
 
 The following entries identify the UI in the tested archive. The table
 describes the original scripts and configuration.
@@ -429,7 +472,7 @@ These entry points are from Scene.pck SHA-256
 and Gameexe.dat SHA-256
 `492bccbb33ca3ce6e6ff074fe66d52281bb1e80dca5d528696494574b3cb892f`.
 
-## Acceptance status
+### Acceptance status
 
 The full-route results above are the control runs. Each targeted probe
 below covers a particular subsystem. Final acceptance uses one build and
@@ -458,7 +501,8 @@ are addressed.
 | Chapter 01 line effect during stage transitions                            | Confirmed          | The checkpoint checks effect membership on both pages, wipe durations and the resulting layer opacity at half time.                                          |
 | Story screen quake preset 0                                               | Confirmed          | The Chapter 01 probe checks the original command chain, 200 ms duration and integer translations of the background and cast.                                 |
 | Recollection OMV effects                                                   | Confirmed          | The Chapter 01 probe checks both original clips, alpha, scripted scale, slot, wipe membership and the frame restored after title Load.                         |
-| Cinemascope bars during scene wipes                                         | Difference         | Chapter 01 at `0x7010` stages two 1920 × 150 black rectangles on the back page. The browser clips the current background immediately.                         |
+| Cinemascope bars during scene wipes                                        | Confirmed          | The probe verifies the authored horizontal rectangles on their wipe pages, after title Load, and below an opaque fade object.                                 |
+| Dizziness effect                                                           | Difference         | Chapter 01 at `0x523f4` animates five scaled background copies on a 7,500 ms timetable. The browser currently animates a blur filter.                                     |
 | Other transition masks, effects and in-flight audio and animation behavior | Difference         | The browser's documented approximations remain in the rendering and save paths.                                                                              |
 | DOM Text selection, click and focus                                        | Confirmed          | The opening probe checks drag and click. The history, menu and typing probes exercise input during continuation.                                             |
 | DOM Text hiding and restoration                                            | Confirmed          | The right-click probe checks pointer hits before hiding and after revealing the same page, and checks that the hidden text stops receiving hits.             |
@@ -517,7 +561,7 @@ A retiring GAN stays with the outgoing background and cast until
 that layer is removed. The Chapter 01 script starts its explicit
 skippable wait at `0x15aed` while the incoming wipe is still active.
 
-## Known differences
+### Known differences
 
 - The browser uses fractional inherited opacity. The native renderer
   divides multiplied parent and child alpha by 255 with integer truncation
@@ -598,6 +642,16 @@ payload and the browser decoder agree byte for byte on all RGBA
 channels of the first frame of each clip. The browser saves the
 loop phase and decodes the saved frame before presenting the loaded
 scene. Browser presentation cadence under load still needs comparison.
+
+All 158 authored `$sc_cinemascope` calls use the horizontal preset.
+`_effect_basic:0x71c2` and `0x730a` create the two children of
+back-page object 163. Its layer is 0. The embedded PE dispatches
+opcode 40 at `0x556b02` and passes the coordinates, size and four
+color bytes to `0x5eb870`. The off command clears the front-page
+copy flag at `0x8d3a` and `0x8d83`. The browser composites the
+rectangle objects above the background and below the standing
+sprites. The retirement flag takes effect on the next wipe.
+Vertical and custom-layer presets have not been verified.
 
 The browser renders system-call objects above the retained game stage. This
 keeps scene animations and message visibility separate from the system menu.

@@ -38,7 +38,7 @@ export const PLAYERS: readonly PlayerEntry[] = [
     id: 'siglus',
     title: 'SiglusEngine',
     engine: 'SIGLUS',
-    summary: 'FORTUNE×WORLD',
+    summary: 'FORTUNE×WORLD, SweetSummerRainbow',
     engineName: 'SiglusEngine',
     initials: 'SG',
     route: './siglus.html',

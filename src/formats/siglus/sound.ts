@@ -1,6 +1,23 @@
 import {byteDataView, checkRange} from '../../core/binary.js';
 import type {ByteSource} from '../../core/source.js';
-import {xorCycle} from './compression.js';
+import {xorByteInPlace} from './compression.js';
+
+/** OWP stores an Ogg bitstream with a constant bytewise XOR mask. */
+export function decodeOwp(bytes: Uint8Array<ArrayBuffer>): Uint8Array<ArrayBuffer> {
+  const key = (bytes[0] ?? 0) ^ 0x4f;
+  if (
+    bytes.length < 4 ||
+    (bytes[1]! ^ key) !== 0x67 ||
+    (bytes[2]! ^ key) !== 0x67 ||
+    (bytes[3]! ^ key) !== 0x53
+  )
+    throw new Error('Invalid Siglus OWP stream');
+  if (key === 0) return bytes;
+  const out = new Uint8Array(bytes.length);
+  out.set(bytes);
+  xorByteInPlace(out, key);
+  return out;
+}
 
 export interface OvKEntry {
   offset: number;
@@ -27,7 +44,7 @@ export async function readOvk(
 ): Promise<Uint8Array<ArrayBuffer>> {
   const bytes = new Uint8Array(await source.read(entry.offset, entry.size));
   const key = bytes[0]! ^ 0x4f;
-  if (key) xorCycle(bytes, Uint8Array.of(key));
+  if (key) xorByteInPlace(bytes, key);
   if (byteDataView(bytes).getUint32(0, false) !== 0x4f676753)
     throw new Error('Invalid Siglus OVK stream');
   return bytes;

@@ -10,23 +10,24 @@ Zero setup. Visit the page and select your local game files, optionally install 
 
 ## Supported games
 
-| Game                                  | Engine        | Current state |
-| ------------------------------------- | ------------- | ------------- |
-| CHAOS;HEAD NOAH (Windows GOG release) | MAGES / SC3   | Complete      |
-| Aokana                                | BURIKO        | Complete      |
-| Eustia of the Tarnished Wings         | BURIKO        | Complete      |
-| Jewelry Hearts Academia               | BURIKO        | Complete      |
-| Subarashiki Hibi \~Furenzoku Sonzai\~ | BURIKO        | Complete      |
-| Fairytale Requiem                     | codeX RScript | Complete      |
-| Fairytale Symphony                    | codeX RScript | Complete      |
-| Fairytale Encore                      | codeX RScript | Complete      |
-| Albatross Koukairoku                  | codeX RScript | Complete      |
-| FORTUNE×WORLD                         | SiglusEngine  | Prologue, title and New Game opening |
+| Game                                      | Engine        | Current state                          |
+| ----------------------------------------- | ------------- | -------------------------------------- |
+| CHAOS;HEAD NOAH (Windows GOG release)     | MAGES / SC3   | Complete                               |
+| Aokana                                    | BURIKO        | Complete                               |
+| Eustia of the Tarnished Wings             | BURIKO        | Complete                               |
+| Jewelry Hearts Academia                   | BURIKO        | Complete                               |
+| Subarashiki Hibi \~Furenzoku Sonzai\~     | BURIKO        | Complete                               |
+| Fairytale Requiem                         | codeX RScript | Complete                               |
+| Fairytale Symphony                        | codeX RScript | Complete                               |
+| Fairytale Encore                          | codeX RScript | Complete                               |
+| Albatross Koukairoku                      | codeX RScript | Complete                               |
+| FORTUNE×WORLD                             | SiglusEngine  | Prologue, title and New Game opening   |
+| 月の彼方で逢いましょう SweetSummerRainbow | SiglusEngine  | Title and openings of all four stories |
 
 The games share browser services for files, storage, audio, video, graphics, and input. Reusable interpreters live under `src/engines/`; installation identity and explicit game compatibility profiles are selected separately.
 See [BGI compatibility](docs/buriko-compatibility.md) for revision selection, optional metadata, native evidence, and current verification limits.
 See the [codeX RScript notes](src/engines/rscript/README.md) for installation identity, native evidence, and known gaps.
-See the [SiglusEngine notes](src/engines/siglus/README.md) for the FORTUNE×WORLD setup and verification.
+See the [SiglusEngine notes](src/engines/siglus/README.md) for setup and verification.
 
 ## Dev setup
 

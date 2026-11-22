@@ -2,7 +2,7 @@ import {BrowserAudioContextHost} from '../../audio/browser-audio-context-host.js
 import {byteDataView} from '../../core/binary.js';
 import {isOggPageStart, readOggPage} from '../../formats/ogg/page.js';
 import type {ByteSource} from '../../core/source.js';
-import {decodeNwa, ovkIndex, readOvk} from '../../formats/siglus/sound.js';
+import {decodeNwa, decodeOwp, ovkIndex, readOvk} from '../../formats/siglus/sound.js';
 
 interface Playing {
   source: AudioBufferSourceNode;
@@ -10,10 +10,20 @@ interface Playing {
   kind: SiglusAudioKind;
   character?: number;
   volumeType?: number;
+  bgmFadeTarget?: boolean;
+  bgmFadeSource?: boolean;
   resource?: string | number;
   pcm?: SiglusPcmSource;
   bgm?: BgmTrack;
   startsAt: number;
+}
+
+interface DecodedBgm {
+  buffer: AudioBuffer;
+  sourceRate: number;
+  configuredStart: number;
+  loopStart: number;
+  loopEnd: number;
 }
 
 interface BgmTrack {
@@ -39,6 +49,9 @@ interface SiglusPcmSource {
   loop: boolean;
   volumeType?: number;
   character?: number;
+  bgmName?: string;
+  bgmFadeTarget?: boolean;
+  bgmFadeSource?: boolean;
 }
 
 export interface SiglusPcmCheckpoint {
@@ -53,15 +66,39 @@ export type SiglusAudioKind = 'BGM' | 'KOE' | 'PCM' | 'SE';
 const mixKinds = ['ALL', 'BGM', 'KOE', 'PCM', 'SE', 'MOV'] as const;
 type MixKind = (typeof mixKinds)[number];
 
+/**
+ * Native Siglus DirectSound volume curve (0x6e0bd0):
+ * converts normalized linear level v in [0, 1] to DirectSound hundredths of dB
+ * clamp(trunc((ln(v) / float(ln(10))) * 5000), -10000, 0), then linear WebAudio gain 10^(dB / 2000) ≈ v^2.5.
+ */
+export function siglusVolumeGain(normalized: number): number {
+  if (!Number.isFinite(normalized) || normalized <= 0) return 0;
+  if (normalized >= 1) return 1;
+  const hundredthsDb = Math.max(
+    -10000,
+    Math.min(0, Math.trunc((Math.log(normalized) / Math.fround(Math.LN10)) * 5000)),
+  );
+  return hundredthsDb <= -10000 ? 0 : Math.pow(10, hundredthsDb / 2000);
+}
+
 export class SiglusAudio {
   private readonly context = new AudioContext();
   private readonly host = new BrowserAudioContextHost(this.context, document);
   private readonly soundLevels = new Map<number, number>();
   private readonly pendingPlayback = new Map<string, object>();
-  private readonly preparedPcm = new Map<string, {source: SiglusPcmSource; buffer: AudioBuffer}>();
+  private readonly pendingPromises = new Map<string, Promise<void>>();
+  private pendingBgm?: {name: string; loop: boolean};
+  private readonly preparedPcm = new Map<
+    string,
+    {source: SiglusPcmSource; buffer: AudioBuffer; bgm?: BgmTrack}
+  >();
   private preparedBgm?: BgmTrack;
+  private readonly bgmTable = new Map<string, string[]>();
+  private readonly bgmCache = new Map<string, Promise<DecodedBgm>>();
+  private readonly voiceCache = new Map<number, Promise<AudioBuffer>>();
   private readonly channelLevels = new Map<string, number>();
   private readonly playing = new Map<string, Playing>();
+  private readonly fadeEnds = new Map<string, number>();
   private readonly indexes = new Map<string, ReturnType<typeof ovkIndex>>();
   private readonly effects = new Map<string, Promise<AudioBuffer>>();
   private readonly active = new Set<Playing>();
@@ -70,6 +107,10 @@ export class SiglusAudio {
   private readonly levels = new Map<MixKind, number>();
   private readonly disabled = new Set<MixKind>();
   private voiceDuck = 1;
+  private readonly bgmFadeInStart: number;
+  private readonly bgmFadeInLen: number;
+  private readonly bgmFadeOutStart: number;
+  private readonly bgmFadeOutLen: number;
   private readonly voiceGroups = new Map<number, number>();
   private readonly characterLevels = new Map<number, number>();
   private readonly mutedCharacters = new Set<number>();
@@ -80,7 +121,20 @@ export class SiglusAudio {
     private readonly root: HTMLElement,
     private readonly settingsKey: string,
   ) {
+    const readMs = (key: string): number => {
+      const value = Number(config.get(key) ?? 0);
+      return Number.isFinite(value) && value > 0 ? value / 1000 : 0;
+    };
+    this.bgmFadeInStart = readMs('BGMFADE2.IN_START_TIME');
+    this.bgmFadeInLen = readMs('BGMFADE2.IN_TIME_LEN');
+    this.bgmFadeOutStart = readMs('BGMFADE2.OUT_START_TIME');
+    this.bgmFadeOutLen = readMs('BGMFADE2.OUT_TIME_LEN');
     for (const [key, value] of config) {
+      if (/^BGM\.\d+$/.test(key)) {
+        const bgmName = value.split('"')[1]?.toLowerCase();
+        if (bgmName) this.bgmTable.set(bgmName, value.split(','));
+        continue;
+      }
       const group = /^CHRKOE\.(\d+)$/.exec(key)?.[1];
       const members = /\(([^()]*)\)\s*$/.exec(value)?.[1];
       if (group === undefined || !members) continue;
@@ -128,34 +182,60 @@ export class SiglusAudio {
   }
 
   private async loadBgm(name: string, loop: boolean, startSample?: number): Promise<BgmTrack> {
-    const entry = [...this.config].find(
-      ([key, value]) =>
-        /^BGM\.\d+$/.test(key) && value.split('"')[1]?.toLowerCase() === name.toLowerCase(),
-    );
-    const fields = entry?.[1].split(',') ?? [];
+    const key = name.toLowerCase();
+    const fields = this.bgmTable.get(key) ?? [];
     const file = fields[1]?.split('"')[1] ?? name;
-    const path = `bgm/${file.toLowerCase()}.ogg`;
-    const source = this.files.get(path);
-    if (!source) throw new Error(`Missing Siglus sound ${path}`);
-    const bytes = new Uint8Array(await source.read(0, source.size));
-    const page = isOggPageStart(bytes, 0) ? readOggPage(bytes, 0) : null;
-    if (!page) throw new Error('Missing Siglus BGM Vorbis header');
-    const rate = byteDataView(page.bytes).getUint32(page.bodyOffset + 12, true);
-    if (!rate) throw new Error('Invalid Siglus BGM sample rate');
-    const buffer = await this.context.decodeAudioData(bytes.buffer);
-    const configuredStart = Number(fields[2] ?? 0);
-    const end = Number(fields[3] ?? -1);
-    const loopStart = Number(fields[4] ?? 0) / rate;
-    const loopEnd = end < 0 ? buffer.duration : Math.min(buffer.duration, end / rate);
+    const path = `bgm/${file.toLowerCase()}`;
+    let decoded = this.bgmCache.get(path);
+    if (decoded) {
+      this.bgmCache.delete(path);
+      this.bgmCache.set(path, decoded);
+    } else {
+      const ogg = this.files.get(path + '.ogg');
+      const source = ogg ?? this.files.get(path + '.owp');
+      if (!source) throw new Error(`Missing Siglus sound ${path}.ogg or .owp`);
+      decoded = (async (): Promise<DecodedBgm> => {
+        const encoded = new Uint8Array(await source.read(0, source.size));
+        const bytes = ogg ? encoded : decodeOwp(encoded);
+        const page = isOggPageStart(bytes, 0) ? readOggPage(bytes, 0) : null;
+        if (!page) throw new Error('Missing Siglus BGM Vorbis header');
+        const rate = byteDataView(page.bytes).getUint32(page.bodyOffset + 12, true);
+        if (!rate) throw new Error('Invalid Siglus BGM sample rate');
+        const buffer = await this.context.decodeAudioData(bytes.buffer);
+        const configuredStart = Number(fields[2] ?? 0);
+        const end = Number(fields[3] ?? -1);
+        const loopStart = Number(fields[4] ?? 0) / rate;
+        const loopEnd = end < 0 ? buffer.duration : Math.min(buffer.duration, end / rate);
+        return {buffer, sourceRate: rate, configuredStart, loopStart, loopEnd};
+      })();
+      this.bgmCache.set(path, decoded);
+      decoded.catch(() => {
+        if (this.bgmCache.get(path) === decoded) this.bgmCache.delete(path);
+      });
+      if (this.bgmCache.size > 16) this.bgmCache.delete(this.bgmCache.keys().next().value!);
+    }
+    const {buffer, sourceRate, configuredStart, loopStart, loopEnd} = await decoded;
     return {
       name,
       buffer,
       loop,
       loopStart,
       loopEnd,
-      start: (startSample === undefined || startSample < 0 ? configuredStart : startSample) / rate,
-      sourceRate: rate,
+      start:
+        (startSample === undefined || startSample < 0 ? configuredStart : startSample) / sourceRate,
+      sourceRate,
     };
+  }
+
+  bgmStart(
+    name: string,
+    loop = true,
+    fade = 0,
+    crossfade = 0,
+    delay = 0,
+    startSample?: number,
+  ): void {
+    void this.bgm(name, loop, fade, crossfade, delay, startSample).catch(() => {});
   }
 
   async bgm(
@@ -166,9 +246,29 @@ export class SiglusAudio {
     delay = 0,
     startSample?: number,
   ): Promise<void> {
-    const track = await this.loadBgm(name, loop, startSample);
-    this.stop('bgm', crossfade);
-    this.playBgmTrack(track, fade || crossfade, delay);
+    const request = {};
+    this.preparedBgm = undefined;
+    this.pendingPlayback.set('bgm', request);
+    this.pendingBgm = {name, loop};
+    if (!this.closed) this.root.dataset.bgm = name;
+    const job = (async () => {
+      const track = await this.loadBgm(name, loop, startSample);
+      if (this.closed || this.pendingPlayback.get('bgm') !== request) return;
+      this.pendingBgm = undefined;
+      this.pendingPlayback.delete('bgm');
+      this.stopActiveChannel('bgm', crossfade);
+      this.playBgmTrack(track, fade || crossfade, delay);
+    })();
+    this.pendingPromises.set('bgm', job);
+    try {
+      await job;
+    } finally {
+      if (this.pendingPromises.get('bgm') === job) this.pendingPromises.delete('bgm');
+      if (this.pendingPlayback.get('bgm') === request) {
+        this.pendingPlayback.delete('bgm');
+        this.pendingBgm = undefined;
+      }
+    }
   }
 
   private playBgmTrack(track: BgmTrack, fade: number, delay: number): void {
@@ -211,13 +311,30 @@ export class SiglusAudio {
   }
 
   bgmName(): string {
-    return this.preparedBgm?.name ?? this.root.dataset.bgm ?? '';
+    return this.preparedBgm?.name ?? this.pendingBgm?.name ?? this.root.dataset.bgm ?? '';
+  }
+
+  bgmPlayPosition(): number {
+    const active = this.playing.get('bgm');
+    const bgm = active?.bgm;
+    if (!active || !bgm) return 0;
+    const sampleRate = bgm.buffer.sampleRate;
+    const elapsedSec = Math.max(0, this.context.currentTime - active.startsAt);
+    const rawSec = bgm.start + elapsedSec;
+    if (bgm.loop && bgm.loopEnd > bgm.loopStart && rawSec >= bgm.loopEnd) {
+      const span = bgm.loopEnd - bgm.loopStart;
+      const looped = bgm.loopStart + ((rawSec - bgm.loopStart) % span);
+      return Math.floor(looped * sampleRate);
+    }
+    return Math.min(bgm.buffer.length, Math.floor(rawSec * sampleRate));
   }
 
   bgmCheckpoint(): SiglusBgmCheckpoint | undefined {
     const level = this.channelLevel('bgm');
     if (this.preparedBgm)
       return {name: this.preparedBgm.name, loop: this.preparedBgm.loop, level, ready: true};
+    if (this.pendingBgm?.loop)
+      return {name: this.pendingBgm.name, loop: this.pendingBgm.loop, level};
     const playing = this.playing.get('bgm');
     if (!playing?.bgm) return;
     const pendingResume = playing.startsAt > this.context.currentTime;
@@ -238,6 +355,15 @@ export class SiglusAudio {
     else await this.bgm(checkpoint.name, checkpoint.loop);
   }
 
+  voiceStart(
+    id: number,
+    channel = 'voice',
+    character?: number,
+    volumeType?: number,
+  ): void {
+    void this.voice(id, channel, character, volumeType).catch(() => {});
+  }
+
   async voice(
     id: number,
     channel = 'voice',
@@ -246,21 +372,37 @@ export class SiglusAudio {
   ): Promise<void> {
     const request = {};
     this.pendingPlayback.set(channel, request);
-    const buffer = await this.voiceBuffer(id);
-    if (this.pendingPlayback.get(channel) !== request) return;
-    this.start(channel, buffer, 'KOE', {
-      resource: id,
-      volumeType,
-      character:
-        character === undefined ? undefined : (this.voiceGroups.get(character) ?? character),
-    });
-    if (channel === 'voice') {
-      this.root.dataset.voice = String(id);
-      this.root.dataset.voiceDuration = String(buffer.duration);
+    const job = (async () => {
+      const buffer = await this.voiceBuffer(id);
+      if (this.closed || this.pendingPlayback.get(channel) !== request) return;
+      this.pendingPlayback.delete(channel);
+      this.start(channel, buffer, 'KOE', {
+        resource: id,
+        volumeType,
+        character:
+          character === undefined ? undefined : (this.voiceGroups.get(character) ?? character),
+      });
+      if (channel === 'voice') {
+        this.root.dataset.voice = String(id);
+        this.root.dataset.voiceDuration = String(buffer.duration);
+      }
+    })();
+    this.pendingPromises.set(channel, job);
+    try {
+      await job;
+    } finally {
+      if (this.pendingPromises.get(channel) === job) this.pendingPromises.delete(channel);
+      if (this.pendingPlayback.get(channel) === request) this.pendingPlayback.delete(channel);
     }
   }
 
   private async voiceBuffer(id: number): Promise<AudioBuffer> {
+    let cached = this.voiceCache.get(id);
+    if (cached) {
+      this.voiceCache.delete(id);
+      this.voiceCache.set(id, cached);
+      return cached;
+    }
     const bank = Math.floor(id / 100000);
     const path = `koe/z${String(bank).padStart(4, '0')}.ovk`;
     const file = this.files.get(path);
@@ -270,28 +412,90 @@ export class SiglusAudio {
       index = ovkIndex(file);
       this.indexes.set(path, index);
     }
-    const entries = await index;
-    const entry = entries.get(id % 100000);
-    if (!entry) throw new Error(`Missing Siglus voice ${id}`);
-    const data = await readOvk(file, entry);
-    return this.context.decodeAudioData(data.buffer);
+    cached = (async () => {
+      const entries = await index;
+      const entry = entries.get(id % 100000);
+      if (!entry) throw new Error(`Missing Siglus voice ${id}`);
+      const data = await readOvk(file, entry);
+      return this.context.decodeAudioData(data.buffer);
+    })();
+    this.voiceCache.set(id, cached);
+    cached.catch(() => {
+      if (this.voiceCache.get(id) === cached) this.voiceCache.delete(id);
+    });
+    if (this.voiceCache.size > 24) this.voiceCache.delete(this.voiceCache.keys().next().value!);
+    return cached;
   }
 
   private effectBuffer(name: string): Promise<AudioBuffer> {
-    const path = `wav/${name.toLowerCase()}.nwa`;
+    const path = `wav/${name.toLowerCase()}`;
     let decoded = this.effects.get(path);
-    if (!decoded) {
-      decoded = this.decode(path);
+    if (decoded) {
+      this.effects.delete(path);
       this.effects.set(path, decoded);
-      if (this.effects.size > 16) this.effects.delete(this.effects.keys().next().value!);
+    } else {
+      const wav = this.files.get(path + '.wav');
+      const nwa = this.files.get(path + '.nwa');
+      const ogg = this.files.get(path + '.ogg');
+      const owp = this.files.get(path + '.owp');
+      if (wav)
+        decoded = wav
+          .read(0, wav.size)
+          .then((bytes) => this.context.decodeAudioData(bytes.slice().buffer));
+      else if (nwa) decoded = this.decode(path + '.nwa');
+      else if (ogg)
+        decoded = ogg
+          .read(0, ogg.size)
+          .then((bytes) => this.context.decodeAudioData(bytes.slice().buffer));
+      else if (owp)
+        decoded = owp
+          .read(0, owp.size)
+          .then((bytes) => this.context.decodeAudioData(decodeOwp(new Uint8Array(bytes)).buffer));
+      else decoded = this.decode(path + '.nwa');
+      this.effects.set(path, decoded);
+      decoded.catch(() => {
+        if (this.effects.get(path) === decoded) this.effects.delete(path);
+      });
+      if (this.effects.size > 64) this.effects.delete(this.effects.keys().next().value!);
     }
     return decoded;
   }
 
+  effectStart(channel: string, name: string): void {
+    void this.effect(channel, name).catch(() => {});
+  }
+
   async effect(channel: string, name: string): Promise<void> {
-    this.start(channel, await this.effectBuffer(name), channel === 'se' ? 'SE' : 'PCM', {
-      resource: name,
-    });
+    const request = {};
+    this.pendingPlayback.set(channel, request);
+    const job = (async () => {
+      const buffer = await this.effectBuffer(name);
+      if (this.closed || this.pendingPlayback.get(channel) !== request) return;
+      this.pendingPlayback.delete(channel);
+      this.start(channel, buffer, channel === 'se' ? 'SE' : 'PCM', {
+        resource: name,
+      });
+    })();
+    this.pendingPromises.set(channel, job);
+    try {
+      await job;
+    } finally {
+      if (this.pendingPromises.get(channel) === job) this.pendingPromises.delete(channel);
+      if (this.pendingPlayback.get(channel) === request) this.pendingPlayback.delete(channel);
+    }
+  }
+
+  async effectDurationMs(name: string): Promise<number> {
+    try {
+      const buffer = await this.effectBuffer(name);
+      return Math.round(buffer.duration * 1000);
+    } catch {
+      return 0;
+    }
+  }
+
+  pcmStart(channel: number, source: SiglusPcmSource, ready = false, fade = 0): void {
+    void this.pcm(channel, source, ready, fade).catch(() => {});
   }
 
   async pcm(channel: number, source: SiglusPcmSource, ready = false, fade = 0): Promise<void> {
@@ -299,28 +503,50 @@ export class SiglusAudio {
     this.stop(key);
     const request = {};
     this.pendingPlayback.set(key, request);
-    const buffer =
-      typeof source.resource === 'number'
-        ? await this.voiceBuffer(source.resource)
-        : await this.effectBuffer(source.resource);
-    if (this.closed || this.pendingPlayback.get(key) !== request) return;
-    this.pendingPlayback.delete(key);
-    this.preparedPcm.set(key, {source, buffer});
-    if (!ready) this.resumePcm(channel, fade);
+    const job = (async () => {
+      let buffer: AudioBuffer;
+      let bgm: BgmTrack | undefined;
+      if (source.bgmName) {
+        bgm = await this.loadBgm(source.bgmName, source.loop);
+        buffer = bgm.buffer;
+      } else {
+        buffer =
+          typeof source.resource === 'number'
+            ? await this.voiceBuffer(source.resource)
+            : await this.effectBuffer(source.resource);
+      }
+      if (this.closed || this.pendingPlayback.get(key) !== request) return;
+      this.pendingPlayback.delete(key);
+      this.preparedPcm.set(key, {source, buffer, bgm});
+      if (!ready) this.resumePcm(channel, fade);
+    })();
+    this.pendingPromises.set(key, job);
+    try {
+      await job;
+    } finally {
+      if (this.pendingPromises.get(key) === job) this.pendingPromises.delete(key);
+      if (this.pendingPlayback.get(key) === request) this.pendingPlayback.delete(key);
+    }
   }
 
   resumePcm(channel: number, fade = 0, delay = 0): void {
     const key = `pcm${channel}`;
     const prepared = this.preparedPcm.get(key);
     if (!prepared) return;
-    const {source, buffer} = prepared;
-    const {resource, loop, volumeType, character} = source;
+    const {source, buffer, bgm} = prepared;
+    const {resource, loop, volumeType, character, bgmFadeTarget, bgmFadeSource} = source;
     this.start(key, buffer, typeof resource === 'number' ? 'KOE' : 'PCM', {
       resource,
       loop,
+      loopStart: bgm?.loopStart,
+      loopEnd: bgm?.loopEnd,
+      start: bgm?.start,
+      sourceRate: bgm?.sourceRate,
       fade,
       delay,
       volumeType,
+      bgmFadeTarget,
+      bgmFadeSource,
       character:
         character === undefined ? undefined : (this.voiceGroups.get(character) ?? character),
       pcm: source,
@@ -382,6 +608,8 @@ export class SiglusAudio {
       delay = 0,
       character,
       volumeType,
+      bgmFadeTarget,
+      bgmFadeSource,
       resource,
       pcm,
       bgm,
@@ -395,6 +623,8 @@ export class SiglusAudio {
       delay?: number;
       character?: number;
       volumeType?: number;
+      bgmFadeTarget?: boolean;
+      bgmFadeSource?: boolean;
       resource?: string | number;
       pcm?: SiglusPcmSource;
       bgm?: BgmTrack;
@@ -405,7 +635,7 @@ export class SiglusAudio {
     this.stop(channel);
     const source = this.context.createBufferSource();
     const gain = this.context.createGain();
-    const volume = this.playbackVolume(channel, kind, character, volumeType);
+    const volume = this.playbackVolume(channel, kind, character, volumeType, bgmFadeTarget);
     const startsAt = this.context.currentTime + Math.max(0, delay) / 1000;
     gain.gain.setValueAtTime(fade > 0 ? 0 : volume, startsAt);
     if (fade > 0) gain.gain.linearRampToValueAtTime(volume, startsAt + fade / 1000);
@@ -420,6 +650,8 @@ export class SiglusAudio {
       kind,
       character,
       volumeType,
+      bgmFadeTarget,
+      bgmFadeSource,
       resource,
       pcm,
       bgm,
@@ -435,10 +667,10 @@ export class SiglusAudio {
       }
       source.disconnect();
       gain.disconnect();
-      if (channel === 'voice') this.updateGains('BGM');
+      if (channel === 'voice' || bgmFadeSource) this.updateVoiceDuckGains(false);
     };
     source.start(startsAt, start);
-    if (channel === 'voice') this.updateGains('BGM');
+    if (channel === 'voice' || bgmFadeSource) this.updateVoiceDuckGains(true);
     this.root.dataset.audioState = this.context.state;
     if (new URLSearchParams(location.search).has('siglus-trace')) {
       let levels = this.measured.get(buffer);
@@ -480,8 +712,14 @@ export class SiglusAudio {
     }
   }
 
+  private isVoiceDucking(): boolean {
+    if (this.playing.has('voice')) return true;
+    for (const playing of this.playing.values()) if (playing.bgmFadeSource) return true;
+    return false;
+  }
+
   volume(kind: Exclude<MixKind, 'ALL'>, character?: number): number {
-    const duck = kind === 'BGM' && this.playing.has('voice') ? this.voiceDuck : 1;
+    const duck = kind === 'BGM' && this.isVoiceDucking() ? this.voiceDuck : 1;
     const individual =
       character === undefined
         ? 1
@@ -575,15 +813,17 @@ export class SiglusAudio {
     kind: SiglusAudioKind,
     character?: number,
     volumeType?: number,
+    bgmFadeTarget?: boolean,
   ): number {
     const level = this.channelLevel(channel);
+    const duck = kind !== 'BGM' && bgmFadeTarget && this.isVoiceDucking() ? this.voiceDuck : 1;
     const volume =
       volumeType === undefined || volumeType === 1
         ? this.volume(kind, character)
         : this.enabled('ALL')
           ? (this.level('ALL') * this.soundLevel(volumeType)) / (255 * 255)
           : 0;
-    return (volume * level) / 255;
+    return siglusVolumeGain((volume * duck * level) / 255);
   }
 
   channelLevel(channel: string): number {
@@ -594,28 +834,55 @@ export class SiglusAudio {
     this.channelLevels.set(channel, Math.max(0, Math.min(255, level)));
     const playing = this.playing.get(channel);
     if (!playing) return;
-    const {gain, kind, character, volumeType} = playing;
+    const {gain, kind, character, volumeType, bgmFadeTarget} = playing;
     const time = this.context.currentTime;
     gain.gain.cancelAndHoldAtTime(time);
     gain.gain.linearRampToValueAtTime(
-      this.playbackVolume(channel, kind, character, volumeType),
+      this.playbackVolume(channel, kind, character, volumeType, bgmFadeTarget),
       time + Math.max(0, fade) / 1000,
     );
   }
 
-  private updateGains(kind: MixKind): void {
+  private updateVoiceDuckGains(duckingStarted: boolean): void {
+    const active = this.isVoiceDucking();
+    if (this.voiceDuck >= 1) {
+      this.updateGains('ALL');
+      return;
+    }
+    const fade =
+      duckingStarted && active
+        ? {delay: this.bgmFadeInStart, duration: this.bgmFadeInLen}
+        : !active
+          ? {delay: this.bgmFadeOutStart, duration: this.bgmFadeOutLen}
+          : undefined;
+    this.updateGains('ALL', fade);
+  }
+
+  private updateGains(kind: MixKind, duckFade?: {delay: number; duration: number}): void {
     const time = this.context.currentTime;
-    for (const [channel, {gain, kind: playingKind, character, volumeType}] of this.playing) {
+    for (const [channel, {gain, kind: playingKind, character, volumeType, bgmFadeTarget}] of this
+      .playing) {
       if (kind !== 'ALL' && playingKind !== kind) continue;
-      gain.gain.cancelScheduledValues(time);
-      gain.gain.setValueAtTime(
-        this.playbackVolume(channel, playingKind, character, volumeType),
-        time,
-      );
+      const target = this.playbackVolume(channel, playingKind, character, volumeType, bgmFadeTarget);
+      if (
+        duckFade &&
+        duckFade.duration > 0 &&
+        (playingKind === 'BGM' || bgmFadeTarget) &&
+        typeof gain.gain.cancelAndHoldAtTime === 'function'
+      ) {
+        gain.gain.cancelAndHoldAtTime(time);
+        if (duckFade.delay > 0) gain.gain.setValueAtTime(gain.gain.value, time + duckFade.delay);
+        gain.gain.linearRampToValueAtTime(target, time + duckFade.delay + duckFade.duration);
+      } else {
+        gain.gain.cancelScheduledValues(time);
+        gain.gain.setValueAtTime(target, time);
+      }
     }
   }
 
   async waitForEnd(channel: string): Promise<void> {
+    const pending = this.pendingPromises.get(channel);
+    if (pending) await pending.catch(() => {});
     const playing = this.playing.get(channel);
     if (!playing) return;
     await new Promise<void>((resolve) =>
@@ -623,18 +890,50 @@ export class SiglusAudio {
     );
   }
 
-  stop(channel: string, fade = 0): void {
-    if (channel === 'bgm') this.preparedBgm = undefined;
-    this.pendingPlayback.delete(channel);
-    this.preparedPcm.delete(channel);
+  channelRemainingMs(channel: string): number {
+    const playing = this.playing.get(channel);
+    if (!playing || playing.source.loop || !playing.source.buffer) return 0;
+    const endsAt = playing.startsAt + playing.source.buffer.duration;
+    return Math.max(0, Math.ceil((endsAt - this.context.currentTime) * 1000));
+  }
+
+  fadeRemaining(channel: string): number {
+    const end = this.fadeEnds.get(channel) ?? 0;
+    return Math.max(0, Math.ceil((end - this.context.currentTime) * 1000));
+  }
+
+  isPending(channel: string): boolean {
+    return this.pendingPromises.has(channel);
+  }
+
+  channelState(channel: string): number {
+    if (this.playing.has(channel) || this.pendingPromises.has(channel)) return 1;
+    return this.fadeRemaining(channel) > 0 ? 2 : 0;
+  }
+
+  private stopActiveChannel(channel: string, fade = 0): void {
     const playing = this.playing.get(channel);
     if (!playing) return;
     this.playing.delete(channel);
     const time = this.context.currentTime;
-    if (fade > 0) playing.gain.gain.linearRampToValueAtTime(0, time + fade / 1000);
+    if (fade > 0) {
+      this.fadeEnds.set(channel, time + fade / 1000);
+      playing.gain.gain.linearRampToValueAtTime(0, time + fade / 1000);
+    } else this.fadeEnds.delete(channel);
     playing.source.stop(time + fade / 1000);
-    if (channel === 'bgm') delete this.root.dataset.bgm;
-    if (channel === 'voice') this.updateGains('BGM');
+    if (channel === 'voice' || playing.bgmFadeSource) this.updateVoiceDuckGains(false);
+  }
+
+  stop(channel: string, fade = 0): void {
+    if (channel === 'bgm') {
+      this.preparedBgm = undefined;
+      this.pendingBgm = undefined;
+      delete this.root.dataset.bgm;
+    }
+    this.pendingPlayback.delete(channel);
+    this.pendingPromises.delete(channel);
+    this.preparedPcm.delete(channel);
+    this.stopActiveChannel(channel, fade);
   }
 
   stopPcmChannels(): void {
@@ -656,9 +955,12 @@ export class SiglusAudio {
 
   resetPlayback(): void {
     this.pendingPlayback.clear();
+    this.pendingPromises.clear();
+    this.pendingBgm = undefined;
     this.preparedPcm.clear();
     this.preparedBgm = undefined;
     this.playing.clear();
+    this.fadeEnds.clear();
     // A source in a fade-out is no longer addressable by its channel.
     for (const {source} of this.active) source.stop();
     delete this.root.dataset.bgm;
@@ -669,6 +971,12 @@ export class SiglusAudio {
   async dispose(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    this.pendingPlayback.clear();
+    this.pendingPromises.clear();
+    this.pendingBgm = undefined;
+    this.bgmCache.clear();
+    this.voiceCache.clear();
+    this.effects.clear();
     this.host.dispose();
     for (const {source} of this.active) source.stop();
     await this.context.close();

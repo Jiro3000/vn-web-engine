@@ -64,7 +64,7 @@ class Channel {
   }
 }
 
-/** Stereo 24-bit WMA Pro, 44.1 kHz, length-prefixed 2048-sample frames. */
+/** Stereo 24-bit WMA Pro, 44.1/48 kHz, length-prefixed 2048-sample frames. */
 export class WmaProDecoder {
   private readonly gb = new BitReader();
   private readonly pgb = new BitReader();
@@ -111,7 +111,7 @@ export class WmaProDecoder {
     const view = new DataView(extra.buffer, extra.byteOffset, extra.byteLength);
     if (
       config.channels !== 2 ||
-      config.sampleRate !== 44100 ||
+      (config.sampleRate !== 44100 && config.sampleRate !== 48000) ||
       view.getUint16(0, true) !== 24 ||
       view.getUint32(2, true) !== 3 ||
       view.getUint16(14, true) !== 0xe0 ||

@@ -31,7 +31,8 @@ test('WMA Pro instances isolate the first-frame delay and reject unsupported inp
   assert.equal(b.decode(proPacket()).length, 2);
   a.close();
   b.close();
-  assert.throws(() => new WmaProDecoder({...proConfig(), sampleRate: 48000}), /Unsupported/);
+  assert.throws(() => new WmaProDecoder({...proConfig(), sampleRate: 96000}), /Unsupported/);
+  assert.doesNotThrow(() => new WmaProDecoder({...proConfig(), sampleRate: 48000}).close());
   assert.throws(() => new WmaProDecoder({...proConfig(), extra: new Uint8Array(3)}), /extradata/);
   assert.throws(() => new WmaProDecoder(proConfig()).decode(new Uint8Array(10)), /Truncated/);
 });

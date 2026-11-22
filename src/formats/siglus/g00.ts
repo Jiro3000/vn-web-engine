@@ -14,7 +14,7 @@ export interface G00Frame {
 }
 
 function pixelBytes(width: number, height: number): number {
-  if (width <= 0 || height <= 0 || width * height > 16_777_216)
+  if (width <= 0 || height <= 0 || width * height > 67_108_864)
     throw new Error('Invalid G00 dimensions');
   return width * height * 4;
 }
@@ -62,12 +62,24 @@ export class G00Image {
     if (this.type === 1) {
       const paletteSize = view.getUint16(0, true);
       const pixels = 2 + paletteSize * 4;
-      checkRange(this.data.length, pixels, size / 4);
+      const count = size >>> 2;
+      checkRange(this.data.length, pixels, count);
       const bgra = new Uint8Array(size);
-      for (let i = 0; i < size / 4; i++) {
+      const bgra32 = new Uint32Array(bgra.buffer);
+      const pal32 = new Uint32Array(paletteSize);
+      for (let c = 0; c < paletteSize; c++) {
+        const o = 2 + c * 4;
+        pal32[c] =
+          (this.data[o]! |
+            (this.data[o + 1]! << 8) |
+            (this.data[o + 2]! << 16) |
+            (this.data[o + 3]! << 24)) >>>
+          0;
+      }
+      for (let i = 0; i < count; i++) {
         const color = this.data[pixels + i]!;
         if (color >= paletteSize) throw new Error('Invalid G00 palette index');
-        bgra.set(this.data.subarray(2 + color * 4, 6 + color * 4), i * 4);
+        bgra32[i] = pal32[color]!;
       }
       return {width, height, x: 0, y: 0, centerX: 0, centerY: 0, bgra};
     }
@@ -75,7 +87,8 @@ export class G00Image {
     const x = outer.getInt32(9 + index * 24, true);
     const y = outer.getInt32(13 + index * 24, true);
     const offset = view.getUint32(4 + index * 8, true);
-    const length = view.getUint32(8 + index * 8, true);
+    // Native 0x6de3bc checks length != 0; deduplicated Type 2 cuts store negative signed length (-N).
+    const length = Math.abs(view.getInt32(8 + index * 8, true));
     if (!offset || !length)
       return {width: 1, height: 1, x, y, centerX: 0, centerY: 0, bgra: new Uint8Array(4)};
     checkRange(this.data.length, offset, length);
@@ -92,13 +105,23 @@ export class G00Image {
       const cw = cut.getUint16(p + 6, true);
       const ch = cut.getUint16(p + 8, true);
       p += 92;
-      checkRange(block.length, p, cw * ch * 4);
+      const chipBytes = cw * ch * 4;
+      checkRange(block.length, p, chipBytes);
       if (left + cw > w || top + ch > h) throw new Error('G00 chip outside cut');
-      for (let row = 0; row < ch; row++) {
-        const start = p + row * cw * 4;
-        bgra.set(block.subarray(start, start + cw * 4), ((top + row) * w + left) * 4);
+      if (left === 0 && cw === w) {
+        bgra.set(block.subarray(p, p + chipBytes), top * w * 4);
+      } else {
+        const rowBytes = cw * 4;
+        const dstStride = w * 4;
+        let src = p;
+        let dst = (top * w + left) * 4;
+        for (let row = 0; row < ch; row++) {
+          bgra.set(block.subarray(src, src + rowBytes), dst);
+          src += rowBytes;
+          dst += dstStride;
+        }
       }
-      p += cw * ch * 4;
+      p += chipBytes;
     }
     const left = cut.getInt32(4, true);
     const top = cut.getInt32(8, true);

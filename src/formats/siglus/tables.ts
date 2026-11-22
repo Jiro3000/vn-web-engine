@@ -59,3 +59,4 @@ export const easySourceXor = hex(
     '163d1a76d0879b2d0c7bd1e1ada9190f282d1b52395c36229f4931f68332ffc2b1e9e1983d6f310dacb108839d0d10d1' +
     '41f900ba1acf1371e486212f2365c345',
 );
+export const dbsMask = hex('ff0000ffff0000ffff00ffffff00ff0000ff0000000000ffff');

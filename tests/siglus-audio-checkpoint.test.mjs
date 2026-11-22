@@ -23,7 +23,8 @@ test('Siglus restores scheduled tracks immediately and preserves their prepared 
       return {duration: length / sampleRate, sampleRate, getChannelData: (index) => data[index]};
     }
 
-    async decodeAudioData() {
+    async decodeAudioData(data) {
+      assert.equal(new TextDecoder().decode(new Uint8Array(data, 0, 4)), 'OggS');
       return this.createBuffer(1, 480000, this.sampleRate);
     }
 
@@ -74,6 +75,7 @@ test('Siglus restores scheduled tracks immediately and preserves their prepared 
   const audio = new SiglusAudio(
     new Map([
       ['bgm/theme.ogg', new BlobSource(new Blob([ogg]))],
+      ['bgm/legacy.owp', new BlobSource(new Blob([ogg.map((byte) => byte ^ 0x39)]))],
       ['wav/chime.nwa', new BlobSource(new Blob([nwa]))],
     ]),
     new Map([['BGM.000', '"theme", "theme", 48000, 480000, 96000']]),
@@ -127,4 +129,10 @@ test('Siglus restores scheduled tracks immediately and preserves their prepared 
   audio.stop('bgm', 500);
   assert.equal(fading.stopped, 22.5);
   assert.equal(audio.bgmCheckpoint(), undefined);
+  assert.equal(audio.channelState('bgm'), 2);
+  context.currentTime = 22.5;
+  assert.equal(audio.channelState('bgm'), 0);
+  await audio.bgm('legacy');
+  assert.equal(audio.bgmName(), 'legacy');
+  assert.equal(audio.channelState('bgm'), 1);
 });

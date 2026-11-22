@@ -20,6 +20,7 @@ const viewer = mountGameViewer('siglus');
 const traceEnabled = new URLSearchParams(location.search).has('siglus-trace');
 let cached: CachedInstallation | null = null;
 let game: SiglusGame | null = null;
+export let currentPlayer: SiglusPlayer | null = null;
 let player: SiglusPlayer | undefined;
 let busy = false;
 
@@ -107,6 +108,7 @@ play.onclick = () => {
   fullscreenControls = mountFullscreenControls(active.windowDisplay);
   fullscreen.disabled = false;
   player = active;
+  currentPlayer = active;
   el('welcome').hidden = true;
   el('fatal-error').hidden = true;
   viewer.collapseOptions(true);
@@ -128,6 +130,7 @@ play.onclick = () => {
       await active.dispose();
       if (player === active) {
         player = undefined;
+        currentPlayer = null;
         fullscreenControls?.destroy();
         fullscreenControls = undefined;
         fullscreen.disabled = true;

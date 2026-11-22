@@ -33,6 +33,7 @@ const alignmentOnly = process.env.SIGLUS_ALIGNMENT_ONLY === '1';
 const typingOnly = process.env.SIGLUS_TYPING_ONLY === '1';
 const thumbnailOnly = process.env.SIGLUS_THUMBNAIL_ONLY === '1';
 const castLayersOnly = process.env.SIGLUS_CAST_LAYERS_ONLY === '1';
+const cinemaOnly = process.env.SIGLUS_CINEMA_ONLY === '1';
 const recollectOnly = process.env.SIGLUS_RECOLLECT_ONLY === '1';
 const ganOnly = process.env.SIGLUS_GAN_ONLY === '1';
 const fanWipeOnly = process.env.SIGLUS_FAN_WIPE_ONLY === '1';
@@ -751,6 +752,7 @@ verification: try {
     fanWipeOnly ||
     ganOnly ||
     recollectOnly ||
+    cinemaOnly ||
     castLayersOnly ||
     quickOnly ||
     autoOnly ||
@@ -1098,6 +1100,124 @@ verification: try {
       'PNG SHA-256:',
       digest(Buffer.from(visible.thumbnail.split(',', 2)[1], 'base64')),
     );
+    break verification;
+  } else if (cinemaOnly) {
+    const at = (offset) =>
+      `siglusTags.at(-1)?.scene === ${JSON.stringify(scene)} && siglusTags.at(-1)?.offset === ${offset}`;
+    const bars = '[data-siglus-stage-rects="163"]';
+    const dialogue = "siglusSurface.querySelector('[data-siglus-dialogue]').textContent";
+    const observe = () => evaluate(`(() => {
+      const stage = siglusSurface.firstElementChild;
+      const selector = ${JSON.stringify(bars)};
+      window.siglusCinemaWipes = [];
+      window.siglusCinemaBeforeWipe = [];
+      window.siglusCinemaGeometry = (layer = siglusSurface) => {
+        const group = layer?.querySelector(selector);
+        if (!group) return null;
+        // The nearby scripted quake moves the scene, including both rectangles.
+        const stageLayers = stage.querySelector('[data-siglus-scene-layers]');
+        const viewport = stageLayers.getBoundingClientRect();
+        const scaleX = viewport.width / stage.offsetWidth;
+        const scaleY = viewport.height / stage.offsetHeight;
+        return [...group.children].map((rect) => {
+          const {x, y, width, height} = rect.getBoundingClientRect();
+          return [Math.round((x - viewport.x) / scaleX), Math.round((y - viewport.y) / scaleY),
+            Math.round(width / scaleX), Math.round(height / scaleY), getComputedStyle(rect).backgroundColor];
+        });
+      };
+      siglusSurface.addEventListener('siglus-tag', ({detail}) => {
+        if (detail.scene === ${JSON.stringify(scene)} && [0x70a3, 0x76a3].includes(detail.offset))
+          siglusCinemaBeforeWipe.push([detail.offset, siglusCinemaGeometry()]);
+      });
+      const animate = Element.prototype.animate;
+      Element.prototype.animate = function (frames, timing) {
+        const animation = animate.call(this, frames, timing);
+        if (frames?.opacity?.[0] === 0 && timing?.duration === 1000) {
+          const incoming = siglusCinemaGeometry(this);
+          const outgoing = siglusCinemaGeometry(this.previousElementSibling);
+          if (incoming || outgoing) {
+            animation.currentTime = 500;
+            siglusCinemaWipes.push([incoming, outgoing, Number(getComputedStyle(this).opacity)]);
+            animation.currentTime = 0;
+          }
+        }
+        return animation;
+      };
+    })()`);
+    const expected = [
+      [0, 0, 1920, 150, 'rgb(0, 0, 0)'],
+      [0, 930, 1920, 150, 'rgb(0, 0, 0)'],
+    ];
+    const openSlot = async (id) => {
+      await reopenPlayer();
+      await observe();
+      await click('#siglus-surface button[aria-label="Load Game"]');
+      await waitFor(slotLoop);
+      assert.equal(await chooseSlot('load', 0, id), 'confirm');
+      await waitFor('siglusSurface.dataset.loaded === "true"');
+    };
+    await click('#siglus-surface button[aria-label="New Game"]');
+    await runUntil((current) => Number(current.page) >= 3);
+    await selectSlot('save');
+    await waitFor('siglusSurface.dataset.savedPage');
+    await updateSaveFixture(`(slot) => ({
+      ...slot, waitsForInput: false,
+      vm: {...slot.vm, frames: [{scene: ${JSON.stringify(scene)}, pc: 0x6fc2, line: 492,
+        stack: [], points: [], locals: [], declarations: []}]},
+    })`);
+    await openSlot(0);
+    await waitFor(at(0x710a));
+    assert.equal(digest(await evaluate(dialogue)), scripts.get(scene).tags.get(0x70f6).hash);
+    assert.deepEqual(await evaluate('siglusCinemaBeforeWipe'), [[0x70a3, null]]);
+    assert.deepEqual(await evaluate('siglusCinemaWipes'), [[expected, null, 0.5]]);
+    assert.deepEqual(await evaluate('siglusCinemaGeometry()'), expected);
+    compareTags(await evaluate(`siglusTags.filter(({scene, offset}) =>
+      scene === ${JSON.stringify(scene)} && offset >= 0x6fc2 && offset <= 0x710a)`), scripts);
+    await waitForDialogueControls();
+    await selectSlot('save', 1);
+    const stored = await waitFor(asyncExpression(`${slotRecords()}.find(([id]) => id === 1)?.[1]`));
+    assert.deepEqual(stored.rectangleEffects, [{
+      slot: 163, layer: 0, rectangles: expected.map((rect) => rect.slice(0, 4)), rgba: [0, 0, 0, 255],
+    }]);
+    await openSlot(1);
+    await waitForDialogueControls();
+    assert.deepEqual(await evaluate('siglusCinemaGeometry()'), expected);
+    assert.equal(digest(await evaluate(dialogue)), scripts.get(scene).tags.get(0x70f6).hash);
+    for (const offset of [0x7224, 0x72a1, 0x72f4, 0x7347, 0x7410, 0x748d, 0x75a7, 0x75fa, 0x773c]) {
+      await clickStage();
+      await waitFor(at(offset));
+    }
+    assert.deepEqual(await evaluate('siglusCinemaBeforeWipe'), [[0x76a3, expected]]);
+    assert.deepEqual(await evaluate('siglusCinemaWipes'), [[null, expected, 0.5]]);
+    assert.equal(await evaluate('siglusCinemaGeometry()'), null);
+    assert.equal(digest(await evaluate(dialogue)), scripts.get(scene).tags.get(0x7728).hash);
+    compareTags(await evaluate(`siglusTags.filter(({scene, offset}) =>
+      scene === ${JSON.stringify(scene)} && offset >= 0x7224 && offset <= 0x773c)`), scripts);
+    await verifyRenderedPages();
+    assert.deepEqual(errors, [], 'Browser console errors');
+    console.log('Cinemascope stayed with the scripted wipe pages and restored from title Load:', expected);
+
+    // Chapter 03 fades to black while the cinemascope object still has wipe_copy.
+    const chapter = [...scripts.keys()].find((name) => name.startsWith('03_'));
+    await updateSaveFixture(`(slot) => ({
+      ...slot, waitsForInput: false,
+      rectangleEffects: ${JSON.stringify(stored.rectangleEffects)},
+      vm: {...slot.vm, frames: [{scene: ${JSON.stringify(chapter)}, pc: 0xaa42, line: 548,
+        stack: [], points: [], locals: [], declarations: []}]},
+    })`);
+    await openSlot(0);
+    await waitFor('siglusSurface.dataset.background === "bg_kuro"');
+    assert.deepEqual(await evaluate('siglusCinemaWipes'), [[expected, expected, 0.5]]);
+    assert.equal(await evaluate(`(() => {
+      const page = siglusSurface.querySelector('[data-siglus-scene-cover]');
+      return page?.firstElementChild.matches(${JSON.stringify(bars)}) &&
+        page.children[1] instanceof HTMLCanvasElement;
+    })()`), true, 'The black fade object is above the retained rectangles');
+    const fade = await evaluate(`siglusTags.filter(({scene, offset}) =>
+      scene === ${JSON.stringify(chapter)} && offset === 0xaa91)`);
+    assert.equal(fade.length, 1);
+    compareTags(fade, scripts);
+    assert.deepEqual(errors, [], 'Browser console errors');
     break verification;
   } else if (recollectOnly) {
     const {SiglusOmv} = await import('../dist/formats/siglus/omv.js');
