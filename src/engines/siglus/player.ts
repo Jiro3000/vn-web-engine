@@ -625,13 +625,14 @@ export class SiglusPlayer {
   }
 
   private debugSnapshot(): Record<string, unknown> {
+    const now = performance.now();
     return {
       vm: this.vm.checkpoint(),
       mwnd: this.display.messageWindow,
       bgm: this.audio.bgmName(),
       stageObjects: [
-        [...this.objects[0]!].map(([id, obj]) => [id, serializeDrawObject(obj)]),
-        [...this.objects[1]!].map(([id, obj]) => [id, serializeDrawObject(obj)]),
+        [...this.objects[0]!].map(([id, obj]) => [id, serializeDrawObject(obj, now)]),
+        [...this.objects[1]!].map(([id, obj]) => [id, serializeDrawObject(obj, now)]),
       ],
       stageEffects: [...this.stageEffects].map(([k, v]) => [k, [...v.props]]),
       excallFlags: [...this.excallFlags],
@@ -1626,6 +1627,7 @@ export class SiglusPlayer {
   }
 
   private captureSave(waitsForInput = true, includeHistory = true, commandResult = 0): PlayerSave {
+    const now = performance.now();
     const {background} = this.root.dataset;
     const bgmPlayback = this.audio.bgmCheckpoint();
     const history = includeHistory
@@ -1685,10 +1687,10 @@ export class SiglusPlayer {
           ? [
               [...this.objects[0]!]
                 .filter(([id]) => !this.noSaveObjectIds.has(id))
-                .map(([id, obj]) => [id, serializeDrawObject(obj)]),
+                .map(([id, obj]) => [id, serializeDrawObject(obj, now)]),
               [...this.objects[1]!]
                 .filter(([id]) => !this.noSaveObjectIds.has(id))
-                .map(([id, obj]) => [id, serializeDrawObject(obj)]),
+                .map(([id, obj]) => [id, serializeDrawObject(obj, now)]),
             ]
           : undefined,
       stageEffects: this.stageEffects.size
@@ -1757,14 +1759,7 @@ export class SiglusPlayer {
       weather: saved.weather
         ? {mode: saved.weather.mode, params: {...saved.weather.params}, started: performance.now()}
         : undefined,
-      gan: saved.gan
-        ? {
-            file: saved.gan.file,
-            sequence: saved.gan.sequence,
-            loop: saved.gan.loop,
-            started: saved.gan.sequence !== undefined ? performance.now() : undefined,
-          }
-        : undefined,
+      gan: saved.gan ? {...saved.gan} : undefined,
       number: saved.number ? {...saved.number} : undefined,
       clip: saved.clip ? [...saved.clip] : undefined,
       sourceClip: saved.sourceClip ? [...saved.sourceClip] : undefined,

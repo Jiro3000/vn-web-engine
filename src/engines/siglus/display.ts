@@ -87,6 +87,13 @@ export interface ObjectIntEvent {
   endAt: number;
 }
 
+interface ObjectGanCheckpoint {
+  file: string;
+  sequence?: number;
+  loop?: boolean;
+  elapsed?: number;
+}
+
 export interface DrawObject {
   type?: number;
   name: string;
@@ -170,7 +177,7 @@ export interface DrawObject {
     shadowMode?: number;
   };
   weather?: {mode: 0 | 1 | 2; params: Record<number, number>; started: number};
-  gan?: {file: string; sequence?: number; loop?: boolean; started?: number};
+  gan?: ObjectGanCheckpoint & {started?: number};
   number?: {
     value: number;
     ketaMax: number;
@@ -293,7 +300,7 @@ export interface SerializedDrawObject {
   movieMeta?: DrawObject['movieMeta'];
   text?: DrawObject['text'];
   weather?: {mode: 0 | 1 | 2; params: Record<number, number>};
-  gan?: {file: string; sequence?: number; loop?: boolean};
+  gan?: ObjectGanCheckpoint;
   number?: DrawObject['number'];
   clip?: [number, number, number, number, number];
   sourceClip?: [number, number, number, number];
@@ -305,7 +312,14 @@ export interface SerializedDrawObject {
   buttonState?: 'normal' | 'select' | 'disable';
 }
 
-export function serializeDrawObject(object: DrawObject): SerializedDrawObject {
+function objectGanElapsed(gan: NonNullable<DrawObject['gan']>, now: number): number {
+  return (gan.elapsed ?? 0) + (gan.started === undefined ? 0 : Math.max(0, now - gan.started));
+}
+
+export function serializeDrawObject(
+  object: DrawObject,
+  now = performance.now(),
+): SerializedDrawObject {
   return {
     type: object.type,
     name: object.name,
@@ -339,7 +353,7 @@ export function serializeDrawObject(object: DrawObject): SerializedDrawObject {
     button: object.button ? {...object.button} : undefined,
     childCount: object.childCount,
     children: object.children?.size
-      ? [...object.children].map(([id, child]) => [id, serializeDrawObject(child)])
+      ? [...object.children].map(([id, child]) => [id, serializeDrawObject(child, now)])
       : undefined,
     movieMeta: object.movieMeta ? {...object.movieMeta} : undefined,
     text: object.text ? {...object.text} : undefined,
@@ -347,7 +361,16 @@ export function serializeDrawObject(object: DrawObject): SerializedDrawObject {
       ? {mode: object.weather.mode, params: {...object.weather.params}}
       : undefined,
     gan: object.gan
-      ? {file: object.gan.file, sequence: object.gan.sequence, loop: object.gan.loop}
+      ? {
+          file: object.gan.file,
+          sequence: object.gan.sequence,
+          loop: object.gan.loop,
+          // Siglus 1.1.134.0 saves and restores the GAN clock at 0x68801d and 0x688242.
+          elapsed:
+            object.gan.sequence === undefined
+              ? undefined
+              : Math.floor(objectGanElapsed(object.gan, now)),
+        }
       : undefined,
     number: object.number ? {...object.number} : undefined,
     clip: object.clip ? [...object.clip] : undefined,
@@ -3297,7 +3320,7 @@ export class SiglusDisplay {
     layer.dataset.siglusGan = gan.file;
     layer.style.cssText = `position:absolute;left:${object.x}px;top:${object.y}px;pointer-events:none`;
     const patterns = new Map<number, Graphic | undefined>();
-    const elapsedSinceStart = Math.max(0, performance.now() - (gan.started ?? performance.now()));
+    const animations: Animation[] = [];
     let elapsed = 0;
     for (const [index, frame] of frames.entries()) {
       const start = elapsed === 0 && index === 0 ? 0 : Math.min(duration, elapsed + 1);
@@ -3324,13 +3347,20 @@ export class SiglusDisplay {
         opacity: !loop && index + 1 === frames.length ? frame.alpha / 255 : 0,
         offset: !loop && index + 1 === frames.length ? 1 : offset(end),
       });
-      const anim = node.animate(
-        keyframes.map((k) => ({...k, easing: 'steps(1, end)'})),
-        {duration, iterations: loop ? Infinity : 1, fill: 'both'},
+      animations.push(
+        node.animate(keyframes.map((k) => ({...k, easing: 'steps(1, end)'})), {
+          duration,
+          iterations: loop ? Infinity : 1,
+          fill: 'both',
+        }),
       );
-      anim.currentTime = loop ? elapsedSinceStart % duration : Math.min(duration, elapsedSinceStart);
       layer.append(node);
     }
+    const now = performance.now();
+    gan.started ??= now;
+    const position = objectGanElapsed(gan, now);
+    const phase = loop ? position % duration : Math.min(duration, position);
+    for (const animation of animations) animation.currentTime = phase;
     return layer;
   }
 

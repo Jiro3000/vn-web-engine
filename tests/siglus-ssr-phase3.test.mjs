@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {siglusVolumeGain} from '../dist/engines/siglus/audio.js';
-import {orderedObjects, serializeDrawObject} from '../dist/engines/siglus/display.js';
+import {
+  orderedObjects,
+  serializeDrawObject,
+  SiglusDisplay,
+} from '../dist/engines/siglus/display.js';
+import {SiglusPlayer} from '../dist/engines/siglus/player.js';
 import {G00Image} from '../dist/formats/siglus/g00.js';
 
 test('Phase 3 AUDIO-01: siglusVolumeGain matches native DirectSound dB curve (0x6e0bd0)', () => {
@@ -20,7 +25,10 @@ test('Phase 3 AUDIO-01: siglusVolumeGain matches native DirectSound dB curve (0x
   const g64 = siglusVolumeGain(64 / 255);
   const g16 = siglusVolumeGain(16 / 255);
   assert.equal(siglusVolumeGain(1 / 255), 0);
-  assert.ok(g16 > 0 && g16 < g64 && g64 < g128 && g128 < 1, 'Volume curve must be strictly monotonic above silence floor');
+  assert.ok(
+    g16 > 0 && g16 < g64 && g64 < g128 && g128 < 1,
+    'Volume curve must be strictly monotonic above silence floor',
+  );
   assert.equal(siglusVolumeGain(0.009), 0);
   assert.ok(siglusVolumeGain(0.02) > 0);
 });
@@ -81,7 +89,7 @@ test('Phase 3 STORE-05: serializeDrawObject deep-clones full DrawObject trees cl
     children: new Map([[0, child]]),
   };
 
-  const serialized = serializeDrawObject(root);
+  const serialized = serializeDrawObject(root, 1500);
   const roundTripped = JSON.parse(JSON.stringify(serialized));
 
   // Mutating original must NOT mutate serialized snapshot
@@ -98,7 +106,7 @@ test('Phase 3 STORE-05: serializeDrawObject deep-clones full DrawObject trees cl
   assert.deepEqual(roundTripped.center, [320, 240]);
   assert.deepEqual(roundTripped.centerRep, [10, -10]);
   assert.deepEqual(roundTripped.weather, {mode: 1, params: {0: 40, 3: 1000}});
-  assert.deepEqual(roundTripped.gan, {file: 'ef_01', sequence: 2, loop: true});
+  assert.deepEqual(roundTripped.gan, {file: 'ef_01', sequence: 2, loop: true, elapsed: 501});
   assert.equal(roundTripped.children.length, 1);
   assert.equal(roundTripped.children[0][0], 0);
   assert.deepEqual(roundTripped.children[0][1].button, {id: 5, group: 2, actionNo: 23, seNo: 5});
@@ -112,6 +120,69 @@ test('Phase 3 STORE-05: serializeDrawObject deep-clones full DrawObject trees cl
     b: 0,
     a: 200,
   });
+});
+
+test('SSR object GAN load resumes the saved phase, including child objects and legacy slots', async (t) => {
+  const words = [
+    10000, 10000, 20000, 1, 30000, 2, 30100, 0, 30103, 120, 999999, 30100, 1, 30103, 120, 999999,
+  ];
+  const bytes = new Uint8Array(words.length * 4);
+  const view = new DataView(bytes.buffer);
+  words.forEach((word, i) => view.setInt32(i * 4, word, true));
+  const graphic = {x: 0, y: 0, centerX: 0, centerY: 0};
+  const display = {
+    files: new Map([['gan/effect.gan', {size: bytes.length, read: async () => bytes}]]),
+    objectGraphic: async () => graphic,
+    node: () => ({
+      style: {},
+      animate() {
+        return (this.animation = {currentTime: null});
+      },
+    }),
+  };
+  const originalDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
+  Object.defineProperty(globalThis, 'document', {
+    configurable: true,
+    value: {
+      createElement() {
+        return {
+          dataset: {},
+          style: {},
+          children: [],
+          append(child) {
+            this.children.push(child);
+          },
+        };
+      },
+    },
+  });
+  t.after(() => {
+    if (originalDocument) Object.defineProperty(globalThis, 'document', originalDocument);
+    else delete globalThis.document;
+  });
+  const base = {name: '', frames: [], x: 0, y: 0, visible: true, pattern: 0};
+  const parent = {
+    ...base,
+    children: new Map([
+      [0, {...base, gan: {file: 'effect', sequence: 0, loop: true, started: 639}}],
+      [1, {...base, gan: {file: 'effect', sequence: 0, loop: false, started: 639}}],
+    ]),
+  };
+  const save = JSON.parse(JSON.stringify(serializeDrawObject(parent, 1000)));
+  const player = Object.create(SiglusPlayer.prototype);
+  const phase = async (object) => {
+    const layer = await SiglusDisplay.prototype.objectGanLayer.call(display, object);
+    return layer.children.map((child) => child.animation.currentTime);
+  };
+  const restored = await player.deserializeDrawObject(save);
+  assert.deepEqual(await phase(restored.children.get(0)), [121, 121]);
+  assert.deepEqual(await phase(restored.children.get(1)), [240, 240]);
+  const looping = restored.children.get(0);
+  assert.equal(serializeDrawObject(looping, looping.gan.started + 40).gan.elapsed, 401);
+
+  delete save.children[0][1].gan.elapsed;
+  const legacy = await player.deserializeDrawObject(save);
+  assert.deepEqual(await phase(legacy.children.get(0)), [0, 0]);
 });
 
 test('Phase 3 display orderedObjects sorts by order, then layer, then slot id', () => {
