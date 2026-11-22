@@ -269,7 +269,10 @@ export class SiglusPlayer {
   private quakeStopped = false;
   private timeStopped = false;
   private systemSkipDisabled = false;
-  private systemCallActive = false;
+  private systemCallDepth = 0;
+  private get systemCallActive(): boolean {
+    return this.systemCallDepth > 0;
+  }
   private readSkipEnabled = false;
   private requestedFrameAction?: SiglusFrameAction;
   private readonly globalExtraSwitches = new Map<number, boolean>();
@@ -692,37 +695,47 @@ export class SiglusPlayer {
     const [scene, label] = this.game.config.get(key)?.split(',') ?? [];
     const name = scene?.split('"')[1];
     if (!name) throw new Error(`Missing Siglus ${key}`);
-    if (this.systemCallActive) throw new Error('Nested Siglus system scene');
+    const outermost = this.systemCallDepth === 0;
     const previous = [
       this.timeStopped,
       this.systemSkipDisabled,
       this.messageHidden,
       this.quakeStopped,
     ] as const;
-    this.systemCallActive = true;
-    this.systemFrontObjects = new Map();
-    this.inputSampled = false;
-    this.display.setSystemInput(true);
+    const savedCursor = outermost ? this.display.stage.style.cursor : undefined;
+    this.systemCallDepth++;
+    if (outermost) {
+      this.systemFrontObjects = new Map();
+      this.inputSampled = false;
+      this.display.setSystemInput(true);
+      // Native 0x621ec0: mouse cursor is always visible while EXCALL is active.
+      this.display.stage.style.cursor = '';
+    }
     try {
       await this.vm.callScene(name, label?.split('"')[1] ?? Number(label ?? 0));
-      if (this.objectsDirty) await this.renderObjects();
     } finally {
-      this.systemCallActive = false;
-      this.systemFrontObjects = undefined;
-      this.systemFrontObjectsDirty = false;
-      this.display.clearSystemFrontObjects();
-      this.releaseSystemObjects();
-      this.systemCounters.clear();
-      this.systemFont = undefined;
-      this.display.clearEdits();
-      this.display.setSystemInput(false);
+      this.systemCallDepth--;
+      if (outermost) {
+        this.systemFrontObjects = undefined;
+        this.systemFrontObjectsDirty = false;
+        this.display.clearSystemFrontObjects();
+        this.releaseSystemObjects();
+        this.display.clearEdits();
+        this.display.setSystemInput(false);
+        this.display.stage.style.cursor = savedCursor ?? '';
+      }
       [this.timeStopped, this.systemSkipDisabled, this.messageHidden, this.quakeStopped] = previous;
       this.display.setScenePaused(this.timeStopped);
       this.display.setMessageDisplayed(!this.messageHidden && !this.userMessageHidden);
     }
-    const selected = this.selectedSave;
-    this.selectedSave = undefined;
-    if (selected) this.loadSave(selected);
+    if (outermost) {
+      const selected = this.selectedSave;
+      this.selectedSave = undefined;
+      if (selected) this.loadSave(selected);
+      if (this.objectsDirty && !this.timeStopped) await this.renderObjects();
+    } else if (this.selectedSave) {
+      this.vm.returnFromHostScene();
+    }
   }
 
   private systemOption(option: SystemOption): boolean {
@@ -835,6 +848,11 @@ export class SiglusPlayer {
     this.systemBackObjects = undefined;
     this.systemObjectsDirty = false;
     this.excallFlags.clear();
+    this.systemCounters.clear();
+    this.systemFont = undefined;
+    for (const [key, action] of [...this.frameActions]) {
+      if (action.path[0] === 65) this.frameActions.delete(key);
+    }
     for (const group of [...this.activeGroups]) {
       if (group >= 100_000) {
         this.activeGroups.delete(group);
@@ -856,7 +874,10 @@ export class SiglusPlayer {
       else page = this.systemBackObjects ??= new Map();
       index = 3;
     } else if ((path[0] === 37 || path[0] === 38) && path[1] === 2) {
-      page = path[0] === 37 ? this.objects[1]! : (this.systemFrontObjects ?? this.objects[0]!);
+      page =
+        path[0] === 37
+          ? this.objects[1]!
+          : ((!this.excallAllocated ? this.systemFrontObjects : undefined) ?? this.objects[0]!);
       index = 2;
     } else if (
       path[0] === 38 &&
@@ -887,7 +908,8 @@ export class SiglusPlayer {
 
   private markObjectsDirty([root, member]: readonly number[]): void {
     if (root === 38 && member === 3) this.messageObjectsDirty = true;
-    else if (root === 38 && this.systemFrontObjects) this.systemFrontObjectsDirty = true;
+    else if (root === 38 && this.systemFrontObjects && !this.excallAllocated)
+      this.systemFrontObjectsDirty = true;
     else if (root === 38) this.objectsDirty = true;
     if (root === 65 && member === 1) this.systemObjectsDirty = true;
   }
@@ -1434,7 +1456,7 @@ export class SiglusPlayer {
 
   private setUserMessageHidden(hidden: boolean): void {
     if (hidden && !this.hideMwndEnabled) return;
-    if (hidden) this.readSkipEnabled = false;
+    if (hidden) this.readSkipEnabled = this.autoEnabled = false;
     this.userMessageHidden = hidden;
     this.display.setMessageDisplayed(!hidden && !this.messageHidden);
   }
@@ -1566,6 +1588,7 @@ export class SiglusPlayer {
       }
       if (result === 4) continue;
       if (result === 3) {
+        this.readSkipEnabled = this.autoEnabled = false;
         await this.callSystemScene('CANCEL_SCENE');
         continue;
       }
@@ -1898,6 +1921,18 @@ export class SiglusPlayer {
   private async restoreSave(save: PlayerSave): Promise<void> {
     this.skip = false;
     this.readSkipEnabled = false;
+    this.autoEnabled = false;
+    // Native 0x6321f0 -> 0x5bb740: game load/reset reinitializes G_excall and modal state.
+    this.releaseSystemObjects();
+    this.activeGroups.clear();
+    this.cancelGroups.clear();
+    this.decisions.clear();
+    this.timeStopped = false;
+    this.userMessageHidden = false;
+    this.messageHidden = false;
+    this.display.setScenePaused(false);
+    this.display.setMessageDisplayed(true);
+    this.display.stage.style.cursor = '';
     this.savePoint = save;
     this.sceneCounters.clear();
     this.clearDayObjects();
@@ -2124,16 +2159,51 @@ export class SiglusPlayer {
       // wipe exclusively updates G_excall.m_stage_list (systemBackObjects -> systemObjects)
       // without touching the underlying main stage, cast, or message window.
       const back = this.systemBackObjects;
+      const copiedIds = new Set<number>();
       if (this.usesWipeCopy && this.systemObjects) {
         for (const [id, object] of this.systemObjects) {
           if (object.wipeCopy && !back.has(id)) {
             back.set(id, this.copyObject(object));
+            copiedIds.add(id);
           }
         }
       }
       this.systemObjects = this.copyObjects(back);
       if (this.usesWipeCopy) back.clear();
       this.systemObjectsDirty = false;
+      if (this.activeGroups.size || this.cancelGroups.size) {
+        const liveGroups = new Set<number>();
+        const collectGroups = (map?: ReadonlyMap<number, DrawObject>) => {
+          if (!map) return;
+          for (const obj of map.values()) {
+            if (obj.button) liveGroups.add(obj.button.group);
+            if (obj.children) collectGroups(obj.children);
+          }
+        };
+        collectGroups(this.systemObjects);
+        for (const group of [...this.activeGroups]) {
+          if (group >= 100_000 && !liveGroups.has(group)) {
+            this.activeGroups.delete(group);
+            this.cancelGroups.delete(group);
+            this.decisions.delete(group);
+          }
+        }
+      }
+      // Promote EXCALL back-stage object frame_actions (65.2.2.-1.<id>...) to front (65.1.2.-1.<id>...)
+      if (this.frameActions.size) {
+        const promoted: [string, ActiveFrameAction][] = [];
+        for (const [key, action] of [...this.frameActions]) {
+          if (action.path[0] === 65 && action.path[1] === 1 && action.path[2] === 2 && action.path[3] === -1) {
+            const objId = action.path[4];
+            if (objId !== undefined && !copiedIds.has(objId)) this.frameActions.delete(key);
+          } else if (action.path[0] === 65 && action.path[1] === 2 && action.path[2] === 2 && action.path[3] === -1) {
+            this.frameActions.delete(key);
+            const frontPath = [65, 1, ...action.path.slice(2)];
+            promoted.push([frontPath.join('.'), {...action, path: frontPath}]);
+          }
+        }
+        for (const [k, a] of promoted) this.frameActions.set(k, a);
+      }
       await this.display.showSystemObjects(
         orderedObjects(this.systemObjects),
         (button) => this.choose(button),
@@ -2746,9 +2816,13 @@ export class SiglusPlayer {
   private async openHistory(): Promise<void> {
     if (!this.backlog.length) return;
     this.readSkipEnabled = false;
+    this.autoEnabled = false;
     let focus: SiglusHistoryEntry | undefined;
     for (;;) {
       this.display.setScenePaused(true);
+      const savedCursor = this.display.stage.style.cursor;
+      // Native 0x621ec0: mouse cursor is always visible while backlog is open.
+      this.display.stage.style.cursor = '';
       let selected: SiglusHistoryEntry | undefined;
       try {
         selected = await this.display.showHistory(
@@ -2767,6 +2841,7 @@ export class SiglusPlayer {
       } finally {
         this.replayGeneration++;
         this.audio.stop('history-voice');
+        this.display.stage.style.cursor = savedCursor;
         this.display.setScenePaused(this.timeStopped);
       }
       if (!selected) return;
@@ -3052,6 +3127,10 @@ export class SiglusPlayer {
     try {
       const now = performance.now();
       for (const [key, action] of [...this.frameActions]) {
+        const isExcallAction = action.path[0] === 65;
+        // Native 0x622e70 / 0x625c10: time_stop freezes normal-stage frame_actions,
+        // while G_excall.is_ready (excallAllocated) frame_actions continue ticking.
+        if (isExcallAction ? !this.excallAllocated : this.timeStopped) continue;
         if (action.endTime >= 0 && now - action.started >= action.endTime) {
           this.frameActions.delete(key);
           continue;
@@ -3381,6 +3460,14 @@ export class SiglusPlayer {
         case 22:
           this.display.setMessageFrame(n(0));
           break;
+        case 33: // global.wipe_end (0x6a7ff0)
+          this.display.finishWipe();
+          if (this.pendingWipe) {
+            await this.pendingWipe;
+            this.pendingWipe = undefined;
+          }
+          break;
+        case 50: // global.mask_wipe_all (0x56aba0 -> 0x6a7e50)
         case 51: {
           // global.mask_wipe(mask_name, wipe_type, duration, start_time?, options?...)
           const maskName = s(0);
@@ -3647,20 +3734,36 @@ export class SiglusPlayer {
     }
     if (root === 65) {
       if (member === 13 && path.length === 3) {
+        // Native 0x55f290 (excall.script font overrides):
+        // 0x57=set_font_name, 0x58=init_font_name, 0x59=get_font_name,
+        // 0x5a=set_font_futoku, 0x5b=init_font_futoku, 0x5c=get_font_futoku,
+        // 0x5d=set_font_shadow, 0x5e=init_font_shadow, 0x5f=get_font_shadow
         const font = (this.systemFont ??= {});
         switch (path[2]) {
           case 87:
+            font.name = s(0);
+            return 0;
+          case 88:
+            font.name = undefined;
+            return 0;
           case 89:
-            font.name = path[2] === 87 ? s(0) : undefined;
-            return 0;
+            return font.name ?? '';
           case 90:
+            font.bold = Boolean(n(0));
+            return 0;
           case 91:
-            font.bold = path[2] === 90 ? Boolean(n(0)) : undefined;
+            font.bold = undefined;
             return 0;
+          case 92:
+            return font.bold === undefined ? -1 : Number(font.bold);
           case 93:
-          case 94:
-            font.shadow = path[2] === 93 ? n(0) : undefined;
+            font.shadow = n(0);
             return 0;
+          case 94:
+            font.shadow = undefined;
+            return 0;
+          case 95:
+            return font.shadow ?? -1;
         }
       }
       if (member === 6 && path.length === 5 && path[2] === -1)
@@ -4078,6 +4181,17 @@ export class SiglusPlayer {
         for (const active of this.pcmEvents.values()) active.cancel();
         this.pcmEvents.clear();
         this.frameActions.clear();
+        // Native 0x6321f0 -> 0x5bb740: reinit G_excall and modal state on return_to_menu.
+        this.releaseSystemObjects();
+        this.activeGroups.clear();
+        this.cancelGroups.clear();
+        this.decisions.clear();
+        this.timeStopped = false;
+        this.userMessageHidden = false;
+        this.messageHidden = false;
+        this.display.setScenePaused(false);
+        this.display.setMessageDisplayed(true);
+        this.display.stage.style.cursor = '';
         this.messageFilterFiles.clear();
         this.display.clearMessageFilterFiles();
         this.display.closeMessage();
@@ -4897,6 +5011,7 @@ export class SiglusPlayer {
       return 0;
     }
     if (command === 39) {
+      const excallFont = this.systemCallActive || path[0] === 65 ? this.systemFont : undefined;
       page.set(id!, {
         name: '',
         frames: [],
@@ -4906,9 +5021,9 @@ export class SiglusPlayer {
         pattern: 0,
         text: {
           value: String(args[0]),
-          font: this.systemFont?.name ?? this.messageFont.name,
-          bold: this.systemFont?.bold ?? this.messageFont.bold,
-          shadow: this.systemFont?.shadow ?? this.messageFont.shadow,
+          font: excallFont?.name ?? this.messageFont.name,
+          bold: excallFont?.bold ?? this.messageFont.bold,
+          shadow: excallFont?.shadow ?? this.messageFont.shadow,
           size: 32,
         },
       });

@@ -375,6 +375,29 @@ test('Full-route crawl regressions: frame_action owner ref, mask intevents, skip
   assert.match(displaySrc, /async showSystemObjects\([\s\S]*?duration = 0/);
 });
 
+test('Native G_excall / excall_flag / G_syscom xref sweep invariants in player.ts', () => {
+  const playerSrc = fs.readFileSync(path.join(SIGLUS_DIR, 'player.ts'), 'utf8');
+  // 1. Nested EXCALL support via depth counter (0x65f260 / 0x65f400 / 0x65f6a0) + cursor forced visible (0x621ec0)
+  assert.match(playerSrc, /private systemCallDepth = 0;/);
+  assert.doesNotMatch(playerSrc, /Nested Siglus system scene/);
+  // 2. Native 0x622e70 / 0x625c10: time_stop freezes main frame_actions while EXCALL frame_actions tick
+  assert.match(playerSrc, /if \(isExcallAction \? !this\.excallAllocated : this\.timeStopped\) continue;/);
+  // 3. Native 0x5bb820 (excall.free): releaseSystemObjects clears 65.* frameActions, systemCounters, systemFont
+  assert.match(playerSrc, /if \(action\.path\[0\] === 65\) this\.frameActions\.delete\(key\);/);
+  // 4. Native 0x6321f0 -> 0x5bb740: restoreSave and return_to_menu (63.235) reinit EXCALL & modal state
+  assert.match(playerSrc, /private async restoreSave\(save: PlayerSave\)[\s\S]*?this\.releaseSystemObjects\(\);/);
+  assert.match(playerSrc, /if \(member === 235\)[\s\S]*?this\.releaseSystemObjects\(\);/);
+  // 5. Native 0x56aba0 / 0x6a7e50 / 0x6a7ff0: wipe_end (33) and mask_wipe_all (50) handled
+  assert.match(playerSrc, /case 33:[\s\S]*?this\.display\.finishWipe\(\);/);
+  assert.match(playerSrc, /case 50:[\s\S]*?case 51:/);
+  // 6. Native 0x55f290: excall.script font overrides (0x57..0x5f = 87..95)
+  assert.match(playerSrc, /case 88:\s*font\.name = undefined;\s*return 0;\s*case 89:\s*return font\.name \?\? '';/);
+  assert.match(playerSrc, /case 92:\s*return font\.bold === undefined \? -1 : Number\(font\.bold\);/);
+  assert.match(playerSrc, /case 95:\s*return font\.shadow \?\? -1;/);
+  // 7. Native 0x625960 / 0x624dd0 / 0x6614b0 / 0x6615a0: cancel skip & auto on right-click, hide, backlog
+  assert.match(playerSrc, /if \(result === 3\) \{\s*this\.readSkipEnabled = this\.autoEnabled = false;/);
+});
+
 test(
   'Full-route crawl regression: WmaProDecoder decodes 48kHz stereo 24-bit SSR OP.wmv identically across JS and WASM',
   {skip: !fs.existsSync(`${SSR_DIR}/mov/OP.wmv`)},
