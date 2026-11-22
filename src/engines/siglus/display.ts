@@ -717,11 +717,21 @@ export class SiglusDisplay {
     );
     this.stage.addEventListener('keydown', this.key);
     this.stage.addEventListener('keyup', this.key);
-    this.stage.addEventListener('focusout', () => {
+    this.stage.addEventListener('focusout', (event) => {
+      if (this.stage.contains(event.relatedTarget as Node | null)) return;
       skip(false);
       this.clearInput(true);
     });
     this.stage.focus({preventScroll: true});
+  }
+
+  private preserveStageFocus(mutate: () => void): void {
+    const doc = this.stage.ownerDocument;
+    const hadFocus = this.stage.contains(doc.activeElement);
+    mutate();
+    if (hadFocus && !this.stage.contains(doc.activeElement)) {
+      this.stage.focus({preventScroll: true});
+    }
   }
 
   private hasTextSelection(): boolean {
@@ -872,7 +882,9 @@ export class SiglusDisplay {
   ): Promise<void> {
     const next = await this.drawObjects(objects, button);
     this.signal.throwIfAborted();
-    (front ? this.systemFrontLayer : this.systemLayer).replaceChildren(next);
+    this.preserveStageFocus(() => {
+      (front ? this.systemFrontLayer : this.systemLayer).replaceChildren(next);
+    });
   }
 
   editBox(
@@ -932,15 +944,15 @@ export class SiglusDisplay {
 
   clearEdits(): void {
     this.edits.clear();
-    this.editLayer.replaceChildren();
+    this.preserveStageFocus(() => this.editLayer.replaceChildren());
   }
 
   clearSystemObjects(): void {
-    this.systemLayer.replaceChildren();
+    this.preserveStageFocus(() => this.systemLayer.replaceChildren());
   }
 
   clearSystemFrontObjects(): void {
-    this.systemFrontLayer.replaceChildren();
+    this.preserveStageFocus(() => this.systemFrontLayer.replaceChildren());
   }
 
   async prepare(): Promise<void> {
@@ -1177,14 +1189,16 @@ export class SiglusDisplay {
   private mountFrameActions(wakuIndex: number): void {
     if (wakuIndex < 0) {
       this.activeFrameActions = [];
-      this.controls.replaceChildren();
+      this.preserveStageFocus(() => this.controls.replaceChildren());
       this.controls.hidden = true;
       return;
     }
     const existing = this.frameActionsByWaku.get(wakuIndex);
     if (existing) {
       this.activeFrameActions = existing;
-      this.controls.replaceChildren(...existing.map((entry) => entry.element));
+      this.preserveStageFocus(() =>
+        this.controls.replaceChildren(...existing.map((entry) => entry.element)),
+      );
       this.positionMessageButtons();
       if (this.activateFrameAction) {
         this.pageControls(this.activateFrameAction, this.frameActionStateResolver);
@@ -1202,7 +1216,7 @@ export class SiglusDisplay {
     if (!hasButtons) {
       this.frameActionsByWaku.set(wakuIndex, []);
       this.activeFrameActions = [];
-      this.controls.replaceChildren();
+      this.preserveStageFocus(() => this.controls.replaceChildren());
       this.controls.hidden = true;
       return;
     }
@@ -2907,8 +2921,10 @@ export class SiglusDisplay {
   private async replaceLayer(next: HTMLElement, duration: number, fan?: WipeSpec): Promise<void> {
     this.signal.throwIfAborted();
     const previous = [...this.layers.children];
-    for (const child of previous) (child as HTMLElement).inert = true;
-    this.layers.append(next);
+    this.preserveStageFocus(() => {
+      for (const child of previous) (child as HTMLElement).inert = true;
+      this.layers.append(next);
+    });
     this.background = next;
     if (duration > 0) {
       if (fan) await this.animateFanWipe(next, duration, fan);
@@ -2918,7 +2934,9 @@ export class SiglusDisplay {
         this.wipe = undefined;
       }
     }
-    for (const child of previous) child.remove();
+    this.preserveStageFocus(() => {
+      for (const child of previous) child.remove();
+    });
   }
 
   private async animateFanWipe(layer: HTMLElement, duration: number, fan: WipeSpec): Promise<void> {
@@ -4455,7 +4473,7 @@ export class SiglusDisplay {
     return new Promise<SiglusHistoryEntry | undefined>((resolve, reject) => {
       const finish = (entry?: SiglusHistoryEntry) => {
         this.signal.removeEventListener('abort', abort);
-        overlay.remove();
+        this.preserveStageFocus(() => overlay.remove());
         resolve(entry);
       };
       const abort = () => {

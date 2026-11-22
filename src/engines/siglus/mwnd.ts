@@ -126,15 +126,25 @@ function parseQuoted(config: ReadonlyMap<string, string>, key: string): string |
 export function parseMwndLayout(config: ReadonlyMap<string, string>, index: number): MwndLayout {
   const prefix = `MWND.${String(index).padStart(3, '0')}.`;
   const extendType = Number(config.get(prefix + 'EXTEND_TYPE') ?? 0) | 0;
+  const [screenW, screenH] = parseNumbers(config, 'SCREEN_SIZE', [1920, 1080]) as [number, number];
   const [wx, wy] = parseNumbers(config, prefix + 'WINDOW_POS', [7, 727]) as [number, number];
-  const [ww, wh] = parseNumbers(config, prefix + 'WINDOW_SIZE', [1906, 353]) as [number, number];
+  const defaultWindowSize: [number, number] =
+    extendType === 1 ? [Math.max(0, screenW - wx), Math.max(0, screenH - wy)] : [1906, 353];
+  const [ww, wh] = parseNumbers(config, prefix + 'WINDOW_SIZE', defaultWindowSize) as [
+    number,
+    number,
+  ];
   const mojiSize = Number(config.get(prefix + 'MOJI_SIZE') ?? 38);
   const margin = parseNumbers(
     config,
     prefix + 'MESSAGE_MARGIN',
     index === 0 ? [32, 32, 0, 0] : [0, 0, 0, 0],
   );
-  const [msgX, msgY] = parseNumbers(config, prefix + 'MESSAGE_POS', [362, 124]) as [number, number];
+  const defaultMsgPos: [number, number] = extendType === 1 ? [0, 0] : [362, 124];
+  const [msgX, msgY] = parseNumbers(config, prefix + 'MESSAGE_POS', defaultMsgPos) as [
+    number,
+    number,
+  ];
   const [columns, rows] = parseNumbers(config, prefix + 'MOJI_CNT', [32, 3]) as [number, number];
   const [spacing, lineSpace] = parseNumbers(config, prefix + 'MOJI_SPACE', [0, 18]) as [
     number,
@@ -557,6 +567,21 @@ export function parseSpaceHideObjectIds(config: ReadonlyMap<string, string>): Re
   for (const [key, value] of config) {
     const match = /^OBJECT\.(\d+)\.SPACE_HIDE$/.exec(key);
     if (match && Number(value.trim()) !== 0) {
+      ids.add(Number(match[1]));
+    }
+  }
+  return ids;
+}
+
+/**
+ * Returns the set of stage object slot indices configured with `OBJECT.<n>.SAVE = 0`,
+ * which are transient overlays excluded from save snapshots.
+ */
+export function parseNoSaveObjectIds(config: ReadonlyMap<string, string>): ReadonlySet<number> {
+  const ids = new Set<number>();
+  for (const [key, value] of config) {
+    const match = /^OBJECT\.(\d+)\.SAVE$/.exec(key);
+    if (match && Number(value.trim()) === 0) {
       ids.add(Number(match[1]));
     }
   }

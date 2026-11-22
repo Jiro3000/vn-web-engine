@@ -1,5 +1,6 @@
 import {IndexedDbStore} from '../../platform/store.js';
 import type {ByteSource} from '../../core/source.js';
+import {parseCgTable} from '../../formats/siglus/cgtable.js';
 import {SiglusDbs} from '../../formats/siglus/dbs.js';
 import {SiglusScenePack} from '../../formats/siglus/scene-pack.js';
 import {BrowserFullscreenMoviePlayer} from '../../video/fullscreen-movie.js';
@@ -12,7 +13,12 @@ import {
   type SiglusPcmCheckpoint,
 } from './audio.js';
 import {siglusCos, siglusSin, siglusTostrZen} from './math.js';
-import {parseButtonSe, parseMwndAnimation, type MwndAnimation} from './mwnd.js';
+import {
+  parseButtonSe,
+  parseMwndAnimation,
+  parseNoSaveObjectIds,
+  type MwndAnimation,
+} from './mwnd.js';
 import {
   SiglusConfiguration,
   type SiglusFontSettings,
@@ -332,6 +338,11 @@ export class SiglusPlayer {
   private readonly databases = new Map<number, Promise<SiglusDbs | undefined>>();
   private readonly g00Buffers = new Map<number, unknown>();
   private readonly bgmListened = new Set<string>();
+  private readonly cgTable = new Map<string, number>();
+  private readonly cgFlags = new Set<number>();
+  private readonly cgFlagLimit: number;
+  private cgTableLoaded = false;
+  private readonly noSaveObjectIds: ReadonlySet<number>;
   private readonly namaeIds = new Map<string, number>();
   private readonly namaeValues = new Map<number, string>();
   private readonly frameActions = new Map<string, ActiveFrameAction>();
@@ -384,6 +395,8 @@ export class SiglusPlayer {
       throw new Error('Invalid Siglus screen size');
     this.startScene = config.get('START_SCENE')?.split('"')[1] ?? '_start';
     this.usesLegacyIncludes = game.pack.commandNames.includes('$bs_disp_in');
+    this.noSaveObjectIds = parseNoSaveObjectIds(config);
+    this.cgFlagLimit = Math.max(0, Number(config.get('CGTABLE_FLAG_CNT') ?? 10000) | 0);
     this.audio = new SiglusAudio(files, config, root, game.saveKey + ':audio');
     this.defaultMessageFont = {
       name: config.get('CONFIG.FONT.NAME')?.split('"')[1] ?? '',
@@ -583,6 +596,15 @@ export class SiglusPlayer {
         // Ignore malformed bgmtable record
       }
     }
+    const cgtable = localStorage.getItem(game.saveKey + ':cgtable');
+    if (cgtable) {
+      try {
+        for (const flag of JSON.parse(cgtable) as number[])
+          if (Number.isInteger(flag) && flag >= 0) this.cgFlags.add(flag);
+      } catch {
+        // Ignore malformed cgtable record
+      }
+    }
     if (this.trace) {
       const win = root.ownerDocument.defaultView as
         | (Window & {__siglusDebug?: {snapshot: () => unknown}})
@@ -610,6 +632,7 @@ export class SiglusPlayer {
       pcmEvents: [...this.pcmEvents].map(([slot, ev]) => [slot, ev.config]),
       objectMasks: this.display.saveObjectMasks(),
       bgmListened: [...this.bgmListened],
+      cgFlags: [...this.cgFlags],
       systemFlags: [...this.system],
       galleryFlags: [...this.galleryFlags],
       usesWipeCopy: this.usesWipeCopy,
@@ -655,6 +678,7 @@ export class SiglusPlayer {
       this.controller.signal,
       {scene: menu!.split('"')[1] ?? '_titlemenu', entry: Number(entry ?? 0)},
     );
+    await this.loadCgTable();
     await this.vm.run(this.startScene);
   }
 
@@ -1623,8 +1647,12 @@ export class SiglusPlayer {
       stageObjects:
         this.objects[0]!.size || this.objects[1]!.size
           ? [
-              [...this.objects[0]!].map(([id, obj]) => [id, serializeDrawObject(obj)]),
-              [...this.objects[1]!].map(([id, obj]) => [id, serializeDrawObject(obj)]),
+              [...this.objects[0]!]
+                .filter(([id]) => !this.noSaveObjectIds.has(id))
+                .map(([id, obj]) => [id, serializeDrawObject(obj)]),
+              [...this.objects[1]!]
+                .filter(([id]) => !this.noSaveObjectIds.has(id))
+                .map(([id, obj]) => [id, serializeDrawObject(obj)]),
             ]
           : undefined,
       stageEffects: this.stageEffects.size
@@ -2269,8 +2297,11 @@ export class SiglusPlayer {
     this.stageProperties.set('$bg_name.-1.0', name);
     this.stageProperties.set('$bg_name_prev.-1.0', name);
     this.stagedBackground = undefined;
+    const resolvedName = this.backgroundName(name);
+    this.recordCgSeen(name);
+    this.recordCgSeen(resolvedName);
     await this.display.setBackground(
-      this.backgroundName(name),
+      resolvedName,
       this.wipeDuration(fadeTimes[fade] ?? 0),
       pan,
       clearCast,
@@ -2314,6 +2345,7 @@ export class SiglusPlayer {
       sprites.push({name, costume, ...placements?.[slot]});
     }
     const backdrop = publish ? this.stagedBackground : undefined;
+    if (backdrop) this.recordCgSeen(backdrop.name);
     await this.display.showCast(
       sprites,
       this.wipeDuration(fadeTimes[fade] ?? 0),
@@ -2703,6 +2735,47 @@ export class SiglusPlayer {
     if (!key || this.bgmListened.has(key)) return;
     this.bgmListened.add(key);
     localStorage.setItem(this.game.saveKey + ':bgmtable', JSON.stringify([...this.bgmListened]));
+  }
+
+  private async loadCgTable(): Promise<void> {
+    if (this.cgTableLoaded) return;
+    this.cgTableLoaded = true;
+    const raw = this.game.config.get('CGTABLE_FILE')?.split('"')[1];
+    if (!raw) return;
+    const lower = raw.toLowerCase();
+    const file = this.game.files.get(`dat/${lower}`) ?? this.game.files.get(lower);
+    if (!file) return;
+    const parsed = parseCgTable(new Uint8Array(await file.read(0, file.size)));
+    for (const [name, flagNo] of parsed.byName) {
+      if (flagNo >= 0 && (!this.cgFlagLimit || flagNo < this.cgFlagLimit)) {
+        this.cgTable.set(name, flagNo);
+      }
+    }
+  }
+
+  private recordCgSeen(name: string): void {
+    if (!name || !this.cgTable.size) return;
+    let changed = false;
+    const mark = (candidate: string) => {
+      const flagNo = this.cgTable.get(candidate.toLowerCase());
+      if (flagNo !== undefined && !this.cgFlags.has(flagNo)) {
+        this.cgFlags.add(flagNo);
+        changed = true;
+      }
+    };
+    mark(name);
+    if (name.includes('|')) {
+      for (const segment of name.split('|')) {
+        const trimmed = segment.trim();
+        if (!trimmed) continue;
+        const comma = trimmed.indexOf(',');
+        const partName = comma >= 0 ? trimmed.slice(0, comma).trim() : trimmed;
+        if (partName && !partName.startsWith('(')) mark(partName);
+      }
+    }
+    if (changed) {
+      localStorage.setItem(this.game.saveKey + ':cgtable', JSON.stringify([...this.cgFlags]));
+    }
   }
 
   private async playBgm(name: string, fade = 0, crossfade = 0): Promise<void> {
@@ -3309,6 +3382,26 @@ export class SiglusPlayer {
         case 68: // global.koe_stop (0x54d7c4)
           this.audio.stop('voice');
           break;
+        case 69: // global.koe_check
+          return this.audio.channelState('voice');
+        case 85: // global.koe_wait
+          await this.waitAudio('voice', false);
+          return 0;
+        case 99: // global.koe_wait_key
+          return this.waitAudio('voice', true);
+        case 87: // global.exkoe_play(koe_no, chara_no?, sample_flag?)
+          if (!this.skipping)
+            this.audio.voiceStart(n(0), 'voice', args.length > 1 ? n(1) : undefined);
+          return 0;
+        case 88: // global.exkoe_play_wait(koe_no, chara_no?)
+          if (this.skipping) return 0;
+          await this.audio.voice(n(0), 'voice', args.length > 1 ? n(1) : undefined);
+          await this.waitAudio('voice', false);
+          return 0;
+        case 89: // global.exkoe_play_wait_key(koe_no, chara_no?)
+          if (this.skipping) return 0;
+          await this.audio.voice(n(0), 'voice', args.length > 1 ? n(1) : undefined);
+          return this.waitAudio('voice', true);
         case 72:
           this.messageFaces.get(this.display.messageWindow)?.clear();
           this.display.clearFace();
@@ -4264,6 +4357,15 @@ export class SiglusPlayer {
       if (path[3] === 0) return db ? db.getNum(n(0), n(1)) : 0;
       if (path[3] === 1) return db ? db.getStr(n(0), n(1)) : '';
     }
+    if (root === 78) {
+      // cgtable (CGTABLE / CGTABLE2)
+      await this.loadCgTable();
+      if (member === 2) {
+        const flagNo = this.cgTable.get(s(0).toLowerCase());
+        if (flagNo === undefined) return -1;
+        return Number(this.cgFlags.has(flagNo));
+      }
+    }
     if (root === 123) {
       if (member === 0) {
         let count = 0;
@@ -4440,7 +4542,7 @@ export class SiglusPlayer {
       if (member === 13) return this.audio.bgmPlayPosition();
       if (member === 19) return this.audio.bgmName();
       if (member === 18) return this.audio.channelState('bgm');
-      if (member === 3) return this.waitAudio('bgm', false);
+      if (member === 3 || member === 14) return this.waitAudio('bgm', member === 14);
       if (member === 5 || member === 15)
         return this.delay(this.audio.fadeRemaining('bgm'), member === 15);
       if (member === 4 || member === 10) {
@@ -4563,13 +4665,34 @@ export class SiglusPlayer {
         }
       }
     }
-    if (root === 45 && member === 7) {
-      this.audio.stop('se', n(0));
-      return 0;
-    }
-    if (root === 45 && (member === 0 || member === 9)) {
-      await this.playSystemSound(n(0));
-      return 0;
+    if (root === 45) {
+      if (member === 0 || member === 9) {
+        await this.playSystemSound(n(0));
+        return 0;
+      }
+      if (member === 1 || member === 2 || member === 3) {
+        this.audio.setChannelLevel(
+          'se',
+          member === 1 ? n(0) : member === 2 ? 255 : 0,
+          n(member === 1 ? 1 : 0),
+        );
+        return 0;
+      }
+      if (member === 4) return this.audio.channelLevel('se');
+      if (member === 5) {
+        this.audio.effectStart('se', s(0));
+        return 0;
+      }
+      if (member === 6) {
+        this.audio.voiceStart(n(0), 'se');
+        return 0;
+      }
+      if (member === 7) {
+        this.audio.stop('se', n(0));
+        return 0;
+      }
+      if (member === 8 || member === 10) return this.waitAudio('se', member === 10);
+      if (member === 11) return this.audio.channelState('se');
     }
     if (root !== undefined && root >= 23 && root <= 28 && member === 10) return 0;
     return undefined;
@@ -4658,6 +4781,7 @@ export class SiglusPlayer {
     }
     if (command === 38) {
       const name = String(args[0]);
+      this.recordCgSeen(name);
       const pattern = n(4);
       const frames = [];
       frames[pattern] = await this.display.objectGraphic(name, pattern);
@@ -5217,6 +5341,7 @@ export class SiglusPlayer {
     if (command === 53) {
       // object.change_file (0x556c2a -> 0x5ec520): reload graphic preserving transform/children
       const name = String(args[0]);
+      this.recordCgSeen(name);
       object.name = name;
       object.frames = [];
       const pattern = Math.max(0, object.pattern);

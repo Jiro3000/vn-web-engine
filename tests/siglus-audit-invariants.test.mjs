@@ -358,7 +358,7 @@ test('Full-route crawl regressions: frame_action owner ref, mask intevents, skip
   // 2. Mask x_eve/y_eve intevents & unreached commands (object.free, bgm.wait, auto_mode, msg_back, owari)
   assert.match(playerSrc, /root === 135 &&[\s\S]*path\[3\] === 2 \|\| path\[3\] === 3/);
   assert.match(playerSrc, /if \(command === 35 \|\| command === 36\)/);
-  assert.match(playerSrc, /if \(member === 3\) return this\.waitAudio\('bgm', false\)/);
+  assert.match(playerSrc, /if \(member === 3 \|\| member === 14\) return this\.waitAudio\('bgm', member === 14\)/);
   assert.match(playerSrc, /if \(root === 64 && \(member === 0 \|\| member === 1\)\)/);
   assert.match(playerSrc, /if \(root === 64 && \(member === 34 \|\| member === 35\)\)/);
   // 3. skipTriggerPending does not clobber physical Ctrl skip
