@@ -63,12 +63,13 @@ export function decodeNwa(bytes: Uint8Array): {channels: number; rate: number; p
   const blockSamples = view.getUint32(32, true);
   const lastSamples = view.getUint32(36, true);
   const lastBytes = view.getUint32(40, true);
+  const sampleBytes = bits / 8;
   if (
     (channels !== 1 && channels !== 2) ||
-    bits !== 16 ||
+    (bits !== 16 && !(bits === 8 && level === -1)) ||
     !rate ||
-    size !== samples * 2 ||
-    size > 128 * 1024 * 1024 ||
+    size !== samples * sampleBytes ||
+    samples * 2 > 128 * 1024 * 1024 ||
     samples % channels ||
     level < -1 ||
     level > 5
@@ -77,7 +78,12 @@ export function decodeNwa(bytes: Uint8Array): {channels: number; rate: number; p
   const pcm = new Int16Array(samples);
   if (level === -1) {
     checkRange(bytes.length, 44, size);
-    for (let i = 0; i < samples; i++) pcm[i] = view.getInt16(44 + i * 2, true);
+    // Siglus 1.1.134.0 streams uncompressed 8- and 16-bit PCM directly at 0x71ed90.
+    if (bits === 8) {
+      for (let i = 0; i < samples; i++) pcm[i] = (bytes[44 + i]! - 128) << 8;
+    } else {
+      for (let i = 0; i < samples; i++) pcm[i] = view.getInt16(44 + i * 2, true);
+    }
     return {channels, rate, pcm};
   }
   checkRange(bytes.length, 44, blocks * 4);

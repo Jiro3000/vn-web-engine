@@ -1,6 +1,7 @@
 import {BrowserAudioContextHost} from '../../audio/browser-audio-context-host.js';
 import {byteDataView} from '../../core/binary.js';
 import {isOggPageStart, readOggPage} from '../../formats/ogg/page.js';
+import {parseWave} from '../../formats/riff/wave.js';
 import type {ByteSource} from '../../core/source.js';
 import {decodeNwa, decodeOwp, ovkIndex, readOvk} from '../../formats/siglus/sound.js';
 
@@ -18,13 +19,13 @@ interface Playing {
   startsAt: number;
 }
 
-interface DecodedBgm {
+interface DecodedSound {
   buffer: AudioBuffer;
   sourceRate: number;
-  configuredStart: number;
-  loopStart: number;
-  loopEnd: number;
 }
+
+const soundExtensions = ['wav', 'nwa', 'ogg', 'owp'] as const;
+type SoundExtension = (typeof soundExtensions)[number];
 
 interface BgmTrack {
   name: string;
@@ -94,7 +95,7 @@ export class SiglusAudio {
   >();
   private preparedBgm?: BgmTrack;
   private readonly bgmTable = new Map<string, string[]>();
-  private readonly bgmCache = new Map<string, Promise<DecodedBgm>>();
+  private readonly bgmCache = new Map<string, Promise<DecodedSound>>();
   private readonly voiceCache = new Map<number, Promise<AudioBuffer>>();
   private readonly channelLevels = new Map<string, number>();
   private readonly playing = new Map<string, Playing>();
@@ -168,17 +169,43 @@ export class SiglusAudio {
     return this.host.resume();
   }
 
-  private async decode(path: string): Promise<AudioBuffer> {
-    const file = this.files.get(path);
-    if (!file) throw new Error(`Missing Siglus sound ${path}`);
-    const bytes = new Uint8Array(await file.read(0, file.size));
-    const {channels, rate, pcm} = decodeNwa(bytes);
-    const buffer = this.context.createBuffer(channels, pcm.length / channels, rate);
-    for (let channel = 0; channel < channels; channel++) {
-      const dest = buffer.getChannelData(channel);
-      for (let i = 0; i < dest.length; i++) dest[i] = pcm[i * channels + channel]! / 32768;
+  private async decodeSound(
+    file: ByteSource,
+    extension: SoundExtension,
+    readSourceRate = false,
+  ): Promise<DecodedSound> {
+    const encoded = new Uint8Array(await file.read(0, file.size));
+    if (extension === 'nwa') {
+      const {channels, rate, pcm} = decodeNwa(encoded);
+      const buffer = this.context.createBuffer(channels, pcm.length / channels, rate);
+      for (let channel = 0; channel < channels; channel++) {
+        const dest = buffer.getChannelData(channel);
+        for (let i = 0; i < dest.length; i++) dest[i] = pcm[i * channels + channel]! / 32768;
+      }
+      return {buffer, sourceRate: rate};
     }
-    return buffer;
+    const bytes = extension === 'owp' ? decodeOwp(encoded) : encoded;
+    let sourceRate: number | undefined;
+    if (readSourceRate) {
+      if (extension === 'wav') sourceRate = parseWave(bytes).sampleRate;
+      else {
+        const page = isOggPageStart(bytes, 0) ? readOggPage(bytes, 0) : null;
+        if (!page) throw new Error('Missing Siglus BGM Vorbis header');
+        sourceRate = byteDataView(page.bytes).getUint32(page.bodyOffset + 12, true);
+        if (!sourceRate) throw new Error('Invalid Siglus BGM sample rate');
+      }
+    }
+    const buffer = await this.context.decodeAudioData(bytes.buffer);
+    return {buffer, sourceRate: sourceRate ?? buffer.sampleRate};
+  }
+
+  private async loadSound(path: string, readSourceRate = false): Promise<DecodedSound> {
+    // Both BGM and effects use the resolver at 0x610de0 in Siglus 1.1.134.0.
+    for (const extension of soundExtensions) {
+      const file = this.files.get(`${path}.${extension}`);
+      if (file) return this.decodeSound(file, extension, readSourceRate);
+    }
+    throw new Error(`Missing Siglus sound ${path}`);
   }
 
   private async loadBgm(name: string, loop: boolean, startSample?: number): Promise<BgmTrack> {
@@ -191,38 +218,27 @@ export class SiglusAudio {
       this.bgmCache.delete(path);
       this.bgmCache.set(path, decoded);
     } else {
-      const ogg = this.files.get(path + '.ogg');
-      const source = ogg ?? this.files.get(path + '.owp');
-      if (!source) throw new Error(`Missing Siglus sound ${path}.ogg or .owp`);
-      decoded = (async (): Promise<DecodedBgm> => {
-        const encoded = new Uint8Array(await source.read(0, source.size));
-        const bytes = ogg ? encoded : decodeOwp(encoded);
-        const page = isOggPageStart(bytes, 0) ? readOggPage(bytes, 0) : null;
-        if (!page) throw new Error('Missing Siglus BGM Vorbis header');
-        const rate = byteDataView(page.bytes).getUint32(page.bodyOffset + 12, true);
-        if (!rate) throw new Error('Invalid Siglus BGM sample rate');
-        const buffer = await this.context.decodeAudioData(bytes.buffer);
-        const configuredStart = Number(fields[2] ?? 0);
-        const end = Number(fields[3] ?? -1);
-        const loopStart = Number(fields[4] ?? 0) / rate;
-        const loopEnd = end < 0 ? buffer.duration : Math.min(buffer.duration, end / rate);
-        return {buffer, sourceRate: rate, configuredStart, loopStart, loopEnd};
-      })();
+      decoded = this.loadSound(path, true);
       this.bgmCache.set(path, decoded);
       decoded.catch(() => {
         if (this.bgmCache.get(path) === decoded) this.bgmCache.delete(path);
       });
       if (this.bgmCache.size > 16) this.bgmCache.delete(this.bgmCache.keys().next().value!);
     }
-    const {buffer, sourceRate, configuredStart, loopStart, loopEnd} = await decoded;
+    const {buffer, sourceRate} = await decoded;
+    const configuredStart = Number(fields[2] ?? 0);
+    const end = Number(fields[3] ?? -1);
+    const loopEnd = end < 0 ? buffer.duration : Math.min(buffer.duration, end / sourceRate);
+    const loopStart = Math.min(loopEnd, Math.max(0, Number(fields[4] ?? 0) / sourceRate));
+    const sample = startSample === undefined || startSample < 0 ? configuredStart : startSample;
+    const start = Math.min(loopEnd, Math.max(0, sample / sourceRate));
     return {
       name,
       buffer,
       loop,
       loopStart,
       loopEnd,
-      start:
-        (startSample === undefined || startSample < 0 ? configuredStart : startSample) / sourceRate,
+      start: loop && start >= loopEnd && loopEnd > loopStart ? loopStart : start,
       sourceRate,
     };
   }
@@ -303,7 +319,7 @@ export class SiglusAudio {
     if (track.loop && start >= track.loopEnd && track.loopEnd > track.loopStart)
       start = track.loopStart + ((start - track.loopStart) % (track.loopEnd - track.loopStart));
     this.stop('bgm', fade);
-    if (track.loop || start < track.buffer.duration) this.preparedBgm = {...track, start};
+    if (track.loop || start < track.loopEnd) this.preparedBgm = {...track, start};
   }
 
   resumeBgm(fade = 0, delay = 0): void {
@@ -318,15 +334,15 @@ export class SiglusAudio {
     const active = this.playing.get('bgm');
     const bgm = active?.bgm;
     if (!active || !bgm) return 0;
-    const sampleRate = bgm.buffer.sampleRate;
+    // Native 0x6e0730 returns source PCM frames, even when Web Audio resamples.
     const elapsedSec = Math.max(0, this.context.currentTime - active.startsAt);
     const rawSec = bgm.start + elapsedSec;
     if (bgm.loop && bgm.loopEnd > bgm.loopStart && rawSec >= bgm.loopEnd) {
       const span = bgm.loopEnd - bgm.loopStart;
       const looped = bgm.loopStart + ((rawSec - bgm.loopStart) % span);
-      return Math.floor(looped * sampleRate);
+      return Math.floor(looped * bgm.sourceRate);
     }
-    return Math.min(bgm.buffer.length, Math.floor(rawSec * sampleRate));
+    return Math.floor(Math.min(rawSec, bgm.loopEnd) * bgm.sourceRate);
   }
 
   bgmCheckpoint(): SiglusBgmCheckpoint | undefined {
@@ -403,28 +419,39 @@ export class SiglusAudio {
       this.voiceCache.set(id, cached);
       return cached;
     }
-    const bank = Math.floor(id / 100000);
-    const path = `koe/z${String(bank).padStart(4, '0')}.ovk`;
-    const file = this.files.get(path);
-    if (!file) throw new Error(`Missing Siglus voice bank ${path}`);
-    let index = this.indexes.get(path);
-    if (!index) {
-      index = ovkIndex(file);
-      this.indexes.set(path, index);
-    }
-    cached = (async () => {
-      const entries = await index;
-      const entry = entries.get(id % 100000);
-      if (!entry) throw new Error(`Missing Siglus voice ${id}`);
-      const data = await readOvk(file, entry);
-      return this.context.decodeAudioData(data.buffer);
-    })();
+    cached = this.loadVoice(id);
     this.voiceCache.set(id, cached);
     cached.catch(() => {
       if (this.voiceCache.get(id) === cached) this.voiceCache.delete(id);
     });
     if (this.voiceCache.size > 24) this.voiceCache.delete(this.voiceCache.keys().next().value!);
     return cached;
+  }
+
+  private async loadVoice(id: number): Promise<AudioBuffer> {
+    const bank = String(Math.floor(id / 100000)).padStart(4, '0');
+    const loose = `koe/${bank}/z${String(id).padStart(9, '0')}`;
+    // The voice resolver at 0x6112f0 prefers loose WAV, then loose NWA, then OVK.
+    for (const extension of ['wav', 'nwa'] as const) {
+      const file = this.files.get(`${loose}.${extension}`);
+      if (file) return (await this.decodeSound(file, extension)).buffer;
+    }
+    const path = `koe/z${bank}.ovk`;
+    const file = this.files.get(path);
+    if (!file) throw new Error(`Missing Siglus voice bank ${path}`);
+    let index = this.indexes.get(path);
+    if (!index) {
+      const loading = ovkIndex(file);
+      this.indexes.set(path, loading);
+      loading.catch(() => {
+        if (this.indexes.get(path) === loading) this.indexes.delete(path);
+      });
+      index = loading;
+    }
+    const entry = (await index).get(id % 100000);
+    if (!entry) throw new Error(`Missing Siglus voice ${id}`);
+    const data = await readOvk(file, entry);
+    return this.context.decodeAudioData(data.buffer);
   }
 
   private effectBuffer(name: string): Promise<AudioBuffer> {
@@ -434,24 +461,7 @@ export class SiglusAudio {
       this.effects.delete(path);
       this.effects.set(path, decoded);
     } else {
-      const wav = this.files.get(path + '.wav');
-      const nwa = this.files.get(path + '.nwa');
-      const ogg = this.files.get(path + '.ogg');
-      const owp = this.files.get(path + '.owp');
-      if (wav)
-        decoded = wav
-          .read(0, wav.size)
-          .then((bytes) => this.context.decodeAudioData(bytes.slice().buffer));
-      else if (nwa) decoded = this.decode(path + '.nwa');
-      else if (ogg)
-        decoded = ogg
-          .read(0, ogg.size)
-          .then((bytes) => this.context.decodeAudioData(bytes.slice().buffer));
-      else if (owp)
-        decoded = owp
-          .read(0, owp.size)
-          .then((bytes) => this.context.decodeAudioData(decodeOwp(new Uint8Array(bytes)).buffer));
-      else decoded = this.decode(path + '.nwa');
+      decoded = this.loadSound(path).then(({buffer}) => buffer);
       this.effects.set(path, decoded);
       decoded.catch(() => {
         if (this.effects.get(path) === decoded) this.effects.delete(path);
@@ -669,7 +679,9 @@ export class SiglusAudio {
       gain.disconnect();
       if (channel === 'voice' || bgmFadeSource) this.updateVoiceDuckGains(false);
     };
-    source.start(startsAt, start);
+    if (bgm && !loop && loopEnd < buffer.duration)
+      source.start(startsAt, start, Math.max(0, loopEnd - start));
+    else source.start(startsAt, start);
     if (channel === 'voice' || bgmFadeSource) this.updateVoiceDuckGains(true);
     this.root.dataset.audioState = this.context.state;
     if (new URLSearchParams(location.search).has('siglus-trace')) {
@@ -893,7 +905,9 @@ export class SiglusAudio {
   channelRemainingMs(channel: string): number {
     const playing = this.playing.get(channel);
     if (!playing || playing.source.loop || !playing.source.buffer) return 0;
-    const endsAt = playing.startsAt + playing.source.buffer.duration;
+    const {bgm} = playing;
+    const duration = bgm ? bgm.loopEnd - bgm.start : playing.source.buffer.duration;
+    const endsAt = playing.startsAt + duration;
     return Math.max(0, Math.ceil((endsAt - this.context.currentTime) * 1000));
   }
 
