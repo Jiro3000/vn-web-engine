@@ -188,7 +188,6 @@ export interface DrawObject {
     space: number;
   };
   clip?: [number, number, number, number, number];
-  sourceClip?: [number, number, number, number];
   sourceClipEnabled?: boolean;
   sourceClipBounds?: [number, number, number, number];
   pushKeep?: boolean;
@@ -303,6 +302,7 @@ export interface SerializedDrawObject {
   gan?: ObjectGanCheckpoint;
   number?: DrawObject['number'];
   clip?: [number, number, number, number, number];
+  /** Bounds saved by older browser builds before the clip command shared the property fields. */
   sourceClip?: [number, number, number, number];
   sourceClipEnabled?: boolean;
   sourceClipBounds?: [number, number, number, number];
@@ -374,7 +374,6 @@ export function serializeDrawObject(
       : undefined,
     number: object.number ? {...object.number} : undefined,
     clip: object.clip ? [...object.clip] : undefined,
-    sourceClip: object.sourceClip ? [...object.sourceClip] : undefined,
     sourceClipEnabled: object.sourceClipEnabled,
     sourceClipBounds: object.sourceClipBounds ? [...object.sourceClipBounds] : undefined,
     pushKeep: object.pushKeep,
@@ -2595,10 +2594,7 @@ export class SiglusDisplay {
         }
       }
       parent.append(element);
-      if (object.sourceClip) {
-        const [x, y, width, height] = object.sourceClip;
-        canvas.style.clipPath = `inset(${y}px ${frame.width - x - width}px ${frame.height - y - height}px ${x}px)`;
-      } else if (object.sourceClipEnabled && object.sourceClipBounds) {
+      if (object.sourceClipEnabled && object.sourceClipBounds) {
         const [l, t, r, b] = object.sourceClipBounds;
         canvas.style.clipPath = `inset(${Math.max(0, t)}px ${Math.max(0, frame.width - r)}px ${Math.max(0, frame.height - b)}px ${Math.max(0, l)}px)`;
       }

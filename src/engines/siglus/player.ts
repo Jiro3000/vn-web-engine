@@ -1721,6 +1721,7 @@ export class SiglusPlayer {
   }
 
   private async deserializeDrawObject(saved: SerializedDrawObject): Promise<DrawObject> {
+    const sourceClipBounds = saved.sourceClip ?? saved.sourceClipBounds;
     const object: DrawObject = {
       type: saved.type,
       name: saved.name,
@@ -1762,9 +1763,8 @@ export class SiglusPlayer {
       gan: saved.gan ? {...saved.gan} : undefined,
       number: saved.number ? {...saved.number} : undefined,
       clip: saved.clip ? [...saved.clip] : undefined,
-      sourceClip: saved.sourceClip ? [...saved.sourceClip] : undefined,
-      sourceClipEnabled: saved.sourceClipEnabled,
-      sourceClipBounds: saved.sourceClipBounds ? [...saved.sourceClipBounds] : undefined,
+      sourceClipEnabled: saved.sourceClip ? true : saved.sourceClipEnabled,
+      sourceClipBounds: sourceClipBounds ? [...sourceClipBounds] : undefined,
       pushKeep: saved.pushKeep,
       alphaTest: saved.alphaTest,
       disabled: saved.disabled,
@@ -2363,7 +2363,6 @@ export class SiglusPlayer {
       scale: object.scale && ([...object.scale] as [number, number]),
       center: object.center && ([...object.center] as [number, number]),
       centerRep: object.centerRep && ([...object.centerRep] as [number, number]),
-      sourceClip: object.sourceClip && ([...object.sourceClip] as [number, number, number, number]),
       sourceClipBounds: object.sourceClipBounds && ([...object.sourceClipBounds] as [number, number, number, number]),
       colorProps: object.colorProps && {...object.colorProps},
       intEvents: object.intEvents && new Map([...object.intEvents].map(([k, v]) => [k, {...v}])),
@@ -4013,9 +4012,9 @@ export class SiglusPlayer {
         }
       }
       if (member === 182 || member === 185) {
-        // syscom.set_save_value / set_quick_save_value (0x652bb0): <=256 custom dwords in slot header
-        const slots = member === 182 ? this.saves : this.quickSaves;
-        const slotIndex = n(0);
+        // Native 0x568857 offsets quick slots into the shared range used at 0x652bb0.
+        const firstQuick = Number(this.game.config.get('SAVE.CNT') ?? 0);
+        const [slots, slotIndex] = this.saveSlotAddress(n(0) + (member === 185 ? firstQuick : 0));
         const listRef = args[1];
         const ofs = Math.max(0, n(2));
         const cnt = Math.max(0, Math.min(256, n(3)));
@@ -4029,13 +4028,12 @@ export class SiglusPlayer {
         return 0;
       }
       if (member === 183) {
-        // syscom.get_save_value (0x652c00)
-        const existing = this.saves.get(n(0));
+        // Native 0x567f2e leaves the destination alone if the slot header could not be read.
         const listRef = args[1];
         const ofs = Math.max(0, n(2));
         const cnt = Math.max(0, Math.min(256, n(3)));
-        if (Array.isArray(listRef)) {
-          const custom = existing?.customValues ?? [];
+        if (slot && Array.isArray(listRef)) {
+          const custom = slot.customValues ?? [];
           const out = Array.from({length: cnt}, (_, i) => custom[i] ?? 0);
           this.vm.writeIntList(listRef as readonly number[], ofs, out);
         }
@@ -5214,7 +5212,7 @@ export class SiglusPlayer {
       object.pattern = 0;
       return 0;
     }
-    if (command === 127) return Number(object.movie?.playing ?? false);
+    if (command === 127) return Number(object.movie?.active ?? false);
     if (object.movie) {
       if (command === 138) return Math.trunc(object.movie.elapsed);
       if (command === 128 || command === 142)
@@ -5577,8 +5575,11 @@ export class SiglusPlayer {
       };
     else if (command === 175) object.alphaTest = Boolean(n(0));
     else if (command === 98) object.pushKeep = Boolean(n(0));
-    else if (command === 161) object.sourceClip = n(0) ? [n(1), n(2), n(3), n(4)] : undefined;
-    else if (command === 48) {
+    else if (command === 161) {
+      // Native 0x555d2a writes the same enable flag and LTRB bounds as properties 149–153.
+      object.sourceClipEnabled = Boolean(n(0));
+      object.sourceClipBounds = [n(1), n(2), n(3), n(4)];
+    } else if (command === 48) {
       object.x = n(0);
       object.y = n(1);
     } else if (command === 49) object.scale = [n(0), n(1)];

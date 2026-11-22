@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {test} from 'node:test';
+import {SiglusPlayer} from '../dist/engines/siglus/player.js';
 import {SiglusOmv} from '../dist/formats/siglus/omv.js';
 import {readTheoraOgg, TheoraDecoder} from '../dist/formats/theora/index.js';
+import {SiglusOmvPlayback} from '../dist/video/siglus-omv-playback.js';
 
 test('Siglus OMV restores BGR and all three alpha segments from a 4:4:4 stream', async () => {
   const payload = await readFile(new URL('./fixtures/theora/testsrc2-444.ogv', import.meta.url));
@@ -57,4 +59,24 @@ test('Siglus OMV restores BGR and all three alpha segments from a 4:4:4 stream',
   }
   movie.frame(packets.length - 1);
   assert.deepEqual(movie.frame(0), rgba);
+});
+
+test('Siglus check_movie reports prepared and paused OMVs until playback ends', async () => {
+  const movie = Object.create(SiglusOmvPlayback.prototype);
+  Object.assign(movie, {info: {duration: 4000}, pausedAt: 0, connections: new Set()});
+  const player = Object.create(SiglusPlayer.prototype);
+  player.objects = [new Map([[0, {movie}]]), new Map()];
+  const check = (id) => player.objectCommand({path: [38, 2, -1, id, 127], args: [], named: []});
+
+  assert.equal(await check(1), 0);
+  assert.equal(await check(0), 1);
+  assert.equal(movie.playing, false);
+  movie.seek(500);
+  movie.play();
+  assert.equal(movie.playing, true);
+  movie.pause();
+  assert.equal(movie.playing, false);
+  assert.equal(await check(0), 1);
+  movie.seek(4000);
+  assert.equal(await check(0), 0);
 });

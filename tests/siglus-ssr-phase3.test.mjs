@@ -213,6 +213,72 @@ test('Siglus object.exist_type returns a script boolean for root and child objec
   assert.equal(player.objectsDirty, undefined);
 });
 
+test('Siglus source clip commands and properties share the saved LTRB bounds', async () => {
+  const player = Object.create(SiglusPlayer.prototype);
+  const object = {name: '', frames: [], x: 0, y: 0, visible: true, pattern: 0};
+  player.objects = [new Map([[5, object]]), new Map()];
+  const path = [38, 2, -1, 5];
+  const setClip = (...args) => player.objectCommand({path: [...path, 161], args, named: []});
+  const property = (id, value) => player.property([...path, id], value);
+  const bounds = () => [150, 151, 152, 153].map((id) => property(id));
+
+  await setClip(1, 8, 10, 48, 90);
+  assert.equal(property(149), 1);
+  assert.deepEqual(bounds(), [8, 10, 48, 90]);
+  property(152, 52);
+  assert.deepEqual(serializeDrawObject(object).sourceClipBounds, [8, 10, 52, 90]);
+
+  await setClip(0, 12, 15, 70, 100);
+  assert.equal(property(149), 0);
+  assert.deepEqual(bounds(), [12, 15, 70, 100]);
+  property(149, 1);
+  assert.equal(property(149), 1);
+  assert.deepEqual(bounds(), [12, 15, 70, 100]);
+
+  const save = {...serializeDrawObject(object), sourceClip: [16, 19, 71, 106]};
+  const restored = await player.deserializeDrawObject(save);
+  assert.equal(restored.sourceClipEnabled, true);
+  assert.deepEqual(restored.sourceClipBounds, [16, 19, 71, 106]);
+});
+
+test('Siglus save values use combined slot addresses and leave missing-slot output intact', async () => {
+  const player = Object.create(SiglusPlayer.prototype);
+  player.game = {
+    config: new Map([
+      ['SAVE.CNT', '100'],
+      ['QUICK_SAVE.CNT', '5'],
+    ]),
+  };
+  player.saves = new Map([[0, {customValues: [1000]}]]);
+  player.quickSaves = new Map([[1, {customValues: [11, 22]}]]);
+  const records = new Map();
+  player.saveStore = {update: async (change) => change(records)};
+  const lists = new Map([
+    [0, [10, 20, 30]],
+    [1, [80, 81, 82, 83]],
+  ]);
+  player.vm = {
+    readIntList: ([id], start, count) => lists.get(id).slice(start, start + count),
+    writeIntList: ([id], start, values) => lists.get(id).splice(start, values.length, ...values),
+  };
+  const call = (member, ...args) => player.command({path: [63, member], args, named: []});
+
+  await call(183, 101, [1], 1, 2);
+  assert.deepEqual(lists.get(1), [80, 11, 22, 83]);
+  await call(183, 102, [1], 1, 2);
+  assert.deepEqual(lists.get(1), [80, 11, 22, 83]);
+  await call(183, 0, [1], 1, 2);
+  assert.deepEqual(lists.get(1), [80, 1000, 0, 83]);
+
+  await call(182, 101, [0], 1, 2);
+  assert.deepEqual(player.quickSaves.get(1).customValues, [20, 30]);
+  await call(185, 1, [0], 0, 1);
+  assert.deepEqual(player.quickSaves.get(1).customValues, [10, 30]);
+  const persisted = JSON.parse(new TextDecoder().decode(records.get('quick-saves:1')));
+  assert.deepEqual(persisted.customValues, [10, 30]);
+  assert.deepEqual(player.saves.get(0).customValues, [1000]);
+});
+
 test('Phase 3 display orderedObjects sorts by order, then layer, then slot id', () => {
   const m = new Map([
     [10, {name: 'a', frames: [], x: 0, y: 0, visible: true, pattern: 0, order: 2, layer: 0}],

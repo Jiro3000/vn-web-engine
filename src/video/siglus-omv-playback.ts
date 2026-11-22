@@ -68,9 +68,14 @@ export class SiglusOmvPlayback {
     return this.loop ? time % this.info.duration : Math.min(time, this.info.duration);
   }
 
-  get playing(): boolean {
+  /** Siglus 1.1.134.0 check_movie at 0x5f58a0 stays true while an open movie is paused. */
+  get active(): boolean {
     if (this.error) throw this.error;
-    return !this.disposed && this.startedAt !== undefined && this.elapsed < this.info.duration;
+    return !this.disposed && this.elapsed < this.info.duration;
+  }
+
+  get playing(): boolean {
+    return this.active && this.startedAt !== undefined;
   }
 
   private request(request: OmvRequest): Promise<OmvReply> {
