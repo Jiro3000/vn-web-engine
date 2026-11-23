@@ -1,5 +1,11 @@
 import type {ByteSource} from '../../core/source.js';
 import {BrowserWindowDisplayHost} from '../../platform/browser-window-display.js';
+import {
+  domTextClasses,
+  domTextFamily,
+  getDomTextStyle,
+  subscribeDomTextStyle,
+} from '../../text/dom-text-style.js';
 import {readSfntFontMetadata} from '../../formats/sfnt.js';
 import {readGan} from '../../formats/siglus/gan.js';
 import {G00Image, type G00Frame} from '../../formats/siglus/g00.js';
@@ -28,9 +34,11 @@ import {
   type NameAlign,
   type WakuConfig,
 } from './mwnd.js';
+import {layoutObjectText} from './object-text.js';
 import {
   layoutSelbtnItems,
   readSelbtnTemplate,
+  selbtnPresentation,
   type SelbtnCall,
   type SelbtnTemplate,
 } from './selbtn.js';
@@ -503,11 +511,12 @@ export class SiglusDisplay {
     rubySize: 13,
     rubySpace: 2,
   };
-  private speakerMetrics: {x: number; y: number; align: NameAlign; spacing: number} = {
+  private speakerMetrics: {x: number; y: number; align: NameAlign; spacing: number; size: number} = {
     x: 0,
     y: 0,
     align: 0,
     spacing: 0,
+    size: 0,
   };
   private mwndLayout?: MwndLayout;
   private readonly wakuAssets = new Map<
@@ -571,6 +580,7 @@ export class SiglusDisplay {
   private windowIndex = 0;
   private frameIndex = 0;
   private defaultTextSize = 38;
+  private messageTextSize = 0;
   private ruby = '';
   private slideTime?: number;
   private slideOffset = 0;
@@ -611,10 +621,16 @@ export class SiglusDisplay {
     this.text.style.cssText =
       'position:absolute;white-space:pre-wrap;overflow-wrap:anywhere;text-shadow:0 1px 4px #000';
     for (const element of [this.speaker, this.text]) {
+      element.classList.add(domTextClasses.text, domTextClasses.horizontal);
+      element.dataset.gameText = '';
       element.style.pointerEvents = 'auto';
       element.style.userSelect = 'text';
       element.style.cursor = 'text';
     }
+    this.text.classList.add(domTextClasses.multiline);
+    this.message.classList.add('game-glyph-slots');
+    const unsubscribeStyle = subscribeDomTextStyle(() => this.styleMessageText());
+    signal.addEventListener('abort', unsubscribeStyle, {once: true});
     this.portrait.style.cssText = 'position:absolute;overflow:hidden';
     this.cast.style.cssText = 'position:absolute;inset:0;pointer-events:none';
     this.effect.style.cssText = 'position:absolute;inset:0;pointer-events:none;isolation:isolate';
@@ -737,6 +753,7 @@ export class SiglusDisplay {
     this.stage.tabIndex = 0;
     this.stage.addEventListener('click', this.click);
     this.stage.addEventListener('pointerdown', this.pointerDown);
+    this.stage.addEventListener('pointerenter', (event) => this.trackPointer(event));
     this.stage.addEventListener('pointermove', (event) => this.trackPointer(event));
     this.stage.addEventListener('pointerdown', (event) => this.trackPointer(event));
     this.stage.addEventListener('pointerleave', () => {
@@ -1357,8 +1374,8 @@ export class SiglusDisplay {
     this.nativeText.hidden = mode !== 'native';
     this.text.hidden = this.speaker.hidden = mode === 'native';
     this.stage.dataset.textMode = mode;
-    if (mode === 'dom') this.alignDomText();
-    else {
+    this.styleMessageText();
+    if (mode === 'native') {
       this.text.style.top = `${this.textMetrics.y}px`;
       this.speaker.style.top = `${this.speakerMetrics.y}px`;
     }
@@ -1366,9 +1383,44 @@ export class SiglusDisplay {
     this.stage.focus({preventScroll: true});
   }
 
+  private styleMessageText(): void {
+    const reader = getDomTextStyle();
+    const styled = reader.enabled && this.textMode === 'dom';
+    const scale = styled ? reader.scale : 1;
+    const natural = styled && reader.layout === 'natural';
+    const pitch = this.messageTextSize + this.textMetrics.lineSpace;
+    const outline = siglusFontShadow(this.messageShadow);
+    this.message.classList.toggle('game-glyph-slots', this.textMode === 'dom');
+    for (const [element, size] of [
+      [this.text, this.messageTextSize],
+      [this.speaker, this.speakerMetrics.size],
+    ] as const) {
+      element.dataset.fontSize = String(size);
+      element.style.fontFamily = styled ? domTextFamily(reader, this.message.style.fontFamily) : '';
+      element.style.fontWeight = styled && reader.weight !== null ? String(reader.weight) : '';
+      element.style.fontSize = size > 0 ? `${size * scale}px` : '';
+      element.style.textShadow = styled && !reader.effects ? 'none' : outline;
+    }
+    this.text.style.lineHeight = natural
+      ? `${this.messageTextSize * scale + Math.max(0, this.textMetrics.lineSpace)}px`
+      : `${pitch}px`;
+    this.text.style.height = natural && this.slideTime === undefined
+      ? 'auto'
+      : `${pitch * this.textMetrics.rows}px`;
+    const fitClip = styled && !natural && this.slideTime === undefined;
+    const rubyRoom = this.textMetrics.rubySize + this.textMetrics.rubySpace + 2;
+    this.text.style.clipPath = fitClip ? `inset(${-rubyRoom}px -8px 0 -8px)` : '';
+    this.text.style.setProperty('--siglus-ruby-size', `${this.textMetrics.rubySize * scale}px`);
+    this.text.style.setProperty(
+      '--siglus-ruby-offset',
+      `${this.messageTextSize * scale / 2 + this.textMetrics.rubySpace}px`,
+    );
+    if (this.messageTextSize > 0) this.alignDomText();
+    this.paintMessageText();
+  }
+
   private alignDomText(): void {
-    if (this.textMode !== 'dom' || !this.text.style.fontSize) return;
-    const family = this.message.style.fontFamily || 'sans-serif';
+    if (this.textMode !== 'dom' || !this.text.style.fontSize || this.messageTextSize <= 0) return;
     const context = this.nativeText.getContext('2d')!;
     context.save();
     context.textBaseline = 'top';
@@ -1376,8 +1428,9 @@ export class SiglusDisplay {
       [this.text, this.textMetrics.y],
       [this.speaker, this.speakerMetrics.y],
     ] as const) {
-      const {fontSize, fontWeight, lineHeight} = getComputedStyle(element);
-      const font = `${fontWeight} ${fontSize} ${family}`;
+      const {fontSize, fontWeight, fontFamily, lineHeight} = getComputedStyle(element);
+      if (Number.parseFloat(fontSize) <= 0) continue;
+      const font = `${fontWeight} ${fontSize} ${fontFamily}`;
       const key = `${font} / ${lineHeight}`;
       let offset = this.domBaselineOffsets.get(key);
       if (offset === undefined) {
@@ -1431,7 +1484,7 @@ export class SiglusDisplay {
       if (this.messageShadow & 2) context.strokeText(text, x, y);
       context.fillText(text, x, y);
     };
-    const speakerSize = Number.parseFloat(this.speaker.style.fontSize);
+    const speakerSize = this.speakerMetrics.size;
     if (this.currentName && speakerSize > 0 && this.mwndLayout?.nameDispMode !== 2) {
       context.font = `${weight} ${speakerSize}px ${family}`;
       if ('letterSpacing' in context) {
@@ -1449,7 +1502,7 @@ export class SiglusDisplay {
         (context as CanvasRenderingContext2D & {letterSpacing: string}).letterSpacing = '0px';
       }
     }
-    const size = Number.parseFloat(this.text.style.fontSize);
+    const size = this.messageTextSize;
     if (!size || !this.currentText.length) return;
     const {x, y, width, rows, spacing, lineSpace, rubySize, rubySpace} = this.textMetrics;
     const advance = (character: string) => {
@@ -1549,7 +1602,6 @@ export class SiglusDisplay {
       top: `${layout.nameAnchorY}px`,
       width: 'auto',
       height: 'auto',
-      fontSize: `${layout.nameMojiSize}px`,
       letterSpacing: `${layout.nameMojiSpace[0]}px`,
       transform:
         layout.nameAlign === 1
@@ -1563,6 +1615,7 @@ export class SiglusDisplay {
       y: layout.nameAnchorY,
       align: layout.nameAlign,
       spacing: layout.nameMojiSpace[0],
+      size: layout.nameMojiSize,
     };
     this.applyMessageFrame(layout.wakuNo);
     const mwColors = parseMwndColors(this.config, index);
@@ -1709,9 +1762,7 @@ export class SiglusDisplay {
     this.message.style.fontFamily = this.fontFamily(name);
     this.message.style.fontWeight = bold ? 'bold' : 'normal';
     this.messageShadow = shadow;
-    this.text.style.textShadow = this.speaker.style.textShadow = siglusFontShadow(shadow);
-    this.alignDomText();
-    this.paintMessageText();
+    this.styleMessageText();
   }
 
   private async resource(name: string): Promise<G00Image> {
@@ -2372,7 +2423,9 @@ export class SiglusDisplay {
       template.textAlignY === 1 ? '-50%' : template.textAlignY === 2 ? '-100%' : '0%';
     const usePositionedLabel = Boolean(normal);
     for (const {item, x, y} of placements) {
-      const isDisabled = item.dispFlag === 2;
+      const presentation = selbtnPresentation(item.dispFlag);
+      if (presentation === 'hidden') continue;
+      const isDisabled = presentation === 'disabled';
       const button = document.createElement('button');
       button.type = 'button';
       button.disabled = isDisabled;
@@ -2523,6 +2576,56 @@ export class SiglusDisplay {
     return next;
   }
 
+  private applyDstClip(
+    element: HTMLElement,
+    object: DrawObject,
+    screenX: number,
+    screenY: number,
+    width: number,
+    height: number,
+  ): void {
+    if (!object.clip?.[0]) return;
+    const [, left, top, right, bottom] = object.clip;
+    const now = performance.now();
+    const active = [0, 1, 2, 3].map((edge) => {
+      const ev = object.intEvents?.get(`dstClip:${edge}`);
+      return ev && (ev.mode !== 0 || now - ev.started < ev.duration + ev.delay) ? ev : undefined;
+    });
+    if (active.every((ev) => !ev)) {
+      if (right <= left || bottom <= top) {
+        element.style.clipPath = 'inset(100%)';
+        return;
+      }
+      element.style.clipPath = `inset(${Math.max(0, top - screenY)}px ${Math.max(0, screenX + width - right)}px ${Math.max(0, screenY + height - bottom)}px ${Math.max(0, left - screenX)}px)`;
+      return;
+    }
+    const edgePx = (edge: 0 | 1 | 2 | 3, fallback: number): string => {
+      const ev = active[edge];
+      if (!ev) return `${fallback}px`;
+      const property = `--siglus-dst-clip-${edge}`;
+      registerAnimatedNumber(property);
+      element.style.setProperty(property, String(fallback));
+      const animation = element.animate(
+        {[property]: [String(ev.from), String(ev.target)]},
+        {
+          duration: ev.duration,
+          delay: ev.delay,
+          easing: eventEasing(ev.easing),
+          fill: 'both',
+          iterations: ev.mode === 0 ? 1 : Infinity,
+          direction: ev.mode === 2 ? 'alternate' : 'normal',
+        },
+      );
+      animation.currentTime = Math.max(0, now - ev.started);
+      return `calc(var(${property}) * 1px)`;
+    };
+    const leftPx = edgePx(0, left);
+    const topPx = edgePx(1, top);
+    const rightPx = edgePx(2, right);
+    const bottomPx = edgePx(3, bottom);
+    element.style.clipPath = `inset(max(0px, ${topPx} - ${screenY}px) max(0px, ${screenX + width}px - ${rightPx}) max(0px, ${screenY + height}px - ${bottomPx}) max(0px, ${leftPx} - ${screenX}px))`;
+  }
+
   private applyClip(
     element: HTMLElement,
     object: DrawObject,
@@ -2532,15 +2635,7 @@ export class SiglusDisplay {
     height: number,
     parentOrigin: readonly [number, number] = [0, 0],
   ): void {
-    if (!object.clip?.[0]) return;
-    const [, left, top, right, bottom] = object.clip;
-    if (right <= left || bottom <= top) {
-      element.style.clipPath = 'inset(100%)';
-      return;
-    }
-    const screenX = parentOrigin[0] + x;
-    const screenY = parentOrigin[1] + y;
-    element.style.clipPath = `inset(${Math.max(0, top - screenY)}px ${Math.max(0, screenX + width - right)}px ${Math.max(0, screenY + height - bottom)}px ${Math.max(0, left - screenX)}px)`;
+    this.applyDstClip(element, object, parentOrigin[0] + x, parentOrigin[1] + y, width, height);
   }
 
   private async appendObjects(
@@ -2573,23 +2668,28 @@ export class SiglusDisplay {
           bold,
           shadow,
           spaceX,
-          spaceY,
           maxChars,
           color,
           shadowColor,
           outlineColor,
           shadowMode,
         } = object.text;
-        text.textContent = value;
         const fillCss = color !== undefined ? (this.tableColor(color) ?? 'white') : 'white';
         const textPlacement = computeObjectPlacement(object);
         const maxWidth =
           maxChars && maxChars > 0 ? Math.max(size, maxChars * (size + (spaceX ?? 0))) : this.width;
-        text.style.cssText = `position:absolute;left:${textPlacement.placedX}px;top:${textPlacement.placedY}px;width:${maxWidth}px;height:${this.height}px;font-size:${size}px;color:${fillCss};white-space:${maxChars && maxChars > 0 ? 'pre-wrap' : 'pre'};pointer-events:none`;
+        text.style.cssText = `position:absolute;left:${textPlacement.placedX}px;top:${textPlacement.placedY}px;width:${maxWidth}px;height:${this.height}px;font-size:${size}px;color:${fillCss};white-space:pre;pointer-events:none`;
+        text.dataset.siglusObjectText = '';
         text.style.fontFamily = this.fontFamily(font);
         text.style.fontWeight = bold ? 'bold' : 'normal';
         if (spaceX) text.style.letterSpacing = `${spaceX}px`;
-        if (spaceY) text.style.lineHeight = `${size + spaceY}px`;
+        for (const run of layoutObjectText(value, object.text)) {
+          const span = document.createElement('span');
+          span.textContent = run.text;
+          span.style.cssText = `position:absolute;left:${run.x}px;top:${run.y}px;font-size:${run.size}px;line-height:1`;
+          if (run.color !== color) span.style.color = this.tableColor(run.color ?? -1) ?? fillCss;
+          text.append(span);
+        }
         const shadowCss =
           shadowColor !== undefined && shadowColor >= 0
             ? (this.tableColor(shadowColor) ?? 'black')
@@ -2962,26 +3062,82 @@ export class SiglusDisplay {
     animate: boolean,
     property: string,
   ): void {
-    let baseAlpha = (object.transparency ?? 255) / 255;
-    if (object.trOffsets?.length) {
-      for (const factor of object.trOffsets) baseAlpha *= Math.max(0, Math.min(255, factor)) / 255;
+    const now = performance.now();
+    let staticRepScale = 1;
+    const animatedFactors: string[] = [];
+    for (const [slot, factor] of (object.trOffsets ?? []).entries()) {
+      const clamped = Math.max(0, Math.min(255, factor)) / 255;
+      const ev = object.intEvents?.get(`tr_rep:${slot}`);
+      if (ev && (ev.mode !== 0 || now - ev.started < ev.duration + ev.delay)) {
+        const trProp = `--siglus-tr-rep-${slot}`;
+        registerAnimatedNumber(trProp);
+        element.style.setProperty(trProp, String(clamped));
+        const animation = element.animate(
+          {
+            [trProp]: [
+              String(Math.max(0, Math.min(255, ev.from)) / 255),
+              String(Math.max(0, Math.min(255, ev.target)) / 255),
+            ],
+          },
+          {
+            duration: ev.duration,
+            delay: ev.delay,
+            easing: eventEasing(ev.easing),
+            fill: 'both',
+            iterations: ev.mode === 0 ? 1 : Infinity,
+            direction: ev.mode === 2 ? 'alternate' : 'normal',
+          },
+        );
+        animation.currentTime = Math.max(0, now - ev.started);
+        animatedFactors.push(`var(${trProp})`);
+      } else {
+        staticRepScale *= clamped;
+      }
+    }
+    const baseOpacity = ((object.transparency ?? 255) / 255) * staticRepScale;
+    const fadeElapsed =
+      object.opacityStarted === undefined ? 0 : now - object.opacityStarted;
+    const hasFade = Boolean(
+      object.opacity &&
+        (animate || object.opacityStarted !== undefined) &&
+        object.opacity[1] + object.opacity[2] > fadeElapsed,
+    );
+    if (animatedFactors.length) {
+      if (hasFade && object.opacity) {
+        const [target, duration, delay, mode, start] = object.opacity;
+        const fadeProp = '--siglus-fade-opacity';
+        registerAnimatedNumber(fadeProp);
+        element.style.setProperty(fadeProp, String(target / 255));
+        const animation = element.animate(
+          {[fadeProp]: [String(start / 255), String(target / 255)]},
+          {duration, delay, easing: eventEasing(mode), fill: 'both'},
+        );
+        animation.currentTime = Math.max(0, fadeElapsed);
+        animatedFactors.push(`var(${fadeProp})`);
+        if (staticRepScale !== 1) animatedFactors.push(String(staticRepScale));
+      } else if (baseOpacity !== 1) {
+        animatedFactors.push(String(baseOpacity));
+      }
+      element.style.setProperty(
+        property,
+        animatedFactors.length === 1 ? animatedFactors[0]! : `calc(${animatedFactors.join(' * ')})`,
+      );
+      return;
     }
     if (object.transparency !== undefined || object.trOffsets?.length)
-      element.style.setProperty(property, String(baseAlpha));
-    if (!object.opacity || (!animate && object.opacityStarted === undefined)) return;
+      element.style.setProperty(property, String(baseOpacity));
+    if (!hasFade || !object.opacity) return;
     const [target, duration, delay, mode, start] = object.opacity;
-    const elapsed =
-      object.opacityStarted === undefined ? 0 : performance.now() - object.opacityStarted;
-    if (duration + delay <= elapsed) return;
-    let repScale = 1;
-    if (object.trOffsets?.length) {
-      for (const factor of object.trOffsets) repScale *= Math.max(0, Math.min(255, factor)) / 255;
-    }
     const animation = element.animate(
-      {[property]: [String((start / 255) * repScale), String((target / 255) * repScale)]},
+      {
+        [property]: [
+          String((start / 255) * staticRepScale),
+          String((target / 255) * staticRepScale),
+        ],
+      },
       {duration, delay, easing: eventEasing(mode), fill: 'both'},
     );
-    animation.currentTime = elapsed;
+    animation.currentTime = Math.max(0, fadeElapsed);
   }
 
   private async appendChildren(
@@ -2998,13 +3154,9 @@ export class SiglusDisplay {
     if (object.clip?.[0]) {
       // Native C_d3d_render_param::combine_parent (0x629c70, 0x629e63..0x629ed1) propagates and
       // intersects parent dst_clip in screen coordinates down to all descendants.
-      const [, left, top, right, bottom] = object.clip;
       const clipBox = document.createElement('div');
       clipBox.style.cssText = `position:absolute;left:${-parentOrigin[0]}px;top:${-parentOrigin[1]}px;width:${this.width}px;height:${this.height}px;pointer-events:none`;
-      clipBox.style.clipPath =
-        right <= left || bottom <= top
-          ? 'inset(100%)'
-          : `inset(${Math.max(0, top)}px ${Math.max(0, this.width - right)}px ${Math.max(0, this.height - bottom)}px ${Math.max(0, left)}px)`;
+      this.applyDstClip(clipBox, object, 0, 0, this.width, this.height);
       children.style.cssText = `position:absolute;left:${parentOrigin[0] + object.x}px;top:${parentOrigin[1] + object.y}px;pointer-events:none`;
       this.applyObjectPosition(children, object, parentOrigin[0], parentOrigin[1]);
       clipBox.append(children);
@@ -3015,7 +3167,7 @@ export class SiglusDisplay {
     }
     const childPivot: [number, number] = [object.centerRep?.[0] ?? 0, object.centerRep?.[1] ?? 0];
     this.applyObjectScale(children, object, childPivot);
-    if ((object.transparency ?? 255) !== 255 || object.opacity) {
+    if ((object.transparency ?? 255) !== 255 || object.opacity || object.trOffsets?.length) {
       const property = '--siglus-group-opacity-' + parentOpacity.length;
       registerAnimatedNumber(property);
       this.applyObjectOpacity(children, object, animate, property);
@@ -3399,16 +3551,8 @@ export class SiglusDisplay {
   }
 
   setTextSize(size?: number): void {
-    const pixels = size ?? this.defaultTextSize;
-    this.text.style.fontSize = `${pixels}px`;
-    this.text.style.lineHeight = `${pixels + this.textMetrics.lineSpace}px`;
-    this.text.style.height = `${(pixels + this.textMetrics.lineSpace) * this.textMetrics.rows}px`;
-    this.text.style.setProperty(
-      '--siglus-ruby-offset',
-      `${pixels / 2 + this.textMetrics.rubySpace}px`,
-    );
-    this.alignDomText();
-    this.paintMessageText();
+    this.messageTextSize = size ?? this.defaultTextSize;
+    this.styleMessageText();
   }
 
   centerText(center: boolean): void {
@@ -3420,7 +3564,7 @@ export class SiglusDisplay {
     this.slideTime = time;
     if (time === undefined) this.resetSlide();
     this.text.toggleAttribute('data-siglus-slide', time !== undefined);
-    this.paintMessageText();
+    this.styleMessageText();
   }
 
   finishMessageSlide(): void {
@@ -4115,7 +4259,7 @@ export class SiglusDisplay {
       annotation.style.cssText =
         'position:absolute;bottom:calc(50% + var(--siglus-ruby-offset));left:50%;' +
         'transform:translateX(-50%);line-height:1;user-select:none';
-      annotation.style.fontSize = `${this.textMetrics.rubySize}px`;
+      annotation.style.fontSize = 'var(--siglus-ruby-size)';
       annotation.textContent = value ? fragment.ruby : '';
       ruby.append(node, annotation);
       this.text.append(ruby);
@@ -4314,7 +4458,7 @@ export class SiglusDisplay {
       face: this.currentFace,
       faceCostume: this.currentFaceCostume,
       index: this.windowIndex,
-      size: Number.parseFloat(this.text.style.fontSize),
+      size: this.messageTextSize,
       slideTime: this.slideTime,
     };
   }

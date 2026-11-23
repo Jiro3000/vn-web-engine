@@ -236,6 +236,7 @@ interface PlayerSave {
   messageFilterFiles?: [number, string][];
   messageButtonOffsets?: [string, number[]][];
   objectMasks?: [number, {name?: string; x: number; y: number}][];
+  messagePointerAction?: {channel: number; scene: string; command: string};
 }
 
 export class SiglusPlayer {
@@ -602,19 +603,18 @@ export class SiglusPlayer {
       },
       {passive: false, signal: this.controller.signal},
     );
-    const pointerChanged = () => {
-      this.messagePointerChanged = Boolean(this.messagePointerAction);
-      for (const watcher of messageFrameWatchers)
-        if (
-          this.system.get(watcher.flag) === 0 &&
-          this.game.pack.commandNames.includes(watcher.command)
-        )
-          this.pendingFrameWatchers.add(watcher);
+    const refreshFrameInput = () => {
+      this.queueMessageFrameInput();
       if ((this.pendingFrameWatchers.size || this.messagePointerChanged) && this.waitingForPage)
         this.wait?.(6);
     };
-    for (const type of ['pointermove', 'pointerleave'] as const)
-      this.display.stage.addEventListener(type, pointerChanged, {signal: this.controller.signal});
+    const frameInputOptions = {signal: this.controller.signal};
+    for (const type of ['pointerenter', 'pointermove', 'pointerleave', 'pointerdown'] as const)
+      this.display.stage.addEventListener(type, refreshFrameInput, frameInputOptions);
+    const document = root.ownerDocument;
+    for (const type of ['focus', 'blur'] as const)
+      document.defaultView?.addEventListener(type, refreshFrameInput, frameInputOptions);
+    document.addEventListener('visibilitychange', refreshFrameInput, frameInputOptions);
     this.movies = new BrowserFullscreenMoviePlayer({
       document: root.ownerDocument,
       container: this.display.stage,
@@ -1647,6 +1647,16 @@ export class SiglusPlayer {
     );
   }
 
+  private queueMessageFrameInput(): void {
+    this.messagePointerChanged = Boolean(this.messagePointerAction);
+    for (const watcher of messageFrameWatchers)
+      if (
+        this.system.get(watcher.flag) === 0 &&
+        this.game.pack.commandNames.includes(watcher.command)
+      )
+        this.pendingFrameWatchers.add(watcher);
+  }
+
   private async refreshMessageFrame(): Promise<void> {
     const queued = [...this.pendingFrameWatchers];
     this.pendingFrameWatchers.clear();
@@ -1671,6 +1681,7 @@ export class SiglusPlayer {
       const readSkipping = this.skipping && this.readSkipEnabled && !this.skip;
       const showControls = this.messageButtonsEnabled && (!this.skipping || readSkipping);
       if (showControls) {
+        this.queueMessageFrameInput();
         this.display.pageControls(
           (action) => {
             if (this.requestedFrameAction) return;
@@ -1692,7 +1703,7 @@ export class SiglusPlayer {
         const deadline = autoWait === undefined ? undefined : performance.now() + autoWait;
         do {
           this.waitingForPage = false;
-          if (this.pendingFrameWatchers.size || this.messagePointerChanged)
+          while (this.pendingFrameWatchers.size || this.messagePointerChanged)
             await this.refreshMessageFrame();
           this.waitingForPage = true;
           if (this.requestedFrameAction) {
@@ -1854,6 +1865,9 @@ export class SiglusPlayer {
         const masks = this.display.saveObjectMasks();
         return masks.length ? masks : undefined;
       })(),
+      messagePointerAction: this.messagePointerAction
+        ? {...this.messagePointerAction}
+        : undefined,
     };
   }
 
@@ -2225,6 +2239,10 @@ export class SiglusPlayer {
     for (const active of this.pcmEvents.values()) active.cancel();
     this.pcmEvents.clear();
     this.frameActions.clear();
+    this.messagePointerAction = save.messagePointerAction
+      ? {...save.messagePointerAction}
+      : undefined;
+    this.messagePointerChanged = false;
     this.maskEvents.clear();
     this.stageEffects.clear();
     for (const [key, entries] of save.stageEffects ?? []) {
@@ -4278,7 +4296,7 @@ export class SiglusPlayer {
       if (member === 131 || member === 132) return (member === 131 ? slot : quick)?.comment ?? '';
       if (member === 129 || member === 130 || member === 324 || member === 325) {
         const message = (member === 129 || member === 324 ? slot : quick)?.message;
-        return message?.text.map(({text}) => text).join('') ?? '';
+        return (message?.text.map(({text}) => text).join('') ?? '').replace(/[\r\n]+/g, '');
       }
       if (
         member !== undefined &&
@@ -5694,16 +5712,10 @@ export class SiglusPlayer {
         command === 54 ||
         command === 63 ||
         command === 64 ||
+        command === 66 ||
         command === 67 ||
         command === 68 ||
-        command === 69 ||
-        command === 71 ||
-        command === 72 ||
-        command === 75 ||
-        command === 76 ||
-        command === 83 ||
-        command === 86 ||
-        command === 90 ||
+        (command !== undefined && command >= 69 && command <= 90) ||
         command === 91 ||
         command === 95 ||
         command === 96 ||
@@ -5886,6 +5898,21 @@ export class SiglusPlayer {
         (value) => { bounds[edge] = value; },
       );
     }
+    if (command !== undefined && command >= 105 && command <= 108 && path.length === index + 4) {
+      // 0x52ff18 105..108 dispatch dst_clip_left/top/right/bottom_eve to object.clip[1..4].
+      const edge = command - 105;
+      const clip = (object.clip ??= [0, 0, 0, 0, 0]);
+      return this.runObjectIntEvent(
+        object,
+        `dstClip:${edge}`,
+        path[index + 3]!,
+        args,
+        () => clip[edge + 1]!,
+        (value) => {
+          clip[edge + 1] = value;
+        },
+      );
+    }
     if (command === 140 && path[index + 3] === -1 && path.length === index + 6) {
       // object.tr_rep_eve[slot].<op> (0x5590e0)
       const slot = path[index + 4]!;
@@ -5909,13 +5936,24 @@ export class SiglusPlayer {
         command === 67 ||
         command === 68 ||
         command === 69 ||
+        command === 70 ||
         command === 71 ||
+        command === 73 ||
+        command === 74 ||
         command === 75 ||
         command === 76 ||
+        command === 77 ||
+        command === 78 ||
+        command === 80 ||
+        command === 81 ||
         command === 83 ||
+        command === 84 ||
+        command === 85 ||
         command === 86 ||
-        command === 90 ||
-        (command !== undefined && command >= 105 && command <= 108)) &&
+        command === 87 ||
+        command === 88 ||
+        command === 89 ||
+        command === 90) &&
       path.length === index + 4
     ) {
       const op = path[index + 3]!;
@@ -5975,16 +6013,25 @@ export class SiglusPlayer {
         if (command === 64) return object.y;
         if (command === 67) return (object.scale ?? [1000, 1000])[0];
         if (command === 68) return (object.scale ?? [1000, 1000])[1];
+        if (command === 69) return object.rotateX ?? 0;
+        if (command === 70) return object.rotateY ?? 0;
         if (command === 71) return object.rotateZ ?? 0;
-        if (command === 75) return object.pattern;
-        if (command === 76) return object.rotateX ?? 0;
-        if (command === 83) return (object.center ?? [0, 0])[0];
-        if (command === 86) return object.colorProps?.bright ?? 0;
-        if (command === 90) return object.colorProps?.dark ?? 0;
-        if (command === 105) return object.colorProps?.colorR ?? 0;
-        if (command === 106) return object.colorProps?.colorG ?? 0;
-        if (command === 107) return object.colorProps?.colorB ?? 0;
-        if (command === 108) return object.colorProps?.colorRate ?? 0;
+        if (command === 73) return object.colorProps?.mono ?? 0;
+        if (command === 74) return object.colorProps?.reverse ?? 0;
+        if (command === 75) return object.colorProps?.bright ?? 0;
+        if (command === 76) return object.colorProps?.dark ?? 0;
+        if (command === 77) return (object.center ?? [0, 0])[0];
+        if (command === 78) return (object.center ?? [0, 0])[1];
+        if (command === 80) return (object.centerRep ?? [0, 0])[0];
+        if (command === 81) return (object.centerRep ?? [0, 0])[1];
+        if (command === 83) return object.colorProps?.colorRate ?? 0;
+        if (command === 84) return object.colorProps?.addR ?? 0;
+        if (command === 85) return object.colorProps?.addG ?? 0;
+        if (command === 86) return object.colorProps?.addB ?? 0;
+        if (command === 87) return object.colorProps?.colorR ?? 0;
+        if (command === 88) return object.colorProps?.colorG ?? 0;
+        if (command === 89) return object.colorProps?.colorB ?? 0;
+        if (command === 90) return object.pattern;
         return 0;
       };
       const setVal = (v: number): void => {
@@ -5992,16 +6039,25 @@ export class SiglusPlayer {
         else if (command === 64) object.y = v;
         else if (command === 67) object.scale = [v, (object.scale ?? [1000, 1000])[1]];
         else if (command === 68) object.scale = [(object.scale ?? [1000, 1000])[0], v];
+        else if (command === 69) object.rotateX = v;
+        else if (command === 70) object.rotateY = v;
         else if (command === 71) object.rotateZ = v;
-        else if (command === 75) object.pattern = v;
-        else if (command === 76) object.rotateX = v;
-        else if (command === 83) object.center = [v, (object.center ?? [0, 0])[1]];
-        else if (command === 86) (object.colorProps ??= {}).bright = v;
-        else if (command === 90) (object.colorProps ??= {}).dark = v;
-        else if (command === 105) (object.colorProps ??= {}).colorR = v;
-        else if (command === 106) (object.colorProps ??= {}).colorG = v;
-        else if (command === 107) (object.colorProps ??= {}).colorB = v;
-        else if (command === 108) (object.colorProps ??= {}).colorRate = v;
+        else if (command === 73) (object.colorProps ??= {}).mono = v;
+        else if (command === 74) (object.colorProps ??= {}).reverse = v;
+        else if (command === 75) (object.colorProps ??= {}).bright = v;
+        else if (command === 76) (object.colorProps ??= {}).dark = v;
+        else if (command === 77) object.center = [v, (object.center ?? [0, 0])[1]];
+        else if (command === 78) object.center = [(object.center ?? [0, 0])[0], v];
+        else if (command === 80) object.centerRep = [v, (object.centerRep ?? [0, 0])[1]];
+        else if (command === 81) object.centerRep = [(object.centerRep ?? [0, 0])[0], v];
+        else if (command === 83) (object.colorProps ??= {}).colorRate = v;
+        else if (command === 84) (object.colorProps ??= {}).addR = v;
+        else if (command === 85) (object.colorProps ??= {}).addG = v;
+        else if (command === 86) (object.colorProps ??= {}).addB = v;
+        else if (command === 87) (object.colorProps ??= {}).colorR = v;
+        else if (command === 88) (object.colorProps ??= {}).colorG = v;
+        else if (command === 89) (object.colorProps ??= {}).colorB = v;
+        else if (command === 90) object.pattern = v;
       };
       return this.runObjectIntEvent(object, `ch:${command}`, op, args, getVal, setVal);
     }

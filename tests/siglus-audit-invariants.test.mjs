@@ -9,7 +9,12 @@ import {
   parseMwndColors,
   parseSpaceHideObjectIds,
 } from '../dist/engines/siglus/mwnd.js';
-import {readSelbtnTemplate} from '../dist/engines/siglus/selbtn.js';
+import {
+  layoutSelbtnItems,
+  readSelbtnTemplate,
+  selbtnPresentation,
+} from '../dist/engines/siglus/selbtn.js';
+import {layoutObjectText} from '../dist/engines/siglus/object-text.js';
 import {orderedObjects, serializeDrawObject, SiglusDisplay} from '../dist/engines/siglus/display.js';
 import {SiglusPlayer} from '../dist/engines/siglus/player.js';
 import {encodeCaptureBmp, readCaptureBmpFlags} from '../dist/engines/siglus/capture.js';
@@ -1312,8 +1317,9 @@ test('G00 Type 2 skips 24-byte outer atlas crop table (0x6de310/0x6de430) and di
 
   // 3. Verify display.ts propagates parent dst_clip in appendChildren (0x629c70) and guards object.text outline
   const displaySrc = fs.readFileSync(path.join(SIGLUS_DIR, 'display.ts'), 'utf8');
-  assert.match(displaySrc, /appendChildren\([\s\S]{0,600}if \(object\.clip\?\.\[0\]\) \{[\s\S]{0,500}clipBox\.style\.clipPath/);
-  assert.match(displaySrc, /const screenX = parentOrigin\[0\] \+ x;/);
+  assert.match(displaySrc, /applyDstClip\(/);
+  assert.match(displaySrc, /appendChildren\([\s\S]{0,600}if \(object\.clip\?\.\[0\]\) \{[\s\S]{0,500}this\.applyDstClip\(clipBox/);
+  assert.match(displaySrc, /applyClip\([\s\S]{0,250}this\.applyDstClip\(element, object, parentOrigin\[0\] \+ x, parentOrigin\[1\] \+ y/);
   assert.match(displaySrc, /shadowMode === 2 \|\|\s*\(shadowMode === undefined && outlineColor !== undefined && outlineColor >= 0\)/);
 });
 
@@ -1325,4 +1331,248 @@ test('Native 0x650980/0x650bd0 pageInput waits without pendingText (smartphone L
   assert.match(playerSrc, /const autoChars = this\.autoModeMojiCnt \|\| this\.pageCharacters;/);
   // 2. Restore playback before playing the pending load confirmation.
   assert.match(playerSrc, /this\.audio\.resetPlayback\(\);\s*if \(this\.pendingLoadSound\)/);
+});
+
+test('Native 0x52ff18 object int-event dispatch separates dstClip 105..108 from color/center/pattern events', async () => {
+  const object = {type: 2, name: 'cutin', x: 0, y: 0, pattern: 0, frames: [], visible: true};
+  const page = new Map([[1, object]]);
+  const player = Object.assign(Object.create(SiglusPlayer.prototype), {
+    objectAddress: () => ({page, index: 2}),
+    markObjectsDirty: () => {},
+    renderObjects: async () => {},
+    delay: async () => 0,
+  });
+  const call = (command, op, ...args) =>
+    player.objectCommand({path: [37, 2, -1, 1, command, op], args, named: []});
+
+  // 105..108 animate dst_clip_left/top/right/bottom_eve onto object.clip[1..4] without tinting colorProps
+  await call(105, 0, 100, 500, 0, 2);
+  await call(106, 0, 280, 500, 0, 2);
+  await call(107, 0, 1280, 500, 0, 2);
+  await call(108, 0, 420, 500, 0, 2);
+  assert.deepEqual(object.clip, [0, 100, 280, 1280, 420]);
+  assert.equal(object.colorProps, undefined);
+  for (let edge = 0; edge < 4; edge++) assert.equal(object.intEvents?.has(`dstClip:${edge}`), true);
+
+  // 69..90 map rotateX/Y/Z, mono/reverse/bright/dark, center/centerRep, colorRate, addRGB, colorRGB, pattern
+  await call(69, 0, 15, 0, 0, 0);
+  await call(70, 0, 25, 0, 0, 0);
+  await call(71, 0, 35, 0, 0, 0);
+  await call(73, 0, 120, 0, 0, 0);
+  await call(74, 0, 80, 0, 0, 0);
+  await call(75, 0, 40, 0, 0, 0);
+  await call(76, 0, 30, 0, 0, 0);
+  await call(77, 0, 12, 0, 0, 0);
+  await call(78, 0, 34, 0, 0, 0);
+  await call(80, 0, 56, 0, 0, 0);
+  await call(81, 0, 78, 0, 0, 0);
+  await call(83, 0, 255, 600, 300, 0);
+  await call(84, 0, 10, 0, 0, 0);
+  await call(85, 0, 20, 0, 0, 0);
+  await call(86, 0, 30, 0, 0, 0);
+  await call(87, 0, 200, 0, 0, 0);
+  await call(88, 0, 150, 0, 0, 0);
+  await call(89, 0, 100, 0, 0, 0);
+  await call(90, 0, 3, 0, 0, 0);
+
+  assert.equal(object.rotateX, 15);
+  assert.equal(object.rotateY, 25);
+  assert.equal(object.rotateZ, 35);
+  assert.deepEqual(object.center, [12, 34]);
+  assert.deepEqual(object.centerRep, [56, 78]);
+  assert.equal(object.pattern, 3);
+  assert.deepEqual(object.colorProps, {
+    mono: 120,
+    reverse: 80,
+    bright: 40,
+    dark: 30,
+    colorRate: 255,
+    addR: 10,
+    addG: 20,
+    addB: 30,
+    colorR: 200,
+    colorG: 150,
+    colorB: 100,
+  });
+});
+
+test('layoutObjectText interprets ## escapes, #D resets, #<n>C/S/X/Y/RX/RY codes, and maxChars width wrapping', () => {
+  const runs = layoutObjectText('##1#22Sあ#3Cい\r\n#D#4X#5RYえ#10RXお', {
+    size: 18,
+    spaceX: 2,
+    spaceY: 4,
+    color: 1,
+  });
+  assert.deepEqual(runs, [
+    {text: '#1', x: 0, y: 0, size: 18, color: 1},
+    {text: 'あ', x: 22, y: 0, size: 22, color: 1},
+    {text: 'い', x: 46, y: 0, size: 22, color: 3},
+    {text: 'え', x: 4, y: 57, size: 22, color: 3},
+    {text: 'お', x: 38, y: 57, size: 22, color: 3},
+  ]);
+
+  const wrapped = layoutObjectText('ABCDEFGH漢', {size: 20, maxChars: 4});
+  assert.deepEqual(
+    wrapped.map((r) => [r.text, r.x, r.y]),
+    [
+      ['ABCDEFGH', 0, 0],
+      ['漢', 0, 20],
+    ],
+  );
+});
+
+test('selbtnPresentation and layoutSelbtnItems omit dispFlag=0 spacers while preserving hidden spacer slots', () => {
+  assert.equal(selbtnPresentation(0), 'hidden');
+  assert.equal(selbtnPresentation(1), 'enabled');
+  assert.equal(selbtnPresentation(2), 'disabled');
+  assert.equal(selbtnPresentation(3), 'hidden');
+  const template = readSelbtnTemplate(
+    new Map([
+      ['SELBTN.000.BASE_POS', '640,360'],
+      ['SELBTN.000.REP_POS', '0,80'],
+      ['SELBTN.000.ALIGN', '0,0'],
+    ]),
+    0,
+  );
+  const items = [
+    {index: 0, text: '■位置ずらし用■', dispFlag: 0, colorMode: -1},
+    {index: 1, text: '選択肢A', dispFlag: 1, colorMode: -1},
+    {index: 2, text: '■位置ずらし用■', dispFlag: 3, colorMode: -1},
+    {index: 3, text: '選択肢B', dispFlag: 1, colorMode: -1},
+  ];
+  const laid = layoutSelbtnItems(items, template, 200, 40);
+  assert.deepEqual(
+    laid.map((p) => [p.item.index, selbtnPresentation(p.item.dispFlag), p.x, p.y]),
+    [
+      [1, 'enabled', 640, 360],
+      [2, 'hidden', 640, 440],
+      [3, 'enabled', 640, 520],
+    ],
+  );
+});
+
+test('get_save_message strips newlines, messagePointerAction round-trips captureSave/restoreSave, waitAtPage gates hover polling on showControls, and DOM text options stay enabled', async () => {
+  const vm = {checkpoint: () => ({frames: []}), callScene: async () => {}};
+  const player = Object.assign(Object.create(SiglusPlayer.prototype), {
+    stagePath: (path) => path,
+    game: {config: new Map([['SAVE.CNT', '10'], ['QUICK_SAVE.CNT', '10']])},
+    root: {dataset: {}},
+    saves: new Map([[0, {message: {text: [{text: '一行目\r\n'}, {text: '二行目\n三行目'}]}}]]),
+    quickSaves: new Map([[0, {message: {text: [{text: 'クイック\nテキスト'}]}}]]),
+    vm,
+    stageProperties: new Map(),
+    display: {
+      saveMessage: () => ({}),
+      restoreMessage: () => {},
+      loadMessage: async () => {},
+      closeMessage: () => {},
+      setMessageSlide: () => {},
+      clearMessageFilterFiles: () => {},
+      saveGans: () => [],
+      saveMovieEffects: () => [],
+      saveRectangleEffects: () => [],
+      loadStageEffects: async () => {},
+      sceneCovered: false,
+      saveObjectMasks: () => [],
+      restoreObjectMasks: async () => {},
+      syncObjectButtonGroups: () => {},
+      setScenePaused: () => {},
+      setMessageDisplayed: () => {},
+      stage: {style: {}},
+      endEffect: () => {},
+      clearObjects: () => {},
+      setBackground: async () => {},
+      setCast: async () => {},
+      renderMessageObjects: async () => {},
+    },
+    audio: {
+      bgmCheckpoint: () => undefined,
+      channelLevel: () => 255,
+      pcmCheckpoint: () => [],
+      resetPlayback: () => {},
+      restoreBgm: async () => {},
+      setChannelLevel: () => {},
+      restorePcm: async () => {},
+    },
+    currentCast: [],
+    currentCastCostumes: [],
+    speed: -1,
+    saveTitle: '',
+    history: [],
+    backlog: [],
+    historyPoints: new Map(),
+    pageVoices: [],
+    pageReadFlags: [],
+    systemMenuEnabled: true,
+    messageButtonsEnabled: true,
+    disabledMessageButtons: new Set(),
+    saveEnabled: true,
+    loadEnabled: true,
+    selectionReturnFlags: [true, true],
+    skipAllowed: true,
+    localExtraSwitches: new Set(),
+    msgBackEnabled: true,
+    hideMwndEnabled: true,
+    mwndBtnTouchEnabled: true,
+    objects: [new Map(), new Map()],
+    noSaveObjectIds: new Set(),
+    stageEffects: new Map(),
+    excallFlags: new Set(),
+    pcmEvents: new Map(),
+    namaeValues: new Map(),
+    namaeIds: new Map(),
+    messageFilterFiles: new Map(),
+    messageButtonOffsets: new Map(),
+    frameActions: new Map(),
+    maskEvents: new Map(),
+    activeGroups: new Set(),
+    cancelGroups: new Set(),
+    decisions: new Map(),
+    sceneCounters: new Map(),
+    readFlags: new Map(),
+    releaseSystemObjects: () => {},
+    clearDayObjects: () => {},
+    applyScreenEffects: () => {},
+    cast: async () => {},
+    renderObjects: async () => {},
+    renderMessageObjects: async () => {},
+    restoreCastCostumes: async () => {},
+    restoreCustomValues: () => {},
+    restoreObjectMasks: async () => {},
+    applyMessageControls: () => {},
+    deserializeDrawObject: async (o) => o,
+    messagePointerAction: {channel: 0, scene: '_04mwbtn_hide', command: 't_mwnd_btn_check'},
+  });
+
+  // 1. syscom get_save_message / get_quick_save_message strip embedded newlines
+  assert.equal(await player.command({path: [63, 129], args: [0], named: []}), '一行目二行目三行目');
+  assert.equal(await player.command({path: [63, 130], args: [0], named: []}), 'クイックテキスト');
+
+  // 2. captureSave / restoreSave preserves and clears messagePointerAction
+  const captured = player.captureSave(false);
+  assert.deepEqual(captured.messagePointerAction, {
+    channel: 0,
+    scene: '_04mwbtn_hide',
+    command: 't_mwnd_btn_check',
+  });
+  player.messagePointerAction = undefined;
+  await player.restoreSave({...captured, background: undefined});
+  assert.deepEqual(player.messagePointerAction, captured.messagePointerAction);
+  await player.restoreSave({...captured, messagePointerAction: undefined, background: undefined});
+  assert.equal(player.messagePointerAction, undefined);
+
+  // 3. waitAtPage only queues message-frame hover input when showControls is true (source + behavior)
+  const playerSrc = fs.readFileSync(path.join(SIGLUS_DIR, 'player.ts'), 'utf8');
+  assert.match(
+    playerSrc,
+    /const showControls = this\.messageButtonsEnabled && \(!this\.skipping \|\| readSkipping\);\s*if \(showControls\) \{\s*this\.queueMessageFrameInput\(\);/,
+  );
+
+  // 4. Sidebar exposes DomTextStyle unconditionally and display.ts guards 0px baseline measurement
+  const sidebarSrc = fs.readFileSync(path.join(REPO_ROOT, 'ui/player/Sidebar.svelte'), 'utf8');
+  assert.match(sidebarSrc, /<DomTextStyle\s*\/>/);
+  const displaySrc = fs.readFileSync(path.join(SIGLUS_DIR, 'display.ts'), 'utf8');
+  assert.match(displaySrc, /size > 0 \? `\$\{size \* scale\}px` : ''/);
+  assert.match(displaySrc, /if \(this\.messageTextSize > 0\) this\.alignDomText\(\);/);
+  assert.match(displaySrc, /if \(Number\.parseFloat\(fontSize\) <= 0\) continue;/);
 });

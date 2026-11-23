@@ -43,6 +43,11 @@ export interface SelbtnPlacement {
   readonly y: number;
 }
 
+export function selbtnPresentation(dispFlag: number): 'enabled' | 'disabled' | 'hidden' {
+  // 1.1.102.1 draws flags 1 and 2 (0x58b520) and only hit-tests flag 1 (0x5882db).
+  return dispFlag === 1 ? 'enabled' : dispFlag === 2 ? 'disabled' : 'hidden';
+}
+
 /**
  * Native 0x54da44..0x54db18 global.selbtn / selbtn_cancel argument parser.
  * Accepts optional leading int template index, then repeats of (str[, int disp=1[, int color=-1]]).
@@ -138,7 +143,7 @@ export function readSelbtnTemplate(config: ReadonlyMap<string, string>, template
 
 /**
  * Native 0x5b0d60 C_elm_selbtn::set_pos exact layout calculation:
- * Only items with dispFlag !== 0 participate; wraps columns at maxYCount > 0;
+ * Nonzero flags reserve a position, including hidden spacers. Wraps at maxYCount > 0;
  * aligns total bounding box by alignX/alignY (0=left/top, 1=-trunc(total/2), 2=-total).
  */
 export function layoutSelbtnItems(
@@ -147,8 +152,8 @@ export function layoutSelbtnItems(
   itemWidth: number,
   itemHeight: number,
 ): SelbtnPlacement[] {
-  const visible = items.filter((item) => item.dispFlag !== 0);
-  if (!visible.length) return [];
+  const positioned = items.filter((item) => item.dispFlag !== 0);
+  if (!positioned.length) return [];
   const raw: {item: SelbtnItem; x: number; y: number}[] = [];
   let colBaseX = 0;
   let x = 0;
@@ -156,7 +161,7 @@ export function layoutSelbtnItems(
   let rowInCol = 0;
   let maxX = 0;
   let maxY = 0;
-  for (const item of visible) {
+  for (const item of positioned) {
     raw.push({item, x, y});
     x += template.repX;
     y += template.repY;

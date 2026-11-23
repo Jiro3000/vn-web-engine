@@ -67,7 +67,7 @@
         <option value="native">Native</option><option value="dom">DOM text</option>
       </select>
       <p id="text-help">{@render textHelp()}</p>
-      {#if entry.id !== 'siglus'}<DomTextStyle />{/if}
+      <DomTextStyle />
     </section>
     {@render saveFiles()}
     {@render options?.()}
