@@ -10,11 +10,13 @@ import {
   parseWakuConfig,
 } from '../../dist/engines/siglus/mwnd.js';
 import {AsfDemuxer, readAsfLayout} from '../../dist/formats/asf/demux.js';
+import {isOggPageStart, oggPageChecksumValid, readOggPage} from '../../dist/formats/ogg/page.js';
 import {SiglusDbs} from '../../dist/formats/siglus/dbs.js';
 import {G00Image} from '../../dist/formats/siglus/g00.js';
 import {readGan} from '../../dist/formats/siglus/gan.js';
 import {SiglusOmv} from '../../dist/formats/siglus/omv.js';
 import {decodeNwa, decodeOwp, ovkIndex} from '../../dist/formats/siglus/sound.js';
+import {readSiglusToneCurves} from '../../dist/formats/siglus/tonecurve.js';
 import {WindowsMediaDecoder} from '../../dist/video/windows-media.js';
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '../..');
@@ -31,6 +33,10 @@ export const DEFAULT_GAMEEXE_ALLOWLIST = [
   /^SYSCOMMENU\./,
   /^TWITTER\./,
   /^(?:DISCMARK|DUMMY_CHECK.*|GAMEVERSION|MANUAL_PATH|MOUSE_CURSOR\.(?:DEFAULT|CNT)|SAVE\.NO_DATA_STR)$/,
+  // Native resource declarations parsed at 0x6626a0 and 0x665670 in Siglus 1.1.102.1.
+  /^MOUSE_CURSOR\.NNN\.FILE$/,
+  /^TONECURVE_FILE$/,
+  /^NAMAE(?:\.NNN)?$/, // Repeated declarations are consumed through the parsed name-entry list.
   /^(?:FLAG|GLOBAL_FLAG|CALL_FLAG|COUNTER|OBJBTNGROUP|FRAME_ACTION_CH|PCMCH|PCMEVENT|MASK|CHRKOE|BGM|FONT_FILE|SELBTN|WORLD|WAKU|MWND|OBJECT|EFFECT|QUAKE|MOVIE|KOE|SE|DATABASE)\.CNT$/,
   /^FONT_FILE\.NNN\.NAME$/,
   /^CHRKOE\.NOT_LOOK_NAME_STR$/,
@@ -231,6 +237,186 @@ export function auditScenePackBytecode(
   };
 }
 
+export function auditScenePackStack(pack) {
+  const exports = new Map();
+  for (let i = 0; i < pack.commandScenes.length; i += 2) {
+    const owner = pack.commandScenes[i];
+    const entries = exports.get(owner) ?? [];
+    entries.push(pack.commandScenes[i + 1]);
+    exports.set(owner, entries);
+  }
+  let reachableInstructions = 0;
+  for (const [sceneIndex, name] of pack.sceneNames.entries()) {
+    const scene = pack.scene(name);
+    const code = new DataView(scene.code.buffer, scene.code.byteOffset, scene.code.byteLength);
+    const seen = new Map();
+    const entries = new Set([...scene.entries, ...scene.commands, ...(exports.get(sceneIndex) ?? [])]);
+    const work = [...entries].map((pc) => ({pc, stack: [], points: [], declarations: new Map()}));
+    while (work.length) {
+      let {pc, stack, points, declarations} = work.pop();
+      while (pc < code.byteLength) {
+        const address = pc;
+        const location = () => `${name}@0x${address.toString(16)}`;
+        const previous = seen.get(address);
+        if (previous) {
+          if (stack.length !== previous.stack.length || String(points) !== String(previous.points))
+            assert.fail(`Inconsistent Siglus stack at ${location()}`);
+          if (stack.every((value, i) => value === previous.stack[i] || previous.stack[i] === null))
+            break;
+          stack = stack.map((value, i) => (value === previous.stack[i] ? value : null));
+        } else {
+          reachableInstructions++;
+        }
+        seen.set(address, {stack: stack.slice(), points: points.slice()});
+
+        const word = () => {
+          const value = code.getInt32(pc, true);
+          pc += 4;
+          return value;
+        };
+        const pop = () => {
+          if (stack.length === 0) assert.fail(`Siglus stack underflow at ${location()}`);
+          return stack.pop();
+        };
+        const element = () => {
+          const start = points.pop();
+          if (start === undefined || start >= stack.length)
+            assert.fail(`Missing Siglus element path at ${location()}`);
+          return stack.splice(start);
+        };
+        const argumentsAt = () => {
+          for (let count = word(); count > 0; count--) {
+            const form = word();
+            if (form === -1) argumentsAt();
+            else if (form === 0 || form === 10 || form === 20 || form === 30) pop();
+            else element();
+          }
+        };
+        const branch = (label, call) => {
+          const target = scene.labels[label];
+          if (target === undefined) assert.fail(`Missing Siglus label ${label} at ${location()}`);
+          work.push({
+            pc: target,
+            stack: call ? [] : stack.slice(),
+            points: call ? [] : points.slice(),
+            declarations: call ? new Map() : new Map(declarations),
+          });
+        };
+        const op = code.getUint8(pc++);
+        switch (op) {
+          case 0:
+          case 9:
+            continue;
+          case 1:
+            word();
+            continue;
+          case 2: {
+            const form = word();
+            const value = word();
+            stack.push(form === 20 ? null : value);
+            continue;
+          }
+          case 3:
+            if (word()) pop();
+            continue;
+          case 4: {
+            word();
+            const top = pop();
+            stack.push(top, top);
+            continue;
+          }
+          case 5: {
+            const path = element();
+            if (path.length === 2 && path[0] === 83 && path[1] >>> 24 === 125) {
+              const form = [...declarations.values()][path[1] & 0xffff];
+              if (form !== undefined && ![0, 10, 20, 30].includes(form)) points.push(stack.length);
+            }
+            stack.push(null);
+            continue;
+          }
+          case 6: {
+            const start = points.at(-1);
+            if (start === undefined) assert.fail(`Missing Siglus element copy at ${location()}`);
+            points.push(stack.length);
+            stack.push(...stack.slice(start));
+            continue;
+          }
+          case 7: {
+            const form = word();
+            declarations.set(word(), form);
+            if (form === 11 || form === 21) pop();
+            continue;
+          }
+          case 8:
+            points.push(stack.length);
+            continue;
+          case 16:
+          case 17:
+          case 18: {
+            const label = word();
+            if (op !== 16) pop();
+            branch(label, false);
+            if (op !== 16) continue;
+            break;
+          }
+          case 19:
+          case 20: {
+            const label = word();
+            argumentsAt();
+            branch(label, true);
+            stack.push(null);
+            continue;
+          }
+          case 21:
+            argumentsAt();
+            break;
+          case 22:
+            break;
+          case 32:
+            pc += 12;
+            pop();
+            element();
+            continue;
+          case 33:
+            pc += 5;
+            pop();
+            stack.push(null);
+            continue;
+          case 34:
+            pc += 9;
+            pop();
+            pop();
+            stack.push(null);
+            continue;
+          case 48: {
+            word();
+            argumentsAt();
+            for (let count = word(); count > 0; count--) word();
+            const result = word();
+            const path = element();
+            if (hasTrailingReadFlag(path)) word();
+            if (result === 23) points.push(stack.length);
+            if (result) stack.push(null);
+            if (path.length === 1 && (path[0] === 3 || path[0] === 4)) break;
+            continue;
+          }
+          case 49:
+            word();
+            pop();
+            continue;
+          case 50:
+            pop();
+            continue;
+          default:
+            assert.fail(`Unknown Siglus opcode ${op} at ${location()}`);
+        }
+        break;
+      }
+    }
+  }
+  return reachableInstructions;
+}
+
 export function auditGameexeCoverage(
   cfg,
   gameDir,
@@ -257,17 +443,21 @@ export function auditGameexeCoverage(
     assert.equal(mwndCnt, expectedMwndCount);
   }
 
+  assert.ok(
+    [screenW, screenH].every((n) => Number.isSafeInteger(n) && n > 0),
+    `Invalid SCREEN_SIZE: ${screenRaw}`,
+  );
   if (checkGeometry && mwndCnt > 0) {
     for (let i = 0; i < mwndCnt; i++) {
       const layout = parseMwndLayout(cfg, i);
+      // Siglus 1.1.102.1 copies WINDOW_POS and WINDOW_SIZE verbatim from the
+      // configuration into the live message-window object (0x669230, 0x5284d0).
+      // The logical window also anchors WAKU children. Stage clipping is applied
+      // to the drawn elements and does not change those anchor coordinates.
       assert.ok(
-        layout.windowPos[0] >= 0 && layout.windowPos[1] >= 0,
-        `MWND.${i} negative origin: ${JSON.stringify(layout.windowPos)}`,
-      );
-      assert.ok(
-        layout.windowPos[0] + layout.windowSize[0] <= screenW &&
-          layout.windowPos[1] + layout.windowSize[1] <= screenH,
-        `MWND.${i} exceeds ${screenW}x${screenH}`,
+        layout.windowPos.every(Number.isSafeInteger) &&
+          layout.windowSize.every((n) => Number.isSafeInteger(n) && n >= 0),
+        `MWND.${i} invalid geometry: ${layout.windowPos}, ${layout.windowSize}`,
       );
       const waku = parseWakuConfig(cfg, layout.wakuNo);
       if (waku.wakuFile && gameDir) {
@@ -290,19 +480,18 @@ export function auditGameexeCoverage(
           centerY: 0,
         });
         assert.ok(
-          origin.left >= -10 &&
-            origin.left <= screenW + 10 &&
-            origin.top >= -10 &&
-            origin.top <= screenH + 10,
-          `WAKU.${tag}.BTN.${m[1]} origin out of bounds: ${JSON.stringify(origin)}`,
+          mode >= 0 &&
+            mode <= 3 &&
+            Number.isInteger(mode) &&
+            Number.isSafeInteger(origin.left) &&
+            Number.isSafeInteger(origin.top),
+          `WAKU.${tag}.BTN.${m[1]} invalid origin: ${JSON.stringify(origin)}`,
         );
       }
     }
   }
 
-  const engineCode = fs
-    .readdirSync(SIGLUS_DIR)
-    .filter((f) => f.endsWith('.ts'))
+  const engineCode = listNonDotFiles(SIGLUS_DIR, '.ts')
     .map((f) => fs.readFileSync(path.join(SIGLUS_DIR, f), 'utf8'))
     .join('\n');
 
@@ -373,6 +562,45 @@ export function auditWmaParity(
   return {codec: audioStream.codec, sampleRate: audioStream.sampleRate, frames, maxAbs, maxDiff};
 }
 
+export function auditNwaFile(filePath) {
+  const {channels, rate, pcm} = decodeNwa(new Uint8Array(fs.readFileSync(filePath)));
+  assert.ok(rate > 0 && pcm.length > 0, `NWA ${filePath} decoded empty`);
+  return {channels, rate, frames: pcm.length / channels};
+}
+
+export function auditOggFile(filePath) {
+  const bytes = fs.readFileSync(filePath);
+  assert.ok(bytes.length > 0, `Empty Ogg file ${filePath}`);
+  for (let pos = 0; pos < bytes.length;) {
+    const page = isOggPageStart(bytes, pos) && readOggPage(bytes, pos);
+    assert.ok(page && oggPageChecksumValid(page), `Invalid Ogg page at ${pos} in ${filePath}`);
+    pos += page.bytes.length;
+  }
+}
+
+export async function auditOvkFile(filePath) {
+  const file = await fs.promises.open(filePath, 'r');
+  try {
+    const {size} = await file.stat();
+    const index = await ovkIndex({
+      size,
+      read: async (offset, length) => {
+        const buffer = Buffer.alloc(length);
+        const {bytesRead} = await file.read(buffer, 0, length, offset);
+        assert.equal(bytesRead, length, `Truncated OVK at ${offset} in ${filePath}`);
+        return buffer;
+      },
+    });
+    assert.ok(index.size > 0, `OVK ${filePath} empty index`);
+  } finally {
+    await file.close();
+  }
+}
+
+export function auditToneCurveFile(filePath) {
+  return [...readSiglusToneCurves(fs.readFileSync(filePath)).keys()];
+}
+
 export async function auditSiglusAssets(
   gameDir,
   {
@@ -383,8 +611,12 @@ export async function auditSiglusAssets(
     endingOmvCount,
     endingOmvSize,
     bgmCount,
+    bgmNwaCount,
     nwaCount,
+    oggCount,
     ovkCount,
+    g00Count,
+    g00CutCount,
     sampleLimit = 20,
   } = {},
 ) {
@@ -430,26 +662,28 @@ export async function auditSiglusAssets(
     }
   }
 
-  if (nwaCount !== undefined) {
-    const nwas = listNonDotFiles(path.join(gameDir, 'wav'), '.nwa');
-    assert.equal(nwas.length, nwaCount);
-    for (const f of nwas.slice(0, sampleLimit)) {
-      const dec = decodeNwa(new Uint8Array(fs.readFileSync(path.join(gameDir, 'wav', f))));
-      assert.ok(dec.rate > 0 && dec.pcm.length > 0, `NWA ${f} decoded empty`);
-    }
+  for (const [folder, expected] of [
+    ['bgm', bgmNwaCount],
+    ['wav', nwaCount],
+  ]) {
+    if (expected === undefined) continue;
+    const dir = path.join(gameDir, folder);
+    const nwas = listNonDotFiles(dir, '.nwa');
+    assert.equal(nwas.length, expected);
+    for (const f of nwas.slice(0, sampleLimit)) auditNwaFile(path.join(dir, f));
+  }
+
+  if (oggCount !== undefined) {
+    const wavDir = path.join(gameDir, 'wav');
+    const oggs = listNonDotFiles(wavDir, '.ogg');
+    assert.equal(oggs.length, oggCount);
+    for (const f of oggs) auditOggFile(path.join(wavDir, f));
   }
 
   if (ovkCount !== undefined) {
     const ovks = listNonDotFiles(path.join(gameDir, 'koe'), '.ovk');
     assert.equal(ovks.length, ovkCount);
-    for (const f of ovks.slice(0, sampleLimit)) {
-      const buf = new Uint8Array(fs.readFileSync(path.join(gameDir, 'koe', f)));
-      const idx = await ovkIndex({
-        size: buf.length,
-        read: async (offset, length) => buf.subarray(offset, offset + length),
-      });
-      assert.ok(idx.size > 0, `OVK ${f} empty index`);
-    }
+    for (const f of ovks.slice(0, sampleLimit)) await auditOvkFile(path.join(gameDir, 'koe', f));
   }
 
   // Native C_g00::set_data (0x6de310) skips the 24-byte outer atlas-crop table for Type 2 G00s;
@@ -457,10 +691,24 @@ export async function auditSiglusAssets(
   const g00Dir = path.join(gameDir, 'g00');
   if (fs.existsSync(g00Dir)) {
     const g00Files = listNonDotFiles(g00Dir, '.g00');
+    if (g00Count !== undefined) assert.equal(g00Files.length, g00Count);
     let checkedNonZeroOuter = 0;
+    let cutCount = 0;
     for (const f of g00Files) {
-      if (checkedNonZeroOuter >= sampleLimit) break;
+      if (g00CutCount === undefined && checkedNonZeroOuter >= sampleLimit) break;
       const buf = new Uint8Array(fs.readFileSync(path.join(g00Dir, f)));
+      const full = g00CutCount !== undefined ? new G00Image(buf) : undefined;
+      if (full) {
+        cutCount += full.count;
+        if (full.type === 3) {
+          assert.deepEqual([...full.jpeg().subarray(0, 2)], [255, 216], `${f}: invalid JPEG marker`);
+        } else {
+          for (let index = 0; index < full.count; index++) {
+            const frame = full.frame(index);
+            assert.equal(frame.bgra.length, frame.width * frame.height * 4, `${f} cut ${index}`);
+          }
+        }
+      }
       if (buf.length < 33 || buf[0] !== 2) continue;
       const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
       const cnt = dv.getUint32(5, true);
@@ -474,7 +722,7 @@ export async function auditSiglusAssets(
         }
       }
       if (nzCut >= 0) {
-        const img = new G00Image(buf);
+        const img = full ?? new G00Image(buf);
         const fr = img.frame(nzCut);
         assert.equal(fr.x, 0, `${f} cut ${nzCut}: G00 Type 2 outer atlas X leaked into frame.x=${fr.x}`);
         assert.equal(fr.y, 0, `${f} cut ${nzCut}: G00 Type 2 outer atlas Y leaked into frame.y=${fr.y}`);
@@ -483,5 +731,8 @@ export async function auditSiglusAssets(
         checkedNonZeroOuter++;
       }
     }
+    if (g00CutCount !== undefined) assert.equal(cutCount, g00CutCount);
+  } else if (g00Count !== undefined) {
+    assert.equal(g00Count, 0, 'Missing g00 directory');
   }
 }

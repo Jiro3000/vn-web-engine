@@ -17,12 +17,14 @@ import {
 
 const movieDialogResource = 124;
 const screenDialogResource = 127;
+const autoModeDialogResource = 115;
 const sdWrapImageOffset = 0x1c000;
 const moviePlayers = new Map<number, SiglusMoviePlayer>([
   [1164, 'mci'],
   [1165, 'wmp'],
 ]);
 export type SiglusMoviePlayer = 'mci' | 'wmp';
+type AutoModeSettings = {autoCharacterWait: number; autoMinimumWait: number};
 export interface SiglusScreenSettings extends ViewportPresentation {
   fullscreen: boolean;
   syncScale: boolean;
@@ -87,7 +89,7 @@ export class SiglusConfiguration {
     const result = new Map<number, DialogTemplate>();
     for (const image of images)
       for (const {id, language, bytes} of parsePeResources(image, [5]))
-        if (language === 1041 && (id === movieDialogResource || id === screenDialogResource))
+        if (language === 1041 && (id === movieDialogResource || id === screenDialogResource || id === autoModeDialogResource))
           result.set(id, parseDialogTemplate(bytes, 0));
     return result;
   }
@@ -132,6 +134,73 @@ export class SiglusConfiguration {
     await this.show(dialog);
     const selected = new FormData(form).get('method');
     return selected === 'mci' || selected === 'wmp' ? selected : current;
+  }
+
+  async autoMode(
+    current: AutoModeSettings,
+    defaults: AutoModeSettings,
+    limits: AutoModeSettings,
+    apply: (settings: AutoModeSettings) => void,
+  ): Promise<void> {
+    const template = await this.template(autoModeDialogResource);
+    const {dialog, place} = this.templateDialog('auto-mode', template);
+    const document = this.owner.ownerDocument;
+    const settings = {...current};
+    const fields = new Map<number, keyof AutoModeSettings>([
+      [1177, 'autoCharacterWait'],
+      [1176, 'autoMinimumWait'],
+    ]);
+    const refresh: (() => void)[] = [];
+    const update = () => {
+      for (const render of refresh) render();
+      apply({...settings});
+    };
+    for (const item of template.items) {
+      const {id, title} = item;
+      const field = fields.get(id);
+      if (field) {
+        const slider = document.createElement('input');
+        slider.type = 'range';
+        slider.min = '0';
+        slider.max = String(limits[field]);
+        slider.setAttribute('aria-label', field === 'autoCharacterWait' ? '文字時間' : '最小時間');
+        slider.addEventListener('input', () => {
+          settings[field] = slider.valueAsNumber;
+          update();
+        });
+        refresh.push(() => { slider.value = String(settings[field]); });
+        place(item, slider);
+      } else if (id === 1002 || id === 1003) {
+        const button = document.createElement('button');
+        button.type = id === 1002 ? 'submit' : 'button';
+        button.textContent = typeof title === 'string' ? title : '';
+        if (id === 1003) button.addEventListener('click', () => {
+          Object.assign(settings, defaults);
+          update();
+        });
+        place(item, button);
+      } else if (id >= 1205 && id <= 1207) {
+        const readout = document.createElement('output');
+        refresh.push(() => {
+          const time = id === 1205 ? settings.autoMinimumWait : id === 1206 ? settings.autoCharacterWait :
+            settings.autoMinimumWait + settings.autoCharacterWait * 10;
+          readout.value = `${(time / 1000).toFixed(3)} 秒`;
+        });
+        place(item, readout);
+      } else if (typeof title === 'string') {
+        const group = item.className === 128 && (item.style & 15) === 7;
+        const label = document.createElement(group ? 'fieldset' : 'div');
+        if (group) {
+          label.style.cssText = 'margin:0;padding:0;min-width:0;pointer-events:none';
+          const legend = document.createElement('legend');
+          legend.textContent = title;
+          label.append(legend);
+        } else label.textContent = title;
+        place(item, label);
+      }
+    }
+    for (const render of refresh) render();
+    await this.show(dialog);
   }
 
   async screen(
@@ -420,6 +489,92 @@ export class SiglusConfiguration {
     form.method = 'dialog';
     dialog.append(title, form);
     return {dialog, form};
+  }
+
+  async shareCapture(
+    png: Uint8Array,
+    text?: string,
+    saveFile?: File,
+    caption?: string,
+  ): Promise<boolean> {
+    const sharing = text !== undefined;
+    const {dialog, form} = this.dialog(
+      sharing ? 'share-capture' : 'save-capture',
+      caption || (sharing ? 'キャプチャを共有' : 'キャプチャを保存'),
+    );
+    const document = dialog.ownerDocument;
+    const preview = new File([new Uint8Array(png)], 'siglus-capture.png', {type: 'image/png'});
+    const file = saveFile ?? preview;
+    const url = URL.createObjectURL(file);
+    const previewUrl = file === preview ? url : URL.createObjectURL(preview);
+    let exported = false;
+    form.style.cssText = 'padding:12px;display:grid;gap:8px;width:min(480px,80vw)';
+    const image = document.createElement('img');
+    image.src = previewUrl;
+    image.alt = 'キャプチャ画像';
+    image.style.cssText = 'display:block;max-width:100%;max-height:55vh;object-fit:contain';
+    const save = document.createElement('a');
+    save.href = url;
+    save.download = file.name;
+    save.textContent = '画像を保存';
+    save.addEventListener('click', () => {
+      exported = true;
+      if (!sharing) document.defaultView?.requestAnimationFrame(() => {
+        if (dialog.open) dialog.close();
+      });
+    });
+    const close = document.createElement('button');
+    close.textContent = '閉じる';
+    form.append(image, save);
+    const navigator = document.defaultView?.navigator;
+    if (sharing && navigator?.share && navigator.canShare?.({files: [file]})) {
+      const message = document.createElement('textarea');
+      message.value = text;
+      message.setAttribute('aria-label', '共有するテキスト');
+      const share = document.createElement('button');
+      share.type = 'button';
+      share.textContent = '共有';
+      const status = document.createElement('div');
+      status.setAttribute('role', 'status');
+      share.addEventListener('click', () => {
+        void navigator.share({files: [file], text: message.value}).then(
+          () => { exported = true; if (dialog.open) dialog.close(); },
+          (error: unknown) => {
+            if (!(error instanceof DOMException && error.name === 'AbortError'))
+              status.textContent = '共有できませんでした。画像を保存できます。';
+          },
+        );
+      });
+      form.append(message, share, status);
+    }
+    form.append(close);
+    try {
+      await this.show(dialog);
+      return exported;
+    } finally {
+      URL.revokeObjectURL(url);
+      if (previewUrl !== url) URL.revokeObjectURL(previewUrl);
+    }
+  }
+
+  async pickCaptureBmp(caption: string): Promise<File | undefined> {
+    const {dialog, form} = this.dialog('open-capture', caption || 'ファイルの選択');
+    const document = dialog.ownerDocument;
+    form.style.cssText = 'padding:12px;display:grid;gap:8px';
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.bmp,image/bmp';
+    input.setAttribute('aria-label', 'BMP ファイル');
+    let file: File | undefined;
+    input.addEventListener('change', () => {
+      file = input.files?.[0];
+      if (file) dialog.close();
+    });
+    const close = document.createElement('button');
+    close.textContent = 'キャンセル';
+    form.append(input, close);
+    await this.show(dialog);
+    return file;
   }
 
   private templateDialog(kind: string, template: DialogTemplate) {

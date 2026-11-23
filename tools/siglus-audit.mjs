@@ -7,12 +7,14 @@
  * hit-test, unhandled-opcode telemetry, and audio/video verification.
  *
  * Usage:
- *   node tools/siglus-audit.mjs <profile.json> [systems|extras|crawl] [choicePick] [maxSeconds] [chaosEvery]
+ *   node tools/siglus-audit.mjs <profile.json> [systems|extras|crawl] [choicePick] [maxSeconds] [chaosEvery] [replay]
  *
  * Environment:
  *   BROWSER_BIN   Path to Brave/Chrome binary (defaults to Brave on macOS, falls back to Chrome)
  *   TEXT_MODE     'dom' (default) or 'native'
  *   GAME_DIR      Optional override for profile.gameDir
+ *   SITE_DIR      Built site directory (defaults to site)
+ *   TRACE_CRAWL   Log scene transitions and stalled script positions
  */
 import {spawn} from 'node:child_process';
 import fs from 'node:fs';
@@ -20,6 +22,7 @@ import {mkdtemp, readdir, readFile, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 import {setTimeout as delay} from 'node:timers/promises';
+import {parseMwndAnimation, parseMwndLayout} from '../dist/engines/siglus/mwnd.js';
 import {SiglusScenePack} from '../dist/formats/siglus/scene-pack.js';
 import {sha256File} from '../tests/helpers/siglus-game-suite.mjs';
 import {DevToolsConnection} from './capture-browser-trace.mjs';
@@ -35,7 +38,11 @@ if (!PROFILE_PATH) {
 }
 
 const profileCfg = JSON.parse(fs.readFileSync(resolve(PROFILE_PATH), 'utf8'));
+const replayName = MODE === 'crawl' ? process.argv[7] : undefined;
+const replay = replayName === undefined ? undefined : profileCfg.crawlReplays?.[replayName];
+if (replayName && !replay) throw new Error(`Unknown crawl replay ${replayName}`);
 const GAME_DIR = resolve(process.env.GAME_DIR ?? profileCfg.gameDir);
+const SITE_DIR = resolve(process.env.SITE_DIR ?? 'site');
 
 function resolveBrowserBin() {
   if (process.env.BROWSER_BIN) return process.env.BROWSER_BIN;
@@ -68,11 +75,18 @@ const CANCEL_SCENE = parseSceneName('CANCEL_SCENE', null);
 const SAVE_SCENE = parseSceneName('SAVE_SCENE', null);
 const LOAD_SCENE = parseSceneName('LOAD_SCENE', null);
 const CONFIG_SCENE = parseSceneName('CONFIG_SCENE', null);
+const mwndBottom = Math.max(
+  SCREEN_H,
+  ...Array.from({length: Number(gameexe.get('MWND.CNT') ?? 0)}, (_, index) => {
+    const {windowPos, windowSize} = parseMwndLayout(gameexe, index);
+    return windowPos[1] + windowSize[1];
+  }),
+);
 const SAVE_KEY = 'siglus:' + sha256File(join(DATA_DIR, 'Scene.pck'));
 const BROWSER_BIN = resolveBrowserBin();
 
 const tmpProfile = await mkdtemp(join(tmpdir(), 'siglus-audit-'));
-const server = await createStaticServer();
+const server = await createStaticServer({root: SITE_DIR});
 let child;
 let cdp;
 
@@ -93,6 +107,9 @@ try {
       '--window-size=1280,800',
       '--incognito',
       '--mute-audio',
+      '--disable-background-timer-throttling',
+      '--disable-backgrounding-occluded-windows',
+      '--disable-renderer-backgrounding',
       '--autoplay-policy=no-user-gesture-required',
       '--remote-debugging-port=0',
       '--user-data-dir=' + tmpProfile,
@@ -124,6 +141,7 @@ try {
   const {targetId} = await cdp.command('Target.createTarget', {url: `${origin}/siglus.html?siglus-trace`});
   const {sessionId} = await cdp.command('Target.attachToTarget', {targetId, flatten: true});
   const send = (method, params) => cdp.command(method, params, sessionId);
+  await send('Page.bringToFront');
 
   cdp.on('event', ({method, params}) => {
     if (method === 'Runtime.exceptionThrown') {
@@ -156,6 +174,11 @@ try {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
       if (await evaluate(`Boolean(${expr})`)) return true;
+      const fatal = await evaluate(`(() => {
+        const banner = document.getElementById('fatal-error');
+        return banner && !banner.hidden ? banner.textContent : '';
+      })()`);
+      if (fatal) throw new Error(fatal);
       await delay(100);
     }
     return false;
@@ -202,8 +225,8 @@ try {
     await send('Input.dispatchKeyEvent', {type: 'keyUp', key, code, windowsVirtualKeyCode: vk});
   };
 
-  if (!(await waitFor("document.querySelector('#files') !== null"))) {
-    throw new Error('Timed out waiting for #files');
+  if (!(await waitFor("typeof document.querySelector('#files')?.onchange === 'function'"))) {
+    throw new Error('Timed out waiting for the installation input handler');
   }
   const {root: doc} = await send('DOM.getDocument', {depth: -1, pierce: true});
   const {nodeId} = await send('DOM.querySelector', {nodeId: doc.nodeId, selector: '#files'});
@@ -218,11 +241,11 @@ try {
   })()`);
 
   let runtimePath;
-  for (const name of await readdir(resolve('site/assets'))) {
+  for (const name of await readdir(join(SITE_DIR, 'assets'))) {
     if (
       name.startsWith('siglus-') &&
       name.endsWith('.js') &&
-      /export\s*\{[^}]*\bcurrentPlayer\b/.test(await readFile(resolve('site/assets', name), 'utf8'))
+      /export\s*\{[^}]*\bcurrentPlayer\b/.test(await readFile(join(SITE_DIR, 'assets', name), 'utf8'))
     ) {
       runtimePath = '/assets/' + name;
       break;
@@ -231,11 +254,12 @@ try {
   if (!runtimePath) throw new Error('Could not find siglus runtime chunk exporting currentPlayer');
   await evaluate(`import(${JSON.stringify(origin + runtimePath)}).then(m => { window.__runtime = m; })`);
 
-  // Seed extras unlock flags if running extras mode
-  if (MODE === 'extras' && profileCfg.extras) {
+  // This temporary browser profile can unlock bundled gallery and replay entry points.
+  const unlock = MODE === 'extras' ? profileCfg.extras : replay;
+  if (unlock) {
     await evaluate(`(() => {
       const k = ${JSON.stringify(SAVE_KEY)};
-      const ex = ${JSON.stringify(profileCfg.extras)};
+      const ex = ${JSON.stringify(unlock)};
       if (ex.systemFlags) localStorage.setItem(k + ':system', JSON.stringify(ex.systemFlags));
       if (ex.cgFlags) localStorage.setItem(k + ':cgtable', JSON.stringify(ex.cgFlags));
       if (ex.bgmListened) localStorage.setItem(k + ':bgmtable', JSON.stringify(ex.bgmListened));
@@ -254,7 +278,99 @@ try {
 
   await evaluate(`(() => {
     const p = window.__runtime.currentPlayer;
-    window.__audit = {scenes: [], sceneSet: new Set(), movies: [], movieActive: null};
+    window.__audit = {scenes: [], sceneSet: new Set(), movies: [], movieActive: null, compositeInk: new WeakMap(), effects: [], playingOmvs: new Set(), pageWaits: 0, stagePause: null};
+    window.__audit.frame = () => {
+      const vm = window.__runtime?.currentPlayer?.vm;
+      const frame = vm?.frames?.at(-1);
+      return frame && (vm.sceneJumps?.get(frame) ?? frame);
+    };
+    const stagePageScenes = new Set(${JSON.stringify(profileCfg.gameplay?.stagePageScenes ?? [])});
+    const ending = ${JSON.stringify(replay?.ending ?? null)};
+    const expectedSpeaker = ${JSON.stringify(replay?.expectedSpeaker ?? null)};
+    const promptScenes = new Set(${JSON.stringify(replay?.prompts?.map(({scene}) => scene) ?? [])});
+    window.__audit.stageTiming = [];
+    if (${Boolean(process.env.TRACE_CRAWL && MODE === 'crawl')}) {
+      const delay = p.delay.bind(p);
+      p.delay = async function(time, ...args) {
+        const wait = {ms: time ?? null, started: performance.now()};
+        window.__audit.delay = wait;
+        try {
+          return await delay(time, ...args);
+        } finally {
+          if (window.__audit.delay === wait) window.__audit.delay = null;
+        }
+      };
+    }
+    if (ending || stagePageScenes.size) {
+      const command = p.command.bind(p);
+      p.command = function(call) {
+        if (ending && !window.__audit.playingOmvs.has(ending.movie) &&
+            call.scene === ending.scene && call.line >= ending.fromLine) {
+          window.__audit.endingPending = true;
+          p.skip = false;
+        }
+        if (stagePageScenes.has(call.scene) && call.path.length === 1 && [14, 54, 55, 115].includes(call.path[0])) {
+          const entries = window.__audit.stageTiming;
+          entries.push({line: call.line, command: call.path[0], args: call.args, pendingText: p.pendingText});
+          if (entries.length > 12) entries.shift();
+        }
+        if (${MODE === 'crawl'} && stagePageScenes.has(call.scene)) p.skip = false;
+        return command(call);
+      };
+    }
+    const waitAtPage = p.waitAtPage.bind(p);
+    p.waitAtPage = async function() {
+      window.__audit.pageWaits++;
+      const frame = window.__audit.frame();
+      if (${MODE === 'crawl'} && stagePageScenes.has(frame?.scene.name)) {
+        // Let this real script wait consume a single click before resuming the fast crawl.
+        p.skip = false;
+        window.__audit.stagePause = {scene: frame.scene.name, line: frame.line};
+      }
+      try {
+        if (expectedSpeaker && !promptScenes.has(frame?.scene.name) &&
+            p.root.querySelector('[data-siglus-speaker]')?.textContent?.trim() === expectedSpeaker)
+          window.__audit.expectedSpeakerSeen = true;
+        await waitAtPage();
+      } finally {
+        window.__audit.stagePause = null;
+      }
+    };
+    p.root.addEventListener('siglus-audio', ({detail}) => {
+      if (detail.channel === 'se' && detail.frames > 0) window.__audit.effects.push(detail.resource);
+      if (detail.channel === 'bgm') window.__audit.bgmPlayback = detail;
+    });
+    if (${MODE === 'extras'}) {
+      window.__audit.pointer = [];
+      window.__audit.galleryDecisions = [];
+      window.__audit.galleryGroups = new Map();
+      const choose = p.choose.bind(p);
+      p.choose = function(target) {
+        const frame = window.__audit.frame();
+        window.__audit.pointer.push(['decision', target.group, target.id, frame?.scene.name, frame?.line, frame?.pc]);
+        choose(target);
+      };
+      const groupCommand = p.groupCommand.bind(p);
+      p.groupCommand = function(group, command) {
+        const frame = window.__audit.frame();
+        const pending = p.decisions.get(group);
+        const result = groupCommand(group, command);
+        if (command === 2 || command === 10) window.__audit.galleryGroups.set(group, frame?.scene.name);
+        if (command === 4 || command === 5) window.__audit.galleryGroups.delete(group);
+        if (pending !== undefined) {
+          window.__audit.galleryDecisions.push([group, command, pending, result, frame?.scene.name, frame?.line]);
+          if (window.__audit.galleryDecisions.length > 12) window.__audit.galleryDecisions.shift();
+        }
+        return result;
+      };
+      for (const type of ['pointerdown', 'pointerup', 'click']) {
+        p.display.stage.addEventListener(type, (event) => {
+          const button = event.target.closest('button');
+          window.__audit.pointer.push([event.type, button?.dataset.siglusGroup, button?.dataset.siglusButton]);
+          if (window.__audit.pointer.length > 24) window.__audit.pointer.shift();
+        }, true);
+      }
+    }
     const origMovie = p.movie?.bind(p);
     if (origMovie) {
       p.movie = async function(name, skippable) {
@@ -272,12 +388,27 @@ try {
         }
       };
     }
+    const recordObjectMovies = (objects) => {
+      for (const object of objects?.values() ?? []) {
+        if (!object.visible) continue;
+        if (object.movie?.presentedFrame > 0)
+          window.__audit.playingOmvs.add(object.name.toLowerCase());
+        if (object.children) recordObjectMovies(object.children);
+      }
+    };
     setInterval(() => {
-      const s = p.vm?.frames?.at?.(-1)?.scene?.name;
+      const s = window.__audit.frame()?.scene.name;
       if (s && !window.__audit.sceneSet.has(s)) {
         window.__audit.sceneSet.add(s);
         window.__audit.scenes.push(s);
       }
+      for (const effect of p.display?.activeEffects?.values() ?? []) {
+        if (effect.layer?.isConnected && effect.movie?.presentedFrame > 0)
+          window.__audit.playingOmvs.add(effect.checkpoint.name.toLowerCase());
+      }
+      recordObjectMovies(p.objects?.[0]);
+      recordObjectMovies(p.systemObjects);
+      recordObjectMovies(p.systemFrontObjects);
     }, 50);
   })()`);
 
@@ -303,7 +434,7 @@ try {
           cy: Math.round(r.top + r.height / 2),
         };
       };
-      const top = p?.vm?.frames?.at?.(-1);
+      const top = window.__audit.frame();
       const disp = p?.display;
       const layersEl = disp?.layers;
       const systemLayerEl = disp?.systemLayer;
@@ -325,7 +456,8 @@ try {
             cur = cur.parentElement;
           }
           if (!hidden && r.width > 0 && r.height > 0) {
-            const key = el.dataset.siglusKey ?? el.dataset.siglusObject ?? el.getAttribute('alt') ?? (el.tagName + ':' + Math.round(r.width) + 'x' + Math.round(r.height));
+            const slot = el.closest('[data-siglus-object-id]')?.dataset.siglusObjectId;
+            const key = el.dataset.siglusKey ?? el.dataset.siglusObject ?? el.getAttribute('alt') ?? slot ?? el.tagName;
             visibleLayerVisuals.push({tag: el.tagName, key});
           }
         }
@@ -362,7 +494,7 @@ try {
         for (const b of stage.querySelectorAll('button')) {
           const r = b.getBoundingClientRect();
           const cs = getComputedStyle(b);
-          let hidden = b.disabled || b.hidden || cs.display === 'none' || cs.visibility === 'hidden' || Number(cs.opacity) <= 0.05 || r.width <= 0 || r.height <= 0;
+          let hidden = b.disabled || b.hidden || b.inert || cs.display === 'none' || cs.visibility === 'hidden' || Number(cs.opacity) <= 0.05 || r.width <= 0 || r.height <= 0;
           let cur = b.parentElement;
           while (!hidden && cur && cur !== stage) {
             const pcs = getComputedStyle(cur);
@@ -377,14 +509,21 @@ try {
           if (!hidden) {
             const st = toStage(b);
             const hit = document.elementFromPoint(st.cx, st.cy);
-            const hitOk = Boolean(hit && (hit === b || b.contains(hit) || hit.contains(b)));
+            const hitButton = hit?.closest('button');
+            const sameScriptControl =
+              b.dataset.siglusButton !== undefined &&
+              b.dataset.siglusButton === hitButton?.dataset.siglusButton &&
+              b.dataset.siglusGroup === hitButton.dataset.siglusGroup;
+            const hitOk = Boolean((hit && b.contains(hit)) || sameScriptControl);
             buttons.push({
               aria: b.getAttribute('aria-label') ?? '',
               text: (b.textContent ?? '').trim().slice(0, 40),
               dataset: {...b.dataset},
               rect: st,
               hitOk,
-              hitTag: hit ? (hit.tagName + (hit.dataset?.siglusButton ? '#btn' + hit.dataset.siglusButton : '')) : null,
+              hitTag: hitButton ? (hitButton.getAttribute('aria-label') ?? hitButton.tagName) : hit?.tagName,
+              hitGroup: hitButton?.dataset.siglusGroup,
+              hitClip: hitOk ? undefined : b.style.clipPath.slice(0, 120),
             });
           }
         }
@@ -460,16 +599,40 @@ try {
             } else if (allCached && (fr.width !== expectedW || fr.height !== expectedH)) {
               visualIntegrityErrors.push('composite_dim_mismatch:' + obj.name.slice(0, 48) + ' got ' + fr.width + 'x' + fr.height + ' expected ' + expectedW + 'x' + expectedH);
             }
-            if (fr.image && typeof fr.image.getContext === 'function' && fr.width > 0 && fr.height > 0) {
-              // Sample a sparse grid across the composite canvas to ensure it isn't blank
-              const ctx = fr.image.getContext('2d');
-              const data = ctx?.getImageData(0, 0, fr.width, fr.height)?.data;
-              if (data) {
-                let opaque = 0;
-                const step = Math.max(4, Math.floor(data.length / 4096) * 4);
-                for (let bi = 3; bi < data.length; bi += step) if (data[bi] > 10) opaque++;
-                if (opaque === 0) visualIntegrityErrors.push('composite_blank:' + obj.name.slice(0, 48));
+            if (fr.image && fr.width > 0 && fr.height > 0) {
+              const cache = window.__audit.compositeInk;
+              let visible = cache.get(fr.image);
+              if (visible === undefined) {
+                let context = fr.image.getContext?.('2d');
+                if (!context) {
+                  const probe = window.__audit.compositeProbe ??= new OffscreenCanvas(0, 0);
+                  probe.width = fr.width;
+                  probe.height = fr.height;
+                  context = probe.getContext('2d', {willReadFrequently: true});
+                  context?.drawImage(fr.image, 0, 0);
+                }
+                const data = context?.getImageData(0, 0, fr.width, fr.height)?.data;
+                if (data) {
+                  visible = false;
+                  for (let byte = 3; byte < data.length; byte += 4) {
+                    if (data[byte] === 0) continue;
+                    visible = true;
+                    break;
+                  }
+                  cache.set(fr.image, visible);
+                }
               }
+              if (visible === false) visualIntegrityErrors.push('composite_blank:' + JSON.stringify({
+                name: obj.name,
+                lostContext: fr.image.getContext?.('2d')?.isContextLost?.(),
+                cachedSource: disp.compositeCache.get(obj.name)?.graphic?.image === fr.image,
+                sourceDimensions: [fr.image.width, fr.image.height],
+                cachedLayers: partTokens.map((part) => {
+                  const [, name, , , cut] = /^([^()]+?)(?:\((-?\d+),(-?\d+)(?:,(-?\d+))?(?:,blend=\d+)?\))?$/.exec(part.trim()) ?? [];
+                  const graphic = name && disp.graphicCache.get(name.toLowerCase() + '#' + (cut ?? 0))?.graphic;
+                  return graphic && {width: graphic.width, height: graphic.height, centerX: graphic.centerX, centerY: graphic.centerY, bounds: graphic.contentBounds};
+                }),
+              }));
             }
           }
           if (obj.clip?.[0] && obj.children && [...obj.children.values()].some((c) => c?.visible)) {
@@ -483,6 +646,8 @@ try {
           }
           if (obj.text && String(obj.text.value ?? '').trim().length > 0) {
             stageTextCount++;
+            if (String(obj.text.value).includes('\ufffd'))
+              visualIntegrityErrors.push('invalid_stage_text:slot=' + slotId);
           }
           if (obj.children) {
             for (const [ck, child] of obj.children.entries()) visit(child, ck, false);
@@ -505,7 +670,7 @@ try {
         }
       }
 
-      const dbg = window.__siglusDebug?.snapshot?.();
+      const dbg = top ? window.__siglusDebug?.snapshot?.() : undefined;
       const historyEl = stage?.querySelector('[data-siglus-history]');
       const errBanner = document.getElementById('fatal-error')?.hidden === false ? document.getElementById('fatal-error').textContent : '';
 
@@ -524,6 +689,12 @@ try {
         visibleLayerVisuals,
         stageFocused: Boolean(stage && (document.activeElement === stage || stage.contains(document.activeElement))),
         waitingForPage: Boolean(p?.waitingForPage),
+        pageWaits: window.__audit.pageWaits,
+        delay: window.__audit.delay,
+        stagePause: window.__audit.stagePause,
+        expectedSpeakerSeen: Boolean(window.__audit.expectedSpeakerSeen),
+        endingPending: Boolean(window.__audit.endingPending) && !window.__audit.playingOmvs.has(${JSON.stringify(replay?.ending?.movie ?? null)}),
+        pendingText: Boolean(p?.pendingText),
         excallAllocated: Boolean(p?.excallAllocated),
         systemCallActive: Boolean(p?.systemCallActive),
         systemLayerChildren: systemLayerEl?.children?.length ?? 0,
@@ -547,6 +718,7 @@ try {
         movieActive: window.__audit?.movieActive ?? null,
         moviesSeen: window.__audit?.movies ?? [],
         scenesSeen: window.__audit?.scenes ?? [],
+        playingOmvs: [...(window.__audit?.playingOmvs ?? [])],
         unhandledCommands: dbg?.unhandledCommands ?? [],
         unhandledProperties: dbg?.unhandledProperties ?? [],
         errBanner,
@@ -558,13 +730,43 @@ try {
     return buttons.find((b) => {
       if (spec.group !== undefined && b.dataset.siglusGroup !== String(spec.group)) return false;
       if (spec.id !== undefined && b.dataset.siglusButton !== String(spec.id)) return false;
+      if (spec.frameId !== undefined && b.dataset.siglusBtnId !== String(spec.frameId)) return false;
       if (spec.action !== undefined && b.dataset.siglusAction !== spec.action) return false;
       if (spec.aria !== undefined && b.aria !== spec.aria) return false;
       return true;
     });
   };
 
-  const assertLayoutAndHitTests = async (label, {checkHitTest = true, checkText = false, allowAutoHiddenBottomBar = false} = {}) => {
+  const quickButton = (state, id) =>
+    matchButton(
+      state.buttons.filter((button) => button.hitOk),
+      {group: profileCfg.quickMenu?.group, id},
+    );
+
+  const currentScene = 'window.__audit.frame()?.scene.name';
+  const waitForActiveScene = (name, timeout, group) => {
+    const groups = 'window.__runtime?.currentPlayer?.activeGroups';
+    const scene = JSON.stringify(name);
+    const active = MODE === 'extras'
+      ? `[...(${groups} ?? [])].some((id) => window.__audit.galleryGroups.get(id) === ${scene})`
+      : group === undefined ? `${groups}?.size > 0` : `${groups}?.has(${Number(group)})`;
+    const sceneMatches = group === undefined || MODE === 'extras'
+      ? `${currentScene} === ${scene}`
+      : `(() => {
+        const vm = window.__runtime?.currentPlayer?.vm;
+        return vm?.frames.some(frame => (vm.sceneJumps.get(frame) ?? frame).scene.name === ${scene});
+      })()`;
+    return waitFor(`${sceneMatches} && ${active}`, timeout);
+  };
+
+  const openQuickMenu = async () => {
+    await waitForDialogue('quick-menu');
+    await rightClickStage();
+    if (!(await waitForActiveScene(CANCEL_SCENE, 6000)))
+      throw new Error(`[quick-menu] ${CANCEL_SCENE} did not activate`);
+  };
+
+  const assertLayoutAndHitTests = async (label, {checkHitTest = true, checkText = false, allowAutoHiddenBottomBar = false, buttonGroup} = {}) => {
     const s = await inspectState();
     const failures = [];
     if (s.nanCount > 0) failures.push(`nanCount=${s.nanCount} els=${JSON.stringify(s.nanElements)}`);
@@ -572,15 +774,21 @@ try {
     if (s.visualIntegrityErrors?.length > 0) {
       failures.push(`visualIntegrity=${JSON.stringify(s.visualIntegrityErrors)}`);
     }
-    for (const b of s.buttons) {
+    const buttons = buttonGroup === undefined
+      ? s.buttons
+      : s.buttons.filter((button) => button.dataset.siglusGroup === String(buttonGroup));
+    if (buttonGroup !== undefined && buttons.length === 0)
+      failures.push(`No visible buttons in active group ${buttonGroup}`);
+    for (const b of buttons) {
       const fullyOffStage = b.rect.top >= SCREEN_H || b.rect.bottom <= 0 || b.rect.left >= SCREEN_W || b.rect.right <= 0;
       if (fullyOffStage) continue;
       if (allowAutoHiddenBottomBar && b.dataset.siglusAction !== undefined && b.rect.top >= SCREEN_H - 2) continue;
-      if (b.rect.left < -6 || b.rect.right > SCREEN_W + 6 || b.rect.top < -6 || b.rect.bottom > SCREEN_H + 6) {
+      const expectedBottom = b.dataset.siglusAction === undefined ? SCREEN_H : mwndBottom;
+      if (b.rect.left < -6 || b.rect.right > SCREEN_W + 6 || b.rect.top < -6 || b.rect.bottom > expectedBottom + 6) {
         failures.push(`Button clipped at ${SCREEN_W}x${SCREEN_H}: ${JSON.stringify({aria: b.aria, ds: b.dataset, rect: b.rect})}`);
       }
       if (checkHitTest && !b.hitOk) {
-        failures.push(`Button failed hit-test: ${JSON.stringify({aria: b.aria, ds: b.dataset, rect: b.rect, hitTag: b.hitTag})}`);
+        failures.push(`Button failed hit-test: ${JSON.stringify({aria: b.aria, ds: b.dataset, rect: b.rect, hitTag: b.hitTag, hitGroup: b.hitGroup, hitClip: b.hitClip})}`);
       }
     }
     if (checkText) {
@@ -623,11 +831,19 @@ try {
     return {state: s, failures};
   };
 
-  const layerSig = (s) => s.visibleLayerVisuals.map((v) => `${v.tag}:${v.key}`).sort().join('|');
+  const layerKeys = (s) => new Set(s.visibleLayerVisuals.map((v) => `${v.tag}:${v.key}`));
 
-  const assertRoundTripClean = (label, before, after) => {
+  const assertRoundTripClean = (label, before, after, {restored = false} = {}) => {
     const diffs = [];
-    if (layerSig(before) !== layerSig(after)) diffs.push(`layers: ${layerSig(before)} vs ${layerSig(after)}`);
+    const previousLayers = layerKeys(before);
+    const currentLayers = layerKeys(after);
+    const missing = [...previousLayers].filter((key) => !currentLayers.has(key));
+    const added = [...currentLayers].filter((key) => !previousLayers.has(key));
+    if (missing.length || added.length)
+      diffs.push(`visible layer objects changed (missing ${missing.join(', ')}, added ${added.join(', ')})`);
+    if (before.scene !== after.scene || before.line !== after.line || before.pc !== after.pc)
+      diffs.push(`script position: ${before.scene}:${before.line}@${before.pc} vs ${after.scene}:${after.line}@${after.pc}`);
+    if (!restored && before.pages !== after.pages) diffs.push(`advance count: ${before.pages} vs ${after.pages}`);
     if (before.dialogue !== after.dialogue) diffs.push(`dialogue mismatch`);
     if (before.messageVisible !== after.messageVisible) diffs.push(`messageVisible: ${before.messageVisible} vs ${after.messageVisible}`);
     if (before.speaker !== after.speaker) diffs.push(`speaker: "${before.speaker}" vs "${after.speaker}"`);
@@ -643,6 +859,128 @@ try {
     if (after.nanCount > 0) diffs.push(`nanCount=${after.nanCount}`);
     for (const d of diffs) errors.push(`[roundtrip:${label}] ${d}`);
     return diffs;
+  };
+
+  const readyForDialogue = `(() => {
+    const p = window.__runtime?.currentPlayer;
+    return p?.waitingForPage && p.savePoint && !p.systemCallActive;
+  })()`;
+  const readyForModalCancel = `(() => {
+    const p = window.__runtime?.currentPlayer;
+    return p?.systemCallActive && [...p.cancelGroups].some((group) =>
+      group >= 100000 && p.activeGroups.has(group) &&
+      p.display.stage.querySelector('[data-siglus-group="' + group + '"]'));
+  })()`;
+  const canCloseModal = `(() => {
+    const p = window.__runtime?.currentPlayer;
+    return p?.systemCallActive && [...p.cancelGroups].some((group) =>
+      group >= 100000 && p.activeGroups.has(group));
+  })()`;
+
+  const waitForModalCancel = async (label) => {
+    if (!(await waitFor(readyForModalCancel, 10000))) {
+      const {scene, line, activeGroups, cancelGroups} = await inspectState();
+      throw new Error(`[${label}] No ready cancel group at ${scene}:${line} (active=${activeGroups}, cancel=${cancelGroups})`);
+    }
+  };
+
+  const waitForDialogue = async (label) => {
+    if (!(await waitFor(readyForDialogue, 10000))) {
+      const {scene, line, waitingForPage, systemCallActive, activeGroups, cancelGroups} = await inspectState();
+      throw new Error(`[${label}] No dialogue checkpoint at ${scene}:${line} (wait=${waitingForPage}, modal=${systemCallActive}, active=${activeGroups}, cancel=${cancelGroups})`);
+    }
+    return inspectState();
+  };
+
+  const closeSystemMenu = async (label) => {
+    for (let remaining = 4; remaining > 0; remaining--) {
+      if (!(await waitFor(`${readyForDialogue} || ${readyForModalCancel} || ${canCloseModal}`, 8000))) break;
+      const before = await inspectState();
+      if (!before.systemCallActive) return before;
+      const closeId = profileCfg.quickMenu?.closeButtonId;
+      const close = before.scene === CANCEL_SCENE && closeId !== undefined ? quickButton(before, closeId) : undefined;
+      if (close) await clickAt(close.rect.cx, close.rect.cy);
+      else await rightClickStage();
+      if (process.env.TRACE_MODAL) {
+        const input = await evaluate(`(() => {
+          const p = window.__runtime.currentPlayer;
+          return {ready: Boolean(p.decisionReady), decisions: [...p.decisions], dirty: p.systemObjectsDirty};
+        })()`);
+        console.log('Modal close:', JSON.stringify({label, scene: before.scene, line: before.line, active: before.activeGroups, controls: before.buttons.length, click: Boolean(close), ...input}));
+      }
+      await waitFor(`${readyForDialogue} || ${currentScene} !== ${JSON.stringify(before.scene)}`, 5000);
+    }
+    return waitForDialogue(label);
+  };
+
+  const clickControl = async (label, spec) => {
+    let state = await inspectState();
+    if (spec.frameId !== undefined && profileCfg.gameplay?.mwndAutoHideBar) {
+      const {left, top, width, height} = state.stageRect;
+      await moveMouse(Math.round(left + width * 0.5), Math.round(top + height * 0.97));
+      await delay(400);
+      state = await inspectState();
+    }
+    const button = matchButton(state.buttons.filter((b) => b.hitOk), spec);
+    if (!button) {
+      const available = state.buttons.map(({aria, dataset, hitOk}) => ({aria, ...dataset, hitOk}));
+      throw new Error(`[${label}] No clickable control in ${state.scene} matching ${JSON.stringify(spec)}; available=${JSON.stringify(available)}`);
+    }
+    await clickAt(button.rect.cx, button.rect.cy);
+  };
+
+  const confirm = async (dialog, label, accept) => {
+    if (!(await waitForActiveScene(dialog.scene, 8000, dialog.group))) {
+      const state = await inspectState();
+      throw new Error(`[${label}] Expected confirmation scene ${dialog.scene} (scene=${state.scene}, groups=${state.activeGroups.join(',')})`);
+    }
+    await delay(300);
+    await assertLayoutAndHitTests(`${label}-confirmation`, {buttonGroup: dialog.group});
+    const aria = accept ? dialog.yesAria : dialog.noAria;
+    await clickControl(label, {group: dialog.group, ...(aria ? {aria} : {id: accept ? 1 : 2})});
+  };
+
+  const effectOffset = () => evaluate('window.__audit.effects.length');
+  const assertSystemSound = async (label, offset, id) => {
+    const name = gameexe.get(`SE.${String(id).padStart(3, '0')}`)?.split('"')[1];
+    if (!name || !(await waitFor(`window.__audit.effects.slice(${offset}).includes(${JSON.stringify(name)})`, 3500)))
+      errors.push(`[${label}] Expected decoded playback of SE.${String(id).padStart(3, '0')} (${name ?? 'unconfigured'})`);
+  };
+
+  const advanceDialogue = async (label, before) => {
+    const {left, top, width, height} = before.stageRect;
+    await clickAt(Math.round(left + width * 0.5), Math.round(top + height * 0.35));
+    if (!(await waitFor(`${readyForDialogue} && window.__audit.pageWaits > ${before.pageWaits}`, 8000)))
+      throw new Error(`[${label}] Single click did not produce a new dialogue checkpoint`);
+    const after = await inspectState();
+    if (after.pageWaits !== before.pageWaits + 1)
+      errors.push(`[${label}] Single click passed ${after.pageWaits - before.pageWaits} input waits`);
+    return after;
+  };
+
+  const testQuickSaveLoad = async (menu, label) => {
+    const complete = async (action) => {
+      const scene = JSON.stringify(menu.confirmDialog.scene);
+      const idleOrConfirm = `${readyForDialogue} || ${currentScene} === ${scene}`;
+      if (!(await waitFor(idleOrConfirm, 10000))) {
+        const {scene, line, pc, waitingForPage, systemCallActive, activeGroups} = await inspectState();
+        throw new Error(`[${action}] Quick action did not settle at ${scene}:${line}@${pc} (wait=${waitingForPage}, modal=${systemCallActive}, groups=${activeGroups})`);
+      }
+      if ((await inspectState()).scene === menu.confirmDialog.scene)
+        await confirm(menu.confirmDialog, action, true);
+      return waitForDialogue(action);
+    };
+    const before = await waitForDialogue(label);
+    const saveSound = await effectOffset();
+    await clickControl(`${label}-save`, menu.quickSave);
+    await complete(`${label}-save`);
+    await assertSystemSound(`${label}-save`, saveSound, 4);
+    await advanceDialogue(label, before);
+    const loadSound = await effectOffset();
+    await clickControl(`${label}-load`, menu.quickLoad);
+    const after = await complete(`${label}-load`);
+    console.log(`${label} parity diffs:`, assertRoundTripClean(label, before, after, {restored: true}));
+    await assertSystemSound(`${label}-load`, loadSound, 5);
   };
 
   const checkUnhandled = (state, label) => {
@@ -734,6 +1072,45 @@ try {
       }
       await clickAt(routeBtn.rect.cx, routeBtn.rect.cy);
     }
+    for (const prompt of replay?.prompts ?? profileCfg.title?.newGamePrompts ?? []) {
+      let button;
+      let state;
+      const deadline = Date.now() + 20000;
+      while (Date.now() < deadline) {
+        state = await inspectState();
+        if (errors.length || state.errBanner) return false;
+        if (state.scene === prompt.scene) {
+          if (prompt.advancePage && state.waitingForPage) break;
+          button = prompt.button
+            ? matchButton(state.buttons, prompt.button)
+            : state.buttons.find((item) => item.dataset.siglusChoice === String(prompt.choice));
+          if (button?.hitOk) break;
+        }
+        await delay(100);
+      }
+      if (prompt.advancePage && state?.scene === prompt.scene && state.waitingForPage) {
+        await pressKey('Enter', 'Enter', 13);
+      } else if (button?.hitOk) {
+        if (prompt.editValues) {
+          const selector = '#siglus-surface input[type="text"]';
+          if (!(await waitFor(`document.querySelectorAll(${JSON.stringify(selector)}).length === ${prompt.editValues.length}`, 8000)))
+            throw new Error(`[new-game] Name inputs did not appear in ${prompt.scene}`);
+          for (const [index, value] of prompt.editValues.entries()) {
+            await evaluate(`(() => {
+              const input = document.querySelectorAll(${JSON.stringify(selector)})[${index}];
+              input.focus();
+              input.select();
+            })()`);
+            await send('Input.insertText', {text: value});
+          }
+        }
+        await clickAt(button.rect.cx, button.rect.cy);
+        await delay(180);
+      } else {
+        errors.push(`[new-game] Prompt control failed to appear: ${JSON.stringify(prompt)} at ${state?.scene}:${state?.line} (controls: ${JSON.stringify(state?.buttons.map(({aria, dataset, hitOk}) => ({aria, dataset, hitOk})))})`);
+        return false;
+      }
+    }
     return true;
   };
 
@@ -749,15 +1126,58 @@ try {
       errors.push(`Never reached ${MENU_SCENE} (in ${titleState.scene})`);
     } else {
       await assertLayoutAndHitTests('title-menu');
+      if (profileCfg.title?.streamedBgm) {
+        const name = JSON.stringify(profileCfg.title.streamedBgm);
+        const streaming = `(() => {
+          const playback = window.__audit.bgmPlayback;
+          const audio = window.__runtime.currentPlayer.audio;
+          return playback?.resource === ${name} && playback.streaming && playback.frames > 0 &&
+            audio.context.state === 'running' && audio.bgmPlayPosition() > playback.startSample;
+        })()`;
+        if (!(await waitFor(streaming, 8000))) errors.push(`[title] BGM ${name} did not stream PCM`);
+        else {
+          const telemetry = await evaluate(`(() => {
+            const source = window.__runtime.currentPlayer.audio.playing.get('bgm')?.source;
+            const queuedFrames = [...(source?.nodes ?? [])].reduce((sum, node) => sum + (node.buffer?.length ?? 0), 0);
+            return {...window.__audit.bgmPlayback, queuedFrames};
+          })()`);
+          // Include the full current chunk and the final chunk crossing the five-second look-ahead.
+          if (!(telemetry.queuedFrames > 0 && telemetry.queuedFrames <= telemetry.sourceRate * 8))
+            errors.push(`[title] BGM stream has ${telemetry.queuedFrames} queued PCM frames`);
+          console.log('Title BGM streaming:', JSON.stringify(telemetry));
+        }
+      }
       if (profileCfg.title?.configButton && CONFIG_SCENE) {
         const cfgBtn = matchButton(titleState.buttons, profileCfg.title.configButton);
         if (cfgBtn) {
           await clickAt(cfgBtn.rect.cx, cfgBtn.rect.cy);
-          await waitFor(`window.__runtime?.currentPlayer?.vm?.frames?.at?.(-1)?.scene?.name === ${JSON.stringify(CONFIG_SCENE)} && window.__runtime?.currentPlayer?.cancelGroups?.size > 0`, 12000);
+          await waitFor(`${currentScene} === ${JSON.stringify(CONFIG_SCENE)} && window.__runtime?.currentPlayer?.cancelGroups?.size > 0`, 12000);
           await delay(500);
           await assertLayoutAndHitTests('title-config');
+          const timing = profileCfg.title.messageWindowTiming;
+          if (timing) {
+            const defaults = Array.from({length: Number(gameexe.get('MWND.CNT') ?? 0)}, (_, index) =>
+              ['open', 'close'].map((kind) => parseMwndAnimation(gameexe, index, kind).time));
+            const timingsMatch = (shortened) => `(() => {
+              const player = window.__runtime.currentPlayer;
+              return ${JSON.stringify(defaults)}.every(([open, close], index) => {
+                const opening = player.messageOpenAnimations.get(index)?.time;
+                const closing = player.messageCloseAnimations.get(index)?.time;
+                return ${shortened}
+                  ? opening === Math.trunc(open / 2) && closing === Math.trunc(close / 2)
+                  : opening === undefined && closing === undefined;
+              });
+            })()`;
+            await clickControl('title-config-half-timing', timing.halfButton);
+            if (!(await waitFor(timingsMatch(true), 8000)))
+              throw new Error('[title-config] Half-duration control did not apply the configured timings');
+            await clickControl('title-config-default-timing', timing.defaultButton);
+            if (!(await waitFor(timingsMatch(false), 8000)))
+              throw new Error('[title-config] Default-duration control did not restore the configured timings');
+            console.log('Title config window animations: half durations applied and restored for all windows');
+          }
           await rightClickStage();
-          const back = await waitFor(`window.__runtime?.currentPlayer?.vm?.frames?.at?.(-1)?.scene?.name === ${JSON.stringify(MENU_SCENE)} && window.__runtime?.currentPlayer?.activeGroups?.size > 0`, 10000);
+          const back = await waitForActiveScene(MENU_SCENE, 10000);
           if (!back) errors.push('[title-config] Right-click did not return to title');
           await delay(400);
         }
@@ -821,11 +1241,12 @@ try {
 
       // 2. Quick Menu (CANCEL_SCENE) interactive matrix
       const qm = profileCfg.quickMenu;
-      if (CANCEL_SCENE && qm) {
+      const messageMenu = profileCfg.messageMenu;
+      if (CANCEL_SCENE && (qm || messageMenu)) {
         // RC -> RC
         const b1 = await inspectState();
         await rightClickStage();
-        await waitFor("window.__runtime?.currentPlayer?.systemCallActive === true && window.__runtime?.currentPlayer?.activeGroups?.size > 0", 6000);
+        await waitForModalCancel('rc-open');
         await delay(400);
         if ((await inspectState()).visibleLayerVisuals.length === 0) errors.push('[rc-open] Main layers black');
         await assertLayoutAndHitTests('quick-menu-open');
@@ -837,7 +1258,7 @@ try {
         // RC -> Esc
         const b2 = await inspectState();
         await rightClickStage();
-        await waitFor("window.__runtime?.currentPlayer?.systemCallActive === true && window.__runtime?.currentPlayer?.activeGroups?.size > 0", 6000);
+        await waitForModalCancel('rc-escape-open');
         await delay(400);
         await pressKey('Escape', 'Escape', 27);
         await waitFor("window.__runtime?.currentPlayer?.systemCallActive === false", 6000);
@@ -845,12 +1266,11 @@ try {
         console.log('RC->Esc diffs:', assertRoundTripClean('rc->esc', b2, await inspectState()));
 
         // RC -> Close btn
-        if (qm.closeButtonId !== undefined) {
+        if (qm?.closeButtonId !== undefined) {
           const b3 = await inspectState();
-          await rightClickStage();
-          await waitFor("window.__runtime?.currentPlayer?.systemCallActive === true && window.__runtime?.currentPlayer?.activeGroups?.size > 0", 6000);
+          await openQuickMenu();
           await delay(400);
-          const closeBtn = (await inspectState()).buttons.find((b) => b.dataset.siglusButton === String(qm.closeButtonId));
+          const closeBtn = quickButton(await inspectState(), qm.closeButtonId);
           if (closeBtn) await clickAt(closeBtn.rect.cx, closeBtn.rect.cy);
           else await rightClickStage();
           await waitFor("window.__runtime?.currentPlayer?.systemCallActive === false", 6000);
@@ -859,45 +1279,37 @@ try {
         }
 
         // Nested QM -> Save -> Cancel
-        if (qm.saveButtonId !== undefined && SAVE_SCENE) {
+        if (qm?.saveButtonId !== undefined && SAVE_SCENE) {
           const b4 = await inspectState();
-          await rightClickStage();
-          await waitFor("window.__runtime?.currentPlayer?.systemCallActive === true && window.__runtime?.currentPlayer?.activeGroups?.size > 0", 6000);
+          await openQuickMenu();
           await delay(400);
-          const sb = (await inspectState()).buttons.find((b) => b.dataset.siglusButton === String(qm.saveButtonId));
+          const sb = quickButton(await inspectState(), qm.saveButtonId);
           if (sb) {
             await clickAt(sb.rect.cx, sb.rect.cy);
-            await waitFor(`window.__runtime?.currentPlayer?.vm?.frames?.at?.(-1)?.scene?.name === ${JSON.stringify(SAVE_SCENE)} && window.__runtime?.currentPlayer?.activeGroups?.size > 0`, 8000);
+            if (!(await waitForActiveScene(SAVE_SCENE, 8000, qm.slotGroup)))
+              throw new Error(`[nested-save] Expected ${SAVE_SCENE}, reached ${(await inspectState()).scene}`);
             await delay(500);
             if ((await inspectState()).visibleLayerVisuals.length === 0) errors.push('[nested-save] Main layers black');
             await assertLayoutAndHitTests('nested-save-open');
-          }
-          for (let t = 0; t < 4 && (await inspectState()).systemCallActive; t++) {
-            await rightClickStage();
-            await delay(400);
-          }
-          console.log('Nested QM->Save->Cancel diffs:', assertRoundTripClean('nested-save-cancel', b4, await inspectState()));
+          } else errors.push('[nested-save] Missing clickable Save control');
+          console.log('Nested QM->Save->Cancel diffs:', assertRoundTripClean('nested-save-cancel', b4, await closeSystemMenu('nested-save-cancel')));
         }
 
         // Nested QM -> Config -> Cancel
-        if (qm.configButtonId !== undefined && CONFIG_SCENE) {
+        if (qm?.configButtonId !== undefined && CONFIG_SCENE) {
           const b5 = await inspectState();
-          await rightClickStage();
-          await waitFor("window.__runtime?.currentPlayer?.systemCallActive === true && window.__runtime?.currentPlayer?.activeGroups?.size > 0", 6000);
+          await openQuickMenu();
           await delay(400);
-          const cb = (await inspectState()).buttons.find((b) => b.dataset.siglusButton === String(qm.configButtonId));
+          const cb = quickButton(await inspectState(), qm.configButtonId);
           if (cb) {
             await clickAt(cb.rect.cx, cb.rect.cy);
-            await waitFor(`window.__runtime?.currentPlayer?.vm?.frames?.at?.(-1)?.scene?.name === ${JSON.stringify(CONFIG_SCENE)} && window.__runtime?.currentPlayer?.activeGroups?.size > 0`, 8000);
+            if (!(await waitForActiveScene(CONFIG_SCENE, 8000)))
+              throw new Error(`[nested-config] Expected ${CONFIG_SCENE}, reached ${(await inspectState()).scene}`);
             await delay(500);
             if ((await inspectState()).visibleLayerVisuals.length === 0) errors.push('[nested-cfg] Main layers black');
             await assertLayoutAndHitTests('nested-config-open');
-          }
-          for (let t = 0; t < 4 && (await inspectState()).systemCallActive; t++) {
-            await rightClickStage();
-            await delay(400);
-          }
-          console.log('Nested QM->Config->Cancel diffs:', assertRoundTripClean('nested-config-cancel', b5, await inspectState()));
+          } else errors.push('[nested-config] Missing clickable Configuration control');
+          console.log('Nested QM->Config->Cancel diffs:', assertRoundTripClean('nested-config-cancel', b5, await closeSystemMenu('nested-config-cancel')));
         }
       }
 
@@ -914,18 +1326,12 @@ try {
         await waitFor("!document.querySelector('[data-siglus-history]')", 5000);
         await delay(300);
         console.log('Wheel->Backlog->Close diffs:', assertRoundTripClean('wheel-backlog-close', beforeBl, await inspectState()));
-      }
+      } else errors.push('[backlog] Mouse wheel did not open the backlog');
 
       // 4. Verify 1 single left-click advances cleanly
       const before1 = await inspectState();
-      await clickAt(Math.round(sr.left + sr.width * 0.5), Math.round(sr.top + sr.height * 0.35));
-      await delay(500);
-      const after1 = await inspectState();
-      if (after1.pages <= before1.pages && after1.dialogue === before1.dialogue) {
-        errors.push(`[1-click] Left-click did not advance (${before1.pages}->${after1.pages})`);
-      } else {
-        console.log('1 single left-click advanced cleanly:', before1.pages, '->', after1.pages);
-      }
+      const after1 = await advanceDialogue('one-click', before1);
+      console.log('Single left-click input waits:', before1.pageWaits, '->', after1.pageWaits);
 
       // 5. Save/Load + QSave/QLoad parity (via Quick Menu UI or MWND action buttons)
       const snapFull = () =>
@@ -935,67 +1341,91 @@ try {
           speaker: document.querySelector('[data-siglus-speaker]')?.textContent?.trim() ?? '',
         }))()`);
 
-      const confirmIfDialog = async () => {
-        const dc = qm?.confirmDialog;
-        if (!dc) return;
-        const s = await inspectState();
-        if (s.scene !== dc.scene) return;
-        const yes = s.buttons.find((b) => (dc.yesAria && b.aria === dc.yesAria) || (b.dataset.siglusButton === '1' && b.dataset.siglusGroup === String(dc.group)));
-        if (yes) {
-          await clickAt(yes.rect.cx, yes.rect.cy);
-          await delay(600);
-        }
-      };
+      if (messageMenu) {
+        const open = async (action, scene) => {
+          await clickControl(action, messageMenu[action]);
+          if (!(await waitForActiveScene(scene, 8000)))
+            throw new Error(`[${action}] Expected active scene ${scene}, reached ${(await inspectState()).scene}`);
+          await delay(450);
+          await assertLayoutAndHitTests(action);
+          if ((await inspectState()).visibleLayerVisuals.length === 0)
+            errors.push(`[${action}] Main layers black`);
+        };
+        const before = await waitForDialogue('save-load');
+        await open('config', CONFIG_SCENE);
+        console.log('Message controls -> Config -> Cancel diffs:',
+          assertRoundTripClean('mwnd-config-cancel', before, await closeSystemMenu('config')));
 
-      if (qm?.saveButtonId !== undefined && qm?.loadButtonId !== undefined && SAVE_SCENE && LOAD_SCENE) {
-        const preSave = await snapFull();
-        await rightClickStage();
-        await waitFor("window.__runtime?.currentPlayer?.systemCallActive === true && window.__runtime?.currentPlayer?.activeGroups?.size > 0", 6000);
+        await open('save', SAVE_SCENE);
+        const slot = (await inspectState()).buttons.find((button) => {
+          const id = Number(button.dataset.siglusButton);
+          return button.hitOk && id >= messageMenu.slotButtonMin && id <= messageMenu.slotButtonMax;
+        });
+        if (!slot) throw new Error('[save-load] No clickable save slot');
+        const slotSpec = {group: slot.dataset.siglusGroup, id: slot.dataset.siglusButton};
+        const saveSound = await effectOffset();
+        await clickControl('save-slot', slotSpec);
+        await assertSystemSound('save', saveSound, 4);
+        await closeSystemMenu('save');
+
+        const beforeOverwrite = await waitForDialogue('save-cancel');
+        await open('save', SAVE_SCENE);
+        await clickControl('save-overwrite', slotSpec);
+        await confirm(messageMenu.confirmDialog, 'save-overwrite', false);
+        console.log('Message controls -> Save -> Confirm -> Cancel diffs:',
+          assertRoundTripClean('save-confirm-cancel', beforeOverwrite, await closeSystemMenu('save-cancel')));
+
+        await advanceDialogue('save-load', before);
+        await open('load', LOAD_SCENE);
+        const loadSound = await effectOffset();
+        await clickControl('load-slot', slotSpec);
+        await confirm(messageMenu.confirmDialog, 'load-slot', true);
+        console.log('Save/Load UI parity diffs:', assertRoundTripClean('save-load', before, await waitForDialogue('load'), {restored: true}));
+        await assertSystemSound('load', loadSound, 5);
+        await testQuickSaveLoad(messageMenu, 'quick-save-load');
+      } else if (qm?.saveButtonId !== undefined && qm?.loadButtonId !== undefined && SAVE_SCENE && LOAD_SCENE) {
+        const preSave = await waitForDialogue('save-load');
+        const confirmScene = qm.confirmDialog?.scene;
+        const dialogOpen = confirmScene ? `${currentScene} === ${JSON.stringify(confirmScene)}` : 'false';
+        await openQuickMenu();
         await delay(350);
-        const sb = (await inspectState()).buttons.find((b) => b.dataset.siglusButton === String(qm.saveButtonId));
+        const sb = quickButton(await inspectState(), qm.saveButtonId);
+        if (!sb) throw new Error('[save-load] Missing clickable Save control');
         await clickAt(sb.rect.cx, sb.rect.cy);
-        await waitFor(`window.__runtime?.currentPlayer?.vm?.frames?.at?.(-1)?.scene?.name === ${JSON.stringify(SAVE_SCENE)} && window.__runtime?.currentPlayer?.activeGroups?.size > 0`, 8000);
+        if (!(await waitForActiveScene(SAVE_SCENE, 8000, qm.slotGroup)))
+          throw new Error(`[save-load] Expected ${SAVE_SCENE}, reached ${(await inspectState()).scene}`);
         await delay(500);
         const sv0 = (await inspectState()).buttons.find((b) => {
           const id = Number(b.dataset.siglusButton);
-          return Number.isInteger(id) && id >= (qm.slotButtonMin ?? 0) && id <= (qm.slotButtonMax ?? 15);
+          return b.hitOk && Number.isInteger(id) && id >= (qm.slotButtonMin ?? 0) && id <= (qm.slotButtonMax ?? 15);
         });
         if (sv0) {
+          const stored = 'window.__runtime.currentPlayer.saves.size > 0';
           await clickAt(sv0.rect.cx, sv0.rect.cy);
-          await delay(500);
-          await confirmIfDialog();
-          for (let t = 0; t < 4 && (await inspectState()).systemCallActive; t++) {
-            await rightClickStage();
-            await delay(400);
-          }
-          for (let k = 0; k < 4; k++) {
-            await pressKey('Enter', 'Enter', 13);
-            await delay(250);
-          }
-          await rightClickStage();
-          await waitFor("window.__runtime?.currentPlayer?.systemCallActive === true && window.__runtime?.currentPlayer?.activeGroups?.size > 0", 6000);
+          if (!(await waitFor(`${stored} || ${dialogOpen}`, 10000)))
+            throw new Error('[save-load] Save slot did not write a checkpoint');
+          if (await evaluate(dialogOpen)) await confirm(qm.confirmDialog, 'save-slot', true);
+          if (!(await waitFor(stored, 10000))) throw new Error('[save-load] Save confirmation did not write a checkpoint');
+          await closeSystemMenu('save-return');
+          await advanceDialogue('save-load', preSave);
+          await openQuickMenu();
           await delay(350);
-          const lb = (await inspectState()).buttons.find((b) => b.dataset.siglusButton === String(qm.loadButtonId));
+          const lb = quickButton(await inspectState(), qm.loadButtonId);
+          if (!lb) throw new Error('[save-load] Missing clickable Load control');
           await clickAt(lb.rect.cx, lb.rect.cy);
-          await waitFor(`window.__runtime?.currentPlayer?.vm?.frames?.at?.(-1)?.scene?.name === ${JSON.stringify(LOAD_SCENE)} && window.__runtime?.currentPlayer?.activeGroups?.size > 0`, 8000);
+          if (!(await waitForActiveScene(LOAD_SCENE, 8000, qm.slotGroup)))
+            throw new Error(`[save-load] Expected ${LOAD_SCENE}, reached ${(await inspectState()).scene}`);
           await delay(500);
-          const ld0 = (await inspectState()).buttons.find((b) => b.dataset.siglusButton === sv0.dataset.siglusButton);
-          if (ld0) {
-            await clickAt(ld0.rect.cx, ld0.rect.cy);
-            await delay(500);
-            await confirmIfDialog();
-          }
-          await waitFor("window.__runtime?.currentPlayer?.waitingForPage === true && window.__runtime?.currentPlayer?.systemCallActive === false", 10000);
-          await delay(400);
-          const postLoad = await snapFull();
-          const diffs = [];
-          if (preSave.dialogue !== postLoad.dialogue) diffs.push('dialogue');
-          if (preSave.speaker !== postLoad.speaker) diffs.push('speaker');
-          if (preSave.debug.bgm !== postLoad.debug.bgm) diffs.push('bgm');
-          if (preSave.debug.vm.frames.at(-1)?.scene !== postLoad.debug.vm.frames.at(-1)?.scene) diffs.push('scene');
-          console.log('Save/Load UI parity diffs:', diffs);
-          for (const d of diffs) errors.push(`[save-load] ${d} mismatch`);
-        }
+          const ld0 = (await inspectState()).buttons.find((b) => b.hitOk && b.dataset.siglusButton === sv0.dataset.siglusButton);
+          if (!ld0) throw new Error('[save-load] Saved slot cannot be loaded');
+          const loaded = `window.__runtime.currentPlayer.root.dataset.loaded === 'true' && ${readyForDialogue}`;
+          await clickAt(ld0.rect.cx, ld0.rect.cy);
+          if (!(await waitFor(`(${loaded}) || ${dialogOpen}`, 10000)))
+            throw new Error('[save-load] Load slot did not start restoring the checkpoint');
+          if (await evaluate(dialogOpen)) await confirm(qm.confirmDialog, 'load-slot', true);
+          if (!(await waitFor(loaded, 10000))) throw new Error('[save-load] No restored checkpoint after Load');
+          console.log('Save/Load UI parity diffs:', assertRoundTripClean('save-load', preSave, await inspectState(), {restored: true}));
+        } else errors.push('[save-load] No clickable save slots');
       } else {
         // Fallback for games using MWND qsave/qload buttons (e.g., FORTUNE×WORLD)
         // Advance once to ensure we're on a clean page boundary with a fresh savePoint
@@ -1034,42 +1464,96 @@ try {
       // 6. Live WMV & OMV playback checks
       const wmvList = profileCfg.movies?.wmv ?? [];
       const omvList = profileCfg.movies?.omv ?? [];
-      if (wmvList.length || omvList.length) {
-        const movieRes = await evaluate(`(async () => {
+      const movieResults = [];
+      for (const name of wmvList) {
+        const progress = await evaluate(`(async () => {
           const p = window.__runtime.currentPlayer;
-          const out = [];
-          for (const name of ${JSON.stringify(wmvList)}) {
-            let err = null;
-            const run = p.movie(name, true).catch((e) => { err = String(e); });
-            await new Promise((r) => setTimeout(r, 900));
-            const stage = document.getElementById('siglus-surface')?.firstElementChild;
-            stage?.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', code: 'Enter', bubbles: true}));
-            await Promise.race([run, new Promise((r) => setTimeout(r, 3000))]);
-            out.push({name, kind: 'wmv', error: err});
+          const movies = p.movies;
+          try {
+            if (!(await movies.play({path: ${JSON.stringify(name)}, attenuation: 0, renderer: 0})))
+              throw new Error('Missing movie');
+            const deadline = performance.now() + 8000;
+            let progress;
+            while (performance.now() < deadline) {
+              if (p.movieError) throw p.movieError;
+              progress = movies.progress;
+              if (progress?.frames >= 3 && progress.position > 0) break;
+              await new Promise((resolve) => setTimeout(resolve, 50));
+            }
+            if (!progress || progress.frames < 3 || progress.position <= 0)
+              throw new Error('Movie clock or frame presentation did not advance');
+            return {frames: progress.frames, position: progress.position};
+          } finally {
+            movies.close();
           }
-          for (const name of ${JSON.stringify(omvList)}) {
-            let err = null;
-            let dims = null;
-            try {
-              await p.display.stageMovieEffect({slot: 99, name, layer: 100, loop: false, scale: [1000, 1000], elapsed: 0});
-              await new Promise((r) => setTimeout(r, 600));
-              const eff = p.display.pendingEffects?.get(99);
-              const cvs = eff?.layer?.querySelector('canvas');
-              dims = cvs ? {w: cvs.width, h: cvs.height} : null;
-              if (eff?.movie) eff.movie.close();
-              p.display.pendingEffects?.delete(99);
-            } catch (e) { err = String(e); }
-            out.push({name, kind: 'omv', dims, error: err});
-          }
-          return out;
-        })()`);
-        console.log('Movie/OMV telemetry:', JSON.stringify(movieRes));
-        for (const m of movieRes) {
-          if (m.error) errors.push(`[movie:${m.name}] ${m.error}`);
-          if (m.kind === 'omv' && (!m.dims || m.dims.w <= 0 || m.dims.h <= 0)) errors.push(`[movie:${m.name}] zero OMV dims`);
-        }
+        })()`).catch((error) => ({error: error.message}));
+        movieResults.push({name, kind: 'wmv', ...progress});
       }
+      for (const name of omvList) {
+        const progress = await evaluate(`(async () => {
+          const display = window.__runtime.currentPlayer.display;
+          const slot = 0x7fffffff;
+          await display.stageMovieEffect({slot, name: ${JSON.stringify(name)}, layer: 0, loop: false, scale: [1000, 1000], elapsed: 0});
+          const effect = display.pendingEffects.get(slot);
+          if (!effect?.movie || !effect.layer) throw new Error('Missing staged OMV');
+          try {
+            const canvas = effect.layer.querySelector('canvas');
+            if (!canvas || canvas.width <= 0 || canvas.height <= 0)
+              throw new Error('Invalid OMV dimensions');
+            display.stage.append(effect.layer);
+            const deadline = performance.now() + 5000;
+            while (performance.now() < deadline && !(effect.movie.presentedFrame > 0)) {
+              if (effect.movie.error) throw effect.movie.error;
+              await new Promise((resolve) => setTimeout(resolve, 50));
+            }
+            const frame = effect.movie.presentedFrame;
+            if (!(frame > 0)) throw new Error('OMV frame presentation did not advance');
+            return {width: canvas.width, height: canvas.height, frame};
+          } finally {
+            effect.movie.close();
+            effect.layer.remove();
+            display.pendingEffects.delete(slot);
+          }
+        })()`).catch((error) => ({error: error.message}));
+        movieResults.push({name, kind: 'omv', ...progress});
+      }
+      if (movieResults.length) console.log('Movie/OMV telemetry:', JSON.stringify(movieResults));
+      for (const result of movieResults)
+        if (result.error) errors.push(`[movie:${result.name}] ${result.error}`);
 
+      if (profileCfg.autoModeDialog) {
+        const beforeAutoMode = await waitForDialogue('auto-mode');
+        const dialog = await evaluate(`(async () => {
+          const player = window.__runtime.currentPlayer;
+          const selector = '[data-siglus-configuration="auto-mode"]';
+          const controls = (id) => document.querySelector(selector + ' [data-siglus-control="' + id + '"]');
+          const elapsed = player.command({path: [63, 140], args: [], named: []});
+          try {
+            const until = performance.now() + 6000;
+            while (!document.querySelector(selector)?.open && performance.now() < until)
+              await new Promise((resolve) => setTimeout(resolve, 50));
+            const character = controls(1177), minimum = controls(1176), sample = controls(1207);
+            if (!character || !minimum || !sample) throw new Error('Auto Mode controls missing');
+            character.value = '80';
+            character.dispatchEvent(new Event('input', {bubbles: true}));
+            minimum.value = '2500';
+            minimum.dispatchEvent(new Event('input', {bubbles: true}));
+            if (player.playback.autoCharacterWait !== 80 || player.playback.autoMinimumWait !== 2500 || Number.parseFloat(sample.value) !== 3.3)
+              throw new Error('Auto Mode wait settings did not update');
+            controls(1003).click();
+            if (player.playback.autoCharacterWait !== player.playbackDefaults.autoCharacterWait ||
+                player.playback.autoMinimumWait !== player.playbackDefaults.autoMinimumWait)
+              throw new Error('Auto Mode defaults did not restore');
+            controls(1002).click();
+            await elapsed;
+            return 'changed, reset and closed';
+          } finally {
+            document.querySelector(selector)?.close();
+          }
+        })()`);
+        console.log('Native Auto Mode dialog:', dialog);
+        assertRoundTripClean('auto-mode-dialog', beforeAutoMode, await waitForDialogue('auto-mode'));
+      }
       checkUnhandled(await inspectState(), 'systems-end');
     }
   }
@@ -1087,24 +1571,26 @@ try {
     } else {
       await clickAt(extraBtn.rect.cx, extraBtn.rect.cy);
       if (ex?.expectedScene) {
-        await waitFor(`window.__runtime?.currentPlayer?.vm?.frames?.at?.(-1)?.scene?.name === ${JSON.stringify(ex.expectedScene)} && window.__runtime?.currentPlayer?.activeGroups?.size > 0`, 12000);
+        if (!(await waitForActiveScene(ex.expectedScene, 12000)))
+          throw new Error(`[extras] Expected ${ex.expectedScene}, reached ${(await inspectState()).scene}`);
         await delay(800);
       } else {
         await delay(1000);
       }
       await assertLayoutAndHitTests('extras-main');
       for (const tab of ex?.tabs ?? []) {
-        const cur = await inspectState();
-        const tabBtn = cur.buttons.find((b) => b.dataset.siglusButton === String(tab.buttonId));
-        if (tabBtn) {
-          await clickAt(tabBtn.rect.cx, tabBtn.rect.cy);
-          await waitFor(`window.__runtime?.currentPlayer?.vm?.frames?.at?.(-1)?.scene?.name === ${JSON.stringify(tab.expectedScene)} && window.__runtime?.currentPlayer?.activeGroups?.size > 0`, 10000);
-          await delay(800);
-          await assertLayoutAndHitTests(`extras-${tab.expectedScene}`);
+        await clickControl(`extras-${tab.expectedScene}`, {id: tab.buttonId});
+        if (!(await waitForActiveScene(tab.expectedScene, 10000))) {
+          const {scene, line, activeGroups} = await inspectState();
+          const input = await evaluate('({pointer: window.__audit.pointer, decisions: window.__audit.galleryDecisions})');
+          throw new Error(`[extras] Expected ${tab.expectedScene}, reached ${scene}:${line} with groups ${activeGroups}; input=${JSON.stringify(input)}`);
         }
+        await delay(800);
+        await assertLayoutAndHitTests(`extras-${tab.expectedScene}`);
       }
       await rightClickStage();
-      await waitFor(`window.__runtime?.currentPlayer?.vm?.frames?.at?.(-1)?.scene?.name === ${JSON.stringify(MENU_SCENE)}`, 10000);
+      if (!(await waitForActiveScene(MENU_SCENE, 10000)))
+        errors.push(`[extras] Gallery did not return to ${MENU_SCENE}`);
       checkUnhandled(await inspectState(), 'extras-end');
     }
   }
@@ -1121,6 +1607,13 @@ try {
       errors.push(`Crawl never reached ${MENU_SCENE}`);
     } else if (await startNewGameFromTitle(titleState)) {
       await evaluate(`window.__runtime.currentPlayer.skipUnread = true;`);
+      if (replay?.scriptOptions) {
+        await evaluate(`(() => {
+          const player = window.__runtime.currentPlayer;
+          for (const [slot, value] of ${JSON.stringify(replay.scriptOptions)})
+            player.property([31, -1, slot], value);
+        })()`);
+      }
       const t0 = Date.now();
       let ctrlHeld = false;
       let lastPages = -1;
@@ -1131,6 +1624,9 @@ try {
       let watchdogChecks = 0;
       let compositesAudited = 0;
       let clippedContainersAudited = 0;
+      let stageObjectPauses = 0;
+      let lastPosition;
+      let lastPositionChange = t0;
       const setCtrl = async (down) => {
         if (down === ctrlHeld) return;
         ctrlHeld = down;
@@ -1140,6 +1636,19 @@ try {
       while (Date.now() - t0 < maxSeconds * 1000 && errors.length === 0) {
         await delay(170);
         const s = await inspectState();
+        if (process.env.TRACE_CRAWL) {
+          const now = Date.now();
+          if (s.scene !== lastPosition?.scene || now - lastPositionChange >= 15000) {
+            console.log('Crawl position:', JSON.stringify({
+              elapsedSec: Math.round((now - t0) / 1000), scene: s.scene, line: s.line, pc: s.pc,
+              pages: s.pages, waitingForPage: s.waitingForPage, ctrlHeld, delay: s.delay,
+            }));
+            lastPositionChange = now;
+          } else if (s.pc !== lastPosition?.pc || s.pages !== lastPosition?.pages) {
+            lastPositionChange = now;
+          }
+          lastPosition = {scene: s.scene, pc: s.pc, pages: s.pages};
+        }
         watchdogChecks++;
         compositesAudited += s.compositesCount ?? 0;
         clippedContainersAudited += s.clippedContainersCount ?? 0;
@@ -1160,24 +1669,25 @@ try {
           await setCtrl(false);
           break;
         }
+        if (s.expectedSpeakerSeen) break;
+        if (replay?.requireStagePage && stageObjectPauses > 0 &&
+            (!replay.scenePrefix || s.scenesSeen.some((name) => name.startsWith(replay.scenePrefix)))) break;
 
-        if (s.pages >= nextChaos && s.waitingForPage && !s.systemCallActive && s.dialogue && s.visibleLayerVisuals.length > 0) {
+        if (s.pages >= nextChaos && !s.systemCallActive && !s.movieActive) {
           await setCtrl(false);
-          await delay(300);
+          if (!s.waitingForPage) await delay(300);
           const s0 = await inspectState();
-          if (s0.waitingForPage && !s0.systemCallActive && s0.dialogue && s0.visibleLayerVisuals.length > 0) {
-            const kind = chaosCount % 3;
+          if (s0.waitingForPage && !s0.systemCallActive && s0.messageVisible && s0.dialogue && s0.visibleLayerVisuals.length > 0) {
+            const sequence = profileCfg.messageMenu ? [0, 3, 1, 2] : [0, 1, 2];
+            const kind = sequence[chaosCount % sequence.length];
             chaosCount++;
             if (kind === 0 && CANCEL_SCENE) {
               await rightClickStage();
-              if (await waitFor("window.__runtime?.currentPlayer?.systemCallActive === true && window.__runtime?.currentPlayer?.activeGroups?.size > 0", 5000)) {
-                await delay(300);
-                if ((await inspectState()).visibleLayerVisuals.length === 0) errors.push('[chaos:rc] black layers');
-                await rightClickStage();
-                await waitFor("window.__runtime?.currentPlayer?.systemCallActive === false", 5000);
-                await delay(250);
-                assertRoundTripClean(`chaos-${chaosCount}-rc`, s0, await inspectState());
-              }
+              const label = `chaos-${chaosCount}-rc`;
+              await waitForModalCancel(label);
+              if ((await inspectState()).visibleLayerVisuals.length === 0) errors.push('[chaos:rc] black layers');
+              await rightClickStage();
+              assertRoundTripClean(label, s0, await waitForDialogue(label));
             } else if (kind === 1) {
               await pressKey(' ', 'Space', 32);
               await delay(200);
@@ -1185,7 +1695,7 @@ try {
               await pressKey(' ', 'Space', 32);
               await delay(200);
               assertRoundTripClean(`chaos-${chaosCount}-space`, s0, await inspectState());
-            } else {
+            } else if (kind === 2) {
               await wheelStage(-120);
               if (await waitFor("Boolean(document.querySelector('[data-siglus-history]'))", 4000)) {
                 await delay(250);
@@ -1194,10 +1704,12 @@ try {
                 await delay(250);
                 assertRoundTripClean(`chaos-${chaosCount}-backlog`, s0, await inspectState());
               }
+            } else {
+              await testQuickSaveLoad(profileCfg.messageMenu, `chaos-${chaosCount}-quick-save-load`);
             }
+            nextChaos = (await inspectState()).pages + chaosEvery;
+            continue;
           }
-          nextChaos = s.pages + chaosEvery;
-          continue;
         }
 
         const choiceBtns = s.scene === MENU_SCENE
@@ -1218,6 +1730,38 @@ try {
           await pressKey('Enter', 'Enter', 13);
           continue;
         }
+        if (s.endingPending) {
+          await setCtrl(false);
+          if (s.waitingForPage) await pressKey('Enter', 'Enter', 13);
+          continue;
+        }
+        if (s.waitingForPage && !s.systemCallActive && (s.stagePause || (!s.pendingText && s.stageTextCount > 0))) {
+          await setCtrl(false);
+          await delay(200);
+          const settled = await inspectState();
+          if (settled.pageWaits === s.pageWaits && settled.waitingForPage && (!settled.pendingText || !settled.messageVisible)) {
+            stageObjectPauses++;
+            await assertLayoutAndHitTests(`stage-object:${s.scene}:${s.line}`);
+            if (!settled.visibleLayerVisuals.length) errors.push(`[stage-object-pacing] Empty stage at ${s.scene}:${s.line}`);
+            const {left, top, width, height} = settled.stageRect;
+            await clickAt(Math.round(left + width * 0.75), Math.round(top + height * 0.3));
+            await waitFor(`window.__audit.pageWaits > ${settled.pageWaits} || !window.__runtime.currentPlayer.waitingForPage`, 3500);
+            const next = await inspectState();
+            if (next.pageWaits > settled.pageWaits + 1 || (next.waitingForPage && next.pageWaits === settled.pageWaits))
+              errors.push(`[stage-object-pacing] One click did not advance a single wait at ${s.scene}:${s.line}`);
+            console.log('Stage-object wait:', JSON.stringify({
+              scene: settled.scene, line: settled.line, pageWait: settled.pageWaits,
+              followingWait: next.pageWaits, composites: settled.compositesCount,
+              clippedContainers: settled.clippedContainersCount, textObjects: settled.stageTextCount,
+            }));
+            continue;
+          }
+          if (s.stagePause) errors.push(`[stage-object-pacing] Wait advanced without input at ${s.scene}:${s.line}`);
+        }
+        if ((profileCfg.gameplay?.stagePageScenes ?? []).includes(s.scene)) {
+          await setCtrl(false);
+          continue;
+        }
         if (s.pages !== lastPages) {
           lastPages = s.pages;
           stall = 0;
@@ -1230,9 +1774,24 @@ try {
       }
       await setCtrl(false);
       const fin = await inspectState();
+      if (replay?.scenePrefix && !fin.scenesSeen.some((name) => name.startsWith(replay.scenePrefix)))
+        errors.push(`[crawl] Never reached replay ${replayName} (${replay.scenePrefix})`);
+      if (replay?.ending && !fin.playingOmvs.includes(replay.ending.movie))
+        errors.push(`[crawl] Replay ${replayName} did not present ending OMV ${replay.ending.movie}`);
+      if (replay?.ending && fin.scene !== MENU_SCENE)
+        errors.push(`[crawl] Replay ${replayName} did not return to ${MENU_SCENE}`);
+      if (replay?.expectedSpeaker && !fin.expectedSpeakerSeen)
+        errors.push(`[crawl] Replay ${replayName} never displayed speaker ${replay.expectedSpeaker}`);
+      if (replay?.requireStagePage && stageObjectPauses === 0) {
+        const timing = await evaluate('window.__audit.stageTiming');
+        errors.push(`[crawl] Replay ${replayName} did not verify a stage-object input wait; timing=${JSON.stringify(timing)}`);
+      }
       console.log('CRAWL SUMMARY:', JSON.stringify({
+        replay: replayName,
         elapsedSec: Math.round((Date.now() - t0) / 1000),
         finalScene: fin.scene,
+        finalLine: fin.line,
+        finalPc: fin.pc,
         pages: fin.pages,
         scenesCount: fin.scenesSeen.length,
         choicesTaken,
@@ -1240,20 +1799,23 @@ try {
         watchdogChecks,
         compositesAudited,
         clippedContainersAudited,
+        stageObjectPauses,
+        expectedSpeakerSeen: fin.expectedSpeakerSeen || undefined,
+        playingOmvs: fin.playingOmvs,
         unhandledCommands: fin.unhandledCommands.length,
         unhandledProperties: fin.unhandledProperties.length,
       }));
     }
   }
 
+} catch (error) {
+  errors.push(error instanceof Error ? error.message : String(error));
+} finally {
   console.log(`\n=== RESULT [${profileCfg.name}:${MODE}] errors=${errors.length} warnings=${warnings.length} ===`);
   if (errors.length) console.log('Errors:', errors);
   if (warnings.length) console.log('Warnings:', warnings);
   if (errors.length > 0 || warnings.length > 0) process.exitCode = 1;
-} finally {
-  if (cdp) {
-    try { await cdp.close(); } catch {}
-  }
+  if (cdp) cdp.socket.close();
   if (child) {
     try {
       const exited = new Promise((r) => child.once('exit', r));

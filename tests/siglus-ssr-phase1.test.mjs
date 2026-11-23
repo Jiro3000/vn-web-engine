@@ -87,6 +87,25 @@ async function runVm(code, strings = [], onCommand = async () => 0) {
   return {calls, props, vm};
 }
 
+test('an animation frame can resume the VM after its cooperative instruction yield', async (t) => {
+  const request = globalThis.requestAnimationFrame;
+  const cancel = globalThis.cancelAnimationFrame;
+  let provideFrame;
+  const scheduled = new Promise((resolve) => { provideFrame = resolve; });
+  globalThis.requestAnimationFrame = (tick) => { provideFrame(tick); return 1; };
+  globalThis.cancelAnimationFrame = () => {};
+  t.after(() => {
+    globalThis.requestAnimationFrame = request;
+    globalThis.cancelAnimationFrame = cancel;
+  });
+  const code = new Uint8Array(8193);
+  code[8192] = 0x16;
+  const result = runVm(code);
+  const frame = await scheduled;
+  frame(performance.now() + 1);
+  assert.deepEqual((await result).calls, []);
+});
+
 test('VM-GAP-01: trailing 4-byte readFlag is consumed for all 11 global roots and mwnd members, but NOT object members', async () => {
   const globalReadFlagRoots = [0x0c, 0x12, 0x13, 0x4c, 0x4d, 0x5a, 0x5b, 0x64, 0x65, 0x66, 0x7f];
   const code = [];
@@ -212,9 +231,19 @@ test('Phase 1 VM refs & intlist: retForm=23 strref (global.namae), vm.assign int
 
     // 6) Declare call-local intlist (propId 0x7d000000, size 2), resize to 5, write [4]=42, read into A[3]
     ...pushInt(2), 0x07, ...i32(11), ...i32(0),
+    ...elm(23, -1, 4), ...elm(83, 0x7d000000, 9), ...cmd(0, [], [], 10),
+    0x20, ...i32(13), ...i32(10), ...i32(1),
     ...elm(83, 0x7d000000, 2), ...pushInt(5), ...cmd(0, [10], [], 0),
+    ...elm(23, -1, 5), ...elm(83, 0x7d000000, 9), ...cmd(0, [], [], 10),
+    0x20, ...i32(13), ...i32(10), ...i32(1),
     ...elm(83, 0x7d000000, -1, 4), ...pushInt(42), 0x20, ...i32(13), ...i32(10), ...i32(1),
     ...elm(23, -1, 3), ...elm(83, 0x7d000000, -1, 4), 0x05, 0x20, ...i32(13), ...i32(10), ...i32(1),
+    ...elm(83, 0x7d000000, 10), ...cmd(0, [], [], 0),
+    ...elm(23, -1, 6), ...elm(83, 0x7d000000, -1, 4), 0x05, 0x20, ...i32(13), ...i32(10), ...i32(1),
+    ...elm(23, -1, 7), ...elm(83, 0x7d000000, 9), ...cmd(0, [], [], 10),
+    0x20, ...i32(13), ...i32(10), ...i32(1),
+    // Global integer list set begins writing at the supplied index.
+    ...elm(26, 1), ...pushInt(51), ...pushInt(7), ...pushInt(-3), ...cmd(0, [10, 10, 10], [], 0),
     0x16,
   ];
 
@@ -236,6 +265,12 @@ test('Phase 1 VM refs & intlist: retForm=23 strref (global.namae), vm.assign int
   assert.equal(props.get('31.-1.2'), 7);
   assert.equal(props.get('23.-1.2'), 0);
   assert.equal(props.get('23.-1.3'), 42);
+  assert.equal(props.get('23.-1.4'), 2);
+  assert.equal(props.get('23.-1.5'), 5);
+  assert.equal(props.get('23.-1.6'), 0);
+  assert.equal(props.get('23.-1.7'), 5);
+  assert.equal(props.get('26.-1.51'), 7);
+  assert.equal(props.get('26.-1.52'), -3);
 });
 
 test('Phase 1 SELBTN parsing and 0x5b0d60 layout contracts', () => {

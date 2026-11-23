@@ -10,18 +10,743 @@ import {
   parseSpaceHideObjectIds,
 } from '../dist/engines/siglus/mwnd.js';
 import {readSelbtnTemplate} from '../dist/engines/siglus/selbtn.js';
-import {orderedObjects, serializeDrawObject} from '../dist/engines/siglus/display.js';
+import {orderedObjects, serializeDrawObject, SiglusDisplay} from '../dist/engines/siglus/display.js';
+import {SiglusPlayer} from '../dist/engines/siglus/player.js';
+import {encodeCaptureBmp, readCaptureBmpFlags} from '../dist/engines/siglus/capture.js';
+import {BlobSource} from '../dist/core/source.js';
 import {unpackSiglusLz, xorByteInPlace} from '../dist/formats/siglus/compression.js';
 import {G00Image} from '../dist/formats/siglus/g00.js';
+import {readJpegHeader} from '../dist/formats/jpeg/header.js';
 import {decodeOwp} from '../dist/formats/siglus/sound.js';
 import {AsfDemuxer, readAsfLayout} from '../dist/formats/asf/demux.js';
 import {SiglusScenePack} from '../dist/formats/siglus/scene-pack.js';
 import {WindowsMediaDecoder} from '../dist/video/windows-media.js';
+import {MemoryStore} from '../dist/platform/store.js';
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '..');
 const SIGLUS_DIR = path.join(REPO_ROOT, 'src/engines/siglus');
 const SSR_DIR = '/Users/paul/Torrents/Games/tsuki no kanata fan disk';
 const HAS_SSR = fs.existsSync(`${SSR_DIR}/Gameexe.dat`) && fs.existsSync(`${SSR_DIR}/Scene.pck`);
+
+test('composite layers clamp requested G00 cuts to the decoded range', async () => {
+  const display = {
+    files: new Map(),
+    resource: async (name) => ({count: name === 'single' ? 1 : 4}),
+    graphic: async (name, pattern) => ({name, pattern}),
+    compositeGraphic: async (name) => ({composite: name}),
+  };
+  const graphic = SiglusDisplay.prototype.objectGraphic.bind(display);
+  assert.deepEqual(await graphic('single', 1, true), {name: 'single', pattern: 0});
+  assert.deepEqual(await graphic('atlas', -1, true), {name: 'atlas', pattern: 0});
+  assert.deepEqual(await graphic('atlas', 8, true), {name: 'atlas', pattern: 3});
+  assert.equal(await graphic('atlas', 8), undefined);
+  assert.deepEqual(await graphic('atlas|single(0,0,1)', 0), {composite: 'atlas|single(0,0,1)'});
+  const cutCount = SiglusDisplay.prototype.graphicCutCount.bind(display);
+  assert.equal(await cutCount('atlas___001'), 4);
+  assert.equal(await cutCount('(1024,768)|atlas(0,0,3)'), 1);
+});
+
+test('G00 Type 1 expands palette indices with their stored alpha', () => {
+  const pixels = [2, 0, 1, 2, 3, 255, 4, 5, 6, 0, 1, 0];
+  const literals = [0xff, ...pixels.slice(0, 8), 0xff, ...pixels.slice(8)];
+  const bytes = new Uint8Array(13 + literals.length);
+  const header = new DataView(bytes.buffer);
+  header.setUint8(0, 1);
+  header.setUint16(1, 2, true);
+  header.setUint16(3, 1, true);
+  header.setUint32(5, bytes.length - 5, true);
+  header.setUint32(9, pixels.length, true);
+  bytes.set(literals, 13);
+  const image = new G00Image(bytes);
+  assert.deepEqual(image.frame(0).bgra, Uint8Array.of(4, 5, 6, 0, 1, 2, 3, 255));
+  bytes[bytes.length - 1] = 2;
+  assert.throws(() => new G00Image(bytes).frame(0), /Invalid G00 palette index/);
+});
+
+test('G00 Type 3 unscrambles the real SSR JPEG and preserves its dimensions', {skip: !HAS_SSR}, () => {
+  const image = new G00Image(fs.readFileSync(path.join(SSR_DIR, 'g00', 'bb_BG303n.g00')));
+  assert.equal(image.type, 3);
+  const jpeg = readJpegHeader(image.jpeg());
+  assert.deepEqual([jpeg.width, jpeg.height], [image.width, image.height]);
+  assert.ok(jpeg.components > 0);
+});
+
+test('source-clip integer events update only their edge and support the script wait', async () => {
+  const object = {type: 2, name: 'atlas', sourceClipBounds: [3, 4, 85, 100]};
+  const phases = [];
+  const player = Object.assign(Object.create(SiglusPlayer.prototype), {
+    objectAddress: () => ({page: new Map([[1, object]]), index: 2}),
+    markObjectsDirty: () => {},
+    display: {graphicCutCount: async (name) => name === 'atlas' ? 5 : 0},
+    renderObjects: async () => { phases.push('render'); },
+    delay: async () => { phases.push('wait'); return 0; },
+  });
+  const command = (tail, ...args) => player.objectCommand({path: [37, 2, -1, 1, ...tail], args, named: []});
+  assert.equal(await command([169]), 5);
+  assert.equal(await command([157, 0], 400, 400, 0, 0), 0);
+  assert.deepEqual(object.sourceClipBounds, [3, 4, 85, 400]);
+  assert.equal(object.intEvents.get('sourceClip:3').from, 100);
+  assert.equal(await command([157, 4]), 0);
+  assert.deepEqual(phases, ['render', 'wait']);
+  assert.equal(object.intEvents.size, 0);
+  object.type = 1;
+  assert.equal(await command([169]), 0);
+});
+
+test('object center commands distinguish the sprite origin from the pivot offset', async () => {
+  const objects = new Map();
+  const player = {
+    objectAddress: () => ({page: objects, index: 2}),
+    markObjectsDirty: () => {},
+  };
+  const command = (id, ...args) => SiglusPlayer.prototype.objectCommand.call(player, {path: [37, 2, -1, 1, id], args});
+  assert.equal(await command(158, 512, 300), 0);
+  assert.equal(await command(159, 30, -10), 0);
+  assert.deepEqual(objects.get(1).center, [512, 300]);
+  assert.deepEqual(objects.get(1).centerRep, [30, -10]);
+});
+
+test('object dimensions select cel zero or the explicit index independently of the displayed cel', async () => {
+  const object = {type: 2, name: 'atlas', pattern: 1, frames: [undefined, {width: 30, height: 40}]};
+  const loads = [];
+  const player = {
+    objectAddress: () => ({page: new Map([[1, object]]), index: 2}),
+    markObjectsDirty: () => {},
+    display: {
+      objectGraphic: async (name, index) => {
+        loads.push([name, index]);
+        return index === 0 ? {width: 10, height: 20} : undefined;
+      },
+    },
+  };
+  const query = (id, ...args) => SiglusPlayer.prototype.objectCommand.call(player, {
+    path: [37, 2, -1, 1, id], args,
+  });
+  assert.equal(await query(25), 20);
+  assert.equal(await query(24), 10);
+  assert.equal(await query(25, 1), 40);
+  assert.equal(await query(25, 12), 0);
+  assert.equal(await query(24, -1), 0);
+  assert.deepEqual(loads, [['atlas', 0], ['atlas', 12]]);
+  assert.equal(object.pattern, 1);
+});
+
+test('stage object count returns the configured extent of the sparse page', async () => {
+  const objects = new Map([[11, {}]]);
+  const config = new Map([['OBJECT.CNT', '128']]);
+  const player = Object.assign(Object.create(SiglusPlayer.prototype), {
+    game: {config},
+    objects: [objects, new Map()],
+  });
+  const count = () => player.command({path: [38, 2, 3], args: [], named: []});
+  assert.equal(await count(), 128);
+  objects.clear();
+  assert.equal(await count(), 128);
+  config.delete('OBJECT.CNT');
+  assert.equal(await count(), 256);
+});
+
+test('immutable stage cels use software-backed canvases', () => {
+  const previous = globalThis.document;
+  const calls = [];
+  const canvas = {
+    style: {},
+    getContext: (type, options) => {
+      calls.push({type, options});
+      return {drawImage: (...args) => calls.push(args)};
+    },
+  };
+  globalThis.document = {createElement: () => canvas};
+  try {
+    const image = {};
+    assert.equal(SiglusDisplay.prototype.node({image, x: 0, y: 0, width: 32, height: 32}), canvas);
+    assert.deepEqual(calls, [{type: '2d', options: {willReadFrequently: true}}, [image, 0, 0]]);
+  } finally {
+    globalThis.document = previous;
+  }
+});
+
+test('tone-curve rendering mixes luminance before looking up RGB channels', () => {
+  const previous = globalThis.document;
+  const create = (name) => ({
+    name,
+    attributes: {},
+    children: [],
+    setAttribute(key, value) { this.attributes[key] = value; },
+    append(...elements) { this.children.push(...elements); },
+  });
+  globalThis.document = {createElementNS: (_, name) => create(name)};
+  try {
+    const filter = create('filter');
+    const display = {
+      toneCurves: new Map([[2, {monochrome: 1, channels: [Uint8Array.of(255, 0), Uint8Array.of(64, 128), Uint8Array.of(0, 255)]}]]),
+      colorFilterUrl(key, setup) { setup(filter); return `url(#${key})`; },
+      appendColorMatrix: SiglusDisplay.prototype.appendColorMatrix,
+    };
+    assert.equal(SiglusDisplay.prototype.toneCurveFilterUrl.call(display, 2), 'url(#tone:2)');
+    assert.equal(SiglusDisplay.prototype.toneCurveFilterUrl.call(display, 3), undefined);
+    const [matrix, transfer] = filter.children;
+    assert.equal(matrix.name, 'feColorMatrix');
+    assert.deepEqual(matrix.attributes.values.split(' ').slice(0, 5).map(Number), [0.2989, 0.5886, 0.1145, 0, 0]);
+    assert.equal(transfer.name, 'feComponentTransfer');
+    assert.deepEqual(transfer.children.map((child) => child.name), ['feFuncR', 'feFuncG', 'feFuncB']);
+    assert.equal(transfer.children[0].attributes.tableValues, '1 0');
+  } finally {
+    globalThis.document = previous;
+  }
+});
+
+test('resetting a scripted button preserves its sprite for the transition animation', async () => {
+  const fields = {name: 'button', frames: [], visible: true, x: 21, y: 32, pattern: 2};
+  const object = {
+    ...fields,
+    button: {id: 3, group: 4, actionNo: 1, seNo: 5},
+    buttonState: 'disable',
+    disabled: true,
+    pushKeep: true,
+    alphaTest: true,
+  };
+  const page = new Map([[3, object]]);
+  let dirty = false;
+  const player = {
+    objectAddress: () => ({page, index: 5}),
+    markObjectsDirty: () => {
+      dirty = true;
+    },
+  };
+  const path = [38, 2, -1, 31, 93, -1, 3, 61];
+  assert.equal(await SiglusPlayer.prototype.objectCommand.call(player, {path, args: []}), 0);
+  assert.equal(page.get(3), object);
+  assert.ok(dirty);
+  assert.deepEqual(
+    Object.fromEntries(Object.entries(object).filter(([, value]) => value !== undefined)),
+    fields,
+  );
+});
+
+test('Siglus name references expand to the current script values', () => {
+  const player = {
+    namaeIds: new Map([
+      ['％ｂ', 0],
+      ['＊ａａ', 1],
+    ]),
+    namaeValues: new Map([
+      [0, '雪兎'],
+      [1, '新見'],
+    ]),
+  };
+  const expand = SiglusPlayer.prototype.expandNamae.bind(player);
+  assert.equal(expand('＊ＡＡ ％Ｂ'), '新見 雪兎');
+  player.namaeValues.set(0, '春');
+  assert.equal(expand('％Ｂと％Ｃ'), '春と％Ｃ');
+});
+
+test('absolute save and load commands share the configured quick slots', async () => {
+  const sound = [];
+  const player = {
+    game: {config: new Map([['SAVE.CNT', '171'], ['QUICK_SAVE.CNT', '11']])},
+    root: {dataset: {}},
+    saves: new Map(),
+    quickSaves: new Map([[3, {comment: 'overwrite'}]]),
+    saveEnabled: true,
+    loadEnabled: true,
+    savePoint: {version: 1, vm: {}},
+    stagePath: (path) => path,
+    saveSlotAddress: SiglusPlayer.prototype.saveSlotAddress,
+    saveSlot: SiglusPlayer.prototype.saveSlot,
+    writeSlot: async (slots, index, save) => slots.set(index, save),
+    playSystemSound: async (id) => sound.push(id),
+    loadSave: (save) => { player.loaded = save; },
+  };
+  const command = (member, args) =>
+    SiglusPlayer.prototype.command.call(player, {path: [63, member], args});
+  assert.equal(await command(249, [174, 0, 1]), 1);
+  assert.equal(player.saves.size, 0);
+  assert.deepEqual(player.quickSaves.get(3).vm, player.savePoint.vm);
+  assert.equal(player.quickSaves.get(3).comment, 'overwrite');
+  assert.deepEqual(sound, [4]);
+  assert.equal(await command(69, [174]), 1);
+  await command(256, [174, 0, 1]);
+  assert.equal(player.loaded, player.quickSaves.get(3));
+  assert.equal(player.pendingLoadSound, true);
+  assert.equal(await command(18, [4, 0, 0]), 1);
+  assert.deepEqual(sound, [4]);
+  await command(20, [4, 0, 0]);
+  assert.equal(player.loaded, player.quickSaves.get(4));
+  assert.equal(player.pendingLoadSound, false);
+});
+
+test('the scene-based system call resolves labels and forwards scalar arguments', async () => {
+  const calls = [];
+  const player = {
+    game: {pack: {sceneNames: ['_Scene']}},
+    stagePath: (path) => path,
+    saveSlot: () => undefined,
+    quickSaves: new Map(),
+    runSystemScene: async (...call) => calls.push(call),
+  };
+  const command = (args) =>
+    SiglusPlayer.prototype.command.call(player, {path: [63, 236], args});
+  assert.equal(await command(['_scene']), 1);
+  assert.equal(await command(['_scene', 4, [5, 'text', [27, -1, 1]]]), 1);
+  assert.equal(await command(['_missing']), 0);
+  assert.deepEqual(calls, [['_Scene', 0, []], ['_Scene', 4, [5, 'text']]]);
+});
+
+test('resizing offset event lists preserves the separate position offsets', async () => {
+  const object = {
+    positionOffsets: {x: [10, 20], y: [30, 40]},
+    offsetEvents: {x: new Map([[0, {}], [1, {}]]), y: new Map([[1, {}]])},
+  };
+  const page = new Map([[3, object]]);
+  const player = {
+    objectAddress: () => ({page, index: 2}),
+    markObjectsDirty: () => {},
+  };
+  const command = (tail, args) =>
+    SiglusPlayer.prototype.objectCommand.call(player, {path: [38, 2, -1, 3, ...tail], args});
+  assert.equal(await command([112, 1], [1]), 0);
+  assert.deepEqual(object.positionOffsets, {x: [10, 20], y: [30, 40]});
+  assert.deepEqual([...object.offsetEvents.x.keys()], [0]);
+  assert.deepEqual([...object.offsetEvents.y.keys()], [1]);
+  assert.equal(await command([112, -1, 1, 0], [99, 0, 0, 0]), 0);
+  assert.equal(object.positionOffsets.x[1], 20);
+});
+
+test('ending an object button group removes its sprites from pointer routing', () => {
+  const old = {dataset: {siglusGroup: '4'}, inert: false};
+  const next = {dataset: {siglusGroup: '0'}, inert: true};
+  const display = {stage: {querySelectorAll: () => [old, next]}};
+  const player = {
+    display: Object.assign(display, {syncObjectButtonGroups: SiglusDisplay.prototype.syncObjectButtonGroups}),
+    activeGroups: new Set([4]),
+    cancelGroups: new Set(),
+    decisions: new Map(),
+  };
+  const command = (group, member) => SiglusPlayer.prototype.groupCommand.call(player, group, member);
+  command(4, 5);
+  command(0, 2);
+  assert.equal(old.inert, true);
+  assert.equal(next.inert, false);
+});
+
+test('script shortcut suppression applies only to the named virtual key', async () => {
+  const display = {
+    disabledShortcutKeys: new Set(),
+    setShortcutKeyDisabled: SiglusDisplay.prototype.setShortcutKeyDisabled,
+  };
+  const player = {display, stagePath: (path) => path};
+  const command = (member, key) =>
+    SiglusPlayer.prototype.command.call(player, {path: [64, member], args: [key]});
+  assert.equal(await command(40, 32), 0);
+  assert.equal(await command(40, 256), 0);
+  assert.deepEqual([...display.disabledShortcutKeys], [32]);
+  assert.equal(await command(41, 32), 0);
+  assert.equal(display.disabledShortcutKeys.size, 0);
+});
+
+test('return-to-selection availability requires both flags and a checkpoint', async () => {
+  const player = {
+    selectionSaves: [],
+    selectionReturnFlags: [true, true],
+    stagePath: (path) => path,
+    saveSlot: () => undefined,
+    quickSaves: new Map(),
+  };
+  const command = (member, ...args) =>
+    SiglusPlayer.prototype.command.call(player, {path: [63, member], args});
+  assert.equal(await command(234), 0);
+  player.selectionSaves.push({});
+  assert.equal(await command(234), 1);
+  await command(230, 0);
+  assert.equal(await command(231), 0);
+  assert.equal(await command(234), 0);
+  await command(230, 1);
+  await command(232, 0);
+  assert.equal(await command(233), 0);
+  assert.equal(await command(234), 0);
+  await command(232, 1);
+  assert.equal(await command(234), 1);
+});
+
+test('system-call status and mouse-coordinate references follow the active player state', async () => {
+  const writes = [];
+  const player = {
+    stagePath: (path) => path,
+    systemCallActive: true,
+    excallAllocated: false,
+    display: {pointerPosition: (axis) => [240, 360][axis]},
+    vm: {assign: (...write) => writes.push(write)},
+  };
+  const command = (path, args = []) => SiglusPlayer.prototype.command.call(player, {path, args});
+  assert.equal(await command([65, 12]), 1);
+  assert.equal(await command([65, 8]), 0);
+  await command([46, 9], [[26, -1, 5], [26, -1, 6]]);
+  assert.deepEqual(writes, [[[26, -1, 5], 240], [[26, -1, 6], 360]]);
+});
+
+test('a message-window button can be hidden and shown independently in each window', () => {
+  const refreshed = [];
+  const display = {
+    windowIndex: 0,
+    messageButtonStates: new Map(),
+    messageButtonState: SiglusDisplay.prototype.messageButtonState,
+    setMessageButtonProperty: SiglusDisplay.prototype.setMessageButtonProperty,
+    activeFrameActions: [{
+      action: {id: 3},
+      element: {dataset: {}},
+      refresh: () => refreshed.push(display.messageButtonState(0, 3).visible),
+    }],
+  };
+  const player = {stagePath: (path) => path, display};
+  const visible = (window, value) => SiglusPlayer.prototype.property.call(
+    player, [38, 3, -1, window, 32, -1, 3, 0], value,
+  );
+  assert.equal(visible(0), 1);
+  assert.equal(visible(0, 0), 0);
+  assert.equal(visible(1), 1);
+  assert.equal(visible(0), 0);
+  assert.equal(visible(0, 1), 1);
+  assert.deepEqual(refreshed, [false, true]);
+});
+
+test('a generated capture is reported only in the game capture folder', async () => {
+  const store = new MemoryStore();
+  const offsets = [];
+  const png = new Uint8Array([1, 2, 3]);
+  const player = Object.assign(Object.create(SiglusPlayer.prototype), {
+    game: {files: new Map()},
+    stagePath: (path) => path,
+    saveSlot: () => undefined,
+    quickSaves: new Map(),
+    display: {capturePng: async (x, y) => { offsets.push([x, y]); return png; }},
+    controller: new AbortController(),
+    saveStore: store,
+  });
+  const command = (path, ...args) => player.command({path, args});
+  assert.equal(await command([92, 12], 'Album/Test.png'), 0);
+  assert.equal(await command([63, 290], -3, 2, 'Album/Test'), 0);
+  assert.deepEqual(offsets, [[-3, 2]]);
+  assert.deepEqual((await store.snapshot()).get('capture:album/test.png'), png);
+  assert.equal(await command([92, 12], 'ALBUM\\TEST.PNG'), 1);
+  assert.equal(await command([92, 6], 'Album/Test.png'), 0);
+  assert.equal(await command([63, 290], 0, 0, '../Outside'), 0);
+  assert.equal((await store.snapshot()).size, 1);
+});
+
+test('a numbered capture is stored, reopened as an object, and restored from a checkpoint', async () => {
+  const store = new MemoryStore();
+  const captures = [];
+  const frame = {width: 1280, height: 720};
+  const png = Uint8Array.of(1, 2, 3);
+  const objects = new Map();
+  const player = Object.assign(Object.create(SiglusPlayer.prototype), {
+    stagePath: (path) => path,
+    objectAddress: () => ({page: objects, index: 2}),
+    markObjectsDirty: () => {},
+    display: {
+      capturePng: async (...args) => { captures.push(args); return png; },
+      capturedGraphic: async (bytes) => { assert.deepEqual(bytes, png); return frame; },
+    },
+    controller: new AbortController(),
+    saveStore: store,
+  });
+  const photoId = await player.command({path: [144], args: [99], named: [0]});
+  assert.ok(photoId > 0);
+  assert.deepEqual(captures, [[0, 0, {limit: [99, 0x7fffffff]}]]);
+  assert.equal(await player.command({path: [92, 12], args: [`${photoId}.png`]}), 1);
+  assert.equal(await player.objectCommand({path: [37, 2, -1, 3, 170], args: [photoId, 1, 158, 280]}), 0);
+  const photo = objects.get(3);
+  assert.deepEqual(photo, {type: 11, name: `${photoId}.png`, frames: [frame], x: 158, y: 280, visible: true, pattern: 0});
+  const restored = await player.deserializeDrawObject(serializeDrawObject(photo));
+  assert.equal(restored.frames[0], frame);
+  assert.equal(await player.objectCommand({path: [37, 2, -1, 4, 170], args: [1, 0]}), 0);
+  assert.deepEqual(objects.get(4).frames, []);
+  assert.equal(objects.get(4).visible, false);
+});
+
+test('the save and share capture commands keep independent buffers and preserve capture dimensions', async () => {
+  const store = new MemoryStore();
+  const captures = [];
+  const dialogs = [];
+  const png = Uint8Array.of(1, 2, 3);
+  const player = Object.assign(Object.create(SiglusPlayer.prototype), {
+    game: {config: new Map([['TWITTER.OVERLAP_IMAGE', '"watermark"'], ['TWITTER.INITIAL_TWEET_TEXT', '"Draft"']])},
+    stagePath: (path) => path,
+    saveSlot: () => undefined,
+    quickSaves: new Map(),
+    display: {
+      capturePng: async (...args) => { captures.push(args); return png; },
+      stage: {focus() {}},
+    },
+    configuration: {shareCapture: async (...args) => { dialogs.push(args); return true; }},
+    controller: new AbortController(),
+    saveStore: store,
+  });
+  const command = (path, ...args) => player.command({path, args});
+  assert.equal(await command([63, 286], 640, 360), 0);
+  assert.equal(await command([63, 290], 4, -9, 'Album/Test'), 0);
+  assert.equal(await command([164]), 0);
+  assert.equal(await command([63, 287]), 0);
+  assert.equal(await command([63, 327]), 0);
+  assert.equal(await command([165]), 0);
+  assert.equal(await command([63, 327]), 0);
+  assert.equal(await command([63, 316], 0, 0), 0);
+  assert.equal(await player.command({path: [63, 314], args: ['test', 'png', 1], named: [0]}), 1);
+  assert.deepEqual(captures, [[4, -9, {size: [640, 360]}], [0, 0, {overlay: 'watermark'}], [0, 0, {size: undefined}]]);
+  assert.equal(dialogs.length, 2);
+  assert.deepEqual(dialogs[0], [png, 'Draft']);
+  const [preview, text, file] = dialogs[1];
+  assert.equal(preview, png);
+  assert.equal(text, undefined);
+  assert.equal(file.name, 'test.png');
+  assert.equal(file.type, 'image/png');
+  assert.deepEqual(new Uint8Array(await file.arrayBuffer()), png);
+});
+
+test('BMP capture exports append signed flags after the native image size and import a bounded range', async () => {
+  const image = {width: 1, height: 1, data: Uint8ClampedArray.of(11, 22, 33, 255)};
+  const list = [30];
+  const savedFlags = [-42, 0, 0x7fffffff];
+  const loads = [];
+  const store = new MemoryStore();
+  const player = Object.assign(Object.create(SiglusPlayer.prototype), {
+    stagePath: (path) => path,
+    saveSlot: () => undefined,
+    quickSaves: new Map(),
+    game: {files: new Map(), config: new Map([['FLAG.CNT', '10']])},
+    captureBuffer: Uint8Array.of(1),
+    display: {captureBmp: async (_png, flags) => encodeCaptureBmp(image, flags)},
+    vm: {
+      readIntList: (path, offset, count) => {
+        assert.deepEqual([path, offset, count], [list, 7, 3]);
+        return savedFlags;
+      },
+      writeIntList: (...args) => loads.push(args),
+    },
+    saveStore: store,
+    controller: new AbortController(),
+  });
+  const command = (member, start, count) => player.command({
+    path: [63, member], args: ['flags', 'bmp', list, start, count], named: [2, 3, 4],
+  });
+  assert.equal(await command(314, 7, 5), 1);
+  const bytes = (await store.snapshot()).get('capture:flags.bmp');
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  assert.equal(view.getUint32(2, true), 58);
+  assert.equal(view.getInt32(22, true), -1);
+  assert.deepEqual([...bytes.subarray(54, 58)], [33, 22, 11, 255]);
+  assert.equal(await command(315, -1, 3), 1);
+  assert.deepEqual(loads, [[list, 0, [-42, 0]]]);
+  view.setUint32(2, 10, true);
+  assert.deepEqual(await readCaptureBmpFlags(new BlobSource(new Blob([bytes])), 2), []);
+});
+
+test('a scene-counter wait renders pending objects before waiting for input', async () => {
+  const calls = [];
+  const player = {
+    stagePath: (path) => path,
+    renderObjects: async () => { calls.push('render'); },
+    counter: () => 30,
+    delay: async (ms, skippable) => { calls.push([ms, skippable]); return 1; },
+  };
+  assert.equal(await SiglusPlayer.prototype.command.call(player, {
+    path: [40, -1, 0, 8], args: [100],
+  }), 1);
+  assert.deepEqual(calls, ['render', [70, true]]);
+});
+
+test('a finite Siglus wait completes when animation frames run ahead of a delayed timer', async (t) => {
+  let tick;
+  const previousRequest = globalThis.requestAnimationFrame;
+  globalThis.requestAnimationFrame = (callback) => { tick = callback; return 1; };
+  t.after(() => { globalThis.requestAnimationFrame = previousRequest; });
+  const previousCancel = globalThis.cancelAnimationFrame;
+  globalThis.cancelAnimationFrame = () => {};
+  t.after(() => { globalThis.cancelAnimationFrame = previousCancel; });
+  const player = {controller: new AbortController(), skipping: false};
+  const pending = SiglusPlayer.prototype.delay.call(player, 2000, true);
+  assert.equal(typeof player.wait, 'function');
+  tick(performance.now() + 2001);
+  assert.equal(await pending, 0);
+  assert.equal(player.wait, undefined);
+  Object.assign(player, {systemCallActive: true, decisions: new Map(), activeGroups: new Set()});
+  const poll = SiglusPlayer.prototype.nextInput.call(player);
+  assert.equal(typeof player.decisionReady, 'function');
+  tick(performance.now() + 17);
+  assert.equal(await poll, 0);
+  assert.equal(player.decisionReady, undefined);
+});
+
+test('the scripted no-wait flag overrides the configured character reveal interval', async () => {
+  const printed = [];
+  const player = Object.assign(Object.create(SiglusPlayer.prototype), {
+    stagePath: (path) => path,
+    speed: -1,
+    playback: {messageSpeed: 90},
+    pageCharacters: 0,
+    display: {append: (text) => printed.push([text]), messageWindow: 0},
+    revealRun: (text, _characters, speed) => printed.push([text, speed]),
+  });
+  assert.equal(await player.command({path: [64, 28], args: [1]}), 0);
+  assert.equal(await player.command({path: [64, 29], args: []}), 1);
+  player.print('instant');
+  assert.equal(await player.command({path: [64, 28], args: [0]}), 0);
+  assert.equal(await player.command({path: [64, 25], args: [0]}), 0);
+  assert.equal(await player.command({path: [64, 26], args: []}), 0);
+  player.print('zero interval');
+  assert.equal(await player.command({path: [64, 27], args: []}), 0);
+  assert.equal(await player.command({path: [64, 26], args: []}), -1);
+  player.print('paced');
+  assert.deepEqual(printed, [['instant'], ['zero interval'], ['paced', 90]]);
+});
+
+test('script flags independently control history recording and automatic page checkpoints', async () => {
+  const pages = [];
+  const snapshots = [];
+  const player = Object.assign(Object.create(SiglusPlayer.prototype), {
+    stagePath: (path) => path,
+    root: {dataset: {}},
+    pages: 0,
+    saveEnabled: true,
+    loadEnabled: true,
+    pageReadFlags: [],
+    pageVoices: [],
+    display: {
+      finishMessageSlide() {},
+      saveMessage: () => ({name: '', text: [{text: 'sample'}]}),
+    },
+    historyPoints: new WeakMap(),
+    backlog: [],
+    addHistory: (entry) => pages.push(entry),
+    systemOption: () => true,
+    captureSave: () => {
+      const snapshot = {};
+      snapshots.push(snapshot);
+      return snapshot;
+    },
+    attachHistoryToSave: (snapshot) => snapshot,
+    tracePage() {},
+    async waitAtPage() {},
+  });
+  const flag = (member) => player.command({path: [64, member], args: [], named: []});
+  const page = async () => {
+    player.pendingText = true;
+    await player.pageInput();
+  };
+  await flag(34);
+  await page();
+  assert.equal(pages.length, 0);
+  assert.ok(!player.scriptMsgBackDisabled);
+  assert.equal(player.savePoint, snapshots[0]);
+  await flag(35);
+  await flag(38);
+  await page();
+  assert.equal(pages.length, 1);
+  assert.equal(snapshots.length, 1);
+  assert.equal(player.savePoint, snapshots[0]);
+  await flag(39);
+  await page();
+  assert.equal(pages.length, 2);
+  assert.equal(player.savePoint, snapshots[1]);
+  player.backlog.push(...pages);
+  await flag(12);
+  await player.openHistory();
+  assert.equal(player.backlog.length, 2);
+});
+
+test('BGM stop and pause use the native default fade while preserving explicit zero', async () => {
+  const actions = [];
+  const player = {
+    stagePath: (path) => path,
+    audio: {
+      stop: (channel, fade) => actions.push(['stop', channel, fade]),
+      pauseBgm: (fade) => actions.push(['pause', fade]),
+    },
+  };
+  const command = (member, args) => SiglusPlayer.prototype.command.call(player, {path: [42, member], args, named: []});
+  await command(4, []);
+  await command(10, []);
+  await command(4, [0]);
+  assert.deepEqual(actions, [['stop', 'bgm', 100], ['pause', 100], ['stop', 'bgm', 0]]);
+});
+
+test('only the key-enabled quake commands let input interrupt their wait', async () => {
+  const waits = [];
+  const player = {
+    stagePath: (path) => path,
+    display: {startQuake: () => 450},
+    delay: async (duration, byKey) => { waits.push([duration, byKey]); return 0; },
+  };
+  for (const member of [0, 1, 2, 4, 5, 6]) {
+    const command = {path: [70, 25, -1, 0, member], args: [0, 150, 1, 2, [20, 6]], named: []};
+    assert.equal(await SiglusPlayer.prototype.command.call(player, command), 0);
+  }
+  assert.deepEqual(waits, [[450, false], [450, true], [450, false], [450, true]]);
+});
+
+test('message-window timing queries retain the configured defaults after runtime overrides', async () => {
+  const player = {
+    stagePath: (path) => path,
+    game: {config: new Map([
+      ['MWND.003.OPEN_ANIME_TIME', '240'],
+      ['MWND.003.CLOSE_ANIME_TIME', '180'],
+    ])},
+    messageOpenAnimations: new Map(),
+    messageCloseAnimations: new Map(),
+  };
+  const command = (member, ...args) => SiglusPlayer.prototype.command.call(player, {
+    path: [38, 3, -1, 3, member], args, named: [],
+  });
+  await command(34, 120);
+  await command(35, 90);
+  assert.equal(await command(33), 240);
+  assert.equal(await command(39), 180);
+  assert.equal(player.messageOpenAnimations.get(3).time, 120);
+  assert.equal(player.messageCloseAnimations.get(3).time, 90);
+});
+
+test('camera input can stop and resume its EXCALL counter without resetting elapsed time', async () => {
+  const player = Object.assign(Object.create(SiglusPlayer.prototype), {systemCounters: new Map()});
+  const command = (member) => player.command({path: [65, -1, 0, 6, -1, 0, member], args: [], named: []});
+  assert.equal(await command(9), 0);
+  const counter = player.systemCounters.get(0);
+  counter.start -= 500;
+  assert.equal(await command(4), 0);
+  const stopped = await command(1);
+  assert.ok(stopped >= 500);
+  assert.equal(await command(14), 0);
+  assert.equal(await command(1), stopped);
+  assert.equal(await command(5), 0);
+  assert.equal(counter.pausedAt, undefined);
+  assert.equal(await command(14), 1);
+  assert.ok(await command(1) >= stopped);
+});
+
+test('an object frame action still addresses its own child during a modal display command', async () => {
+  const owner = [38, 2, -1, 89, 93, -1, 1];
+  const stageObject = {y: 0};
+  const modalObject = {y: 0};
+  const page = (child) => new Map([[89, {children: new Map([[1, child]])}]]);
+  const player = Object.assign(Object.create(SiglusPlayer.prototype), {
+    systemCallDepth: 0,
+    objects: [page(stageObject)],
+    frameActions: new Map(),
+    game: {pack: {commandNames: ['update']}},
+    vm: {callScene: async (_scene, _label, [_event, ref, y]) => player.property([...ref, 4], y)},
+  });
+  player.startFrameAction([...owner, 52], '_animation', -1, 'update', [41], false);
+  player.systemCallDepth = 1;
+  player.systemFrontObjects = page(modalObject);
+  player.startFrameAction([...owner, 52], '_animation', -1, 'update', [62], false);
+  await player.tickFrameActions();
+  assert.equal(stageObject.y, 41);
+  assert.equal(modalObject.y, 62);
+  assert.equal(player.objectsDirty, true);
+  assert.equal(player.systemFrontObjectsDirty, true);
+  player.endFrameAction([...owner, 52]);
+  assert.equal(player.frameActions.size, 1);
+});
 
 test('parseButtonActionStates parses BUTTON.ACTION.nnn.SELECT and falls back to normal when absent', () => {
   const cfg = new Map([
@@ -307,6 +1032,7 @@ test(
       /^(?:SAVEINFO|LOADINFO|WARNINGINFO|SAVELOAD_DIALOG)\./,
       /^SYSCOMMENU\./,
       /^TWITTER\./,
+      /^NAMAE(?:\.NNN)?$/, // Scene-pack parsing preserves the repeated alias declarations.
       /^(?:DISCMARK|DUMMY_CHECK.*|GAMEVERSION|MANUAL_PATH|MOUSE_CURSOR\.(?:DEFAULT|CNT)|SAVE\.NO_DATA_STR)$/,
       /^(?:FLAG|GLOBAL_FLAG|CALL_FLAG|COUNTER|OBJBTNGROUP|FRAME_ACTION_CH|PCMCH|PCMEVENT|MASK|CHRKOE|BGM|FONT_FILE)\.CNT$/, // JS Maps grow dynamically; C++ capacity hints unnecessary
       /^FONT_FILE\.NNN\.NAME$/, // SiglusDisplay auto-loads all bundled font files directly
@@ -347,7 +1073,7 @@ test(
   },
 );
 
-test('Full-route crawl regressions: frame_action owner ref, mask intevents, skipTriggerPending, compositeGraphic, input.next, and 0-size drawImage guards', () => {
+test('Full-route crawl regressions: frame_action owner ref, mask intevents, skipTriggerPending, input.next, and 0-size drawImage guards', () => {
   const playerSrc = fs.readFileSync(path.join(SIGLUS_DIR, 'player.ts'), 'utf8');
   const displaySrc = fs.readFileSync(path.join(SIGLUS_DIR, 'display.ts'), 'utf8');
 
@@ -362,14 +1088,12 @@ test('Full-route crawl regressions: frame_action owner ref, mask intevents, skip
   assert.match(playerSrc, /if \(root === 64 && \(member === 34 \|\| member === 35\)\)/);
   // 3. skipTriggerPending does not clobber physical Ctrl skip
   assert.match(playerSrc, /this\.skip \|\| this\.readSkipEnabled \|\| this\.skipTriggerPending/);
-  // 4. Base-driven pipe compositeGraphic syntax without leading (W,H)
-  assert.match(displaySrc, /if \(name\.includes\('\|'\)/);
-  // 5. input.next yields a frame even outside system scenes & keys record outside systemInput
+  // 4. input.next yields a frame even outside system scenes & keys record outside systemInput
   assert.match(playerSrc, /await this\.nextInput\(true\)/);
   assert.match(displaySrc, /const pushKey = \(index: number, down: boolean\): void =>/);
-  // 6. Zero-dimension drawImage guards
+  // 5. Zero-dimension drawImage guards
   assert.match(displaySrc, /if \(graphic\.width > 0 && graphic\.height > 0\)/);
-  // 7. Native 0x6a7cd0 EXCALL wipe isolation: wiping while excallAllocated only updates systemLayer
+  // 6. Native 0x6a7cd0 EXCALL wipe isolation: wiping while excallAllocated only updates systemLayer
   assert.match(playerSrc, /if \(this\.excallAllocated && this\.systemBackObjects\) \{[\s\S]*?return;\s*\}/);
   assert.match(displaySrc, /async showSystemObjects\([\s\S]*?duration = 0/);
 });
@@ -599,8 +1323,6 @@ test('Native 0x650980/0x650bd0 pageInput waits without pendingText (smartphone L
   assert.doesNotMatch(playerSrc, /private async pageInput\([^)]*\): Promise<void> \{\s*if \(!this\.pendingText\) return;/);
   assert.match(playerSrc, /private async pageInput\([\s\S]{0,350}if \(this\.objectsDirty\) await this\.renderObjects\(\);/);
   assert.match(playerSrc, /const autoChars = this\.autoModeMojiCnt \|\| this\.pageCharacters;/);
-  // 2. syscom.save/quick_save play SE.004 when args[2] != 0; syscom.load/quick_load play SE.005 after resetPlayback
-  assert.match(playerSrc, /if \(member === 249 \|\| member === 18\)[\s\S]{0,600}if \(n\(2\)\) await this\.playSystemSound\(4\);/);
-  assert.match(playerSrc, /if \(member === 256 \|\| member === 20\)[\s\S]{0,600}this\.pendingLoadSound = Boolean\(n\(2\)\);/);
+  // 2. Restore playback before playing the pending load confirmation.
   assert.match(playerSrc, /this\.audio\.resetPlayback\(\);\s*if \(this\.pendingLoadSound\)/);
 });

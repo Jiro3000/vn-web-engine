@@ -20,10 +20,16 @@ import {G00Image} from '../dist/formats/siglus/g00.js';
 import {readGan} from '../dist/formats/siglus/gan.js';
 import {SiglusOmv} from '../dist/formats/siglus/omv.js';
 import {SiglusScenePack} from '../dist/formats/siglus/scene-pack.js';
-import {decodeNwa, decodeOwp, ovkIndex} from '../dist/formats/siglus/sound.js';
+import {decodeOwp} from '../dist/formats/siglus/sound.js';
+import {readSfntFontData} from '../dist/formats/sfnt.js';
 import {
   auditGameexeCoverage,
+  auditNwaFile,
+  auditOggFile,
+  auditOvkFile,
   auditScenePackBytecode,
+  auditScenePackStack,
+  auditToneCurveFile,
   auditWmaParity,
   listNonDotFiles,
   sha256File,
@@ -111,6 +117,7 @@ const bc = auditScenePackBytecode(pack);
 console.log(
   `   ${bc.sceneCount} scenes, ${bc.totalInstructions.toLocaleString()} instructions, 0 unknown opcodes, 0 misaligned scenes, ${bc.commandPaths.size} unique built-in command paths.`,
 );
+console.log(`   Stack verified from all scene and command entry points: ${auditScenePackStack(pack).toLocaleString()} reachable instructions.`);
 
 if (baselineArg) {
   const refDir = resolveDataDir(baselineArg);
@@ -120,13 +127,22 @@ if (baselineArg) {
     .filter(([k]) => !refBc.commandPaths.has(k))
     .sort((a, b) => b[1] - a[1]);
   console.log(`   Delta vs baseline (${path.basename(refDir)}): ${newPaths.length} new command path(s):`);
-  for (const [k, count] of newPaths.slice(0, 40)) {
+  for (const [k, count] of newPaths) {
     console.log(`     - ${k} (${count} calls)`);
   }
 }
 
 // 4. Assets & Codecs
 console.log('\n4. Assets & Codec Verification:');
+const toneCurve = cfg.get('TONECURVE_FILE')?.split('"')[1];
+if (toneCurve) {
+  const indices = auditToneCurveFile(path.join(dataDir, 'dat', toneCurve));
+  console.log(`   TCR dat/${toneCurve}: ${indices.length} RGB curves (indices ${indices.join(', ')})`);
+}
+for (const file of listNonDotFiles(path.join(dataDir, 'dat')).filter((name) => /\.(ttf|otf)$/i.test(name))) {
+  const faces = readSfntFontData(fs.readFileSync(path.join(dataDir, 'dat', file)));
+  console.log(`   Font dat/${file}: ${faces.length} SFNT face(s)`);
+}
 const dbsFiles = listNonDotFiles(path.join(dataDir, 'dat'), '.dbs');
 for (const f of dbsFiles) {
   const d = new SiglusDbs(new Uint8Array(fs.readFileSync(path.join(dataDir, 'dat', f))));
@@ -167,23 +183,22 @@ for (const f of bgms) {
 }
 console.log(`   BGM (.owp): ${bgms.length} file(s) verified OggS`);
 
-const nwas = listNonDotFiles(path.join(dataDir, 'wav'), '.nwa');
-for (const f of nwas.slice(0, 20)) {
-  const dec = decodeNwa(new Uint8Array(fs.readFileSync(path.join(dataDir, 'wav', f))));
-  if (dec.rate <= 0 || dec.pcm.length === 0) throw new Error(`Empty NWA ${f}`);
+for (const folder of ['bgm', 'wav']) {
+  const dir = path.join(dataDir, folder);
+  const nwas = listNonDotFiles(dir, '.nwa');
+  for (const f of nwas) auditNwaFile(path.join(dir, f));
+  console.log(`   ${folder.toUpperCase()} (.nwa): ${nwas.length} file(s) decoded cleanly`);
 }
-console.log(`   WAV (.nwa): ${nwas.length} file(s) (first ${Math.min(20, nwas.length)} decoded cleanly)`);
 
-const ovks = listNonDotFiles(path.join(dataDir, 'koe'), '.ovk');
-for (const f of ovks.slice(0, 20)) {
-  const buf = new Uint8Array(fs.readFileSync(path.join(dataDir, 'koe', f)));
-  const idx = await ovkIndex({
-    size: buf.length,
-    read: async (o, l) => buf.subarray(o, o + l),
-  });
-  if (idx.size === 0) throw new Error(`Empty OVK ${f}`);
-}
-console.log(`   KOE (.ovk): ${ovks.length} bank(s) (first ${Math.min(20, ovks.length)} indexed cleanly)`);
+const wavDir = path.join(dataDir, 'wav');
+const oggs = listNonDotFiles(wavDir, '.ogg');
+for (const f of oggs) auditOggFile(path.join(wavDir, f));
+console.log(`   WAV (.ogg): ${oggs.length} file(s) verified by page checksum`);
+
+const koeDir = path.join(dataDir, 'koe');
+const ovks = listNonDotFiles(koeDir, '.ovk');
+for (const f of ovks) await auditOvkFile(path.join(koeDir, f));
+console.log(`   KOE (.ovk): ${ovks.length} bank(s) indexed cleanly`);
 
 const g00s = listNonDotFiles(path.join(dataDir, 'g00'), '.g00');
 let g00Checked = 0;

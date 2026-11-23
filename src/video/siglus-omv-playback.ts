@@ -12,6 +12,7 @@ export class SiglusOmvPlayback {
   });
   private pending?: {resolve: (reply: OmvReply) => void; reject: (error: Error) => void};
   private presented?: {index: number; image: ImageData};
+  private paintedFrame = -1;
   private startedAt?: number;
   private pausedAt = 0;
   private disposed = false;
@@ -76,6 +77,10 @@ export class SiglusOmvPlayback {
 
   get playing(): boolean {
     return this.active && this.startedAt !== undefined;
+  }
+
+  get presentedFrame(): number {
+    return this.paintedFrame;
   }
 
   private request(request: OmvRequest): Promise<OmvReply> {
@@ -154,6 +159,7 @@ export class SiglusOmvPlayback {
       if (this.presented && painted !== this.presented.index) {
         context.putImageData(this.presented.image, 0, 0);
         painted = this.presented.index;
+        this.paintedFrame = painted;
       }
       if (!this.error && !this.pending && index !== this.presented?.index)
         void this.decode(index).catch((error) => {

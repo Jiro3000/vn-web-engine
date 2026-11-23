@@ -3,6 +3,19 @@ import {svelte} from '@sveltejs/vite-plugin-svelte';
 import {runtimeModules} from './tools/static-runtime-modules.mjs';
 import {progressiveWebApp} from './tools/static-pwa.mjs';
 
+const releaseCodeSplitting = {
+  maxSize: 330_000,
+  groups: [
+    {name: 'buriko-engine', test: /[\\/]src[\\/]engines[\\/]buriko[\\/]/},
+    {
+      name: 'artemis-engine',
+      test: /[\\/]src[\\/](?:engines[\\/]artemis|core[\\/]lua51|native[\\/](?:emotedriver|d3d11))[\\/]/,
+    },
+    {name: 'mages-engine', test: /[\\/]src[\\/]engines[\\/]mages[\\/]/},
+    {name: 'windows-media-codecs', test: /[\\/]src[\\/]formats[\\/](?:wma|vc1)[\\/]/},
+  ],
+};
+
 export default defineConfig(({mode}) => {
   const profiling = mode === 'profile';
   const runtimeBuildId = `${profiling ? 'profile' : 'release'}-${new Date().toISOString()}`;
@@ -23,7 +36,11 @@ export default defineConfig(({mode}) => {
         resolveDependencies: (filename, deps, {hostId}) => (/worker/i.test(hostId) ? [] : deps),
       },
       rolldownOptions: {
-        output: {keepNames: profiling},
+        output: {
+          keepNames: profiling,
+          codeSplitting: profiling ? undefined : releaseCodeSplitting,
+          strictExecutionOrder: !profiling,
+        },
         input: [
           'index.html',
           'buriko.html',

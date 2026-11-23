@@ -3,6 +3,29 @@ import {test} from 'node:test';
 import {BlobSource} from '../dist/core/source.js';
 import {SiglusAudio} from '../dist/engines/siglus/audio.js';
 
+test('a save sound can finish decoding while a button sound starts on another voice', async () => {
+  const started = [];
+  let finishSave;
+  const save = new Promise((resolve) => { finishSave = resolve; });
+  const audio = Object.assign(Object.create(SiglusAudio.prototype), {
+    nextSeVoice: 0,
+    playing: new Map(),
+    fadeEnds: new Map(),
+    pendingPlayback: new Map(),
+    pendingPromises: new Map(),
+    context: {currentTime: 0},
+    effectBuffer: (name) => name === 'save' ? save : Promise.resolve({duration: 0.25}),
+    start: (voice, _buffer, kind, {resource}) => started.push([voice, kind, resource]),
+  });
+  const pendingSave = audio.effect('se', 'save');
+  await audio.effect('se', 'button');
+  assert.equal(audio.channelState('se'), 1);
+  finishSave({duration: 0.4});
+  await pendingSave;
+  assert.deepEqual(started, [['se:1', 'SE', 'button'], ['se:0', 'SE', 'save']]);
+  assert.equal(audio.channelState('se'), 0);
+});
+
 function mockAudio(t, files, config = []) {
   const document = new EventTarget();
   let context;
@@ -23,6 +46,7 @@ function mockAudio(t, files, config = []) {
       return {
         duration: length / sampleRate,
         length,
+        numberOfChannels: channels,
         sampleRate,
         getChannelData: (index) => data[index],
       };
@@ -37,6 +61,7 @@ function mockAudio(t, files, config = []) {
     createBufferSource() {
       const source = {
         connect: (destination) => destination,
+        disconnect() {},
         start(...args) {
           this.started = args;
         },
@@ -51,6 +76,7 @@ function mockAudio(t, files, config = []) {
     createGain() {
       return {
         connect() {},
+        disconnect() {},
         gain: {setValueAtTime() {}, linearRampToValueAtTime() {}, cancelScheduledValues() {}},
       };
     }
@@ -177,7 +203,7 @@ test('Siglus BGM aliases share decoded audio and keep distinct source-rate sampl
     [['bgm/shared.ogg', source(vorbisHeader(44100))]],
     [
       ['BGM.000', '"intro", "shared", 44100, 176400, 88200'],
-      ['BGM.001', '"alt", "shared", 88200, 220500, 132300'],
+      ['BGM.001', '"alt", "shared", 88200, 220500, 132300\t/alternate mix'],
     ],
   );
   await audio.bgm('intro');
@@ -200,6 +226,44 @@ test('Siglus BGM aliases share decoded audio and keep distinct source-rate sampl
 
   await audio.bgm('intro', true, 0, 0, 0, 220500);
   assert.deepEqual(context.sources.at(-1).started, [14, 2]);
+});
+
+test('large NWA BGM schedules a bounded PCM window with a sample-exact loop', async (t) => {
+  const frames = 6_000_000;
+  const header = rawNwa(16, []);
+  const view = new DataView(header.buffer);
+  view.setUint32(20, frames * 2, true);
+  view.setUint32(28, frames, true);
+  const reads = [];
+  const file = {
+    size: 44 + frames * 2,
+    async read(offset, length) {
+      reads.push([offset, length]);
+      if (offset === 0 && length === header.length) return header;
+      const bytes = new Uint8Array(length);
+      const pcm = new DataView(bytes.buffer);
+      const start = (offset - 44) / 2;
+      for (let i = 0; i < bytes.length / 2; i++) pcm.setInt16(i * 2, (start + i) % 16384, true);
+      return bytes;
+    },
+  };
+  const {audio, context} = mockAudio(t, [['bgm/shared.nwa', file]], [
+    ['BGM.000', '"intro", "shared", 90000, 96000, 95998'],
+  ]);
+  await audio.bgm('intro');
+  await new Promise(setImmediate);
+  const playback = context.sources[0];
+  assert.deepEqual(playback.started, [10.075, 0]);
+  const samples = playback.buffer.getChannelData(0);
+  assert.equal(samples[0], (90000 % 16384) / 32768);
+  assert.equal(samples[5999], (95999 % 16384) / 32768);
+  assert.equal(samples[6000], (95998 % 16384) / 32768);
+  assert.equal(samples[6001], samples[5999]);
+  assert.equal(samples[6002], samples[6000]);
+  assert.deepEqual(reads, [[0, 44], [180044, 12000], [192040, 4]]);
+  assert.ok(context.sources.length > 1 && context.sources.length <= 4);
+  audio.stop('bgm');
+  assert.equal(audio.channelState('bgm'), 0);
 });
 
 test('Siglus resolves loose audio before lower-priority BGM and voice formats', async (t) => {

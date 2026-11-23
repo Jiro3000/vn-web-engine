@@ -3,8 +3,9 @@ import {BrowserWindowDisplayHost} from '../../platform/browser-window-display.js
 import {readSfntFontMetadata} from '../../formats/sfnt.js';
 import {readGan} from '../../formats/siglus/gan.js';
 import {G00Image, type G00Frame} from '../../formats/siglus/g00.js';
+import {readSiglusToneCurves, type SiglusToneCurve} from '../../formats/siglus/tonecurve.js';
 import {SiglusOmvPlayback} from '../../video/siglus-omv-playback.js';
-import {captureLayers} from './capture.js';
+import {captureLayers, encodeCaptureBmp} from './capture.js';
 import {siglusFontShadow, type SiglusFontChoice} from './configuration.js';
 import {
   computeAlignedNameLeft,
@@ -74,6 +75,12 @@ export interface Graphic {
   centerX: number;
   centerY: number;
   contentBounds?: G00Frame['contentBounds'];
+}
+
+export interface SiglusCaptureOptions {
+  limit?: readonly [order: number, layer: number];
+  overlay?: string;
+  size?: readonly [width: number, height: number];
 }
 
 export interface ObjectIntEvent {
@@ -153,6 +160,7 @@ export interface DrawObject {
     >
   >;
   positionOffsets?: Partial<Record<'x' | 'y', number[]>>;
+  offsetEventCounts?: Partial<Record<'x' | 'y', number>>;
   offsetEvents?: Partial<
     Record<'x' | 'y', Map<number, {from: number; started: number; time: KeyframeAnimationOptions}>>
   >;
@@ -293,6 +301,7 @@ export interface SerializedDrawObject {
   wipeCopy?: boolean;
   rect?: DrawObject['rect'];
   positionOffsets?: DrawObject['positionOffsets'];
+  offsetEventCounts?: DrawObject['offsetEventCounts'];
   button?: DrawObject['button'];
   childCount?: number;
   children?: [number, SerializedDrawObject][];
@@ -350,6 +359,7 @@ export function serializeDrawObject(
           y: object.positionOffsets.y?.slice(),
         }
       : undefined,
+    offsetEventCounts: object.offsetEventCounts && {...object.offsetEventCounts},
     button: object.button ? {...object.button} : undefined,
     childCount: object.childCount,
     children: object.children?.size
@@ -402,6 +412,16 @@ export function orderedObjects(
 
 const registeredNumberProperties = new Set<string>();
 
+function isCompositeGraphic(name: string): boolean {
+  return name.includes('|') || /\(-?\d+,-?\d+(?:,-?\d+)?(?:,blend=\d+)?\)$/.test(name);
+}
+
+function embeddedCut(files: ReadonlyMap<string, unknown>, name: string): [string, number] | undefined {
+  if (files.has(`g00/${name.toLowerCase()}.g00`)) return;
+  const cut = /^(.*?)___(\d+)$/.exec(name);
+  if (cut) return [cut[1]!, Number(cut[2])];
+}
+
 function registerAnimatedNumber(name: string): void {
   if (registeredNumberProperties.has(name)) return;
   CSS.registerProperty({name, syntax: '<number>', inherits: true, initialValue: '1'});
@@ -419,6 +439,7 @@ export class SiglusDisplay {
   private readonly pendingEffects = new Map<number, StageEffect | null>();
   private castTransition?: Promise<void>;
   private readonly controls = document.createElement('div');
+  private objectButtonGroups?: ReadonlySet<number>;
   private readonly objectMasks = new Map<
     number,
     {name?: string; url?: string; x: number; y: number}
@@ -456,7 +477,7 @@ export class SiglusDisplay {
   > = [];
   private readonly messageButtonStates = new Map<
     string,
-    {posX: number; posY: number; repX: number; repY: number; patno: number}
+    {visible: boolean; posX: number; posY: number; repX: number; repY: number; patno: number}
   >();
   private activateFrameAction?: (action: SiglusFrameAction) => void;
   private frameActionStateResolver?: (
@@ -504,6 +525,7 @@ export class SiglusDisplay {
   private waitIconTimer?: ReturnType<typeof setInterval>;
   private colorFilterSvg?: SVGSVGElement;
   private readonly colorFilterCache = new Map<string, string>();
+  private toneCurves?: ReadonlyMap<number, SiglusToneCurve>;
   private lastFilterColor: readonly number[] = [0, 0, 0, 255];
   private readonly domBaselineOffsets = new Map<string, number>();
   private messageShadow = 2;
@@ -526,6 +548,7 @@ export class SiglusDisplay {
   private readonly vkDown = new Set<number>();
   private readonly vkPressed = new Set<number>();
   private readonly vkReleased = new Set<number>();
+  private readonly disabledShortcutKeys = new Set<number>();
   private wheelDelta = 0;
   private sampledWheel = 0;
   private pressed?: {id: number; group: number};
@@ -666,6 +689,10 @@ export class SiglusDisplay {
           this.vkReleased.add(vk);
         }
       }
+      if (this.disabledShortcutKeys.has(vk)) {
+        event.preventDefault();
+        return;
+      }
       if (
         event.key === ' ' &&
         event.type === 'keydown' &&
@@ -797,6 +824,12 @@ export class SiglusDisplay {
     return button?.group === group ? button.id : -1;
   }
 
+  syncObjectButtonGroups(groups: ReadonlySet<number>): void {
+    this.objectButtonGroups = groups;
+    for (const control of this.stage.querySelectorAll<HTMLButtonElement>('button[data-siglus-group]'))
+      control.inert = !groups.has(Number(control.dataset.siglusGroup));
+  }
+
   pointerPosition(axis: number): number {
     return this.pointer[axis]!;
   }
@@ -873,6 +906,12 @@ export class SiglusDisplay {
       default:
         return 0;
     }
+  }
+
+  setShortcutKeyDisabled(vk: number, disabled: boolean): void {
+    if (vk < 0 || vk >= 256) return;
+    if (disabled) this.disabledShortcutKeys.add(vk);
+    else this.disabledShortcutKeys.delete(vk);
   }
 
   sampleInput(): void {
@@ -1026,6 +1065,10 @@ export class SiglusDisplay {
   }
 
   async prepare(): Promise<void> {
+    const toneFile = this.config.get('TONECURVE_FILE')?.split('"')[1]?.toLowerCase();
+    const toneSource = toneFile && this.files.get(`dat/${toneFile}`);
+    if (toneSource)
+      this.toneCurves = readSiglusToneCurves(await toneSource.read(0, toneSource.size, this.signal));
     for (const [key, value] of this.config) {
       if (!/^FONT_FILE\.\d+\.NAME$/.test(key)) continue;
       const name = value.split('"')[1]?.toLowerCase();
@@ -1546,7 +1589,7 @@ export class SiglusDisplay {
     const key = `${window}.${id}`;
     let state = this.messageButtonStates.get(key);
     if (!state) {
-      state = {posX: 0, posY: 0, repX: 0, repY: 0, patno: 0};
+      state = {visible: true, posX: 0, posY: 0, repX: 0, repY: 0, patno: 0};
       this.messageButtonStates.set(key, state);
     }
     return state;
@@ -1577,11 +1620,12 @@ export class SiglusDisplay {
       : undefined;
   }
 
-  setMessageButtonProperty(window: number, id: number, prop: 1 | 4, value?: number): number {
+  setMessageButtonProperty(window: number, id: number, prop: 0 | 1 | 4, value?: number): number {
     const state = this.messageButtonState(window, id);
     if (value !== undefined) {
       const next = value | 0;
-      if (prop === 1) state.patno = next;
+      if (prop === 0) state.visible = Boolean(next);
+      else if (prop === 1) state.patno = next;
       else state.posY = next;
       if (window === this.windowIndex) {
         const entry = this.activeFrameActions.find(({action}) => action.id === id);
@@ -1591,12 +1635,13 @@ export class SiglusDisplay {
             entry.motion = undefined;
             entry.element.style.translate = `${state.posX + state.repX}px ${state.posY + state.repY}px`;
           } else {
-            entry.element.dataset.patno = String(state.patno);
+            if (prop === 1) entry.element.dataset.patno = String(state.patno);
             entry.refresh();
           }
         }
       }
     }
+    if (prop === 0) return Number(state.visible);
     return prop === 1 ? state.patno : state.posY;
   }
 
@@ -1702,9 +1747,7 @@ export class SiglusDisplay {
       const oldest = this.graphicCache.get(oldestKey)!;
       this.graphicCache.delete(oldestKey);
       this.graphicCacheBytes -= oldest.bytes;
-      if (typeof ImageBitmap !== 'undefined' && oldest.graphic.image instanceof ImageBitmap) {
-        oldest.graphic.image.close();
-      }
+      // An active draw object can still own this cel after cache eviction.
     }
   }
 
@@ -1728,20 +1771,25 @@ export class SiglusDisplay {
     }
   }
 
-  async objectGraphic(name: string, pattern: number): Promise<Graphic | undefined> {
-    if (pattern < 0) return;
-    if (name.includes('|') || /\(-?\d+,-?\d+(?:,\d+)?(?:,blend=\d+)?\)$/.test(name))
+  async objectGraphic(name: string, pattern: number, compositeLayer = false): Promise<Graphic | undefined> {
+    if (pattern < 0 && !compositeLayer) return;
+    if (isCompositeGraphic(name))
       return pattern === 0 ? this.compositeGraphic(name) : undefined;
     const split = `${name}___${String(pattern).padStart(3, '0')}`;
     if (this.files.has(`g00/${split.toLowerCase()}.g00`)) return this.graphic(split);
-    const cut = /^(.*?)___(\d+)$/.exec(name);
-    if (cut && !this.files.has(`g00/${name.toLowerCase()}.g00`)) {
-      name = cut[1]!;
-      pattern = Number(cut[2]);
-    }
+    const cut = embeddedCut(this.files, name);
+    if (cut) [name, pattern] = cut;
     const resource = await this.resource(name);
+    // 1.1.102.1 (0x6c4bae) clamps a composite layer's cut before drawing it.
+    if (compositeLayer && resource.count > 0) pattern = Math.max(0, Math.min(pattern, resource.count - 1));
     if (pattern >= resource.count) return;
     return this.graphic(name, pattern);
+  }
+
+  async graphicCutCount(name: string): Promise<number> {
+    if (!name) return 0;
+    if (isCompositeGraphic(name)) return 1;
+    return (await this.resource(embeddedCut(this.files, name)?.[0] ?? name)).count;
   }
 
   private async compositeGraphic(specification: string): Promise<Graphic> {
@@ -1758,7 +1806,7 @@ export class SiglusDisplay {
       const explicitDim = /^\((\d+),(\d+)\)$/.exec(tokens[0] ?? '');
       const partTokens = explicitDim ? tokens.slice(1) : tokens;
       const parsed = partTokens.map((part) => {
-        const layer = /^([^()]+?)(?:\((-?\d+),(-?\d+)(?:,(\d+))?(?:,blend=(\d+))?\))?$/.exec(
+        const layer = /^([^()]+?)(?:\((-?\d+),(-?\d+)(?:,(-?\d+))?(?:,blend=(\d+))?\))?$/.exec(
           part.trim(),
         );
         if (!layer) throw new Error('Invalid Siglus composite image component ' + part);
@@ -1771,7 +1819,7 @@ export class SiglusDisplay {
           blend: layer[5],
         };
       });
-      const frames = await Promise.all(parsed.map((p) => this.objectGraphic(p.name, p.pattern)));
+      const frames = await Promise.all(parsed.map((p) => this.objectGraphic(p.name, p.pattern, true)));
       const loaded = parsed.map((p, idx) => {
         const frame = frames[idx];
         if (!frame) throw new Error('Missing Siglus composite image component ' + p.part);
@@ -1800,10 +1848,10 @@ export class SiglusDisplay {
       }
       if (!width || !height || width * height > 16_777_216)
         throw new Error('Invalid Siglus composite image dimensions');
-      const image = document.createElement('canvas');
-      image.width = width;
-      image.height = height;
-      const context = image.getContext('2d')!;
+      // Only the composition needs a drawing context. Retain its immutable
+      // bitmap so a long route cannot lose the cached cel's Canvas2D context.
+      const composition = new OffscreenCanvas(width, height);
+      const context = composition.getContext('2d', {willReadFrequently: true})!;
       for (const [idx, {frame, dx, dy, blend}] of loaded.entries()) {
         if (frame.width <= 0 || frame.height <= 0) continue;
         context.globalCompositeOperation =
@@ -1813,7 +1861,7 @@ export class SiglusDisplay {
         context.drawImage(frame.image, drawX, drawY);
       }
       const result: Graphic = {
-        image,
+        image: composition.transferToImageBitmap(),
         width,
         height,
         x: baseX,
@@ -1920,11 +1968,7 @@ export class SiglusDisplay {
       } else {
         const {width, height, x, y, centerX, centerY, contentBounds, bgra} =
           resource.frame(pattern);
-        const image = document.createElement('canvas');
-        image.width = width;
-        image.height = height;
-        const ctx = image.getContext('2d')!;
-        const imageData = ctx.createImageData(width, height);
+        const imageData = new ImageData(width, height);
         const rgba = imageData.data;
         if (isLittleEndian && (bgra.byteOffset & 3) === 0 && (bgra.byteLength & 3) === 0) {
           const src32 = new Uint32Array(bgra.buffer, bgra.byteOffset, bgra.byteLength >>> 2);
@@ -1942,7 +1986,11 @@ export class SiglusDisplay {
             rgba[i + 3] = bgra[i + 3]!;
           }
         }
-        ctx.putImageData(imageData, 0, 0);
+        const image = await createImageBitmap(imageData);
+        if (this.signal.aborted) {
+          image.close();
+          this.signal.throwIfAborted();
+        }
         result = {image, width, height, x, y, centerX, centerY, contentBounds};
       }
       this.rememberGraphic(cacheKey, result);
@@ -2028,6 +2076,18 @@ export class SiglusDisplay {
     if (this.config.get('SAVE_THUMB.USE') !== '1') return;
     const [width, height] = (this.config.get('SAVE_THUMB.SIZE') ?? '').split(',').map(Number);
     if (!width || !height || width > this.width || height > this.height) return;
+    const stage = this.captureStage();
+    if (!stage) return;
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    canvas.getContext('2d')!.drawImage(stage, 0, 0, width, height);
+    return this.config.get('SAVE_THUMB.TYPE') === '1'
+      ? canvas.toDataURL('image/png')
+      : canvas.toDataURL('image/jpeg', 0.8);
+  }
+
+  private captureStage(x = 0, y = 0, limit?: readonly [number, number]): HTMLCanvasElement | undefined {
     const bounds = this.stage.getBoundingClientRect();
     if (!bounds.width || !bounds.height) return;
     let substitute: Parameters<typeof captureLayers>[4];
@@ -2045,14 +2105,59 @@ export class SiglusDisplay {
     const layers = [this.layers, this.cast, this.effect, this.message, this.controls].filter(
       (layer) => layer.parentElement === this.sceneLayers,
     );
-    const stage = captureLayers(this.width, this.height, bounds, layers, substitute);
-    const canvas = document.createElement('canvas');
-    canvas.width = width;
-    canvas.height = height;
-    canvas.getContext('2d')!.drawImage(stage, 0, 0, width, height);
-    return this.config.get('SAVE_THUMB.TYPE') === '1'
-      ? canvas.toDataURL('image/png')
-      : canvas.toDataURL('image/jpeg', 0.8);
+    const include = limit && ((element: HTMLElement) => {
+      const value = element === this.message || element === this.controls
+        ? this.config.get('MWND.ORDER') ?? '200'
+        : element.dataset.siglusDrawOrder;
+      if (value === undefined) return true;
+      const order = Number(value);
+      const layer = Number(element.dataset.siglusDrawLayer ?? 0);
+      return order < limit[0] || (order === limit[0] && layer <= limit[1]);
+    });
+    return captureLayers(this.width, this.height, bounds, layers, substitute, x, y, include);
+  }
+
+  async capturePng(
+    x: number,
+    y: number,
+    {limit, overlay, size}: SiglusCaptureOptions = {},
+  ): Promise<Uint8Array | undefined> {
+    let stage = this.captureStage(x, y, limit);
+    if (!stage) return;
+    if (overlay && this.files.has(`g00/${overlay.toLowerCase()}.g00`)) {
+      const graphic = await this.graphic(overlay);
+      stage.getContext('2d')!.drawImage(graphic.image, 0, 0);
+    }
+    if (size && (size[0] !== stage.width || size[1] !== stage.height)) {
+      const result = document.createElement('canvas');
+      [result.width, result.height] = size;
+      const context = result.getContext('2d')!;
+      context.fillStyle = 'black';
+      context.fillRect(0, 0, result.width, result.height);
+      context.drawImage(stage, 0, 0);
+      stage = result;
+    }
+    const blob = await new Promise<Blob | null>((resolve) => stage.toBlob(resolve, 'image/png'));
+    if (blob) return new Uint8Array(await blob.arrayBuffer());
+  }
+
+  async capturedGraphic(png: Uint8Array): Promise<Graphic> {
+    const image = await createImageBitmap(new Blob([new Uint8Array(png)], {type: 'image/png'}));
+    return {image, width: image.width, height: image.height, x: 0, y: 0, centerX: 0, centerY: 0};
+  }
+
+  async captureBmp(png: Uint8Array, flags: readonly number[]): Promise<Uint8Array> {
+    const image = await createImageBitmap(new Blob([new Uint8Array(png)], {type: 'image/png'}));
+    try {
+      const surface = this.stage.ownerDocument.createElement('canvas');
+      surface.width = image.width;
+      surface.height = image.height;
+      const context = surface.getContext('2d', {willReadFrequently: true})!;
+      context.drawImage(image, 0, 0);
+      return encodeCaptureBmp(context.getImageData(0, 0, image.width, image.height), flags);
+    } finally {
+      image.close();
+    }
   }
 
   async savedThumbnail(url: string): Promise<Graphic> {
@@ -2082,7 +2187,7 @@ export class SiglusDisplay {
     canvas.height = graphic.height;
     canvas.style.cssText = `position:absolute;left:${graphic.x}px;top:${graphic.y}px`;
     if (graphic.width > 0 && graphic.height > 0) {
-      canvas.getContext('2d')!.drawImage(graphic.image, 0, 0);
+      canvas.getContext('2d', {willReadFrequently: true})!.drawImage(graphic.image, 0, 0);
     }
     return canvas;
   }
@@ -2450,6 +2555,8 @@ export class SiglusDisplay {
     const tagStageSlot = (el: HTMLElement, object: DrawObject) => {
       if (!isRootStage || object.slotId === undefined) return;
       el.dataset.siglusObjectId = String(object.slotId);
+      el.dataset.siglusDrawOrder = String(object.order ?? 0);
+      el.dataset.siglusDrawLayer = String(object.layer ?? 0);
       if (this.spaceHideIds.has(object.slotId)) {
         el.dataset.siglusSpaceHide = '1';
         if (!this.messageDisplayed) el.style.visibility = 'hidden';
@@ -2566,8 +2673,10 @@ export class SiglusDisplay {
             centerY: 0,
             contentBounds: undefined,
           }
-        : (object.frames[object.pattern] ??
-          (object.frames[object.pattern] = await this.objectGraphic(object.name, object.pattern)));
+        : (object.frames[object.pattern] ?? (
+            object.type === 11 ? undefined :
+              (object.frames[object.pattern] = await this.objectGraphic(object.name, object.pattern))
+          ));
       if (!frame) continue;
       const element =
         object.button === undefined
@@ -2635,8 +2744,26 @@ export class SiglusDisplay {
       }
       parent.append(element);
       if (object.sourceClipEnabled && object.sourceClipBounds) {
-        const [l, t, r, b] = object.sourceClipBounds;
-        canvas.style.clipPath = `inset(${Math.max(0, t)}px ${Math.max(0, frame.width - r)}px ${Math.max(0, frame.height - b)}px ${Math.max(0, l)}px)`;
+        const edges = object.sourceClipBounds.map((value, edge) => {
+          const event = object.intEvents?.get(`sourceClip:${edge}`);
+          const extent = edge === 2 ? frame.width : edge === 3 ? frame.height : undefined;
+          if (!event) return `${Math.max(0, extent === undefined ? value : extent - value)}px`;
+          const property = `--siglus-source-clip-${edge}`;
+          registerAnimatedNumber(property);
+          canvas.style.setProperty(property, String(value));
+          const animation = canvas.animate({[property]: [String(event.from), String(event.target)]}, {
+            duration: event.duration,
+            delay: event.delay,
+            easing: eventEasing(event.easing),
+            fill: 'both',
+            iterations: event.mode === 0 ? 1 : Infinity,
+            direction: event.mode === 2 ? 'alternate' : 'normal',
+          });
+          animation.currentTime = performance.now() - event.started;
+          const pixels = `calc(var(${property}) * 1px)`;
+          return extent === undefined ? `max(0px, ${pixels})` : `max(0px, ${extent}px - ${pixels})`;
+        });
+        canvas.style.clipPath = `inset(${edges[1]} ${edges[2]} ${edges[3]} ${edges[0]})`;
       }
       if (element instanceof HTMLButtonElement) {
         const target = object.button!;
@@ -2678,6 +2805,7 @@ export class SiglusDisplay {
         );
         element.dataset.siglusButton = String(target.id);
         element.dataset.siglusGroup = String(target.group);
+        element.inert = this.objectButtonGroups?.has(target.group) === false;
         if (object.buttonState) element.dataset.siglusButtonState = object.buttonState;
         const isSelectState = object.buttonState === 'select';
         if (target.actionNo !== undefined && target.actionNo >= 0 && object.name && 'image' in frame) {
@@ -2948,8 +3076,8 @@ export class SiglusDisplay {
     }
   }
 
-  private colorMatrixFilterUrl(matrix: string): string {
-    const cached = this.colorFilterCache.get(matrix);
+  private colorFilterUrl(key: string, setup: (filter: SVGFilterElement) => void): string {
+    const cached = this.colorFilterCache.get(key);
     if (cached) return cached;
     if (!this.colorFilterSvg) {
       const svg = document.createElementNS(svgNamespace, 'svg');
@@ -2963,14 +3091,41 @@ export class SiglusDisplay {
     const filter = document.createElementNS(svgNamespace, 'filter');
     filter.id = id;
     filter.setAttribute('color-interpolation-filters', 'sRGB');
-    const fe = document.createElementNS(svgNamespace, 'feColorMatrix');
-    fe.setAttribute('type', 'matrix');
-    fe.setAttribute('values', matrix);
-    filter.append(fe);
+    setup(filter);
     this.colorFilterSvg.firstChild!.appendChild(filter);
     const url = `url(#${id})`;
-    this.colorFilterCache.set(matrix, url);
+    this.colorFilterCache.set(key, url);
     return url;
+  }
+
+  private appendColorMatrix(filter: SVGFilterElement, matrix: string): void {
+    const transform = document.createElementNS(svgNamespace, 'feColorMatrix');
+    transform.setAttribute('type', 'matrix');
+    transform.setAttribute('values', matrix);
+    filter.append(transform);
+  }
+
+  private toneCurveFilterUrl(index: number): string | undefined {
+    const curve = this.toneCurves?.get(index);
+    if (!curve) return;
+    return this.colorFilterUrl(`tone:${index}`, (filter) => {
+      // The 2D pixel shader at file offset 0x7920a0 mixes luminance before
+      // looking up the three channels, and retains the sprite's alpha.
+      if (curve.monochrome) {
+        const weights = [0.2989, 0.5886, 0.1145];
+        const rows = weights.map((_, channel) => [...weights.map((weight, component) =>
+          curve.monochrome * weight + (component === channel ? 1 - curve.monochrome : 0)), 0, 0]);
+        this.appendColorMatrix(filter, [...rows.flat(), 0, 0, 0, 1, 0].join(' '));
+      }
+      const transfer = document.createElementNS(svgNamespace, 'feComponentTransfer');
+      for (const [channel, name] of ['feFuncR', 'feFuncG', 'feFuncB'].entries()) {
+        const component = document.createElementNS(svgNamespace, name);
+        component.setAttribute('type', 'table');
+        component.setAttribute('tableValues', Array.from(curve.channels[channel]!, (byte) => byte / 255).join(' '));
+        transfer.append(component);
+      }
+      filter.append(transfer);
+    });
   }
 
   private applyObjectScale(
@@ -2999,7 +3154,8 @@ export class SiglusDisplay {
         Boolean(cp.addR || cp.addG || cp.addB);
       if (needsMatrix) {
         const matrix = computeColorMatrix(cp);
-        if (matrix) element.style.filter = this.colorMatrixFilterUrl(matrix);
+        if (matrix)
+          element.style.filter = this.colorFilterUrl(matrix, (filter) => this.appendColorMatrix(filter, matrix));
       } else {
         const filters: string[] = [];
         if (cp.mono && cp.mono > 0)
@@ -3010,6 +3166,10 @@ export class SiglusDisplay {
           filters.push(`brightness(${Math.max(0, 1 - cp.dark / 255).toFixed(3)})`);
         if (filters.length) element.style.filter = filters.join(' ');
       }
+    }
+    if (object.tonecurveNo !== undefined) {
+      const tone = this.toneCurveFilterUrl(object.tonecurveNo);
+      if (tone) element.style.filter = [element.style.filter, tone].filter(Boolean).join(' ');
     }
     if (!object.scale) return;
     if (!object.scaleEvents) {
@@ -4315,7 +4475,11 @@ export class SiglusDisplay {
         },
         pointerState: 'normal',
         refresh: () => {
-          const patno = this.messageButtonStates.get(`${this.windowIndex}.${id}`)?.patno ?? 0;
+          const state = this.messageButtonStates.get(`${this.windowIndex}.${id}`);
+          const patno = state?.patno ?? 0;
+          element.hidden = state?.visible === false ||
+            (!decorative && this.frameActionStateResolver?.(action) === 'hidden');
+          if (element.hidden) return;
           if (decorative) {
             applyState(actionStates.normal, patno);
             return;
@@ -4647,12 +4811,10 @@ export class SiglusDisplay {
     if (this.controls.hidden) return;
     for (const entry of this.activeFrameActions) {
       if (entry.decorative) {
-        entry.element.hidden = false;
         entry.refresh();
         continue;
       }
       const status = state?.(entry.action);
-      entry.button!.hidden = status === 'hidden';
       entry.button!.disabled = status !== 'enabled';
       if (entry.button!.disabled) entry.pointerState = 'normal';
       entry.refresh();
@@ -4675,7 +4837,7 @@ export class SiglusDisplay {
     this.colorFilterSvg?.remove();
     this.colorFilterSvg = undefined;
     this.colorFilterCache.clear();
-    for (const entry of this.graphicCache.values()) {
+    for (const entry of [...this.graphicCache.values(), ...this.compositeCache.values()]) {
       if (typeof ImageBitmap !== 'undefined' && entry.graphic.image instanceof ImageBitmap) {
         entry.graphic.image.close();
       }

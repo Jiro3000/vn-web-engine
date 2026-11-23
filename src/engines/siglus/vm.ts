@@ -1,4 +1,5 @@
 import {byteDataView} from '../../core/binary.js';
+import {scheduleFrameDeadline} from '../../core/frame-deadline.js';
 import type {SiglusScene, SiglusScenePack} from '../../formats/siglus/scene-pack.js';
 
 export type Value = number | string;
@@ -37,6 +38,7 @@ export interface SiglusCheckpoint {
     points: number[];
     locals: [string, Value][];
     declarations: [number, number][];
+    localListSizes?: [number, number][];
     references?: [number, readonly number[]][];
   }[];
 }
@@ -144,6 +146,7 @@ class Frame {
   readonly points: number[] = [];
   readonly locals = new Map<string, Value>();
   readonly declarations = new Map<number, number>();
+  readonly localListSizes = new Map<number, number>();
   readonly references = new Map<number, readonly number[]>();
   readonly code: DataView;
   constructor(
@@ -256,6 +259,7 @@ export class SiglusVm {
         points: [...frame.points],
         locals: [...frame.locals],
         declarations: [...frame.declarations],
+        localListSizes: frame.localListSizes.size ? [...frame.localListSizes] : undefined,
         references: [...frame.references],
       };
     });
@@ -371,6 +375,7 @@ export class SiglusVm {
       frame.points.push(...saved.points);
       for (const [key, value] of saved.locals) frame.locals.set(key, value);
       for (const [key, form] of saved.declarations) frame.declarations.set(key, form);
+      for (const [key, size] of saved.localListSizes ?? []) frame.localListSizes.set(key, size);
       for (const [key, reference] of saved.references ?? []) frame.references.set(key, reference);
       return frame;
     });
@@ -464,8 +469,10 @@ export class SiglusVm {
     for (let steps = 0; ; steps++) {
       if (steps % 8192 === 0) {
         this.signal.throwIfAborted();
-        if (steps)
-          await new Promise((resolve) => setTimeout(resolve, this.services.yieldDelay?.() ?? 0));
+        if (steps) {
+          await new Promise<void>((resolve) => scheduleFrameDeadline(this.services.yieldDelay?.() ?? 0, resolve));
+          this.signal.throwIfAborted();
+        }
       }
       const offset = frame.pc;
       const position = () => ({scene: frame.scene.name, offset, line: frame.line});
@@ -522,7 +529,8 @@ export class SiglusVm {
           case 7: {
             const form = frame.word();
             const index = frame.word();
-            if (form === 11 || form === 21) frame.pop();
+            if (form === 11 || form === 21)
+              frame.localListSizes.set(index, Math.max(0, Number(frame.scalar()) | 0));
             frame.declarations.set(index, form);
             break;
           }
@@ -623,6 +631,12 @@ export class SiglusVm {
               }
             };
             if (path.length === 2 && path[0]! >= 23 && path[0]! <= 31) {
+              if (path[0]! >= 25 && path[1] === 1) {
+                // 1.1.102.1 (0x5313aa): assign consecutive integer list entries.
+                this.setList(frame, path.slice(0, 1), args);
+                pushResult(0);
+                break;
+              }
               if (path[1] === 10) {
                 for (const key of this.globals.keys()) {
                   if (key.startsWith(path[0] + '.')) this.globals.delete(key);
@@ -672,8 +686,14 @@ export class SiglusVm {
             const form = this.propertyForm(frame, receiverPath);
             const declaredList =
               elementOwner(receiverPath[0]!) === userProperty && receiverPath.length === 1;
+            const localDeclaration = receiverPath[0] === localRoot && receiverPath.length === 2 &&
+              elementOwner(receiverPath[1]!) === callProperty
+              ? [...frame.declarations.keys()][elementIndex(receiverPath[1]!)]
+              : undefined;
             const sizeIndex = elementIndex(receiverPath[0]!) * 2 + 1;
-            const declaredSize = declaredList
+            const declaredSize = localDeclaration !== undefined
+              ? frame.localListSizes.get(localDeclaration)
+              : declaredList
               ? (this.pack.properties[sizeIndex] ??
                 frame.scene.properties[sizeIndex - this.pack.properties.length])
               : undefined;
@@ -681,6 +701,8 @@ export class SiglusVm {
               declaredSize !== undefined &&
               ((form === 11 && member === 9) || (form === 21 && member === 4))
             ) {
+              // 1.1.102.1 local declaration 0x64a2f0 uses the usual list
+              // dispatchers. Intlist member 9 (0x531241) returns its length.
               pushResult(declaredSize);
               break;
             }
@@ -694,7 +716,8 @@ export class SiglusVm {
                 break;
               }
               if (member === 2 && args.length === 1) {
-                const nextSize = Math.max(0, Number(args[0]));
+                const nextSize = Math.max(0, Number(args[0]) | 0);
+                if (localDeclaration !== undefined) frame.localListSizes.set(localDeclaration, nextSize);
                 const store = receiverPath[0] === localRoot ? frame.locals : this.globals;
                 const prefix =
                   (declaredList && elementIndex(receiverPath[0]!) >= this.pack.properties.length / 2
@@ -727,16 +750,18 @@ export class SiglusVm {
                 break;
               }
             }
-            if (declaredList && ((member === 10 && form === 11) || (member === 3 && form === 21))) {
+            if ((declaredList || localDeclaration !== undefined) &&
+                ((member === 10 && form === 11) || (member === 3 && form === 21))) {
               const root = receiverPath[0]!;
+              const store = localDeclaration === undefined ? this.globals : frame.locals;
               const prefix =
-                (elementIndex(root) >= this.pack.properties.length / 2
+                (declaredList && elementIndex(root) >= this.pack.properties.length / 2
                   ? frame.scene.name + ':'
                   : '') +
-                root +
+                receiverPath.join('.') +
                 '.';
-              for (const key of this.globals.keys()) {
-                if (key.startsWith(prefix)) this.globals.delete(key);
+              for (const key of store.keys()) {
+                if (key.startsWith(prefix)) store.delete(key);
               }
               pushResult(0);
               break;

@@ -112,7 +112,7 @@ function literalArguments(expression, count) {
 async function referenceScripts(directory) {
   const scripts = new Map();
   for (const file of await readdir(directory)) {
-    if (!file.endsWith('.dat.txt')) continue;
+    if (file.startsWith('._') || !file.endsWith('.dat.txt')) continue;
     const lines = (await readFile(join(directory, file), 'utf8')).split(/\r?\n/);
     const name = lines.find((line) => line.startsWith('scene_name: '))?.slice(12);
     const start = lines.indexOf('---- scn_bytes disassembly ----');

@@ -1,6 +1,7 @@
 import {BlobSource} from '../../src/core/source.js';
 import type {CachedInstallation} from '../../src/platform/installation-cache.js';
 import type {InstallationSelection} from '../../src/platform/installation-picker.js';
+import {isInstallationMetadata} from '../../src/platform/installation-path.js';
 import {siglusDirectory} from '../../src/engines/siglus/installation-markers.js';
 import {openSiglusGame, SiglusPlayer, type SiglusGame} from '../../src/engines/siglus/player.js';
 import type {SiglusTag} from '../../src/engines/siglus/vm.js';
@@ -41,7 +42,9 @@ async function load(selected: CachedInstallation): Promise<void> {
   const files = new Map(
     selected.files.flatMap(({path, source}) => {
       const key = path.replaceAll('\\', '/').toLowerCase();
-      return key.startsWith(dir) ? [[key.slice(dir.length), source] as const] : [];
+      return key.startsWith(dir) && !isInstallationMetadata(key)
+        ? [[key.slice(dir.length), source] as const]
+        : [];
     }),
   );
   const next = await openSiglusGame(files);

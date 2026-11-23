@@ -110,6 +110,12 @@ export interface SiglusScene {
   commandNames: string[];
 }
 
+export class SiglusGameConfig extends Map<string, string> {
+  constructor(readonly nameEntries: readonly string[]) {
+    super();
+  }
+}
+
 export class SiglusScenePack {
   readonly commandNames: string[];
   readonly commandScenes: number[];
@@ -167,7 +173,7 @@ export class SiglusScenePack {
     return scene;
   }
 
-  configuration(bytes: Uint8Array): Map<string, string> {
+  configuration(bytes: Uint8Array): SiglusGameConfig {
     const encrypted = byteDataView(bytes).getUint32(4, true);
     const payload = bytes.slice(8);
     xorCycle(payload, configXor);
@@ -175,11 +181,17 @@ export class SiglusScenePack {
       if (!this.key) throw new Error('Missing Siglus configuration key');
       xorCycle(payload, this.key);
     }
-    const config = new Map<string, string>();
+    const names: string[] = [];
+    const config = new SiglusGameConfig(names);
     for (const match of utf16
       .decode(unpackSiglusLz(payload))
-      .matchAll(/^#([\w.]+)\s*=([^\r\n]*)/gm))
-      config.set(match[1]!.toUpperCase(), match[2]!.trim());
+      .matchAll(/^#([\w.]+)\s*=([^\r\n]*)/gm)) {
+      const key = match[1]!.toUpperCase();
+      const value = match[2]!.trim();
+      // NAMAE is repeatable. Keep the original map lookup and preserve each declaration.
+      if (/^NAMAE(?:\.\d+)?$/.test(key)) names.push(value);
+      config.set(key, value);
+    }
     return config;
   }
 }
