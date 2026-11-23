@@ -313,6 +313,7 @@ export class SiglusPlayer {
   private objectsDirty = false;
   private pages = 0;
   private pendingText = false;
+  private pendingLoadSound = false;
   private printing = false;
   private revealWholePage = false;
   private speed = 0;
@@ -1381,13 +1382,16 @@ export class SiglusPlayer {
   }
 
   private async pageInput(continuesMessage = false): Promise<void> {
-    if (!this.pendingText) return;
+    // Native 0x650980 (global.p / CMD 14) & 0x650bd0 (global.k / CMD 115) always pause for key wait
+    // even when no MWND text was printed (e.g. stage-object UI such as smartphone chat in _00_mess).
+    if (this.objectsDirty) await this.renderObjects();
+    const hadPendingText = this.pendingText;
     this.revealWholePage = false;
     this.pageAlreadyRead =
       this.pageReadFlags.length > 0 &&
       this.pageReadFlags.every(({scene, flag}) => this.readFlags.get(scene)?.has(flag));
     if (!this.pageAlreadyRead && !this.skipUnread) this.readSkipEnabled = false;
-    this.display.finishMessageSlide();
+    if (hadPendingText) this.display.finishMessageSlide();
     if (continuesMessage) {
       this.root.dataset.page = String(++this.pages);
       this.tracePage();
@@ -1398,6 +1402,7 @@ export class SiglusPlayer {
         };
       }
       await this.waitAtPage();
+      this.autoModeMojiCnt = 0;
       return;
     }
     let changed = false;
@@ -1410,12 +1415,19 @@ export class SiglusPlayer {
     }
     if (changed) this.scheduleReadFlagsFlush();
     this.pageReadFlags = [];
-    const history = {...this.display.saveMessage(), voices: this.pageVoices};
-    this.addHistory(history);
+    const history = hadPendingText
+      ? {...this.display.saveMessage(), voices: this.pageVoices}
+      : undefined;
+    if (history) this.addHistory(history);
     const needHistoryPoint = this.loadEnabled && this.saveEnabled;
     const needSavePoint = !this.skipping && this.saveEnabled;
     const baseSnapshot = needHistoryPoint || needSavePoint ? this.captureSave(true, false) : undefined;
-    if (needHistoryPoint && baseSnapshot) this.historyPoints.set(history, baseSnapshot);
+    if (needHistoryPoint && baseSnapshot) {
+      const targetEntry = history ?? this.backlog.at(-1);
+      if (targetEntry && !this.historyPoints.has(targetEntry)) {
+        this.historyPoints.set(targetEntry, baseSnapshot);
+      }
+    }
     this.pageVoices = [];
     this.root.dataset.page = String(++this.pages);
     this.tracePage();
@@ -1427,6 +1439,7 @@ export class SiglusPlayer {
     } else {
       await this.waitAtPage();
     }
+    this.autoModeMojiCnt = 0;
     if (this.skipTriggerPending) {
       this.skipTriggerPending = false;
     }
@@ -1615,9 +1628,10 @@ export class SiglusPlayer {
       }
       let result = 1;
       try {
+        const autoChars = this.autoModeMojiCnt || this.pageCharacters;
         const autoWait =
           this.autoEnabled && !this.userMessageHidden
-            ? this.playback.autoMinimumWait + this.playback.autoCharacterWait * this.pageCharacters
+            ? this.playback.autoMinimumWait + this.playback.autoCharacterWait * autoChars
             : undefined;
         const deadline = autoWait === undefined ? undefined : performance.now() + autoWait;
         do {
@@ -2068,6 +2082,10 @@ export class SiglusPlayer {
       this.objectsDirty = true;
     }
     this.audio.resetPlayback();
+    if (this.pendingLoadSound) {
+      this.pendingLoadSound = false;
+      void this.playSystemSound(5);
+    }
     this.display.endEffect();
     this.stageProperties.clear();
     for (const [key, value] of save.stage) this.stageProperties.set(key, value);
@@ -4100,11 +4118,17 @@ export class SiglusPlayer {
           comment: slots.get(n(0))?.comment,
         });
         this.root.dataset.savedPage = String(this.pages);
+        // Native tnm_syscom_save (0x661af0 @ 0x661be6) & tnm_syscom_quick_save (0x661cf0 @ 0x661dd9):
+        // when args[2] (se_flag) is non-zero, play SE.004 (_sys004_save).
+        if (n(2)) await this.playSystemSound(4);
         return 1;
       }
       if (member === 256 || member === 20) {
         const save = member === 256 ? slot : quick;
         if (save && this.loadEnabled) {
+          // Native tnm_syscom_load (0x661c20 @ 0x661cc4) & tnm_syscom_quick_load (0x661e70 @ 0x661f1a):
+          // when args[2] (se_flag) is non-zero, play SE.005 (_sys005_load) after playback reset.
+          this.pendingLoadSound = Boolean(n(2));
           if (this.systemCallActive) {
             this.selectedSave = save;
             this.vm.returnFromHostScene();

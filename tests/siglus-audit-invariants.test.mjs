@@ -592,3 +592,15 @@ test('G00 Type 2 skips 24-byte outer atlas crop table (0x6de310/0x6de430) and di
   assert.match(displaySrc, /const screenX = parentOrigin\[0\] \+ x;/);
   assert.match(displaySrc, /shadowMode === 2 \|\|\s*\(shadowMode === undefined && outlineColor !== undefined && outlineColor >= 0\)/);
 });
+
+test('Native 0x650980/0x650bd0 pageInput waits without pendingText (smartphone LIME) and 0x661af0/cf0/c20/e70 play save/load SE', () => {
+  const playerSrc = fs.readFileSync(path.join(SIGLUS_DIR, 'player.ts'), 'utf8');
+  // 1. pageInput must NOT early-return on !this.pendingText, must flush objectsDirty, and honor autoModeMojiCnt
+  assert.doesNotMatch(playerSrc, /private async pageInput\([^)]*\): Promise<void> \{\s*if \(!this\.pendingText\) return;/);
+  assert.match(playerSrc, /private async pageInput\([\s\S]{0,350}if \(this\.objectsDirty\) await this\.renderObjects\(\);/);
+  assert.match(playerSrc, /const autoChars = this\.autoModeMojiCnt \|\| this\.pageCharacters;/);
+  // 2. syscom.save/quick_save play SE.004 when args[2] != 0; syscom.load/quick_load play SE.005 after resetPlayback
+  assert.match(playerSrc, /if \(member === 249 \|\| member === 18\)[\s\S]{0,600}if \(n\(2\)\) await this\.playSystemSound\(4\);/);
+  assert.match(playerSrc, /if \(member === 256 \|\| member === 20\)[\s\S]{0,600}this\.pendingLoadSound = Boolean\(n\(2\)\);/);
+  assert.match(playerSrc, /this\.audio\.resetPlayback\(\);\s*if \(this\.pendingLoadSound\)/);
+});
