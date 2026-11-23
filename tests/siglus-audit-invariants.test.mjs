@@ -12,6 +12,7 @@ import {
 import {readSelbtnTemplate} from '../dist/engines/siglus/selbtn.js';
 import {orderedObjects, serializeDrawObject} from '../dist/engines/siglus/display.js';
 import {unpackSiglusLz, xorByteInPlace} from '../dist/formats/siglus/compression.js';
+import {G00Image} from '../dist/formats/siglus/g00.js';
 import {decodeOwp} from '../dist/formats/siglus/sound.js';
 import {AsfDemuxer, readAsfLayout} from '../dist/formats/asf/demux.js';
 import {SiglusScenePack} from '../dist/formats/siglus/scene-pack.js';
@@ -499,4 +500,95 @@ test('Optimized unpackSiglusLz, xorByteInPlace, and decodeOwp preserve exact byt
     [...pxOut],
     [10, 20, 30, 255, 10, 20, 30, 255, 10, 20, 30, 255],
   );
+});
+
+test('G00 Type 2 skips 24-byte outer atlas crop table (0x6de310/0x6de430) and display.ts propagates parent clip (0x629c70)', () => {
+  // 1. Build a synthetic G00 Type 2 with non-zero outer (left=510, top=720) crop rect
+  const cutW = 2;
+  const cutH = 2;
+  const cutBlock = new Uint8Array(116 + 92 + cutW * cutH * 4);
+  const cbv = new DataView(cutBlock.buffer);
+  cbv.setUint16(2, 1, true); // 1 chip
+  cbv.setInt32(4, 0, true); // disp_left
+  cbv.setInt32(8, 0, true); // disp_top
+  cbv.setInt32(12, cutW, true); // disp_width
+  cbv.setInt32(16, cutH, true); // disp_height
+  cbv.setInt32(20, 1, true); // centerX
+  cbv.setInt32(24, 1, true); // centerY
+  cbv.setInt32(28, cutW, true); // width
+  cbv.setInt32(32, cutH, true); // height
+  cbv.setUint16(116, 0, true); // chip left
+  cbv.setUint16(118, 0, true); // chip top
+  cbv.setUint16(122, cutW, true); // chip width
+  cbv.setUint16(124, cutH, true); // chip height
+  cutBlock.fill(255, 116 + 92);
+
+  // Decompressed inner payload: [cut_cnt=1][offset=12][len=cutBlock.length][cutBlock]
+  const rawInner = new Uint8Array(12 + cutBlock.length);
+  const riv = new DataView(rawInner.buffer);
+  riv.setUint32(0, 1, true);
+  riv.setUint32(4, 12, true);
+  riv.setInt32(8, cutBlock.length, true);
+  rawInner.set(cutBlock, 12);
+
+  // Pack rawInner using literal-only Siglus LZ chunks (0xff flag byte + 8 literal bytes)
+  const chunks = [];
+  for (let i = 0; i < rawInner.length; i += 8) {
+    chunks.push(0xff);
+    for (let j = 0; j < 8 && i + j < rawInner.length; j++) chunks.push(rawInner[i + j]);
+  }
+  const lzBody = new Uint8Array(8 + chunks.length);
+  const lzv = new DataView(lzBody.buffer);
+  lzv.setUint32(0, lzBody.length, true);
+  lzv.setUint32(4, rawInner.length, true);
+  lzBody.set(chunks, 8);
+
+  // Outer G00 Type 2 file: type=2, w=1020, h=1020, count=1, outerRect=[510,720,539,749,0,0], lzBody
+  const g00Bytes = new Uint8Array(9 + 24 + lzBody.length);
+  const gv = new DataView(g00Bytes.buffer);
+  gv.setUint8(0, 2);
+  gv.setUint16(1, 1020, true);
+  gv.setUint16(3, 1020, true);
+  gv.setUint32(5, 1, true);
+  gv.setInt32(9, 510, true); // outer atlas left — MUST be ignored
+  gv.setInt32(13, 720, true); // outer atlas top — MUST be ignored
+  gv.setInt32(17, 539, true);
+  gv.setInt32(21, 749, true);
+  g00Bytes.set(lzBody, 9 + 24);
+
+  const img = new G00Image(g00Bytes);
+  const frame = img.frame(0);
+  assert.equal(frame.x, 0);
+  assert.equal(frame.y, 0);
+  assert.equal(frame.width, cutW);
+  assert.equal(frame.height, cutH);
+  assert.equal(frame.centerX, 1);
+  assert.equal(frame.centerY, 1);
+
+  // 2. Verify real Tsukikana & SSR smartphone bitmap-font and multi-cut UI G00 files when installed
+  const TK_DIR = '/Volumes/Transcend/Torrents/1GAMES/Tsuki no Kanata de Aimashou';
+  for (const [label, dir] of [
+    ['Tsukikana', TK_DIR],
+    ['SSR', SSR_DIR],
+  ]) {
+    if (!fs.existsSync(`${dir}/g00/_mj_SE30_0010.g00`)) continue;
+    const glyphImg = new G00Image(new Uint8Array(fs.readFileSync(`${dir}/g00/_mj_SE30_0010.g00`)));
+    const glyphCut = glyphImg.frame(833);
+    assert.equal(glyphCut.x, 0, `${label} _mj_SE30_0010 cut 833 leaked outer X`);
+    assert.equal(glyphCut.y, 0, `${label} _mj_SE30_0010 cut 833 leaked outer Y`);
+    assert.equal(glyphCut.width, 30);
+    assert.equal(glyphCut.height, 30);
+    if (fs.existsSync(`${dir}/g00/_chr_menu_btn01.g00`)) {
+      const btnImg = new G00Image(new Uint8Array(fs.readFileSync(`${dir}/g00/_chr_menu_btn01.g00`)));
+      const btnCut2 = btnImg.frame(2);
+      assert.equal(btnCut2.x, 0, `${label} _chr_menu_btn01 cut 2 leaked outer X`);
+      assert.equal(btnCut2.y, 0, `${label} _chr_menu_btn01 cut 2 leaked outer Y`);
+    }
+  }
+
+  // 3. Verify display.ts propagates parent dst_clip in appendChildren (0x629c70) and guards object.text outline
+  const displaySrc = fs.readFileSync(path.join(SIGLUS_DIR, 'display.ts'), 'utf8');
+  assert.match(displaySrc, /appendChildren\([\s\S]{0,600}if \(object\.clip\?\.\[0\]\) \{[\s\S]{0,500}clipBox\.style\.clipPath/);
+  assert.match(displaySrc, /const screenX = parentOrigin\[0\] \+ x;/);
+  assert.match(displaySrc, /shadowMode === 2 \|\|\s*\(shadowMode === undefined && outlineColor !== undefined && outlineColor >= 0\)/);
 });

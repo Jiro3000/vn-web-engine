@@ -16,6 +16,7 @@ import path from 'node:path';
 import {parseMwndLayout, parseNoSaveObjectIds, parseSpaceHideObjectIds} from '../dist/engines/siglus/mwnd.js';
 import {parseCgTable} from '../dist/formats/siglus/cgtable.js';
 import {SiglusDbs} from '../dist/formats/siglus/dbs.js';
+import {G00Image} from '../dist/formats/siglus/g00.js';
 import {readGan} from '../dist/formats/siglus/gan.js';
 import {SiglusOmv} from '../dist/formats/siglus/omv.js';
 import {SiglusScenePack} from '../dist/formats/siglus/scene-pack.js';
@@ -183,6 +184,34 @@ for (const f of ovks.slice(0, 20)) {
   if (idx.size === 0) throw new Error(`Empty OVK ${f}`);
 }
 console.log(`   KOE (.ovk): ${ovks.length} bank(s) (first ${Math.min(20, ovks.length)} indexed cleanly)`);
+
+const g00s = listNonDotFiles(path.join(dataDir, 'g00'), '.g00');
+let g00Checked = 0;
+let g00AtlasCount = 0;
+for (const f of g00s) {
+  const buf = new Uint8Array(fs.readFileSync(path.join(dataDir, 'g00', f)));
+  if (buf.length < 33 || buf[0] !== 2) continue;
+  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  const cnt = dv.getUint32(5, true);
+  let nzCut = -1;
+  for (let i = 0; i < cnt && 9 + (i + 1) * 24 <= buf.length; i++) {
+    if (dv.getInt32(9 + i * 24, true) !== 0 || dv.getInt32(13 + i * 24, true) !== 0) {
+      nzCut = i;
+      break;
+    }
+  }
+  if (nzCut >= 0) {
+    g00AtlasCount++;
+    if (g00Checked < 25) {
+      const fr = new G00Image(buf).frame(nzCut);
+      if (fr.x !== 0 || fr.y !== 0) {
+        throw new Error(`G00 ${f} cut ${nzCut} leaked outer atlas offset (${fr.x},${fr.y})`);
+      }
+      g00Checked++;
+    }
+  }
+}
+console.log(`   G00: ${g00s.length} file(s), ${g00AtlasCount} atlas/sheet Type 2 file(s) (${g00Checked} verified x=0,y=0)`);
 
 console.log('\n5. Auto-computed saveKey:');
 console.log(`   siglus:${digests['Scene.pck']}`);

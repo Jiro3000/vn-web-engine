@@ -401,6 +401,110 @@ try {
         }
       }
 
+      const visualIntegrityErrors = [];
+      let compositesCount = 0;
+      let clippedContainersCount = 0;
+      let stageTextCount = 0;
+      if (disp?.graphicCache) {
+        for (const [ck, entry] of disp.graphicCache.entries()) {
+          if (entry?.graphic && (entry.graphic.x !== 0 || entry.graphic.y !== 0)) {
+            visualIntegrityErrors.push('g00_nonzero_xy:' + ck + '=' + entry.graphic.x + ',' + entry.graphic.y);
+            if (visualIntegrityErrors.length >= 10) break;
+          }
+        }
+      }
+      const domSynced = !p?.objectsDirty && !p?.systemObjectsDirty && !p?.systemFrontObjectsDirty;
+      const walkVisualTree = (map, domRoot, isRootStage, checkDomClip) => {
+        if (!map || !domRoot) return;
+        const visit = (obj, slotId, isRoot) => {
+          if (!obj || !obj.visible) return;
+          const fr = obj.frames?.[obj.pattern];
+          if (fr && obj.type !== 1 && obj.name && (fr.x !== 0 || fr.y !== 0)) {
+            visualIntegrityErrors.push('frame_nonzero_xy:' + obj.name.slice(0, 40) + '=' + fr.x + ',' + fr.y);
+          }
+          if (obj.name && obj.name.includes('|') && fr) {
+            compositesCount++;
+            const tokens = obj.name.split('|').filter((t) => t.length > 0);
+            const explicitDim = /^\\((\\d+),(\\d+)\\)$/.exec(tokens[0] ?? '');
+            const partTokens = explicitDim ? tokens.slice(1) : tokens;
+            let expectedW = explicitDim ? Number(explicitDim[1]) : 0;
+            let expectedH = explicitDim ? Number(explicitDim[2]) : 0;
+            let allCached = !explicitDim && partTokens.length > 0;
+            let maxDx = 0;
+            let maxDy = 0;
+            for (let pi = 0; pi < partTokens.length; pi++) {
+              const m = /^([^()]+?)(?:\\((-?\\d+),(-?\\d+)(?:,(\\d+))?(?:,blend=(\\d+))?\\))?$/.exec(partTokens[pi].trim());
+              if (!m) { allCached = false; continue; }
+              const pName = m[1].trim().toLowerCase();
+              const dx = Number(m[2] ?? 0);
+              const dy = Number(m[3] ?? 0);
+              const pat = Number(m[4] ?? 0);
+              if (dx > maxDx) maxDx = dx;
+              if (dy > maxDy) maxDy = dy;
+              const cached = disp?.graphicCache?.get(pName + '#' + pat)?.graphic;
+              if (!cached) {
+                allCached = false;
+              } else if (!explicitDim) {
+                if (pi === 0) {
+                  expectedW = cached.width;
+                  expectedH = cached.height;
+                }
+                const right = dx - cached.centerX + cached.width;
+                const bottom = dy - cached.centerY + cached.height;
+                if (right > expectedW) expectedW = right;
+                if (bottom > expectedH) expectedH = bottom;
+              }
+            }
+            if (explicitDim && (fr.width !== expectedW || fr.height !== expectedH)) {
+              visualIntegrityErrors.push('composite_explicit_dim_mismatch:' + fr.width + 'x' + fr.height + '!=' + expectedW + 'x' + expectedH);
+            } else if (allCached && (fr.width !== expectedW || fr.height !== expectedH)) {
+              visualIntegrityErrors.push('composite_dim_mismatch:' + obj.name.slice(0, 48) + ' got ' + fr.width + 'x' + fr.height + ' expected ' + expectedW + 'x' + expectedH);
+            }
+            if (fr.image && typeof fr.image.getContext === 'function' && fr.width > 0 && fr.height > 0) {
+              // Sample a sparse grid across the composite canvas to ensure it isn't blank
+              const ctx = fr.image.getContext('2d');
+              const data = ctx?.getImageData(0, 0, fr.width, fr.height)?.data;
+              if (data) {
+                let opaque = 0;
+                const step = Math.max(4, Math.floor(data.length / 4096) * 4);
+                for (let bi = 3; bi < data.length; bi += step) if (data[bi] > 10) opaque++;
+                if (opaque === 0) visualIntegrityErrors.push('composite_blank:' + obj.name.slice(0, 48));
+              }
+            }
+          }
+          if (obj.clip?.[0] && obj.children && [...obj.children.values()].some((c) => c?.visible)) {
+            clippedContainersCount++;
+            if (checkDomClip && isRoot && slotId !== undefined) {
+              const slotEl = domRoot.querySelector('[data-siglus-object-id="' + slotId + '"]');
+              if (slotEl && getComputedStyle(slotEl).clipPath === 'none') {
+                visualIntegrityErrors.push('clipped_container_missing_clipPath:slot=' + slotId);
+              }
+            }
+          }
+          if (obj.text && String(obj.text.value ?? '').trim().length > 0) {
+            stageTextCount++;
+          }
+          if (obj.children) {
+            for (const [ck, child] of obj.children.entries()) visit(child, ck, false);
+          }
+        };
+        for (const [k, obj] of map.entries()) visit(obj, k, isRootStage);
+      };
+      walkVisualTree(p?.objects?.[0], layersEl, true, domSynced);
+      if (p?.systemCallActive || p?.excallAllocated) {
+        walkVisualTree(p?.systemObjects, systemLayerEl, false, domSynced);
+        walkVisualTree(p?.systemFrontObjects, systemLayerEl, false, domSynced);
+      }
+      if (domSynced && clippedContainersCount > 0 && stage) {
+        let domClipped = 0;
+        for (const el of stage.querySelectorAll('div')) {
+          if (el.style?.clipPath && el.style.clipPath !== 'none') domClipped++;
+        }
+        if (domClipped === 0) {
+          visualIntegrityErrors.push('clipped_containers_dom_missing:expected>=' + clippedContainersCount);
+        }
+      }
+
       const dbg = window.__siglusDebug?.snapshot?.();
       const historyEl = stage?.querySelector('[data-siglus-history]');
       const errBanner = document.getElementById('fatal-error')?.hidden === false ? document.getElementById('fatal-error').textContent : '';
@@ -433,6 +537,10 @@ try {
         autoMode: Boolean(p?.autoEnabled),
         nanCount,
         nanElements,
+        visualIntegrityErrors,
+        compositesCount,
+        clippedContainersCount,
+        stageTextCount,
         buttons,
         backlogOpen: Boolean(historyEl),
         stageRect: sr ? {left: sr.left, top: sr.top, width: sr.width, height: sr.height} : null,
@@ -461,6 +569,9 @@ try {
     const failures = [];
     if (s.nanCount > 0) failures.push(`nanCount=${s.nanCount} els=${JSON.stringify(s.nanElements)}`);
     if (s.errBanner) failures.push(`errBanner=${s.errBanner}`);
+    if (s.visualIntegrityErrors?.length > 0) {
+      failures.push(`visualIntegrity=${JSON.stringify(s.visualIntegrityErrors)}`);
+    }
     for (const b of s.buttons) {
       const fullyOffStage = b.rect.top >= SCREEN_H || b.rect.bottom <= 0 || b.rect.left >= SCREEN_W || b.rect.right <= 0;
       if (fullyOffStage) continue;
@@ -1018,6 +1129,8 @@ try {
       let chaosCount = 0;
       let choicesTaken = 0;
       let watchdogChecks = 0;
+      let compositesAudited = 0;
+      let clippedContainersAudited = 0;
       const setCtrl = async (down) => {
         if (down === ctrlHeld) return;
         ctrlHeld = down;
@@ -1028,8 +1141,13 @@ try {
         await delay(170);
         const s = await inspectState();
         watchdogChecks++;
+        compositesAudited += s.compositesCount ?? 0;
+        clippedContainersAudited += s.clippedContainersCount ?? 0;
         if (s.errBanner) { errors.push(`[crawl:banner] ${s.errBanner}`); break; }
         if (s.nanCount > 0) errors.push(`[watchdog@${s.scene}:${s.line}] nanCount=${s.nanCount}`);
+        if (s.visualIntegrityErrors?.length > 0) {
+          errors.push(`[watchdog-visual@${s.scene}:${s.line}] ${JSON.stringify(s.visualIntegrityErrors)}`);
+        }
         checkUnhandled(s, `watchdog@${s.scene}:${s.line}`);
         if (s.waitingForPage && !s.systemCallActive && !s.backlogOpen) {
           if (s.layersInert || s.messageInert || s.controlsInert) errors.push(`[watchdog@${s.scene}] stuck inert`);
@@ -1120,6 +1238,8 @@ try {
         choicesTaken,
         chaosCount,
         watchdogChecks,
+        compositesAudited,
+        clippedContainersAudited,
         unhandledCommands: fin.unhandledCommands.length,
         unhandledProperties: fin.unhandledProperties.length,
       }));

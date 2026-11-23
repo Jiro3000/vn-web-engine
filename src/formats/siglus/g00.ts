@@ -27,7 +27,7 @@ export class G00Image {
   readonly count: number;
   private readonly data: Uint8Array<ArrayBuffer>;
 
-  constructor(private readonly bytes: Uint8Array) {
+  constructor(bytes: Uint8Array) {
     const view = byteDataView(bytes);
     this.type = view.getUint8(0);
     this.width = view.getUint16(1, true);
@@ -83,14 +83,14 @@ export class G00Image {
       }
       return {width, height, x: 0, y: 0, centerX: 0, centerY: 0, bgra};
     }
-    const outer = byteDataView(this.bytes);
-    const x = outer.getInt32(9 + index * 24, true);
-    const y = outer.getInt32(13 + index * 24, true);
+    // Native C_g00::set_data (0x6de310) skips the 24-byte outer cut-rect table completely
+    // (cut_cnt * 24 bytes are source-atlas crop coordinates, never runtime draw offsets),
+    // and C_g00_cut::set_data (0x6de430) reads only width/height/centerX/centerY/disp_rect/chips.
     const offset = view.getUint32(4 + index * 8, true);
     // Native 0x6de3bc checks length != 0; deduplicated Type 2 cuts store negative signed length (-N).
     const length = Math.abs(view.getInt32(8 + index * 8, true));
     if (!offset || !length)
-      return {width: 1, height: 1, x, y, centerX: 0, centerY: 0, bgra: new Uint8Array(4)};
+      return {width: 1, height: 1, x: 0, y: 0, centerX: 0, centerY: 0, bgra: new Uint8Array(4)};
     checkRange(this.data.length, offset, length);
     const block = this.data.subarray(offset, offset + length);
     const cut = byteDataView(block);
@@ -130,8 +130,8 @@ export class G00Image {
     return {
       width: w,
       height: h,
-      x,
-      y,
+      x: 0,
+      y: 0,
       centerX: cut.getInt32(20, true),
       centerY: cut.getInt32(24, true),
       contentBounds: [left, top, left + contentWidth, top + contentHeight],

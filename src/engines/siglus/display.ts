@@ -2425,10 +2425,17 @@ export class SiglusDisplay {
     y: number,
     width: number,
     height: number,
+    parentOrigin: readonly [number, number] = [0, 0],
   ): void {
     if (!object.clip?.[0]) return;
     const [, left, top, right, bottom] = object.clip;
-    element.style.clipPath = `inset(${Math.max(0, top - y)}px ${Math.max(0, x + width - right)}px ${Math.max(0, y + height - bottom)}px ${Math.max(0, left - x)}px)`;
+    if (right <= left || bottom <= top) {
+      element.style.clipPath = 'inset(100%)';
+      return;
+    }
+    const screenX = parentOrigin[0] + x;
+    const screenY = parentOrigin[1] + y;
+    element.style.clipPath = `inset(${Math.max(0, top - screenY)}px ${Math.max(0, screenX + width - right)}px ${Math.max(0, screenY + height - bottom)}px ${Math.max(0, left - screenX)}px)`;
   }
 
   private async appendObjects(
@@ -2438,6 +2445,7 @@ export class SiglusDisplay {
     animate: boolean,
     parentOpacity: readonly string[] = [],
     isRootStage = false,
+    parentOrigin: readonly [number, number] = [0, 0],
   ): Promise<void> {
     const tagStageSlot = (el: HTMLElement, object: DrawObject) => {
       if (!isRootStage || object.slotId === undefined) return;
@@ -2475,11 +2483,20 @@ export class SiglusDisplay {
         text.style.fontWeight = bold ? 'bold' : 'normal';
         if (spaceX) text.style.letterSpacing = `${spaceX}px`;
         if (spaceY) text.style.lineHeight = `${size + spaceY}px`;
-        const shadowCss = shadowColor !== undefined ? (this.tableColor(shadowColor) ?? 'black') : 'black';
-        const outlineCss = outlineColor !== undefined ? (this.tableColor(outlineColor) ?? 'black') : 'black';
-        if (shadowMode === 2 || outlineColor !== undefined) {
+        const shadowCss =
+          shadowColor !== undefined && shadowColor >= 0
+            ? (this.tableColor(shadowColor) ?? 'black')
+            : 'black';
+        const outlineCss =
+          outlineColor !== undefined && outlineColor >= 0
+            ? (this.tableColor(outlineColor) ?? 'black')
+            : 'black';
+        if (
+          shadowMode === 2 ||
+          (shadowMode === undefined && outlineColor !== undefined && outlineColor >= 0)
+        ) {
           text.style.textShadow = `1px 0 0 ${outlineCss},-1px 0 0 ${outlineCss},0 1px 0 ${outlineCss},0 -1px 0 ${outlineCss}`;
-        } else if (shadow || shadowMode) {
+        } else if (shadowMode === 1 || (shadowMode === undefined && shadow)) {
           text.style.textShadow = `1px 1px 2px ${shadowCss}`;
         }
         this.applyObjectScale(text, object, [textPlacement.pivotX, textPlacement.pivotY]);
@@ -2491,12 +2508,13 @@ export class SiglusDisplay {
           textPlacement.placedY,
           maxWidth,
           this.height,
+          parentOrigin,
         );
         this.applyLeafOpacity(text, object, animate, parentOpacity);
         tagStageSlot(text, object);
         parent.append(text);
         if (object.children)
-          await this.appendChildren(parent, object, button, animate, parentOpacity);
+          await this.appendChildren(parent, object, button, animate, parentOpacity, parentOrigin);
         continue;
       }
       if (object.weather && object.weather.mode > 0) {
@@ -2507,7 +2525,7 @@ export class SiglusDisplay {
           parent.append(layer);
         }
         if (object.children)
-          await this.appendChildren(parent, object, button, animate, parentOpacity);
+          await this.appendChildren(parent, object, button, animate, parentOpacity, parentOrigin);
         continue;
       }
       if (object.gan?.sequence !== undefined) {
@@ -2519,13 +2537,22 @@ export class SiglusDisplay {
           tagStageSlot(ganLayer, object);
           parent.append(ganLayer);
           if (object.children)
-            await this.appendChildren(parent, object, button, animate, parentOpacity);
+            await this.appendChildren(parent, object, button, animate, parentOpacity, parentOrigin);
           continue;
         }
       }
       if (!object.movie && !object.name && !object.frames.length) {
-        if (object.children)
-          await this.appendChildren(parent, object, button, animate, parentOpacity);
+        if (object.children) {
+          const wrapper = await this.appendChildren(
+            parent,
+            object,
+            button,
+            animate,
+            parentOpacity,
+            parentOrigin,
+          );
+          tagStageSlot(wrapper, object);
+        }
         continue;
       }
       if (object.pattern < 0) continue;
@@ -2582,6 +2609,7 @@ export class SiglusDisplay {
         placement.placedY,
         frame.width,
         frame.height,
+        parentOrigin,
       );
       element.append(canvas);
       if (object.patternCycle) {
@@ -2617,8 +2645,8 @@ export class SiglusDisplay {
             frame,
             canvas,
             object,
-            placement.placedX,
-            placement.placedY,
+            parentOrigin[0] + placement.placedX,
+            parentOrigin[1] + placement.placedY,
           );
         const role = object.name.split('_').at(-1);
         const supported =
@@ -2780,7 +2808,7 @@ export class SiglusDisplay {
         );
       }
       if (object.children)
-        await this.appendChildren(parent, object, button, animate, parentOpacity);
+        await this.appendChildren(parent, object, button, animate, parentOpacity, parentOrigin);
     }
   }
 
@@ -2834,11 +2862,29 @@ export class SiglusDisplay {
     button: (target: NonNullable<DrawObject['button']>) => void,
     animate: boolean,
     parentOpacity: readonly string[],
-  ): Promise<void> {
+    parentOrigin: readonly [number, number] = [0, 0],
+  ): Promise<HTMLElement> {
     // Applying the group alpha to its leaves keeps blending in the stage's backdrop.
     const children = document.createElement('div');
-    children.style.cssText = `position:absolute;left:${object.x}px;top:${object.y}px;pointer-events:none`;
-    this.applyObjectPosition(children, object);
+    let wrapper: HTMLElement = children;
+    if (object.clip?.[0]) {
+      // Native C_d3d_render_param::combine_parent (0x629c70, 0x629e63..0x629ed1) propagates and
+      // intersects parent dst_clip in screen coordinates down to all descendants.
+      const [, left, top, right, bottom] = object.clip;
+      const clipBox = document.createElement('div');
+      clipBox.style.cssText = `position:absolute;left:${-parentOrigin[0]}px;top:${-parentOrigin[1]}px;width:${this.width}px;height:${this.height}px;pointer-events:none`;
+      clipBox.style.clipPath =
+        right <= left || bottom <= top
+          ? 'inset(100%)'
+          : `inset(${Math.max(0, top)}px ${Math.max(0, this.width - right)}px ${Math.max(0, this.height - bottom)}px ${Math.max(0, left)}px)`;
+      children.style.cssText = `position:absolute;left:${parentOrigin[0] + object.x}px;top:${parentOrigin[1] + object.y}px;pointer-events:none`;
+      this.applyObjectPosition(children, object, parentOrigin[0], parentOrigin[1]);
+      clipBox.append(children);
+      wrapper = clipBox;
+    } else {
+      children.style.cssText = `position:absolute;left:${object.x}px;top:${object.y}px;pointer-events:none`;
+      this.applyObjectPosition(children, object);
+    }
     const childPivot: [number, number] = [object.centerRep?.[0] ?? 0, object.centerRep?.[1] ?? 0];
     this.applyObjectScale(children, object, childPivot);
     if ((object.transparency ?? 255) !== 255 || object.opacity) {
@@ -2847,14 +2893,23 @@ export class SiglusDisplay {
       this.applyObjectOpacity(children, object, animate, property);
       parentOpacity = [...parentOpacity, property];
     }
-    parent.append(children);
+    parent.append(wrapper);
+    const childOffsetX = object.positionOffsets?.x?.reduce((sum, value) => sum + value, 0) ?? 0;
+    const childOffsetY = object.positionOffsets?.y?.reduce((sum, value) => sum + value, 0) ?? 0;
+    const childOrigin: readonly [number, number] = [
+      parentOrigin[0] + object.x + childOffsetX,
+      parentOrigin[1] + object.y + childOffsetY,
+    ];
     await this.appendObjects(
       children,
       orderedObjects(object.children!),
       button,
       animate,
       parentOpacity,
+      false,
+      childOrigin,
     );
+    return wrapper;
   }
 
   private applyObjectPosition(

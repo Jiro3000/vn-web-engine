@@ -451,4 +451,37 @@ export async function auditSiglusAssets(
       assert.ok(idx.size > 0, `OVK ${f} empty index`);
     }
   }
+
+  // Native C_g00::set_data (0x6de310) skips the 24-byte outer atlas-crop table for Type 2 G00s;
+  // verify multi-cut G00 files with non-zero outer (left, top) decode with frame.x === 0, frame.y === 0.
+  const g00Dir = path.join(gameDir, 'g00');
+  if (fs.existsSync(g00Dir)) {
+    const g00Files = listNonDotFiles(g00Dir, '.g00');
+    let checkedNonZeroOuter = 0;
+    for (const f of g00Files) {
+      if (checkedNonZeroOuter >= sampleLimit) break;
+      const buf = new Uint8Array(fs.readFileSync(path.join(g00Dir, f)));
+      if (buf.length < 33 || buf[0] !== 2) continue;
+      const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+      const cnt = dv.getUint32(5, true);
+      let nzCut = -1;
+      for (let i = 0; i < cnt && 9 + (i + 1) * 24 <= buf.length; i++) {
+        const ox = dv.getInt32(9 + i * 24, true);
+        const oy = dv.getInt32(13 + i * 24, true);
+        if (ox !== 0 || oy !== 0) {
+          nzCut = i;
+          break;
+        }
+      }
+      if (nzCut >= 0) {
+        const img = new G00Image(buf);
+        const fr = img.frame(nzCut);
+        assert.equal(fr.x, 0, `${f} cut ${nzCut}: G00 Type 2 outer atlas X leaked into frame.x=${fr.x}`);
+        assert.equal(fr.y, 0, `${f} cut ${nzCut}: G00 Type 2 outer atlas Y leaked into frame.y=${fr.y}`);
+        assert.ok(fr.width > 0 && fr.height > 0, `${f} cut ${nzCut}: invalid dimensions`);
+        assert.ok(Number.isFinite(fr.centerX) && Number.isFinite(fr.centerY), `${f} cut ${nzCut}: non-finite center`);
+        checkedNonZeroOuter++;
+      }
+    }
+  }
 }
