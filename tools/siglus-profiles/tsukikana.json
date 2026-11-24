@@ -38,7 +38,7 @@
     "expectedScene": "_03_cgm",
     "tabs": [
       { "buttonId": "103", "expectedScene": "_03_mus" },
-      { "buttonId": "102", "expectedScene": "_03_scn" }
+      { "buttonId": "207", "expectedScene": "_03_scn" }
     ]
   }
 }
