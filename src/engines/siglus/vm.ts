@@ -268,6 +268,194 @@ export class SiglusVm {
     return {globals: [...this.globals], frames};
   }
 
+  /** Scan upcoming instructions without mutating VM state to extract literal voice IDs for prefetching. */
+  peekUpcomingVoices(limit = 2, maxInstructions = 256): number[] {
+    if (limit <= 0 || !this.frames.length) return [];
+    const voices: number[] = [];
+    const seen = new Set<number>();
+    const visitedJumps = new Set<number>();
+    let frameIndex = this.frames.length - 1;
+    let frame = this.sceneJumps.get(this.frames[frameIndex]!) ?? this.frames[frameIndex]!;
+    let pc = frame.pc;
+    let stack: unknown[] = [];
+    let points: number[] = [];
+    try {
+      for (let step = 0; step < maxInstructions && voices.length < limit; step++) {
+        const code = frame.code;
+        if (pc < 0 || pc >= code.byteLength) break;
+        const readWord = (): number => {
+          const v = code.getInt32(pc, true);
+          pc += 4;
+          return v;
+        };
+        const readArgs = (): unknown[] => {
+          const count = readWord();
+          if (count < 0 || count > (code.byteLength - pc) / 4) throw new Error('bounds');
+          const out: unknown[] = [];
+          for (let i = 0; i < count; i++) {
+            const form = readWord();
+            if (form === -1) out.push(readArgs());
+            else if (form === 0 || form === 10 || form === 20 || form === 30) out.push(stack.pop());
+            else if (form > 0) {
+              const start = points.pop();
+              out.push(start !== undefined && stack.length > start ? stack.splice(start) : []);
+            } else throw new Error('form');
+          }
+          return out.reverse();
+        };
+        const op = code.getUint8(pc++);
+        switch (op) {
+          case 0:
+            step = maxInstructions;
+            break;
+          case 1:
+            pc += 4;
+            break;
+          case 2: {
+            const form = readWord();
+            const raw = readWord();
+            stack.push(form === 10 ? raw : null);
+            break;
+          }
+          case 3:
+            if (readWord() !== 0) stack.pop();
+            break;
+          case 4:
+            pc += 4;
+            stack.push(stack.at(-1) ?? null);
+            break;
+          case 5: {
+            const start = points.pop();
+            if (start !== undefined && stack.length > start) stack.length = start;
+            stack.push(null);
+            break;
+          }
+          case 6: {
+            const start = points.at(-1);
+            if (start === undefined) {
+              step = maxInstructions;
+              break;
+            }
+            const slice = stack.slice(start);
+            points.push(stack.length);
+            stack.push(...slice);
+            break;
+          }
+          case 7: {
+            const form = readWord();
+            pc += 4;
+            if (form === 11 || form === 21) stack.pop();
+            break;
+          }
+          case 8:
+            points.push(stack.length);
+            break;
+          case 9:
+            break;
+          case 16: {
+            const target = frame.scene.labels[readWord()];
+            const visitKey = (frameIndex << 24) ^ (target ?? -1);
+            if (target === undefined || visitedJumps.has(visitKey)) {
+              step = maxInstructions;
+              break;
+            }
+            visitedJumps.add(visitKey);
+            pc = target;
+            break;
+          }
+          case 17:
+          case 18:
+          case 19:
+          case 20:
+            step = maxInstructions;
+            break;
+          case 21:
+          case 22:
+            if (voices.length === 0 && frameIndex > 0) {
+              frameIndex--;
+              frame = this.sceneJumps.get(this.frames[frameIndex]!) ?? this.frames[frameIndex]!;
+              pc = frame.pc;
+              stack = [];
+              points = [];
+            } else {
+              step = maxInstructions;
+            }
+            break;
+          case 32: {
+            pc += 12;
+            stack.pop();
+            const start = points.pop();
+            if (start !== undefined && stack.length > start) stack.length = start;
+            break;
+          }
+          case 33:
+            pc += 5;
+            stack.pop();
+            stack.push(null);
+            break;
+          case 34:
+            pc += 9;
+            stack.pop();
+            stack.pop();
+            stack.push(null);
+            break;
+          case 48: {
+            pc += 4;
+            const args = readArgs();
+            const namedCount = readWord();
+            if (namedCount < 0 || namedCount > (code.byteLength - pc) / 4) {
+              step = maxInstructions;
+              break;
+            }
+            pc += namedCount * 4;
+            const retForm = readWord();
+            const start = points.pop();
+            const rawPath =
+              start !== undefined && stack.length > start ? stack.splice(start) : [];
+            const path = rawPath.flatMap((v) =>
+              Array.isArray(v) ? (v as number[]) : [typeof v === 'number' ? v : -1],
+            );
+            if (hasTrailingReadFlag(path)) pc += 4;
+            if (path.length === 1) {
+              const id = path[0]!;
+              if (id === 3 || id === 4 || id === 5) {
+                step = maxInstructions;
+                break;
+              }
+              if (
+                (id === 18 || id === 91 || id === 87 || id === 88 || id === 89) &&
+                typeof args[0] === 'number' &&
+                args[0] >= 0 &&
+                !seen.has(args[0])
+              ) {
+                seen.add(args[0]);
+                voices.push(args[0]);
+              }
+            }
+            if (retForm !== 0) {
+              if (retForm === 23) points.push(stack.length);
+              stack.push(null);
+            }
+            break;
+          }
+          case 49:
+            pc += 4;
+            stack.pop();
+            break;
+          case 50:
+            stack.pop();
+            break;
+          default:
+            step = maxInstructions;
+            break;
+        }
+      }
+    } catch {
+      // Best-effort read-only prefetch; ignore partial/symbolic stack shapes cleanly.
+    }
+    return voices;
+  }
+
   requestLoad(checkpoint: SiglusCheckpoint, beforeResume: () => Promise<void>): never {
     this.pendingLoad = {checkpoint, beforeResume};
     throw checkpoint;

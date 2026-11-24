@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {BlobSource} from '../dist/core/source.js';
 import {SiglusAudio} from '../dist/engines/siglus/audio.js';
+import {SiglusVm} from '../dist/engines/siglus/vm.js';
+import {ovkIndex} from '../dist/formats/siglus/sound.js';
 
 test('a save sound can finish decoding while a button sound starts on another voice', async () => {
   const started = [];
@@ -332,4 +334,154 @@ test('Siglus resolves loose audio before lower-priority BGM and voice formats', 
   await assert.rejects(audio.voice(200007), /Temporarily unavailable/);
   await audio.voice(200007);
   assert.equal(context.sources.at(-1).buffer.duration, 10);
+});
+
+test('ovkIndex reads <= 1023-entry tables in one read and > 1023-entry tables in two bounded reads', async () => {
+  const buildOvk = (count) => {
+    const headerSize = 4 + count * 16;
+    const payloadOffset = headerSize + 32;
+    const total = payloadOffset + 64;
+    const reads = [];
+    const bytes = new Uint8Array(headerSize);
+    const dv = new DataView(bytes.buffer);
+    dv.setUint32(0, count, true);
+    for (let i = 0; i < count; i++) {
+      dv.setUint32(4 + i * 16, 64, true);
+      dv.setUint32(4 + i * 16 + 4, payloadOffset, true);
+      dv.setUint32(4 + i * 16 + 8, i + 1, true);
+    }
+    const backing = new Uint8Array(total);
+    backing.set(bytes);
+    return {
+      reads,
+      source: {
+        size: total,
+        async read(offset, length) {
+          reads.push([offset, length]);
+          return backing.slice(offset, offset + length);
+        },
+      },
+    };
+  };
+
+  const small = buildOvk(100);
+  const idxSmall = await ovkIndex(small.source);
+  assert.equal(idxSmall.size, 100);
+  assert.deepEqual(idxSmall.get(100), {offset: 4 + 100 * 16 + 32, size: 64});
+  assert.deepEqual(small.reads, [[0, small.source.size]]);
+
+  const large = buildOvk(1025);
+  const idxLarge = await ovkIndex(large.source);
+  assert.equal(idxLarge.size, 1025);
+  assert.deepEqual(idxLarge.get(1025), {offset: 4 + 1025 * 16 + 32, size: 64});
+  assert.deepEqual(large.reads, [
+    [0, 16384],
+    [16384, 4 + 1025 * 16 - 16384],
+  ]);
+});
+
+test('SiglusAudio reads large OVK banks with zero read-ahead and prefetchVoice warms voiceCache', async (t) => {
+  const ogg = vorbisHeader(44100);
+  const voiceOffset = 9 << 20;
+  const totalSize = voiceOffset + ogg.length + 1024;
+  const sliceCalls = [];
+  const fakeFile = Object.setPrototypeOf(
+    {
+      size: totalSize,
+      slice(start, end) {
+        sliceCalls.push([start, end]);
+        return {
+          async arrayBuffer() {
+            const out = new Uint8Array(end - start);
+            if (start === 0) {
+              const dv = new DataView(out.buffer);
+              dv.setUint32(0, 1, true);
+              dv.setUint32(4, ogg.length, true);
+              dv.setUint32(8, voiceOffset, true);
+              dv.setUint32(12, 42, true);
+            } else if (start === voiceOffset) {
+              out.set(ogg);
+            }
+            return out.buffer;
+          },
+        };
+      },
+    },
+    File.prototype,
+  );
+
+  const {audio, context} = mockAudio(t, [['koe/z0001.ovk', new BlobSource(fakeFile)]]);
+  let decodeCount = 0;
+  const origDecode = context.decodeAudioData.bind(context);
+  context.decodeAudioData = async (data) => {
+    decodeCount++;
+    return origDecode(data);
+  };
+
+  audio.prefetchVoice(100042);
+  await audio.voice(100042);
+
+  assert.deepEqual(sliceCalls, [
+    [0, 16384],
+    [voiceOffset, voiceOffset + ogg.length],
+  ]);
+  assert.equal(decodeCount, 1);
+  assert.equal(context.sources.at(-1).buffer.duration, 10);
+
+  // Calling voice() again reuses decoded buffer cleanly with zero additional reads or decodes
+  await audio.voice(100042);
+  assert.equal(sliceCalls.length, 2);
+  assert.equal(decodeCount, 1);
+});
+
+test('SiglusVm.peekUpcomingVoices extracts upcoming literal koe IDs without mutating VM state', () => {
+  const bytes = [];
+  const u8 = (v) => bytes.push(v & 255);
+  const i32 = (v) => {
+    const b = new ArrayBuffer(4);
+    new DataView(b).setInt32(0, v | 0, true);
+    bytes.push(...new Uint8Array(b));
+  };
+  const pushInt = (v) => { u8(2); i32(10); i32(v); };
+  const cmdKoe = (id, ch = 5) => {
+    u8(8); // CD_ELM_POINT
+    pushInt(18); // global.koe
+    pushInt(id);
+    pushInt(ch);
+    u8(48); // CD_COMMAND
+    i32(0); // overload
+    i32(2); i32(10); i32(10); // args: (int, int)
+    i32(0); // named count
+    i32(0); // retForm = void
+    i32(0); // trailing readFlag (0x12 is in readFlagGlobalRoots)
+  };
+
+  // Label 0 starts right after pause (pc=0); first koe 110100067, then jump to label0 -> koe 110100072, then branch op 17 stops scan before 110100999
+  cmdKoe(110100067);
+  u8(16); i32(0); // unconditional jump to label 0 (later in stream -> exercises label follow cleanly)
+  const label0 = bytes.length;
+  cmdKoe(110100072);
+  pushInt(0);
+  u8(17); i32(0); // conditional jump stops scan
+  cmdKoe(110100999);
+  u8(0);
+
+  const vm = Object.create(SiglusVm.prototype);
+  const fakeFrame = {
+    scene: {name: 'test_scene', labels: [label0], strings: []},
+    pc: 0,
+    line: 1,
+    stack: ['keep'],
+    points: [0],
+    code: new DataView(Uint8Array.from(bytes).buffer),
+  };
+  Object.assign(vm, {
+    frames: [fakeFrame],
+    sceneJumps: new Map(),
+  });
+
+  assert.deepEqual(vm.peekUpcomingVoices(4), [110100067, 110100072]);
+  assert.equal(fakeFrame.pc, 0);
+  assert.deepEqual(fakeFrame.stack, ['keep']);
+  assert.deepEqual(fakeFrame.points, [0]);
 });

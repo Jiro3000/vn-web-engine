@@ -3,7 +3,7 @@ import {ScheduledPcmRange, type PcmRangeSource} from '../../audio/scheduled-pcm-
 import {byteDataView} from '../../core/binary.js';
 import {isOggPageStart, readOggPage} from '../../formats/ogg/page.js';
 import {parseWave} from '../../formats/riff/wave.js';
-import type {ByteSource} from '../../core/source.js';
+import {BlobSource, type ByteSource} from '../../core/source.js';
 import {workerSourceOf} from '../../core/worker-source.js';
 import {decodeNwa, decodeOwp, openNwa, ovkIndex, readOvk} from '../../formats/siglus/sound.js';
 import {WorkerPool, WorkerPoolLane} from '../../platform/worker-pool.js';
@@ -102,7 +102,7 @@ export function siglusVolumeGain(normalized: number): number {
 }
 
 export class SiglusAudio {
-  private readonly context = new AudioContext();
+  private readonly context = new AudioContext({latencyHint: 'interactive'});
   private readonly host = new BrowserAudioContextHost(this.context, document);
   private readonly soundLevels = new Map<number, number>();
   private readonly pendingPlayback = new Map<string, object>();
@@ -125,6 +125,7 @@ export class SiglusAudio {
   private nextSeVoice = 0;
   private readonly fadeEnds = new Map<string, number>();
   private readonly indexes = new Map<string, ReturnType<typeof ovkIndex>>();
+  private readonly ovkSources = new Map<string, ByteSource>();
   private readonly effects = new Map<string, Promise<AudioBuffer>>();
   private readonly active = new Set<Playing>();
   private readonly measured = new WeakMap<AudioBuffer, {peak: number; rms: number}>();
@@ -519,6 +520,11 @@ export class SiglusAudio {
     else await this.bgm(checkpoint.name, checkpoint.loop);
   }
 
+  prefetchVoice(id: number): void {
+    if (this.closed || !Number.isInteger(id) || id < 0 || this.voiceCache.has(id)) return;
+    void this.voiceBuffer(id).catch(() => {});
+  }
+
   voiceStart(
     id: number,
     channel = 'voice',
@@ -577,6 +583,16 @@ export class SiglusAudio {
     return cached;
   }
 
+  private ovkSource(path: string, file: ByteSource): ByteSource {
+    let source = this.ovkSources.get(path);
+    if (!source) {
+      // Bypass BlobSource's 8 MiB read-ahead window for random-access OVK headers and voice clips.
+      source = file instanceof BlobSource ? new BlobSource(file.blob, 0) : file;
+      this.ovkSources.set(path, source);
+    }
+    return source;
+  }
+
   private async loadVoice(id: number): Promise<AudioBuffer> {
     const bank = String(Math.floor(id / 100000)).padStart(4, '0');
     const loose = `koe/${bank}/z${String(id).padStart(9, '0')}`;
@@ -588,9 +604,10 @@ export class SiglusAudio {
     const path = `koe/z${bank}.ovk`;
     const file = this.files.get(path);
     if (!file) throw new Error(`Missing Siglus voice bank ${path}`);
+    const source = this.ovkSource(path, file);
     let index = this.indexes.get(path);
     if (!index) {
-      const loading = ovkIndex(file);
+      const loading = ovkIndex(source);
       this.indexes.set(path, loading);
       loading.catch(() => {
         if (this.indexes.get(path) === loading) this.indexes.delete(path);
@@ -599,7 +616,7 @@ export class SiglusAudio {
     }
     const entry = (await index).get(id % 100000);
     if (!entry) throw new Error(`Missing Siglus voice ${id}`);
-    const data = await readOvk(file, entry);
+    const data = await readOvk(source, entry);
     return this.context.decodeAudioData(data.buffer);
   }
 
@@ -1171,6 +1188,8 @@ export class SiglusAudio {
     this.bgmCacheBytes = 0;
     this.nwaStreams.clear();
     this.nwaWorker?.terminate();
+    this.indexes.clear();
+    this.ovkSources.clear();
     this.voiceCache.clear();
     this.effects.clear();
     this.host.dispose();

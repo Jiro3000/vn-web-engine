@@ -1676,7 +1676,12 @@ export class SiglusPlayer {
   }
 
   private async waitAtPage(): Promise<void> {
-    if (!this.systemCallActive) this.pruneDeadButtonGroups(true);
+    if (!this.systemCallActive) {
+      this.pruneDeadButtonGroups(true);
+      if (!this.skipping) {
+        for (const id of this.vm.peekUpcomingVoices?.(2) ?? []) this.audio.prefetchVoice(id);
+      }
+    }
     for (;;) {
       const readSkipping = this.skipping && this.readSkipEnabled && !this.skip;
       const showControls = this.messageButtonsEnabled && (!this.skipping || readSkipping);

@@ -25,9 +25,21 @@ export interface OvKEntry {
 }
 
 export async function ovkIndex(source: ByteSource): Promise<Map<number, OvKEntry>> {
-  const count = byteDataView(await source.read(0, 4)).getUint32(0, true);
-  checkRange(source.size, 4, count * 16);
-  const table = byteDataView(await source.read(4, count * 16));
+  checkRange(source.size, 0, 4);
+  const initial = await source.read(0, Math.min(source.size, 16384));
+  const count = byteDataView(initial).getUint32(0, true);
+  const tableBytes = count * 16;
+  checkRange(source.size, 4, tableBytes);
+  let table: DataView;
+  if (4 + tableBytes <= initial.byteLength) {
+    table = byteDataView(initial.subarray(4, 4 + tableBytes));
+  } else {
+    const combined = new Uint8Array(tableBytes);
+    const have = initial.byteLength - 4;
+    combined.set(initial.subarray(4));
+    combined.set(await source.read(initial.byteLength, tableBytes - have), have);
+    table = byteDataView(combined);
+  }
   const entries = new Map<number, OvKEntry>();
   for (let i = 0; i < table.byteLength; i += 16) {
     const size = table.getUint32(i, true);
