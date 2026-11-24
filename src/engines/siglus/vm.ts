@@ -1025,6 +1025,10 @@ export class SiglusVm {
 
   private stringCommand(receiver: string, member: number, args: Argument[]): Value {
     const start = Math.max(0, Number(args[0] ?? 0));
+    const charWidth = (character: string): number => {
+      const code = character.codePointAt(0)!;
+      return code <= 0x7f || (code >= 0xff61 && code <= 0xff9f) ? 1 : 2;
+    };
     switch (member) {
       case 0:
         return receiver.toUpperCase();
@@ -1032,12 +1036,12 @@ export class SiglusVm {
         return receiver.toLowerCase();
       case 7: {
         // left_len uses one column for halfwidth characters and two for fullwidth.
+        const limit = Number(args[0] ?? 0);
         let width = 0;
         let end = 0;
         for (const character of receiver) {
-          const code = character.codePointAt(0)!;
-          width += code <= 0x7f || (code >= 0xff61 && code <= 0xff9f) ? 1 : 2;
-          if (width > start) break;
+          width += charWidth(character);
+          if (width > limit) break;
           end += character.length;
         }
         return receiver.slice(0, end);
@@ -1051,23 +1055,45 @@ export class SiglusVm {
         );
       case 4:
         return receiver.slice(Math.max(0, receiver.length - start));
-      case 5:
+      case 5: {
+        // 1.1.80.8 0x645ac3: str.len returns halfwidth(1)/fullwidth(2) display-column width.
+        let width = 0;
+        for (const character of receiver) width += charWidth(character);
+        return width;
+      }
       case 6:
+        // 1.1.80.8 0x645ab1: str.cnt returns code-unit count.
         return receiver.length;
       case 8: {
-        // mid_len(start, maxCols): slice from char index start up to maxCols display columns (half=1, full=2)
-        const sliced = receiver.slice(start);
-        if (args.length <= 1) return sliced;
-        const limit = Math.max(0, Number(args[1] ?? 0));
-        let width = 0;
-        let end = 0;
-        for (const character of sliced) {
-          const code = character.codePointAt(0)!;
-          width += code <= 0x7f || (code >= 0xff61 && code <= 0xff9f) ? 1 : 2;
-          if (width > limit) break;
-          end += character.length;
+        // 1.1.80.8 0x645e28: mid_len skips while col < startCols, then takes while col <= startCols + maxCols.
+        const hasLimit = args.length > 1;
+        const limit = start + Number(args[1] ?? 0);
+        let col = 0;
+        let out = '';
+        for (const character of receiver) {
+          const width = charWidth(character);
+          if (col < start) {
+            col += width;
+            continue;
+          }
+          col += width;
+          if (hasLimit && col > limit) break;
+          out += character;
         }
-        return sliced.slice(0, end);
+        return out;
+      }
+      case 9: {
+        // 1.1.80.8 0x645c7a: right_len scans backwards collecting characters within limit display columns.
+        const limit = Number(args[0] ?? 0);
+        const chars = [...receiver];
+        let width = 0;
+        let begin = chars.length;
+        while (begin > 0) {
+          width += charWidth(chars[begin - 1]!);
+          if (width > limit) break;
+          begin--;
+        }
+        return chars.slice(begin).join('');
       }
       case 10:
         return foldAscii(receiver).indexOf(foldAscii(String(args[0])));

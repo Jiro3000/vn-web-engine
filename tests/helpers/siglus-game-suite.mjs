@@ -612,6 +612,7 @@ export async function auditSiglusAssets(
     endingOmvSize,
     bgmCount,
     bgmNwaCount,
+    bgmOggCount,
     nwaCount,
     oggCount,
     ovkCount,
@@ -673,11 +674,15 @@ export async function auditSiglusAssets(
     for (const f of nwas.slice(0, sampleLimit)) auditNwaFile(path.join(dir, f));
   }
 
-  if (oggCount !== undefined) {
-    const wavDir = path.join(gameDir, 'wav');
-    const oggs = listNonDotFiles(wavDir, '.ogg');
-    assert.equal(oggs.length, oggCount);
-    for (const f of oggs) auditOggFile(path.join(wavDir, f));
+  for (const [folder, expected] of [
+    ['bgm', bgmOggCount],
+    ['wav', oggCount],
+  ]) {
+    if (expected === undefined) continue;
+    const dir = path.join(gameDir, folder);
+    const oggs = listNonDotFiles(dir, '.ogg');
+    assert.equal(oggs.length, expected);
+    for (const f of oggs) auditOggFile(path.join(dir, f));
   }
 
   if (ovkCount !== undefined) {

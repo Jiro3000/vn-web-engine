@@ -287,7 +287,11 @@ try {
     const stagePageScenes = new Set(${JSON.stringify(profileCfg.gameplay?.stagePageScenes ?? [])});
     const ending = ${JSON.stringify(replay?.ending ?? null)};
     const expectedSpeaker = ${JSON.stringify(replay?.expectedSpeaker ?? null)};
-    const promptScenes = new Set(${JSON.stringify(replay?.prompts?.map(({scene}) => scene) ?? [])});
+    const promptScenes = new Set(${JSON.stringify(
+      replay?.prompts
+        ?.filter((p) => !p.advancePage || p.button || p.choice !== undefined || p.editValues !== undefined)
+        ?.map(({scene}) => scene) ?? [],
+    )});
     window.__audit.stageTiming = [];
     if (${Boolean(process.env.TRACE_CRAWL && MODE === 'crawl')}) {
       const delay = p.delay.bind(p);
@@ -1090,6 +1094,11 @@ try {
       }
       if (prompt.advancePage && state?.scene === prompt.scene && state.waitingForPage) {
         await pressKey('Enter', 'Enter', 13);
+        await waitFor(
+          `window.__audit.pageWaits !== ${state.pageWaits} || ${currentScene} !== ${JSON.stringify(prompt.scene)} || !window.__runtime?.currentPlayer?.waitingForPage`,
+          5000,
+        );
+        await delay(120);
       } else if (button?.hitOk) {
         if (prompt.editValues) {
           const selector = '#siglus-surface input[type="text"]';

@@ -1,0 +1,65 @@
+{
+  "name": "Hoshi Ori Yume Mirai - Rikka to Anata",
+  "gameDir": "/Volumes/Transcend/Torrents/1GAMES/Hoshi Ori Yume Mirai - Rikka to Anata",
+  "autoModeDialog": true,
+  "title": {
+    "startButton": {"group": "4", "id": "1"},
+    "configButton": {"group": "4", "id": "3"},
+    "messageWindowTiming": {
+      "halfButton": {"group": "100000", "id": "313"},
+      "defaultButton": {"group": "100000", "id": "312"}
+    },
+    "newGamePrompts": [
+      {"scene": "k律佳_聖誕祭", "advancePage": true},
+      {"scene": "k律佳_聖誕祭", "advancePage": true},
+      {"scene": "k律佳_聖誕祭", "advancePage": true},
+      {"scene": "k律佳_聖誕祭", "advancePage": true},
+      {"scene": "_05_name", "choice": "0"}
+    ]
+  },
+  "gameplay": {
+    "minPages": 5,
+    "requireSpeaker": true,
+    "requireBgm": true,
+    "minVisuals": 2,
+    "mwndAutoHideBar": true,
+    "stagePageScenes": ["_00_mess"]
+  },
+  "messageMenu": {
+    "save": {"frameId": "1", "action": "save"},
+    "load": {"frameId": "2", "action": "load"},
+    "quickSave": {"frameId": "3", "action": "none"},
+    "quickLoad": {"frameId": "4", "action": "qload"},
+    "config": {"frameId": "11", "action": "none"},
+    "confirmDialog": {"scene": "_00dialog", "group": "100008", "yesAria": "_cw_yes", "noAria": "_cw_no"},
+    "slotButtonMin": 1,
+    "slotButtonMax": 10
+  },
+  "movies": {
+    "wmv": ["logo"],
+    "omv": [
+      "ef_day_star00",
+      "ef_reco_black00",
+      "ef_reco_white00",
+      "ef_rk01_lf00",
+      "ef_steam00",
+      "ef_sun115_bg502"
+    ]
+  },
+  "crawlReplays": {
+    "custom-name": {
+      "prompts": [
+        {"scene": "k律佳_聖誕祭", "advancePage": true},
+        {"scene": "k律佳_聖誕祭", "advancePage": true},
+        {"scene": "k律佳_聖誕祭", "advancePage": true},
+        {"scene": "k律佳_聖誕祭", "advancePage": true},
+        {"scene": "_05_name", "choice": "1"},
+        {"scene": "_05_name", "editValues": ["試験", "灯"], "button": {"group": "0", "id": "1"}},
+        {"scene": "_05_name", "advancePage": true},
+        {"scene": "_05_name", "advancePage": true},
+        {"scene": "_05_name", "choice": "0"}
+      ],
+      "expectedSpeaker": "灯"
+    }
+  }
+}

@@ -17,6 +17,8 @@ import {
 import {layoutObjectText} from '../dist/engines/siglus/object-text.js';
 import {orderedObjects, serializeDrawObject, SiglusDisplay} from '../dist/engines/siglus/display.js';
 import {SiglusPlayer} from '../dist/engines/siglus/player.js';
+import {SiglusVm} from '../dist/engines/siglus/vm.js';
+import {MissingSiglusVoiceError, SiglusAudio} from '../dist/engines/siglus/audio.js';
 import {encodeCaptureBmp, readCaptureBmpFlags} from '../dist/engines/siglus/capture.js';
 import {BlobSource} from '../dist/core/source.js';
 import {unpackSiglusLz, xorByteInPlace} from '../dist/formats/siglus/compression.js';
@@ -1575,4 +1577,63 @@ test('get_save_message strips newlines, messagePointerAction round-trips capture
   assert.match(displaySrc, /size > 0 \? `\$\{size \* scale\}px` : ''/);
   assert.match(displaySrc, /if \(this\.messageTextSize > 0\) this\.alignDomText\(\);/);
   assert.match(displaySrc, /if \(Number\.parseFloat\(fontSize\) <= 0\) continue;/);
+});
+
+test('SiglusVm stringCommand implements 1.1.80.8 (0x6459d0) display-column string methods', () => {
+  const stringCommand = SiglusVm.prototype.stringCommand;
+  const sample = 'AあBいC';
+
+  // member 6: cnt (UTF-16 length), member 5: len (1-col halfwidth, 2-col fullwidth)
+  assert.equal(stringCommand(sample, 6, []), 5);
+  assert.equal(stringCommand(sample, 5, []), 7);
+  assert.equal(stringCommand('ｱｲAあ', 5, []), 5);
+
+  // member 7: left_len
+  assert.equal(stringCommand(sample, 7, [2]), 'A');
+  assert.equal(stringCommand(sample, 7, [3]), 'Aあ');
+  assert.equal(stringCommand(sample, 7, [4]), 'AあB');
+
+  // member 8: mid_len [startCols, maxCols] (1.1.80.8 0x645ea4: col <= startCols + maxCols)
+  assert.equal(stringCommand(sample, 8, [1, 3]), 'あB');
+  assert.equal(stringCommand(sample, 8, [2, 3]), 'B');
+  assert.equal(stringCommand(sample, 8, [2, 4]), 'Bい');
+  assert.equal(stringCommand('あいう', 8, [1, 2]), '');
+  assert.equal(stringCommand('あいう', 8, [1, 3]), 'い');
+
+  // member 9: right_len
+  assert.equal(stringCommand(sample, 9, [2]), 'C');
+  assert.equal(stringCommand(sample, 9, [3]), 'いC');
+  assert.equal(stringCommand(sample, 9, [4]), 'BいC');
+  assert.equal(stringCommand(sample, 9, [7]), sample);
+  assert.equal(stringCommand(sample, 9, [0]), '');
+  assert.equal(stringCommand(sample, 9, [-1]), '');
+});
+
+test('SiglusAudio/Player handle missing koe/ voice banks gracefully via MissingSiglusVoiceError', async () => {
+  const audio = {files: new Map(), decodeSound: async () => { throw new Error('unexpected decode'); }};
+  await assert.rejects(
+    () => SiglusAudio.prototype.loadVoice.call(audio, 100001),
+    (error) => error instanceof MissingSiglusVoiceError && /koe\/z0001\.ovk/.test(error.message),
+  );
+
+  const playerMissing = {
+    audio: {
+      voice: async (id) => {
+        throw new MissingSiglusVoiceError(id);
+      },
+    },
+  };
+  assert.equal(await SiglusPlayer.prototype.playVoiceSafe.call(playerMissing, 100001, 'voice', 0), false);
+
+  const playerCrash = {
+    audio: {
+      voice: async () => {
+        throw new Error('corrupt voice packet');
+      },
+    },
+  };
+  await assert.rejects(
+    () => SiglusPlayer.prototype.playVoiceSafe.call(playerCrash, 100001, 'voice', 0),
+    /corrupt voice packet/,
+  );
 });

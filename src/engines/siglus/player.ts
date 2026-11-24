@@ -7,6 +7,7 @@ import {SiglusScenePack} from '../../formats/siglus/scene-pack.js';
 import {BrowserFullscreenMoviePlayer} from '../../video/fullscreen-movie.js';
 import {SiglusOmvPlayback} from '../../video/siglus-omv-playback.js';
 import {
+  MissingSiglusVoiceError,
   SiglusAudio,
   siglusVolumeGain,
   type SiglusAudioKind,
@@ -3084,11 +3085,21 @@ export class SiglusPlayer {
 
   private replayGeneration = 0;
 
+  private async playVoiceSafe(id: number, channel: string, character?: number): Promise<boolean> {
+    try {
+      await this.audio.voice(id, channel, character);
+      return true;
+    } catch (error) {
+      if (error instanceof MissingSiglusVoiceError) return false;
+      throw error;
+    }
+  }
+
   private async replayHistoryVoice(entry?: SiglusHistoryEntry): Promise<void> {
     const generation = ++this.replayGeneration;
     for (const {id, character} of entry?.voices ?? []) {
       if (generation !== this.replayGeneration) break;
-      await this.audio.voice(id, 'history-voice', character);
+      if (!(await this.playVoiceSafe(id, 'history-voice', character))) continue;
       await this.audio.waitForEnd('history-voice');
     }
   }
@@ -3872,7 +3883,8 @@ export class SiglusPlayer {
             {id: n(0), character: args.length > 1 ? n(1) : undefined},
           ];
           if (this.skipping) return 0;
-          await this.audio.voice(n(0), 'voice', args.length > 1 ? n(1) : undefined);
+          if (!(await this.playVoiceSafe(n(0), 'voice', args.length > 1 ? n(1) : undefined)))
+            return 0;
           return this.waitAudio('voice', true);
         case 93: // global.next_msg (0x5da150: multi-message sub-block advance)
           break;
@@ -3908,12 +3920,14 @@ export class SiglusPlayer {
           return 0;
         case 88: // global.exkoe_play_wait(koe_no, chara_no?)
           if (this.skipping) return 0;
-          await this.audio.voice(n(0), 'voice', args.length > 1 ? n(1) : undefined);
+          if (!(await this.playVoiceSafe(n(0), 'voice', args.length > 1 ? n(1) : undefined)))
+            return 0;
           await this.waitAudio('voice', false);
           return 0;
         case 89: // global.exkoe_play_wait_key(koe_no, chara_no?)
           if (this.skipping) return 0;
-          await this.audio.voice(n(0), 'voice', args.length > 1 ? n(1) : undefined);
+          if (!(await this.playVoiceSafe(n(0), 'voice', args.length > 1 ? n(1) : undefined)))
+            return 0;
           return this.waitAudio('voice', true);
         case 72:
           this.messageFaces.get(this.display.messageWindow)?.clear();

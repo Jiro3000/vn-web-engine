@@ -9,6 +9,8 @@ import {decodeNwa, decodeOwp, openNwa, ovkIndex, readOvk} from '../../formats/si
 import {WorkerPool, WorkerPoolLane} from '../../platform/worker-pool.js';
 import type {NwaRequest} from './nwa-worker.js';
 
+export class MissingSiglusVoiceError extends Error {}
+
 interface Playing {
   source: AudioBufferSourceNode | ScheduledPcmRange;
   gain: GainNode;
@@ -603,7 +605,7 @@ export class SiglusAudio {
     }
     const path = `koe/z${bank}.ovk`;
     const file = this.files.get(path);
-    if (!file) throw new Error(`Missing Siglus voice bank ${path}`);
+    if (!file) throw new MissingSiglusVoiceError(`Missing Siglus voice bank ${path}`);
     const source = this.ovkSource(path, file);
     let index = this.indexes.get(path);
     if (!index) {
@@ -615,7 +617,7 @@ export class SiglusAudio {
       index = loading;
     }
     const entry = (await index).get(id % 100000);
-    if (!entry) throw new Error(`Missing Siglus voice ${id}`);
+    if (!entry) throw new MissingSiglusVoiceError(`Missing Siglus voice ${id}`);
     const data = await readOvk(source, entry);
     return this.context.decodeAudioData(data.buffer);
   }
