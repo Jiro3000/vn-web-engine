@@ -55,26 +55,53 @@ function resolveBrowserBin() {
   throw new Error('Could not find Brave or Chrome; set BROWSER_BIN');
 }
 
+function findCaseInsensitiveFile(dir, targetLower) {
+  if (!fs.existsSync(dir)) return undefined;
+  const hit = fs.readdirSync(dir).find((name) => !name.startsWith('._') && name.toLowerCase() === targetLower);
+  return hit ? join(dir, hit) : undefined;
+}
+
+function hasSiglusDataFiles(dir) {
+  return Boolean(findCaseInsensitiveFile(dir, 'scene.pck') && findCaseInsensitiveFile(dir, 'gameexe.dat'));
+}
+
 function resolveDataDir(dir) {
-  if (fs.existsSync(join(dir, 'Scene.pck')) && fs.existsSync(join(dir, 'Gameexe.dat'))) return dir;
+  if (hasSiglusDataFiles(dir)) return dir;
   const nested = join(dir, 'StartData', 'GameData');
-  if (fs.existsSync(join(nested, 'Scene.pck')) && fs.existsSync(join(nested, 'Gameexe.dat'))) return nested;
-  throw new Error(`Missing Scene.pck / Gameexe.dat under ${dir}`);
+  if (hasSiglusDataFiles(nested)) return nested;
+  const selectIni = findCaseInsensitiveFile(dir, 'select.ini');
+  if (selectIni) {
+    const first = fs.readFileSync(selectIni, 'utf8').split(/\r?\n/).find((line) => line.trim());
+    const sub = first?.split('\t')[0]?.trim();
+    if (sub && hasSiglusDataFiles(join(dir, sub))) return join(dir, sub);
+  }
+  if (fs.existsSync(dir)) {
+    for (const entry of fs.readdirSync(dir, {withFileTypes: true})) {
+      if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
+      const candidate = join(dir, entry.name);
+      if (hasSiglusDataFiles(candidate)) return candidate;
+    }
+  }
+  throw new Error(`Missing Scene.pck / gameexe.dat under ${dir}`);
 }
 
 const DATA_DIR = resolveDataDir(GAME_DIR);
-const pack = new SiglusScenePack(new Uint8Array(fs.readFileSync(join(DATA_DIR, 'Scene.pck'))));
-const gameexe = pack.configuration(new Uint8Array(fs.readFileSync(join(DATA_DIR, 'Gameexe.dat'))));
+const pack = new SiglusScenePack(new Uint8Array(fs.readFileSync(findCaseInsensitiveFile(DATA_DIR, 'scene.pck'))));
+const gameexe = pack.configuration(new Uint8Array(fs.readFileSync(findCaseInsensitiveFile(DATA_DIR, 'gameexe.dat'))));
 
 const parseSceneName = (key, fallback) => gameexe.get(key)?.split('"')[1] ?? fallback;
 const [SCREEN_W, SCREEN_H] = (gameexe.get('SCREEN_SIZE') ?? '1280, 720')
   .split(',')
   .map((v) => Number(v.trim()));
 const MENU_SCENE = profileCfg.title?.scene ?? parseSceneName('MENU_SCENE', '_titlemenu');
-const CANCEL_SCENE = parseSceneName('CANCEL_SCENE', null);
-const SAVE_SCENE = parseSceneName('SAVE_SCENE', null);
-const LOAD_SCENE = parseSceneName('LOAD_SCENE', null);
-const CONFIG_SCENE = parseSceneName('CONFIG_SCENE', null);
+const CANCEL_SCENE = profileCfg.quickMenu?.scene ?? parseSceneName('CANCEL_SCENE', null);
+const SAVE_SCENE =
+  profileCfg.quickMenu?.saveScene ?? profileCfg.messageMenu?.saveScene ?? parseSceneName('SAVE_SCENE', null);
+const LOAD_SCENE =
+  profileCfg.quickMenu?.loadScene ?? profileCfg.messageMenu?.loadScene ?? parseSceneName('LOAD_SCENE', null);
+const CONFIG_SCENE =
+  profileCfg.title?.configScene ?? profileCfg.quickMenu?.configScene ?? parseSceneName('CONFIG_SCENE', null);
+const USES_POINTER_MENUS = Boolean(profileCfg.pointerPolledMenus);
 const mwndBottom = Math.max(
   SCREEN_H,
   ...Array.from({length: Number(gameexe.get('MWND.CNT') ?? 0)}, (_, index) => {
@@ -82,7 +109,7 @@ const mwndBottom = Math.max(
     return windowPos[1] + windowSize[1];
   }),
 );
-const SAVE_KEY = 'siglus:' + sha256File(join(DATA_DIR, 'Scene.pck'));
+const SAVE_KEY = 'siglus:' + sha256File(findCaseInsensitiveFile(DATA_DIR, 'scene.pck'));
 const BROWSER_BIN = resolveBrowserBin();
 
 const tmpProfile = await mkdtemp(join(tmpdir(), 'siglus-audit-'));
@@ -189,14 +216,29 @@ try {
   };
 
   const clickAt = async (x, y) => {
+    const hold = USES_POINTER_MENUS ? 45 : 25;
     await send('Input.dispatchMouseEvent', {type: 'mouseMoved', x, y});
-    await delay(25);
+    await delay(hold);
     await send('Input.dispatchMouseEvent', {type: 'mousePressed', x, y, button: 'left', clickCount: 1});
-    await delay(25);
+    await delay(hold);
     await send('Input.dispatchMouseEvent', {type: 'mouseReleased', x, y, button: 'left', clickCount: 1});
   };
 
   const rightClickStage = async () => {
+    if (USES_POINTER_MENUS) {
+      const pt = await evaluate(`(() => {
+        const stage = document.getElementById('siglus-surface')?.firstElementChild;
+        if (!stage) throw new Error('No stage for contextmenu');
+        const r = stage.getBoundingClientRect();
+        return {x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2)};
+      })()`);
+      await send('Input.dispatchMouseEvent', {type: 'mouseMoved', x: pt.x, y: pt.y});
+      await delay(30);
+      await send('Input.dispatchMouseEvent', {type: 'mousePressed', x: pt.x, y: pt.y, button: 'right', clickCount: 1});
+      await delay(45);
+      await send('Input.dispatchMouseEvent', {type: 'mouseReleased', x: pt.x, y: pt.y, button: 'right', clickCount: 1});
+      return;
+    }
     await evaluate(`(() => {
       const stage = document.getElementById('siglus-surface')?.firstElementChild;
       if (!stage) throw new Error('No stage for contextmenu');
@@ -255,7 +297,10 @@ try {
   await evaluate(`import(${JSON.stringify(origin + runtimePath)}).then(m => { window.__runtime = m; })`);
 
   // This temporary browser profile can unlock bundled gallery and replay entry points.
-  const unlock = MODE === 'extras' ? profileCfg.extras : replay;
+  const unlock =
+    MODE === 'extras'
+      ? profileCfg.extras
+      : (replay ?? (profileCfg.title?.systemFlags ? {systemFlags: profileCfg.title.systemFlags} : undefined));
   if (unlock) {
     await evaluate(`(() => {
       const k = ${JSON.stringify(SAVE_KEY)};
@@ -498,7 +543,7 @@ try {
         for (const b of stage.querySelectorAll('button')) {
           const r = b.getBoundingClientRect();
           const cs = getComputedStyle(b);
-          let hidden = b.disabled || b.hidden || b.inert || cs.display === 'none' || cs.visibility === 'hidden' || Number(cs.opacity) <= 0.05 || r.width <= 0 || r.height <= 0;
+          let hidden = b.disabled || b.hidden || b.inert || cs.display === 'none' || cs.visibility === 'hidden' || Number(cs.opacity) <= 0.05 || r.width <= 0 || r.height <= 0 || b.style.clipPath === 'inset(100%)';
           let cur = b.parentElement;
           while (!hidden && cur && cur !== stage) {
             const pcs = getComputedStyle(cur);
@@ -512,6 +557,17 @@ try {
           }
           if (!hidden) {
             const st = toStage(b);
+            const inset = /^inset\\((-?\\d+(?:\\.\\d+)?)px\\s+(-?\\d+(?:\\.\\d+)?)px\\s+(-?\\d+(?:\\.\\d+)?)px\\s+(-?\\d+(?:\\.\\d+)?)px\\)$/.exec(b.style.clipPath.trim());
+            if (inset) {
+              const vx0 = Math.max(r.left, r.left + Number(inset[4]) / sx);
+              const vy0 = Math.max(r.top, r.top + Number(inset[1]) / sy);
+              const vx1 = Math.min(r.right, r.right - Number(inset[2]) / sx);
+              const vy1 = Math.min(r.bottom, r.bottom - Number(inset[3]) / sy);
+              if (vx1 > vx0 && vy1 > vy0) {
+                st.cx = Math.round((vx0 + vx1) / 2);
+                st.cy = Math.round((vy0 + vy1) / 2);
+              }
+            }
             const hit = document.elementFromPoint(st.cx, st.cy);
             const hitButton = hit?.closest('button');
             const sameScriptControl =
@@ -519,15 +575,78 @@ try {
               b.dataset.siglusButton === hitButton?.dataset.siglusButton &&
               b.dataset.siglusGroup === hitButton.dataset.siglusGroup;
             const hitOk = Boolean((hit && b.contains(hit)) || sameScriptControl);
+            let opaqueRect;
+            if (sr && (st.left < -6 || st.right > sw + 6 || st.top < -6 || st.bottom > sh + 6 || b.dataset.siglusAction !== undefined)) {
+              const canvas = b.children.length === 1 && b.firstElementChild?.tagName === 'CANVAS' ? b.firstElementChild : null;
+              if (canvas && canvas.width > 0 && canvas.height > 0) {
+                const px = canvas.getContext('2d')?.getImageData(0, 0, canvas.width, canvas.height).data;
+                if (px) {
+                  let minX = canvas.width, minY = canvas.height, maxX = -1, maxY = -1;
+                  for (let y = 0; y < canvas.height; y++) {
+                    for (let x = 0; x < canvas.width; x++) {
+                      if (px[(y * canvas.width + x) * 4 + 3] >= 16) {
+                        if (x < minX) minX = x;
+                        if (x > maxX) maxX = x;
+                        if (y < minY) minY = y;
+                        if (y > maxY) maxY = y;
+                      }
+                    }
+                  }
+                  if (maxX >= minX && maxY >= minY) {
+                    const cr = canvas.getBoundingClientRect();
+                    const scaleX = cr.width / canvas.width;
+                    const scaleY = cr.height / canvas.height;
+                    opaqueRect = {
+                      left: Math.round((cr.left + minX * scaleX - sr.left) * sx),
+                      top: Math.round((cr.top + minY * scaleY - sr.top) * sy),
+                      right: Math.round((cr.left + (maxX + 1) * scaleX - sr.left) * sx),
+                      bottom: Math.round((cr.top + (maxY + 1) * scaleY - sr.top) * sy),
+                    };
+                  }
+                }
+              }
+            }
             buttons.push({
               aria: b.getAttribute('aria-label') ?? '',
               text: (b.textContent ?? '').trim().slice(0, 40),
               dataset: {...b.dataset},
               rect: st,
+              ...(opaqueRect ? {opaqueRect} : {}),
               hitOk,
               hitTag: hitButton ? (hitButton.getAttribute('aria-label') ?? hitButton.tagName) : hit?.tagName,
               hitGroup: hitButton?.dataset.siglusGroup,
               hitClip: hitOk ? undefined : b.style.clipPath.slice(0, 120),
+            });
+          }
+        }
+      }
+
+      const sprites = [];
+      if (stage && sr) {
+        for (const el of stage.querySelectorAll('[data-siglus-object]')) {
+          const r = el.getBoundingClientRect();
+          const cs = getComputedStyle(el);
+          let hidden = el.hidden || el.inert || cs.display === 'none' || cs.visibility === 'hidden' || Number(cs.opacity) <= 0.05 || r.width <= 0 || r.height <= 0;
+          let cur = el.parentElement;
+          while (!hidden && cur && cur !== stage) {
+            const pcs = getComputedStyle(cur);
+            if (cur.hidden || cur.inert || pcs.display === 'none' || pcs.visibility === 'hidden' || Number(pcs.opacity) <= 0.05) {
+              hidden = true;
+            } else if (pcs.overflowY === 'auto' || pcs.overflowY === 'scroll') {
+              const pr = cur.getBoundingClientRect();
+              if (r.top < pr.top || r.bottom > pr.bottom) hidden = true;
+            }
+            cur = cur.parentElement;
+          }
+          if (!hidden) {
+            const st = toStage(el);
+            const insideStage = st.cx >= sr.left && st.cx <= sr.right && st.cy >= sr.top && st.cy <= sr.bottom;
+            const hit = insideStage ? document.elementFromPoint(st.cx, st.cy) : null;
+            const hitOk = Boolean(insideStage && stage.contains(hit));
+            sprites.push({
+              objectName: el.dataset.siglusObject ?? '',
+              rect: st,
+              hitOk,
             });
           }
         }
@@ -567,23 +686,22 @@ try {
           }
           if (obj.name && obj.name.includes('|') && fr) {
             compositesCount++;
-            const tokens = obj.name.split('|').filter((t) => t.length > 0);
-            const explicitDim = /^\\((\\d+),(\\d+)\\)$/.exec(tokens[0] ?? '');
+            const tokens = obj.name.split('|').map((t) => t.trim()).filter((t) => t.length > 0);
+            const explicitDim = /^\\(\\s*([+-]?\\d+)\\s*,\\s*([+-]?\\d+)\\s*\\)$/.exec(tokens[0] ?? '');
             const partTokens = explicitDim ? tokens.slice(1) : tokens;
+            const layerRe = /^([^()]+?)(?:\\(\\s*([+-]?\\d+)\\s*,\\s*([+-]?\\d+)(?:\\s*,\\s*([+-]?\\d+))?(?:\\s*,\\s*blend\\s*=\\s*([+-]?\\d+))?\\s*\\))?$/;
             let expectedW = explicitDim ? Number(explicitDim[1]) : 0;
             let expectedH = explicitDim ? Number(explicitDim[2]) : 0;
+            let baseCenterX = 0;
+            let baseCenterY = 0;
             let allCached = !explicitDim && partTokens.length > 0;
-            let maxDx = 0;
-            let maxDy = 0;
             for (let pi = 0; pi < partTokens.length; pi++) {
-              const m = /^([^()]+?)(?:\\((-?\\d+),(-?\\d+)(?:,(\\d+))?(?:,blend=(\\d+))?\\))?$/.exec(partTokens[pi].trim());
+              const m = layerRe.exec(partTokens[pi]);
               if (!m) { allCached = false; continue; }
               const pName = m[1].trim().toLowerCase();
               const dx = Number(m[2] ?? 0);
               const dy = Number(m[3] ?? 0);
               const pat = Number(m[4] ?? 0);
-              if (dx > maxDx) maxDx = dx;
-              if (dy > maxDy) maxDy = dy;
               const cached = disp?.graphicCache?.get(pName + '#' + pat)?.graphic;
               if (!cached) {
                 allCached = false;
@@ -591,11 +709,14 @@ try {
                 if (pi === 0) {
                   expectedW = cached.width;
                   expectedH = cached.height;
+                  baseCenterX = cached.centerX;
+                  baseCenterY = cached.centerY;
+                } else {
+                  const right = dx + baseCenterX - cached.centerX + cached.width;
+                  const bottom = dy + baseCenterY - cached.centerY + cached.height;
+                  if (right > expectedW) expectedW = right;
+                  if (bottom > expectedH) expectedH = bottom;
                 }
-                const right = dx - cached.centerX + cached.width;
-                const bottom = dy - cached.centerY + cached.height;
-                if (right > expectedW) expectedW = right;
-                if (bottom > expectedH) expectedH = bottom;
               }
             }
             if (explicitDim && (fr.width !== expectedW || fr.height !== expectedH)) {
@@ -632,8 +753,8 @@ try {
                 cachedSource: disp.compositeCache.get(obj.name)?.graphic?.image === fr.image,
                 sourceDimensions: [fr.image.width, fr.image.height],
                 cachedLayers: partTokens.map((part) => {
-                  const [, name, , , cut] = /^([^()]+?)(?:\((-?\d+),(-?\d+)(?:,(-?\d+))?(?:,blend=\d+)?\))?$/.exec(part.trim()) ?? [];
-                  const graphic = name && disp.graphicCache.get(name.toLowerCase() + '#' + (cut ?? 0))?.graphic;
+                  const [, name, , , cut] = layerRe.exec(part) ?? [];
+                  const graphic = name && disp.graphicCache.get(name.trim().toLowerCase() + '#' + (cut ?? 0))?.graphic;
                   return graphic && {width: graphic.width, height: graphic.height, centerX: graphic.centerX, centerY: graphic.centerY, bounds: graphic.contentBounds};
                 }),
               }));
@@ -717,6 +838,8 @@ try {
         clippedContainersCount,
         stageTextCount,
         buttons,
+        sprites,
+        inputSampled: Boolean(p?.inputSampled || (p?.lastInputSampleAt >= 0 && p.lastInputSampleScene === top?.scene.name && performance.now() - p.lastInputSampleAt < 500)),
         backlogOpen: Boolean(historyEl),
         stageRect: sr ? {left: sr.left, top: sr.top, width: sr.width, height: sr.height} : null,
         movieActive: window.__audit?.movieActive ?? null,
@@ -741,19 +864,47 @@ try {
     });
   };
 
-  const quickButton = (state, id) =>
-    matchButton(
-      state.buttons.filter((button) => button.hitOk),
-      {group: profileCfg.quickMenu?.group, id},
-    );
+  const matchControl = (state, spec, onlyClickable = false) => {
+    if (!spec) return undefined;
+    if (spec.objectName !== undefined) {
+      const target = spec.objectName.toLowerCase();
+      const matches = (state.sprites ?? []).filter((sp) => {
+        if (onlyClickable && !sp.hitOk) return false;
+        if (sp.objectName.toLowerCase() !== target) return false;
+        if (spec.minX !== undefined && sp.rect.left < spec.minX) return false;
+        if (spec.maxX !== undefined && sp.rect.left > spec.maxX) return false;
+        if (spec.minY !== undefined && sp.rect.top < spec.minY) return false;
+        if (spec.maxY !== undefined && sp.rect.top > spec.maxY) return false;
+        return true;
+      });
+      return matches[spec.index ?? 0];
+    }
+    const pool = onlyClickable ? state.buttons.filter((b) => b.hitOk) : state.buttons;
+    return matchButton(pool, spec);
+  };
+
+  const quickButton = (state, idOrSpec) =>
+    typeof idOrSpec === 'object'
+      ? matchControl(state, idOrSpec, true)
+      : matchButton(
+          state.buttons.filter((button) => button.hitOk),
+          {group: profileCfg.quickMenu?.group, id: idOrSpec},
+        );
 
   const currentScene = 'window.__audit.frame()?.scene.name';
+  const ptrReady = (expr, sceneExpr = currentScene) => `(${expr}?.inputSampled === true || (${expr}?.lastInputSampleAt >= 0 && ${expr}?.lastInputSampleScene === ${sceneExpr} && performance.now() - ${expr}.lastInputSampleAt < 500))`;
   const waitForActiveScene = (name, timeout, group) => {
     const groups = 'window.__runtime?.currentPlayer?.activeGroups';
     const scene = JSON.stringify(name);
     const active = MODE === 'extras'
-      ? `[...(${groups} ?? [])].some((id) => window.__audit.galleryGroups.get(id) === ${scene})`
-      : group === undefined ? `${groups}?.size > 0` : `${groups}?.has(${Number(group)})`;
+      ? USES_POINTER_MENUS && name === MENU_SCENE
+        ? `(${groups}?.size > 0 || ${ptrReady('window.__runtime?.currentPlayer', scene)})`
+        : `[...(${groups} ?? [])].some((id) => window.__audit.galleryGroups.get(id) === ${scene})`
+      : group === undefined
+        ? USES_POINTER_MENUS
+          ? `(${groups}?.size > 0 || ${ptrReady('window.__runtime?.currentPlayer', scene)})`
+          : `${groups}?.size > 0`
+        : `${groups}?.has(${Number(group)})`;
     const sceneMatches = group === undefined || MODE === 'extras'
       ? `${currentScene} === ${scene}`
       : `(() => {
@@ -788,8 +939,9 @@ try {
       if (fullyOffStage) continue;
       if (allowAutoHiddenBottomBar && b.dataset.siglusAction !== undefined && b.rect.top >= SCREEN_H - 2) continue;
       const expectedBottom = b.dataset.siglusAction === undefined ? SCREEN_H : mwndBottom;
-      if (b.rect.left < -6 || b.rect.right > SCREEN_W + 6 || b.rect.top < -6 || b.rect.bottom > expectedBottom + 6) {
-        failures.push(`Button clipped at ${SCREEN_W}x${SCREEN_H}: ${JSON.stringify({aria: b.aria, ds: b.dataset, rect: b.rect})}`);
+      const clipRect = b.opaqueRect ?? b.rect;
+      if (clipRect.left < -6 || clipRect.right > SCREEN_W + 6 || clipRect.top < -6 || clipRect.bottom > expectedBottom + 6) {
+        failures.push(`Button clipped at ${SCREEN_W}x${SCREEN_H}: ${JSON.stringify({aria: b.aria, ds: b.dataset, rect: b.rect, ...(b.opaqueRect ? {opaqueRect: b.opaqueRect} : {})})}`);
       }
       if (checkHitTest && !b.hitOk) {
         failures.push(`Button failed hit-test: ${JSON.stringify({aria: b.aria, ds: b.dataset, rect: b.rect, hitTag: b.hitTag, hitGroup: b.hitGroup, hitClip: b.hitClip})}`);
@@ -871,13 +1023,17 @@ try {
   })()`;
   const readyForModalCancel = `(() => {
     const p = window.__runtime?.currentPlayer;
-    return p?.systemCallActive && [...p.cancelGroups].some((group) =>
+    if (!p?.systemCallActive) return false;
+    if (${USES_POINTER_MENUS} && ${ptrReady('p')}) return true;
+    return [...p.cancelGroups].some((group) =>
       group >= 100000 && p.activeGroups.has(group) &&
       p.display.stage.querySelector('[data-siglus-group="' + group + '"]'));
   })()`;
   const canCloseModal = `(() => {
     const p = window.__runtime?.currentPlayer;
-    return p?.systemCallActive && [...p.cancelGroups].some((group) =>
+    if (!p?.systemCallActive) return false;
+    if (${USES_POINTER_MENUS} && ${ptrReady('p')}) return true;
+    return [...p.cancelGroups].some((group) =>
       group >= 100000 && p.activeGroups.has(group));
   })()`;
 
@@ -901,7 +1057,7 @@ try {
       if (!(await waitFor(`${readyForDialogue} || ${readyForModalCancel} || ${canCloseModal}`, 8000))) break;
       const before = await inspectState();
       if (!before.systemCallActive) return before;
-      const closeId = profileCfg.quickMenu?.closeButtonId;
+      const closeId = profileCfg.quickMenu?.closeButton ?? profileCfg.quickMenu?.closeButtonId;
       const close = before.scene === CANCEL_SCENE && closeId !== undefined ? quickButton(before, closeId) : undefined;
       if (close) await clickAt(close.rect.cx, close.rect.cy);
       else await rightClickStage();
@@ -925,21 +1081,60 @@ try {
       await delay(400);
       state = await inspectState();
     }
-    const button = matchButton(state.buttons.filter((b) => b.hitOk), spec);
-    if (!button) {
-      const available = state.buttons.map(({aria, dataset, hitOk}) => ({aria, ...dataset, hitOk}));
+    const control = matchControl(state, spec, true);
+    if (!control) {
+      const available = spec.objectName !== undefined
+        ? [...new Set((state.sprites ?? []).map((sp) => `${sp.objectName}@${sp.rect.left},${sp.rect.top}(${sp.hitOk})`))]
+        : state.buttons.map(({aria, dataset, hitOk}) => ({aria, ...dataset, hitOk}));
       throw new Error(`[${label}] No clickable control in ${state.scene} matching ${JSON.stringify(spec)}; available=${JSON.stringify(available)}`);
     }
-    await clickAt(button.rect.cx, button.rect.cy);
+    await clickAt(control.rect.cx, control.rect.cy);
+  };
+
+  const dialogOpenExpr = (dialog) => {
+    if (!dialog) return 'false';
+    if (dialog.objectName) {
+      const target = JSON.stringify(dialog.objectName.toLowerCase());
+      return `(() => {
+        const stage = document.getElementById('siglus-surface')?.firstElementChild;
+        if (!stage) return false;
+        for (const el of stage.querySelectorAll('[data-siglus-object]')) {
+          if ((el.dataset.siglusObject ?? '').toLowerCase() !== ${target}) continue;
+          const r = el.getBoundingClientRect();
+          const cs = getComputedStyle(el);
+          if (el.hidden || el.inert || cs.display === 'none' || cs.visibility === 'hidden' || Number(cs.opacity) <= 0.05 || r.width <= 0 || r.height <= 0) continue;
+          let hidden = false;
+          let cur = el.parentElement;
+          while (cur && cur !== stage) {
+            const pcs = getComputedStyle(cur);
+            if (cur.hidden || cur.inert || pcs.display === 'none' || pcs.visibility === 'hidden' || Number(pcs.opacity) <= 0.05) { hidden = true; break; }
+            cur = cur.parentElement;
+          }
+          if (!hidden) return true;
+        }
+        return false;
+      })()`;
+    }
+    return dialog.scene ? `${currentScene} === ${JSON.stringify(dialog.scene)}` : 'false';
   };
 
   const confirm = async (dialog, label, accept) => {
-    if (!(await waitForActiveScene(dialog.scene, 8000, dialog.group))) {
+    if (dialog.objectName) {
+      if (!(await waitFor(dialogOpenExpr(dialog), 8000))) {
+        const state = await inspectState();
+        throw new Error(`[${label}] Expected confirmation object ${dialog.objectName} (scene=${state.scene}, groups=${state.activeGroups.join(',')})`);
+      }
+    } else if (!(await waitForActiveScene(dialog.scene, 8000, dialog.group))) {
       const state = await inspectState();
       throw new Error(`[${label}] Expected confirmation scene ${dialog.scene} (scene=${state.scene}, groups=${state.activeGroups.join(',')})`);
     }
     await delay(300);
-    await assertLayoutAndHitTests(`${label}-confirmation`, {buttonGroup: dialog.group});
+    await assertLayoutAndHitTests(`${label}-confirmation`, dialog.group ? {buttonGroup: dialog.group} : {});
+    const targetSpec = accept ? dialog.yesButton : dialog.noButton;
+    if (targetSpec) {
+      await clickControl(label, targetSpec);
+      return;
+    }
     const aria = accept ? dialog.yesAria : dialog.noAria;
     await clickControl(label, {group: dialog.group, ...(aria ? {aria} : {id: accept ? 1 : 2})});
   };
@@ -1029,8 +1224,9 @@ try {
         }
       }
       if (s.scene === MENU_SCENE) {
-        const startBtn = matchButton(s.buttons, profileCfg.title?.startButton);
-        if (startBtn && startBtn.hitOk && (s.activeGroups.length > 0 || !profileCfg.title?.startButton?.group)) {
+        const startBtn = matchControl(s, profileCfg.title?.startButton);
+        const ready = (!USES_POINTER_MENUS || s.inputSampled) && (!profileCfg.title?.startButton?.group || s.activeGroups.length > 0);
+        if (startBtn && startBtn.hitOk && ready) {
           await setCtrl(false);
           await delay(350);
           return await inspectState();
@@ -1042,7 +1238,7 @@ try {
           await setCtrl(false);
           await pressKey('Enter', 'Enter', 13);
         }
-      } else if (i > 3 && i % 4 === 0) {
+      } else if (s.scene !== MENU_SCENE && i > 3 && i % 4 === 0) {
         await pressKey('Enter', 'Enter', 13);
       }
     }
@@ -1051,7 +1247,7 @@ try {
   };
 
   const startNewGameFromTitle = async (titleState) => {
-    const startBtn = matchButton(titleState.buttons, profileCfg.title?.startButton);
+    const startBtn = matchControl(titleState, profileCfg.title?.startButton);
     if (!startBtn) {
       errors.push(`[title] Could not find startButton ${JSON.stringify(profileCfg.title?.startButton)}`);
       return false;
@@ -1069,7 +1265,7 @@ try {
       }
       await delay(400);
       const subState = await inspectState();
-      const routeBtn = matchButton(subState.buttons, sub);
+      const routeBtn = matchControl(subState, sub);
       if (!routeBtn) {
         errors.push(`[title] Route submenu button not visible/clickable`);
         return false;
@@ -1086,7 +1282,7 @@ try {
         if (state.scene === prompt.scene) {
           if (prompt.advancePage && state.waitingForPage) break;
           button = prompt.button
-            ? matchButton(state.buttons, prompt.button)
+            ? matchControl(state, prompt.button)
             : state.buttons.find((item) => item.dataset.siglusChoice === String(prompt.choice));
           if (button?.hitOk) break;
         }
@@ -1135,16 +1331,18 @@ try {
       errors.push(`Never reached ${MENU_SCENE} (in ${titleState.scene})`);
     } else {
       await assertLayoutAndHitTests('title-menu');
-      if (profileCfg.title?.streamedBgm) {
-        const name = JSON.stringify(profileCfg.title.streamedBgm);
+      const bgmCheckName = profileCfg.title?.streamedBgm ?? profileCfg.title?.playedBgm;
+      if (bgmCheckName) {
+        const requireStream = Boolean(profileCfg.title?.streamedBgm);
+        const name = JSON.stringify(bgmCheckName);
         const streaming = `(() => {
           const playback = window.__audit.bgmPlayback;
           const audio = window.__runtime.currentPlayer.audio;
-          return playback?.resource === ${name} && playback.streaming && playback.frames > 0 &&
+          return playback?.resource === ${name} && (!${requireStream} || playback.streaming) && playback.frames > 0 &&
             audio.context.state === 'running' && audio.bgmPlayPosition() > playback.startSample;
         })()`;
-        if (!(await waitFor(streaming, 8000))) errors.push(`[title] BGM ${name} did not stream PCM`);
-        else {
+        if (!(await waitFor(streaming, 8000))) errors.push(`[title] BGM ${name} did not ${requireStream ? 'stream PCM' : 'play'}`);
+        else if (requireStream) {
           const telemetry = await evaluate(`(() => {
             const source = window.__runtime.currentPlayer.audio.playing.get('bgm')?.source;
             const queuedFrames = [...(source?.nodes ?? [])].reduce((sum, node) => sum + (node.buffer?.length ?? 0), 0);
@@ -1154,13 +1352,19 @@ try {
           if (!(telemetry.queuedFrames > 0 && telemetry.queuedFrames <= telemetry.sourceRate * 8))
             errors.push(`[title] BGM stream has ${telemetry.queuedFrames} queued PCM frames`);
           console.log('Title BGM streaming:', JSON.stringify(telemetry));
+        } else {
+          const telemetry = await evaluate(`({
+            ...window.__audit.bgmPlayback,
+            pos: window.__runtime.currentPlayer.audio.bgmPlayPosition(),
+          })`);
+          console.log('Title BGM playback:', JSON.stringify(telemetry));
         }
       }
       if (profileCfg.title?.configButton && CONFIG_SCENE) {
-        const cfgBtn = matchButton(titleState.buttons, profileCfg.title.configButton);
+        const cfgBtn = matchControl(titleState, profileCfg.title.configButton);
         if (cfgBtn) {
           await clickAt(cfgBtn.rect.cx, cfgBtn.rect.cy);
-          await waitFor(`${currentScene} === ${JSON.stringify(CONFIG_SCENE)} && window.__runtime?.currentPlayer?.cancelGroups?.size > 0`, 12000);
+          await waitFor(`${currentScene} === ${JSON.stringify(CONFIG_SCENE)} && (window.__runtime?.currentPlayer?.cancelGroups?.size > 0 || (${USES_POINTER_MENUS} && ${ptrReady('window.__runtime?.currentPlayer', JSON.stringify(CONFIG_SCENE))}))`, 12000);
           await delay(500);
           await assertLayoutAndHitTests('title-config');
           const timing = profileCfg.title.messageWindowTiming;
@@ -1275,11 +1479,12 @@ try {
         console.log('RC->Esc diffs:', assertRoundTripClean('rc->esc', b2, await inspectState()));
 
         // RC -> Close btn
-        if (qm?.closeButtonId !== undefined) {
+        const qmCloseSpec = qm?.closeButton ?? qm?.closeButtonId;
+        if (qmCloseSpec !== undefined) {
           const b3 = await inspectState();
           await openQuickMenu();
           await delay(400);
-          const closeBtn = quickButton(await inspectState(), qm.closeButtonId);
+          const closeBtn = quickButton(await inspectState(), qmCloseSpec);
           if (closeBtn) await clickAt(closeBtn.rect.cx, closeBtn.rect.cy);
           else await rightClickStage();
           await waitFor("window.__runtime?.currentPlayer?.systemCallActive === false", 6000);
@@ -1288,11 +1493,12 @@ try {
         }
 
         // Nested QM -> Save -> Cancel
-        if (qm?.saveButtonId !== undefined && SAVE_SCENE) {
+        const qmSaveSpec = qm?.saveButton ?? qm?.saveButtonId;
+        if (qmSaveSpec !== undefined && SAVE_SCENE) {
           const b4 = await inspectState();
           await openQuickMenu();
           await delay(400);
-          const sb = quickButton(await inspectState(), qm.saveButtonId);
+          const sb = quickButton(await inspectState(), qmSaveSpec);
           if (sb) {
             await clickAt(sb.rect.cx, sb.rect.cy);
             if (!(await waitForActiveScene(SAVE_SCENE, 8000, qm.slotGroup)))
@@ -1305,11 +1511,12 @@ try {
         }
 
         // Nested QM -> Config -> Cancel
-        if (qm?.configButtonId !== undefined && CONFIG_SCENE) {
+        const qmConfigSpec = qm?.configButton ?? qm?.configButtonId;
+        if (qmConfigSpec !== undefined && CONFIG_SCENE) {
           const b5 = await inspectState();
           await openQuickMenu();
           await delay(400);
-          const cb = quickButton(await inspectState(), qm.configButtonId);
+          const cb = quickButton(await inspectState(), qmConfigSpec);
           if (cb) {
             await clickAt(cb.rect.cx, cb.rect.cy);
             if (!(await waitForActiveScene(CONFIG_SCENE, 8000)))
@@ -1392,46 +1599,55 @@ try {
         console.log('Save/Load UI parity diffs:', assertRoundTripClean('save-load', before, await waitForDialogue('load'), {restored: true}));
         await assertSystemSound('load', loadSound, 5);
         await testQuickSaveLoad(messageMenu, 'quick-save-load');
-      } else if (qm?.saveButtonId !== undefined && qm?.loadButtonId !== undefined && SAVE_SCENE && LOAD_SCENE) {
+      } else if ((qm?.saveButton ?? qm?.saveButtonId) !== undefined && (qm?.loadButton ?? qm?.loadButtonId) !== undefined && SAVE_SCENE && LOAD_SCENE) {
         const preSave = await waitForDialogue('save-load');
-        const confirmScene = qm.confirmDialog?.scene;
-        const dialogOpen = confirmScene ? `${currentScene} === ${JSON.stringify(confirmScene)}` : 'false';
+        const saveDialog = qm.saveConfirmDialog ?? qm.confirmDialog;
+        const loadDialog = qm.loadConfirmDialog ?? qm.confirmDialog;
+        const saveDialogOpen = dialogOpenExpr(saveDialog);
+        const loadDialogOpen = dialogOpenExpr(loadDialog);
         await openQuickMenu();
         await delay(350);
-        const sb = quickButton(await inspectState(), qm.saveButtonId);
+        const sb = quickButton(await inspectState(), qm.saveButton ?? qm.saveButtonId);
         if (!sb) throw new Error('[save-load] Missing clickable Save control');
         await clickAt(sb.rect.cx, sb.rect.cy);
         if (!(await waitForActiveScene(SAVE_SCENE, 8000, qm.slotGroup)))
           throw new Error(`[save-load] Expected ${SAVE_SCENE}, reached ${(await inspectState()).scene}`);
         await delay(500);
-        const sv0 = (await inspectState()).buttons.find((b) => {
-          const id = Number(b.dataset.siglusButton);
-          return b.hitOk && Number.isInteger(id) && id >= (qm.slotButtonMin ?? 0) && id <= (qm.slotButtonMax ?? 15);
-        });
+        const saveState = await inspectState();
+        const sv0 = qm.slotButton
+          ? matchControl(saveState, qm.slotButton, true)
+          : saveState.buttons.find((b) => {
+              const id = Number(b.dataset.siglusButton);
+              return b.hitOk && Number.isInteger(id) && id >= (qm.slotButtonMin ?? 0) && id <= (qm.slotButtonMax ?? 15);
+            });
         if (sv0) {
           const stored = 'window.__runtime.currentPlayer.saves.size > 0';
           await clickAt(sv0.rect.cx, sv0.rect.cy);
-          if (!(await waitFor(`${stored} || ${dialogOpen}`, 10000)))
+          if (!(await waitFor(`${stored} || ${saveDialogOpen}`, 10000)))
             throw new Error('[save-load] Save slot did not write a checkpoint');
-          if (await evaluate(dialogOpen)) await confirm(qm.confirmDialog, 'save-slot', true);
+          if (await evaluate(saveDialogOpen)) await confirm(saveDialog, 'save-slot', true);
           if (!(await waitFor(stored, 10000))) throw new Error('[save-load] Save confirmation did not write a checkpoint');
           await closeSystemMenu('save-return');
           await advanceDialogue('save-load', preSave);
           await openQuickMenu();
           await delay(350);
-          const lb = quickButton(await inspectState(), qm.loadButtonId);
+          const lb = quickButton(await inspectState(), qm.loadButton ?? qm.loadButtonId);
           if (!lb) throw new Error('[save-load] Missing clickable Load control');
           await clickAt(lb.rect.cx, lb.rect.cy);
           if (!(await waitForActiveScene(LOAD_SCENE, 8000, qm.slotGroup)))
             throw new Error(`[save-load] Expected ${LOAD_SCENE}, reached ${(await inspectState()).scene}`);
           await delay(500);
-          const ld0 = (await inspectState()).buttons.find((b) => b.hitOk && b.dataset.siglusButton === sv0.dataset.siglusButton);
+          const loadState = await inspectState();
+          const loadSlotSpec = qm.loadSlotButton ?? qm.slotButton;
+          const ld0 = loadSlotSpec
+            ? matchControl(loadState, loadSlotSpec, true)
+            : loadState.buttons.find((b) => b.hitOk && b.dataset.siglusButton === sv0.dataset.siglusButton);
           if (!ld0) throw new Error('[save-load] Saved slot cannot be loaded');
           const loaded = `window.__runtime.currentPlayer.root.dataset.loaded === 'true' && ${readyForDialogue}`;
           await clickAt(ld0.rect.cx, ld0.rect.cy);
-          if (!(await waitFor(`(${loaded}) || ${dialogOpen}`, 10000)))
+          if (!(await waitFor(`(${loaded}) || ${loadDialogOpen}`, 10000)))
             throw new Error('[save-load] Load slot did not start restoring the checkpoint');
-          if (await evaluate(dialogOpen)) await confirm(qm.confirmDialog, 'load-slot', true);
+          if (await evaluate(loadDialogOpen)) await confirm(loadDialog, 'load-slot', true);
           if (!(await waitFor(loaded, 10000))) throw new Error('[save-load] No restored checkpoint after Load');
           console.log('Save/Load UI parity diffs:', assertRoundTripClean('save-load', preSave, await inspectState(), {restored: true}));
         } else errors.push('[save-load] No clickable save slots');
@@ -1574,7 +1790,7 @@ try {
     const titleState = await waitUntilTitle();
     await assertLayoutAndHitTests('extras-title');
     const ex = profileCfg.extras;
-    const extraBtn = matchButton(titleState.buttons, profileCfg.title?.extraButton);
+    const extraBtn = matchControl(titleState, profileCfg.title?.extraButton);
     if (!extraBtn || !extraBtn.hitOk) {
       errors.push('[extras] Extra button not visible/clickable on unlocked title');
     } else {
@@ -1582,24 +1798,73 @@ try {
       if (ex?.expectedScene) {
         if (!(await waitForActiveScene(ex.expectedScene, 12000)))
           throw new Error(`[extras] Expected ${ex.expectedScene}, reached ${(await inspectState()).scene}`);
-        await delay(800);
-      } else {
-        await delay(1000);
+      }
+      const tabToSpec = (item) =>
+        item
+          ? {
+              ...(item.group !== undefined ? {group: item.group} : {}),
+              ...(item.buttonId !== undefined ? {id: item.buttonId} : {}),
+              ...(item.id !== undefined ? {id: item.id} : {}),
+              ...(item.objectName !== undefined ? {objectName: item.objectName} : {}),
+            }
+          : undefined;
+      const readySpec = tabToSpec(ex?.tabs?.[0]) ?? tabToSpec(ex?.exitButton);
+      {
+        const deadline = Date.now() + 20000;
+        let ready = false;
+        let lastState;
+        while (Date.now() < deadline) {
+          lastState = await inspectState();
+          const ok = readySpec
+            ? Boolean(matchControl(lastState, readySpec, true))
+            : lastState.buttons.some((b) => b.hitOk);
+          if (ok) {
+            ready = true;
+            break;
+          }
+          await delay(250);
+        }
+        if (!ready) {
+          throw new Error(
+            `[extras] Timed out waiting for ready controls: ${JSON.stringify({
+              scene: lastState?.scene,
+              line: lastState?.line,
+              groups: lastState?.activeGroups,
+              btnCount: lastState?.buttons?.length ?? 0,
+              sprites: [...new Set((lastState?.sprites ?? []).map((s) => s.objectName))],
+            })}`,
+          );
+        }
+        await delay(300);
       }
       await assertLayoutAndHitTests('extras-main');
       for (const tab of ex?.tabs ?? []) {
-        await clickControl(`extras-${tab.expectedScene}`, {id: tab.buttonId});
-        if (!(await waitForActiveScene(tab.expectedScene, 10000))) {
+        const tabLabel = tab.expectedScene ?? tab.expectedObject ?? 'tab';
+        const tabSpec = tabToSpec(tab);
+        await clickControl(`extras-${tabLabel}`, tabSpec);
+        if (tab.expectedObject) {
+          const ok = await waitFor(
+            `Boolean([...document.querySelectorAll('#siglus-surface [data-siglus-object]')].find(el => el.dataset.siglusObject?.toLowerCase() === ${JSON.stringify(tab.expectedObject.toLowerCase())} && getComputedStyle(el).display !== 'none' && Number(getComputedStyle(el).opacity) > 0.05))`,
+            10000,
+          );
+          if (!ok) {
+            const {scene, line, sprites} = await inspectState();
+            throw new Error(`[extras] Expected object ${tab.expectedObject} in ${scene}:${line}; sprites=${JSON.stringify([...new Set(sprites.map((s) => s.objectName))])}`);
+          }
+        } else if (!(await waitForActiveScene(tab.expectedScene, 10000))) {
           const {scene, line, activeGroups} = await inspectState();
           const input = await evaluate('({pointer: window.__audit.pointer, decisions: window.__audit.galleryDecisions})');
           throw new Error(`[extras] Expected ${tab.expectedScene}, reached ${scene}:${line} with groups ${activeGroups}; input=${JSON.stringify(input)}`);
         }
         await delay(800);
-        await assertLayoutAndHitTests(`extras-${tab.expectedScene}`);
+        await assertLayoutAndHitTests(`extras-${tabLabel}`);
       }
-      await rightClickStage();
-      if (!(await waitForActiveScene(MENU_SCENE, 10000)))
-        errors.push(`[extras] Gallery did not return to ${MENU_SCENE}`);
+      if (ex?.exitButton) await clickControl('extras-exit', ex.exitButton);
+      else await rightClickStage();
+      if (!(await waitForActiveScene(MENU_SCENE, 20000))) {
+        const end = await inspectState();
+        errors.push(`[extras] Gallery did not return to ${MENU_SCENE} (at ${end.scene}:${end.line})`);
+      }
       checkUnhandled(await inspectState(), 'extras-end');
     }
   }

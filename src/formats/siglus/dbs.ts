@@ -72,6 +72,18 @@ export class SiglusDbs {
     this.columns = columns;
   }
 
+  /** Native 0x5983a0 (database[n].check_item_no): returns true if any row matches rowId. */
+  hasRow(rowId: number): boolean {
+    return this.rowIds.includes(rowId);
+  }
+
+  /** Native 0x5983f0 (database[n].check_column_no): 0=missing, 2=int ('V'), 1=string/other. */
+  checkColumn(colId: number): number {
+    const col = this.columns.find((c) => c.id === colId);
+    if (!col) return 0;
+    return col.type === 'V' ? 2 : 1;
+  }
+
   /** Native 0x5b9e00: linear-scan first-match rowId & colId guarded by type === 'V'. */
   getNum(rowId: number, colId: number): number {
     const rIdx = this.rowIds.indexOf(rowId);

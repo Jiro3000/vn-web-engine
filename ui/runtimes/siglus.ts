@@ -39,6 +39,7 @@ async function load(selected: CachedInstallation): Promise<void> {
   const dir = siglusDirectory(selected.files);
   if (dir === undefined)
     throw new Error('Choose the folder containing the SiglusEngine installation.');
+  const parent = dir.replace(/[^/]+\/$/, '');
   const files = new Map(
     selected.files.flatMap(({path, source}) => {
       const key = path.replaceAll('\\', '/').toLowerCase();
@@ -47,7 +48,28 @@ async function load(selected: CachedInstallation): Promise<void> {
         : [];
     }),
   );
-  const next = await openSiglusGame(files);
+  if (!files.has('siglusengine.exe') && parent !== dir) {
+    const exe = selected.files.find(
+      ({path}) => path.replaceAll('\\', '/').toLowerCase() === parent + 'siglusengine.exe',
+    );
+    if (exe) files.set('siglusengine.exe', exe.source);
+  }
+  let appendDir = '';
+  if (parent !== dir) {
+    if (!files.has('select.ini')) {
+      const ini = selected.files.find(
+        ({path}) => path.replaceAll('\\', '/').toLowerCase() === parent + 'select.ini',
+      );
+      if (ini) files.set('select.ini', ini.source);
+    }
+    const sample = selected.files.find(({path}) => {
+      const normalized = path.replaceAll('\\', '/').toLowerCase();
+      return normalized.startsWith(dir) && !isInstallationMetadata(normalized);
+    });
+    const rel = sample ? sample.path.replaceAll('\\', '/').slice(parent.length) : '';
+    appendDir = rel.split('/')[0] ?? dir.slice(parent.length).replace(/\/$/, '');
+  }
+  const next = await openSiglusGame(files, appendDir ? {appendDir} : undefined);
   cached = selected;
   game = next;
   el('game-title').textContent = next.title;

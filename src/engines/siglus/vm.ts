@@ -30,6 +30,7 @@ export interface SiglusServices {
 
 export interface SiglusCheckpoint {
   globals: [string, Value][];
+  declaredListSizes?: [string, number][];
   frames: {
     scene: string;
     pc: number;
@@ -39,6 +40,7 @@ export interface SiglusCheckpoint {
     locals: [string, Value][];
     declarations: [number, number][];
     localListSizes?: [number, number][];
+    localListInitialSizes?: [number, number][];
     references?: [number, readonly number[]][];
   }[];
 }
@@ -147,6 +149,7 @@ class Frame {
   readonly locals = new Map<string, Value>();
   readonly declarations = new Map<number, number>();
   readonly localListSizes = new Map<number, number>();
+  readonly localListInitialSizes = new Map<number, number>();
   readonly references = new Map<number, readonly number[]>();
   readonly code: DataView;
   constructor(
@@ -213,6 +216,7 @@ class Frame {
 /** SceneScript stack machine. Include commands can bind to equivalent host services. */
 export class SiglusVm {
   private readonly globals = new Map<string, Value>();
+  private readonly declaredListSizes = new Map<string, number>();
   private readonly frames: Frame[] = [];
   private readonly sceneJumps = new Map<Frame, Frame>();
   private pendingLoad?: {checkpoint: SiglusCheckpoint; beforeResume: () => Promise<void>};
@@ -260,12 +264,19 @@ export class SiglusVm {
         locals: [...frame.locals],
         declarations: [...frame.declarations],
         localListSizes: frame.localListSizes.size ? [...frame.localListSizes] : undefined,
+        localListInitialSizes: frame.localListInitialSizes.size
+          ? [...frame.localListInitialSizes]
+          : undefined,
         references: [...frame.references],
       };
     });
     if (!frames.length) throw new Error('Siglus has no running frame');
     if (commandResult !== undefined) frames.at(-1)!.stack.push(commandResult);
-    return {globals: [...this.globals], frames};
+    return {
+      globals: [...this.globals],
+      declaredListSizes: this.declaredListSizes.size ? [...this.declaredListSizes] : undefined,
+      frames,
+    };
   }
 
   /** Scan upcoming instructions without mutating VM state to extract literal voice IDs for prefetching. */
@@ -473,21 +484,53 @@ export class SiglusVm {
       if (typeof entry === 'number')
         return await this.call(this.entry(scene, entry, parameters), this.frames.length);
       const script = this.pack.scene(scene);
-      const exported = this.pack.commandNames.findIndex(
-        (name, index) =>
-          name === entry &&
-          this.pack.sceneNames[this.pack.commandScenes[index * 2]!] === script.name,
-      );
-      const offset =
-        exported >= 0
-          ? this.pack.commandScenes[exported * 2 + 1]
-          : script.commands[script.commandNames.indexOf(entry)];
+      const offset = this.commandOffset(script, entry);
       if (offset === undefined) throw new Error(`Missing Siglus system command ${scene}.${entry}`);
       return await this.call(new Frame(script, offset, parameters), this.frames.length);
     } catch (error) {
       if (error instanceof ReturnFromHostScene) return 0;
       throw error;
     }
+  }
+
+  private commandOffset(script: SiglusScene, entry: string): number | undefined {
+    const exported = this.pack.commandNames.findIndex(
+      (name, index) =>
+        name === entry &&
+        this.pack.sceneNames[this.pack.commandScenes[index * 2]!] === script.name,
+    );
+    return exported >= 0
+      ? this.pack.commandScenes[exported * 2 + 1]
+      : script.commands[script.commandNames.indexOf(entry)];
+  }
+
+  /** Inspect leading parameter declarations up to the first `ARG_BIND` opcode (`9`). */
+  commandArity(scene: string, entry: string): number | undefined {
+    const script = this.pack.scene(scene);
+    const offset = this.commandOffset(script, entry);
+    if (offset === undefined) return undefined;
+    const {code} = script;
+    const view = new DataView(code.buffer, code.byteOffset, code.byteLength);
+    let pc = offset;
+    let count = 0;
+    while (pc < code.length) {
+      const op = code[pc++]!;
+      if (op === 1) {
+        if (pc + 4 > code.length) return undefined;
+        pc += 4;
+      } else if (op === 7) {
+        if (pc + 8 > code.length) return undefined;
+        const form = view.getInt32(pc, true);
+        pc += 8;
+        if (form === 11 || form === 21) return undefined;
+        count++;
+      } else if (op === 9) {
+        return count;
+      } else {
+        return undefined;
+      }
+    }
+    return undefined;
   }
 
   returnFromHostScene(): never {
@@ -553,6 +596,9 @@ export class SiglusVm {
     for (const [key, value] of checkpoint.globals)
       if (!key.startsWith('31.')) this.globals.set(key, value);
     for (const [key, value] of system) this.globals.set(key, value);
+    this.declaredListSizes.clear();
+    for (const [key, size] of checkpoint.declaredListSizes ?? [])
+      this.declaredListSizes.set(key, size);
     return checkpoint.frames.map((saved) => {
       const scene = this.pack.scene(saved.scene);
       if (!Number.isInteger(saved.pc) || saved.pc < 0 || saved.pc >= scene.code.length)
@@ -564,6 +610,8 @@ export class SiglusVm {
       for (const [key, value] of saved.locals) frame.locals.set(key, value);
       for (const [key, form] of saved.declarations) frame.declarations.set(key, form);
       for (const [key, size] of saved.localListSizes ?? []) frame.localListSizes.set(key, size);
+      for (const [key, size] of saved.localListInitialSizes ?? saved.localListSizes ?? [])
+        frame.localListInitialSizes.set(key, size);
       for (const [key, reference] of saved.references ?? []) frame.references.set(key, reference);
       return frame;
     });
@@ -643,10 +691,19 @@ export class SiglusVm {
     return store.get(key) ?? (form === 20 || form === 21 ? '' : 0);
   }
 
-  private setList(frame: Frame, receiver: number[], [start, ...values]: Argument[]): void {
+  private setList(
+    frame: Frame,
+    receiver: number[],
+    [start, ...values]: Argument[],
+    form?: number,
+  ): void {
     if (typeof start !== 'number' || start < 0) throw new Error('Invalid Siglus list start index');
     for (const [index, value] of values.entries()) {
-      if (typeof value !== 'number') throw new Error('Expected a Siglus list integer');
+      if (form === 21) {
+        if (typeof value !== 'string') throw new Error('Expected a Siglus list string');
+      } else if (typeof value !== 'number') {
+        throw new Error('Expected a Siglus list integer');
+      }
       this.property(frame, [...receiver, -1, start + index], value);
     }
   }
@@ -717,8 +774,11 @@ export class SiglusVm {
           case 7: {
             const form = frame.word();
             const index = frame.word();
-            if (form === 11 || form === 21)
-              frame.localListSizes.set(index, Math.max(0, Number(frame.scalar()) | 0));
+            if (form === 11 || form === 21) {
+              const initialSize = Math.max(0, Number(frame.scalar()) | 0);
+              frame.localListSizes.set(index, initialSize);
+              frame.localListInitialSizes.set(index, initialSize);
+            }
             frame.declarations.set(index, form);
             break;
           }
@@ -878,41 +938,46 @@ export class SiglusVm {
               elementOwner(receiverPath[1]!) === callProperty
               ? [...frame.declarations.keys()][elementIndex(receiverPath[1]!)]
               : undefined;
+            const listKey = declaredList
+              ? (elementIndex(receiverPath[0]!) >= this.pack.properties.length / 2
+                  ? frame.scene.name + ':'
+                  : '') + receiverPath.join('.')
+              : undefined;
             const sizeIndex = elementIndex(receiverPath[0]!) * 2 + 1;
-            const declaredSize = localDeclaration !== undefined
-              ? frame.localListSizes.get(localDeclaration)
-              : declaredList
+            const staticDeclaredSize = declaredList
               ? (this.pack.properties[sizeIndex] ??
                 frame.scene.properties[sizeIndex - this.pack.properties.length])
               : undefined;
+            const declaredSize =
+              localDeclaration !== undefined
+                ? frame.localListSizes.get(localDeclaration)
+                : declaredList
+                  ? (this.declaredListSizes.get(listKey!) ?? staticDeclaredSize)
+                  : undefined;
             if (
               declaredSize !== undefined &&
               ((form === 11 && member === 9) || (form === 21 && member === 4))
             ) {
               // 1.1.102.1 local declaration 0x64a2f0 uses the usual list
-              // dispatchers. Intlist member 9 (0x531241) returns its length.
+              // dispatchers. Intlist member 9 (0x531241) and strlist member 4 return its length.
               pushResult(declaredSize);
               break;
             }
             if (
               ((receiverPath[0] === localRoot && receiverPath.length === 2) || declaredList) &&
-              (form === 11 || form === 14)
+              (form === 11 || form === 14 || form === 21)
             ) {
-              if (member === 1) {
-                this.setList(frame, receiverPath, args);
+              if (member === 1 && (form !== 21 || (args.length >= 1 && typeof args[0] === 'number'))) {
+                this.setList(frame, receiverPath, args, form);
                 pushResult(0);
                 break;
               }
               if (member === 2 && args.length === 1) {
                 const nextSize = Math.max(0, Number(args[0]) | 0);
                 if (localDeclaration !== undefined) frame.localListSizes.set(localDeclaration, nextSize);
+                else if (listKey !== undefined) this.declaredListSizes.set(listKey, nextSize);
                 const store = receiverPath[0] === localRoot ? frame.locals : this.globals;
-                const prefix =
-                  (declaredList && elementIndex(receiverPath[0]!) >= this.pack.properties.length / 2
-                    ? frame.scene.name + ':'
-                    : '') +
-                  receiverPath.join('.') +
-                  '.-1.';
+                const prefix = (listKey ?? receiverPath.join('.')) + '.-1.';
                 for (const key of store.keys()) {
                   if (!key.startsWith(prefix)) continue;
                   const idx = Number(key.slice(prefix.length));
@@ -921,18 +986,20 @@ export class SiglusVm {
                 pushResult(0);
                 break;
               }
-              if (member === 8 && form === 11 && declaredList && args.length === 3) {
-                const [first, last, value] = args;
-                if (
-                  typeof first !== 'number' ||
-                  typeof last !== 'number' ||
-                  typeof value !== 'number' ||
-                  declaredSize === undefined ||
-                  first < 0 ||
-                  last >= declaredSize
-                )
+              if (
+                member === 8 &&
+                (form === 11 || form === 14) &&
+                (args.length === 2 || args.length === 3)
+              ) {
+                const first = args[0];
+                const last = args[1];
+                const value = args.length >= 3 ? args[2] : 0;
+                if (typeof first !== 'number' || typeof last !== 'number' || typeof value !== 'number')
                   throw new Error('Invalid Siglus list clear range');
-                for (let index = first; index <= last; index++)
+                const start = Math.max(0, first);
+                const end = declaredSize !== undefined ? Math.min(last, declaredSize - 1) : last;
+                if (end - start > 1_000_000) throw new Error('Invalid Siglus list clear range');
+                for (let index = start; index <= end; index++)
                   this.property(frame, [...receiverPath, -1, index], value);
                 pushResult(0);
                 break;
@@ -940,16 +1007,17 @@ export class SiglusVm {
             }
             if ((declaredList || localDeclaration !== undefined) &&
                 ((member === 10 && form === 11) || (member === 3 && form === 21))) {
-              const root = receiverPath[0]!;
               const store = localDeclaration === undefined ? this.globals : frame.locals;
-              const prefix =
-                (declaredList && elementIndex(root) >= this.pack.properties.length / 2
-                  ? frame.scene.name + ':'
-                  : '') +
-                receiverPath.join('.') +
-                '.';
+              const prefix = (listKey ?? receiverPath.join('.')) + '.';
               for (const key of store.keys()) {
                 if (key.startsWith(prefix)) store.delete(key);
+              }
+              if (declaredList && listKey !== undefined) this.declaredListSizes.delete(listKey);
+              if (localDeclaration !== undefined && frame.localListInitialSizes.has(localDeclaration)) {
+                frame.localListSizes.set(
+                  localDeclaration,
+                  frame.localListInitialSizes.get(localDeclaration)!,
+                );
               }
               pushResult(0);
               break;

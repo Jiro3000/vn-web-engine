@@ -1,0 +1,64 @@
+{
+  "name": "Angel Beats! -1st beat-",
+  "gameDir": "/Volumes/Transcend/Torrents/1GAMES/Angel Beats! -1st beat-",
+  "pointerPolledMenus": true,
+  "autoModeDialog": true,
+  "title": {
+    "scene": "_sys_menu_tt01",
+    "configScene": "_sys_menu_cf01",
+    "systemFlags": [[5, 1]],
+    "startButton": {"objectName": "sys_tm_1st_btn01"},
+    "configButton": {"objectName": "sys_tm_1st_btn05"},
+    "extraButton": {"objectName": "sys_tm_1st_btn06"},
+    "playedBgm": "m102"
+  },
+  "gameplay": {
+    "minPages": 5,
+    "requireSpeaker": false,
+    "requireBgm": true,
+    "minVisuals": 1,
+    "mwndAutoHideBar": false
+  },
+  "quickMenu": {
+    "saveScene": "_sys_menu_sl01",
+    "loadScene": "_sys_menu_sl01",
+    "configScene": "_sys_menu_cf01",
+    "saveButton": {"objectName": "sys_qm_btn06"},
+    "loadButton": {"objectName": "sys_qm_btn05"},
+    "configButton": {"objectName": "sys_qm_btn04"},
+    "slotButton": {"objectName": "sys_sa_data01"},
+    "loadSlotButton": {"objectName": "sys_lo_data01"},
+    "saveConfirmDialog": {
+      "objectName": "sys_sa_setbtn01",
+      "yesButton": {"objectName": "sys_sa_setbtn01"},
+      "noButton": {"objectName": "sys_sa_setbtn02"}
+    },
+    "loadConfirmDialog": {
+      "objectName": "sys_lo_setbtn01",
+      "yesButton": {"objectName": "sys_lo_setbtn01"},
+      "noButton": {"objectName": "sys_lo_setbtn02"}
+    }
+  },
+  "movies": {
+    "wmv": ["OP00"],
+    "omv": [
+      "sys_tm_1st_bg04",
+      "sys_ecatch00",
+      "ef_twinkle",
+      "ef_spark",
+      "ef_sr_iw00",
+      "ef_bs1_emo03"
+    ]
+  },
+  "extras": {
+    "systemFlags": [[5, 1], [6, 1]],
+    "cgFlags": [0, 1, 2, 3],
+    "bgmListened": ["m102", "m103", "m104", "m105"],
+    "expectedScene": "_extra_mode",
+    "tabs": [
+      {"group": "1", "buttonId": "1", "expectedObject": "sys_ex_music_check_all"},
+      {"group": "1", "buttonId": "2", "expectedObject": "sys_ex_record_title_bg"}
+    ],
+    "exitButton": {"group": "2", "id": "0"}
+  }
+}

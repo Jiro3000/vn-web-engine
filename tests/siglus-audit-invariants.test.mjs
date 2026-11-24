@@ -15,16 +15,30 @@ import {
   selbtnPresentation,
 } from '../dist/engines/siglus/selbtn.js';
 import {layoutObjectText} from '../dist/engines/siglus/object-text.js';
-import {orderedObjects, serializeDrawObject, SiglusDisplay} from '../dist/engines/siglus/display.js';
+import {SiglusConfiguration} from '../dist/engines/siglus/configuration.js';
+import {
+  isSiglusInstallation,
+  siglusDirectory,
+} from '../dist/engines/siglus/installation-markers.js';
+import {
+  layoutSiglusCompositeLayers,
+  orderedObjects,
+  parseSiglusCompositeSpec,
+  serializeDrawObject,
+  SiglusDisplay,
+} from '../dist/engines/siglus/display.js';
 import {SiglusPlayer} from '../dist/engines/siglus/player.js';
 import {SiglusVm} from '../dist/engines/siglus/vm.js';
 import {MissingSiglusVoiceError, SiglusAudio} from '../dist/engines/siglus/audio.js';
 import {encodeCaptureBmp, readCaptureBmpFlags} from '../dist/engines/siglus/capture.js';
 import {BlobSource} from '../dist/core/source.js';
-import {unpackSiglusLz, xorByteInPlace} from '../dist/formats/siglus/compression.js';
+import {unpackSiglusLz, xorByteInPlace, xorCycle} from '../dist/formats/siglus/compression.js';
+import {parseCgTable} from '../dist/formats/siglus/cgtable.js';
+import {SiglusDbs} from '../dist/formats/siglus/dbs.js';
 import {G00Image} from '../dist/formats/siglus/g00.js';
 import {readJpegHeader} from '../dist/formats/jpeg/header.js';
 import {decodeOwp} from '../dist/formats/siglus/sound.js';
+import {cgmXor, dbsMask} from '../dist/formats/siglus/tables.js';
 import {AsfDemuxer, readAsfLayout} from '../dist/formats/asf/demux.js';
 import {SiglusScenePack} from '../dist/formats/siglus/scene-pack.js';
 import {WindowsMediaDecoder} from '../dist/video/windows-media.js';
@@ -577,7 +591,12 @@ test('a finite Siglus wait completes when animation frames run ahead of a delaye
   tick(performance.now() + 2001);
   assert.equal(await pending, 0);
   assert.equal(player.wait, undefined);
-  Object.assign(player, {systemCallActive: true, decisions: new Map(), activeGroups: new Set()});
+  Object.assign(player, {
+    systemCallActive: true,
+    decisions: new Map(),
+    activeGroups: new Set(),
+    pendingButtonCalls: [],
+  });
   const poll = SiglusPlayer.prototype.nextInput.call(player);
   assert.equal(typeof player.decisionReady, 'function');
   tick(performance.now() + 17);
@@ -739,6 +758,8 @@ test('an object frame action still addresses its own child during a modal displa
     systemCallDepth: 0,
     objects: [page(stageObject)],
     frameActions: new Map(),
+    frameActionCounters: new Map(),
+    pendingButtonCalls: [],
     game: {pack: {commandNames: ['update']}},
     vm: {callScene: async (_scene, _label, [_event, ref, y]) => player.property([...ref, 4], y)},
   });
@@ -1113,7 +1134,10 @@ test('Native G_excall / excall_flag / G_syscom xref sweep invariants in player.t
   // 2. Native 0x622e70 / 0x625c10: time_stop freezes main frame_actions while EXCALL frame_actions tick
   assert.match(playerSrc, /if \(isExcallAction \? !this\.excallAllocated : this\.timeStopped\) continue;/);
   // 3. Native 0x5bb820 (excall.free): releaseSystemObjects clears 65.* frameActions, systemCounters, systemFont
-  assert.match(playerSrc, /if \(action\.path\[0\] === 65\) this\.frameActions\.delete\(key\);/);
+  assert.match(
+    playerSrc,
+    /if \(action\.path\[0\] === 65\) \{\s*this\.frameActions\.delete\(key\);\s*this\.frameActionCounters\.delete\(key\);\s*\}/,
+  );
   // 4. Native 0x6321f0 -> 0x5bb740: restoreSave and return_to_menu (63.235) reinit EXCALL & modal state
   assert.match(playerSrc, /private async restoreSave\(save: PlayerSave\)[\s\S]*?this\.releaseSystemObjects\(\);/);
   assert.match(playerSrc, /if \(member === 235\)[\s\S]*?this\.releaseSystemObjects\(\);/);
@@ -1470,6 +1494,8 @@ test('get_save_message strips newlines, messagePointerAction round-trips capture
       closeMessage: () => {},
       setMessageSlide: () => {},
       clearMessageFilterFiles: () => {},
+      clearMessageFrameFiles: () => {},
+      finishWipe: () => {},
       saveGans: () => [],
       saveMovieEffects: () => [],
       saveRectangleEffects: () => [],
@@ -1524,8 +1550,11 @@ test('get_save_message strips newlines, messagePointerAction round-trips capture
     namaeValues: new Map(),
     namaeIds: new Map(),
     messageFilterFiles: new Map(),
+    messageFrameFiles: new Map(),
     messageButtonOffsets: new Map(),
     frameActions: new Map(),
+    frameActionCounters: new Map(),
+    pendingButtonCalls: [],
     maskEvents: new Map(),
     activeGroups: new Set(),
     cancelGroups: new Set(),
@@ -1636,4 +1665,422 @@ test('SiglusAudio/Player handle missing koe/ voice banks gracefully via MissingS
     () => SiglusPlayer.prototype.playVoiceSafe.call(playerCrash, 100001, 'voice', 0),
     /corrupt voice packet/,
   );
+});
+
+test('nested Select.ini installation markers ignore AppleDouble dotfiles and recognize parent exe layouts', async () => {
+  const probeSource = (bytes) => new BlobSource(new Blob([bytes]));
+  const nestedFiles = [
+    {path: '._SiglusEngine.exe', source: probeSource(Uint8Array.of(0, 5, 22, 7))},
+    {path: 'SiglusEngine.exe', source: probeSource(Uint8Array.of(0x4d, 0x5a))},
+    {path: '1st_beat/._Scene.pck', source: probeSource(Uint8Array.of(0, 5, 22, 7))},
+    {path: '1st_beat/Scene.pck', source: probeSource(Uint8Array.of(92, 0, 0, 0))},
+    {path: '1st_beat/gameexe.dat', source: probeSource(Uint8Array.of(0))},
+  ];
+  assert.equal(siglusDirectory(nestedFiles), '1st_beat/');
+  assert.equal(await isSiglusInstallation(nestedFiles), true);
+  assert.equal(
+    await isSiglusInstallation([
+      {path: 'SiglusEngine.exe', source: probeSource(Uint8Array.of(0x4d, 0x5a))},
+      {path: '1st_beat/Scene.pck', source: probeSource(Uint8Array.of(0, 0, 0, 0))},
+      {path: '1st_beat/gameexe.dat', source: probeSource(Uint8Array.of(0))},
+    ]),
+    false,
+  );
+});
+
+test('parseCgTable decodes CGTABLE2 with packedFlag=0 XOR+LZSS payloads and CGTABLE v1', () => {
+  const literalLz = (raw) => {
+    const body = [];
+    for (let i = 0; i < raw.length; i += 8) {
+      body.push(0xff);
+      for (let j = 0; j < 8 && i + j < raw.length; j++) body.push(raw[i + j]);
+    }
+    const stream = new Uint8Array(8 + body.length);
+    const dv = new DataView(stream.buffer);
+    dv.setUint32(0, stream.length, true);
+    dv.setUint32(4, raw.length, true);
+    stream.set(body, 8);
+    return stream;
+  };
+
+  const entry = new Uint8Array(60);
+  entry.set(Buffer.from('EVAK_01A', 'ascii'), 0);
+  const edv = new DataView(entry.buffer);
+  edv.setInt32(32, 0, true);
+  edv.setInt32(36, 1, true);
+  edv.setInt32(40, 77, true);
+  const payload = literalLz(entry);
+  xorCycle(payload, cgmXor);
+  const cgm = new Uint8Array(32 + payload.length);
+  cgm.set(Buffer.from('CGTABLE2', 'ascii'), 0);
+  const hdv = new DataView(cgm.buffer);
+  hdv.setInt32(16, 1, true);
+  hdv.setInt32(20, 0, true); // Angel Beats sets header[20..23]=0 on an XOR+LZSS CGTABLE2 payload
+  cgm.set(payload, 32);
+
+  const parsedV2 = parseCgTable(cgm);
+  assert.equal(parsedV2.version, 2);
+  assert.equal(parsedV2.byName.get('evak_01a'), 0);
+  assert.deepEqual(parsedV2.entries[0].codes, [77]);
+
+  const v1 = new Uint8Array(32 + 36);
+  v1.set(Buffer.from('CGTABLE', 'ascii'), 0);
+  const v1dv = new DataView(v1.buffer);
+  v1dv.setInt32(16, 1, true);
+  v1.set(Buffer.from('BG_00', 'ascii'), 32);
+  v1dv.setInt32(64, 5, true);
+  const parsedV1 = parseCgTable(v1);
+  assert.equal(parsedV1.version, 1);
+  assert.equal(parsedV1.byName.get('bg_00'), 5);
+});
+
+test('SiglusDbs supports hasRow, checkColumn, and typed linear-scan cell reads', () => {
+  // Build a minimal UTF-16LE DBS table (2 rows, 2 cols: col 10='S', col 20='V')
+  const rowCount = 2;
+  const colCount = 2;
+  const rowHeaderOffset = 28;
+  const colHeaderOffset = rowHeaderOffset + rowCount * 4;
+  const dataOffset = colHeaderOffset + colCount * 8;
+  const stringTable = Buffer.from('Alpha\0Beta\0', 'utf16le');
+  const stringOffset = dataOffset + rowCount * colCount * 4;
+  const paddedLen = Math.ceil((stringOffset + stringTable.length) / 4) * 4;
+  const plain = new Uint8Array(paddedLen);
+  const pdv = new DataView(plain.buffer);
+  pdv.setUint32(4, rowCount, true);
+  pdv.setUint32(8, colCount, true);
+  pdv.setUint32(12, rowHeaderOffset, true);
+  pdv.setUint32(16, colHeaderOffset, true);
+  pdv.setUint32(20, dataOffset, true);
+  pdv.setUint32(24, stringOffset, true);
+  pdv.setInt32(rowHeaderOffset, 100, true);
+  pdv.setInt32(rowHeaderOffset + 4, 200, true);
+  pdv.setInt32(colHeaderOffset, 10, true);
+  pdv.setUint32(colHeaderOffset + 4, 'S'.charCodeAt(0), true);
+  pdv.setInt32(colHeaderOffset + 8, 20, true);
+  pdv.setUint32(colHeaderOffset + 12, 'V'.charCodeAt(0), true);
+  pdv.setUint32(dataOffset, 0, true);
+  pdv.setInt32(dataOffset + 4, 42, true);
+  pdv.setUint32(dataOffset + 8, 12, true);
+  pdv.setInt32(dataOffset + 12, 99, true);
+  plain.set(stringTable, stringOffset);
+  for (let i = 0; i < paddedLen / 4; i++) {
+    const key = dbsMask[(Math.floor(i / 16) % 5) * 5 + ((i % 16) % 5)] >= 0x80 ? 0x7190c70e : 0x499bf135;
+    pdv.setUint32(i * 4, (pdv.getUint32(i * 4, true) ^ key) >>> 0, true);
+  }
+  const lzBody = [];
+  for (let i = 0; i < plain.length; i += 8) {
+    lzBody.push(0xff);
+    for (let j = 0; j < 8 && i + j < plain.length; j++) lzBody.push(plain[i + j]);
+  }
+  const raw = new Uint8Array(4 + 8 + lzBody.length);
+  const rdv = new DataView(raw.buffer);
+  rdv.setUint32(0, 1, true);
+  rdv.setUint32(4, 8 + lzBody.length, true);
+  rdv.setUint32(8, plain.length, true);
+  raw.set(lzBody, 12);
+  for (let i = 4; i + 4 <= raw.length; i += 4) {
+    rdv.setUint32(i, (rdv.getUint32(i, true) ^ 0x89f4622d) >>> 0, true);
+  }
+
+  const dbs = new SiglusDbs(raw);
+  assert.equal(dbs.hasRow(100), true);
+  assert.equal(dbs.hasRow(200), true);
+  assert.equal(dbs.hasRow(300), false);
+  assert.equal(dbs.checkColumn(10), 1);
+  assert.equal(dbs.checkColumn(20), 2);
+  assert.equal(dbs.checkColumn(30), 0);
+  assert.equal(dbs.getStr(200, 10), 'Beta');
+  assert.equal(dbs.getNum(200, 20), 99);
+});
+
+test('SiglusVm dynamic list resize/clear/sets/init, checkpoints, and commandArity behave per native 1.1.80.8', async () => {
+  const i32 = (v) => [v & 0xff, (v >>> 8) & 0xff, (v >>> 16) & 0xff, v >>> 24];
+  const push = (form, value) => [0x02, ...i32(form), ...i32(value)];
+  const pushInt = (value) => push(10, value);
+  const pushStr = (index) => push(20, index);
+  const elm = (...segments) => [0x08, ...segments.flatMap(pushInt)];
+  const encodeArgs = (forms) => [
+    ...i32(forms.length),
+    ...forms.toReversed().flatMap((f) => (Array.isArray(f) ? [...i32(-1), ...encodeArgs(f)] : i32(f))),
+  ];
+  const cmd = (forms, retForm = 0) => [0x30, ...i32(0), ...encodeArgs(forms), ...i32(0), ...i32(retForm)];
+  const assign = (lhsForm, rhsForm) => [0x20, ...i32(lhsForm), ...i32(rhsForm), ...i32(0)];
+  const dec = (form, size) => [0x07, ...i32(form), ...i32(size)];
+
+  const globalIntList = 0x7f000000;
+  const globalStrList = 0x7f000001;
+  const localIntList = 0x7d000000;
+  const localIntRef = 0x7d000001;
+  const localStrRef = 0x7d000002;
+  const hostCalls = [];
+
+  // Test scene: declared global intlist[2] and strlist[1], plus local intlist[3], sets/resize/clear/init
+  const code = [
+    ...pushInt(3), ...dec(11, 0), // L[0]: intlist size 3
+    ...dec(10, 0), // L[1]: scratch int
+    ...dec(20, 0), // L[2]: scratch str
+    // globalIntList.sets(0, 10, 20, 30) & resize(4)
+    ...elm(globalIntList, 1), ...pushInt(0), ...pushInt(10), ...pushInt(20), ...pushInt(30), ...cmd([10, 10, 10, 10]),
+    ...elm(globalIntList, 2), ...pushInt(4), ...cmd([10]),
+    // globalIntList.clear(1, 99, 7) (clamps end to size-1 = 3)
+    ...elm(globalIntList, 8), ...pushInt(1), ...pushInt(99), ...pushInt(7), ...cmd([10, 10, 10]),
+    // 2-arg clear fills with 0; reversed range (3, 1) is no-op
+    ...elm(globalIntList, 8), ...pushInt(2), ...pushInt(2), ...cmd([10, 10]),
+    ...elm(globalIntList, 8), ...pushInt(3), ...pushInt(1), ...pushInt(55), ...cmd([10, 10, 10]),
+    // local intlist resize(2), sets(0, 5, 6), 2-arg clear(1, 1)
+    ...elm(0x7c000000 - 0x7c000000 + 83), // placeholder replaced below via proper localRoot=83
+  ];
+  // Build clean bytecode cleanly with explicit localRoot = 83:
+  const mainCode = Uint8Array.from([
+    ...pushInt(3), ...dec(11, 0),
+    // globalIntList.resize(4) & sets(0, 11, 22, 33, 44) & 3-arg clear(1, 99, 7) & 2-arg clear(2, 2) & no-op clear(3, 1, 99)
+    ...elm(globalIntList, 2), ...pushInt(4), ...cmd([10]),
+    ...elm(globalIntList, 1), ...pushInt(0), ...pushInt(11), ...pushInt(22), ...pushInt(33), ...pushInt(44), ...cmd([10, 10, 10, 10, 10]),
+    ...elm(globalIntList, 8), ...pushInt(1), ...pushInt(99), ...pushInt(7), ...cmd([10, 10, 10]),
+    ...elm(globalIntList, 8), ...pushInt(2), ...pushInt(2), ...cmd([10, 10]),
+    ...elm(globalIntList, 8), ...pushInt(3), ...pushInt(1), ...pushInt(99), ...cmd([10, 10, 10]),
+    // localIntList.resize(2) & clear(0, 1, 88) & clear(1, 1)
+    ...elm(83, localIntList, 2), ...pushInt(2), ...cmd([10]),
+    ...elm(83, localIntList, 8), ...pushInt(0), ...pushInt(1), ...pushInt(88), ...cmd([10, 10, 10]),
+    ...elm(83, localIntList, 8), ...pushInt(1), ...pushInt(1), ...cmd([10, 10]),
+    // globalStrList.resize(2), sets(0, 'A', 'B'), host report (command 999)
+    ...elm(globalStrList, 2), ...pushInt(2), ...cmd([10]),
+    ...elm(globalStrList, 1), ...pushInt(0), ...pushStr(0), ...pushStr(1), ...cmd([10, 20, 20]),
+    // report sizes and elements via host cmd 999:
+    ...elm(999),
+    ...elm(globalIntList, 9), ...cmd([], 10),
+    ...elm(globalIntList, -1, 0), [0x05],
+    ...elm(globalIntList, -1, 1), [0x05],
+    ...elm(globalIntList, -1, 2), [0x05],
+    ...elm(globalIntList, -1, 3), [0x05],
+    ...elm(83, localIntList, 9), ...cmd([], 10),
+    ...elm(83, localIntList, -1, 0), [0x05],
+    ...elm(83, localIntList, -1, 1), [0x05],
+    ...elm(globalStrList, 4), ...cmd([], 10),
+    ...elm(globalStrList, -1, 1), [0x05],
+    ...cmd([10, 10, 10, 10, 10, 10, 10, 10, 10, 20]),
+    // init globalStrList (3) and globalIntList (10) -> check reset sizes (2, 1)
+    ...elm(globalIntList, 10), ...cmd([]),
+    ...elm(globalStrList, 3), ...cmd([]),
+    ...elm(998), ...elm(globalIntList, 9), ...cmd([], 10), ...elm(globalStrList, 4), ...cmd([], 10), ...cmd([10, 10]),
+    0x15, ...i32(0), ...encodeArgs([]),
+  ]);
+  void code; void assign; void localIntRef; void localStrRef;
+
+  const subCode = Uint8Array.from([
+    0x01, ...i32(10),
+    ...dec(10, 0),
+    ...dec(20, 0),
+    0x09,
+    0x15, ...i32(0), ...encodeArgs([]),
+  ]);
+  const pack = {
+    sceneNames: ['main'],
+    properties: [11, 2, 21, 1],
+    propertyNames: ['g_ints', 'g_strs'],
+    commands: [],
+    commandNames: [],
+    commandScenes: [],
+    scene: () => ({
+      name: 'main',
+      code: mainCode,
+      strings: ['Alpha', 'Beta'],
+      labels: [0, subCode],
+      entries: [0],
+      properties: [],
+      commands: [mainCode.length],
+      commandNames: ['local_two_args'],
+    }),
+  };
+  // Put subCode cleanly at an offset inside combined code buffer for commandArity test
+  const combined = Uint8Array.from([...mainCode, ...subCode]);
+  pack.scene = () => ({
+    name: 'main',
+    code: combined,
+    strings: ['Alpha', 'Beta'],
+    labels: [0],
+    entries: [0],
+    properties: [],
+    commands: [mainCode.length],
+    commandNames: ['local_two_args'],
+  });
+
+  let savedCheckpoint;
+  const vm = new SiglusVm(
+    pack,
+    {
+      command: async (c) => {
+        if (c.path[0] === 999) {
+          savedCheckpoint = vm.checkpoint(0);
+          hostCalls.push({cmd: 999, args: c.args});
+        } else if (c.path[0] === 998) {
+          hostCalls.push({cmd: 998, args: c.args});
+        }
+        return 0;
+      },
+      property: () => undefined,
+      message: () => {},
+      trace: () => {},
+    },
+    new AbortController().signal,
+  );
+  assert.equal(vm.commandArity('main', 'local_two_args'), 2);
+  await vm.run('main', 0);
+  assert.deepEqual(hostCalls[0], {cmd: 999, args: [4, 11, 7, 0, 7, 2, 88, 0, 2, 'Beta']});
+  assert.deepEqual(hostCalls[1], {cmd: 998, args: [2, 1]});
+  assert.deepEqual(savedCheckpoint.declaredListSizes, [['2130706432', 4], ['2130706433', 2]]);
+  assert.deepEqual(savedCheckpoint.frames[0].localListSizes, [[0, 2]]);
+});
+
+test('parseSiglusCompositeSpec and layoutSiglusCompositeLayers match 1.1.80.8 whitespace and center alignment', () => {
+  const parsed = parseSiglusCompositeSpec(
+    ' bs_base ( +4 , -2 , 1 , blend = 2 ) | bs_face(10, 20) ',
+  );
+  assert.equal(parsed.explicitDim, undefined);
+  assert.equal(parsed.layers.length, 2);
+  assert.deepEqual(parsed.layers[0], {
+    part: 'bs_base ( +4 , -2 , 1 , blend = 2 )',
+    name: 'bs_base',
+    dx: 4,
+    dy: -2,
+    pattern: 1,
+    blend: '2',
+  });
+  assert.deepEqual(parsed.layers[1], {
+    part: 'bs_face(10, 20)',
+    name: 'bs_face',
+    dx: 10,
+    dy: 20,
+    pattern: 0,
+    blend: undefined,
+  });
+
+  const layout = layoutSiglusCompositeLayers([
+    {frame: {width: 400, height: 600, x: 0, y: 0, centerX: 200, centerY: 100}, dx: 4, dy: -2},
+    {frame: {width: 100, height: 80, x: 5, y: 3, centerX: 50, centerY: 40}, dx: 10, dy: 20},
+  ]);
+  assert.equal(layout.baseCenterX, 200);
+  assert.equal(layout.baseCenterY, 100);
+  assert.deepEqual(layout.placements, [
+    {drawX: 4, drawY: -2},
+    {drawX: 165, drawY: 83}, // dx(10) + baseCenterX(200) + x(5) - centerX(50)
+  ]);
+
+  const explicit = parseSiglusCompositeSpec('( 800 , 600 ) | part ( -10 , +5 )');
+  assert.deepEqual(explicit.explicitDim, {width: 800, height: 600});
+  const explicitLayout = layoutSiglusCompositeLayers(
+    [{frame: {width: 100, height: 50, x: 2, y: 4, centerX: 30, centerY: 10}, dx: -10, dy: 5}],
+    explicit.explicitDim,
+  );
+  assert.deepEqual([explicitLayout.width, explicitLayout.height], [800, 600]);
+  assert.deepEqual(explicitLayout.placements, [{drawX: -38, drawY: -1}]);
+});
+
+test('SiglusConfiguration falls back to built-in Japanese dialogs 115 and 124 when PE resources are encrypted or missing', async () => {
+  const garbageExe = new BlobSource(new Blob([Uint8Array.from({length: 512}, (_, i) => i & 0xff)]));
+  const cfg = new SiglusConfiguration({}, garbageExe, new AbortController().signal);
+  const autoTmpl = await cfg.template(115);
+  const movieTmpl = await cfg.template(124);
+  assert.ok(autoTmpl.items.some((item) => item.id === 1177) && autoTmpl.items.some((item) => item.id === 1176));
+  assert.ok(movieTmpl.items.some((item) => item.id === 1164) && movieTmpl.items.some((item) => item.id === 1165));
+});
+
+test('SiglusPlayer commits wait=0 wipe synchronously before async display, supports audio wait commands, and tolerates missing child parents', async () => {
+  const childObj = {
+    type: 2,
+    name: 'bs2_yr0101_01',
+    frames: [],
+    x: 0,
+    y: 0,
+    visible: true,
+    layer: 0,
+    order: 0,
+    transparency: 255,
+    pattern: 0,
+  };
+  const backParent = {
+    type: 0,
+    name: '',
+    frames: [],
+    x: 0,
+    y: 0,
+    visible: true,
+    layer: 0,
+    order: 0,
+    transparency: 255,
+    pattern: 0,
+    wipeCopy: true,
+    children: new Map([[0, childObj]]),
+  };
+  let releaseShow;
+  let finishedWipe = false;
+  const audioLog = [];
+  const unhandledProperties = new Map();
+  const display = {
+    finishWipe() {
+      finishedWipe = true;
+    },
+    closeMessage() {},
+    show: () => new Promise((resolve) => { releaseShow = resolve; }),
+  };
+  const player = Object.assign(Object.create(SiglusPlayer.prototype), {
+    controller: new AbortController(),
+    objects: [new Map(), new Map([[12, backParent]])],
+    usesWipeCopy: true,
+    activeGroups: new Set(),
+    cancelGroups: new Set(),
+    decisions: new Map(),
+    frameActions: new Map(),
+    pendingButtonCalls: [],
+    currentCast: [],
+    currentCastCostumes: [],
+    pageVoices: [],
+    unhandledProperties,
+    unhandledCommands: new Map(),
+    display,
+    systemOption: () => false,
+    releaseUnusedObjectMovies: () => {},
+    audio: {
+      bgmStart: (...args) => audioLog.push(['bgmStart', ...args]),
+      resumeBgm: (...args) => audioLog.push(['resumeBgm', ...args]),
+      pcmStart: (...args) => audioLog.push(['pcmStart', ...args]),
+      resumePcm: (...args) => audioLog.push(['resumePcm', ...args]),
+    },
+    waitAudio: async (...args) => { audioLog.push(['waitAudio', ...args]); return 0; },
+    recordBgmListened: () => {},
+  });
+
+  // 1. wait=0 wipe (named=[8], args=[0, 250, 0]) commits front objects[0][12] and clears back immediately
+  await player.command({path: [7], args: [0, 250, 0], named: [8], scene: 't', line: 1, pc: 0, name: ''});
+  assert.ok(finishedWipe);
+  assert.equal(player.objects[1].size, 0);
+  assert.equal(await player.objectCommand({path: [38, 2, -1, 12, 93, -1, 0, 62], args: [], named: []}), 'bs2_yr0101_01');
+  // Calling wipe_end or resolving previous show does not clobber front[12]
+  releaseShow();
+  await player.pendingWipe;
+  assert.equal(player.objects[0].get(12).children.get(0).name, 'bs2_yr0101_01');
+
+  // 2. Missing parent .child traversal returns "" / 0 and write returns value without allocating or recording unhandledProperties
+  assert.equal(await player.objectCommand({path: [38, 2, -1, 99, 93, -1, 0, 62], args: [], named: []}), '');
+  assert.equal(player.property([38, 2, -1, 99, 93, -1, 0, 27]), 0);
+  assert.equal(player.property([38, 2, -1, 99, 93, -1, 0, 27], 128), 128);
+  assert.equal(player.property([38, 2, -1, 99, 93, -1, 0, 27]), 0);
+  assert.equal(player.objects[0].has(99), false);
+  assert.equal(unhandledProperties.size, 0);
+
+  // 3. Native 1.1.80.8 audio wait commands (42.2, 42.12, 44.-1.*.1, 44.-1.*.17)
+  await player.command({path: [42, 2], args: ['bgm01', 100, 50], named: [], scene: 't', line: 2, pc: 0, name: ''});
+  await player.command({path: [42, 12], args: [120], named: [], scene: 't', line: 3, pc: 0, name: ''});
+  await player.command({path: [44, -1, 3, 1], args: ['se01', 40], named: [], scene: 't', line: 4, pc: 0, name: ''});
+  await player.command({path: [44, -1, 3, 17], args: [60], named: [], scene: 't', line: 5, pc: 0, name: ''});
+  assert.deepEqual(audioLog, [
+    ['bgmStart', 'bgm01', false, 100, 50],
+    ['waitAudio', 'bgm', false],
+    ['resumeBgm', 120],
+    ['waitAudio', 'bgm', false],
+    ['pcmStart', 3, {loop: false, resource: 'se01'}, false, 40],
+    ['waitAudio', 'pcm3', false],
+    ['resumePcm', 3, 60],
+    ['waitAudio', 'pcm3', false],
+  ]);
 });

@@ -6,11 +6,16 @@ import {
 
 export function siglusDirectory(files: readonly InstallationProbeFile[]): string | undefined {
   const paths = new Set(files.map(({path}) => path.replaceAll('\\', '/').toLowerCase()));
+  let nestedDir: string | undefined;
   for (const path of paths) {
     if (!/(^|\/)scene\.pck$/.test(path)) continue;
     const dir = path.slice(0, -'scene.pck'.length);
-    if (paths.has(dir + 'gameexe.dat') && paths.has(dir + 'siglusengine.exe')) return dir;
+    if (!paths.has(dir + 'gameexe.dat')) continue;
+    if (paths.has(dir + 'siglusengine.exe')) return dir;
+    const parent = dir.replace(/[^/]+\/$/, '');
+    if (!nestedDir && parent !== dir && paths.has(parent + 'siglusengine.exe')) nestedDir = dir;
   }
+  return nestedDir;
 }
 
 export const isSiglusInstallation: InstallationRecognizer = (files) => {

@@ -71,6 +71,98 @@ export function siglusFontShadow(shadow: number): string {
   return shadowStyles[shadow] ?? shadowStyles[0]!;
 }
 
+function defaultDialogItem(
+  id: number,
+  className: number | string,
+  x: number,
+  y: number,
+  cx: number,
+  cy: number,
+  style: number,
+  title: string | null,
+): DialogItemTemplate {
+  return {helpId: 0, style, exStyle: 0, x, y, cx, cy, id, className, title, data: 0};
+}
+
+function defaultDialog(
+  cx: number,
+  cy: number,
+  title: string,
+  items: readonly DialogItemTemplate[],
+): DialogTemplate {
+  return {
+    extended: true,
+    helpId: 0,
+    style: 0x80cc0848,
+    exStyle: 0,
+    x: 0,
+    y: 0,
+    cx,
+    cy,
+    menu: null,
+    className: null,
+    title,
+    font: {pointSize: 8, weight: 400, italic: false, charset: 1, face: 'MS Shell Dlg'},
+    items,
+  };
+}
+
+const defaultDialogTemplates = new Map<number, DialogTemplate>([
+  [
+    autoModeDialogResource,
+    defaultDialog(284, 137, 'オートモード （文章の自動送り機能） の設定', [
+      defaultDialogItem(1002, 128, 243, 103, 34, 14, 0x50030000, '閉じる'),
+      defaultDialogItem(
+        1204,
+        130,
+        7,
+        7,
+        269,
+        8,
+        0x50020000,
+        '待ち時間は 『 （ 表示した文字数 × 文字時間 ） ＋ 最小時間 』 で計算されます。',
+      ),
+      defaultDialogItem(1102, 128, 7, 20, 269, 35, 0x50020007, '文字時間'),
+      defaultDialogItem(1206, 130, 13, 33, 44, 16, 0x50020201, 'スタティック'),
+      defaultDialogItem(1177, 'msctls_trackbar32', 59, 30, 214, 20, 0x50030005, null),
+      defaultDialogItem(1101, 128, 7, 60, 269, 35, 0x50020007, '最小時間'),
+      defaultDialogItem(1205, 130, 13, 73, 44, 16, 0x50020201, 'スタティック'),
+      defaultDialogItem(1176, 'msctls_trackbar32', 59, 70, 214, 20, 0x50030005, null),
+      defaultDialogItem(1208, 130, 7, 104, 110, 8, 0x50020000, '１０文字表示した際の待ち時間 = '),
+      defaultDialogItem(1207, 130, 117, 101, 44, 16, 0x50020201, 'スタティック'),
+      defaultDialogItem(1003, 128, 171, 103, 68, 14, 0x50030000, '初期状態に戻す'),
+    ]),
+  ],
+  [
+    movieDialogResource,
+    defaultDialog(224, 120, 'ムービーの再生方法の設定', [
+      defaultDialogItem(1026, 128, 183, 86, 34, 14, 0x50030000, '閉じる'),
+      defaultDialogItem(
+        1224,
+        130,
+        7,
+        7,
+        210,
+        26,
+        0x50020000,
+        'ムービーの再生方法を変更できます。\nゲーム中、ムービーがうまく再生されない場合に変更して下さい。\n\u3000※問題ない場合は 『 Windows Media Player 』 にして下さい。',
+      ),
+      defaultDialogItem(
+        1225,
+        130,
+        7,
+        37,
+        210,
+        26,
+        0x50020000,
+        '『 Windows Media Player 』 を利用するには\nWindows Media Player のバージョン９以上が必要です。\n\u3000※環境によってうまく動作しない場合があります。',
+      ),
+      defaultDialogItem(1164, 128, 12, 70, 30, 10, 0x50030009, 'ＭＣＩ'),
+      defaultDialogItem(1165, 128, 12, 84, 112, 10, 0x50010009, 'Windows Media Player （標準）'),
+    ]),
+  ],
+]);
+
 export class SiglusConfiguration {
   private templates?: Promise<Map<number, DialogTemplate>>;
 
@@ -81,21 +173,35 @@ export class SiglusConfiguration {
   ) {}
 
   private async readTemplates(): Promise<Map<number, DialogTemplate>> {
-    if (!this.engine) throw new Error('SiglusEngine.exe is needed for these configuration dialogs');
+    const result = new Map<number, DialogTemplate>();
+    if (!this.engine) return result;
     const outer = await this.engine.read(0, this.engine.size);
     const embedded = outer.subarray(sdWrapImageOffset);
     const images = [outer];
     if (embedded[0] === 0x4d && embedded[1] === 0x5a) images.push(embedded);
-    const result = new Map<number, DialogTemplate>();
-    for (const image of images)
-      for (const {id, language, bytes} of parsePeResources(image, [5]))
-        if (language === 1041 && (id === movieDialogResource || id === screenDialogResource || id === autoModeDialogResource))
-          result.set(id, parseDialogTemplate(bytes, 0));
+    for (const image of images) {
+      let resources;
+      try {
+        resources = parsePeResources(image, [5]);
+      } catch {
+        continue;
+      }
+      for (const {id, language, bytes} of resources) {
+        if (language === 1041 && (id === movieDialogResource || id === screenDialogResource || id === autoModeDialogResource)) {
+          try {
+            result.set(id, parseDialogTemplate(bytes, 0));
+          } catch {
+            // Encrypted or packed PE executables keep unparseable .rsrc payloads until runtime decryption.
+          }
+        }
+      }
+    }
     return result;
   }
 
   private async template(id: number): Promise<DialogTemplate> {
-    const template = (await (this.templates ??= this.readTemplates())).get(id);
+    const template =
+      (await (this.templates ??= this.readTemplates())).get(id) ?? defaultDialogTemplates.get(id);
     if (!template) throw new Error(`Missing Siglus settings dialog resource ${id}`);
     this.signal.throwIfAborted();
     return template;

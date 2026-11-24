@@ -268,7 +268,8 @@ test('Phase 1 VM refs & intlist: retForm=23 strref (global.namae), vm.assign int
   assert.equal(props.get('23.-1.4'), 2);
   assert.equal(props.get('23.-1.5'), 5);
   assert.equal(props.get('23.-1.6'), 0);
-  assert.equal(props.get('23.-1.7'), 5);
+  // Native C_elm_int_list::reinit (0x534af0) resizes extendable call-local lists (0x64a593) back to their declared initial size.
+  assert.equal(props.get('23.-1.7'), 2);
   assert.equal(props.get('26.-1.51'), 7);
   assert.equal(props.get('26.-1.52'), -3);
 });

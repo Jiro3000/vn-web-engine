@@ -83,6 +83,7 @@ export interface Graphic {
   centerX: number;
   centerY: number;
   contentBounds?: G00Frame['contentBounds'];
+  pixels?: Uint8ClampedArray;
 }
 
 export interface SiglusCaptureOptions {
@@ -173,7 +174,14 @@ export interface DrawObject {
     Record<'x' | 'y', Map<number, {from: number; started: number; time: KeyframeAnimationOptions}>>
   >;
   patternCycle?: {count: number; duration: number; started: number};
-  button?: {id: number; group: number; actionNo?: number; seNo?: number};
+  button?: {
+    id: number;
+    group: number;
+    actionNo?: number;
+    seNo?: number;
+    buttonCall?: {scene: string; command: string};
+  };
+  buttonCall?: {scene: string; command: string};
   children?: Map<number, DrawObject>;
   childCount?: number;
   movie?: SiglusOmvPlayback;
@@ -311,6 +319,7 @@ export interface SerializedDrawObject {
   positionOffsets?: DrawObject['positionOffsets'];
   offsetEventCounts?: DrawObject['offsetEventCounts'];
   button?: DrawObject['button'];
+  buttonCall?: {scene: string; command: string};
   childCount?: number;
   children?: [number, SerializedDrawObject][];
   movieMeta?: DrawObject['movieMeta'];
@@ -369,6 +378,7 @@ export function serializeDrawObject(
       : undefined,
     offsetEventCounts: object.offsetEventCounts && {...object.offsetEventCounts},
     button: object.button ? {...object.button} : undefined,
+    buttonCall: object.buttonCall ? {...object.buttonCall} : undefined,
     childCount: object.childCount,
     children: object.children?.size
       ? [...object.children].map(([id, child]) => [id, serializeDrawObject(child, now)])
@@ -420,8 +430,101 @@ export function orderedObjects(
 
 const registeredNumberProperties = new Set<string>();
 
+const explicitCompositeDimPattern = /^\(\s*([+-]?\d+)\s*,\s*([+-]?\d+)\s*\)$/;
+const compositeLayerPattern =
+  /^([^()]+?)(?:\(\s*([+-]?\d+)\s*,\s*([+-]?\d+)(?:\s*,\s*([+-]?\d+))?(?:\s*,\s*blend\s*=\s*([+-]?\d+))?\s*\))?$/;
+
+/** A parsed layer entry inside a Siglus composite graphic specification. */
+export interface SiglusCompositeLayerSpec {
+  part: string;
+  name: string;
+  dx: number;
+  dy: number;
+  pattern: number;
+  blend?: string;
+}
+
+/** Parses a Siglus composite image string into optional canvas size and ordered layer specs. */
+export function parseSiglusCompositeSpec(specification: string): {
+  explicitDim?: {width: number; height: number};
+  layers: SiglusCompositeLayerSpec[];
+} {
+  const tokens = specification
+    .split('|')
+    .map((t) => t.trim())
+    .filter((t) => t.length > 0);
+  const explicitMatch = explicitCompositeDimPattern.exec(tokens[0] ?? '');
+  const explicitDim = explicitMatch
+    ? {width: Number(explicitMatch[1]), height: Number(explicitMatch[2])}
+    : undefined;
+  const partTokens = explicitDim ? tokens.slice(1) : tokens;
+  const layers = partTokens.map((part) => {
+    const layer = compositeLayerPattern.exec(part);
+    if (!layer) throw new Error('Invalid Siglus composite image component ' + part);
+    return {
+      part,
+      name: layer[1]!.trim(),
+      dx: Number(layer[2] ?? 0),
+      dy: Number(layer[3] ?? 0),
+      pattern: Number(layer[4] ?? 0),
+      blend: layer[5],
+    };
+  });
+  return {explicitDim, layers};
+}
+
+/** Computes composite surface dimensions, base center pivot, and per-layer blit coordinates. */
+export function layoutSiglusCompositeLayers(
+  layers: ReadonlyArray<{
+    frame: {width: number; height: number; x: number; y: number; centerX: number; centerY: number};
+    dx: number;
+    dy: number;
+  }>,
+  explicitDim?: {width: number; height: number},
+): {
+  width: number;
+  height: number;
+  baseX: number;
+  baseY: number;
+  baseCenterX: number;
+  baseCenterY: number;
+  placements: Array<{drawX: number; drawY: number}>;
+} {
+  let width = explicitDim ? explicitDim.width : 0;
+  let height = explicitDim ? explicitDim.height : 0;
+  let baseX = 0;
+  let baseY = 0;
+  let baseCenterX = 0;
+  let baseCenterY = 0;
+  if (!explicitDim && layers.length > 0) {
+    const first = layers[0]!;
+    baseX = first.frame.x;
+    baseY = first.frame.y;
+    baseCenterX = first.frame.centerX;
+    baseCenterY = first.frame.centerY;
+    width = first.frame.width;
+    height = first.frame.height;
+    for (const [idx, {frame, dx, dy}] of layers.entries()) {
+      if (idx === 0) continue;
+      const right = dx + baseCenterX + frame.x - frame.centerX + frame.width;
+      const bottom = dy + baseCenterY + frame.y - frame.centerY + frame.height;
+      if (right > width) width = right;
+      if (bottom > height) height = bottom;
+    }
+  }
+  const placements = layers.map(({frame, dx, dy}, idx) => ({
+    drawX: !explicitDim && idx === 0 ? dx : dx + baseCenterX + frame.x - frame.centerX,
+    drawY: !explicitDim && idx === 0 ? dy : dy + baseCenterY + frame.y - frame.centerY,
+  }));
+  return {width, height, baseX, baseY, baseCenterX, baseCenterY, placements};
+}
+
 function isCompositeGraphic(name: string): boolean {
-  return name.includes('|') || /\(-?\d+,-?\d+(?:,-?\d+)?(?:,blend=\d+)?\)$/.test(name);
+  const trimmed = name.trim();
+  return (
+    trimmed.includes('|') ||
+    /\(\s*[+-]?\d+\s*,\s*[+-]?\d+(?:\s*,\s*[+-]?\d+)?(?:\s*,\s*blend\s*=\s*[+-]?\d+)?\s*\)$/.test(trimmed)
+  );
 }
 
 function embeddedCut(files: ReadonlyMap<string, unknown>, name: string): [string, number] | undefined {
@@ -455,6 +558,10 @@ export class SiglusDisplay {
   private readonly spaceHideIds: ReadonlySet<number>;
   private messageDisplayed = true;
   private readonly messageFilterOverrides = new Map<
+    number,
+    {file: string; layer?: HTMLCanvasElement; frame?: Graphic}
+  >();
+  private readonly messageFrameOverrides = new Map<
     number,
     {file: string; layer?: HTMLCanvasElement; frame?: Graphic}
   >();
@@ -551,6 +658,7 @@ export class SiglusDisplay {
   private readonly hitPaths = new WeakMap<Graphic, string>();
   private background?: HTMLElement;
   private objectLayer?: HTMLElement;
+  private stageGeneration = 0;
   private wipe?: Animation;
   private systemInput = false;
   private readonly keys = [this.inputKey(), this.inputKey()];
@@ -1241,26 +1349,32 @@ export class SiglusDisplay {
     this.paintMessageFilter(asset.config, asset.filterLayer, asset.filterFrame, color);
   }
 
-  async setMessageFilterFile(windowIndex: number, file: string): Promise<void> {
-    const prev = this.messageFilterOverrides.get(windowIndex);
+  private async setMessageLayerOverride(
+    overrides: Map<number, {file: string; layer?: HTMLCanvasElement; frame?: Graphic}>,
+    windowIndex: number,
+    file: string,
+    zIndex: string,
+    dataKey: 'siglusWakuFilterOverride' | 'siglusWakuFrameOverride',
+  ): Promise<void> {
+    const prev = overrides.get(windowIndex);
     prev?.layer?.remove();
     if (!file) {
-      this.messageFilterOverrides.delete(windowIndex);
+      overrides.delete(windowIndex);
       if (windowIndex === this.windowIndex) this.applyMessageFrame(this.frameIndex);
       return;
     }
     const entry: {file: string; layer?: HTMLCanvasElement; frame?: Graphic} = {file};
-    this.messageFilterOverrides.set(windowIndex, entry);
+    overrides.set(windowIndex, entry);
     if (this.files.has(`g00/${file.toLowerCase()}.g00`)) {
       const frame = await this.graphic(file);
-      if (this.messageFilterOverrides.get(windowIndex) !== entry || this.signal.aborted) return;
+      if (overrides.get(windowIndex) !== entry || this.signal.aborted) return;
       const offset = computeSpriteOffset(0, 0, frame);
       const layer = this.node(frame);
       layer.style.left = `${offset.left}px`;
       layer.style.top = `${offset.top}px`;
-      layer.style.zIndex = '-2';
+      layer.style.zIndex = zIndex;
       layer.style.pointerEvents = 'none';
-      layer.dataset.siglusWakuFilterOverride = String(windowIndex);
+      layer.dataset[dataKey] = String(windowIndex);
       layer.hidden = true;
       this.message.prepend(layer);
       entry.frame = frame;
@@ -1269,9 +1383,34 @@ export class SiglusDisplay {
     if (windowIndex === this.windowIndex) this.applyMessageFrame(this.frameIndex);
   }
 
+  async setMessageFilterFile(windowIndex: number, file: string): Promise<void> {
+    return this.setMessageLayerOverride(
+      this.messageFilterOverrides,
+      windowIndex,
+      file,
+      '-2',
+      'siglusWakuFilterOverride',
+    );
+  }
+
+  async setMessageFrameFile(windowIndex: number, file: string): Promise<void> {
+    return this.setMessageLayerOverride(
+      this.messageFrameOverrides,
+      windowIndex,
+      file,
+      '-1',
+      'siglusWakuFrameOverride',
+    );
+  }
+
   clearMessageFilterFiles(): void {
     for (const entry of this.messageFilterOverrides.values()) entry.layer?.remove();
     this.messageFilterOverrides.clear();
+  }
+
+  clearMessageFrameFiles(): void {
+    for (const entry of this.messageFrameOverrides.values()) entry.layer?.remove();
+    this.messageFrameOverrides.clear();
   }
 
   private applyMessageFrame(index: number): void {
@@ -1281,6 +1420,9 @@ export class SiglusDisplay {
       if (asset.wakuLayer) asset.wakuLayer.hidden = true;
     }
     for (const entry of this.messageFilterOverrides.values()) {
+      if (entry.layer) entry.layer.hidden = true;
+    }
+    for (const entry of this.messageFrameOverrides.values()) {
       if (entry.layer) entry.layer.hidden = true;
     }
     const asset = this.wakuAssets.get(index);
@@ -1304,7 +1446,9 @@ export class SiglusDisplay {
         );
       }
     }
-    if (asset?.wakuLayer) asset.wakuLayer.hidden = false;
+    const frameOverride = this.messageFrameOverrides.get(this.windowIndex);
+    if (frameOverride?.layer) frameOverride.layer.hidden = false;
+    else if (asset?.wakuLayer) asset.wakuLayer.hidden = false;
     const facePos = asset?.config.facePos ?? parseWakuConfig(this.config, Math.max(0, index)).facePos;
     const windowHeight = this.mwndLayout?.windowSize[1] ?? 353;
     Object.assign(this.portrait.style, {
@@ -1638,6 +1782,21 @@ export class SiglusDisplay {
     this.applyMessageFrame(index);
   }
 
+  messageButtonPointerState(window: number, buttonId: number): number {
+    const {wakuNo} = parseMwndLayout(this.config, window);
+    const entry = this.frameActionsByWaku.get(wakuNo)?.find((item) => item.action.id === buttonId);
+    if (!entry) return 0;
+    const state = this.messageButtonStates.get(`${window}.${buttonId}`);
+    if (state?.visible === false) return 0;
+    const resolved = entry.decorative ? 'normal' : this.frameActionStateResolver?.(entry.action);
+    if (resolved === 'hidden') return 0;
+    if (entry.button?.disabled || resolved === 'disabled') return 4;
+    if (entry.action.state === 1) return 3;
+    if (entry.pointerState === 'push') return 2;
+    if (entry.pointerState === 'hit') return 1;
+    return 0;
+  }
+
   private messageButtonState(window: number, id: number) {
     const key = `${window}.${id}`;
     let state = this.messageButtonStates.get(key);
@@ -1787,7 +1946,7 @@ export class SiglusDisplay {
       this.graphicCacheBytes -= existing.bytes;
       this.graphicCache.delete(key);
     }
-    const bytes = Math.max(4, graphic.width * graphic.height * 4);
+    const bytes = Math.max(4, graphic.width * graphic.height * (graphic.pixels ? 8 : 4));
     this.graphicCache.set(key, {graphic, bytes});
     this.graphicCacheBytes += bytes;
     while (
@@ -1808,7 +1967,7 @@ export class SiglusDisplay {
       this.compositeCacheBytes -= existing.bytes;
       this.compositeCache.delete(key);
     }
-    const bytes = Math.max(4, graphic.width * graphic.height * 4);
+    const bytes = Math.max(4, graphic.width * graphic.height * (graphic.pixels ? 8 : 4));
     this.compositeCache.set(key, {graphic, bytes});
     this.compositeCacheBytes += bytes;
     while (
@@ -1853,62 +2012,28 @@ export class SiglusDisplay {
     const inflight = this.inFlightComposites.get(specification);
     if (inflight) return inflight;
     const job = (async () => {
-      const tokens = specification.split('|').filter((t) => t.length > 0);
-      const explicitDim = /^\((\d+),(\d+)\)$/.exec(tokens[0] ?? '');
-      const partTokens = explicitDim ? tokens.slice(1) : tokens;
-      const parsed = partTokens.map((part) => {
-        const layer = /^([^()]+?)(?:\((-?\d+),(-?\d+)(?:,(-?\d+))?(?:,blend=(\d+))?\))?$/.exec(
-          part.trim(),
-        );
-        if (!layer) throw new Error('Invalid Siglus composite image component ' + part);
-        return {
-          part,
-          name: layer[1]!.trim(),
-          dx: Number(layer[2] ?? 0),
-          dy: Number(layer[3] ?? 0),
-          pattern: Number(layer[4] ?? 0),
-          blend: layer[5],
-        };
-      });
+      const {explicitDim, layers: parsed} = parseSiglusCompositeSpec(specification);
       const frames = await Promise.all(parsed.map((p) => this.objectGraphic(p.name, p.pattern, true)));
       const loaded = parsed.map((p, idx) => {
         const frame = frames[idx];
         if (!frame) throw new Error('Missing Siglus composite image component ' + p.part);
         return {frame, dx: p.dx, dy: p.dy, blend: p.blend};
       });
-      let width = explicitDim ? Number(explicitDim[1]) : 0;
-      let height = explicitDim ? Number(explicitDim[2]) : 0;
-      let baseX = 0;
-      let baseY = 0;
-      let baseCenterX = 0;
-      let baseCenterY = 0;
-      if (!explicitDim && loaded.length > 0) {
-        const first = loaded[0]!;
-        baseX = first.frame.x;
-        baseY = first.frame.y;
-        baseCenterX = first.frame.centerX;
-        baseCenterY = first.frame.centerY;
-        width = first.frame.width;
-        height = first.frame.height;
-        for (const {frame, dx, dy} of loaded) {
-          const right = dx + frame.x - frame.centerX + frame.width;
-          const bottom = dy + frame.y - frame.centerY + frame.height;
-          if (right > width) width = right;
-          if (bottom > height) height = bottom;
-        }
-      }
-      if (!width || !height || width * height > 16_777_216)
+      const {width, height, baseX, baseY, baseCenterX, baseCenterY, placements} = layoutSiglusCompositeLayers(
+        loaded,
+        explicitDim,
+      );
+      if (width <= 0 || height <= 0 || width * height > 16_777_216)
         throw new Error('Invalid Siglus composite image dimensions');
       // Only the composition needs a drawing context. Retain its immutable
       // bitmap so a long route cannot lose the cached cel's Canvas2D context.
       const composition = new OffscreenCanvas(width, height);
       const context = composition.getContext('2d', {willReadFrequently: true})!;
-      for (const [idx, {frame, dx, dy, blend}] of loaded.entries()) {
+      for (const [idx, {frame, blend}] of loaded.entries()) {
         if (frame.width <= 0 || frame.height <= 0) continue;
         context.globalCompositeOperation =
           blend === '3' ? 'multiply' : blend === '1' ? 'lighter' : 'source-over';
-        const drawX = !explicitDim && idx === 0 ? dx : dx + frame.x - frame.centerX;
-        const drawY = !explicitDim && idx === 0 ? dy : dy + frame.y - frame.centerY;
+        const {drawX, drawY} = placements[idx]!;
         context.drawImage(frame.image, drawX, drawY);
       }
       const result: Graphic = {
@@ -2037,12 +2162,12 @@ export class SiglusDisplay {
             rgba[i + 3] = bgra[i + 3]!;
           }
         }
-        const image = await createImageBitmap(imageData);
+        const image = await createImageBitmap(imageData, {colorSpaceConversion: 'none'});
         if (this.signal.aborted) {
           image.close();
           this.signal.throwIfAborted();
         }
-        result = {image, width, height, x, y, centerX, centerY, contentBounds};
+        result = {image, width, height, x, y, centerX, centerY, contentBounds, pixels: rgba};
       }
       this.rememberGraphic(cacheKey, result);
       return result;
@@ -2226,10 +2351,19 @@ export class SiglusDisplay {
     };
   }
 
-  graphicAlpha(graphic: Graphic, x: number, y: number): number {
-    if (x < 0 || y < 0 || x >= graphic.width || y >= graphic.height) return 0;
+  graphicPixelChannel(graphic: Graphic, x: number, y: number, channel: 0 | 1 | 2 | 3): number {
+    const ix = Math.trunc(x);
+    const iy = Math.trunc(y);
+    if (ix < 0 || iy < 0 || ix >= graphic.width || iy >= graphic.height) return 0;
+    if (graphic.pixels) {
+      return graphic.pixels[(iy * graphic.width + ix) * 4 + channel]!;
+    }
     const canvas = graphic.image instanceof HTMLCanvasElement ? graphic.image : this.node(graphic);
-    return canvas.getContext('2d')!.getImageData(x, y, 1, 1).data[3]!;
+    return canvas.getContext('2d')!.getImageData(ix, iy, 1, 1).data[channel]!;
+  }
+
+  graphicAlpha(graphic: Graphic, x: number, y: number): number {
+    return this.graphicPixelChannel(graphic, x, y, 3);
   }
 
   private node(graphic: Graphic): HTMLCanvasElement {
@@ -2264,7 +2398,7 @@ export class SiglusDisplay {
     if (right <= left || bottom <= top) return 'inset(100%)';
     if (!object.alphaTest)
       return `inset(${top}px ${width - right}px ${height - bottom}px ${left}px)`;
-    const {data} = canvas.getContext('2d')!.getImageData(0, 0, width, height);
+    const data = frame.pixels ?? canvas.getContext('2d')!.getImageData(0, 0, width, height).data;
     const runs: string[] = [];
     for (let row = top; row < bottom; row++) {
       let column = left;
@@ -2529,8 +2663,11 @@ export class SiglusDisplay {
     button: (target: NonNullable<DrawObject['button']>) => void,
     fan?: WipeSpec,
   ): Promise<void> {
+    const generation = ++this.stageGeneration;
     await this.finishCastTransition();
+    if (generation !== this.stageGeneration) return;
     const next = await this.drawObjects(objects, button);
+    if (generation !== this.stageGeneration) return;
     const title = next.querySelector('[aria-label="New Game"]');
     if (title) this.clearStageEffects();
     if (this.pendingEffects.size) {
@@ -2541,12 +2678,13 @@ export class SiglusDisplay {
       try {
         await this.replaceLayer(next, duration, fan);
       } finally {
-        if (fan && duration > 0) {
+        if (fan && duration > 0 && generation === this.stageGeneration) {
           this.cast.inert = false;
           this.layers.after(this.cast);
         }
       }
     }
+    if (generation !== this.stageGeneration) return;
     this.objectLayer = next;
     this.cast.replaceChildren();
     delete this.root.dataset.cast;
@@ -2560,8 +2698,11 @@ export class SiglusDisplay {
   ): Promise<void> {
     const layer = this.objectLayer;
     if (!layer?.isConnected) return;
+    const generation = ++this.stageGeneration;
     const next = await this.drawObjects(objects, button, false);
+    if (generation !== this.stageGeneration) return;
     await this.replaceLayer(next, 0);
+    if (generation !== this.stageGeneration) return;
     this.objectLayer = next;
   }
 
@@ -2797,6 +2938,7 @@ export class SiglusDisplay {
       const placement = computeObjectPlacement(object, frame);
       element.style.cssText = `position:absolute;left:${placement.placedX}px;top:${placement.placedY}px;width:${frame.width}px;height:${frame.height}px;border:0;padding:0;background:none;pointer-events:none`;
       this.applyObjectScale(element, object, [placement.pivotX, placement.pivotY]);
+      if (object.name) element.dataset.siglusObject = object.name;
       tagStageSlot(element, object);
       const mask = object.mask === undefined ? undefined : this.objectMasks.get(object.mask);
       if (mask?.url) {
@@ -2866,7 +3008,9 @@ export class SiglusDisplay {
         canvas.style.clipPath = `inset(${edges[1]} ${edges[2]} ${edges[3]} ${edges[0]})`;
       }
       if (element instanceof HTMLButtonElement) {
-        const target = object.button!;
+        const target = object.buttonCall
+          ? {...object.button!, buttonCall: object.buttonCall}
+          : object.button!;
         if ('image' in frame)
           element.style.clipPath = this.buttonHitPath(
             frame,
@@ -3354,6 +3498,7 @@ export class SiglusDisplay {
 
   private async replaceLayer(next: HTMLElement, duration: number, fan?: WipeSpec): Promise<void> {
     this.signal.throwIfAborted();
+    this.finishWipe();
     const previous = [...this.layers.children];
     this.preserveStageFocus(() => {
       for (const child of previous) (child as HTMLElement).inert = true;
@@ -3363,9 +3508,13 @@ export class SiglusDisplay {
     if (duration > 0) {
       if (fan) await this.animateFanWipe(next, duration, fan);
       else {
-        this.wipe = next.animate({opacity: [0, 1]}, {duration});
-        await this.wipe.finished;
-        this.wipe = undefined;
+        const animation = next.animate({opacity: [0, 1]}, {duration});
+        this.wipe = animation;
+        try {
+          await animation.finished;
+        } finally {
+          if (this.wipe === animation) this.wipe = undefined;
+        }
       }
     }
     this.preserveStageFocus(() => {
@@ -3438,7 +3587,7 @@ export class SiglusDisplay {
       this.signal.removeEventListener('abort', stop);
       layer.style.removeProperty('mask-image');
       svg.remove();
-      this.wipe = undefined;
+      if (this.wipe === animation) this.wipe = undefined;
     }
   }
 
@@ -3449,8 +3598,11 @@ export class SiglusDisplay {
     clearCast = false,
     coversScene = false,
   ): Promise<void> {
+    const generation = ++this.stageGeneration;
     await this.finishCastTransition();
+    if (generation !== this.stageGeneration) return;
     const next = await this.backgroundLayer({name, pan}, duration);
+    if (generation !== this.stageGeneration) return;
     if (coversScene) next.dataset.siglusSceneCover = '';
     if (this.pendingEffects.size) {
       const cast = clearCast ? [] : [...this.copyStageLayer(this.cast).children];
@@ -3459,6 +3611,7 @@ export class SiglusDisplay {
       this.placeStageRectangles(next);
       await this.replaceLayer(next, duration);
     }
+    if (generation !== this.stageGeneration) return;
     this.root.dataset.background = name;
     this.root.dataset.phase = 'scene';
   }
@@ -3497,7 +3650,7 @@ export class SiglusDisplay {
     await this.finishCastTransition();
     const characters = await Promise.all(
       sprites.map(async ({name, costume, position, drawOrder}, index) => {
-        const match = /^(bs\d_)?([a-z]{2})(\d\d)(\d\d)/i.exec(name);
+        const match = /^(bs\d_)?([a-z][a-z0-9])(\d\d)(\d\d)/i.exec(name);
         if (!match) throw new Error(`Invalid Siglus sprite ${name}`);
         const [, prefix = 'bs2_', actor, pose, expression] = match;
         const [x, y] = position ?? [
@@ -4133,6 +4286,28 @@ export class SiglusDisplay {
       if (this.quakes.get(slot)?.animation === animation) this.quakes.delete(slot);
     };
     return infinite ? 0 : duration;
+  }
+
+  /** Plays a `SHAKE.NNN` step pattern `(dx, dy, ms)` via the stage quake channel. */
+  startShakeSteps(slot: number, steps: readonly (readonly [number, number, number])[]): number {
+    this.quakes.get(slot)?.animation.cancel();
+    this.quakes.delete(slot);
+    const duration = steps.reduce((sum, [, , ms]) => sum + Math.max(0, ms), 0);
+    if (duration <= 0) return 0;
+    const keyframes: Keyframe[] = [];
+    let elapsed = 0;
+    for (const [dx, dy, ms] of steps) {
+      if (ms <= 0) continue;
+      keyframes.push({offset: elapsed / duration, translate: `${dx}px ${dy}px`, easing: 'steps(1, end)'});
+      elapsed += ms;
+    }
+    keyframes.push({offset: 1, translate: '0px 0px', easing: 'steps(1, end)'});
+    const animation = this.sceneLayers.animate(keyframes, {duration, iterations: 1, composite: 'add'});
+    this.quakes.set(slot, {animation, duration, displacement: () => [0, 0]});
+    animation.onfinish = () => {
+      if (this.quakes.get(slot)?.animation === animation) this.quakes.delete(slot);
+    };
+    return duration;
   }
 
   isQuakeActive(slot: number): boolean {
