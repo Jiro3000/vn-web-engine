@@ -678,7 +678,10 @@ export class SiglusPlayer {
     );
     const refreshFrameInput = () => {
       this.queueMessageFrameInput();
-      if ((this.pendingFrameWatchers.size || this.messagePointerChanged) && this.waitingForPage)
+      if (
+        this.waitingForPage &&
+        (this.pendingFrameWatchers.size || this.messagePointerChanged || this.frameActions.size)
+      )
         this.wait?.(6);
     };
     const frameInputOptions = {signal: this.controller.signal};
@@ -1807,6 +1810,10 @@ export class SiglusPlayer {
         const deadline = autoWait === undefined ? undefined : performance.now() + autoWait;
         do {
           this.waitingForPage = false;
+          if (this.frameActions.size && !this.skipping) {
+            await this.tickFrameActions();
+            await this.renderObjects();
+          }
           while (this.pendingFrameWatchers.size || this.messagePointerChanged)
             await this.refreshMessageFrame();
           this.waitingForPage = true;
@@ -1990,6 +1997,8 @@ export class SiglusPlayer {
       layer: saved.layer,
       order: saved.order,
       transparency: saved.transparency,
+      opacity: saved.opacity ? [...saved.opacity.values] : undefined,
+      opacityElapsed: saved.opacity?.elapsed,
       trOffsets: saved.trOffsets?.slice(),
       flags: saved.flags?.slice(),
       pattern: saved.pattern,
@@ -2469,6 +2478,7 @@ export class SiglusPlayer {
     this.decisions.set(group, id);
     if (buttonCall) this.pendingButtonCalls.push(buttonCall);
     this.decisionReady?.();
+    if (this.waitingForPage && this.frameActions.size) this.wait?.(6);
   }
 
   private groupCommand(group: number, command: number): Value | undefined {
@@ -2798,6 +2808,7 @@ export class SiglusPlayer {
       ...object,
       text: object.text && {...object.text},
       number: object.number && {...object.number},
+      opacity: object.opacity && [...object.opacity],
       weather: object.weather && {...object.weather, params: {...object.weather.params}},
       gan: object.gan && {...object.gan},
       rect: object.rect && {...object.rect},
@@ -3451,10 +3462,15 @@ export class SiglusPlayer {
   ): void {
     const key = this.frameActionKey(faPath);
     const now = performance.now();
+    // 1.1.137.0 (0x6990f0) looks up the normalized name in the global table first.
+    const name = command.toLowerCase();
+    const pack = this.game.pack;
+    const exported = pack.commandNames.indexOf(name);
+    const callbackScene = exported >= 0 ? pack.sceneNames[pack.commandScenes[exported * 2]!] : scene;
     this.frameActions.set(key, {
       path: [...faPath],
-      scene,
-      command,
+      scene: callbackScene ?? scene,
+      command: name,
       args: [...extraArgs],
       endTime,
       realTime,
@@ -3917,7 +3933,7 @@ export class SiglusPlayer {
         case 96: // frame
           await this.tickFrameActions();
           await this.renderObjects();
-          if (root === 6 && this.systemCallActive && !this.inputSampled) {
+          if (root === 6 && !this.inputSampled && (this.systemCallActive || this.activeGroups.size)) {
             await this.nextInput();
             this.sampleInputNow();
           }
@@ -4720,8 +4736,9 @@ export class SiglusPlayer {
         return 0;
       }
       if (member === 310) {
-        // syscom.msg_back_load (0x5668a0)
+        // 1.1.137.0 (0x5677fc -> 0x661cc0) plays SE.005 after restoration when se_flag is set.
         if (this.historyTarget) {
+          this.pendingLoadSound = Boolean(n(1));
           if (this.systemCallActive) {
             this.selectedSave = this.historyTarget;
             this.vm.returnFromHostScene();
@@ -6179,6 +6196,7 @@ export class SiglusPlayer {
         object.horizontalMotion = undefined;
         object.opacity = undefined;
         object.opacityStarted = undefined;
+        object.opacityElapsed = undefined;
         object.intEvents?.clear();
         return 0;
       }
@@ -6477,6 +6495,7 @@ export class SiglusPlayer {
           args.length === 5 ? n(4) : (object.transparency ?? 255),
         ];
         object.opacityStarted = performance.now();
+        object.opacityElapsed = undefined;
         object.transparency = n(0);
         return 0;
       }

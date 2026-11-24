@@ -538,8 +538,10 @@ export class SiglusVm {
   }
 
   currentPosition(): {scene: string; line: number} | undefined {
-    const frame = this.frames.at(-1);
-    return frame ? {scene: frame.scene.name, line: frame.line} : undefined;
+    const original = this.frames.at(-1);
+    if (!original) return;
+    const frame = this.sceneJumps.get(original) ?? original;
+    return {scene: frame.scene.name, line: frame.line};
   }
 
   returnToMenu(scene = this.menu?.scene, entry = this.menu?.entry): never {

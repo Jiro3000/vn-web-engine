@@ -221,6 +221,7 @@ export interface DrawObject {
   slotId?: number;
   opacity?: [target: number, duration: number, delay: number, easing: number, start: number];
   opacityStarted?: number;
+  opacityElapsed?: number;
   horizontalMotion?: {
     from: number;
     duration: number;
@@ -301,6 +302,7 @@ export interface SerializedDrawObject {
   layer?: number;
   order?: number;
   transparency?: number;
+  opacity?: {values: NonNullable<DrawObject['opacity']>; elapsed: number};
   trOffsets?: number[];
   flags?: number[];
   pattern: number;
@@ -346,6 +348,9 @@ export function serializeDrawObject(
   object: DrawObject,
   now = performance.now(),
 ): SerializedDrawObject {
+  const opacityElapsed = object.opacityStarted === undefined
+    ? (object.opacityElapsed ?? 0)
+    : Math.max(0, now - object.opacityStarted);
   return {
     type: object.type,
     name: object.name,
@@ -355,6 +360,10 @@ export function serializeDrawObject(
     layer: object.layer,
     order: object.order,
     transparency: object.transparency,
+    // 1.1.137.0 saves and restores the active transparency event at 0x5e90a2 and 0x5ea941.
+    opacity: object.opacity && opacityElapsed < object.opacity[1] + object.opacity[2]
+      ? {values: [...object.opacity], elapsed: opacityElapsed}
+      : undefined,
     trOffsets: object.trOffsets?.slice(),
     flags: object.flags?.slice(),
     pattern: object.pattern,
@@ -720,8 +729,9 @@ export class SiglusDisplay {
     this.spaceHideIds = parseSpaceHideObjectIds(config);
     root.replaceChildren(this.stage);
     this.stage.dataset.textMode = this.textMode;
+    // Keep focus and history scrolling from moving the fixed game viewport.
     this.stage.style.cssText =
-      'position:absolute;overflow:hidden;isolation:isolate;background:#000;color:white';
+      'position:absolute;overflow:clip;isolation:isolate;background:#000;color:white';
     this.layers.style.cssText = 'position:absolute;inset:0;pointer-events:none';
     this.message.style.cssText = 'position:absolute;isolation:isolate;pointer-events:none';
     this.messageObjects.style.cssText = 'position:absolute;inset:0;pointer-events:none';
@@ -907,12 +917,19 @@ export class SiglusDisplay {
     );
     this.stage.addEventListener('keydown', this.key);
     this.stage.addEventListener('keyup', this.key);
-    this.stage.addEventListener('focusout', (event) => {
-      if (this.stage.contains(event.relatedTarget as Node | null)) return;
+    this.stage.addEventListener('focusout', (event) => this.handleStageFocusOut(event, skip));
+    this.stage.focus({preventScroll: true});
+  }
+
+  private handleStageFocusOut(event: FocusEvent, skip: (active: boolean) => void): void {
+    if (this.stage.contains(event.relatedTarget as Node | null)) return;
+    // Layer replacement restores focus synchronously after the focused control is removed.
+    queueMicrotask(() => {
+      const doc = this.stage.ownerDocument;
+      if (doc.hasFocus() && this.stage.contains(doc.activeElement)) return;
       skip(false);
       this.clearInput(true);
     });
-    this.stage.focus({preventScroll: true});
   }
 
   private preserveStageFocus(mutate: () => void): void {
@@ -3207,6 +3224,10 @@ export class SiglusDisplay {
     property: string,
   ): void {
     const now = performance.now();
+    if (object.opacityElapsed !== undefined) {
+      object.opacityStarted = now - object.opacityElapsed;
+      object.opacityElapsed = undefined;
+    }
     let staticRepScale = 1;
     const animatedFactors: string[] = [];
     for (const [slot, factor] of (object.trOffsets ?? []).entries()) {

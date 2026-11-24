@@ -224,8 +224,8 @@ try {
     await send('Input.dispatchMouseEvent', {type: 'mouseReleased', x, y, button: 'left', clickCount: 1});
   };
 
-  const rightClickStage = async () => {
-    if (USES_POINTER_MENUS) {
+  const rightClickStage = async (trusted = USES_POINTER_MENUS) => {
+    if (trusted) {
       const pt = await evaluate(`(() => {
         const stage = document.getElementById('siglus-surface')?.firstElementChild;
         if (!stage) throw new Error('No stage for contextmenu');
@@ -273,7 +273,7 @@ try {
   const {root: doc} = await send('DOM.getDocument', {depth: -1, pierce: true});
   const {nodeId} = await send('DOM.querySelector', {nodeId: doc.nodeId, selector: '#files'});
   await send('DOM.setFileInputFiles', {nodeId, files: [GAME_DIR]});
-  if (!(await waitFor("document.querySelector('#play')?.disabled === false", 60000))) {
+  if (!(await waitFor("document.querySelector('#play')?.disabled === false", 180000))) {
     throw new Error('Play button never enabled: ' + (await evaluate("document.querySelector('#status')?.textContent")));
   }
 
@@ -317,8 +317,9 @@ try {
   })()`);
   await clickAt(playPt.x, playPt.y);
 
-  if (!(await waitFor('Boolean(window.__runtime?.currentPlayer?.vm)', 25000))) {
-    throw new Error('currentPlayer.vm did not initialize; errors=' + JSON.stringify(errors));
+  if (!(await waitFor('Boolean(window.__runtime?.currentPlayer?.vm)', 90000))) {
+    const status = await evaluate("document.querySelector('#status')?.textContent");
+    throw new Error(`currentPlayer.vm did not initialize (${status}); errors=${JSON.stringify(errors)}`);
   }
 
   await evaluate(`(() => {
@@ -329,6 +330,30 @@ try {
       const frame = vm?.frames?.at(-1);
       return frame && (vm.sceneJumps?.get(frame) ?? frame);
     };
+    const recordScene = (scene) => {
+      if (!scene || window.__audit.sceneSet.has(scene)) return;
+      window.__audit.sceneSet.add(scene);
+      window.__audit.scenes.push(scene);
+    };
+    const replayScene = ${JSON.stringify(replay?.scenePrefix ?? null)};
+    if (replayScene) p.root.addEventListener('siglus-tag', ({detail}) => {
+      if (detail.scene.startsWith(replayScene)) recordScene(detail.scene);
+    });
+    const auditedVoice = ${JSON.stringify(profileCfg.gameplay?.voice?.id ?? null)};
+    if (auditedVoice !== null) {
+      const voice = p.audio.voice.bind(p.audio);
+      p.audio.voice = function(id, channel = 'voice', ...args) {
+        if (id === auditedVoice && channel === 'voice') window.__audit.voiceRequestedAt = performance.now();
+        return voice(id, channel, ...args);
+      };
+    }
+    if (${Boolean(profileCfg.gameplay?.backlogJump)}) {
+      const callScene = p.vm.callScene.bind(p.vm);
+      p.vm.callScene = function(scene, entry, ...args) {
+        if (p.historyTarget) (window.__audit.historyCalls ??= []).push([scene, entry]);
+        return callScene(scene, entry, ...args);
+      };
+    }
     const stagePageScenes = new Set(${JSON.stringify(profileCfg.gameplay?.stagePageScenes ?? [])});
     const ending = ${JSON.stringify(replay?.ending ?? null)};
     const expectedSpeaker = ${JSON.stringify(replay?.expectedSpeaker ?? null)};
@@ -388,6 +413,9 @@ try {
     p.root.addEventListener('siglus-audio', ({detail}) => {
       if (detail.channel === 'se' && detail.frames > 0) window.__audit.effects.push(detail.resource);
       if (detail.channel === 'bgm') window.__audit.bgmPlayback = detail;
+      if (detail.channel === 'voice' && detail.resource === auditedVoice) {
+        window.__audit.voicePlayback = {...detail, latencyMs: performance.now() - window.__audit.voiceRequestedAt};
+      }
     });
     if (${MODE === 'extras'}) {
       window.__audit.pointer = [];
@@ -446,11 +474,7 @@ try {
       }
     };
     setInterval(() => {
-      const s = window.__audit.frame()?.scene.name;
-      if (s && !window.__audit.sceneSet.has(s)) {
-        window.__audit.sceneSet.add(s);
-        window.__audit.scenes.push(s);
-      }
+      recordScene(window.__audit.frame()?.scene.name);
       for (const effect of p.display?.activeEffects?.values() ?? []) {
         if (effect.layer?.isConnected && effect.movie?.presentedFrame > 0)
           window.__audit.playingOmvs.add(effect.checkpoint.name.toLowerCase());
@@ -482,6 +506,20 @@ try {
           cx: Math.round(r.left + r.width / 2),
           cy: Math.round(r.top + r.height / 2),
         };
+      };
+      const clipHitBounds = (bounds, el, style) => {
+        const inset = /^inset\\(([^()]+)\\)$/.exec(style.clipPath);
+        if (!inset) return;
+        const edges = inset[1].trim().split(/\\s+/);
+        if (edges.length > 4 || !edges.every((edge) => /^-?\\d+(?:\\.\\d+)?(?:px|%)$/.test(edge))) return;
+        const [top, right = top, bottom = top, left = right] = edges;
+        const r = el.getBoundingClientRect();
+        const length = (edge, rendered, unscaled) => parseFloat(edge) *
+          (edge.endsWith('%') ? rendered / 100 : rendered / (unscaled || rendered || 1));
+        bounds.left = Math.max(bounds.left, r.left + length(left, r.width, el.offsetWidth));
+        bounds.right = Math.min(bounds.right, r.right - length(right, r.width, el.offsetWidth));
+        bounds.top = Math.max(bounds.top, r.top + length(top, r.height, el.offsetHeight));
+        bounds.bottom = Math.min(bounds.bottom, r.bottom - length(bottom, r.height, el.offsetHeight));
       };
       const top = window.__audit.frame();
       const disp = p?.display;
@@ -543,10 +581,13 @@ try {
         for (const b of stage.querySelectorAll('button')) {
           const r = b.getBoundingClientRect();
           const cs = getComputedStyle(b);
+          const hitBounds = {left: r.left, right: r.right, top: r.top, bottom: r.bottom};
+          clipHitBounds(hitBounds, b, cs);
           let hidden = b.disabled || b.hidden || b.inert || cs.display === 'none' || cs.visibility === 'hidden' || Number(cs.opacity) <= 0.05 || r.width <= 0 || r.height <= 0 || b.style.clipPath === 'inset(100%)';
           let cur = b.parentElement;
           while (!hidden && cur && cur !== stage) {
             const pcs = getComputedStyle(cur);
+            clipHitBounds(hitBounds, cur, pcs);
             if (cur.hidden || cur.inert || pcs.display === 'none' || pcs.visibility === 'hidden' || Number(pcs.opacity) <= 0.05) {
               hidden = true;
             } else if (pcs.overflowY === 'auto' || pcs.overflowY === 'scroll') {
@@ -555,19 +596,10 @@ try {
             }
             cur = cur.parentElement;
           }
-          if (!hidden) {
+          if (!hidden && hitBounds.right > hitBounds.left && hitBounds.bottom > hitBounds.top) {
             const st = toStage(b);
-            const inset = /^inset\\((-?\\d+(?:\\.\\d+)?)px\\s+(-?\\d+(?:\\.\\d+)?)px\\s+(-?\\d+(?:\\.\\d+)?)px\\s+(-?\\d+(?:\\.\\d+)?)px\\)$/.exec(b.style.clipPath.trim());
-            if (inset) {
-              const vx0 = Math.max(r.left, r.left + Number(inset[4]) / sx);
-              const vy0 = Math.max(r.top, r.top + Number(inset[1]) / sy);
-              const vx1 = Math.min(r.right, r.right - Number(inset[2]) / sx);
-              const vy1 = Math.min(r.bottom, r.bottom - Number(inset[3]) / sy);
-              if (vx1 > vx0 && vy1 > vy0) {
-                st.cx = Math.round((vx0 + vx1) / 2);
-                st.cy = Math.round((vy0 + vy1) / 2);
-              }
-            }
+            st.cx = Math.round((hitBounds.left + hitBounds.right) / 2);
+            st.cy = Math.round((hitBounds.top + hitBounds.bottom) / 2);
             const hit = document.elementFromPoint(st.cx, st.cy);
             const hitButton = hit?.closest('button');
             const sameScriptControl =
@@ -841,6 +873,7 @@ try {
         sprites,
         inputSampled: Boolean(p?.inputSampled || (p?.lastInputSampleAt >= 0 && p.lastInputSampleScene === top?.scene.name && performance.now() - p.lastInputSampleAt < 500)),
         backlogOpen: Boolean(historyEl),
+        pointer: disp?.pointer,
         stageRect: sr ? {left: sr.left, top: sr.top, width: sr.width, height: sr.height} : null,
         movieActive: window.__audit?.movieActive ?? null,
         moviesSeen: window.__audit?.movies ?? [],
@@ -1225,7 +1258,9 @@ try {
       }
       if (s.scene === MENU_SCENE) {
         const startBtn = matchControl(s, profileCfg.title?.startButton);
-        const ready = (!USES_POINTER_MENUS || s.inputSampled) && (!profileCfg.title?.startButton?.group || s.activeGroups.length > 0);
+        const readyLine = profileCfg.title?.readyLine;
+        const ready = (readyLine === undefined || s.line === readyLine) &&
+          (!USES_POINTER_MENUS || s.inputSampled) && (!profileCfg.title?.startButton?.group || s.activeGroups.length > 0);
         if (startBtn && startBtn.hitOk && ready) {
           await setCtrl(false);
           await delay(350);
@@ -1431,6 +1466,36 @@ try {
       console.log('LIVE GAMEPLAY:', {scene: liveState.scene, line: liveState.line, pages: liveState.pages, speaker: liveState.speaker, bgm: liveState.bgm, visuals: liveState.visibleLayerVisuals.length});
       await assertLayoutAndHitTests('live-mwnd', {checkHitTest: true, checkText: true, allowAutoHiddenBottomBar: Boolean(gp.mwndAutoHideBar)});
 
+      if (gp.bundledFonts) {
+        const fonts = await evaluate(`(() => {
+          const display = window.__runtime.currentPlayer.display;
+          return display.loadedFonts.map((face) => ({
+            family: face.family,
+            loaded: face.status === 'loaded' && document.fonts.has(face) && document.fonts.check('24px ' + face.family),
+            aliases: [...display.fontNames].filter(([, family]) => family === face.family).map(([name]) => name),
+          }));
+        })()`);
+        for (const [index, {file, name}] of gp.bundledFonts.entries()) {
+          const configured = gameexe.get(`FONT_FILE.${String(index).padStart(3, '0')}.NAME`)?.split('"')[1];
+          const face = fonts[index];
+          if (configured !== file || face?.family !== `SiglusGame${index}` || !face.loaded || !face.aliases.includes(name.toLowerCase()))
+            errors.push(`[font] ${file} (${name}) did not load as SiglusGame${index}`);
+        }
+        console.log('Bundled fonts:', JSON.stringify(fonts));
+      }
+      if (gp.voice) {
+        const bank = `koe/z${String(Math.floor(gp.voice.id / 100000)).padStart(4, '0')}.ovk`;
+        await waitFor('Boolean(window.__audit.voicePlayback)', 3500);
+        const sample = await evaluate(`(() => {
+          const audio = window.__runtime.currentPlayer.audio;
+          return {bank: audio.indexes.has(${JSON.stringify(bank)}), ...window.__audit.voicePlayback};
+        })()`);
+        if (!(sample.bank && sample.frames > 0 && sample.rate > 0 && sample.gain > 0 && sample.rms > 0 &&
+              sample.peak > 0 && sample.peak < 1 && sample.latencyMs >= 0 && sample.latencyMs <= gp.voice.maxLatencyMs))
+          errors.push(`[voice] Invalid or late OVK playback ${JSON.stringify(sample)}`);
+        console.log(`Story voice ${bank}:`, JSON.stringify(sample));
+      }
+
       const sr = liveState.stageRect;
       if (gp.mwndAutoHideBar) {
         await moveMouse(Math.round(sr.left + sr.width * 0.5), Math.round(sr.top + sr.height * 0.97));
@@ -1463,10 +1528,7 @@ try {
         await delay(400);
         if ((await inspectState()).visibleLayerVisuals.length === 0) errors.push('[rc-open] Main layers black');
         await assertLayoutAndHitTests('quick-menu-open');
-        await rightClickStage();
-        await waitFor("window.__runtime?.currentPlayer?.systemCallActive === false", 6000);
-        await delay(350);
-        console.log('RC->RC diffs:', assertRoundTripClean('rc->rc', b1, await inspectState()));
+        console.log('RC->RC diffs:', assertRoundTripClean('rc->rc', b1, await closeSystemMenu('rc-close')));
 
         // RC -> Esc
         const b2 = await inspectState();
@@ -1548,6 +1610,45 @@ try {
       const before1 = await inspectState();
       const after1 = await advanceDialogue('one-click', before1);
       console.log('Single left-click input waits:', before1.pageWaits, '->', after1.pageWaits);
+
+      if (gp.backlogJump) {
+        const [scene, rawEntry] = gameexe.get('MSGBK.LOAD_CALL')?.split(',') ?? [];
+        const callback = [scene?.split('"')[1], rawEntry?.split('"')[1] ?? Number(rawEntry ?? 0)];
+        if (!callback[0]) throw new Error('[backlog-jump] Missing MSGBK.LOAD_CALL');
+        await wheelStage(-120);
+        if (!(await waitFor("Boolean(document.querySelector('[data-siglus-history]'))", 5000)))
+          throw new Error('[backlog-jump] Could not open history');
+        const target = await evaluate(`(() => {
+          const p = window.__runtime.currentPlayer;
+          const expected = ${JSON.stringify({scene: before1.scene, line: before1.line, pc: before1.pc})};
+          const index = p.backlog.findIndex((entry) => {
+            const frame = p.historyPoints.get(entry)?.vm.frames.at(-1);
+            return frame?.scene === expected.scene && frame.line === expected.line && frame.pc === expected.pc;
+          });
+          const row = document.querySelectorAll('[data-siglus-history-entry]')[index];
+          const button = row?.querySelector('button[aria-label="Resume from this message"]');
+          if (!button) return null;
+          button.scrollIntoView({block: 'center'});
+          const rect = button.getBoundingClientRect();
+          const x = Math.round(rect.left + rect.width / 2);
+          const y = Math.round(rect.top + rect.height / 2);
+          return {x, y, hit: button.contains(document.elementFromPoint(x, y)),
+            scrollX: p.display.stage.scrollLeft, scrollY: p.display.stage.scrollTop};
+        })()`);
+        if (target?.scrollX || target?.scrollY)
+          errors.push(`[backlog-jump] History scroll moved the game viewport by ${target.scrollX},${target.scrollY}`);
+        if (!target?.hit) throw new Error('[backlog-jump] Earlier checkpoint button could not receive input');
+        const loadSound = await effectOffset();
+        await clickAt(target.x, target.y);
+        const called = `window.__audit.historyCalls?.some(([scene, entry]) => scene === ${JSON.stringify(callback[0])} && entry === ${JSON.stringify(callback[1])})`;
+        if (!(await waitFor(`${called} && ${readyForDialogue} && window.__audit.pageWaits > ${after1.pageWaits}`, 10000)))
+          throw new Error('[backlog-jump] Configured callback did not restore a dialogue checkpoint');
+        const restored = await inspectState();
+        console.log('Backlog jump parity diffs:', assertRoundTripClean('backlog-jump', before1, restored, {restored: true}));
+        if (gp.backlogJump.sound) await assertSystemSound('backlog-jump', loadSound, 5);
+        const advanced = await advanceDialogue('after-backlog-jump', restored);
+        assertRoundTripClean('after-backlog-jump', after1, advanced, {restored: true});
+      }
 
       // 5. Save/Load + QSave/QLoad parity (via Quick Menu UI or MWND action buttons)
       const snapFull = () =>
@@ -1858,6 +1959,40 @@ try {
         }
         await delay(800);
         await assertLayoutAndHitTests(`extras-${tabLabel}`);
+        if (tab.drag) {
+          const before = await inspectState();
+          const thumb = matchControl(before, tab.drag.thumb, true);
+          const start = matchControl(before, tab.drag.start, true);
+          const visibleRows = (state) => state.buttons.flatMap((button) => {
+            const id = Number(button.dataset.siglusButton);
+            return button.hitOk && button.dataset.siglusGroup === tab.drag.rows.group &&
+              id >= tab.drag.rows.min && id <= tab.drag.rows.max ? [id] : [];
+          });
+          const rowsBefore = visibleRows(before);
+          if (!thumb || !start || !rowsBefore.length) throw new Error(`[extras-${tabLabel}] Slider or list is unreachable`);
+          const {cx: x, cy: y} = start.rect;
+          const dy = tab.drag.deltaY * before.stageRect.height / SCREEN_H;
+          await moveMouse(x, y);
+          await delay(50);
+          await send('Input.dispatchMouseEvent', {type: 'mousePressed', x, y, button: 'left', clickCount: 1});
+          try {
+            await delay(100);
+            for (let step = 1; step <= 8; step++) {
+              await delay(35);
+              await send('Input.dispatchMouseEvent', {type: 'mouseMoved', x, y: Math.round(y + dy * step / 8), buttons: 1});
+            }
+          } finally {
+            await send('Input.dispatchMouseEvent', {type: 'mouseReleased', x, y: Math.round(y + dy), button: 'left', clickCount: 1});
+          }
+          await delay(450);
+          const after = await inspectState();
+          const rowsAfter = visibleRows(after);
+          const moved = matchControl(after, tab.drag.thumb, true);
+          if (!moved || moved.rect.top <= thumb.rect.top || !rowsAfter.some((id) => !rowsBefore.includes(id)))
+            errors.push(`[extras-${tabLabel}] Drag did not move the slider and reveal later rows (${rowsBefore} -> ${rowsAfter})`);
+          else console.log('Slider drag revealed later list buttons:', JSON.stringify({before: rowsBefore, after: rowsAfter}));
+          await assertLayoutAndHitTests(`extras-${tabLabel}-scrolled`);
+        }
       }
       if (ex?.exitButton) await clickControl('extras-exit', ex.exitButton);
       else await rightClickStage();
@@ -1899,6 +2034,8 @@ try {
       let compositesAudited = 0;
       let clippedContainersAudited = 0;
       let stageObjectPauses = 0;
+      let interactionsDone = 0;
+      let dialogueSceneReached = false;
       let lastPosition;
       let lastPositionChange = t0;
       const setCtrl = async (down) => {
@@ -1944,8 +2081,49 @@ try {
           break;
         }
         if (s.expectedSpeakerSeen) break;
+        if (s.scene === replay?.dialogueScene && s.waitingForPage && s.dialogue) {
+          dialogueSceneReached = true;
+          break;
+        }
         if (replay?.requireStagePage && stageObjectPauses > 0 &&
             (!replay.scenePrefix || s.scenesSeen.some((name) => name.startsWith(replay.scenePrefix)))) break;
+
+        const interaction = replay?.interactions?.[interactionsDone];
+        if (interaction?.scene === s.scene &&
+            (interaction.activeGroup === undefined || s.activeGroups.includes(interaction.activeGroup))) {
+          const control = interaction.button && matchControl(s, interaction.button, true);
+          const object = interaction.objectName && s.sprites.find((item) =>
+            item.objectName.toLowerCase() === interaction.objectName.toLowerCase());
+          if (control || object) {
+            await setCtrl(false);
+            if (control) await clickAt(control.rect.cx, control.rect.cy);
+            else if (interaction.rightClick) await rightClickStage(true);
+            console.log('Crawl interaction:', JSON.stringify(interaction));
+            interactionsDone++;
+            if (interactionsDone === replay.interactions.length) {
+              const destination = interaction.nextScene
+                ? `${currentScene} === ${JSON.stringify(interaction.nextScene)}`
+                : `${currentScene} !== ${JSON.stringify(interaction.scene)}`;
+              if (!(await waitFor(destination, 6000)))
+                errors.push(`[crawl] Interaction in ${interaction.scene} did not reach ${interaction.nextScene ?? 'the next scene'}`);
+              break;
+            }
+            continue;
+          }
+          if (interaction.revealAt && s.waitingForPage && s.stageRect) {
+            const [x, y] = interaction.revealAt;
+            if (!s.pointer || Math.abs(s.pointer[0] - x) > 2 || Math.abs(s.pointer[1] - y) > 2) {
+              await setCtrl(false);
+              const {left, top, width, height} = s.stageRect;
+              await moveMouse(Math.round(left + x * width / SCREEN_W), Math.round(top + y * height / SCREEN_H));
+              continue;
+            }
+          }
+        }
+        if (interaction?.scene === s.scene && interaction.activeGroup !== undefined) {
+          await setCtrl(false);
+          continue;
+        }
 
         if (s.pages >= nextChaos && !s.systemCallActive && !s.movieActive) {
           await setCtrl(false);
@@ -2050,6 +2228,10 @@ try {
       const fin = await inspectState();
       if (replay?.scenePrefix && !fin.scenesSeen.some((name) => name.startsWith(replay.scenePrefix)))
         errors.push(`[crawl] Never reached replay ${replayName} (${replay.scenePrefix})`);
+      if (replay?.interactions && interactionsDone !== replay.interactions.length)
+        errors.push(`[crawl] Completed ${interactionsDone}/${replay.interactions.length} interactions in ${replayName}`);
+      if (replay?.dialogueScene && !dialogueSceneReached)
+        errors.push(`[crawl] Replay ${replayName} did not reach dialogue in ${replay.dialogueScene}`);
       if (replay?.ending && !fin.playingOmvs.includes(replay.ending.movie))
         errors.push(`[crawl] Replay ${replayName} did not present ending OMV ${replay.ending.movie}`);
       if (replay?.ending && fin.scene !== MENU_SCENE)

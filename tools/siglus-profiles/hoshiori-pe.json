@@ -1,0 +1,93 @@
+{
+  "name": "Hoshi Ori Yume Mirai - Perfect Edition",
+  "gameDir": "/Volumes/Transcend/Torrents/1GAMES/Hoshi Ori Yume Mirai - Perfect Edition",
+  "autoModeDialog": true,
+  "title": {
+    "startButton": {"group": "4", "id": "1"},
+    "configButton": {"group": "4", "id": "3"},
+    "extraButton": {"group": "4", "id": "4"},
+    "readyLine": 99,
+    "messageWindowTiming": {
+      "halfButton": {"group": "100000", "id": "313"},
+      "defaultButton": {"group": "100000", "id": "312"}
+    },
+    "streamedBgm": "bgm02"
+  },
+  "gameplay": {
+    "minPages": 5,
+    "requireSpeaker": true,
+    "requireBgm": true,
+    "minVisuals": 2,
+    "mwndAutoHideBar": true,
+    "stagePageScenes": ["_00_mess"],
+    "bundledFonts": [
+      {"file": "font02.ttf", "name": "MotoyaLCedar"},
+      {"file": "font01.ttf", "name": "MotoyaLMaru"}
+    ],
+    "voice": {"id": 53100049, "maxLatencyMs": 250},
+    "backlogJump": {"sound": true}
+  },
+  "messageMenu": {
+    "save": {"frameId": "1", "action": "save"},
+    "load": {"frameId": "2", "action": "load"},
+    "quickSave": {"frameId": "3", "action": "none"},
+    "quickLoad": {"frameId": "4", "action": "qload"},
+    "config": {"frameId": "11", "action": "none"},
+    "confirmDialog": {"scene": "_00dialog", "group": "100008", "yesAria": "_cw_yes", "noAria": "_cw_no"},
+    "slotButtonMin": 1,
+    "slotButtonMax": 10
+  },
+  "movies": {
+    "wmv": ["logo", "OPMV"],
+    "omv": [
+      "ef_day_star00",
+      "ef_reco_black00",
+      "ef_prologue_rooftop00",
+      "ef_sun115_bg502",
+      "ed_marika",
+      "ed_misa",
+      "ed_misa_school",
+      "ed_natsuki",
+      "ed_rikka",
+      "ed_sora",
+      "ed_touko"
+    ]
+  },
+  "extras": {
+    "systemFlags": [[1, 1]],
+    "cgFlags": [0, 1, 2, 3],
+    "bgmListened": ["bgm01", "bgm02", "bgm03", "bgm11", "bgm12"],
+    "expectedScene": "_03_cgm",
+    "tabs": [
+      {
+        "objectName": "_ga_mode_mus",
+        "expectedScene": "_03_mus",
+        "drag": {
+          "thumb": {"group": "0", "id": "114"},
+          "start": {"group": "0", "id": "7"},
+          "deltaY": -250,
+          "rows": {"group": "0", "min": 1, "max": 43}
+        }
+      },
+      {"objectName": "_ga_mode_scn", "expectedScene": "_03_scn"},
+      {"objectName": "_ga_mode_chr", "expectedScene": "_03_chr"}
+    ],
+    "exitButton": {"objectName": "_chr_tit"}
+  },
+  "crawlReplays": {
+    "story-selection": {
+      "systemFlags": [[1, 1], [9, 1], [81, 3]],
+      "prompts": [{"scene": "_01scn_select", "button": {"group": "5", "id": "1", "aria": "_sm_chr_sr"}}],
+      "scenePrefix": "_03_story",
+      "dialogueScene": "bそら_0609"
+    },
+    "smartphone-camera": {
+      "scenePrefix": "_02smh_08camera",
+      "interactions": [
+        {"scene": "a共通_0531", "revealAt": [1840, 400], "button": {"group": "9", "id": "253"}},
+        {"scene": "_02smh", "activeGroup": 100010, "button": {"group": "100010", "id": "3", "aria": "_smh_ic_cm"}},
+        {"scene": "_02smh_08camera", "activeGroup": 100011, "objectName": "_smh_camera_f02", "rightClick": true, "nextScene": "_02smh"}
+      ]
+    }
+  }
+}

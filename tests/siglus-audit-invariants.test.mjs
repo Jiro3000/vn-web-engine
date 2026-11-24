@@ -49,6 +49,81 @@ const SIGLUS_DIR = path.join(REPO_ROOT, 'src/engines/siglus');
 const SSR_DIR = '/Users/paul/Torrents/Games/tsuki no kanata fan disk';
 const HAS_SSR = fs.existsSync(`${SSR_DIR}/Gameexe.dat`) && fs.existsSync(`${SSR_DIR}/Scene.pck`);
 
+test('the fixed Siglus viewport clips overflow without becoming a scroll container', () => {
+  const display = fs.readFileSync(path.join(SIGLUS_DIR, 'display.ts'), 'utf8');
+  assert.match(display, /this\.stage\.style\.cssText\s*=\s*'[^']*\boverflow:clip;/);
+});
+
+test('replacing a focused script control preserves held input until focus leaves the stage', async () => {
+  const stage = {
+    ownerDocument: {activeElement: null, hasFocus: () => true},
+    contains: (element) => element === stage,
+  };
+  const cleared = [];
+  const display = {stage, clearInput: (reset) => cleared.push(reset)};
+  const skip = (active) => cleared.push(active);
+  const focusOut = () => SiglusDisplay.prototype.handleStageFocusOut.call(display, {relatedTarget: null}, skip);
+
+  focusOut();
+  stage.ownerDocument.activeElement = stage;
+  await Promise.resolve();
+  assert.deepEqual(cleared, []);
+
+  stage.ownerDocument.activeElement = null;
+  focusOut();
+  await Promise.resolve();
+  assert.deepEqual(cleared, [false, true]);
+});
+
+test('display frames sample held input for nonmodal script controls without duplicating input.next', async () => {
+  const calls = [];
+  const player = {
+    stagePath: (path) => path,
+    tickFrameActions: async () => calls.push('actions'),
+    renderObjects: async () => calls.push('draw'),
+    nextInput: async () => calls.push('yield'),
+    sampleInputNow: () => calls.push('sample'),
+    activeGroups: new Set([0]),
+    systemCallActive: false,
+    inputSampled: false,
+  };
+  const draw = () => SiglusPlayer.prototype.command.call(player, {path: [6], args: [], named: []});
+
+  await draw();
+  assert.deepEqual(calls.splice(0), ['actions', 'draw', 'yield', 'sample']);
+  player.inputSampled = true;
+  await draw();
+  assert.deepEqual(calls, ['actions', 'draw']);
+  assert.equal(player.inputSampled, false);
+});
+
+test('page waits run exported frame callbacks in their declaring scene and wake on stage decisions', async () => {
+  const calls = [];
+  const player = Object.assign(Object.create(SiglusPlayer.prototype), {
+    game: {pack: {commandNames: ['$$open'], commandScenes: [0, 44], sceneNames: ['_export']}},
+    vm: {callScene: async (...args) => calls.push(args)},
+    display: {pageControls() {}},
+    frameActions: new Map(),
+    frameActionCounters: new Map(),
+    pendingFrameWatchers: new Set(),
+    pendingButtonCalls: [],
+    decisions: new Map(),
+    pruneDeadButtonGroups() {},
+    renderObjects: async () => {},
+    delay: async () => 1,
+  });
+  const channel = [53, -1, 3];
+  player.startFrameAction(channel, '_caller', -1, '$$Open', [], false);
+  await player.waitAtPage();
+  assert.deepEqual(calls, [['_export', '$$open', [channel]]]);
+
+  player.waitingForPage = true;
+  player.wait = (result) => calls.push(result);
+  player.choose({id: 253, group: 9});
+  assert.equal(player.decisions.get(9), 253);
+  assert.equal(calls.at(-1), 6);
+});
+
 test('composite layers clamp requested G00 cuts to the decoded range', async () => {
   const display = {
     files: new Map(),
@@ -697,6 +772,49 @@ test('BGM stop and pause use the native default fade while preserving explicit z
   assert.deepEqual(actions, [['stop', 'bgm', 100], ['pause', 100], ['stop', 'bgm', 0]]);
 });
 
+test('backlog load queues its sound only for a selected checkpoint with se_flag set', async () => {
+  const target = {};
+  const restored = [];
+  const player = Object.assign(Object.create(SiglusPlayer.prototype), {
+    saveSlot: () => undefined,
+    quickSaves: new Map(),
+    pendingLoadSound: false,
+    loadSave: (save) => restored.push(save),
+  });
+  const load = (sound) => player.command({path: [63, 310], args: [0, sound, 1], named: []});
+  assert.equal(await load(1), 0);
+  assert.equal(player.pendingLoadSound, false);
+  player.historyTarget = target;
+  assert.equal(await load(1), 1);
+  assert.equal(player.pendingLoadSound, true);
+  assert.equal(await load(0), 1);
+  assert.equal(player.pendingLoadSound, false);
+  assert.deepEqual(restored, [target, target]);
+});
+
+test('VM input sampling reports the destination scene after a script jump', async () => {
+  const word = (value) => [value & 255, (value >>> 8) & 255, (value >>> 16) & 255, value >>> 24];
+  const push = (form, value) => [2, ...word(form), ...word(value)];
+  const command = (...forms) => [48, ...word(0), ...word(forms.length), ...forms.flatMap(word), ...word(0), ...word(0)];
+  const scenes = {
+    start: {strings: ['destination'], code: [8, ...push(10, 4), ...push(20, 0), ...command(20)]},
+    destination: {strings: [], code: [1, ...word(73), 8, ...push(10, 86), ...push(10, 3), ...command(), 22]},
+  };
+  const pack = {
+    commandNames: [],
+    scene: (name) => ({...scenes[name], name, entries: [0], code: Uint8Array.from(scenes[name].code)}),
+  };
+  const samples = [];
+  const vm = new SiglusVm(pack, {
+    command: () => { samples.push(vm.currentPosition()); return 0; },
+    property: () => undefined,
+    message() {},
+    trace() {},
+  }, new AbortController().signal);
+  await vm.run('start');
+  assert.deepEqual(samples, [{scene: 'destination', line: 73}]);
+});
+
 test('only the key-enabled quake commands let input interrupt their wait', async () => {
   const waits = [];
   const player = {
@@ -760,7 +878,7 @@ test('an object frame action still addresses its own child during a modal displa
     frameActions: new Map(),
     frameActionCounters: new Map(),
     pendingButtonCalls: [],
-    game: {pack: {commandNames: ['update']}},
+    game: {pack: {commandNames: ['update'], commandScenes: [0, 0], sceneNames: ['_animation']}},
     vm: {callScene: async (_scene, _label, [_event, ref, y]) => player.property([...ref, 4], y)},
   });
   player.startFrameAction([...owner, 52], '_animation', -1, 'update', [41], false);
@@ -774,6 +892,107 @@ test('an object frame action still addresses its own child during a modal displa
   assert.equal(player.systemFrontObjectsDirty, true);
   player.endFrameAction([...owner, 52]);
   assert.equal(player.frameActions.size, 1);
+});
+
+test('nested stage objects retain child state through object copy and save restoration', async () => {
+  const player = Object.assign(Object.create(SiglusPlayer.prototype), {
+    objects: [new Map(), new Map()],
+    systemCallDepth: 0,
+    frameActions: new Map(),
+    frameActionCounters: new Map(),
+    cgTable: new Map(),
+    display: {objectGraphic: async (name, pattern) => ({name, pattern})},
+  });
+  const stage = [49, -1, 0, 2, -1, 42];
+  const child = [...stage, 93, -1, 5];
+  const grandchild = [...child, 93, -1, 2];
+  const invoke = (target, operation, ...args) =>
+    player.command({path: [...target, ...operation], args, named: []});
+
+  await invoke(stage, [93, 4], 6);
+  await invoke(child, [93, 4], 3);
+  await invoke(child, [63, 2], 1);
+  await invoke(child, [160], 1, 312, 142, 1606, 835);
+  await invoke(child, [112, -1, 0, 0], 16, 300, 0, 2);
+  await invoke(grandchild, [38], 'indicator', 1, 1200, 0);
+  await invoke(grandchild, [42], 11, 9, 3, 0);
+  await invoke(grandchild, [97]);
+  await invoke(grandchild, [72, 0], 0, 2000, 3000, 2);
+
+  const original = player.objects[1].get(42);
+  const leaf = original.children.get(5).children.get(2);
+  assert.ok(Number.isFinite(leaf.opacityStarted));
+  leaf.opacityStarted = 1000;
+  const now = leaf.opacityStarted + 500;
+  const saved = JSON.parse(JSON.stringify(serializeDrawObject(original, now)));
+  assert.equal(saved.childCount, 6);
+  const [[childId, savedChild]] = saved.children;
+  assert.equal(childId, 5);
+  assert.equal(savedChild.childCount, 3);
+  assert.deepEqual(savedChild.clip, [1, 312, 142, 1606, 835]);
+  assert.deepEqual(savedChild.positionOffsets.x, [16]);
+  const [[grandchildId, savedGrandchild]] = savedChild.children;
+  assert.equal(grandchildId, 2);
+  assert.deepEqual(savedGrandchild.button, {id: 11, group: 9, actionNo: 3, seNo: 0});
+  assert.equal(savedGrandchild.buttonState, 'disable');
+  assert.deepEqual(savedGrandchild.opacity, {values: [0, 2000, 3000, 2, 255], elapsed: 500});
+
+  const copied = player.copyObject(original);
+  const restored = await player.deserializeDrawObject(saved);
+  assert.deepEqual(JSON.parse(JSON.stringify(serializeDrawObject(copied, now))), saved);
+  assert.deepEqual(JSON.parse(JSON.stringify(serializeDrawObject(restored, now))), saved);
+  assert.deepEqual(restored.children.get(5).children.get(2).frames, [{name: 'indicator', pattern: 0}]);
+  const animation = {};
+  const restoredLeaf = restored.children.get(5).children.get(2);
+  SiglusDisplay.prototype.applyObjectOpacity.call({}, {
+    style: {setProperty() {}},
+    animate: () => animation,
+  }, restoredLeaf, false, 'opacity');
+  assert.ok(Math.abs(animation.currentTime - 500) < 0.001);
+  assert.equal(restoredLeaf.opacityElapsed, undefined);
+  assert.equal(serializeDrawObject(original, now + 5000).children[0][1].children[0][1].opacity, undefined);
+  copied.children.get(5).clip[1] = 0;
+  copied.children.get(5).children.get(2).button.id = 0;
+  assert.equal(original.children.get(5).clip[1], 312);
+  assert.equal(original.children.get(5).children.get(2).button.id, 11);
+});
+
+test('indexed EXCALL stage and front paths address main-stage children', async () => {
+  const player = Object.assign(Object.create(SiglusPlayer.prototype), {
+    objects: [new Map(), new Map()],
+    systemCallDepth: 0,
+    cgTable: new Map(),
+    renderObjects: async () => {},
+    delay: async () => 0,
+    display: {
+      numberGraphic: async (name, {value}) => ({name, value}),
+      objectGraphic: async (name) => ({name}),
+    },
+  });
+  const invoke = (path, ...args) => player.command({path, args, named: []});
+  const back = [65, -1, 0, 0, -1, 0, 2, -1, 36, 93];
+  await invoke([...back, 4], 12);
+  await invoke([...back, -1, 11, 132], 'digits', 1, 45, 99);
+  await invoke([...back, -1, 11, 134], 2, 1, 0, 0, 0, 1);
+  await invoke([...back, -1, 11, 133], 19);
+  const number = player.objects[1].get(36).children.get(11);
+  assert.deepEqual(number.frames, [{name: 'digits', value: 19}]);
+  assert.equal(number.number.ketaMax, 2);
+
+  const front = [65, -1, 0, 1, 2, -1, 36, 93];
+  await invoke([...front, 4], 2);
+  await invoke([...front, -1, 1, 38], 'control', 1);
+  await invoke([...front, -1, 1, 42], 98, 10, 20, 0);
+  const control = player.objects[0].get(36).children.get(1);
+  assert.equal(control.button.group, 10);
+  assert.equal(control.button.id, 98);
+  await invoke([...front, -1, 1, 68, 0], 600, 0, 0, 2);
+  assert.equal(await invoke([...front, -1, 1, 68, 4]), 0);
+  assert.deepEqual(control.scale, [1000, 600]);
+  const frontParent = [38, 2, -1, 36];
+  assert.equal(await invoke([...frontParent, 67, 5]), 0);
+  await invoke([...frontParent, 67, 0], 500, 1000, 0, 2);
+  assert.equal(await invoke([...frontParent, 67, 5]), 1);
 });
 
 test('parseButtonActionStates parses BUTTON.ACTION.nnn.SELECT and falls back to normal when absent', () => {
@@ -874,8 +1093,9 @@ test('Audit B: DrawObject persistent field parity across SerializedDrawObject, s
     'positionEvents',
     'offsetEvents',
     'patternCycle',
-    'opacity',
+    // Serialized as a relative phase inside the opacity checkpoint.
     'opacityStarted',
+    'opacityElapsed',
     'horizontalMotion',
     'movement',
   ]);
@@ -913,6 +1133,7 @@ test('Audit B: DrawObject persistent field parity across SerializedDrawObject, s
     'number',
     'weather',
     'gan',
+    'opacity',
     'rect',
     'movieMeta',
     'button',
