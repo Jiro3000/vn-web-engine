@@ -10,30 +10,23 @@ Zero setup. Visit the page and select your local game files, optionally install 
 
 ## Supported games
 
-| Game                                  | Engine        | Current state |
-| ------------------------------------- | ------------- | ------------- |
-| CHAOS;HEAD NOAH (Windows GOG release) | MAGES / SC3   | Complete      |
-| Aokana                                | BURIKO        | Complete      |
-| Eustia of the Tarnished Wings         | BURIKO        | Complete      |
-| Jewelry Hearts Academia               | BURIKO        | Complete      |
-| Subarashiki Hibi \~Furenzoku Sonzai\~ | BURIKO        | Complete      |
-| Fairytale Requiem                     | codeX RScript | Complete      |
-| Fairytale Symphony                    | codeX RScript | Complete      |
-| Fairytale Encore                      | codeX RScript | Complete      |
-| Albatross Koukairoku                  | codeX RScript | Complete      |
+| Game                                                   | Engine        | Current state                    |
+| ------------------------------------------------------ | ------------- | -------------------------------- |
+| CHAOS;HEAD NOAH (Windows GOG release)                  | MAGES / SC3   | Complete                         |
+| Aokana                                                 | BURIKO        | Complete                         |
+| Eustia of the Tarnished Wings                          | BURIKO        | Complete                         |
+| Jewelry Hearts Academia                                | BURIKO        | Complete                         |
+| Subarashiki Hibi \~Furenzoku Sonzai\~                  | BURIKO        | Complete                         |
+| Fairytale Requiem                                      | codeX RScript | Complete                         |
+| Fairytale Symphony                                     | codeX RScript | Complete                         |
+| Fairytale Encore                                       | codeX RScript | Complete                         |
+| Albatross Koukairoku                                   | codeX RScript | Complete                         |
+| はじめるセカイの理想論 -goodbye world index- (Hajiron) | YU-RIS        | Seven route-ending checks passed |
+| Relirium -レリリウム- 遺跡と出逢いと冒険と             | YU-RIS        | Route endings verified           |
 
 The games share browser services for files, storage, audio, video, graphics, and input. Reusable interpreters live under `src/engines/`; installation identity and explicit game compatibility profiles are selected separately.
 See [BGI compatibility](docs/buriko-compatibility.md) for revision selection, optional metadata, native evidence, and current verification limits.
 See the [codeX RScript notes](src/engines/rscript/README.md) for installation identity, native evidence, and known gaps.
-
-### YU-RIS
-
-| Game                                                   | YBN version | Verified coverage                                           |
-| ------------------------------------------------------ | ----------- | ----------------------------------------------------------- |
-| はじめるセカイの理想論 -goodbye world index- (Hajiron) | 555         | Seven route-ending checks in the browser                    |
-| Relirium -レリリウム- 遺跡と出逢いと冒険と             | 500         | Browser playthroughs through the ending and return to title |
-
-Open **YU-RIS** in the library and select the game folder containing the `pac` directory and its `.ypf` archives. See the [YU-RIS engine notes](src/engines/yuris/README.md) for version details and verification tools.
 
 ## Dev setup
 
