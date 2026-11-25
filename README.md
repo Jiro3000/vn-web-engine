@@ -10,42 +10,35 @@ Zero setup. Visit the page and select your local game files, optionally install 
 
 ## Supported games
 
-| Game                                  | Engine        | Current state |
-| ------------------------------------- | ------------- | ------------- |
-| CHAOS;HEAD NOAH (Windows GOG release) | MAGES / SC3   | Complete      |
-| Aokana                                | BURIKO        | Complete      |
-| Eustia of the Tarnished Wings         | BURIKO        | Complete      |
-| Jewelry Hearts Academia               | BURIKO        | Complete      |
-| Subarashiki Hibi \~Furenzoku Sonzai\~ | BURIKO        | Complete      |
-| Fairytale Requiem                     | codeX RScript | Complete      |
-| Fairytale Symphony                    | codeX RScript | Complete      |
-| Fairytale Encore                      | codeX RScript | Complete      |
-| Albatross Koukairoku                  | codeX RScript | Complete      |
+| Game                                  | Engine        | Current state                               |
+| ------------------------------------- | ------------- | ------------------------------------------- |
+| CHAOS;HEAD NOAH (Windows GOG release) | MAGES / SC3   | Complete                                    |
+| Aokana                                | BURIKO        | Complete                                    |
+| Eustia of the Tarnished Wings         | BURIKO        | Complete                                    |
+| Jewelry Hearts Academia               | BURIKO        | Complete                                    |
+| Subarashiki Hibi \~Furenzoku Sonzai\~ | BURIKO        | Complete                                    |
+| Fairytale Requiem                     | codeX RScript | Complete                                    |
+| Fairytale Symphony                    | codeX RScript | Complete                                    |
+| Fairytale Encore                      | codeX RScript | Complete                                    |
+| Albatross Koukairoku                  | codeX RScript | Complete                                    |
+| Aibeya 3                              | Artemis       | Full story verified                         |
+| Amakano 3                             | Artemis       | Tou route verified                          |
+| Hamidashi Creative                    | Artemis       | Hiyori route verified                       |
+| Hamidashi Creative Totsu              | Artemis       | Hiyori route verified                       |
+| Hamidashi Creative Re Re call         | Artemis       | Ririko route verified                       |
+| Hatsuyuki Sakura                      | Artemis       | Title, New Game and voiced dialogue         |
+| Hentai Prison                         | Artemis       | Chisato route verified                      |
+| NUKITASHI                             | Artemis       | Startup and gameplay verified               |
+| NUKITASHI 2                           | Artemis       | Gameplay, saves, backlog and movie verified |
+| Ryuusei World Actor                   | Artemis       | Chiffon route verified                      |
+| Ryuusei World Actor: Badge & Dagger   | Artemis       | Fuyumi route verified                       |
+| Ryuusei World Actor: Gaslight Bullet  | Artemis       | Tamako route verified                       |
+| Sakura no Toki                        | Artemis       | Route ending verified                       |
+| Sakura no Uta                         | Artemis       | Route ending and save/load verified         |
 
 The games share browser services for files, storage, audio, video, graphics, and input. Reusable interpreters live under `src/engines/`; installation identity and explicit game compatibility profiles are selected separately.
 See [BGI compatibility](docs/buriko-compatibility.md) for revision selection, optional metadata, native evidence, and current verification limits.
 See the [codeX RScript notes](src/engines/rscript/README.md) for installation identity, native evidence, and known gaps.
-
-### Artemis
-
-| Game                                 | Artemis revision         | Verified coverage                                                               |
-| ------------------------------------ | ------------------------ | ------------------------------------------------------------------------------- |
-| Aibeya 3                             | 3257                     | Full story through the staff roll and return to title                           |
-| Amakano 3                            | 3258                     | Tou route through the staff roll and return to title                            |
-| Hamidashi Creative                   | 2762                     | Hiyori route through the ending and return to title                             |
-| Hamidashi Creative Totsu             | 3083 (x64)               | Hiyori route through the ending and return to title                             |
-| Hamidashi Creative Re Re call        | 3248                     | Ririko route through the ending and return to title                             |
-| Hatsuyuki Sakura                     | 3179                     | Title, New Game and voiced dialogue                                             |
-| Hentai Prison                        | 2908                     | Chisato route through the ending and return to title                            |
-| NUKITASHI                            | 3139                     | Browser startup and gameplay regression checks                                  |
-| NUKITASHI 2                          | 3139 (resource variant)  | Browser play, save/load, backlog and fullscreen movie                           |
-| Ryuusei World Actor                  | 2601                     | Chiffon route through the ending and return to title                            |
-| Ryuusei World Actor: Badge & Dagger  | 2868                     | Fuyumi route through the ending and return to title                             |
-| Ryuusei World Actor: Gaslight Bullet | 3257 (wrapped)           | Tamako route through the ending and return to title                             |
-| Sakura no Toki                       | 2898, 3083 (wrapped x86) | Ending and return to title on both revisions                                    |
-| Sakura no Uta                        | 3257                     | Route through the staff roll and return to title, plus browser save/load checks |
-
-Route checks use the nonvisual runtime probe. Open **Artemis** in the library and select the game installation folder. See [Artemis revisions](docs/artemis-revisions.md) for exact executable hashes and [implementation status](docs/artemis-status.md) for validation details.
 
 ## Dev setup
 
@@ -96,6 +89,8 @@ The [CHAOS;HEAD NOAH asset laboratory](assets.html) and [BGI asset laboratory](b
 The included [GitHub Pages workflow](.github/workflows/pages.yml) builds and deploys pushes to `main`, and can also be run manually. Select **GitHub Actions** under the repository's **Settings → Pages → Build and deployment → Source** before enabling it. See [static hosting](docs/static-hosting.md) for setup, subpath verification, and save-storage considerations.
 
 The website is an installable progressive web app. Use your browser's **Install app** command, or **Share → Add to Home Screen** on iPhone/iPad. After the first online visit finishes caching, the library, players, and tools can reopen offline. Game files still need to be selected locally or retained with **Keep game files in browser**. When a new version is published, open pages show an update notice; choose **Reload** to switch, or keep playing and the update applies once all app windows and tabs are closed.
+
+Artemis compatibility is under development. See [implementation status and validation boundaries](docs/artemis-status.md) for the text/font pipeline and remaining player integration.
 
 ## Development
 
