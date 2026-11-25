@@ -26,6 +26,27 @@ The games share browser services for files, storage, audio, video, graphics, and
 See [BGI compatibility](docs/buriko-compatibility.md) for revision selection, optional metadata, native evidence, and current verification limits.
 See the [codeX RScript notes](src/engines/rscript/README.md) for installation identity, native evidence, and known gaps.
 
+### Artemis
+
+| Game                                 | Artemis revision         | Verified coverage                                                               |
+| ------------------------------------ | ------------------------ | ------------------------------------------------------------------------------- |
+| Aibeya 3                             | 3257                     | Full story through the staff roll and return to title                           |
+| Amakano 3                            | 3258                     | Tou route through the staff roll and return to title                            |
+| Hamidashi Creative                   | 2762                     | Hiyori route through the ending and return to title                             |
+| Hamidashi Creative Totsu             | 3083 (x64)               | Hiyori route through the ending and return to title                             |
+| Hamidashi Creative Re Re call        | 3248                     | Ririko route through the ending and return to title                             |
+| Hatsuyuki Sakura                     | 3179                     | Title, New Game and voiced dialogue                                             |
+| Hentai Prison                        | 2908                     | Chisato route through the ending and return to title                            |
+| NUKITASHI                            | 3139                     | Browser startup and gameplay regression checks                                  |
+| NUKITASHI 2                          | 3139 (resource variant)  | Browser play, save/load, backlog and fullscreen movie                           |
+| Ryuusei World Actor                  | 2601                     | Chiffon route through the ending and return to title                            |
+| Ryuusei World Actor: Badge & Dagger  | 2868                     | Fuyumi route through the ending and return to title                             |
+| Ryuusei World Actor: Gaslight Bullet | 3257 (wrapped)           | Tamako route through the ending and return to title                             |
+| Sakura no Toki                       | 2898, 3083 (wrapped x86) | Ending and return to title on both revisions                                    |
+| Sakura no Uta                        | 3257                     | Route through the staff roll and return to title, plus browser save/load checks |
+
+Route checks use the nonvisual runtime probe. Open **Artemis** in the library and select the game installation folder. See [Artemis revisions](docs/artemis-revisions.md) for exact executable hashes and [implementation status](docs/artemis-status.md) for validation details.
+
 ## Dev setup
 
 Install Node.js 24 or newer with npm, then run:
@@ -75,8 +96,6 @@ The [CHAOS;HEAD NOAH asset laboratory](assets.html) and [BGI asset laboratory](b
 The included [GitHub Pages workflow](.github/workflows/pages.yml) builds and deploys pushes to `main`, and can also be run manually. Select **GitHub Actions** under the repository's **Settings → Pages → Build and deployment → Source** before enabling it. See [static hosting](docs/static-hosting.md) for setup, subpath verification, and save-storage considerations.
 
 The website is an installable progressive web app. Use your browser's **Install app** command, or **Share → Add to Home Screen** on iPhone/iPad. After the first online visit finishes caching, the library, players, and tools can reopen offline. Game files still need to be selected locally or retained with **Keep game files in browser**. When a new version is published, open pages show an update notice; choose **Reload** to switch, or keep playing and the update applies once all app windows and tabs are closed.
-
-Artemis compatibility is under development. See [implementation status and validation boundaries](docs/artemis-status.md) for the text/font pipeline and remaining player integration.
 
 ## Development
 
