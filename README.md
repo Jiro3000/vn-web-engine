@@ -10,19 +10,40 @@ Zero setup. Visit the page and select your local game files, optionally install 
 
 ## Supported games
 
-| Game                                      | Engine        | Current state                          |
-| ----------------------------------------- | ------------- | -------------------------------------- |
-| CHAOS;HEAD NOAH (Windows GOG release)     | MAGES / SC3   | Complete                               |
-| Aokana                                    | BURIKO        | Complete                               |
-| Eustia of the Tarnished Wings             | BURIKO        | Complete                               |
-| Jewelry Hearts Academia                   | BURIKO        | Complete                               |
-| Subarashiki Hibi \~Furenzoku Sonzai\~     | BURIKO        | Complete                               |
-| Fairytale Requiem                         | codeX RScript | Complete                               |
-| Fairytale Symphony                        | codeX RScript | Complete                               |
-| Fairytale Encore                          | codeX RScript | Complete                               |
-| Albatross Koukairoku                      | codeX RScript | Complete                               |
-| FORTUNE×WORLD                             | SiglusEngine  | Prologue, title and New Game opening   |
-| 月の彼方で逢いましょう SweetSummerRainbow | SiglusEngine  | Title and openings of all four stories |
+| Game                                                   | Engine        | Current state                               |
+| ------------------------------------------------------ | ------------- | ------------------------------------------- |
+| CHAOS;HEAD NOAH (Windows GOG release)                  | MAGES / SC3   | Complete                                    |
+| Aokana                                                 | BURIKO        | Complete                                    |
+| Eustia of the Tarnished Wings                          | BURIKO        | Complete                                    |
+| Jewelry Hearts Academia                                | BURIKO        | Complete                                    |
+| Subarashiki Hibi \~Furenzoku Sonzai\~                  | BURIKO        | Complete                                    |
+| Fairytale Requiem                                      | codeX RScript | Complete                                    |
+| Fairytale Symphony                                     | codeX RScript | Complete                                    |
+| Fairytale Encore                                       | codeX RScript | Complete                                    |
+| Albatross Koukairoku                                   | codeX RScript | Complete                                    |
+| はじめるセカイの理想論 -goodbye world index- (Hajiron) | YU-RIS        | Seven route-ending checks passed            |
+| Relirium -レリリウム- 遺跡と出逢いと冒険と             | YU-RIS        | Route endings verified                      |
+| Aibeya 3                                               | Artemis       | Full story verified                         |
+| Amakano 3                                              | Artemis       | Tou route verified                          |
+| Hamidashi Creative                                     | Artemis       | Hiyori route verified                       |
+| Hamidashi Creative Totsu                               | Artemis       | Hiyori route verified                       |
+| Hamidashi Creative Re Re call                          | Artemis       | Ririko route verified                       |
+| Hatsuyuki Sakura                                       | Artemis       | Title, New Game and voiced dialogue         |
+| Hentai Prison                                          | Artemis       | Chisato route verified                      |
+| NUKITASHI                                              | Artemis       | Startup and gameplay verified               |
+| NUKITASHI 2                                            | Artemis       | Gameplay, saves, backlog and movie verified |
+| Ryuusei World Actor                                    | Artemis       | Chiffon route verified                      |
+| Ryuusei World Actor: Badge & Dagger                    | Artemis       | Fuyumi route verified                       |
+| Ryuusei World Actor: Gaslight Bullet                   | Artemis       | Tamako route verified                       |
+| Sakura no Toki                                         | Artemis       | Route ending verified                       |
+| Sakura no Uta                                          | Artemis       | Route ending and save/load verified         |
+| Angel Beats! -1st beat-                                | SiglusEngine  | Title verified                              |
+| FORTUNE×WORLD                                          | SiglusEngine  | Full story verified                         |
+| Giniro, Haruka                                         | SiglusEngine  | Title verified                              |
+| Hoshi Ori Yume Mirai - Perfect Edition                 | SiglusEngine  | Title verified                              |
+| Hoshi Ori Yume Mirai - Rikka to Anata                  | SiglusEngine  | Title verified                              |
+| Tsuki no Kanata de Aimashou                            | SiglusEngine  | Title verified                              |
+| 月の彼方で逢いましょう SweetSummerRainbow              | SiglusEngine  | Title and openings of all four stories      |
 
 The games share browser services for files, storage, audio, video, graphics, and input. Reusable interpreters live under `src/engines/`; installation identity and explicit game compatibility profiles are selected separately.
 See [BGI compatibility](docs/buriko-compatibility.md) for revision selection, optional metadata, native evidence, and current verification limits.
