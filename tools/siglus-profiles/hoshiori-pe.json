@@ -19,6 +19,7 @@
     "requireBgm": true,
     "minVisuals": 2,
     "mwndAutoHideBar": true,
+    "framing": {"object": "bg501", "bounds": [0, 225, 1920, 855], "speakerAboveWindow": true},
     "stagePageScenes": ["_00_mess"],
     "bundledFonts": [
       {"file": "font02.ttf", "name": "MotoyaLCedar"},

@@ -3,7 +3,7 @@ import {workerSourceOf} from '../core/worker-source.js';
 import {isAsf} from '../formats/asf/header.js';
 import {playBrowserMediaWithActivation} from './browser-media-activation.js';
 import {BrowserStreamMoviePlayer} from './browser-stream-player.js';
-import {YuvRenderer} from './renderer.js';
+import {createYuvRenderer, type MovieFrameRenderer} from './renderer.js';
 
 /** A movie played over the whole game window by the operating system's media stack
  * (for example a DirectShow graph rendering a loose file), outside the engine renderer. */
@@ -63,7 +63,7 @@ export class BrowserFullscreenMoviePlayer implements FullscreenMoviePlayer {
   private stream: {
     player: BrowserStreamMoviePlayer;
     canvas: HTMLCanvasElement;
-    renderer: YuvRenderer | null;
+    renderer: MovieFrameRenderer | null;
     timer: ReturnType<typeof setInterval>;
     frames: number;
   } | null = null;
@@ -158,7 +158,7 @@ export class BrowserFullscreenMoviePlayer implements FullscreenMoviePlayer {
     const stream = {
       player,
       canvas,
-      renderer: null as YuvRenderer | null,
+      renderer: null as MovieFrameRenderer | null,
       timer: setInterval(() => {
         if (this.stream !== stream) return;
         try {
@@ -174,7 +174,7 @@ export class BrowserFullscreenMoviePlayer implements FullscreenMoviePlayer {
     player.volume(gain(request.attenuation));
     player.start((frame) => {
       if (this.stream !== stream) return;
-      stream.renderer ??= new YuvRenderer(canvas);
+      stream.renderer ??= createYuvRenderer(canvas);
       stream.renderer.draw(frame);
       stream.frames++;
     });

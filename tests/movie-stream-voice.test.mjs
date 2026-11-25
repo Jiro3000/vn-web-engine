@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import {StreamMovieVoice} from '../dist/video/stream-voice.js';
 import {BrowserStreamMoviePlayer} from '../dist/video/browser-stream-player.js';
 import {allocateFrame} from '../dist/video/frame.js';
+import {I420Rgba} from '../dist/video/i420-rgba.js';
+import {yuv420ToBgra} from '../dist/video/pixels.js';
 import {movieRgba} from '../dist/video/rgba.js';
 class WorkerFixture {
   static all = [];
@@ -42,6 +44,42 @@ class WorkerFixture {
     });
   }
 }
+
+test('SIMD I420 respects cropped planes and keeps snapshots independent of later frames', async (t) => {
+  const converter = I420Rgba.create();
+  assert.ok(converter);
+  const frames = [
+    [1, 1],
+    [16, 2],
+    [39, 25],
+    [47, 62],
+    [71, 23],
+  ].map(([width, height]) => allocateFrame(width, height));
+  let seed = 0x96b3fc25;
+  for (const frame of frames)
+    for (const plane of [frame.y, frame.cb, frame.cr])
+      for (let i = 0; i < plane.length; i++) {
+        seed ^= seed << 13;
+        seed ^= seed >>> 17;
+        seed ^= seed << 5;
+        plane[i] = seed & 255;
+      }
+
+  const disableSimd = t.mock.method(I420Rgba, 'create', () => undefined);
+  const reference = await import('../dist/video/pixels.js?reference');
+  const bgra = frames.map((frame) => reference.yuv420ToBgra(frame));
+  disableSimd.mock.restore();
+
+  const snapshots = [];
+  for (const [index, frame] of frames.entries()) {
+    assert.deepEqual(new Uint8Array(converter.convert(frame)), movieRgba(frame).pixels);
+    const snapshot = yuv420ToBgra(frame);
+    assert.deepEqual(snapshot, bgra[index]);
+    snapshots.push(snapshot);
+  }
+  assert.deepEqual(snapshots, bgra);
+  assert.throws(() => converter.convert({...frames.at(-1), cb: new Uint8Array(1)}), /planes/);
+});
 function context() {
   const nodes = [];
   return {

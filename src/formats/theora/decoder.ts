@@ -1,4 +1,5 @@
 import {TheoraBits, type TheoraInfo, type TheoraSetup} from './headers.js';
+import {TheoraReconstruction} from './wasm-reconstruction.js';
 
 /** One decoded plane in Theora coordinates: row 0 is the bottom row of the frame. */
 export interface TheoraPlane {
@@ -260,6 +261,11 @@ export class TheoraDecoder {
   /** Superblocks of all planes in coded order: 16 fragment indices each, -1 when outside. */
   private readonly superblocks: Int32Array;
   private readonly superblockPlaneEnd: number[];
+  private readonly allFragments: Int32Array[];
+  private readonly interFragments: Int32Array[];
+  private readonly pendingTokens: Int32Array[];
+  private readonly qiOrder: Int32Array;
+  private readonly tokenPrefixes: Int16Array[];
   /** Macroblocks in coded order: four luma fragments (bottom-left, bottom-right, top-left,
    * top-right) and the chroma fragments of both chroma planes. */
   private readonly macroblockLuma: Int32Array;
@@ -276,16 +282,19 @@ export class TheoraDecoder {
   private readonly tokenIndex: Uint8Array;
   private readonly coefficientCount: Uint8Array;
   private readonly dc: Int16Array;
+  private readonly reconstruction?: TheoraReconstruction;
   private readonly buffers: TheoraFrame[];
   private current = -1;
   private previous = -1;
   private golden = -1;
   private readonly residual = new Int16Array(64);
   private readonly work = new Int16Array(64);
+  private readonly columns = new Int16Array(64);
 
   constructor(
     readonly info: TheoraInfo,
     private readonly setup: TheoraSetup,
+    options: {wasm?: boolean; rgbaCapacity?: number} = {},
   ) {
     const lumaWidth = info.macroblockWidth * 2,
       lumaHeight = info.macroblockHeight * 2;
@@ -317,6 +326,16 @@ export class TheoraDecoder {
       this.superblockPlaneEnd.push(superblocks.length / 16);
     }
     this.superblocks = Int32Array.from(superblocks);
+    let begin = 0;
+    this.allFragments = this.superblockPlaneEnd.map((end) => {
+      const fragments = this.superblocks.subarray(begin * 16, end * 16).filter((fragment) => fragment >= 0);
+      begin = end;
+      return fragments;
+    });
+    this.pendingTokens = this.allFragments.map((list) => new Int32Array(list.length));
+    this.interFragments = this.allFragments.map((list) => new Int32Array(list.length));
+    this.qiOrder = new Int32Array(this.fragments);
+    this.tokenPrefixes = setup.huffman.map(huffmanPrefixes);
     const chroma = this.planes[1]!;
     this.chromaPerMacroblock =
       (chroma.width / info.macroblockWidth) * (chroma.height / info.macroblockHeight);
@@ -347,21 +366,25 @@ export class TheoraDecoder {
     this.macroblockChroma = Int32Array.from(chromaFragments);
     this.macroblocks = luma.length / 4;
     const count = this.fragments;
-    this.coded = new Uint8Array(count);
-    this.mode = new Uint8Array(count);
-    this.motionX = new Int8Array(count);
-    this.motionY = new Int8Array(count);
-    this.qii = new Uint8Array(count);
-    this.coefficients = new Int16Array(count * 64);
+    const recon = options.wasm === false
+      ? undefined
+      : TheoraReconstruction.create(count, setup, options.rgbaCapacity ?? 0);
+    this.reconstruction = recon;
+    this.coded = recon?.coded ?? new Uint8Array(count);
+    this.mode = recon?.mode ?? new Uint8Array(count);
+    this.motionX = recon?.motionX ?? new Int8Array(count);
+    this.motionY = recon?.motionY ?? new Int8Array(count);
+    this.qii = recon?.qiIndex ?? new Uint8Array(count);
+    this.coefficients = recon?.coefficients ?? new Int16Array(count * 64);
     this.tokenIndex = new Uint8Array(count);
-    this.coefficientCount = new Uint8Array(count);
-    this.dc = new Int16Array(count);
+    this.coefficientCount = recon?.count ?? new Uint8Array(count);
+    this.dc = recon?.dc ?? new Int16Array(count);
     this.buffers = [0, 1, 2].map(
       () =>
         this.planes.map((plane) => ({
           width: plane.width * 8,
           height: plane.height * 8,
-          data: new Uint8Array(plane.width * plane.height * 64),
+          data: recon?.bytes(plane.width * plane.height * 64) ?? new Uint8Array(plane.width * plane.height * 64),
         })) as TheoraFrame,
     );
   }
@@ -369,6 +392,17 @@ export class TheoraDecoder {
   /** The last decoded frame, or null before the first one. */
   get frame(): readonly TheoraPlane[] | null {
     return this.current < 0 ? null : this.buffers[this.current]!;
+  }
+
+  /** Convert a Siglus 4:4:4 picture with an optional alpha plane stored under the image. */
+  omvRgba(mode: number, height: number): Uint8ClampedArray<ArrayBuffer> | undefined {
+    const frame = this.frame;
+    const {pictureWidth, pictureHeight, pictureX, pictureY, pixelFormat} = this.info;
+    if (!frame || pixelFormat !== 3 || !Number.isInteger(height) || height < 1 ||
+        pictureHeight !== height + (mode === 1 ? Math.ceil(height / 3) : 0)) return;
+    return this.reconstruction?.rgba(
+      frame, mode, pictureWidth, height, pictureX, pictureHeight + pictureY - 1,
+    );
   }
 
   /** Writes plane `index` of the last frame top-down (the order of th_decode_ycbcr_out). */
@@ -409,9 +443,20 @@ export class TheoraDecoder {
     }
     this.blockQis(bits, codedList, qis.length);
     this.tokens(bits, codedList);
-    this.predictDc();
-    this.reconstruct(qis);
-    this.loopFilter(this.setup.loopFilterLimits[qis[0]!]!);
+    const filterLimit = this.setup.loopFilterLimits[qis[0]!]!;
+    if (this.reconstruction) this.reconstruction.reconstruct(
+      this.buffers[this.current]!,
+      intra ? null : this.buffers[this.previous]!,
+      intra ? null : this.buffers[this.golden]!,
+      this.info.pixelFormat,
+      qis,
+      filterLimit,
+    );
+    else {
+      this.predictDc();
+      this.reconstruct(qis, intra);
+      this.loopFilter(filterLimit);
+    }
     this.previous = this.current;
     if (intra) this.golden = this.current;
     return true;
@@ -426,18 +471,7 @@ export class TheoraDecoder {
   /** Coded fragments of all planes in coded order. */
   private allCoded(): Int32Array[] {
     this.coded.fill(1);
-    const lists: Int32Array[] = [];
-    let begin = 0;
-    for (const end of this.superblockPlaneEnd) {
-      const list: number[] = [];
-      for (let index = begin * 16; index < end * 16; index++) {
-        const fragment = this.superblocks[index]!;
-        if (fragment >= 0) list.push(fragment);
-      }
-      lists.push(Int32Array.from(list));
-      begin = end;
-    }
-    return lists;
+    return this.allFragments;
   }
 
   private codedFlags(bits: TheoraBits): Int32Array[] {
@@ -458,8 +492,9 @@ export class TheoraDecoder {
       run = 0;
     const lists: Int32Array[] = [];
     let begin = 0;
-    for (const end of this.superblockPlaneEnd) {
-      const list: number[] = [];
+    for (const [plane, end] of this.superblockPlaneEnd.entries()) {
+      const list = this.interFragments[plane]!;
+      let length = 0;
       for (let superblock = begin; superblock < end; superblock++)
         for (let index = superblock * 16; index < superblock * 16 + 16; index++) {
           const fragment = this.superblocks[index]!;
@@ -476,9 +511,9 @@ export class TheoraDecoder {
             coded = flag;
           }
           this.coded[fragment] = coded;
-          if (coded) list.push(fragment);
+          if (coded) list[length++] = fragment;
         }
-      lists.push(Int32Array.from(list));
+      lists.push(list.subarray(0, length));
       begin = end;
     }
     return lists;
@@ -614,16 +649,22 @@ export class TheoraDecoder {
   private blockQis(bits: TheoraBits, lists: Int32Array[], count: number): void {
     this.qii.fill(0);
     if (count === 1) return;
-    const coded = lists.flatMap((list) => [...list]);
-    let nonzero = 0;
-    longRunFlags(bits, coded.length, (index, flag) => {
-      this.qii[coded[index]!] = flag;
-      nonzero += flag;
-    });
-    if (count === 3 && nonzero) {
-      const raised = coded.filter((fragment) => this.qii[fragment]);
-      longRunFlags(bits, raised.length, (index, flag) => (this.qii[raised[index]!]! += flag));
+    const coded = this.qiOrder;
+    let length = 0;
+    for (const list of lists) {
+      coded.set(list, length);
+      length += list.length;
     }
+    let raised = 0;
+    longRunFlags(bits, length, (index, flag) => {
+      if (!flag) return;
+      const fragment = coded[index]!;
+      this.qii[fragment] = 1;
+      // Pass two visits only the raised entries, in the same order.
+      coded[raised++] = fragment;
+    });
+    if (count === 3 && raised)
+      longRunFlags(bits, raised, (index, flag) => (this.qii[coded[index]!]! += flag));
   }
 
   /** DCT tokens: for each token index, every coded luma fragment and then every coded
@@ -631,13 +672,15 @@ export class TheoraDecoder {
    * runs continue across fragments, planes and token indices. */
   private tokens(bits: TheoraBits, lists: Int32Array[]): void {
     const huffman = this.setup.huffman;
-    for (const list of lists)
+    const pending = this.pendingTokens;
+    const lengths = lists.map((list, plane) => {
+      pending[plane]!.set(list);
       for (const fragment of list) {
         this.coefficients.fill(0, fragment * 64, fragment * 64 + 64);
         this.tokenIndex[fragment] = 0;
-        this.coefficientCount[fragment] = 0;
       }
-    let pending = lists.map((list) => list.slice());
+      return list.length;
+    });
     let endRun = 0,
       lumaTable = 0,
       chromaTable = 0;
@@ -647,12 +690,17 @@ export class TheoraDecoder {
         chromaTable = bits.read(4);
       }
       const group = ti === 0 ? 0 : ti < 6 ? 1 : ti < 15 ? 2 : ti < 28 ? 3 : 4;
-      pending = pending.map((list, plane) => {
-        const tree = huffman[group * 16 + (plane ? chromaTable : lumaTable)]!;
-        const next: number[] = [];
-        for (const fragment of list) {
+      if (!(lengths[0] || lengths[1] || lengths[2])) break;
+      for (let plane = 0; plane < 3; plane++) {
+        const table = group * 16 + (plane ? chromaTable : lumaTable);
+        const tree = huffman[table]!;
+        const prefixes = this.tokenPrefixes[table]!;
+        const list = pending[plane]!;
+        let remaining = 0;
+        for (let offset = 0; offset < lengths[plane]!; offset++) {
+          const fragment = list[offset]!;
           if (this.tokenIndex[fragment] !== ti) {
-            if (this.tokenIndex[fragment]! < 64) next.push(fragment);
+            list[remaining++] = fragment;
             continue;
           }
           if (endRun > 0) {
@@ -660,7 +708,7 @@ export class TheoraDecoder {
             this.endBlock(fragment);
             continue;
           }
-          const token = huffmanToken(bits, tree);
+          const token = huffmanToken(bits, tree, prefixes);
           if (token < 7) {
             endRun = endOfBlockRun(bits, token) - 1;
             this.endBlock(fragment);
@@ -678,10 +726,10 @@ export class TheoraDecoder {
           if (index > 64) throw Error('Invalid Theora DCT token run');
           this.tokenIndex[fragment] = index;
           this.coefficientCount[fragment] = index;
-          if (index < 64) next.push(fragment);
+          if (index < 64) list[remaining++] = fragment;
         }
-        return Int32Array.from(next);
-      });
+        lengths[plane] = remaining;
+      }
     }
   }
 
@@ -743,7 +791,7 @@ export class TheoraDecoder {
     }
   }
 
-  private reconstruct(qis: number[]): void {
+  private reconstruct(qis: number[], intra: boolean): void {
     const target = this.buffers[this.current]!,
       previous = this.previous >= 0 ? this.buffers[this.previous]! : null,
       golden = this.golden >= 0 ? this.buffers[this.golden]! : null;
@@ -751,41 +799,71 @@ export class TheoraDecoder {
     for (let pli = 0; pli < 3; pli++) {
       const plane = this.planes[pli]!,
         output = target[pli]!,
-        stride = output.width;
-      const quarterX = pli > 0 && !(this.info.pixelFormat & 1),
-        quarterY = pli > 0 && !(this.info.pixelFormat & 2);
+        data = new Uint8ClampedArray(output.data.buffer, output.data.byteOffset, output.data.length),
+        stride = output.width,
+        previousData = previous?.[pli]?.data;
+      const words = new Uint32Array(data.buffer, data.byteOffset, data.length / 4);
+      // All uncoded fragments copy the colocated block from the previous frame.
+      // One contiguous copy avoids creating a view and making a call for each row.
+      if (!intra && previousData) data.set(previousData);
+      const xDivisor = pli > 0 && !(this.info.pixelFormat & 1) ? 4 : 2;
+      const yDivisor = pli > 0 && !(this.info.pixelFormat & 2) ? 4 : 2;
       for (let by = 0; by < plane.height; by++)
         for (let bx = 0; bx < plane.width; bx++) {
           const fragment = plane.offset + by * plane.width + bx,
             px = bx * 8,
             py = by * 8;
-          if (!this.coded[fragment]) {
-            const source = previous![pli]!.data;
-            for (let row = 0; row < 8; row++) {
-              const at = (py + row) * stride + px;
-              output.data.set(source.subarray(at, at + 8), at);
-            }
-            continue;
-          }
+          if (!this.coded[fragment]) continue;
           const mode = this.mode[fragment]!;
+          const dcOnly = this.coefficientCount[fragment]! < 2;
           this.residualBlock(fragment, pli, mode === Mode.Intra ? 0 : 1, qis);
           if (mode === Mode.Intra) {
-            for (let row = 0; row < 8; row++)
+            if (dcOnly) {
+              const pixel = clamp255(residual[0]! + 128) * 0x01010101;
+              for (let row = 0; row < 8; row++) {
+                const dest = ((py + row) * stride + px) >>> 2;
+                words[dest] = words[dest + 1] = pixel;
+              }
+              continue;
+            }
+            for (let row = 0; row < 8; row++) {
+              const dest = (py + row) * stride + px;
               for (let col = 0; col < 8; col++)
-                output.data[(py + row) * stride + px + col] = clamp255(
-                  residual[row * 8 + col]! + 128,
-                );
+                data[dest + col] = residual[row * 8 + col]! + 128;
+            }
             continue;
           }
           const reference = (
             mode === Mode.GoldenNoMv || mode === Mode.GoldenMv ? golden : previous
           )![pli]!;
-          const [x0, x1] = motionOffsets(this.motionX[fragment]!, quarterX),
-            [y0, y1] = motionOffsets(this.motionY[fragment]!, quarterY);
+          const mx = this.motionX[fragment]!, my = this.motionY[fragment]!;
+          // Truncate toward zero, then away from zero for fractional motion.
+          const x0 = (mx / xDivisor) | 0, y0 = (my / yDivisor) | 0;
+          const x1 = x0 + (mx & (xDivisor - 1) ? Math.sign(mx) : 0);
+          const y1 = y0 + (my & (yDivisor - 1) ? Math.sign(my) : 0);
           const width = reference.width,
             height = reference.height,
             source = reference.data;
           const two = x1 !== x0 || y1 !== y0;
+          if (!two && x0 === 0 && y0 === 0 && source === previousData && dcOnly && residual[0] === 0)
+            continue;
+          const ax = px + x0, ay = py + y0;
+          const sx = px + x1, sy = py + y1;
+          const inside = Math.min(ax, sx) >= 0 && Math.max(ax, sx) + 8 <= width &&
+            Math.min(ay, sy) >= 0 && Math.max(ay, sy) + 8 <= height;
+          if (inside) {
+            for (let row = 0; row < 8; row++) {
+              const first = (ay + row) * width + ax;
+              const second = (sy + row) * width + sx;
+              const dest = (py + row) * stride + px;
+              for (let col = 0; col < 8; col++) {
+                const a = source[first + col]!;
+                const predicted = two ? (a + source[second + col]!) >> 1 : a;
+                data[dest + col] = predicted + residual[row * 8 + col]!;
+              }
+            }
+            continue;
+          }
           for (let row = 0; row < 8; row++) {
             const ya = clampIndex(py + row + y0, height) * width,
               yb = clampIndex(py + row + y1, height) * width;
@@ -793,9 +871,7 @@ export class TheoraDecoder {
               let predicted = source[ya + clampIndex(px + col + x0, width)]!;
               if (two)
                 predicted = (predicted + source[yb + clampIndex(px + col + x1, width)]!) >> 1;
-              output.data[(py + row) * stride + px + col] = clamp255(
-                predicted + residual[row * 8 + col]!,
-              );
+              data[(py + row) * stride + px + col] = predicted + residual[row * 8 + col]!;
             }
           }
         }
@@ -808,7 +884,8 @@ export class TheoraDecoder {
     const tables = this.setup.quantizers[qti]![pli]!;
     const residual = this.residual;
     const dcQuant = tables[qis[0]!]![0]!;
-    if (this.coefficientCount[fragment]! < 2) {
+    const count = this.coefficientCount[fragment]!;
+    if (count < 2) {
       residual.fill(int16((this.dc[fragment]! * dcQuant + 15) >> 5));
       return;
     }
@@ -817,11 +894,11 @@ export class TheoraDecoder {
     input.fill(0);
     input[0] = int16(this.dc[fragment]! * dcQuant);
     const base = fragment * 64;
-    for (let index = 1; index < 64; index++) {
+    for (let index = 1; index < count; index++) {
       const value = this.coefficients[base + index]!;
       if (value) input[ZIGZAG[index]!] = int16(value * acQuant[ZIGZAG[index]!]!);
     }
-    const columns = new Int16Array(64);
+    const columns = this.columns;
     for (let row = 0; row < 8; row++) idct8(columns, row, input, row * 8, 1);
     for (let row = 0; row < 8; row++) idct8(residual, row, columns, row * 8, 1);
     for (let index = 0; index < 64; index++) residual[index] = (residual[index]! + 8) >> 4;
@@ -878,17 +955,26 @@ function clampIndex(value: number, size: number): number {
   return value < 0 ? 0 : value >= size ? size - 1 : value;
 }
 
-/** Integer offsets of one vector component: truncation toward zero, and away from zero
- * as the second offset when the component has a fractional part. */
-function motionOffsets(value: number, quarter: boolean): [number, number] {
-  const divisor = quarter ? 4 : 2;
-  const whole = Math.trunc(value / divisor);
-  return [whole, value % divisor ? whole + Math.sign(value) : whole];
+function huffmanPrefixes(tree: Int16Array): Int16Array {
+  const table = new Int16Array(256);
+  if (tree.length === 1) return table.fill(-1 - tree[0]!);
+  for (let prefix = 0; prefix < table.length; prefix++) {
+    let node = 0;
+    let bits = 0;
+    while (node >= 0 && bits < 8) node = tree[node + ((prefix >> (7 - bits++)) & 1)]!;
+    table[prefix] = node < 0 ? (bits << 5) | (-1 - node) : ~node;
+  }
+  return table;
 }
 
-function huffmanToken(bits: TheoraBits, tree: Int16Array): number {
-  let node = 0;
-  if (tree.length === 1) return -1 - tree[0]!;
+function huffmanToken(bits: TheoraBits, tree: Int16Array, prefixes: Int16Array): number {
+  const decoded = prefixes[bits.peekByte()]!;
+  if (decoded >= 0) {
+    bits.skip(decoded >> 5);
+    return decoded & 31;
+  }
+  bits.skip(8);
+  let node = ~decoded;
   for (;;) {
     node = tree[node + bits.read1()]!;
     if (node < 0) return -1 - node;

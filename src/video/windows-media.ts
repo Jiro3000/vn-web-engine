@@ -118,8 +118,12 @@ export class WindowsMediaDecoder {
             targetStride = plane ? frame.stride >> 1 : frame.stride,
             w = plane ? (width + 1) >> 1 : width,
             rows = plane ? (height + 1) >> 1 : height;
-          for (let y = 0; y < rows; y++)
-            target.set(source.subarray(y * stride, y * stride + w), y * targetStride);
+          if (stride === w && targetStride === w) {
+            target.set(source.subarray(0, rows * w));
+          } else {
+            for (let y = 0; y < rows; y++)
+              target.set(source.subarray(y * stride, y * stride + w), y * targetStride);
+          }
         }
         frame.index = this.index++;
         frame.pictureType = picture.type;

@@ -1,18 +1,73 @@
 import type {YuvFrame} from './frame.js';
+import {I420Rgba} from './i420-rgba.js';
+import {movieRgba} from './rgba.js';
+
+const glOptions: WebGLContextAttributes = {
+  alpha: false,
+  antialias: false,
+  depth: false,
+  preserveDrawingBuffer: false,
+};
+
+export interface MovieFrameRenderer {
+  draw(frame: YuvFrame): void;
+  dispose(): void;
+}
+
+/** Use the GPU renderer when WebGL is available, with Canvas 2D as a fallback. */
+export function createYuvRenderer(canvas: HTMLCanvasElement): MovieFrameRenderer {
+  const gl = canvas.getContext('webgl', glOptions);
+  if (gl) return new YuvRenderer(canvas, gl);
+  const context = canvas.getContext('2d', {alpha: false});
+  if (!context) throw new Error('Cannot create a movie graphics context');
+  return new CanvasYuvRenderer(canvas, context, I420Rgba.create());
+}
+
+class CanvasYuvRenderer implements MovieFrameRenderer {
+  private image?: ImageData;
+
+  constructor(
+    private readonly canvas: HTMLCanvasElement,
+    private readonly context: CanvasRenderingContext2D,
+    private converter?: I420Rgba,
+  ) {}
+
+  draw(frame: YuvFrame): void {
+    const {width, height} = frame;
+    if (this.canvas.width !== width || this.canvas.height !== height) {
+      this.canvas.width = width;
+      this.canvas.height = height;
+    }
+    let pixels: Uint8ClampedArray<ArrayBuffer> | undefined;
+    if (this.converter) {
+      try {
+        pixels = this.converter.convert(frame);
+      } catch (error) {
+        if (!(error instanceof RangeError)) throw error;
+      }
+    }
+    pixels ??= Uint8ClampedArray.from(movieRgba(frame).pixels);
+    if (this.image?.data !== pixels) this.image = new ImageData(pixels, width, height);
+    this.context.putImageData(this.image, 0, 0);
+  }
+
+  dispose(): void {
+    this.image = undefined;
+    this.converter = undefined;
+  }
+}
+
 /** Reusable GPU YCbCr 4:2:0 renderer; MPEG-1 limited-range BT.601, centered chroma. */
-export class YuvRenderer {
+export class YuvRenderer implements MovieFrameRenderer {
   private readonly gl: WebGLRenderingContext;
   private readonly program: WebGLProgram;
   private readonly buffer: WebGLBuffer;
   private readonly textures: WebGLTexture[] = [];
   private readonly scale: WebGLUniformLocation;
-  constructor(readonly canvas: HTMLCanvasElement) {
-    const gl = canvas.getContext('webgl', {
-      alpha: false,
-      antialias: false,
-      depth: false,
-      preserveDrawingBuffer: false,
-    });
+  constructor(
+    readonly canvas: HTMLCanvasElement,
+    gl: WebGLRenderingContext | null = canvas.getContext('webgl', glOptions),
+  ) {
     if (!gl) throw new Error('WebGL is required for movie rendering');
     this.gl = gl;
     function shader(type: number, source: string): WebGLShader {

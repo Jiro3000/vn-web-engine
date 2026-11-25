@@ -3,6 +3,12 @@
 use super::block_support::*;
 use super::{bits::Bits, tables as T};
 
+#[inline(always)]
+unsafe fn different_motion(motion: B16, a: i32, b: i32) -> bool {
+    let pairs = motion.ptr.cast::<u32>();
+    pairs.offset(a as isize).read_unaligned() != pairs.offset(b as isize).read_unaligned()
+}
+
 struct Decoder {
     mbw: i32,
     mbh: i32,
@@ -2749,65 +2755,65 @@ impl Decoder {
         let b8 = self.b8;
         let pq = self.pq;
         let m = (((2 * mbs) + self.mb_x) - (r * mbs)) - c;
-        let cbp = self.cbp_row;
-        let is_intra = self.is_intra_row;
-        let motion = self.motion;
-        let luma_mv = self.luma_mv;
+        let bottom_edge = flags & BOTTOM_EDGE != 0;
+        let blocks = self.cbp_row.at(m) as u32;
+        let intra = self.is_intra_row.at(m);
+        let transforms = self.ttblk_row.at(m) as u32;
+        let (below_blocks, below_intra) = if bottom_edge {
+            (0, 0)
+        } else {
+            (
+                self.cbp_row.at(m + mbs) as u32,
+                self.is_intra_row.at(m + mbs),
+            )
+        };
         let dl = (self.dest0 - ((16 * r) * ls)) - (16 * c);
         let dc = (self.dest1 - ((8 * r) * uvls)) - (8 * c);
         for n in 0..6 {
             let chroma = n > 3;
             let lsz = if chroma { uvls } else { ls };
             let p = self.plane(cur, n);
-            let top_cbp = ((cbp.at(m)) as u32 >> (n * 4)) as i32;
+            let top_cbp = blocks >> (n * 4);
             let dst = if chroma {
                 dc
             } else {
                 (dl + (((n & 2) * 4) * ls)) + ((n & 1) * 8)
             };
-            if (!truth(flags & BOTTOM_EDGE)) || (n < 2) {
-                let top_intra = is_intra.at(m) & (1 << n);
-                let bottom_intra: i32;
-                let bottom_cbp: i32;
-                if chroma {
-                    bottom_intra = is_intra.at(m + mbs) & (1 << n);
-                    bottom_cbp = ((cbp.at(m + mbs)) as u32 >> (n * 4)) as i32;
+            if !bottom_edge || n < 2 {
+                let (bottom_blocks, bottom_intra, index) = if chroma {
+                    (below_blocks, below_intra, n)
+                } else if n < 2 {
+                    (blocks, intra, n + 2)
                 } else {
-                    if n < 2 {
-                        bottom_intra = is_intra.at(m) & (1 << (n + 2));
-                        bottom_cbp = ((cbp.at(m)) as u32 >> ((n + 2) * 4)) as i32;
-                    } else {
-                        bottom_intra = is_intra.at(m + mbs) & (1 << (n - 2));
-                        bottom_cbp = ((cbp.at(m + mbs)) as u32 >> ((n - 2) * 4)) as i32;
-                    }
-                }
-                let differ: bool;
-                if chroma {
-                    differ = (luma_mv.at(m * 2) != luma_mv.at((m + mbs) * 2))
-                        || (luma_mv.at((m * 2) + 1) != luma_mv.at(((m + mbs) * 2) + 1));
+                    (below_blocks, below_intra, n - 2)
+                };
+                let different = if (intra & (1 << n)) != 0 || (bottom_intra & (1 << index)) != 0 {
+                    true
+                } else if chroma {
+                    different_motion(self.luma_mv, m, m + mbs)
                 } else {
                     let k = ((4 + self.bi.at(n)) - ((2 * r) * b8)) - (2 * c);
-                    differ = (motion.at(k * 2) != motion.at((k + b8) * 2))
-                        || (motion.at((k * 2) + 1) != motion.at(((k + b8) * 2) + 1));
-                }
-                if (truth(top_intra) || truth(bottom_intra)) || differ {
-                    v_loop_filter(p, dst + (8 * lsz), lsz, 8, pq);
+                    different_motion(self.motion, k, k + b8)
+                };
+                let mask = if different {
+                    3
                 } else {
-                    let idx = (top_cbp | (((bottom_cbp) as u32 >> (2)) as i32)) & 3;
-                    if truth(idx & 1) {
-                        v_loop_filter(p, (dst + (8 * lsz)) + 4, lsz, 4, pq);
-                    }
-                    if truth(idx & 2) {
-                        v_loop_filter(p, dst + (8 * lsz), lsz, 4, pq);
-                    }
+                    (top_cbp | (bottom_blocks >> (index * 4 + 2))) & 3
+                };
+                let edge = dst + 8 * lsz;
+                match mask {
+                    3 => v_loop_filter(p, edge, lsz, 8, pq),
+                    2 => v_loop_filter(p, edge, lsz, 4, pq),
+                    1 => v_loop_filter(p, edge + 4, lsz, 4, pq),
+                    _ => {}
                 }
             }
-            let tt = (self.ttblk_row.at(m) >> (n * 4)) & 15;
+            let tt = ((transforms >> (n * 4)) & 15) as i32;
             if (tt == TT_4X4) || (tt == TT_8X4) {
-                if truth(top_cbp & 5) {
+                if top_cbp & 5 != 0 {
                     v_loop_filter(p, (dst + (4 * lsz)) + 4, lsz, 4, pq);
                 }
-                if truth(top_cbp & 10) {
+                if top_cbp & 10 != 0 {
                     v_loop_filter(p, dst + (4 * lsz), lsz, 4, pq);
                 }
             }
@@ -2822,65 +2828,62 @@ impl Decoder {
         let b8 = self.b8;
         let pq = self.pq;
         let m = (((2 * mbs) + self.mb_x) - (r * mbs)) - c;
-        let cbp = self.cbp_row;
-        let is_intra = self.is_intra_row;
-        let motion = self.motion;
-        let luma_mv = self.luma_mv;
+        let right_edge = flags & RIGHT_EDGE != 0;
+        let blocks = self.cbp_row.at(m) as u32;
+        let intra = self.is_intra_row.at(m);
+        let transforms = self.ttblk_row.at(m) as u32;
+        let (next_blocks, next_intra) = if right_edge {
+            (0, 0)
+        } else {
+            (self.cbp_row.at(m + 1) as u32, self.is_intra_row.at(m + 1))
+        };
         let dl = (self.dest0 - ((16 * r) * ls)) - (16 * c);
         let dc = (self.dest1 - ((8 * r) * uvls)) - (8 * c);
         for n in 0..6 {
             let chroma = n > 3;
             let lsz = if chroma { uvls } else { ls };
             let p = self.plane(cur, n);
-            let left_cbp = ((cbp.at(m)) as u32 >> (n * 4)) as i32;
+            let left_cbp = blocks >> (n * 4);
             let dst = if chroma {
                 dc
             } else {
                 (dl + (((n & 2) * 4) * ls)) + ((n & 1) * 8)
             };
-            if (!truth(flags & RIGHT_EDGE)) || (!truth(n & 5)) {
-                let left_intra = is_intra.at(m) & (1 << n);
-                let right_intra: i32;
-                let right_cbp: i32;
-                if chroma {
-                    right_intra = is_intra.at(m + 1) & (1 << n);
-                    right_cbp = ((cbp.at(m + 1)) as u32 >> (n * 4)) as i32;
+            if !right_edge || n & 5 == 0 {
+                let (right_blocks, right_intra, index) = if chroma {
+                    (next_blocks, next_intra, n)
+                } else if n & 1 != 0 {
+                    (next_blocks, next_intra, n - 1)
                 } else {
-                    if truth(n & 1) {
-                        right_intra = is_intra.at(m + 1) & (1 << (n - 1));
-                        right_cbp = ((cbp.at(m + 1)) as u32 >> ((n - 1) * 4)) as i32;
-                    } else {
-                        right_intra = is_intra.at(m) & (1 << (n + 1));
-                        right_cbp = ((cbp.at(m)) as u32 >> ((n + 1) * 4)) as i32;
-                    }
-                }
-                let differ: bool;
-                if chroma {
-                    differ = (luma_mv.at(m * 2) != luma_mv.at((m + 1) * 2))
-                        || (luma_mv.at((m * 2) + 1) != luma_mv.at(((m + 1) * 2) + 1));
+                    (blocks, intra, n + 1)
+                };
+                let different = if (intra & (1 << n)) != 0 || (right_intra & (1 << index)) != 0 {
+                    true
+                } else if chroma {
+                    different_motion(self.luma_mv, m, m + 1)
                 } else {
                     let k = ((4 + self.bi.at(n)) - ((2 * r) * b8)) - (2 * c);
-                    differ = (motion.at(k * 2) != motion.at((k + 1) * 2))
-                        || (motion.at((k * 2) + 1) != motion.at(((k + 1) * 2) + 1));
-                }
-                if (truth(left_intra) || truth(right_intra)) || differ {
-                    h_loop_filter(p, dst + 8, lsz, 8, pq);
+                    different_motion(self.motion, k, k + 1)
+                };
+                let mask = if different {
+                    5
                 } else {
-                    let idx = (left_cbp | (((right_cbp) as u32 >> (1)) as i32)) & 5;
-                    if truth(idx & 1) {
-                        h_loop_filter(p, (dst + (4 * lsz)) + 8, lsz, 4, pq);
-                    }
-                    if truth(idx & 4) {
-                        h_loop_filter(p, dst + 8, lsz, 4, pq);
-                    }
+                    (left_cbp | (right_blocks >> (index * 4 + 1))) & 5
+                };
+                let edge = dst + 8;
+                match mask {
+                    5 => h_loop_filter(p, edge, lsz, 8, pq),
+                    4 => h_loop_filter(p, edge, lsz, 4, pq),
+                    1 => h_loop_filter(p, edge + 4 * lsz, lsz, 4, pq),
+                    _ => {}
                 }
             }
-            let tt = (self.ttblk_row.at(m) >> (n * 4)) & 15;
+            let tt = ((transforms >> (n * 4)) & 15) as i32;
             if (tt == TT_4X4) || (tt == TT_4X8) {
-                if truth(left_cbp & 3) {
+                if left_cbp & 3 != 0 {
                     h_loop_filter(p, (dst + (4 * lsz)) + 4, lsz, 4, pq);
                 }
-                if truth(left_cbp & 12) {
+                if left_cbp & 12 != 0 {
                     h_loop_filter(p, dst + 4, lsz, 4, pq);
                 }
             }

@@ -235,6 +235,7 @@ interface PlayerSave {
   };
   history?: SiglusHistoryEntry[];
   historyPoints?: [number, HistoryPoint][];
+  messageFaces?: [number, [number, SerializedDrawObject][]][];
   controls?: {
     systemMenu: boolean;
     messageButtons: boolean;
@@ -379,6 +380,7 @@ export class SiglusPlayer {
   private readonly decisions = new Map<number, number>();
   private decisionReady?: () => void;
   private objectsDirty = false;
+  private objectMoves?: Set<DrawObject>;
   private pages = 0;
   private pendingText = false;
   private pendingLoadSound = false;
@@ -1109,12 +1111,22 @@ export class SiglusPlayer {
     return {page, index, parent};
   }
 
-  private markObjectsDirty([root, member]: readonly number[]): void {
+  private markObjectsDirty([root, member]: readonly number[], moved?: DrawObject): void {
     if (root === 38 && member === 3) this.messageObjectsDirty = true;
     else if (root === 38 && this.modalFrontObjects)
       this.systemFrontObjectsDirty = true;
-    else if (root === 38) this.objectsDirty = true;
+    else if (root === 38) {
+      if (!moved) this.objectMoves = undefined;
+      else if (!this.objectsDirty) this.objectMoves = new Set([moved]);
+      else this.objectMoves?.add(moved);
+      this.objectsDirty = true;
+    }
     if (root === 65 && member === 1) this.systemObjectsDirty = true;
+  }
+
+  private invalidateMainObjects(): void {
+    this.objectMoves = undefined;
+    this.objectsDirty = true;
   }
 
   private get modalFrontObjects(): Map<number, DrawObject> | undefined {
@@ -1178,7 +1190,7 @@ export class SiglusPlayer {
       const axis = path[3] === 4 ? 'x' : 'y';
       if (value !== undefined) {
         this.display.setObjectMaskOffset(slot, axis, Number(value));
-        this.objectsDirty = true;
+        this.invalidateMainObjects();
       }
       return this.display.getObjectMaskOffset(slot, axis);
     }
@@ -1431,7 +1443,7 @@ export class SiglusPlayer {
       if (value !== undefined && offsets && index >= 0 && index < offsets.length) {
         offsets[index] = Number(value);
         object.offsetEvents?.[axis]?.delete(index);
-        this.markObjectsDirty(path);
+        this.markObjectsDirty(path, object);
       }
       return offsets?.[index] ?? 0;
     }
@@ -1466,7 +1478,7 @@ export class SiglusPlayer {
       const next = field === 'blend' ? Math.min(4, Math.max(0, Number(value))) : Number(value);
       if (object[field] !== next) {
         object[field] = next;
-        this.markObjectsDirty(path);
+        this.markObjectsDirty(path, field === 'x' || field === 'y' ? object : undefined);
       }
     }
     return object[field] ?? (field === 'transparency' ? 255 : 0);
@@ -1540,6 +1552,7 @@ export class SiglusPlayer {
     // Native 0x650980 (global.p / CMD 14) & 0x650bd0 (global.k / CMD 115) always pause for key wait
     // even when no MWND text was printed (e.g. stage-object UI such as smartphone chat in _00_mess).
     if (this.objectsDirty) await this.renderObjects();
+    const messageWindow = this.display.messageWindow;
     const hadPendingText = this.pendingText;
     this.revealWholePage = false;
     this.pageAlreadyRead =
@@ -1600,6 +1613,8 @@ export class SiglusPlayer {
       this.skipTriggerPending = false;
     }
     if (!this.systemOption('KOE_DONT_STOP_ONOFF')) this.audio.stop('voice');
+    // The next page can set its face before its first name or text command.
+    this.messageFaces.delete(messageWindow);
     this.pendingText = false;
   }
 
@@ -1901,6 +1916,12 @@ export class SiglusPlayer {
       vm: this.vm.checkpoint(commandResult),
       stage: [...this.stageProperties],
       message: this.display.saveMessage(),
+      messageFaces: this.messageFaces.size
+        ? [...this.messageFaces].map(([window, faces]) => [
+            window,
+            [...faces].map(([id, face]) => [id, serializeDrawObject(face, now)]),
+          ])
+        : undefined,
       background,
       bgm: bgmPlayback?.name,
       bgmPlayback,
@@ -2358,17 +2379,19 @@ export class SiglusPlayer {
       this.messageFrameFiles.set(mwIdx, file);
       await this.display.setMessageFrameFile(mwIdx, file);
     }
+    const savedOffsets = new Map(save.messageButtonOffsets);
+    const offsetKeys = new Set([...this.messageButtonOffsets.keys(), ...savedOffsets.keys()]);
     this.messageButtonOffsets.clear();
-    for (const [key, offsets] of save.messageButtonOffsets ?? []) {
-      const copy = offsets.slice();
-      this.messageButtonOffsets.set(key, copy);
+    for (const key of offsetKeys) {
+      const offsets = savedOffsets.get(key);
+      if (offsets) this.messageButtonOffsets.set(key, offsets.slice());
       const [mwStr, btnStr, axisStr] = key.split('.');
       const axis = Number(axisStr) === 54 ? 'x' : 'y';
       this.display.offsetMessageButton(
         Number(mwStr),
         Number(btnStr),
         axis,
-        copy.reduce((sum, v) => sum + v, 0),
+        offsets?.reduce((sum, v) => sum + v, 0) ?? 0,
         undefined,
         'rep',
       );
@@ -2401,7 +2424,7 @@ export class SiglusPlayer {
       for (const [id, savedObj] of save.stageObjects[1]) {
         this.objects[1]!.set(id, await this.deserializeDrawObject(savedObj));
       }
-      this.objectsDirty = true;
+      this.invalidateMainObjects();
     }
     this.audio.resetPlayback();
     if (this.pendingLoadSound) {
@@ -2414,8 +2437,14 @@ export class SiglusPlayer {
     await this.restoreCastCostumes(save);
     this.pendingBackground = undefined;
     this.stagedBackground = undefined;
-    if (save.background)
+    if (save.background) {
       await this.display.setBackground(save.background, 0, undefined, false, save.sceneCovered);
+    } else {
+      // A checkpoint can have an empty object page, even if the current scene does not.
+      await this.display.show(orderedObjects(this.objects[0]!, true), 0, (button) => this.choose(button));
+      this.objectsDirty = false;
+      this.objectMoves = undefined;
+    }
     await this.cast(save.cast, -1, save.castCostumes);
     await this.display.loadStageEffects(
       save.gans ?? (save.gan ? [save.gan] : []),
@@ -2431,6 +2460,12 @@ export class SiglusPlayer {
     }
     this.speed = save.controls?.messageSpeedOverride ?? (save.speed || -1);
     this.saveTitle = save.title ?? '';
+    this.messageFaces.clear();
+    for (const [window, savedFaces] of save.messageFaces ?? []) {
+      const faces = new Map<number, DrawObject>();
+      for (const [id, face] of savedFaces) faces.set(id, await this.deserializeDrawObject(face));
+      this.messageFaces.set(window, faces);
+    }
     const waitsForInput = save.waitsForInput ?? true;
     if (waitsForInput) {
       const message = save.message;
@@ -2438,6 +2473,8 @@ export class SiglusPlayer {
         ? (message.faceCostume ?? (await this.spriteCostume(message.face, 0, 1)))
         : undefined;
       await this.display.loadMessage({...message, faceCostume});
+      const faces = this.messageFaces.get(message.index);
+      if (faces?.size) await this.display.showMessageFaces(orderedObjects(faces));
       this.pageCharacters = save.message.text.reduce(
         (count, {text}) => count + Array.from(text.replaceAll('\n', '')).length,
         0,
@@ -2447,6 +2484,7 @@ export class SiglusPlayer {
         this.pageReadFlags.every(({scene, flag}) => this.readFlags.get(scene)?.has(flag));
     } else {
       this.display.closeMessage();
+      this.display.repPosition(...(save.message.position ?? [0, 0]));
       this.display.setMessageSlide(save.message.slideTime);
     }
     this.pendingText = waitsForInput;
@@ -2467,6 +2505,7 @@ export class SiglusPlayer {
       this.root.dataset.page = String(++this.pages);
       this.tracePage();
       await this.waitAtPage();
+      if (!save.messagePause) this.messageFaces.delete(save.message.index);
     }
     this.pendingText = Boolean(save.messagePause);
   }
@@ -2669,6 +2708,7 @@ export class SiglusPlayer {
     this.objects[0] = nextFront;
     if (this.usesWipeCopy) back.clear();
     this.objectsDirty = false;
+    this.objectMoves = undefined;
     this.pruneDeadButtonGroups();
     // Promote back-stage object frame_actions (37.2.-1.<id>...) to front-stage (38.2.-1.<id>...)
     // and drop overwritten front-stage object frame_actions unless preserved via wipeCopy.
@@ -2735,6 +2775,7 @@ export class SiglusPlayer {
     this.objects[0]!.clear();
     this.objects[1]!.clear();
     this.objectsDirty = false;
+    this.objectMoves = undefined;
     this.pruneDeadButtonGroups();
   }
 
@@ -2761,10 +2802,13 @@ export class SiglusPlayer {
       );
     }
     if (this.objectsDirty && !this.timeStopped) {
+      const moved = this.objectMoves;
+      this.objectMoves = undefined;
       this.objectsDirty = false;
-      await this.display.refreshObjects(orderedObjects(this.objects[0]!, true), (button) =>
-        this.choose(button),
-      );
+      if (!moved || !this.display.updateStageObjectPositions(moved))
+        await this.display.refreshObjects(orderedObjects(this.objects[0]!, true), (button) =>
+          this.choose(button),
+        );
     }
     this.releaseUnusedObjectMovies();
   }
@@ -3822,20 +3866,23 @@ export class SiglusPlayer {
       !this.scriptMessageAnimationsDisabled && !this.systemOption('NO_MWND_ANIME_ONOFF');
     const chosen = await new Promise<number>((resolve, reject) => {
       let settled = false;
-      const finish = (index: number): void => {
-        if (settled) return;
+      const cleanup = (): void => {
         settled = true;
         signal.removeEventListener('abort', abort);
         window.removeEventListener('keydown', onKey);
+      };
+      const finish = (index: number): void => {
+        if (settled) return;
+        cleanup();
         resolve(index);
       };
-      const abort = (): void => {
+      const fail = (error: unknown): void => {
         if (settled) return;
-        settled = true;
-        window.removeEventListener('keydown', onKey);
+        cleanup();
         this.display.clearSelectionButtons();
-        reject(signal.reason);
+        reject(error);
       };
+      const abort = (): void => fail(signal.reason);
       const onKey = (event: KeyboardEvent): void => {
         if (cancelable && (event.key === 'Escape' || event.key === 'Backspace')) {
           event.preventDefault();
@@ -3851,7 +3898,7 @@ export class SiglusPlayer {
           () => void this.playSystemSound(0),
           animate,
         )
-        .catch(abort);
+        .catch(fail);
     });
     await this.display.finishSelectionButtons(chosen, animate && !this.skipping);
     if (command.readFlag !== undefined && command.readFlag >= 0) {
@@ -4132,7 +4179,7 @@ export class SiglusPlayer {
             return 0;
           return this.waitAudio('voice', true);
         case 72:
-          this.messageFaces.get(this.display.messageWindow)?.clear();
+          this.messageFaces.delete(this.display.messageWindow);
           this.display.clearFace();
           break;
         case 74:
@@ -5464,7 +5511,7 @@ export class SiglusPlayer {
         this.maskEvents.delete(`${slot}.x`);
         this.maskEvents.delete(`${slot}.y`);
       }
-      this.objectsDirty = true;
+      this.invalidateMainObjects();
       return 0;
     }
     // global.mask[].x_eve (2) / y_eve (3) intevent commands (0x55be20 -> 0x5590e0)
@@ -5484,21 +5531,21 @@ export class SiglusPlayer {
         const waitDelay = Math.max(0, n(2));
         this.display.setObjectMaskOffset(slot, axis, target);
         this.maskEvents.set(evKey, {endAt: performance.now() + duration + waitDelay, target});
-        this.objectsDirty = true;
+        this.invalidateMainObjects();
         return 0;
       }
       if (op === 1 || op === 8 || op === 2 || op === 9) {
         const target = n(1) | 0;
         this.display.setObjectMaskOffset(slot, axis, target);
         this.maskEvents.set(evKey, {endAt: Infinity, target});
-        this.objectsDirty = true;
+        this.invalidateMainObjects();
         return 0;
       }
       if (op === 3) {
         const ev = this.maskEvents.get(evKey);
         if (ev) this.display.setObjectMaskOffset(slot, axis, ev.target);
         this.maskEvents.delete(evKey);
-        this.objectsDirty = true;
+        this.invalidateMainObjects();
         return 0;
       }
       if (op === 4 || op === 10) {
@@ -5826,7 +5873,7 @@ export class SiglusPlayer {
         existing.text || existing.number || existing.movie || existing.frames.length || existing.name;
       return drawable ? 1 : 0;
     }
-    if (command !== 175 && command !== 63) this.markObjectsDirty(path);
+    if (command !== 175 && command !== 63 && command !== 48) this.markObjectsDirty(path);
     const n = (index: number) => Number(args[index] ?? 0);
     if (command === 35 || command === 36) {
       page.delete(id!);
@@ -6613,6 +6660,7 @@ export class SiglusPlayer {
     } else if (command === 48) {
       object.x = n(0);
       object.y = n(1);
+      this.markObjectsDirty(path, object);
     } else if (command === 49) object.scale = [n(0), n(1)];
     else if (command === 97) {
       object.disabled = true;

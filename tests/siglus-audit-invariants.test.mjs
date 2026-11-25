@@ -54,6 +54,137 @@ test('the fixed Siglus viewport clips overflow without becoming a scroll contain
   assert.match(display, /this\.stage\.style\.cssText\s*=\s*'[^']*\boverflow:clip;/);
 });
 
+test('destination clips stay in stage space around translated and scaled objects', () => {
+  const createElement = () => ({style: {}, dataset: {}, children: [], append(child) { this.children.push(child); }});
+  const display = Object.assign(Object.create(SiglusDisplay.prototype), {
+    width: 1920,
+    height: 1080,
+    stage: {ownerDocument: {createElement}},
+  });
+  const object = {x: -640, y: -108, scale: [1500, 1500], clip: [1, 0, 225, 1920, 855]};
+  const {viewport, content} = display.destinationClipLayer(object, [0, 0]);
+  assert.equal(content, viewport);
+  assert.equal(viewport.style.clipPath, 'inset(225px 0px 225px 0px)');
+  assert.match(viewport.style.cssText, /left:0px;top:0px;width:1920px;height:1080px/);
+
+  const nested = display.destinationClipLayer(object, [110, 22]);
+  assert.equal(nested.viewport.style.clipPath, viewport.style.clipPath);
+  assert.match(nested.viewport.style.cssText, /left:-110px;top:-22px/);
+  assert.match(nested.content.style.cssText, /left:110px;top:22px/);
+  assert.deepEqual(nested.viewport.children, [nested.content]);
+});
+
+test('native message text draws a speaker above the window without moving the dialogue', () => {
+  const element = () => ({style: {}, dataset: {}});
+  const runs = [];
+  const context = {clearRect() {}, measureText: () => ({width: 40}), fillText: (...args) => runs.push(args)};
+  const display = Object.assign(Object.create(SiglusDisplay.prototype), {
+    config: new Map([
+      ['MWND.000.WINDOW_POS', '0,840'],
+      ['MWND.000.WINDOW_SIZE', '1920,310'],
+      ['MWND.000.NAME_MESSAGE_POS', '375,-36'],
+      ['MWND.000.MESSAGE_POS', '375,30'],
+      ['MWND.000.MESSAGE_MARGIN', '0,0,0,0'],
+    ]),
+    message: element(),
+    text: element(),
+    speaker: element(),
+    nativeText: {...element(), getContext: () => context},
+    currentName: '名前',
+    currentText: [{text: '文'}],
+    messageTextSize: 39,
+    messageShadow: 0,
+    applyMessageFrame() {},
+    positionMessageButtons() {},
+    setTextSize() {},
+    updateSlide: () => 0,
+  });
+  display.selectMessageWindow(0);
+  display.drawNativeMessage(display.nativeText);
+  assert.equal(display.nativeText.style.top, '-36px');
+  assert.equal(display.nativeText.height, 346);
+  assert.deepEqual(runs, [['名前', 375, 0], ['文', 375, 66]]);
+});
+
+test('message portraits survive continuation waits and expire at the end of a page', async () => {
+  const player = Object.assign(Object.create(SiglusPlayer.prototype), {
+    stagePath: (path) => path,
+    display: {messageWindow: 0, objectGraphic: async (name) => ({name}), finishMessageSlide() {}},
+    root: {dataset: {}},
+    messageFaces: new Map(),
+    pageReadFlags: [],
+    pageVoices: [],
+    pages: 0,
+    pendingText: true,
+    scriptHistoryRecordingDisabled: true,
+    systemOption: () => true,
+    tracePage() {},
+    waitAtPage() {
+      assert.equal(this.messageFaces.get(0).get(0).name, 'speaker-face');
+    },
+  });
+  await player.command({path: [41], args: [0, 'speaker-face']});
+  await player.pageInput(true);
+  assert.equal(player.messageFaces.get(0).get(0).name, 'speaker-face');
+  await player.pageInput();
+  assert.equal(player.messageFaces.has(0), false);
+});
+
+test('a message window opens with animations disabled', () => {
+  const display = Object.assign(Object.create(SiglusDisplay.prototype), {
+    message: {hidden: true, style: {display: 'none'}},
+  });
+  display.openMessage({type: 0, time: 0});
+  assert.equal(display.message.hidden, false);
+  assert.equal(display.message.style.display, '');
+});
+
+test('a dismissed choice cannot reappear after its graphic has loaded', async (t) => {
+  const previous = Object.getOwnPropertyDescriptor(globalThis, 'document');
+  Object.defineProperty(globalThis, 'document', {
+    configurable: true,
+    value: {createElement: () => ({dataset: {}, style: {}})},
+  });
+  t.after(() => {
+    if (previous) Object.defineProperty(globalThis, 'document', previous);
+    else delete globalThis.document;
+  });
+  let finishLoad;
+  const asset = new Promise((resolve) => { finishLoad = resolve; });
+  const mounted = [];
+  const display = Object.assign(Object.create(SiglusDisplay.prototype), {
+    config: new Map([['SELBTN.000.BASE_FILE', '"choice"']]),
+    tableColor: () => undefined,
+    objectGraphic: () => asset,
+    stage: {append: (layer) => mounted.push(layer)},
+  });
+  const open = display.showSelectionButtons({templateNo: 0, items: []}, () => {}, undefined, false);
+  await display.finishSelectionButtons(-1, false);
+  finishLoad(undefined);
+  await open;
+  assert.deepEqual(mounted, []);
+});
+
+test('message position is restored from the checkpoint and defaults to zero for older saves', async () => {
+  const display = Object.assign(Object.create(SiglusDisplay.prototype), {
+    message: {style: {}},
+    currentText: [],
+    clearText() {},
+    setMessageSlide() {},
+    selectMessageWindow() {},
+    setTextSize() {},
+    name() {},
+    finishMessageSlide() {},
+  });
+  display.repPosition(30, -20);
+  const saved = display.saveMessage();
+  display.repPosition(0, 0);
+  await display.loadMessage(saved);
+  assert.equal(display.message.style.translate, '30px -20px');
+  await display.loadMessage({...saved, position: undefined});
+  assert.equal(display.message.style.translate, '0px 0px');
+});
+
 test('replacing a focused script control preserves held input until focus leaves the stage', async () => {
   const stage = {
     ownerDocument: {activeElement: null, hasFocus: () => true},
@@ -714,10 +845,12 @@ test('script flags independently control history recording and automatic page ch
     pageReadFlags: [],
     pageVoices: [],
     display: {
+      messageWindow: 0,
       finishMessageSlide() {},
       saveMessage: () => ({name: '', text: [{text: 'sample'}]}),
     },
     historyPoints: new WeakMap(),
+    messageFaces: new Map(),
     backlog: [],
     addHistory: (entry) => pages.push(entry),
     systemOption: () => true,
@@ -1478,7 +1611,7 @@ test('Optimized unpackSiglusLz, xorByteInPlace, and decodeOwp preserve exact byt
   );
 });
 
-test('G00 Type 2 skips 24-byte outer atlas crop table (0x6de310/0x6de430) and display.ts propagates parent clip (0x629c70)', () => {
+test('G00 Type 2 skips 24-byte outer atlas crop table (0x6de310/0x6de430)', () => {
   // 1. Build a synthetic G00 Type 2 with non-zero outer (left=510, top=720) crop rect
   const cutW = 2;
   const cutH = 2;
@@ -1562,11 +1695,8 @@ test('G00 Type 2 skips 24-byte outer atlas crop table (0x6de310/0x6de430) and di
     }
   }
 
-  // 3. Verify display.ts propagates parent dst_clip in appendChildren (0x629c70) and guards object.text outline
+  // Verify object.text outlines honor their configured shadow mode.
   const displaySrc = fs.readFileSync(path.join(SIGLUS_DIR, 'display.ts'), 'utf8');
-  assert.match(displaySrc, /applyDstClip\(/);
-  assert.match(displaySrc, /appendChildren\([\s\S]{0,600}if \(object\.clip\?\.\[0\]\) \{[\s\S]{0,500}this\.applyDstClip\(clipBox/);
-  assert.match(displaySrc, /applyClip\([\s\S]{0,250}this\.applyDstClip\(element, object, parentOrigin\[0\] \+ x, parentOrigin\[1\] \+ y/);
   assert.match(displaySrc, /shadowMode === 2 \|\|\s*\(shadowMode === undefined && outlineColor !== undefined && outlineColor >= 0\)/);
 });
 
@@ -1700,6 +1830,8 @@ test('selbtnPresentation and layoutSelbtnItems omit dispFlag=0 spacers while pre
 
 test('get_save_message strips newlines, messagePointerAction round-trips captureSave/restoreSave, waitAtPage gates hover polling on showControls, and DOM text options stay enabled', async () => {
   const vm = {checkpoint: () => ({frames: []}), callScene: async () => {}};
+  const buttonOffsets = new Map();
+  const restoredStage = [];
   const player = Object.assign(Object.create(SiglusPlayer.prototype), {
     stagePath: (path) => path,
     game: {config: new Map([['SAVE.CNT', '10'], ['QUICK_SAVE.CNT', '10']])},
@@ -1713,6 +1845,7 @@ test('get_save_message strips newlines, messagePointerAction round-trips capture
       restoreMessage: () => {},
       loadMessage: async () => {},
       closeMessage: () => {},
+      repPosition: () => {},
       setMessageSlide: () => {},
       clearMessageFilterFiles: () => {},
       clearMessageFrameFiles: () => {},
@@ -1731,6 +1864,8 @@ test('get_save_message strips newlines, messagePointerAction round-trips capture
       endEffect: () => {},
       clearObjects: () => {},
       setBackground: async () => {},
+      show: async (objects) => restoredStage.push([...objects].map(({name}) => name)),
+      offsetMessageButton: (window, id, axis, value) => buttonOffsets.set(`${window}.${id}.${axis}`, value),
       setCast: async () => {},
       renderMessageObjects: async () => {},
     },
@@ -1773,6 +1908,7 @@ test('get_save_message strips newlines, messagePointerAction round-trips capture
     messageFilterFiles: new Map(),
     messageFrameFiles: new Map(),
     messageButtonOffsets: new Map(),
+    messageFaces: new Map(),
     frameActions: new Map(),
     frameActionCounters: new Map(),
     pendingButtonCalls: [],
@@ -1800,18 +1936,36 @@ test('get_save_message strips newlines, messagePointerAction round-trips capture
   assert.equal(await player.command({path: [63, 129], args: [0], named: []}), '一行目二行目三行目');
   assert.equal(await player.command({path: [63, 130], args: [0], named: []}), 'クイックテキスト');
 
-  // 2. captureSave / restoreSave preserves and clears messagePointerAction
+  // 2. captureSave / restoreSave preserves the pointer callback and current portrait state.
+  player.messageFaces.set(0, new Map([[0, {name: 'portrait', visible: true}]]));
+  player.objects[0].set(1, {name: 'saved stage', visible: true});
+  player.messageButtonOffsets.set('0.1.54', [15, 5]);
   const captured = player.captureSave(false);
+  assert.equal(captured.messageFaces[0][1][0][1].name, 'portrait');
   assert.deepEqual(captured.messagePointerAction, {
     channel: 0,
     scene: '_04mwbtn_hide',
     command: 't_mwnd_btn_check',
   });
   player.messagePointerAction = undefined;
+  player.messageFaces.clear();
   await player.restoreSave({...captured, background: undefined});
   assert.deepEqual(player.messagePointerAction, captured.messagePointerAction);
-  await player.restoreSave({...captured, messagePointerAction: undefined, background: undefined});
+  assert.equal(player.messageFaces.get(0).get(0).name, 'portrait');
+  assert.equal(buttonOffsets.get('0.1.x'), 20);
+  assert.deepEqual(restoredStage.at(-1), ['saved stage']);
+  await player.restoreSave({
+    ...captured,
+    messageFaces: undefined,
+    messagePointerAction: undefined,
+    messageButtonOffsets: undefined,
+    stageObjects: undefined,
+    background: undefined,
+  });
+  assert.equal(player.messageFaces.size, 0);
   assert.equal(player.messagePointerAction, undefined);
+  assert.equal(buttonOffsets.get('0.1.x'), 0);
+  assert.deepEqual(restoredStage.at(-1), []);
 
   // 3. waitAtPage only queues message-frame hover input when showControls is true (source + behavior)
   const playerSrc = fs.readFileSync(path.join(SIGLUS_DIR, 'player.ts'), 'utf8');

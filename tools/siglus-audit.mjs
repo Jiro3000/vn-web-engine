@@ -15,6 +15,7 @@
  *   GAME_DIR      Optional override for profile.gameDir
  *   SITE_DIR      Built site directory (defaults to site)
  *   TRACE_CRAWL   Log scene transitions and stalled script positions
+ *   SIGLUS_BENCH_DISPLAY=1  Report render costs during configured extras drags
  */
 import {spawn} from 'node:child_process';
 import fs from 'node:fs';
@@ -357,6 +358,8 @@ try {
     const stagePageScenes = new Set(${JSON.stringify(profileCfg.gameplay?.stagePageScenes ?? [])});
     const ending = ${JSON.stringify(replay?.ending ?? null)};
     const expectedSpeaker = ${JSON.stringify(replay?.expectedSpeaker ?? null)};
+    const portraitChecks = ${JSON.stringify(replay?.portraitChecks ?? [])};
+    window.__audit.portraitChecks = {};
     const promptScenes = new Set(${JSON.stringify(
       replay?.prompts
         ?.filter((p) => !p.advancePage || p.button || p.choice !== undefined || p.editValues !== undefined)
@@ -396,6 +399,14 @@ try {
     p.waitAtPage = async function() {
       window.__audit.pageWaits++;
       const frame = window.__audit.frame();
+      for (const [index, check] of portraitChecks.entries()) {
+        if (frame?.scene.name !== check.scene || frame.line !== check.line) continue;
+        const {portrait, currentName} = p.display;
+        window.__audit.portraitChecks[index] = {
+          speaker: currentName,
+          faces: [...portrait.querySelectorAll('[data-siglus-object]')].map((el) => el.dataset.siglusObject),
+        };
+      }
       if (${MODE === 'crawl'} && stagePageScenes.has(frame?.scene.name)) {
         // Let this real script wait consume a single click before resuming the fast crawl.
         p.skip = false;
@@ -485,7 +496,7 @@ try {
     }, 50);
   })()`);
 
-  const inspectState = () =>
+  const inspectState = (framingObject) =>
     evaluate(`(() => {
       const p = window.__runtime?.currentPlayer;
       const surface = document.getElementById('siglus-surface');
@@ -527,6 +538,33 @@ try {
       const systemLayerEl = disp?.systemLayer;
       const messageEl = disp?.message;
       const controlsEl = disp?.controls;
+
+      let framing;
+      const framingObject = ${JSON.stringify(framingObject ?? null)};
+      if (framingObject && layersEl && sr) {
+        const object = [...layersEl.querySelectorAll('[data-siglus-object]')]
+          .find((el) => el.dataset.siglusObject === framingObject);
+        if (object) {
+          const r = object.getBoundingClientRect();
+          const bounds = {left: Math.max(sr.left, r.left), top: Math.max(sr.top, r.top),
+            right: Math.min(sr.right, r.right), bottom: Math.min(sr.bottom, r.bottom)};
+          for (let node = object; node && node !== stage; node = node.parentElement)
+            clipHitBounds(bounds, node, getComputedStyle(node));
+          framing = {
+            visibleBounds: ['left', 'top', 'right', 'bottom'].map((edge, index) =>
+              Math.round((bounds[edge] - (index % 2 ? sr.top : sr.left)) * (index % 2 ? sy : sx))),
+          };
+          if (stage.dataset.textMode === 'native') {
+            const canvas = disp.nativeText;
+            const aboveWindow = Math.max(0, Math.min(-canvas.offsetTop, canvas.height));
+            const pixels = aboveWindow > 0
+              ? canvas.getContext('2d').getImageData(0, 0, canvas.width, aboveWindow).data : [];
+            framing.speakerAboveWindow = pixels.some((component, i) => i % 4 === 3 && component > 32);
+          } else {
+            framing.speakerAboveWindow = disp.speaker.getBoundingClientRect().top < messageEl.getBoundingClientRect().top;
+          }
+        }
+      }
 
       const visibleLayerVisuals = [];
       if (layersEl) {
@@ -875,9 +913,11 @@ try {
         backlogOpen: Boolean(historyEl),
         pointer: disp?.pointer,
         stageRect: sr ? {left: sr.left, top: sr.top, width: sr.width, height: sr.height} : null,
+        framing,
         movieActive: window.__audit?.movieActive ?? null,
         moviesSeen: window.__audit?.movies ?? [],
         scenesSeen: window.__audit?.scenes ?? [],
+        portraitChecks: window.__audit.portraitChecks,
         playingOmvs: [...(window.__audit?.playingOmvs ?? [])],
         unhandledCommands: dbg?.unhandledCommands ?? [],
         unhandledProperties: dbg?.unhandledProperties ?? [],
@@ -1466,6 +1506,16 @@ try {
       console.log('LIVE GAMEPLAY:', {scene: liveState.scene, line: liveState.line, pages: liveState.pages, speaker: liveState.speaker, bgm: liveState.bgm, visuals: liveState.visibleLayerVisuals.length});
       await assertLayoutAndHitTests('live-mwnd', {checkHitTest: true, checkText: true, allowAutoHiddenBottomBar: Boolean(gp.mwndAutoHideBar)});
 
+      if (gp.framing) {
+        const {object, bounds, speakerAboveWindow} = gp.framing;
+        const measured = (await inspectState(object)).framing;
+        if (!measured || measured.visibleBounds.some((edge, i) => Math.abs(edge - bounds[i]) > 1))
+          errors.push(`[framing] ${object} expected bounds ${bounds}, measured ${JSON.stringify(measured?.visibleBounds)}`);
+        if (speakerAboveWindow && !measured?.speakerAboveWindow)
+          errors.push('[framing] Speaker name did not draw above the message window');
+        console.log('Scene framing:', JSON.stringify(measured));
+      }
+
       if (gp.bundledFonts) {
         const fonts = await evaluate(`(() => {
           const display = window.__runtime.currentPlayer.display;
@@ -1972,6 +2022,26 @@ try {
           if (!thumb || !start || !rowsBefore.length) throw new Error(`[extras-${tabLabel}] Slider or list is unreachable`);
           const {cx: x, cy: y} = start.rect;
           const dy = tab.drag.deltaY * before.stageRect.height / SCREEN_H;
+          const benchmark = process.env.SIGLUS_BENCH_DISPLAY === '1';
+          if (benchmark) await evaluate(`(() => {
+            const p = window.__runtime.currentPlayer;
+            const render = p.renderObjects;
+            const samples = [];
+            const record = async function (...args) {
+              const dirty = this.objectsDirty;
+              const start = performance.now();
+              try {
+                return await render.apply(this, args);
+              } finally {
+                if (dirty) samples.push(performance.now() - start);
+              }
+            };
+            p.renderObjects = record;
+            window.__audit.finishDragBenchmark = () => {
+              if (p.renderObjects === record) p.renderObjects = render;
+              return samples;
+            };
+          })()`);
           await moveMouse(x, y);
           await delay(50);
           await send('Input.dispatchMouseEvent', {type: 'mousePressed', x, y, button: 'left', clickCount: 1});
@@ -1985,6 +2055,17 @@ try {
             await send('Input.dispatchMouseEvent', {type: 'mouseReleased', x, y: Math.round(y + dy), button: 'left', clickCount: 1});
           }
           await delay(450);
+          if (benchmark) {
+            const samples = await evaluate('window.__audit.finishDragBenchmark()');
+            const totalMs = samples.reduce((sum, value) => sum + value, 0);
+            console.log('Drag animation work:', JSON.stringify({
+              scene: tabLabel,
+              updates: samples.length,
+              totalMs,
+              meanMs: samples.length ? totalMs / samples.length : null,
+              samples,
+            }));
+          }
           const after = await inspectState();
           const rowsAfter = visibleRows(after);
           const moved = matchControl(after, tab.drag.thumb, true);
@@ -2081,6 +2162,7 @@ try {
           break;
         }
         if (s.expectedSpeakerSeen) break;
+        if (replay?.portraitChecks && Object.keys(s.portraitChecks).length === replay.portraitChecks.length) break;
         if (s.scene === replay?.dialogueScene && s.waitingForPage && s.dialogue) {
           dialogueSceneReached = true;
           break;
@@ -2232,6 +2314,12 @@ try {
         errors.push(`[crawl] Completed ${interactionsDone}/${replay.interactions.length} interactions in ${replayName}`);
       if (replay?.dialogueScene && !dialogueSceneReached)
         errors.push(`[crawl] Replay ${replayName} did not reach dialogue in ${replay.dialogueScene}`);
+      for (const [index, check] of (replay?.portraitChecks ?? []).entries()) {
+        const sample = fin.portraitChecks[index];
+        if (!sample || sample.speaker !== check.speaker || JSON.stringify(sample.faces) !== JSON.stringify(check.faces))
+          errors.push(`[portrait] ${check.scene}:${check.line} expected ${JSON.stringify(check.faces)}, measured ${JSON.stringify(sample)}`);
+        else console.log(`Portrait ${check.scene}:${check.line}:`, JSON.stringify(sample));
+      }
       if (replay?.ending && !fin.playingOmvs.includes(replay.ending.movie))
         errors.push(`[crawl] Replay ${replayName} did not present ending OMV ${replay.ending.movie}`);
       if (replay?.ending && fin.scene !== MENU_SCENE)

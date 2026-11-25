@@ -107,7 +107,10 @@ export class SiglusAudio {
   private readonly context = new AudioContext({latencyHint: 'interactive'});
   private readonly host = new BrowserAudioContextHost(this.context, document);
   private readonly soundLevels = new Map<number, number>();
-  private readonly pendingPlayback = new Map<string, object>();
+  private readonly pendingPlayback = new Map<
+    string,
+    {pcm?: {source: SiglusPcmSource; ready: boolean}}
+  >();
   private readonly pendingPromises = new Map<string, Promise<void>>();
   private pendingBgm?: {name: string; loop: boolean};
   private readonly preparedPcm = new Map<
@@ -378,11 +381,12 @@ export class SiglusAudio {
     delay = 0,
     startSample?: number,
   ): Promise<void> {
+    if (this.closed) return;
     const request = {};
     this.preparedBgm = undefined;
     this.pendingPlayback.set('bgm', request);
     this.pendingBgm = {name, loop};
-    if (!this.closed) this.root.dataset.bgm = name;
+    this.syncBgmName();
     const job = (async () => {
       const track = await this.loadBgm(name, loop, startSample, true);
       if (this.closed || this.pendingPlayback.get('bgm') !== request) return;
@@ -399,6 +403,7 @@ export class SiglusAudio {
       if (this.pendingPlayback.get('bgm') === request) {
         this.pendingPlayback.delete('bgm');
         this.pendingBgm = undefined;
+        this.syncBgmName();
       }
     }
   }
@@ -455,10 +460,20 @@ export class SiglusAudio {
   }
 
   async readyBgm(name: string, loop: boolean, fade = 0, startSample?: number): Promise<void> {
-    const track = await this.loadBgm(name, loop, startSample, true);
     if (this.closed) return;
-    this.stop('bgm', fade);
-    this.preparedBgm = track;
+    const request = {};
+    this.pendingPlayback.set('bgm', request);
+    this.pendingPromises.delete('bgm');
+    this.pendingBgm = undefined;
+    this.syncBgmName();
+    try {
+      const track = await this.loadBgm(name, loop, startSample, true);
+      if (this.closed || this.pendingPlayback.get('bgm') !== request) return;
+      this.stop('bgm', fade);
+      this.preparedBgm = track;
+    } finally {
+      if (this.pendingPlayback.get('bgm') === request) this.pendingPlayback.delete('bgm');
+    }
   }
 
   pauseBgm(fade: number): void {
@@ -478,7 +493,13 @@ export class SiglusAudio {
   }
 
   bgmName(): string {
-    return this.preparedBgm?.name ?? this.pendingBgm?.name ?? this.root.dataset.bgm ?? '';
+    return this.preparedBgm?.name ?? this.pendingBgm?.name ?? this.playing.get('bgm')?.bgm?.name ?? '';
+  }
+
+  private syncBgmName(): void {
+    const name = this.pendingBgm?.name ?? this.playing.get('bgm')?.bgm?.name;
+    if (name) this.root.dataset.bgm = name;
+    else delete this.root.dataset.bgm;
   }
 
   bgmPlayPosition(): number {
@@ -690,7 +711,7 @@ export class SiglusAudio {
   async pcm(channel: number, source: SiglusPcmSource, ready = false, fade = 0): Promise<void> {
     const key = `pcm${channel}`;
     this.stop(key);
-    const request = {};
+    const request = {pcm: {source, ready}};
     this.pendingPlayback.set(key, request);
     const job = (async () => {
       let buffer: AudioBuffer;
@@ -747,12 +768,14 @@ export class SiglusAudio {
       ...this.channelLevels.keys(),
       ...this.playing.keys(),
       ...this.preparedPcm.keys(),
+      ...this.pendingPlayback.keys(),
     ]);
     const checkpoint: SiglusPcmCheckpoint[] = [];
     for (const key of channels) {
       if (!/^pcm\d+$/.test(key)) continue;
       const level = this.channelLevel(key);
       const prepared = this.preparedPcm.get(key);
+      const pending = this.pendingPlayback.get(key)?.pcm;
       const playing = this.playing.get(key);
       const pcm = playing?.pcm;
       const pendingResume = playing !== undefined && playing.startsAt > this.context.currentTime;
@@ -762,6 +785,13 @@ export class SiglusAudio {
           level,
           source: prepared.source,
           ready: true,
+        });
+      else if (pending && (pending.source.loop || pending.ready))
+        checkpoint.push({
+          channel: Number(key.slice(3)),
+          level,
+          source: pending.source,
+          ...(pending.ready ? {ready: true} : {}),
         });
       else if (pcm && (pcm.loop || pendingResume))
         checkpoint.push({
@@ -845,11 +875,11 @@ export class SiglusAudio {
       pcm,
       bgm,
       startsAt,
-      duration: bgm ? bgm.loopEnd - bgm.start : buffer.duration,
+      duration: Math.max(0, source.loopEnd - start),
       loop,
     });
-    if (bgm && !loop && loopEnd < buffer.duration)
-      source.start(startsAt, start, Math.max(0, loopEnd - start));
+    if (!loop && source.loopEnd < buffer.duration)
+      source.start(startsAt, start, Math.max(0, source.loopEnd - start));
     else source.start(startsAt, start);
     if (channel === 'voice' || bgmFadeSource) this.updateVoiceDuckGains(true);
     this.root.dataset.audioState = this.context.state;
@@ -875,7 +905,7 @@ export class SiglusAudio {
       this.active.delete(playing);
       if (this.playing.get(channel) === playing) {
         this.playing.delete(channel);
-        if (channel === 'bgm') delete this.root.dataset.bgm;
+        if (channel === 'bgm') this.syncBgmName();
       }
       source.disconnect();
       gain.disconnect();
@@ -947,8 +977,10 @@ export class SiglusAudio {
   }
 
   setVoiceDuck(level: number): void {
-    this.voiceDuck = Math.max(0, Math.min(255, level)) / 255;
-    this.updateGains('BGM');
+    const next = Math.max(0, Math.min(255, level)) / 255;
+    if (next === this.voiceDuck) return;
+    this.voiceDuck = next;
+    this.updateGains('ALL', {delay: 0, duration: 0});
   }
 
   level(kind: MixKind): number {
@@ -1043,17 +1075,14 @@ export class SiglusAudio {
   }
 
   private updateVoiceDuckGains(duckingStarted: boolean): void {
+    if (this.voiceDuck >= 1) return;
     const active = this.isVoiceDucking();
-    if (this.voiceDuck >= 1) {
-      this.updateGains('ALL');
-      return;
-    }
     const fade =
       duckingStarted && active
         ? {delay: this.bgmFadeInStart, duration: this.bgmFadeInLen}
         : !active
           ? {delay: this.bgmFadeOutStart, duration: this.bgmFadeOutLen}
-          : undefined;
+          : {delay: 0, duration: 0};
     this.updateGains('ALL', fade);
   }
 
@@ -1062,11 +1091,11 @@ export class SiglusAudio {
     for (const [channel, {gain, kind: playingKind, character, volumeType, bgmFadeTarget}] of this
       .playing) {
       if (kind !== 'ALL' && playingKind !== kind) continue;
+      if (duckFade && playingKind !== 'BGM' && !bgmFadeTarget) continue;
       const target = this.playbackVolume(channel, playingKind, character, volumeType, bgmFadeTarget);
       if (
         duckFade &&
         duckFade.duration > 0 &&
-        (playingKind === 'BGM' || bgmFadeTarget) &&
         typeof gain.gain.cancelAndHoldAtTime === 'function'
       ) {
         gain.gain.cancelAndHoldAtTime(time);

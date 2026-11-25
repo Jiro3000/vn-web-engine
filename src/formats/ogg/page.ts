@@ -90,16 +90,20 @@ export class OggPacketAssembler {
   push(page: OggPage, limit?: (index: number, size: number) => void): Uint8Array[] {
     const packets: Uint8Array[] = [];
     let read = page.bodyOffset;
+    let start = read;
     for (const length of page.lacing) {
-      this.parts.push(page.bytes.subarray(read, read + length));
       this.size += length;
       read += length;
       limit?.(this.count, this.size);
       if (length < 255) {
+        this.parts.push(page.bytes.subarray(start, read));
         packets.push(this.take());
         this.count++;
+        start = read;
       }
     }
+    // Segments on the same page are adjacent. Keep one span for the unfinished packet.
+    if (read > start) this.parts.push(page.bytes.subarray(start, read));
     return packets;
   }
 

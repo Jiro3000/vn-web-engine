@@ -1,4 +1,9 @@
-import {bitmapStorage, type BurikoBitmap, type BurikoBitmapStorage} from './bitmap.js';
+import {
+  bitmapStorage,
+  burikoBitmapInitialized,
+  type BurikoBitmap,
+  type BurikoBitmapStorage,
+} from './bitmap.js';
 
 export interface BurikoMovieMediaType {
   readonly majorType: string;
@@ -21,6 +26,7 @@ const rgbSubtypes = [
   'e436eb7c-524f-11ce-9f53-0020af0ba770', // RGB555
   'e436eb7b-524f-11ce-9f53-0020af0ba770', // RGB565
 ] as const;
+const littleEndian = new Uint8Array(Uint32Array.of(1).buffer)[0] === 1;
 function mediaInfo(type: BurikoMovieMediaType): DataView {
   if (type.format.length < 60)
     throw new RangeError('Buriko movie reads beyond VIDEOINFOHEADER storage');
@@ -83,6 +89,8 @@ export class BurikoMovieImage {
     const width = Math.min(destination.width >>> 0, this.width >>> 0);
     const height = Math.min(destination.height >>> 0, this.height >>> 0);
     const source = sample.storage;
+    if (this.selectedFormat === 0 && this.copyDisjointRgb32(destination, sample, width, height))
+      return 0;
     const read = (offset: number, size: number): number => {
       source.range(offset, size, true);
       if (size === 4) return source.view.getUint32(offset, true);
@@ -155,6 +163,62 @@ export class BurikoMovieImage {
     }
     return 0;
   }
+
+  private copyDisjointRgb32(
+    destination: BurikoBitmap,
+    sample: BurikoMovieSample,
+    width: number,
+    height: number,
+  ): boolean {
+    const source = sample.storage;
+    const target = destination.storage;
+    if (
+      !littleEndian ||
+      !target ||
+      source.pending ||
+      target.pending ||
+      source.backing().buffer === target.backing().buffer ||
+      !burikoBitmapInitialized(destination, width, height)
+    )
+      return false;
+    const rowBytes = width * 4;
+    const from = sample.offset;
+    const last = from + (height - 1) * this.sourceStride;
+    const lower = Math.min(from, last);
+    if (
+      !source.isInitialized(lower, Math.max(from, last) + rowBytes - lower) ||
+      ![
+        source.backing().byteOffset,
+        target.backing().byteOffset,
+        from,
+        destination.offset,
+        this.sourceStride,
+        destination.stride,
+      ].every((value) => value % 4 === 0)
+    )
+      return false;
+    const inputBytes = source.bytes;
+    const outputBytes = target.bytes;
+    const input = new Uint32Array(
+      inputBytes.buffer,
+      inputBytes.byteOffset,
+      Math.floor(inputBytes.length / 4),
+    );
+    const output = new Uint32Array(
+      outputBytes.buffer,
+      outputBytes.byteOffset,
+      Math.floor(outputBytes.length / 4),
+    );
+    const sourcePitch = this.sourceStride / 4;
+    const targetPitch = destination.stride / 4;
+    for (let row = 0; row < height; row++) {
+      const first = from / 4 + row * sourcePitch;
+      const to = destination.offset / 4 + row * targetPitch;
+      for (let x = 0; x < width; x++) output[to + x] = input[first + x]! & 0x00ffffff;
+    }
+    return true;
+  }
+
   /** 0a94c0 flips the destination descriptor, leaving the decoded input row order intact. */
   orientDestination(bitmap: BurikoBitmap): BurikoBitmap {
     const destination = {...bitmap};

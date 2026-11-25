@@ -72,6 +72,7 @@ interface SiglusMessageSnapshot extends Omit<SiglusHistoryEntry, 'voices'> {
   index: number;
   size?: number;
   slideTime?: number;
+  position?: readonly [number, number];
 }
 
 export interface Graphic {
@@ -612,10 +613,12 @@ export class SiglusDisplay {
   private readonly systemLayer = document.createElement('div');
   private readonly systemFrontLayer = document.createElement('div');
   private readonly message = document.createElement('div');
+  private messagePosition?: readonly [number, number];
   private readonly messageObjects = document.createElement('div');
   private readonly speaker = document.createElement('div');
   private readonly text = document.createElement('div');
   private readonly nativeText = document.createElement('canvas');
+  private nativeTextTop = 0;
   private textMode: 'native' | 'dom' = 'dom';
   private textMetrics = {
     x: 0,
@@ -667,6 +670,11 @@ export class SiglusDisplay {
   private readonly hitPaths = new WeakMap<Graphic, string>();
   private background?: HTMLElement;
   private objectLayer?: HTMLElement;
+  private positionTargets?: WeakMap<HTMLElement, {
+    object: DrawObject;
+    originX: number;
+    originY: number;
+  }>;
   private stageGeneration = 0;
   private wipe?: Animation;
   private systemInput = false;
@@ -1642,8 +1650,9 @@ export class SiglusDisplay {
     context.shadowOffsetY = 2;
     context.textBaseline = 'top';
     const draw = (text: string, x: number, y: number) => {
-      if (this.messageShadow & 2) context.strokeText(text, x, y);
-      context.fillText(text, x, y);
+      const canvasY = y - this.nativeTextTop;
+      if (this.messageShadow & 2) context.strokeText(text, x, canvasY);
+      context.fillText(text, x, canvasY);
     };
     const speakerSize = this.speakerMetrics.size;
     if (this.currentName && speakerSize > 0 && this.mwndLayout?.nameDispMode !== 2) {
@@ -1698,7 +1707,7 @@ export class SiglusDisplay {
       context.beginPath();
       context.rect(
         0,
-        y - rubySize - rubySpace - 2,
+        y - this.nativeTextTop - rubySize - rubySpace - 2,
         canvas.width,
         pitch * rows + rubySize + rubySpace + 2,
       );
@@ -1753,7 +1762,11 @@ export class SiglusDisplay {
       rubySpace: layout.rubySpace,
     };
     this.nativeText.width = layout.windowSize[0];
-    this.nativeText.height = layout.windowSize[1];
+    // A separate speaker name and ruby can extend above the window's origin.
+    const nameTop = layout.nameDispMode === 2 ? 0 : layout.nameAnchorY;
+    this.nativeTextTop = Math.min(0, nameTop, layout.textY - layout.rubySize - layout.rubySpace);
+    this.nativeText.style.top = `${this.nativeTextTop}px`;
+    this.nativeText.height = layout.windowSize[1] - this.nativeTextTop;
     place(this.text, [layout.textX, layout.textY], [layout.textWidth, layout.textHeight]);
     this.text.style.letterSpacing = `${layout.mojiSpace[0]}px`;
     this.text.dataset.siglusDialogue = '';
@@ -2293,7 +2306,13 @@ export class SiglusDisplay {
       image.width = this.nativeText.width;
       image.height = this.nativeText.height;
       this.drawNativeMessage(image, this.slideOffset);
-      substitute = {target: this.nativeText, image, bounds: this.message.getBoundingClientRect()};
+      const message = this.message.getBoundingClientRect();
+      const scale = message.height / (image.height + this.nativeTextTop);
+      substitute = {
+        target: this.nativeText,
+        image,
+        bounds: new DOMRect(message.left, message.top + this.nativeTextTop * scale, message.width, image.height * scale),
+      };
     }
     const layers = [this.layers, this.cast, this.effect, this.message, this.controls].filter(
       (layer) => layer.parentElement === this.sceneLayers,
@@ -2398,20 +2417,15 @@ export class SiglusDisplay {
     frame: Graphic,
     canvas: HTMLCanvasElement,
     object: DrawObject,
-    placedX?: number,
-    placedY?: number,
   ): string {
     const {width, height} = frame;
-    const clip = object.clip?.[0] ? object.clip : undefined;
-    const cached = object.alphaTest && !clip ? this.hitPaths.get(frame) : undefined;
+    const cached = object.alphaTest ? this.hitPaths.get(frame) : undefined;
     if (cached !== undefined) return cached;
     const [cutLeft, cutTop, cutRight, cutBottom] = frame.contentBounds ?? [0, 0, width, height];
-    const x = placedX ?? object.x + frame.x;
-    const y = placedY ?? object.y + frame.y;
-    const left = Math.max(0, cutLeft, (clip?.[1] ?? x) - x);
-    const top = Math.max(0, cutTop, (clip?.[2] ?? y) - y);
-    const right = Math.min(width, cutRight, (clip?.[3] ?? x + width) - x);
-    const bottom = Math.min(height, cutBottom, (clip?.[4] ?? y + height) - y);
+    const left = Math.max(0, cutLeft);
+    const top = Math.max(0, cutTop);
+    const right = Math.min(width, cutRight);
+    const bottom = Math.min(height, cutBottom);
     if (right <= left || bottom <= top) return 'inset(100%)';
     if (!object.alphaTest)
       return `inset(${top}px ${width - right}px ${height - bottom}px ${left}px)`;
@@ -2428,7 +2442,7 @@ export class SiglusDisplay {
       }
     }
     const path = runs.length ? `path("${runs.join('')}")` : 'inset(100%)';
-    if (!clip) this.hitPaths.set(frame, path);
+    this.hitPaths.set(frame, path);
     return path;
   }
 
@@ -2547,6 +2561,7 @@ export class SiglusDisplay {
     const hover = (await loadCut(actionStates.hit.cutOffset)) ?? normal;
     const pressed = (await loadCut(actionStates.push.cutOffset)) ?? hover ?? normal;
     const disabled = (await loadCut(actionStates.disable.cutOffset)) ?? normal;
+    if (this.selectionTemplate !== template) return;
     const itemWidth = normal?.width ?? 640;
     const itemHeight = normal?.height ?? 80;
     const placements = layoutSelbtnItems(call.items, template, itemWidth, itemHeight);
@@ -2555,6 +2570,7 @@ export class SiglusDisplay {
     layer.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:30';
     if (template.backFile && this.files.has(`g00/${template.backFile.toLowerCase()}.g00`)) {
       const back = await this.graphic(template.backFile);
+      if (this.selectionTemplate !== template) return;
       const backOff = computeSpriteOffset(0, 0, back);
       const backCanvas = this.node(back);
       backCanvas.style.left = `${backOff.left}px`;
@@ -2723,6 +2739,33 @@ export class SiglusDisplay {
     this.objectLayer = next;
   }
 
+  updateStageObjectPositions(moved: ReadonlySet<DrawObject>): boolean {
+    const layer = this.objectLayer;
+    if (!layer?.isConnected || this.wipe || this.castTransition || !this.positionTargets) return false;
+    const unmatched = new Set<DrawObject>();
+    for (const object of moved) {
+      if (
+        object.mask !== undefined || object.positionEvents?.x || object.positionEvents?.y ||
+        object.offsetEvents?.x?.size || object.offsetEvents?.y?.size || object.horizontalMotion
+      )
+        return false;
+      if (object.visible) unmatched.add(object);
+    }
+    const changes = [];
+    for (const element of layer.querySelectorAll<HTMLElement>('[data-siglus-positioned]')) {
+      const target = this.positionTargets.get(element);
+      if (!target || !moved.has(target.object)) continue;
+      // A descendant's destination crop is positioned in stage coordinates.
+      if (element.querySelector('[data-siglus-dst-clip]')) return false;
+      changes.push({element, ...target});
+      unmatched.delete(target.object);
+    }
+    if (unmatched.size) return false;
+    for (const {element, object, originX, originY} of changes)
+      this.applyObjectPosition(element, object, originX, originY);
+    return true;
+  }
+
   private async drawObjects(
     objects: Iterable<DrawObject>,
     button: (target: NonNullable<DrawObject['button']>) => void,
@@ -2734,19 +2777,17 @@ export class SiglusDisplay {
     return next;
   }
 
-  private applyDstClip(
+  private applyObjectClip(
     element: HTMLElement,
     object: DrawObject,
-    screenX: number,
-    screenY: number,
+    key: 'dstClip' | 'sourceClip',
+    [left, top, right, bottom]: readonly [number, number, number, number],
     width: number,
     height: number,
   ): void {
-    if (!object.clip?.[0]) return;
-    const [, left, top, right, bottom] = object.clip;
     const now = performance.now();
     const active = [0, 1, 2, 3].map((edge) => {
-      const ev = object.intEvents?.get(`dstClip:${edge}`);
+      const ev = object.intEvents?.get(`${key}:${edge}`);
       return ev && (ev.mode !== 0 || now - ev.started < ev.duration + ev.delay) ? ev : undefined;
     });
     if (active.every((ev) => !ev)) {
@@ -2754,13 +2795,13 @@ export class SiglusDisplay {
         element.style.clipPath = 'inset(100%)';
         return;
       }
-      element.style.clipPath = `inset(${Math.max(0, top - screenY)}px ${Math.max(0, screenX + width - right)}px ${Math.max(0, screenY + height - bottom)}px ${Math.max(0, left - screenX)}px)`;
+      element.style.clipPath = `inset(${Math.max(0, top)}px ${Math.max(0, width - right)}px ${Math.max(0, height - bottom)}px ${Math.max(0, left)}px)`;
       return;
     }
     const edgePx = (edge: 0 | 1 | 2 | 3, fallback: number): string => {
       const ev = active[edge];
       if (!ev) return `${fallback}px`;
-      const property = `--siglus-dst-clip-${edge}`;
+      const property = `--siglus-${key === 'dstClip' ? 'dst' : 'source'}-clip-${edge}`;
       registerAnimatedNumber(property);
       element.style.setProperty(property, String(fallback));
       const animation = element.animate(
@@ -2781,19 +2822,27 @@ export class SiglusDisplay {
     const topPx = edgePx(1, top);
     const rightPx = edgePx(2, right);
     const bottomPx = edgePx(3, bottom);
-    element.style.clipPath = `inset(max(0px, ${topPx} - ${screenY}px) max(0px, ${screenX + width}px - ${rightPx}) max(0px, ${screenY + height}px - ${bottomPx}) max(0px, ${leftPx} - ${screenX}px))`;
+    element.style.clipPath = `inset(max(0px, ${topPx}) max(0px, ${width}px - ${rightPx}) max(0px, ${height}px - ${bottomPx}) max(0px, ${leftPx}))`;
   }
 
-  private applyClip(
-    element: HTMLElement,
+  private destinationClipLayer(
     object: DrawObject,
-    x: number,
-    y: number,
-    width: number,
-    height: number,
-    parentOrigin: readonly [number, number] = [0, 0],
-  ): void {
-    this.applyDstClip(element, object, parentOrigin[0] + x, parentOrigin[1] + y, width, height);
+    [x, y]: readonly [number, number],
+  ): {viewport: HTMLElement; content: HTMLElement} | undefined {
+    if (!object.clip?.[0]) return;
+    const [, left, top, right, bottom] = object.clip;
+    // Native combines destination rectangles in stage coordinates before drawing the
+    // transformed sprite. Keep the viewport outside the object's animated transform.
+    const document = this.stage.ownerDocument;
+    const viewport = document.createElement('div');
+    viewport.dataset.siglusDstClip = '';
+    viewport.style.cssText = `position:absolute;left:${-x}px;top:${-y}px;width:${this.width}px;height:${this.height}px;pointer-events:none`;
+    this.applyObjectClip(viewport, object, 'dstClip', [left, top, right, bottom], this.width, this.height);
+    if (!x && !y) return {viewport, content: viewport};
+    const content = document.createElement('div');
+    content.style.cssText = `position:absolute;left:${x}px;top:${y}px;pointer-events:none`;
+    viewport.append(content);
+    return {viewport, content};
   }
 
   private async appendObjects(
@@ -2817,6 +2866,9 @@ export class SiglusDisplay {
     };
     for (const object of objects) {
       if (!object.visible) continue;
+      const clip = this.destinationClipLayer(object, parentOrigin);
+      if (clip) parent.append(clip.viewport);
+      const targetParent = clip?.content ?? parent;
       if (object.text) {
         const text = document.createElement('div');
         const {
@@ -2866,31 +2918,22 @@ export class SiglusDisplay {
         }
         this.applyObjectScale(text, object, [textPlacement.pivotX, textPlacement.pivotY]);
         this.applyObjectPosition(text, object, textPlacement.originX, textPlacement.originY);
-        this.applyClip(
-          text,
-          object,
-          textPlacement.placedX,
-          textPlacement.placedY,
-          maxWidth,
-          this.height,
-          parentOrigin,
-        );
         this.applyLeafOpacity(text, object, animate, parentOpacity);
-        tagStageSlot(text, object);
-        parent.append(text);
+        tagStageSlot(clip?.viewport ?? text, object);
+        targetParent.append(text);
         if (object.children)
-          await this.appendChildren(parent, object, button, animate, parentOpacity, parentOrigin);
+          await this.appendChildren(targetParent, object, button, animate, parentOpacity, parentOrigin);
         continue;
       }
       if (object.weather && object.weather.mode > 0) {
         const layer = await this.weatherLayer(object);
         if (layer) {
           this.applyLeafOpacity(layer, object, animate, parentOpacity);
-          tagStageSlot(layer, object);
-          parent.append(layer);
+          tagStageSlot(clip?.viewport ?? layer, object);
+          targetParent.append(layer);
         }
         if (object.children)
-          await this.appendChildren(parent, object, button, animate, parentOpacity, parentOrigin);
+          await this.appendChildren(targetParent, object, button, animate, parentOpacity, parentOrigin);
         continue;
       }
       if (object.gan?.sequence !== undefined) {
@@ -2899,24 +2942,24 @@ export class SiglusDisplay {
           this.applyObjectScale(ganLayer, object, [0, 0]);
           this.applyObjectPosition(ganLayer, object);
           this.applyLeafOpacity(ganLayer, object, animate, parentOpacity);
-          tagStageSlot(ganLayer, object);
-          parent.append(ganLayer);
+          tagStageSlot(clip?.viewport ?? ganLayer, object);
+          targetParent.append(ganLayer);
           if (object.children)
-            await this.appendChildren(parent, object, button, animate, parentOpacity, parentOrigin);
+            await this.appendChildren(targetParent, object, button, animate, parentOpacity, parentOrigin);
           continue;
         }
       }
       if (!object.movie && !object.name && !object.frames.length) {
         if (object.children) {
           const wrapper = await this.appendChildren(
-            parent,
+            targetParent,
             object,
             button,
             animate,
             parentOpacity,
             parentOrigin,
           );
-          tagStageSlot(wrapper, object);
+          tagStageSlot(clip?.viewport ?? wrapper, object);
         }
         continue;
       }
@@ -2936,10 +2979,17 @@ export class SiglusDisplay {
               (object.frames[object.pattern] = await this.objectGraphic(object.name, object.pattern))
           ));
       if (!frame) continue;
-      const element =
+      const sourceBounds = object.sourceClipEnabled ? object.sourceClipBounds : undefined;
+      const content =
         object.button === undefined
           ? document.createElement('div')
           : document.createElement('button');
+      // The outer crop applies to every pattern and intersects the button's alpha hit path.
+      const element = sourceBounds && object.button ? document.createElement('div') : content;
+      if (element !== content) {
+        content.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;border:0;padding:0;background:none;pointer-events:none';
+        element.append(content);
+      }
       let canvas: HTMLCanvasElement;
       if ('image' in frame) canvas = this.node(frame);
       else {
@@ -2955,8 +3005,8 @@ export class SiglusDisplay {
       const placement = computeObjectPlacement(object, frame);
       element.style.cssText = `position:absolute;left:${placement.placedX}px;top:${placement.placedY}px;width:${frame.width}px;height:${frame.height}px;border:0;padding:0;background:none;pointer-events:none`;
       this.applyObjectScale(element, object, [placement.pivotX, placement.pivotY]);
-      if (object.name) element.dataset.siglusObject = object.name;
-      tagStageSlot(element, object);
+      if (object.name) content.dataset.siglusObject = object.name;
+      tagStageSlot(clip?.viewport ?? element, object);
       const mask = object.mask === undefined ? undefined : this.objectMasks.get(object.mask);
       if (mask?.url) {
         element.style.maskImage = `url("${mask.url}")`;
@@ -2966,27 +3016,19 @@ export class SiglusDisplay {
           element.style.maskPosition = `${mask.x - placement.placedX}px ${mask.y - placement.placedY}px`;
         }
       }
-      if (object.blend === 1) element.style.mixBlendMode = 'plus-lighter';
-      if (object.blend === 3) element.style.mixBlendMode = 'multiply';
-      if (object.blend === 4) element.style.mixBlendMode = 'screen';
+      const blendTarget = clip && !object.children ? clip.viewport : element;
+      if (object.blend === 1) blendTarget.style.mixBlendMode = 'plus-lighter';
+      if (object.blend === 3) blendTarget.style.mixBlendMode = 'multiply';
+      if (object.blend === 4) blendTarget.style.mixBlendMode = 'screen';
       this.applyObjectPosition(element, object, placement.originX, placement.originY);
-      this.applyClip(
-        element,
-        object,
-        placement.placedX,
-        placement.placedY,
-        frame.width,
-        frame.height,
-        parentOrigin,
-      );
-      element.append(canvas);
+      content.append(canvas);
       if (object.patternCycle) {
         const {count, duration, started} = object.patternCycle;
         const elapsed = performance.now() - started;
         for (let index = 0; index < count; index++) {
           const graphic = (object.frames[index] ??= await this.graphic(object.name, index));
           const image = index === object.pattern ? canvas : this.node(graphic);
-          if (image !== canvas) element.append(image);
+          if (image !== canvas) content.append(image);
           image.style.left = '0';
           image.style.top = '0';
           image.style.opacity = '0';
@@ -3001,41 +3043,15 @@ export class SiglusDisplay {
           animation.currentTime = elapsed + duration;
         }
       }
-      parent.append(element);
-      if (object.sourceClipEnabled && object.sourceClipBounds) {
-        const edges = object.sourceClipBounds.map((value, edge) => {
-          const event = object.intEvents?.get(`sourceClip:${edge}`);
-          const extent = edge === 2 ? frame.width : edge === 3 ? frame.height : undefined;
-          if (!event) return `${Math.max(0, extent === undefined ? value : extent - value)}px`;
-          const property = `--siglus-source-clip-${edge}`;
-          registerAnimatedNumber(property);
-          canvas.style.setProperty(property, String(value));
-          const animation = canvas.animate({[property]: [String(event.from), String(event.target)]}, {
-            duration: event.duration,
-            delay: event.delay,
-            easing: eventEasing(event.easing),
-            fill: 'both',
-            iterations: event.mode === 0 ? 1 : Infinity,
-            direction: event.mode === 2 ? 'alternate' : 'normal',
-          });
-          animation.currentTime = performance.now() - event.started;
-          const pixels = `calc(var(${property}) * 1px)`;
-          return extent === undefined ? `max(0px, ${pixels})` : `max(0px, ${extent}px - ${pixels})`;
-        });
-        canvas.style.clipPath = `inset(${edges[1]} ${edges[2]} ${edges[3]} ${edges[0]})`;
-      }
-      if (element instanceof HTMLButtonElement) {
+      targetParent.append(element);
+      if (sourceBounds)
+        this.applyObjectClip(element, object, 'sourceClip', sourceBounds, frame.width, frame.height);
+      if (content instanceof HTMLButtonElement) {
         const target = object.buttonCall
           ? {...object.button!, buttonCall: object.buttonCall}
           : object.button!;
         if ('image' in frame)
-          element.style.clipPath = this.buttonHitPath(
-            frame,
-            canvas,
-            object,
-            parentOrigin[0] + placement.placedX,
-            parentOrigin[1] + placement.placedY,
-          );
+          content.style.clipPath = this.buttonHitPath(frame, canvas, object);
         const role = object.name.split('_').at(-1);
         const supported =
           !object.name.startsWith('__sys_title_btn_') ||
@@ -3045,10 +3061,10 @@ export class SiglusDisplay {
           role === 'load' ||
           role === 'music' ||
           role === 'config';
-        element.disabled = !supported || Boolean(object.disabled);
-        element.style.pointerEvents = supported ? 'auto' : 'none';
-        element.style.cursor = 'pointer';
-        element.setAttribute(
+        content.disabled = !supported || Boolean(object.disabled);
+        content.style.pointerEvents = supported ? 'auto' : 'none';
+        content.style.cursor = 'pointer';
+        content.setAttribute(
           'aria-label',
           role === 'start'
             ? 'New Game'
@@ -3064,111 +3080,94 @@ export class SiglusDisplay {
                       ? 'Configuration'
                       : object.name,
         );
-        element.dataset.siglusButton = String(target.id);
-        element.dataset.siglusGroup = String(target.group);
-        element.inert = this.objectButtonGroups?.has(target.group) === false;
-        if (object.buttonState) element.dataset.siglusButtonState = object.buttonState;
+        content.dataset.siglusButton = String(target.id);
+        content.dataset.siglusGroup = String(target.group);
+        content.inert = this.objectButtonGroups?.has(target.group) === false;
+        if (object.buttonState) content.dataset.siglusButtonState = object.buttonState;
         const isSelectState = object.buttonState === 'select';
         if (target.actionNo !== undefined && target.actionNo >= 0 && object.name && 'image' in frame) {
           const actionStates = parseButtonActionStates(this.config, target.actionNo);
-          const differs = (s: ButtonActionState) =>
-            s.cutOffset !== actionStates.normal.cutOffset ||
-            s.dx !== actionStates.normal.dx ||
-            s.dy !== actionStates.normal.dy ||
-            s.alpha !== actionStates.normal.alpha ||
-            s.bright !== actionStates.normal.bright ||
-            s.dark !== actionStates.normal.dark;
-          if (
-            differs(actionStates.hit) ||
-            differs(actionStates.push) ||
-            differs(actionStates.disable) ||
-            differs(actionStates.select)
-          ) {
+          const changesGraphic = ({cutOffset, dx, dy, alpha, bright, dark}: ButtonActionState) =>
+            cutOffset !== 0 || dx !== 0 || dy !== 0 || alpha !== 255 || bright !== 0 || dark !== 0;
+          if (Object.values(actionStates).some(changesGraphic)) {
             let paintGen = 0;
-            const applyBtnState = (spec: ButtonActionState) => {
+            const applyBtnState = async (spec: ButtonActionState): Promise<void> => {
               const gen = ++paintGen;
               const cut = Math.max(0, object.pattern + spec.cutOffset);
-              const paint = (g: Graphic) => {
-                if (gen !== paintGen || !canvas.isConnected) return;
-                const ctx = canvas.getContext('2d');
-                ctx?.clearRect(0, 0, canvas.width, canvas.height);
-                if (g.width > 0 && g.height > 0) ctx?.drawImage(g.image, 0, 0);
-                canvas.style.translate = spec.dx || spec.dy ? `${spec.dx}px ${spec.dy}px` : '';
-                canvas.style.opacity = spec.alpha < 255 ? String(spec.alpha / 255) : '';
-                const br = 1 + spec.bright / 255 - spec.dark / 255;
-                canvas.style.filter =
-                  Math.abs(br - 1) > 0.005 ? `brightness(${Math.max(0, br).toFixed(3)})` : '';
-              };
-              const cached = object.frames[cut];
-              if (cached) paint(cached);
-              else {
-                void this.objectGraphic(object.name, cut)
-                  .then((g) => {
-                    if (g) {
-                      object.frames[cut] = g;
-                      paint(g);
-                    } else paint(frame);
-                  })
-                  .catch(() => {});
+              let graphic = object.frames[cut];
+              if (!graphic) {
+                graphic = await this.objectGraphic(object.name, cut).catch(() => undefined);
+                if (graphic) object.frames[cut] = graphic;
               }
+              if (gen !== paintGen) return;
+              graphic ??= frame;
+              const ctx = canvas.getContext('2d');
+              ctx?.clearRect(0, 0, canvas.width, canvas.height);
+              if (graphic.width > 0 && graphic.height > 0) ctx?.drawImage(graphic.image, 0, 0);
+              canvas.style.translate = spec.dx || spec.dy ? `${spec.dx}px ${spec.dy}px` : '';
+              canvas.style.opacity = spec.alpha < 255 ? String(spec.alpha / 255) : '';
+              const br = 1 + spec.bright / 255 - spec.dark / 255;
+              canvas.style.filter =
+                Math.abs(br - 1) > 0.005 ? `brightness(${Math.max(0, br).toFixed(3)})` : '';
             };
             const restingState = () =>
-              element.disabled
+              content.disabled
                 ? actionStates.disable
                 : isSelectState
                   ? actionStates.select
                   : actionStates.normal;
-            if (element.disabled || isSelectState) applyBtnState(restingState());
-            element.addEventListener('pointerenter', () => {
-              if (!element.disabled) {
+            const initial = restingState();
+            if (changesGraphic(initial)) await applyBtnState(initial);
+            content.addEventListener('pointerenter', () => {
+              if (!content.disabled) {
                 if (target.seNo !== undefined && target.seNo >= 0) {
                   this.onButtonSound?.(target.seNo, 'hit');
                 }
-                applyBtnState(actionStates.hit);
+                void applyBtnState(actionStates.hit);
               }
             });
-            element.addEventListener('pointerleave', () => {
-              applyBtnState(restingState());
+            content.addEventListener('pointerleave', () => {
+              void applyBtnState(restingState());
             });
-            element.addEventListener('pointerdown', (event) => {
-              if (event.button === 0 && !element.disabled) {
+            content.addEventListener('pointerdown', (event) => {
+              if (event.button === 0 && !content.disabled) {
                 if (target.seNo !== undefined && target.seNo >= 0) {
                   this.onButtonSound?.(target.seNo, 'push');
                 }
-                applyBtnState(actionStates.push);
+                void applyBtnState(actionStates.push);
               }
             });
-            element.addEventListener('pointerup', () => {
-              if (!element.disabled) applyBtnState(actionStates.hit);
+            content.addEventListener('pointerup', () => {
+              if (!content.disabled) void applyBtnState(actionStates.hit);
             });
           } else if (target.seNo !== undefined && target.seNo >= 0) {
-            element.addEventListener('pointerenter', () => {
-              if (!element.disabled) this.onButtonSound?.(target.seNo!, 'hit');
+            content.addEventListener('pointerenter', () => {
+              if (!content.disabled) this.onButtonSound?.(target.seNo!, 'hit');
             });
-            element.addEventListener('pointerdown', (event) => {
-              if (event.button === 0 && !element.disabled) this.onButtonSound?.(target.seNo!, 'push');
+            content.addEventListener('pointerdown', (event) => {
+              if (event.button === 0 && !content.disabled) this.onButtonSound?.(target.seNo!, 'push');
             });
           }
         } else if (target.seNo !== undefined && target.seNo >= 0) {
-          element.addEventListener('pointerenter', () => {
-            if (!element.disabled) this.onButtonSound?.(target.seNo!, 'hit');
+          content.addEventListener('pointerenter', () => {
+            if (!content.disabled) this.onButtonSound?.(target.seNo!, 'hit');
           });
-          element.addEventListener('pointerdown', (event) => {
-            if (event.button === 0 && !element.disabled) this.onButtonSound?.(target.seNo!, 'push');
+          content.addEventListener('pointerdown', (event) => {
+            if (event.button === 0 && !content.disabled) this.onButtonSound?.(target.seNo!, 'push');
           });
         }
-        element.addEventListener('click', (event) => {
+        content.addEventListener('click', (event) => {
           event.stopPropagation();
           this.stage.focus({preventScroll: true});
           if (!object.pushKeep || event.detail === 0) button(target);
         });
-        element.addEventListener('pointerdown', (event) => {
+        content.addEventListener('pointerdown', (event) => {
           if (event.button !== 0) return;
           this.pressed = target;
           this.heldButton = {
             pointerId: event.pointerId,
             pushKeep: Boolean(object.pushKeep),
-            element,
+            element: content,
             target,
             release: () => button(target),
           };
@@ -3182,7 +3181,10 @@ export class SiglusDisplay {
         const elapsed = performance.now() - started;
         if (elapsed < duration + delay) {
           const animation = element.animate(
-            {transform: [`translateX(${from - object.x}px)`, 'translateX(0px)']},
+            [
+              {translate: `${from - object.x}px 0px`, composite: 'add'},
+              {translate: '0px 0px', composite: 'add'},
+            ],
             {duration, delay, easing: eventEasing(easing), fill: 'both'},
           );
           animation.currentTime = elapsed;
@@ -3192,12 +3194,15 @@ export class SiglusDisplay {
       if (animate && object.movement) {
         const [target, time, delay, mode, start] = object.movement;
         element.animate(
-          {transform: [`translateY(${start}px)`, `translateY(${target}px)`]},
+          [
+            {translate: `0px ${start}px`, composite: 'add'},
+            {translate: `0px ${target}px`, composite: 'add'},
+          ],
           {duration: time, delay, easing: eventEasing(mode), fill: 'both'},
         );
       }
       if (object.children)
-        await this.appendChildren(parent, object, button, animate, parentOpacity, parentOrigin);
+        await this.appendChildren(targetParent, object, button, animate, parentOpacity, parentOrigin);
     }
   }
 
@@ -3315,21 +3320,8 @@ export class SiglusDisplay {
   ): Promise<HTMLElement> {
     // Applying the group alpha to its leaves keeps blending in the stage's backdrop.
     const children = document.createElement('div');
-    let wrapper: HTMLElement = children;
-    if (object.clip?.[0]) {
-      // Native C_d3d_render_param::combine_parent (0x629c70, 0x629e63..0x629ed1) propagates and
-      // intersects parent dst_clip in screen coordinates down to all descendants.
-      const clipBox = document.createElement('div');
-      clipBox.style.cssText = `position:absolute;left:${-parentOrigin[0]}px;top:${-parentOrigin[1]}px;width:${this.width}px;height:${this.height}px;pointer-events:none`;
-      this.applyDstClip(clipBox, object, 0, 0, this.width, this.height);
-      children.style.cssText = `position:absolute;left:${parentOrigin[0] + object.x}px;top:${parentOrigin[1] + object.y}px;pointer-events:none`;
-      this.applyObjectPosition(children, object, parentOrigin[0], parentOrigin[1]);
-      clipBox.append(children);
-      wrapper = clipBox;
-    } else {
-      children.style.cssText = `position:absolute;left:${object.x}px;top:${object.y}px;pointer-events:none`;
-      this.applyObjectPosition(children, object);
-    }
+    children.style.cssText = 'position:absolute;pointer-events:none';
+    this.applyObjectPosition(children, object);
     const childPivot: [number, number] = [object.centerRep?.[0] ?? 0, object.centerRep?.[1] ?? 0];
     this.applyObjectScale(children, object, childPivot);
     if ((object.transparency ?? 255) !== 255 || object.opacity || object.trOffsets?.length) {
@@ -3338,7 +3330,7 @@ export class SiglusDisplay {
       this.applyObjectOpacity(children, object, animate, property);
       parentOpacity = [...parentOpacity, property];
     }
-    parent.append(wrapper);
+    parent.append(children);
     const childOffsetX = object.positionOffsets?.x?.reduce((sum, value) => sum + value, 0) ?? 0;
     const childOffsetY = object.positionOffsets?.y?.reduce((sum, value) => sum + value, 0) ?? 0;
     const childOrigin: readonly [number, number] = [
@@ -3354,7 +3346,7 @@ export class SiglusDisplay {
       false,
       childOrigin,
     );
-    return wrapper;
+    return children;
   }
 
   private applyObjectPosition(
@@ -3363,6 +3355,11 @@ export class SiglusDisplay {
     originX = 0,
     originY = 0,
   ): void {
+    const targets = (this.positionTargets ??= new WeakMap());
+    if (!targets.has(element)) {
+      targets.set(element, {object, originX, originY});
+      element.dataset.siglusPositioned = '';
+    }
     const now = performance.now();
     for (const axis of ['x', 'y'] as const) {
       const property = axis === 'x' ? 'left' : 'top';
@@ -4399,6 +4396,7 @@ export class SiglusDisplay {
   }
 
   repPosition(x: number, y: number): void {
+    this.messagePosition = x || y ? [x, y] : undefined;
     this.message.style.translate = `${x}px ${y}px`;
   }
 
@@ -4561,10 +4559,10 @@ export class SiglusDisplay {
 
   openMessage(anime?: MwndAnimation): void {
     const wasHidden = this.message.hidden || this.message.style.display === 'none';
+    this.message.hidden = false;
     this.message.style.display = '';
     this.pendingOpenAnimation = undefined;
     if (wasHidden && anime && anime.type > 0 && anime.time > 0) {
-      this.message.hidden = false;
       this.playMessageOpenAnimation(anime);
     } else {
       this.cancelMessageVisibilityAnimation();
@@ -4656,11 +4654,13 @@ export class SiglusDisplay {
       index: this.windowIndex,
       size: this.messageTextSize,
       slideTime: this.slideTime,
+      position: this.messagePosition,
     };
   }
 
   async loadMessage(message: SiglusMessageSnapshot): Promise<void> {
     this.clearText();
+    this.repPosition(...(message.position ?? [0, 0]));
     this.setMessageSlide(message.slideTime);
     this.selectMessageWindow(message.index);
     this.setTextSize(message.size);

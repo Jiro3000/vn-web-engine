@@ -14,11 +14,12 @@ share their bitplanes and prediction arrays. Each slice crosses the ABI once;
 no copies or host calls occur for individual blocks. Whole skipped pictures
 share reference storage and keep independent metadata.
 
-The 8×8 inverse transform processes four columns at a time. Interpolation uses
-four-lane integer vectors, clipping before averaging; smaller transforms and
-loop filters preserve the reference's pass order and rounding. Signed 16-bit
-coefficient storage wraps at each transform pass, while pixel output saturates.
-Scratch arrays live on the Wasm stack, and kernels make no host calls.
+The 8×8 inverse transform processes four 32-bit columns per vector and
+transposes the wrapped 16-bit coefficients between passes. Luma interpolation
+filters eight pixels at a time and uses 32-bit sums for the second pass.
+The contiguous loop filter keeps the reference decision for each four-pixel
+group. Pixel output saturates before averaging. Scratch arrays live on the
+Wasm stack, and kernels make no host calls.
 
 Build with `npm run build:wasm -- vc1-video`. The dependency-free crate targets
 `wasm32-unknown-unknown` with SIMD enabled. Its embedded output in

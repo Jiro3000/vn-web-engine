@@ -37,6 +37,7 @@ function mockAudio(t, files, config = []) {
     sampleRate = 48000;
     state = 'running';
     sources = [];
+    gains = [];
 
     constructor() {
       super();
@@ -76,11 +77,20 @@ function mockAudio(t, files, config = []) {
     }
 
     createGain() {
-      return {
+      const events = [];
+      const node = {
         connect() {},
         disconnect() {},
-        gain: {setValueAtTime() {}, linearRampToValueAtTime() {}, cancelScheduledValues() {}},
+        events,
+        gain: {
+          setValueAtTime: (...args) => events.push(['set', ...args]),
+          linearRampToValueAtTime: (...args) => events.push(['ramp', ...args]),
+          cancelScheduledValues: (time) => events.push(['cancel', time]),
+          cancelAndHoldAtTime: (time) => events.push(['hold', time]),
+        },
       };
+      this.gains.push(node);
+      return node;
     }
 
     async close() {}
@@ -133,6 +143,90 @@ function vorbisHeader(rate) {
   new DataView(ogg.buffer).setUint32(40, rate, true);
   return ogg;
 }
+
+test('a failed BGM replacement leaves the playing track available and can be retried', async (t) => {
+  const {audio} = mockAudio(t, [['bgm/theme.ogg', source(vorbisHeader(48000))]]);
+  await audio.bgm('theme');
+  await assert.rejects(audio.bgm('missing'));
+  assert.equal(audio.bgmName(), 'theme');
+  assert.equal(audio.root.dataset.bgm, 'theme');
+  audio.files.set('bgm/missing.ogg', source(vorbisHeader(48000)));
+  await audio.bgm('missing');
+  assert.equal(audio.bgmName(), 'missing');
+});
+
+test('a BGM prepare supersedes an in-flight play and is cancelled by reset', async (t) => {
+  const {audio, context} = mockAudio(t, []);
+  const track = {
+    name: 'theme',
+    buffer: context.createBuffer(1, 48000, 48000),
+    loop: true,
+    start: 0,
+    loopStart: 0,
+    loopEnd: 1,
+    sourceRate: 48000,
+  };
+  const pending = new Map();
+  audio.loadBgm = (name) => new Promise((resolve) => pending.set(name, resolve));
+  const playing = audio.bgm('old');
+  const preparing = audio.readyBgm('theme', true);
+  pending.get('old')({...track, name: 'old'});
+  await playing;
+  assert.equal(context.sources.length, 0);
+
+  audio.resetPlayback();
+  pending.get('theme')(track);
+  await preparing;
+  assert.equal(audio.bgmCheckpoint(), undefined);
+  audio.resumeBgm();
+  assert.equal(context.sources.length, 0);
+});
+
+test('non-looping PCM using a BGM alias stops at its configured end sample', async (t) => {
+  const {audio, context} = mockAudio(t, [['bgm/shared.ogg', source(vorbisHeader(48000))]], [
+    ['BGM.000', '"excerpt", "shared", 48000, 144000, 96000'],
+  ]);
+  await audio.pcm(2, {resource: 'excerpt', bgmName: 'excerpt', loop: false});
+  assert.deepEqual(context.sources.at(-1).started, [10, 1, 2]);
+  assert.equal(audio.channelRemainingMs('pcm2'), 2000);
+});
+
+test('a checkpoint preserves a looping PCM request before its audio is decoded', async (t) => {
+  const {audio, context} = mockAudio(t, []);
+  const ambient = {resource: 'rain', loop: true};
+  let finishDecode;
+  audio.effectBuffer = () => new Promise((resolve) => { finishDecode = resolve; });
+  const starting = audio.pcm(2, ambient);
+  const checkpoint = audio.pcmCheckpoint();
+  audio.resetPlayback();
+  const buffer = context.createBuffer(1, 48000, 48000);
+  finishDecode(buffer);
+  await starting;
+  assert.deepEqual(checkpoint, [{channel: 2, level: 255, source: ambient}]);
+  assert.equal(context.sources.length, 0);
+  audio.effectBuffer = async () => buffer;
+  await audio.restorePcm(checkpoint);
+  assert.equal(context.sources.at(-1).loop, true);
+});
+
+test('starting and stopping voice leaves unrelated PCM gain ramps intact', async (t) => {
+  const {audio, context} = mockAudio(t, [['bgm/theme.ogg', source(vorbisHeader(48000))]]);
+  const buffer = context.createBuffer(1, 48000, 48000);
+  audio.effectBuffer = async () => buffer;
+  audio.voiceBuffer = async () => buffer;
+  await audio.bgm('theme');
+  await audio.pcm(2, {resource: 'rain', loop: true}, false, 1000);
+  const ambient = context.gains[1];
+  const originalRamp = [...ambient.events];
+  await audio.voice(1);
+  audio.stop('voice');
+  assert.deepEqual(ambient.events, originalRamp);
+
+  audio.setVoiceDuck(128);
+  await audio.voice(2);
+  assert.deepEqual(ambient.events, originalRamp);
+  assert.ok(context.gains[0].events.some(([op, value]) => op === 'set' && value > 0 && value < 1));
+});
 
 test('Siglus restores scheduled tracks immediately and preserves their prepared state and levels', async (t) => {
   const ogg = vorbisHeader(48000);

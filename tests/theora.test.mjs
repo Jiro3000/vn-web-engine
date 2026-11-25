@@ -25,17 +25,20 @@ test('Theora frames match libtheora bit for bit in 4:2:0, 4:2:2 and 4:4:4', () =
     assert.equal(stream.info.pixelFormat, clip.format, clip.name);
     assert.equal(stream.info.macroblockWidth * 16, clip.width, clip.name);
     assert.equal(stream.packets.length, clip.frames.length, clip.name);
-    const decoder = new TheoraDecoder(stream.info, stream.setup);
-    let duplicates = 0;
-    stream.packets.forEach((packet, index) => {
-      if (!decoder.decode(packet)) duplicates++;
-      assert.equal(
-        frameHash(decoder, clip.width, clip.height, clip.format),
-        clip.frames[index],
-        `${clip.name} frame ${index}`,
-      );
-    });
-    if (clip.name === 'testsrc2-420') assert.ok(duplicates > 0, 'duplicate frames are covered');
+    for (const wasm of [false, true]) {
+      const decoder = new TheoraDecoder(stream.info, stream.setup, {wasm});
+      assert.equal(Boolean(decoder.reconstruction), wasm);
+      let duplicates = 0;
+      stream.packets.forEach((packet, index) => {
+        if (!decoder.decode(packet)) duplicates++;
+        assert.equal(
+          frameHash(decoder, clip.width, clip.height, clip.format),
+          clip.frames[index],
+          `${clip.name} frame ${index} (${wasm ? 'WASM' : 'JavaScript'})`,
+        );
+      });
+      if (clip.name === 'testsrc2-420') assert.ok(duplicates > 0, 'duplicate frames are covered');
+    }
   }
 });
 

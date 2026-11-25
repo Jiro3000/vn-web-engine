@@ -72,6 +72,27 @@ test('movie RGB32/24 conversion clears X, preserves row padding and uses native 
   assert.deepEqual(words(converted), [0x030201, 0x060504, 0x090807, 0x0c0b0a, 0x0f0e0d]);
   assert.equal(bgr.sourceStride, 16);
 });
+test('initialized RGB32 rows retain padding when copied into a flipped movie texture', () => {
+  const width = 19;
+  const height = 3;
+  const pitch = 24;
+  const decoder = image(0, width, height);
+  const target = allocateBurikoBitmap(pitch, height, 1);
+  target.storage.bytes.fill(0x5a);
+  target.storage.written(0, pitch * height * 4);
+  const bytes = Uint8Array.from({length: width * height * 4}, (_, i) => i * 19);
+  const pixels = new DataView(bytes.buffer);
+  decoder.copySample(decoder.orientDestination({...target, width}), sample(bytes));
+  assert.deepEqual(
+    words(target),
+    Array.from({length: pitch * height}, (_, i) => {
+      const column = i % pitch;
+      if (column >= width) return 0x5a5a5a5a;
+      const source = ((height - 1 - Math.floor(i / pitch)) * width + column) * 4;
+      return pixels.getUint32(source, true) & 0xffffff;
+    }),
+  );
+});
 test('movie RGB555/565 really collapse nonzero color to boolean pixels', () => {
   for (const [kind, expected] of [
     [2, [0, 0, 1]],

@@ -16,11 +16,11 @@ scope.onmessage = async ({data}) => {
   try {
     if ('source' in data) {
       const source = openWorkerSource(data.source);
-      movie = new SiglusOmv(await source.read(0, source.size));
+      movie = await SiglusOmv.open(source);
       const {width, height, frameTime, frames} = movie;
       scope.postMessage({width, height, frameTime, duration: frames * frameTime});
     } else {
-      const pixels = movie.frame(data.index);
+      const pixels = await movie.readFrame(data.index);
       scope.postMessage({pixels, index: data.index}, [pixels.buffer]);
     }
   } catch (error) {

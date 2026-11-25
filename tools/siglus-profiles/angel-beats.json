@@ -60,5 +60,14 @@
       {"group": "1", "buttonId": "2", "expectedObject": "sys_ex_record_title_bg"}
     ],
     "exitButton": {"group": "2", "id": "0"}
+  },
+  "crawlReplays": {
+    "portrait-lifetime": {
+      "systemFlags": [[5, 1]],
+      "portraitChecks": [
+        {"scene": "00_ab01a_day00", "line": 312, "speaker": "男子生徒", "faces": ["bs1_hn010101|bs1_hn0101_f(0,0,0)"]},
+        {"scene": "00_ab01a_day00", "line": 315, "speaker": "", "faces": []}
+      ]
+    }
   }
 }

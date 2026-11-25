@@ -1,4 +1,7 @@
 import type {YuvFrame} from './frame.js';
+import {I420Rgba} from './i420-rgba.js';
+
+let converter: I420Rgba | null | undefined;
 
 /** Limited-range BT.601 conversion for consumers of top-down opaque BGRA samples.
  * MPEG-1 4:2:0 chroma is centered; interpolate at the same texel centers as YuvRenderer. */
@@ -18,6 +21,15 @@ export function yuv420ToBgra(frame: YuvFrame): Uint8Array {
     cr.length < (stride * paddedHeight) / 4
   )
     throw new RangeError('Invalid planar movie frame');
+  if (converter === undefined) converter = I420Rgba.create() ?? null;
+  if (converter) {
+    try {
+      // Bitmap storage owns the returned pixels across future movie frames.
+      return new Uint8Array(converter.convert(frame, 'bgra'));
+    } catch (error) {
+      if (!(error instanceof RangeError)) throw error;
+    }
+  }
   const output = new Uint8ClampedArray(width * height * 4),
     chromaStride = stride / 2;
   for (let row = 0; row < height; row++) {

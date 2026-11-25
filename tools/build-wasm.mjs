@@ -31,6 +31,8 @@ try {
       ['-C', 'target-feature=+simd128'],
     ],
     ['vc1-video', 'VC1_VIDEO_WASM_BINARY', 'src/formats/vc1/wasm-binary.ts', kernel],
+    ['i420-rgba', 'I420_RGBA_WASM_BINARY', 'src/video/i420-rgba-wasm-binary.ts', kernel],
+    ['theora-recon', 'THEORA_RECON_WASM_BINARY', 'src/formats/theora/wasm-binary.ts', kernel],
     ['wma-audio', 'WMA_AUDIO_WASM_BINARY', 'src/formats/wma/wasm-binary.ts', kernel],
     // Scalar: the DXT5 fallback must run where SIMD is unavailable.
     [

@@ -62,20 +62,57 @@ function blendMode(mode: string): GlobalCompositeOperation {
   }
 }
 
-function insetBounds(clip: string, rect: DOMRect): [number, number, number, number] | undefined {
+type Axes = readonly [a: number, b: number, c: number, d: number];
+const identityAxes: Axes = [1, 0, 0, 1];
+
+function captureAxes(style: CSSStyleDeclaration, [a, b, c, d]: Axes): Axes {
+  if (
+    (!style.rotate || style.rotate === 'none') &&
+    (!style.scale || style.scale === 'none') &&
+    (!style.transform || style.transform === 'none')
+  )
+    return [a, b, c, d];
+  // The renderer uses affine transforms, including orthographic rotateX/rotateY.
+  const matrix =
+    style.transform && style.transform !== 'none'
+      ? new DOMMatrixReadOnly(style.transform)
+      : {a: 1, b: 0, c: 0, d: 1};
+  const [sx = 1, sy = sx] =
+    style.scale && style.scale !== 'none' ? style.scale.split(' ').map(Number) : [];
+  const angle =
+    style.rotate && style.rotate !== 'none' ? (Number.parseFloat(style.rotate) * Math.PI) / 180 : 0;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const x = cos * sx,
+    y = sin * sx,
+    u = -sin * sy,
+    v = cos * sy;
+  const ma = x * matrix.a + u * matrix.b;
+  const mb = y * matrix.a + v * matrix.b;
+  const mc = x * matrix.c + u * matrix.d;
+  const md = y * matrix.c + v * matrix.d;
+  return [a * ma + c * mb, b * ma + d * mb, a * mc + c * md, b * mc + d * md];
+}
+
+function ancestorAxes(element: HTMLElement): Axes {
+  const parent = element.parentElement;
+  return parent ? captureAxes(getComputedStyle(parent), ancestorAxes(parent)) : identityAxes;
+}
+
+function insetBounds(clip: string, width: number, height: number): number[] | undefined {
   const match = /^inset\(([-.0-9px% ]+)\)$/.exec(clip);
   if (!match) return;
   const edges = match[1]!.split(/ +/);
   const [top, right = top, bottom = top, left = right] = edges;
   const pixels = (edge: string, size: number): number =>
     Number.parseFloat(edge) * (edge.endsWith('%') ? size / 100 : 1);
-  const x = pixels(left!, rect.width);
-  const y = pixels(top!, rect.height);
+  const x = pixels(left!, width);
+  const y = pixels(top!, height);
   return [
-    rect.left + x,
-    rect.top + y,
-    Math.max(0, rect.width - x - pixels(right!, rect.width)),
-    Math.max(0, rect.height - y - pixels(bottom!, rect.height)),
+    x,
+    y,
+    Math.max(0, width - x - pixels(right!, width)),
+    Math.max(0, height - y - pixels(bottom!, height)),
   ];
 }
 
@@ -90,8 +127,8 @@ export function captureLayers(
   offsetY = 0,
   include?: (element: HTMLElement) => boolean,
 ): HTMLCanvasElement {
-  const left = bounds.left - offsetX * bounds.width / width;
-  const top = bounds.top - offsetY * bounds.height / height;
+  const left = bounds.left - (offsetX * bounds.width) / width;
+  const top = bounds.top - (offsetY * bounds.height) / height;
   const createSurface = () => {
     const canvas = document.createElement('canvas');
     canvas.width = width;
@@ -111,7 +148,7 @@ export function captureLayers(
   result.fillStyle = 'black';
   result.fillRect(left, top, bounds.width, bounds.height);
 
-  const draw = (context: CanvasRenderingContext2D, element: HTMLElement): void => {
+  const draw = (context: CanvasRenderingContext2D, element: HTMLElement, inherited: Axes): void => {
     if (include && !include(element)) return;
     if (element === substitute?.target) {
       const {left, top, width, height} = substitute.bounds;
@@ -124,29 +161,41 @@ export function captureLayers(
     if (!opacity) return;
     const blend = blendMode(style.mixBlendMode);
     const rect = element.getBoundingClientRect();
-    const clip = insetBounds(style.clipPath, rect);
+    const width = element.offsetWidth;
+    const height = element.offsetHeight;
+    const axes = captureAxes(style, inherited);
+    const [a, b, c, d] = axes;
+    // Recover the transformed local origin from the enclosing DOM rectangle.
+    // This includes translations, layout positions, and CSS transform origins.
+    const x = rect.left - Math.min(0, a * width) - Math.min(0, c * height);
+    const y = rect.top - Math.min(0, b * width) - Math.min(0, d * height);
+    const clip = insetBounds(style.clipPath, width, height);
     context.save();
-    if (style.overflow === 'hidden' || style.overflow === 'clip') {
+    const clipRect = (rect: readonly number[]) => {
       context.beginPath();
-      context.rect(rect.left, rect.top, rect.width, rect.height);
+      context.save();
+      context.transform(a, b, c, d, x, y);
+      context.rect(rect[0]!, rect[1]!, rect[2]!, rect[3]!);
+      context.restore();
       context.clip();
-    }
-    if (clip) {
-      context.beginPath();
-      context.rect(...clip);
-      context.clip();
-    }
+    };
+    if (style.overflow === 'hidden' || style.overflow === 'clip') clipRect([0, 0, width, height]);
+    if (clip) clipRect(clip);
     const drawContents = (target: CanvasRenderingContext2D): void => {
-      if (style.backgroundColor !== 'rgba(0, 0, 0, 0)') {
-        target.fillStyle = style.backgroundColor;
-        target.fillRect(rect.left, rect.top, rect.width, rect.height);
+      const background = style.backgroundColor !== 'rgba(0, 0, 0, 0)';
+      if (width && height && (background || element instanceof HTMLCanvasElement)) {
+        target.save();
+        target.transform(a, b, c, d, x, y);
+        if (background) {
+          target.fillStyle = style.backgroundColor;
+          target.fillRect(0, 0, width, height);
+        }
+        if (element instanceof HTMLCanvasElement) target.drawImage(element, 0, 0, width, height);
+        target.restore();
       }
-      if (element instanceof HTMLCanvasElement) {
-        if (rect.width && rect.height)
-          target.drawImage(element, rect.left, rect.top, rect.width, rect.height);
-      } else {
-        for (const child of element.children) if (child instanceof HTMLElement) draw(target, child);
-      }
+      if (!(element instanceof HTMLCanvasElement))
+        for (const child of element.children)
+          if (child instanceof HTMLElement) draw(target, child, axes);
     };
     if (opacity < 1 || blend !== 'source-over' || style.filter !== 'none') {
       const group = createSurface();
@@ -158,6 +207,6 @@ export function captureLayers(
     } else drawContents(context);
     context.restore();
   };
-  for (const layer of layers) draw(result, layer);
+  for (const layer of layers) draw(result, layer, ancestorAxes(layer));
   return result.canvas;
 }

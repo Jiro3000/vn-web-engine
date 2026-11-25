@@ -178,8 +178,10 @@ test('VC-1 SIMD kernels preserve reference arithmetic across transforms, predict
     checks++;
   };
   for (let trial = 0; trial < 200; trial++) {
-    fill(block, 4096);
-    for (let i = 0; i < 64; i++) block[i] -= 2048;
+    // Include coefficients that wrap at the first transform pass boundary.
+    const span = trial & 1 ? 65536 : 4096;
+    fill(block, span);
+    for (let i = 0; i < 64; i++) block[i] -= span / 2;
     fill(dst);
     fill(src);
     check(

@@ -17,10 +17,23 @@ export class TheoraBits {
     const byte = this.bytes[position >>> 3];
     return byte === undefined ? 0 : (byte >>> (7 - (position & 7))) & 1;
   }
+  peekByte(): number {
+    const byte = this.position >>> 3;
+    const word = ((this.bytes[byte] ?? 0) << 8) | (this.bytes[byte + 1] ?? 0);
+    return (word >>> (8 - (this.position & 7))) & 255;
+  }
+  skip(count: number): void {
+    this.position += count;
+  }
   read(count: number): number {
     let value = 0;
-    for (let index = 0; index < count; index++) value = value * 2 + this.read1();
-    return value;
+    for (; count > 8; count -= 8) {
+      value = value * 256 + this.peekByte();
+      this.position += 8;
+    }
+    const last = this.peekByte() >>> (8 - count);
+    this.position += count;
+    return value * (1 << count) + last;
   }
 }
 

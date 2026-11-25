@@ -109,38 +109,61 @@ fn tx8v(x: [v128; 8], round: i32, shift: u32, bias: i32) -> [v128; 8] {
         i32x4_shr(i32x4_add(i32x4_sub(ac, e), r), shift),
     ]
 }
-/// Four independent columns, with signed-16 narrowing at the same pass boundary as JS.
+#[inline(always)]
+fn tx8_pass(rows: [v128; 8], round: i32, shift: u32, bias: i32) -> [v128; 8] {
+    let left = tx8v(
+        rows.map(|row| i32x4_extend_low_i16x8(row)),
+        round,
+        shift,
+        bias,
+    );
+    let right = tx8v(
+        rows.map(|row| i32x4_extend_high_i16x8(row)),
+        round,
+        shift,
+        bias,
+    );
+    // Select the low half of each 32-bit lane to wrap to a signed coefficient.
+    core::array::from_fn(|i| i16x8_shuffle::<0, 2, 4, 6, 8, 10, 12, 14>(left[i], right[i]))
+}
+
+#[inline(always)]
+fn transpose_8x8(rows: [v128; 8]) -> [v128; 8] {
+    let pairs: [v128; 8] = core::array::from_fn(|i| {
+        let a = rows[i & !1];
+        let b = rows[(i & !1) + 1];
+        if i & 1 == 0 {
+            i16x8_shuffle::<0, 8, 1, 9, 2, 10, 3, 11>(a, b)
+        } else {
+            i16x8_shuffle::<4, 12, 5, 13, 6, 14, 7, 15>(a, b)
+        }
+    });
+    let quads: [v128; 8] = core::array::from_fn(|i| {
+        let a = pairs[i & !2];
+        let b = pairs[(i & !2) + 2];
+        if i & 2 == 0 {
+            i32x4_shuffle::<0, 4, 1, 5>(a, b)
+        } else {
+            i32x4_shuffle::<2, 6, 3, 7>(a, b)
+        }
+    });
+    core::array::from_fn(|i| {
+        let pair = (i >> 2) | (i & 2);
+        if i & 1 == 0 {
+            i64x2_shuffle::<0, 2>(quads[pair], quads[pair + 4])
+        } else {
+            i64x2_shuffle::<1, 3>(quads[pair], quads[pair + 4])
+        }
+    })
+}
+
+/// Two column passes with signed-16 wrapping and a transpose between them.
 #[no_mangle]
 pub unsafe extern "C" fn vc1_tx8(block: *mut i16) {
-    let mut tmp = [0i16; 64];
-    for col in [0, 4] {
-        let mut x = [i32x4_splat(0); 8];
-        for row in 0..8 {
-            x[row] = i32x4_extend_low_i16x8(v128_load64_zero(block.add(row * 8 + col).cast()));
-        }
-        let y = tx8v(x, 4, 3, 0);
-        for k in 0..8 {
-            tmp[col * 8 + k] = i32x4_extract_lane::<0>(y[k]) as i16;
-            tmp[(col + 1) * 8 + k] = i32x4_extract_lane::<1>(y[k]) as i16;
-            tmp[(col + 2) * 8 + k] = i32x4_extract_lane::<2>(y[k]) as i16;
-            tmp[(col + 3) * 8 + k] = i32x4_extract_lane::<3>(y[k]) as i16;
-        }
-    }
-    for col in [0, 4] {
-        let mut x = [i32x4_splat(0); 8];
-        for row in 0..8 {
-            x[row] =
-                i32x4_extend_low_i16x8(v128_load64_zero(tmp.as_ptr().add(row * 8 + col).cast()));
-        }
-        let y = tx8v(x, 64, 7, 1);
-        for row in 0..8 {
-            let p = block.add(row * 8 + col);
-            // Cast rather than saturate: coefficient storage uses signed-16 wrapping.
-            *p = i32x4_extract_lane::<0>(y[row]) as i16;
-            *p.add(1) = i32x4_extract_lane::<1>(y[row]) as i16;
-            *p.add(2) = i32x4_extract_lane::<2>(y[row]) as i16;
-            *p.add(3) = i32x4_extract_lane::<3>(y[row]) as i16;
-        }
+    let rows = core::array::from_fn(|row| v128_load(block.add(row * 8).cast()));
+    let columns = transpose_8x8(tx8_pass(rows, 4, 3, 0));
+    for (row, pixels) in tx8_pass(columns, 64, 7, 1).into_iter().enumerate() {
+        v128_store(block.add(row * 8).cast(), pixels);
     }
 }
 #[no_mangle]
@@ -236,40 +259,107 @@ unsafe fn line(p: *mut u8, stride: isize, pq: i32) -> bool {
     let m2 = at(-2);
     let m1 = at(-1);
     let p0 = at(0);
+    let difference = m1 - p0;
+    let c = difference.abs() >> 1;
+    if c == 0 {
+        return false;
+    }
     let p1 = at(1);
-    let raw = (2 * (m2 - p1) - 5 * (m1 - p0) + 4) >> 3;
+    let raw = (2 * (m2 - p1) - 5 * difference + 4) >> 3;
     let a0 = raw.abs();
     if a0 < pq {
         let a1 = ((2 * (at(-4) - m1) - 5 * (at(-3) - m2) + 4) >> 3).abs();
         let a2 = ((2 * (p0 - at(3)) - 5 * (p1 - at(2)) + 4) >> 3).abs();
-        if a1 < a0 || a2 < a0 {
-            let c = (m1 - p0).abs() >> 1;
-            if c != 0 {
-                let dr = 5 * (a1.min(a2) - a0);
-                let sign = (dr >> 31) ^ (raw >> 31);
-                if (sign ^ ((m1 - p0) >> 31)) == 0 {
-                    let d = (dr.abs() >> 3).min(c);
-                    let d = (d ^ sign) - sign;
-                    *p.offset(-stride) = clip(m1 - d);
-                    *p = clip(p0 + d);
-                }
-                return true;
+        let slope = a0 - a1.min(a2);
+        if slope > 0 {
+            if (raw ^ difference) < 0 {
+                let magnitude = ((5 * slope) >> 3).min(c);
+                let d = if difference < 0 {
+                    -magnitude
+                } else {
+                    magnitude
+                };
+                *p.offset(-stride) = (m1 - d) as u8;
+                *p = (p0 + d) as u8;
             }
+            return true;
         }
     }
     false
 }
 #[inline(always)]
-unsafe fn loop_edge<const H: bool, const N: usize>(p: *mut u8, pitch: isize, pq: i32) {
-    let step = if H { pitch } else { 1 };
-    let across = if H { 1 } else { pitch };
+unsafe fn loop_strided<const N: usize>(p: *mut u8, step: isize, pq: i32) {
     for i in (0..N).step_by(4) {
         let q = p.offset(i as isize * step);
-        if line(q.offset(2 * step), across, pq) {
-            line(q, across, pq);
-            line(q.offset(step), across, pq);
-            line(q.offset(3 * step), across, pq);
+        if line(q.offset(2 * step), 1, pq) {
+            line(q, 1, pq);
+            line(q.offset(step), 1, pq);
+            line(q.offset(3 * step), 1, pq);
         }
+    }
+}
+
+#[inline(always)]
+fn edge_response(outer: v128, inner: v128) -> v128 {
+    let twice_outer = i16x8_shl(outer, 1);
+    let five_inner = i16x8_mul(inner, i16x8_splat(5));
+    i16x8_shr(
+        i16x8_add(i16x8_sub(twice_outer, five_inner), i16x8_splat(4)),
+        3,
+    )
+}
+
+#[inline(always)]
+unsafe fn loop_contiguous<const N: usize>(p: *mut u8, pitch: isize, pq: i32) {
+    let read = |line| {
+        let ptr = p.offset(line * pitch);
+        let data = if N == 4 {
+            v128_load32_zero(ptr.cast())
+        } else {
+            v128_load64_zero(ptr.cast())
+        };
+        u16x8_extend_low_u8x16(data)
+    };
+    let m1 = read(-1);
+    let p0 = read(0);
+    let difference = i16x8_sub(m1, p0);
+    let limit = u16x8_shr(i16x8_abs(difference), 1);
+    // A group is filtered only when its third pixel passes the decision.
+    let anchors = if N == 4 { 0b0000_0100 } else { 0b0100_0100 };
+    let usable = i16x8_gt(limit, i16x8_splat(0));
+    if i16x8_bitmask(usable) & anchors == 0 {
+        return;
+    }
+    let m2 = read(-2);
+    let p1 = read(1);
+    let raw = edge_response(i16x8_sub(m2, p1), difference);
+    let a0 = i16x8_abs(raw);
+    let eligible = v128_and(usable, i16x8_lt(a0, i16x8_splat(pq as i16)));
+    if i16x8_bitmask(eligible) & anchors == 0 {
+        return;
+    }
+    let a1 = edge_response(i16x8_sub(read(-4), m1), i16x8_sub(read(-3), m2));
+    let a2 = edge_response(i16x8_sub(p0, read(3)), i16x8_sub(p1, read(2)));
+    let slope = i16x8_sub(a0, i16x8_min(i16x8_abs(a1), i16x8_abs(a2)));
+    let active = v128_and(eligible, i16x8_gt(slope, i16x8_splat(0)));
+    if i16x8_bitmask(active) & anchors == 0 {
+        return;
+    }
+    let group = i16x8_shuffle::<2, 2, 2, 2, 6, 6, 6, 6>(active, active);
+    let direction = i16x8_shr(difference, 15);
+    let sign_matches = i16x8_shr(v128_xor(raw, difference), 15);
+    let mask = v128_and(v128_and(active, group), sign_matches);
+    let magnitude = i16x8_min(i16x8_shr(i16x8_mul(slope, i16x8_splat(5)), 3), limit);
+    let delta = v128_and(i16x8_sub(v128_xor(magnitude, direction), direction), mask);
+    let m = i16x8_sub(m1, delta);
+    let q = i16x8_add(p0, delta);
+    let packed = u8x16_narrow_i16x8(m, q);
+    if N == 4 {
+        v128_store32_lane::<0>(packed, p.offset(-pitch).cast());
+        v128_store32_lane::<2>(packed, p.cast());
+    } else {
+        v128_store64_lane::<0>(packed, p.offset(-pitch).cast());
+        v128_store64_lane::<1>(packed, p.cast());
     }
 }
 #[no_mangle]
@@ -278,15 +368,18 @@ pub unsafe extern "C" fn vc1_loop(p: *mut u8, step: isize, stride: isize, length
     // removes generic address calculations and lets LLVM unroll the 4-pixel groups.
     if step == 1 {
         match length {
-            4 => loop_edge::<false, 4>(p, stride, pq),
-            8 => loop_edge::<false, 8>(p, stride, pq),
-            _ => loop_edge::<false, 16>(p, stride, pq),
+            4 => loop_contiguous::<4>(p, stride, pq),
+            8 => loop_contiguous::<8>(p, stride, pq),
+            _ => {
+                loop_contiguous::<8>(p, stride, pq);
+                loop_contiguous::<8>(p.add(8), stride, pq);
+            }
         }
     } else {
         match length {
-            4 => loop_edge::<true, 4>(p, step, pq),
-            8 => loop_edge::<true, 8>(p, step, pq),
-            _ => loop_edge::<true, 16>(p, step, pq),
+            4 => loop_strided::<4>(p, step, pq),
+            8 => loop_strided::<8>(p, step, pq),
+            _ => loop_strided::<16>(p, step, pq),
         }
     }
 }
@@ -306,30 +399,45 @@ unsafe fn write_bytes(p: *mut u8, mut value: v128, avg: bool) {
     let packed = u8x16_narrow_i16x8(i16x8_narrow_i32x4(value, i32x4_splat(0)), i16x8_splat(0));
     v128_store32_lane::<0>(packed, p.cast());
 }
+const MSPEL_COEFFICIENTS: [[i16; 4]; 4] = [
+    [0, 1, 0, 0],
+    [-4, 53, 18, -3],
+    [-1, 9, 9, -1],
+    [-3, 18, 53, -4],
+];
+
 #[inline(always)]
-fn filter(a: v128, b: v128, c: v128, d: v128, mode: i32) -> v128 {
-    match mode {
-        1 => i32x4_sub(
-            i32x4_add(mul(b, 53), mul(c, 18)),
-            i32x4_add(mul(a, 4), mul(d, 3)),
+unsafe fn filter_bytes8(p: *const u8, step: isize, weights: [v128; 4]) -> v128 {
+    let load = |at: isize| u16x8_extend_low_u8x16(v128_load64_zero(p.offset(at).cast()));
+    // A four-tap sum of unsigned bytes fits in signed 16-bit lanes.
+    i16x8_add(
+        i16x8_add(
+            i16x8_mul(load(-step), weights[0]),
+            i16x8_mul(load(0), weights[1]),
         ),
-        2 => i32x4_sub(mul(i32x4_add(b, c), 9), i32x4_add(a, d)),
-        3 => i32x4_sub(
-            i32x4_add(mul(b, 18), mul(c, 53)),
-            i32x4_add(mul(a, 3), mul(d, 4)),
+        i16x8_add(
+            i16x8_mul(load(step), weights[2]),
+            i16x8_mul(load(2 * step), weights[3]),
         ),
-        _ => b,
-    }
-}
-#[inline(always)]
-unsafe fn filter_bytes(p: *const u8, step: isize, mode: i32) -> v128 {
-    filter(
-        load_bytes(p.offset(-step)),
-        load_bytes(p),
-        load_bytes(p.offset(step)),
-        load_bytes(p.offset(2 * step)),
-        mode,
     )
+}
+
+#[inline(always)]
+unsafe fn filter_words4(p: *const i16, w01: v128, w23: v128) -> v128 {
+    // After the vertical pass the horizontal sum needs 32-bit lanes.
+    let samples = v128_load(p.cast());
+    let first = i16x8_shuffle::<0, 1, 1, 2, 2, 3, 3, 4>(samples, samples);
+    let last = i16x8_shuffle::<2, 3, 3, 4, 4, 5, 5, 6>(samples, samples);
+    i32x4_add(i32x4_dot_i16x8(first, w01), i32x4_dot_i16x8(last, w23))
+}
+
+#[inline(always)]
+unsafe fn write_mspel8(dst: *mut u8, value: v128, avg: bool) {
+    let mut bytes = u8x16_narrow_i16x8(value, value);
+    if avg {
+        bytes = u8x16_avgr(bytes, v128_load64_zero(dst.cast()));
+    }
+    v128_store64_lane::<0>(bytes, dst.cast());
 }
 /// Integral motion needs no interpolation or clipping. Reference and output planes
 /// are disjoint; averaging is the unsigned rounded average of corresponding bytes.
@@ -379,61 +487,53 @@ pub unsafe extern "C" fn vc1_mspel(
     if hm != 0 && vm != 0 {
         let shifts = [0, 5, 1, 5];
         let shift = (shifts[hm as usize] + shifts[vm as usize]) >> 1;
-        let r = i32x4_splat((1 << (shift - 1)) + rnd - 1);
-        let width = n + 3;
-        let mut tmp = [0i16; 19 * 16];
+        let round = i16x8_splat(((1 << (shift - 1)) + rnd - 1) as i16);
+        let vertical = MSPEL_COEFFICIENTS[vm as usize].map(|weight| i16x8_splat(weight));
+        let [a, b, c, d] = MSPEL_COEFFICIENTS[hm as usize];
+        let w01 = i16x8(a, b, a, b, a, b, a, b);
+        let w23 = i16x8(c, d, c, d, c, d, c, d);
+        let horizontal_round = i32x4_splat(64 - rnd);
+        let mut tmp = [0i16; 20];
         for row in 0..n {
-            for col in (0..n).step_by(4) {
-                let p = src.offset((row * stride + col) as isize - 1);
-                let value = i32x4_shr(i32x4_add(filter_bytes(p, stride as isize, vm), r), shift);
-                let value = i16x8_narrow_i32x4(value, i32x4_splat(0));
-                v128_store64_lane::<0>(value, tmp.as_mut_ptr().add(row * width + col).cast());
+            let input = src.add(row * stride).sub(1);
+            let output = dst.add(row * stride);
+            let mut vertical_at = |col| {
+                let sum = filter_bytes8(input.add(col), stride as isize, vertical);
+                v128_store(
+                    tmp.as_mut_ptr().add(col).cast(),
+                    i16x8_shr(i16x8_add(sum, round), shift),
+                );
+            };
+            for col in (0..n).step_by(8) {
+                vertical_at(col);
             }
-            // Three border columns remain. Scalar loads keep the read inside the
-            // 11- or 19-pixel emulated source block supplied by the host.
-            for col in n..width {
-                let p = src.offset((row * stride + col) as isize - 1);
-                let a = *p.offset(-(stride as isize)) as i32;
-                let b = *p as i32;
-                let c = *p.add(stride) as i32;
-                let d = *p.add(2 * stride) as i32;
-                let value = match vm {
-                    1 => -4 * a + 53 * b + 18 * c - 3 * d,
-                    2 => -a + 9 * b + 9 * c - d,
-                    _ => -3 * a + 18 * b + 53 * c - 4 * d,
-                };
-                tmp[row * width + col] = ((value + i32x4_extract_lane::<0>(r)) >> shift) as i16;
-            }
-        }
-        for row in 0..n {
-            for col in (0..n).step_by(4) {
-                let p = tmp.as_ptr().add(row * width + col + 1);
-                let load = |q: *const i16| i32x4_extend_low_i16x8(v128_load64_zero(q.cast()));
-                let v = filter(load(p.sub(1)), load(p), load(p.add(1)), load(p.add(2)), hm);
-                write_bytes(
-                    dst.add(row * stride + col),
-                    i32x4_shr(i32x4_add(v, i32x4_splat(64 - rnd)), 7),
+            // The last load overlaps five pixels and ends at the final border sample.
+            vertical_at(n - 5);
+            for col in (0..n).step_by(8) {
+                let p = tmp.as_ptr().add(col);
+                let half =
+                    |q| i32x4_shr(i32x4_add(filter_words4(q, w01, w23), horizontal_round), 7);
+                write_mspel8(
+                    output.add(col),
+                    i16x8_narrow_i32x4(half(p), half(p.add(4))),
                     avg,
                 );
             }
         }
     } else {
+        let (mode, r, step) = if vm != 0 {
+            (vm, 1 - rnd, stride as isize)
+        } else {
+            (hm, rnd, 1)
+        };
+        let weights = MSPEL_COEFFICIENTS[mode as usize].map(|weight| i16x8_splat(weight));
+        let (shift, round) = if mode == 2 { (4, 8 - r) } else { (6, 32 - r) };
+        let round = i16x8_splat(round as i16);
         for row in 0..n {
-            for col in (0..n).step_by(4) {
+            for col in (0..n).step_by(8) {
                 let p = src.add(row * stride + col);
-                let mode = if vm != 0 { vm } else { hm };
-                let value = if mode == 0 {
-                    load_bytes(p)
-                } else {
-                    let r = if vm != 0 { 1 - rnd } else { rnd };
-                    let v = filter_bytes(p, if vm != 0 { stride as isize } else { 1 }, mode);
-                    let shift = if mode == 2 { 4 } else { 6 };
-                    let round = if mode == 2 { 8 - r } else { 32 - r };
-                    i32x4_shr(i32x4_add(v, i32x4_splat(round)), shift)
-                };
-                // Clip before averaging, matching the reference's put/avg interpolation variants.
-                let value = i32x4_min(i32x4_max(value, i32x4_splat(0)), i32x4_splat(255));
-                write_bytes(dst.add(row * stride + col), value, avg);
+                let shifted = i16x8_shr(i16x8_add(filter_bytes8(p, step, weights), round), shift);
+                write_mspel8(dst.add(row * stride + col), shifted, avg);
             }
         }
     }
