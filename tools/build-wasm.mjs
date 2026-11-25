@@ -33,6 +33,24 @@ try {
     ['vc1-video', 'VC1_VIDEO_WASM_BINARY', 'src/formats/vc1/wasm-binary.ts', kernel],
     ['i420-rgba', 'I420_RGBA_WASM_BINARY', 'src/video/i420-rgba-wasm-binary.ts', kernel],
     ['theora-recon', 'THEORA_RECON_WASM_BINARY', 'src/formats/theora/wasm-binary.ts', kernel],
+    [
+      'siglus-lz',
+      'SIGLUS_LZ_WASM_BINARY',
+      'src/formats/siglus/lz-wasm-binary.ts',
+      ['-C', 'link-arg=--export=__heap_base'],
+    ],
+    [
+      'siglus-nwa',
+      'SIGLUS_NWA_WASM_BINARY',
+      'src/formats/siglus/nwa-wasm-binary.ts',
+      ['-C', 'link-arg=--export=__heap_base'],
+    ],
+    [
+      'siglus-wipe',
+      'SIGLUS_WIPE_WASM_BINARY',
+      'src/engines/siglus/wipe-wasm-binary.ts',
+      ['-C', 'link-arg=--export=__heap_base'],
+    ],
     ['wma-audio', 'WMA_AUDIO_WASM_BINARY', 'src/formats/wma/wasm-binary.ts', kernel],
     // Scalar: the DXT5 fallback must run where SIMD is unavailable.
     [

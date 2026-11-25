@@ -1,6 +1,8 @@
 use core::arch::wasm32::*;
 use core::ptr::copy_nonoverlapping;
 
+mod tokens;
+
 #[inline]
 unsafe fn load_four(bytes: *const u8) -> v128 {
     u32x4_extend_low_u16x8(u16x8_extend_low_u8x16(v128_load32_zero(bytes.cast())))

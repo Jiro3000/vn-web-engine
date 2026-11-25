@@ -1,3 +1,6 @@
+import {bgraLuminanceMask} from '../../graphics/bgra-effects-wasm.js';
+import {createFanWipeRaster} from './wipe-wasm.js';
+
 type Point = readonly [number, number];
 
 export interface FanWipe {
@@ -30,6 +33,7 @@ export function g00MaskValues(
   reverse = false,
 ): Uint8Array {
   const values = new Uint8Array(width * height);
+  if (bgraLuminanceMask(bgra, values, reverse)) return values;
   for (let i = 0; i < values.length; i++) {
     const b = bgra[i * 4]!;
     const g = bgra[i * 4 + 1]!;
@@ -273,6 +277,7 @@ export function fanWipeMask(
   {quadrant, reverse}: FanWipe,
 ): Uint8Array {
   const mask = new Uint8Array(width * height);
+  const raster = createFanWipeRaster(width, height, mask);
   const x = Math.floor(width / 2);
   const y = Math.floor(height / 2);
   const radius = Math.floor(Math.SQRT2 * (Math.max(x, y) + 64));
@@ -303,11 +308,15 @@ export function fanWipeMask(
         cy + Math.trunc(radius * (dy * cos + dx * sin) + 0.5),
       ];
       const level = band * 64 + step;
-      if (previous && (previous[0] !== next[0] || previous[1] !== next[1]))
-        fillTriangle(mask, width, height, [cx, cy], previous, next, reverse ? level : 255 - level);
+      if (previous && (previous[0] !== next[0] || previous[1] !== next[1])) {
+        const alpha = reverse ? level : 255 - level;
+        if (raster) raster.triangle([cx, cy], previous, next, alpha);
+        else fillTriangle(mask, width, height, [cx, cy], previous, next, alpha);
+      }
       previous = next;
     }
   }
+  raster?.finish();
   return mask;
 }
 

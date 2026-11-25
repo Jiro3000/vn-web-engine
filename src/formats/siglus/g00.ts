@@ -19,6 +19,34 @@ function pixelBytes(width: number, height: number): number {
   return width * height * 4;
 }
 
+/** The decoded atlas and its header, transferable without copying the pixels. */
+export interface G00Resource {
+  readonly type: number;
+  readonly width: number;
+  readonly height: number;
+  readonly count: number;
+  readonly data: Uint8Array<ArrayBuffer>;
+}
+
+export function decodeG00(bytes: Uint8Array): G00Resource {
+  const view = byteDataView(bytes);
+  const type = view.getUint8(0);
+  const width = view.getUint16(1, true);
+  const height = view.getUint16(3, true);
+  pixelBytes(width, height);
+  const count = type === 2 ? view.getUint32(5, true) : 1;
+  const start = type === 2 ? 9 + count * 24 : 5;
+  checkRange(bytes.length, start, 1);
+  const payload = bytes.subarray(start);
+  let data: Uint8Array<ArrayBuffer>;
+  if (type === 3) {
+    data = new Uint8Array(payload);
+    xorCycle(data, imageXor);
+  } else if (type <= 2) data = unpackSiglusLz(payload, type === 0);
+  else throw new Error(`Unsupported G00 type ${type}`);
+  return {type, width, height, count, data};
+}
+
 /** Keeps decompressed cut data and expands only the requested frame. */
 export class G00Image {
   readonly type: number;
@@ -27,20 +55,15 @@ export class G00Image {
   readonly count: number;
   private readonly data: Uint8Array<ArrayBuffer>;
 
-  constructor(bytes: Uint8Array) {
-    const view = byteDataView(bytes);
-    this.type = view.getUint8(0);
-    this.width = view.getUint16(1, true);
-    this.height = view.getUint16(3, true);
-    pixelBytes(this.width, this.height);
-    this.count = this.type === 2 ? view.getUint32(5, true) : 1;
-    const start = this.type === 2 ? 9 + this.count * 24 : 5;
-    checkRange(bytes.length, start, 1);
-    if (this.type === 3) {
-      this.data = new Uint8Array(bytes.subarray(start));
-      xorCycle(this.data, imageXor);
-    } else if (this.type <= 2) this.data = unpackSiglusLz(bytes.subarray(start), this.type === 0);
-    else throw new Error(`Unsupported G00 type ${this.type}`);
+  constructor(source: Uint8Array | G00Resource) {
+    const {type, width, height, count, data} = ArrayBuffer.isView(source)
+      ? decodeG00(source)
+      : source;
+    this.type = type;
+    this.width = width;
+    this.height = height;
+    this.count = count;
+    this.data = data;
   }
 
   jpeg(): Uint8Array<ArrayBuffer> {

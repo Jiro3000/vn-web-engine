@@ -366,9 +366,10 @@ export class TheoraDecoder {
     this.macroblockChroma = Int32Array.from(chromaFragments);
     this.macroblocks = luma.length / 4;
     const count = this.fragments;
-    const recon = options.wasm === false
-      ? undefined
-      : TheoraReconstruction.create(count, setup, options.rgbaCapacity ?? 0);
+    const recon =
+      options.wasm === false
+        ? undefined
+        : TheoraReconstruction.create(count, setup, options.rgbaCapacity ?? 0, this.tokenPrefixes);
     this.reconstruction = recon;
     this.coded = recon?.coded ?? new Uint8Array(count);
     this.mode = recon?.mode ?? new Uint8Array(count);
@@ -442,7 +443,8 @@ export class TheoraDecoder {
       this.motionVectors(bits);
     }
     this.blockQis(bits, codedList, qis.length);
-    this.tokens(bits, codedList);
+    if (!this.reconstruction?.decodeTokens(packet, bits.bitPosition, codedList))
+      this.tokens(bits, codedList);
     const filterLimit = this.setup.loopFilterLimits[qis[0]!]!;
     if (this.reconstruction) this.reconstruction.reconstruct(
       this.buffers[this.current]!,

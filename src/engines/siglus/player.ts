@@ -830,6 +830,7 @@ export class SiglusPlayer {
         command: (command) => this.command(command),
         property: (path, value) => this.property(path, value),
         trace: this.trace ?? (() => {}),
+        resetStageForMenu: () => this.resetStageForMenu(),
         yieldDelay: () => (this.systemOption('SLEEP_ONOFF') ? 16 : 0),
         message: (tag) => {
           this.beginMessage();
@@ -2770,8 +2771,7 @@ export class SiglusPlayer {
     }
   }
 
-  private beginDayObjects(): void {
-    this.dayStage = true;
+  private clearStageObjectPages(): void {
     this.objects[0]!.clear();
     this.objects[1]!.clear();
     this.objectsDirty = false;
@@ -2779,10 +2779,30 @@ export class SiglusPlayer {
     this.pruneDeadButtonGroups();
   }
 
+  private beginDayObjects(): void {
+    this.dayStage = true;
+    this.clearStageObjectPages();
+  }
+
   private clearDayObjects(): void {
     if (!this.dayStage) return;
-    this.beginDayObjects();
+    this.clearStageObjectPages();
     this.dayStage = false;
+  }
+
+  private resetStageForMenu(): void {
+    // Perfect Edition 0x65f5eb -> 0x6321a0 resets both native stage object lists
+    // before the menu script builds the next page.
+    this.display.finishWipe();
+    this.clearStageObjectPages();
+    this.dayStage = false;
+    for (const [key, action] of this.frameActions) {
+      if (action.path[0] === 37 || action.path[0] === 38) {
+        this.frameActions.delete(key);
+        this.frameActionCounters.delete(key);
+      }
+    }
+    this.releaseUnusedObjectMovies();
   }
 
   private async renderObjects(): Promise<void> {
@@ -4973,7 +4993,6 @@ export class SiglusPlayer {
         this.scriptHistoryRecordingDisabled = this.scriptAutoSavePointDisabled = false;
         this.savePoint = undefined;
         this.sceneCounters.clear();
-        this.clearDayObjects();
         this.vm.returnToMenu();
       }
       if (member === 11 || member === 12) {

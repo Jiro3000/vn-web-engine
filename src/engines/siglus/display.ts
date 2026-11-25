@@ -1,5 +1,7 @@
 import type {ByteSource} from '../../core/source.js';
+import {workerSourceOf, type WorkerSource} from '../../core/worker-source.js';
 import {BrowserWindowDisplayHost} from '../../platform/browser-window-display.js';
+import {WorkerPool} from '../../platform/worker-pool.js';
 import {
   domTextClasses,
   domTextFamily,
@@ -8,7 +10,7 @@ import {
 } from '../../text/dom-text-style.js';
 import {readSfntFontMetadata} from '../../formats/sfnt.js';
 import {readGan} from '../../formats/siglus/gan.js';
-import {G00Image, type G00Frame} from '../../formats/siglus/g00.js';
+import {G00Image, type G00Frame, type G00Resource} from '../../formats/siglus/g00.js';
 import {readSiglusToneCurves, type SiglusToneCurve} from '../../formats/siglus/tonecurve.js';
 import {SiglusOmvPlayback} from '../../video/siglus-omv-playback.js';
 import {captureLayers, encodeCaptureBmp} from './capture.js';
@@ -565,6 +567,8 @@ export class SiglusDisplay {
     number,
     {name?: string; url?: string; x: number; y: number}
   >();
+  private readonly pendingObjectMasks = new Map<number, object>();
+  private objectMaskRestoreGeneration = 0;
   private readonly spaceHideIds: ReadonlySet<number>;
   private messageDisplayed = true;
   private readonly messageFilterOverrides = new Map<
@@ -659,6 +663,7 @@ export class SiglusDisplay {
   private messageShadow = 2;
   private readonly portrait = document.createElement('div');
   private readonly media = new Map<string, Promise<G00Image>>();
+  private g00Worker?: WorkerPool<WorkerSource, G00Resource>;
   private readonly graphicCache = new Map<string, {graphic: Graphic; bytes: number}>();
   private graphicCacheBytes = 0;
   private readonly inFlightGraphics = new Map<string, Promise<Graphic>>();
@@ -676,6 +681,7 @@ export class SiglusDisplay {
     originY: number;
   }>;
   private stageGeneration = 0;
+  private readonly systemLayerDraws = new WeakMap<HTMLElement, object>();
   private wipe?: Animation;
   private systemInput = false;
   private readonly keys = [this.inputKey(), this.inputKey()];
@@ -1108,9 +1114,12 @@ export class SiglusDisplay {
     front = false,
     duration = 0,
   ): Promise<void> {
+    const container = front ? this.systemFrontLayer : this.systemLayer;
+    const draw = {};
+    this.systemLayerDraws.set(container, draw);
     const next = await this.drawObjects(objects, button);
     this.signal.throwIfAborted();
-    const container = front ? this.systemFrontLayer : this.systemLayer;
+    if (this.systemLayerDraws.get(container) !== draw) return;
     if (duration > 0 && typeof next.animate === 'function') {
       const previous = [...container.children] as HTMLElement[];
       this.preserveStageFocus(() => {
@@ -1137,7 +1146,6 @@ export class SiglusDisplay {
       }
       this.preserveStageFocus(() => {
         for (const child of previous) child.remove();
-        if (next.childElementCount === 0) container.replaceChildren();
       });
       return;
     }
@@ -1207,10 +1215,12 @@ export class SiglusDisplay {
   }
 
   clearSystemObjects(): void {
+    this.systemLayerDraws.delete(this.systemLayer);
     this.preserveStageFocus(() => this.systemLayer.replaceChildren());
   }
 
   clearSystemFrontObjects(): void {
+    this.systemLayerDraws.delete(this.systemFrontLayer);
     this.preserveStageFocus(() => this.systemFrontLayer.replaceChildren());
   }
 
@@ -1963,11 +1973,32 @@ export class SiglusDisplay {
     } else {
       const file = this.files.get(path);
       if (!file) throw new Error(`Missing Siglus image ${name}`);
-      pending = file.read(0, file.size, this.signal).then((bytes) => new G00Image(bytes));
+      pending = this.readG00(file);
       this.media.set(path, pending);
+      void pending.catch(() => {
+        if (this.media.get(path) === pending) this.media.delete(path);
+      });
       if (this.media.size > 24) this.media.delete(this.media.keys().next().value!);
     }
     return pending;
+  }
+
+  private async readG00(file: ByteSource): Promise<G00Image> {
+    const signal = this.signal;
+    signal.throwIfAborted();
+    const pool = (this.g00Worker ??= new WorkerPool<WorkerSource, G00Resource>(
+      () => new Worker(new URL('./g00-worker.js', import.meta.url), {type: 'module'}),
+    ));
+    if (pool.available) {
+      const source = await workerSourceOf(file, signal);
+      signal.throwIfAborted();
+      const decoded = await pool.run(source);
+      signal.throwIfAborted();
+      if (decoded) return new G00Image(decoded);
+    }
+    const bytes = await file.read(0, file.size, signal);
+    signal.throwIfAborted();
+    return new G00Image(bytes);
   }
 
   private rememberGraphic(key: string, graphic: Graphic): void {
@@ -2089,33 +2120,37 @@ export class SiglusDisplay {
   }
 
   async setObjectMask(slot: number, name?: string): Promise<void> {
+    this.pendingObjectMasks.delete(slot);
     if (name === undefined) {
       this.objectMasks.delete(slot);
       return;
     }
     const existing = this.objectMasks.get(slot);
     if (existing?.name === name && existing.url) return;
+    const update = {};
+    this.pendingObjectMasks.set(slot, update);
     const key = name.toLowerCase();
-    let url = this.maskUrlCache.get(key);
-    if (url) {
-      this.maskUrlCache.delete(key);
-      this.maskUrlCache.set(key, url);
-    } else {
-      const graphic = await this.graphic(name);
-      const canvas =
-        graphic.image instanceof HTMLCanvasElement ? graphic.image : this.node(graphic);
-      url = canvas.toDataURL();
-      this.maskUrlCache.set(key, url);
-      if (this.maskUrlCache.size > 32) {
-        this.maskUrlCache.delete(this.maskUrlCache.keys().next().value!);
+    try {
+      let url = this.maskUrlCache.get(key);
+      if (url) {
+        this.maskUrlCache.delete(key);
+        this.maskUrlCache.set(key, url);
+      } else {
+        const graphic = await this.graphic(name);
+        if (this.pendingObjectMasks.get(slot) !== update) return;
+        const canvas =
+          graphic.image instanceof HTMLCanvasElement ? graphic.image : this.node(graphic);
+        url = canvas.toDataURL();
+        this.maskUrlCache.set(key, url);
+        if (this.maskUrlCache.size > 32) {
+          this.maskUrlCache.delete(this.maskUrlCache.keys().next().value!);
+        }
       }
+      const {x = 0, y = 0} = this.objectMasks.get(slot) ?? {};
+      this.objectMasks.set(slot, {name, url, x, y});
+    } finally {
+      if (this.pendingObjectMasks.get(slot) === update) this.pendingObjectMasks.delete(slot);
     }
-    this.objectMasks.set(slot, {
-      name,
-      url,
-      x: existing?.x ?? 0,
-      y: existing?.y ?? 0,
-    });
   }
 
   setObjectMaskOffset(slot: number, axis: 'x' | 'y', value: number): number {
@@ -2139,8 +2174,11 @@ export class SiglusDisplay {
   async restoreObjectMasks(
     saved?: readonly [number, {name?: string; x: number; y: number}][],
   ): Promise<void> {
+    const generation = ++this.objectMaskRestoreGeneration;
+    this.pendingObjectMasks.clear();
     this.objectMasks.clear();
     for (const [slot, m] of saved ?? []) {
+      if (generation !== this.objectMaskRestoreGeneration) return;
       this.objectMasks.set(slot, {x: m.x, y: m.y});
       if (m.name) await this.setObjectMask(slot, m.name);
     }
@@ -5173,6 +5211,11 @@ export class SiglusDisplay {
   }
 
   dispose(): void {
+    this.g00Worker?.terminate();
+    this.systemLayerDraws.delete(this.systemLayer);
+    this.systemLayerDraws.delete(this.systemFrontLayer);
+    this.objectMaskRestoreGeneration++;
+    this.pendingObjectMasks.clear();
     this.updateWaitIcon(false);
     this.colorFilterSvg?.remove();
     this.colorFilterSvg = undefined;

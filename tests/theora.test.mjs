@@ -56,3 +56,18 @@ test('Theora identification header keeps the picture region inside the padded fr
   assert.deepEqual(parseTheoraInfo(header), info);
   assert.throws(() => parseTheoraInfo(header.subarray(0, 20)), /Truncated Theora/);
 });
+
+test('Theora preserves frame references across packets too large for WASM token scratch space', () => {
+  const clip = manifest.clips.find(({name}) => name === 'testsrc2-420');
+  const stream = readTheoraOgg(readFileSync(new URL(clip.name + '.ogv', directory)));
+  const decoder = new TheoraDecoder(stream.info, stream.setup);
+  for (const [index, packet] of stream.packets.entries()) {
+    if (index % 2 && packet.length) {
+      // Zero padding leaves the bitstream unchanged and exceeds this frame's scratch capacity.
+      const padded = new Uint8Array(65537 + packet.length);
+      padded.set(packet);
+      decoder.decode(padded);
+    } else decoder.decode(packet);
+    assert.equal(frameHash(decoder, clip.width, clip.height, clip.format), clip.frames[index]);
+  }
+});

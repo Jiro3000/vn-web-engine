@@ -25,6 +25,7 @@ export interface SiglusServices {
   property(path: number[], value?: Value): Value | undefined;
   message(tag: Extract<SiglusTag, {tag: 'name' | 'text'}>): void | Promise<void>;
   trace(tag: SiglusTag): void;
+  resetStageForMenu?(): void;
   yieldDelay?(): number;
 }
 
@@ -239,6 +240,7 @@ export class SiglusVm {
         return;
       } catch (error) {
         if (error instanceof ReturnToMenu) {
+          this.services.resetStageForMenu?.();
           frames = [this.entry(error.scene, error.entry)];
         } else if (this.pendingLoad && error === this.pendingLoad.checkpoint) {
           frames = this.restore(this.pendingLoad.checkpoint);

@@ -1,6 +1,7 @@
 import {byteDataView, checkRange} from '../../core/binary.js';
 import type {ByteSource} from '../../core/source.js';
 import {xorByteInPlace} from './compression.js';
+import {decodeNwaWasm, type NwaBlockRange} from './nwa-wasm.js';
 
 /** OWP stores an Ogg bitstream with a constant bytewise XOR mask. */
 export function decodeOwp(bytes: Uint8Array<ArrayBuffer>): Uint8Array<ArrayBuffer> {
@@ -158,9 +159,28 @@ function nwaBlock(
   }
 }
 
+function nwaBlocks(
+  bytes: Uint8Array,
+  table: DataView,
+  range: NwaBlockRange,
+  header: NwaHeader,
+  pcm: Int16Array,
+): void {
+  if (decodeNwaWasm(bytes, table, range, header, pcm)) return;
+  const {first, last, sourceOffset, sourceEnd} = range;
+  const view = byteDataView(bytes);
+  for (let i = first; i < last; i++) {
+    const start = table.getUint32(i * 4, true) - sourceOffset;
+    const end = (i + 1 === last ? sourceEnd : table.getUint32((i + 1) * 4, true)) - sourceOffset;
+    const destination = (i - first) * header.blockSamples;
+    const count = Math.min(header.blockSamples, pcm.length - destination);
+    nwaBlock(bytes, view, start, end, header, pcm, destination, count);
+  }
+}
+
 export function decodeNwa(bytes: Uint8Array): {channels: number; rate: number; pcm: Int16Array} {
   const header = nwaHeader(bytes);
-  const {channels, rate, level, samples, blocks, blockSamples, lastSamples, lastBytes, sampleBytes, size} = header;
+  const {channels, rate, level, samples, blocks, lastBytes, sampleBytes, size} = header;
   const pcm = new Int16Array(samples);
   if (level === -1) {
     checkRange(bytes.length, nwaHeaderSize, size);
@@ -168,13 +188,9 @@ export function decodeNwa(bytes: Uint8Array): {channels: number; rate: number; p
     return {channels, rate, pcm};
   }
   checkRange(bytes.length, nwaHeaderSize, blocks * 4);
-  const view = byteDataView(bytes);
-  for (let i = 0; i < blocks; i++) {
-    const start = view.getUint32(nwaHeaderSize + i * 4, true);
-    const last = i === blocks - 1;
-    const end = last ? start + lastBytes : view.getUint32(nwaHeaderSize + (i + 1) * 4, true);
-    nwaBlock(bytes, view, start, end, header, pcm, i * blockSamples, last ? lastSamples : blockSamples);
-  }
+  const table = byteDataView(bytes.subarray(nwaHeaderSize, nwaHeaderSize + blocks * 4));
+  const sourceEnd = table.getUint32((blocks - 1) * 4, true) + lastBytes;
+  nwaBlocks(bytes, table, {first: 0, last: blocks, sourceOffset: 0, sourceEnd}, header, pcm);
   return {channels, rate, pcm};
 }
 
@@ -216,14 +232,9 @@ export async function openNwa(source: ByteSource, signal?: AbortSignal) {
       const start = table.getUint32(from * 4, true);
       const end = to === blocks ? table.getUint32((to - 1) * 4, true) + lastBytes : table.getUint32(to * 4, true);
       const bytes = await source.read(start, end - start, signal);
-      const view = byteDataView(bytes);
       const pcm = new Int16Array(Math.min(samples, to * blockSamples) - from * blockSamples);
-      for (let i = from; i < to; i++) {
-        const offset = table.getUint32(i * 4, true) - start;
-        const limit = i + 1 === to ? bytes.length : table.getUint32((i + 1) * 4, true) - start;
-        const destination = (i - from) * blockSamples;
-        nwaBlock(bytes, view, offset, limit, header, pcm, destination, Math.min(blockSamples, pcm.length - destination));
-      }
+      const range = {first: from, last: to, sourceOffset: start, sourceEnd: start + bytes.length};
+      nwaBlocks(bytes, table, range, header, pcm);
       const cursor = first - from * blockSamples;
       return pcm.subarray(cursor, cursor + length);
     },

@@ -1,5 +1,56 @@
 use core::arch::wasm32::*;
 
+/// Convert BGRA to a one-byte luminance mask using the integer coefficients of
+/// Siglus custom wipes. Alpha is ignored.
+///
+/// # Safety
+/// The input must hold four bytes per pixel and the output one byte per pixel.
+/// The input and output ranges must be disjoint.
+#[no_mangle]
+pub unsafe extern "C" fn bgra_luminance_mask(
+    source: *const u8,
+    output: *mut u8,
+    pixels: usize,
+    reverse: u32,
+) {
+    let channel = u32x4_splat(255);
+    let invert = u32x4_splat(if reverse == 0 { 0 } else { 255 });
+    let mut i = 0;
+    while i + 4 <= pixels {
+        let packed = v128_load(source.add(i * 4).cast());
+        let b = v128_and(packed, channel);
+        let g = v128_and(u32x4_shr(packed, 8), channel);
+        let r = v128_and(u32x4_shr(packed, 16), channel);
+        let weighted = i32x4_add(
+            i32x4_add(
+                i32x4_mul(r, i32x4_splat(299)),
+                i32x4_mul(g, i32x4_splat(587)),
+            ),
+            i32x4_mul(b, i32x4_splat(114)),
+        );
+        // Every numerator is exact in f32. A noninteger quotient lies at
+        // least 0.001 from either integer, beyond f32 rounding error here.
+        let luminance = i32x4_trunc_sat_f32x4(f32x4_div(
+            f32x4_convert_i32x4(weighted),
+            f32x4_splat(1000.0),
+        ));
+        let luminance = v128_xor(luminance, invert);
+        let bytes =
+            i8x16_shuffle::<0, 4, 8, 12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>(luminance, luminance);
+        v128_store32_lane::<0>(bytes, output.add(i).cast());
+        i += 4;
+    }
+    let invert = if reverse == 0 { 0 } else { 255 };
+    while i < pixels {
+        let pixel = source.add(i * 4);
+        let weighted = u32::from(*pixel.add(2)) * 299
+            + u32::from(*pixel.add(1)) * 587
+            + u32::from(*pixel) * 114;
+        *output.add(i) = (weighted / 1000) as u8 ^ invert;
+        i += 1;
+    }
+}
+
 /// Convert a dirty rectangle to opaque RGBA and return the changed row bounds.
 #[no_mangle]
 pub unsafe extern "C" fn present_bgrx(

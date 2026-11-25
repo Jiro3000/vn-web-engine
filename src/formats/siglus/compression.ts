@@ -1,4 +1,5 @@
-import {byteDataView, checkRange} from '../../core/binary.js';
+import {byteDataView} from '../../core/binary.js';
+import {unpackSiglusLzWasm} from './lz-wasm.js';
 
 export function xorCycle(bytes: Uint8Array, key: Uint8Array, start = 0): void {
   const keyLen = key.length;
@@ -41,6 +42,8 @@ export function unpackSiglusLz(bytes: Uint8Array, pixelMode = false): Uint8Array
   const unit = pixelMode ? 4 : 1;
   if (packed !== bytes.length || size > 128 * 1024 * 1024 || size % unit)
     throw new Error('Invalid Siglus LZSS header');
+  const accelerated = unpackSiglusLzWasm(bytes.subarray(8), size, pixelMode);
+  if (accelerated) return accelerated;
   const output = new Uint8Array(size);
   let input = 8;
   let dest = 0;

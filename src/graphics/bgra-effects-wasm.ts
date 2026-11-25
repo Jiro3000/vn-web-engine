@@ -4,6 +4,7 @@ import {BGRA_EFFECTS_WASM_BINARY} from './bgra-effects-wasm-binary.js';
 interface BgraEffects extends WebAssembly.Exports {
   memory: WebAssembly.Memory;
   __heap_base: WebAssembly.Global;
+  bgra_luminance_mask: (source: number, output: number, pixels: number, reverse: number) => void;
   present_bgrx: (
     source: number,
     destination: number,
@@ -94,6 +95,7 @@ interface BgraEffects extends WebAssembly.Exports {
 const MIN_PIXELS = 65536;
 /** A resident target needs no staging, so smaller blends already gain from the kernel. */
 const RESIDENT_MIN_PIXELS = 1024;
+const MASK_BAND_PIXELS = 256 * 1024;
 /** Bytes of each image staged per transition band. */
 const TRANSITION_BAND = 128 * 1024;
 const MAX_SCRATCH = 128 * 1024 * 1024;
@@ -103,6 +105,7 @@ interface ScratchOwner {
   source?: {bytes: WeakRef<Uint8Array>; revision: number};
 }
 const blendMemory: ScratchOwner = {};
+const maskMemory: ScratchOwner = {};
 const scaleMemory: ScratchOwner = {};
 const rowCacheMemory: ScratchOwner = {};
 const transitionMemory: ScratchOwner = {};
@@ -175,6 +178,29 @@ function workspace(owner: ScratchOwner, sizes: readonly number[]) {
 }
 
 const residentTargets = new WeakMap<Uint8Array, NonNullable<ReturnType<typeof workspace>>>();
+
+/** Convert a large custom wipe image to its one-channel luminance mask. */
+export function bgraLuminanceMask(bgra: Uint8Array, output: Uint8Array, reverse: boolean): boolean {
+  if (
+    output.length < MIN_PIXELS ||
+    bgra.length < output.length * 4 ||
+    bgra.buffer === output.buffer
+  )
+    return false;
+  const band = Math.min(MASK_BAND_PIXELS, output.length);
+  const stage = workspace(maskMemory, [band * 4, band]);
+  if (!stage) return false;
+  const [sourceAt, outputAt] = stage.offsets;
+  const source = new Uint8Array(stage.buffer, sourceAt!, band * 4);
+  const mask = new Uint8Array(stage.buffer, outputAt!, band);
+  for (let offset = 0; offset < output.length; offset += band) {
+    const count = Math.min(band, output.length - offset);
+    source.set(bgra.subarray(offset * 4, (offset + count) * 4));
+    stage.kernel.bgra_luminance_mask(sourceAt!, outputAt!, count, Number(reverse));
+    output.set(count === band ? mask : mask.subarray(0, count), offset);
+  }
+  return true;
+}
 
 /** Give a large compositor target a fixed backing buffer and private blend scratch. */
 export function allocateBgraTarget(length: number): Uint8Array | null {

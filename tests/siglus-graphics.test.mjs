@@ -1,7 +1,42 @@
 import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
 import test from 'node:test';
 import {captureLayers} from '../dist/engines/siglus/capture.js';
 import {SiglusDisplay} from '../dist/engines/siglus/display.js';
+import {fanWipeMask, g00MaskValues} from '../dist/engines/siglus/wipe.js';
+import {bgraLuminanceMask} from '../dist/graphics/bgra-effects-wasm.js';
+
+test('full-screen fan wipes preserve inclusive edges and reversed odd-size masks', () => {
+  for (const [width, height, quadrant, reverse, expected] of [
+    [1920, 1080, 2, false, '20fe7553c6841e0811943986633b9fb25dee8c1998331c075b2568a9d6266020'],
+    [1919, 1079, 3, true, '369a4476558930569c23ddad9a7ca9c9a90286caecf604552acddb2ca0fc8682'],
+  ]) {
+    const mask = fanWipeMask(width, height, {softness: 0.5, quadrant, reverse});
+    assert.equal(createHash('sha256').update(mask).digest('hex'), expected);
+  }
+});
+
+test('large G00 wipe masks preserve integer luminance, reversal, and odd band tails', () => {
+  const width = 513;
+  const height = 515;
+  const bgra = new Uint8Array(width * height * 4);
+  const expected = new Uint8Array(width * height);
+  for (let i = 0; i < expected.length; i++) {
+    const blue = (i >>> 3) & 255;
+    const green = i % 4 === 0 ? blue : (i * 79) & 255;
+    const red = i % 4 === 0 ? blue : (i * 131 + 1) & 255;
+    bgra.set([blue, green, red, i & 255], i * 4);
+    expected[i] = Math.floor((299 * red + 587 * green + 114 * blue) / 1000);
+  }
+  const accelerated = new Uint8Array(expected.length);
+  assert.equal(bgraLuminanceMask(bgra, accelerated, false), true);
+  assert.deepEqual(accelerated, expected);
+  assert.deepEqual(g00MaskValues(bgra, width, height), expected);
+  assert.deepEqual(
+    g00MaskValues(bgra, width, height, true),
+    expected.map((value) => 255 - value),
+  );
+});
 
 function installRenderingDom(t) {
   class Element extends EventTarget {
@@ -103,6 +138,122 @@ function renderFixture(t, config = []) {
   const base = {name: 'control', frames: [frame('normal')], visible: true, pattern: 0, x: 5, y: 10};
   return {display, stage: document.createElement('div'), frame, base, Button};
 }
+
+function systemLayerFixture() {
+  const container = () => ({
+    children: [],
+    append(page) {
+      this.children.push(page);
+      page.remove = () => {
+        this.children = this.children.filter((child) => child !== page);
+      };
+    },
+    replaceChildren(...pages) {
+      this.children = [];
+      for (const page of pages) this.append(page);
+    },
+  });
+  return Object.assign(Object.create(SiglusDisplay.prototype), {
+    signal: new AbortController().signal,
+    systemLayer: container(),
+    systemFrontLayer: container(),
+    systemLayerDraws: new WeakMap(),
+    preserveStageFocus(update) {
+      update();
+    },
+    async drawObjects([page]) {
+      return page;
+    },
+  });
+}
+
+test('closing or replacing a system page discards its pending drawing', async () => {
+  const display = systemLayerFixture();
+  const slow = Promise.withResolvers();
+  const newer = {childElementCount: 1};
+  const pending = display.showSystemObjects([slow.promise], () => {});
+  await display.showSystemObjects([newer], () => {});
+  slow.resolve({childElementCount: 1});
+  await pending;
+  assert.deepEqual(display.systemLayer.children, [newer]);
+
+  const closing = Promise.withResolvers();
+  const pendingFront = display.showSystemObjects([closing.promise], () => {}, true);
+  display.clearSystemFrontObjects();
+  closing.resolve({childElementCount: 1});
+  await pendingFront;
+  assert.deepEqual(display.systemFrontLayer.children, []);
+  assert.deepEqual(display.systemLayer.children, [newer]);
+});
+
+test('a completed system fade-out removes only the pages it started with', async () => {
+  const display = systemLayerFixture();
+  const fade = Promise.withResolvers();
+  const outgoing = {childElementCount: 1, animate: () => ({finished: fade.promise})};
+  const incoming = {childElementCount: 1};
+  await display.showSystemObjects([outgoing], () => {});
+  const closing = display.showSystemObjects(
+    [{childElementCount: 0, animate() {}}],
+    () => {},
+    false,
+    100,
+  );
+  await Promise.resolve();
+  await display.showSystemObjects([incoming], () => {});
+  fade.resolve();
+  await closing;
+  assert.deepEqual(display.systemLayer.children, [incoming]);
+});
+
+test('late object masks cannot undo a clear or a restored mask slot', async (t) => {
+  const {display} = renderFixture(t);
+  const old = Promise.withResolvers();
+  const canvas = document.createElement('canvas');
+  canvas.toDataURL = () => 'mask-url';
+  Object.assign(display, {
+    objectMasks: new Map(),
+    maskUrlCache: new Map(),
+    pendingObjectMasks: new Map(),
+    objectMaskRestoreGeneration: 0,
+    graphic: () => old.promise,
+  });
+  const pending = display.setObjectMask(4, 'old-mask');
+  await display.setObjectMask(4);
+  old.resolve({image: canvas});
+  await pending;
+  assert.deepEqual(display.saveObjectMasks(), []);
+
+  const loading = Promise.withResolvers();
+  display.graphic = () => loading.promise;
+  const beforeLoad = display.setObjectMask(4, 'before-load');
+  await display.restoreObjectMasks([[4, {x: 12, y: 7}]]);
+  loading.resolve({image: canvas});
+  await beforeLoad;
+  assert.deepEqual(display.saveObjectMasks(), [[4, {name: undefined, x: 12, y: 7}]]);
+
+  const replaced = Promise.withResolvers();
+  const current = Promise.withResolvers();
+  display.graphic = (name) => (name === 'current' ? current.promise : replaced.promise);
+  const superseded = display.setObjectMask(4, 'replaced');
+  const replacing = display.setObjectMask(4, 'current');
+  display.setObjectMaskOffset(4, 'x', 40);
+  current.resolve({image: canvas});
+  await replacing;
+  replaced.resolve({image: canvas});
+  await superseded;
+  assert.deepEqual(display.saveObjectMasks(), [[4, {name: 'current', x: 40, y: 7}]]);
+
+  const restoring = Promise.withResolvers();
+  display.graphic = () => restoring.promise;
+  const previousLoad = display.restoreObjectMasks([
+    [4, {name: 'previous-load', x: 1, y: 2}],
+    [5, {x: 3, y: 4}],
+  ]);
+  await display.restoreObjectMasks([[6, {x: 5, y: 6}]]);
+  restoring.resolve({image: canvas});
+  await previousLoad;
+  assert.deepEqual(display.saveObjectMasks(), [[6, {name: undefined, x: 5, y: 6}]]);
+});
 
 test('stage buttons render their initial disabled and selected graphics offscreen', async (t) => {
   const {display, stage, frame, base} = renderFixture(t, [
