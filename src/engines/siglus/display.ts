@@ -752,6 +752,8 @@ export class SiglusDisplay {
   private dynamicColorFilterId = 0;
   private readonly systemLayerDraws = new WeakMap<HTMLElement, object>();
   private wipe?: Animation;
+  private wipeAnimations: Animation[] = [];
+  private suppressNextStageClick = false;
   private systemInput = false;
   private readonly keys = [this.inputKey(), this.inputKey()];
   private readonly vkDown = new Set<number>();
@@ -879,6 +881,10 @@ export class SiglusDisplay {
     );
     this.windowDisplay.configure({width, height, fullscreen: false});
     this.click = () => {
+      if (this.suppressNextStageClick) {
+        this.suppressNextStageClick = false;
+        return;
+      }
       if (this.hasTextSelection()) return;
       this.advance();
     };
@@ -898,6 +904,12 @@ export class SiglusDisplay {
         this.stage.ownerDocument.getSelection()?.removeAllRanges();
     };
     this.key = (event) => {
+      if (
+        event.target instanceof HTMLInputElement ||
+        event.target instanceof HTMLTextAreaElement
+      ) {
+        return;
+      }
       const vk = event.keyCode || 0;
       if (vk > 0 && vk < 256) {
         if (event.type === 'keydown') {
@@ -981,10 +993,25 @@ export class SiglusDisplay {
               this.hovered?.id === held.target.id &&
               this.hovered?.group === held.target.group)
           ) {
+            if (held.pushKeep) {
+              this.suppressNextStageClick = true;
+              queueMicrotask(() => {
+                this.suppressNextStageClick = false;
+              });
+            }
             held.release();
           }
         }
       });
+    const onWindowPointerEnd = (event: PointerEvent) => {
+      if (this.stage.contains(event.target as Node | null)) return;
+      if (event.type === 'pointerup' && (event.button === 0 || event.button === 2))
+        pushKey(event.button === 0 ? 0 : 1, false);
+      this.pressed = undefined;
+      if (this.heldButton?.pointerId === event.pointerId) this.heldButton = undefined;
+    };
+    window.addEventListener('pointerup', onWindowPointerEnd, {signal});
+    window.addEventListener('pointercancel', onWindowPointerEnd, {signal});
     this.stage.addEventListener('contextmenu', (event) => {
       if (!this.hasTextSelection() && cancel()) {
         event.preventDefault();
@@ -1040,7 +1067,12 @@ export class SiglusDisplay {
       Math.trunc(((event.clientX - bounds.left) * this.width) / bounds.width),
       Math.trunc(((event.clientY - bounds.top) * this.height) / bounds.height),
     ];
-    this.trackHoveredButton(event.target as Element);
+    let target = event.target as Element | null;
+    if (target === this.stage) {
+      const hit = this.stage.ownerDocument.elementFromPoint(event.clientX, event.clientY);
+      target = hit && this.stage.contains(hit) ? hit : null;
+    }
+    this.trackHoveredButton(target);
   }
 
   movePointer(x: number, y: number): void {
@@ -1085,6 +1117,7 @@ export class SiglusDisplay {
   }
 
   private syncHoverAfterDomUpdate(): void {
+    if (!this.pointer || !this.stage) return;
     const [x, y] = this.pointer;
     if (x < 0 || y < 0) {
       this.hovered = undefined;
@@ -1179,12 +1212,12 @@ export class SiglusDisplay {
         this.vkPressed.delete(vk);
         return Number(v);
       }
-      case 4: {
+      case 4:
+      case 5: {
         const v = this.vkReleased.has(vk);
         this.vkReleased.delete(vk);
         return Number(v);
       }
-      case 5:
       case 6:
         return Number(this.vkDown.has(vk));
       case 7:
@@ -1235,6 +1268,14 @@ export class SiglusDisplay {
     this.layers.inert = active;
     this.message.inert = active;
     this.controls.inert = active;
+    if (active) {
+      for (const entry of this.activeFrameActions) {
+        if (entry.pointerState !== 'normal') {
+          entry.pointerState = 'normal';
+          entry.refresh();
+        }
+      }
+    }
     this.stage.focus({preventScroll: true});
     this.syncHoverAfterDomUpdate();
   }
@@ -1271,10 +1312,14 @@ export class SiglusDisplay {
       if (animations.length > 0) {
         const primary = animations[0]!;
         this.wipe = primary;
+        this.wipeAnimations = animations;
         try {
           await Promise.all(animations.map((a) => a.finished));
         } finally {
-          if (this.wipe === primary) this.wipe = undefined;
+          if (this.wipe === primary) {
+            this.wipe = undefined;
+            this.wipeAnimations = [];
+          }
         }
       }
       this.preserveStageFocus(() => {
@@ -1305,11 +1350,12 @@ export class SiglusDisplay {
       input.style.cssText = `position:absolute;left:${n(0)}px;top:${n(1)}px;width:${n(2)}px;height:${n(3)}px;font-size:${n(4)}px;box-sizing:border-box;pointer-events:auto`;
       input.setAttribute('aria-label', 'Save comment');
       input.addEventListener('keydown', (event) => {
+        event.stopPropagation();
         if (event.isComposing || (event.key !== 'Enter' && event.key !== 'Escape')) return;
         event.preventDefault();
-        event.stopPropagation();
         state.result = event.key;
       });
+      input.addEventListener('keyup', (event) => event.stopPropagation());
       input.addEventListener('pointerdown', (event) => event.stopPropagation());
       input.addEventListener('click', (event) => event.stopPropagation());
       this.edits.set(id, state);
@@ -1328,7 +1374,11 @@ export class SiglusDisplay {
       if (edit) edit.result = '';
       return 0;
     }
-    if (!edit) return undefined;
+    if (!edit) {
+      if (command === 3) return '';
+      if (command === 2 || command === 4 || command === 5 || command === 6) return 0;
+      return undefined;
+    }
     switch (command) {
       case 2:
         edit.input.value = s(0);
@@ -1891,7 +1941,7 @@ export class SiglusDisplay {
             const characters = Array.from(cell.ruby);
             let top = y + inline + (cell.width - characters.length * rubySize) / 2;
             for (const character of characters) {
-              draw(character, columnX + rubySize + rubySpace, top);
+              draw(character, columnX + size + rubySpace, top);
               top += rubySize;
             }
           } else {
@@ -2690,13 +2740,32 @@ export class SiglusDisplay {
     const path = `g00/${name.toLowerCase()}.g00`;
     if (!this.files.has(path)) return undefined;
     const image = await this.resource(name);
-    const frame = image.frame(0);
-    const result: CustomMaskWipe = {
-      softness,
-      width: frame.width,
-      height: frame.height,
-      values: g00MaskValues(frame.bgra, frame.width, frame.height, reverse),
-    };
+    let result: CustomMaskWipe;
+    if (image.type === 3) {
+      const graphic = await this.graphic(name, 0);
+      const canvas = document.createElement('canvas');
+      canvas.width = graphic.width;
+      canvas.height = graphic.height;
+      const ctx = canvas.getContext('2d')!;
+      ctx.drawImage(graphic.image, 0, 0);
+      const rgba = ctx.getImageData(0, 0, graphic.width, graphic.height).data;
+      const values = new Uint8Array(graphic.width * graphic.height);
+      for (let i = 0; i < values.length; i++) {
+        const luma = Math.round(
+          (rgba[i * 4]! * 77 + rgba[i * 4 + 1]! * 150 + rgba[i * 4 + 2]! * 29) / 256,
+        );
+        values[i] = reverse ? 255 - luma : luma;
+      }
+      result = {softness, width: graphic.width, height: graphic.height, values};
+    } else {
+      const frame = image.frame(0);
+      result = {
+        softness,
+        width: frame.width,
+        height: frame.height,
+        values: g00MaskValues(frame.bgra, frame.width, frame.height, reverse),
+      };
+    }
     this.maskWipeCache.set(key, result);
     if (this.maskWipeCache.size > 32) {
       this.maskWipeCache.delete(this.maskWipeCache.keys().next().value!);
@@ -2848,11 +2917,13 @@ export class SiglusDisplay {
         button.style.border = '2px solid rgba(255, 255, 255, 0.65)';
         button.style.borderRadius = '8px';
       }
+      const itemNormalColor =
+        (item.colorMode >= 0 ? this.tableColor(item.colorMode) : undefined) ?? normalColor;
       const label = document.createElement('span');
       label.textContent = item.text;
       label.style.cssText = usePositionedLabel
-        ? `position:absolute;left:${labelAnchorX}px;top:${labelAnchorY}px;transform:translate(${labelTx},${labelTy});font-size:${template.fontSize}px;line-height:1;color:${normalColor};pointer-events:none;white-space:nowrap`
-        : `position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:${template.fontSize}px;color:${normalColor};text-shadow:0 2px 4px rgba(0,0,0,0.85);pointer-events:none;white-space:nowrap`;
+        ? `position:absolute;left:${labelAnchorX}px;top:${labelAnchorY}px;transform:translate(${labelTx},${labelTy});font-size:${template.fontSize}px;line-height:1;color:${itemNormalColor};pointer-events:none;white-space:nowrap`
+        : `position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:${template.fontSize}px;color:${itemNormalColor};text-shadow:0 2px 4px rgba(0,0,0,0.85);pointer-events:none;white-space:nowrap`;
       label.style.fontFamily = this.message.style.fontFamily;
       button.append(label);
       if (!isDisabled) {
@@ -2863,7 +2934,7 @@ export class SiglusDisplay {
         });
         button.addEventListener('pointerleave', () => {
           paintState(normal, actionStates.normal);
-          label.style.color = normalColor;
+          label.style.color = itemNormalColor;
         });
         button.addEventListener('pointerdown', () => {
           paintState(pressed, actionStates.push);
@@ -2939,7 +3010,12 @@ export class SiglusDisplay {
       try {
         await this.replaceLayer(next, duration, fan, speedMode);
       } finally {
-        if (fan && duration > 0 && generation === this.stageGeneration) {
+        if (
+          fan &&
+          duration > 0 &&
+          this.cast.parentElement !== this.sceneLayers &&
+          (generation === this.stageGeneration || this.cast.parentElement !== this.layers)
+        ) {
           this.cast.inert = false;
           this.layers.after(this.cast);
         }
@@ -2991,8 +3067,14 @@ export class SiglusDisplay {
     const unmatched = new Set<DrawObject>();
     for (const object of moved) {
       if (
-        object.mask !== undefined || object.positionEvents?.x || object.positionEvents?.y ||
-        object.offsetEvents?.x?.size || object.offsetEvents?.y?.size || object.horizontalMotion
+        object.mask !== undefined ||
+        object.positionEvents?.x ||
+        object.positionEvents?.y ||
+        object.offsetEvents?.x?.size ||
+        object.offsetEvents?.y?.size ||
+        object.horizontalMotion ||
+        object.intEvents?.has('ch:51') ||
+        object.intEvents?.has('ch:64')
       )
         return false;
       if (object.visible) unmatched.add(object);
@@ -3001,8 +3083,8 @@ export class SiglusDisplay {
     for (const element of layer.querySelectorAll<HTMLElement>('[data-siglus-positioned]')) {
       const target = this.positionTargets.get(element);
       if (!target || !moved.has(target.object)) continue;
-      // A descendant's destination crop is positioned in stage coordinates.
-      if (element.querySelector('[data-siglus-dst-clip]')) return false;
+      // A descendant's destination crop or stage-space mask is positioned in stage coordinates.
+      if (element.querySelector('[data-siglus-dst-clip], [data-siglus-masked]')) return false;
       changes.push({element, ...target});
       unmatched.delete(target.object);
     }
@@ -3259,7 +3341,22 @@ export class SiglusDisplay {
       if (object.gan?.sequence !== undefined) {
         const ganLayer = await this.objectGanLayer(object);
         if (ganLayer) {
-          this.applyObjectScale(ganLayer, object, [0, 0]);
+          this.applyObjectScale(ganLayer, object, [
+            object.centerRep?.[0] ?? 0,
+            object.centerRep?.[1] ?? 0,
+          ]);
+          const ganMask = object.mask === undefined ? undefined : this.objectMasks.get(object.mask);
+          if (ganMask?.url) {
+            ganLayer.dataset.siglusMasked = '1';
+            ganLayer.style.maskImage = `url("${ganMask.url}")`;
+            ganLayer.style.maskMode = 'luminance';
+            ganLayer.style.maskRepeat = 'no-repeat';
+            ganLayer.style.maskPosition = `${ganMask.x - parentOrigin[0] - object.x}px ${ganMask.y - parentOrigin[1] - object.y}px`;
+          }
+          const ganBlendTarget = clip && !object.children ? clip.viewport : ganLayer;
+          if (object.blend === 1) ganBlendTarget.style.mixBlendMode = 'plus-lighter';
+          if (object.blend === 3) ganBlendTarget.style.mixBlendMode = 'multiply';
+          if (object.blend === 4) ganBlendTarget.style.mixBlendMode = 'screen';
           this.applyObjectPosition(ganLayer, object);
           this.applyLeafOpacity(ganLayer, object, animate, parentOpacity);
           tagStageSlot(clip?.viewport ?? ganLayer, object);
@@ -3289,10 +3386,28 @@ export class SiglusDisplay {
             layerScope,
           );
           tagStageSlot(clip?.viewport ?? wrapper, object);
+        } else {
+          clip?.viewport.remove();
         }
         continue;
       }
-      if (object.pattern < 0) continue;
+      if (object.pattern < 0) {
+        if (object.children) {
+          const wrapper = await this.appendChildren(
+            targetParent,
+            object,
+            button,
+            animate,
+            parentOpacity,
+            parentOrigin,
+            layerScope,
+          );
+          tagStageSlot(clip?.viewport ?? wrapper, object);
+        } else {
+          clip?.viewport.remove();
+        }
+        continue;
+      }
       const frame = object.movie
         ? {
             width: object.movie.width,
@@ -3307,7 +3422,23 @@ export class SiglusDisplay {
             object.type === 11 ? undefined :
               (object.frames[object.pattern] = await this.objectGraphic(object.name, object.pattern))
           ));
-      if (!frame) continue;
+      if (!frame) {
+        if (object.children) {
+          const wrapper = await this.appendChildren(
+            targetParent,
+            object,
+            button,
+            animate,
+            parentOpacity,
+            parentOrigin,
+            layerScope,
+          );
+          tagStageSlot(clip?.viewport ?? wrapper, object);
+        } else {
+          clip?.viewport.remove();
+        }
+        continue;
+      }
       const sourceBounds = object.sourceClipEnabled ? object.sourceClipBounds : undefined;
       const content =
         object.button === undefined
@@ -3338,12 +3469,11 @@ export class SiglusDisplay {
       tagStageSlot(clip?.viewport ?? element, object);
       const mask = object.mask === undefined ? undefined : this.objectMasks.get(object.mask);
       if (mask?.url) {
+        element.dataset.siglusMasked = '1';
         element.style.maskImage = `url("${mask.url}")`;
         element.style.maskMode = 'luminance';
         element.style.maskRepeat = 'no-repeat';
-        if (mask.x || mask.y) {
-          element.style.maskPosition = `${mask.x - placement.placedX}px ${mask.y - placement.placedY}px`;
-        }
+        element.style.maskPosition = `${mask.x - parentOrigin[0] - placement.placedX}px ${mask.y - parentOrigin[1] - placement.placedY}px`;
       }
       const blendTarget = clip && !object.children ? clip.viewport : element;
       if (object.blend === 1) blendTarget.style.mixBlendMode = 'plus-lighter';
@@ -3354,12 +3484,13 @@ export class SiglusDisplay {
       if (object.patternCycle) {
         const {count, duration, started} = object.patternCycle;
         const elapsed = performance.now() - started;
+        if (object.pattern < 0 || object.pattern >= count) canvas.style.opacity = '0';
         for (let index = 0; index < count; index++) {
           const graphic = (object.frames[index] ??= await this.graphic(object.name, index));
           const image = index === object.pattern ? canvas : this.node(graphic);
           if (image !== canvas) content.append(image);
-          image.style.left = '0';
-          image.style.top = '0';
+          image.style.left = `${(graphic.x - graphic.centerX) - (frame.x - frame.centerX)}px`;
+          image.style.top = `${(graphic.y - graphic.centerY) - (frame.y - frame.centerY)}px`;
           image.style.opacity = '0';
           const animation = image.animate(
             [
@@ -3396,13 +3527,14 @@ export class SiglusDisplay {
               object.frames[p] = g;
               const img = p === object.pattern ? canvas : this.node(g);
               if (img !== canvas) {
-                img.style.left = '0';
-                img.style.top = '0';
+                img.style.left = `${(g.x - g.centerX) - (frame.x - frame.centerX)}px`;
+                img.style.top = `${(g.y - g.centerY) - (frame.y - frame.centerY)}px`;
                 img.style.pointerEvents = 'none';
                 content.append(img);
               }
               seen.set(p, img);
             }
+            if (seen.size > 0 && !seen.has(object.pattern)) canvas.style.opacity = '0';
             for (const [pat, img] of seen) {
               const frames: Keyframe[] = [];
               for (let idx = 0; idx < count; idx++) {
@@ -4059,6 +4191,8 @@ export class SiglusDisplay {
     if (activeColorEvents.length) {
       const baseCp = {...(object.colorProps ?? {})};
       const needsAnimatedMatrix =
+        activeColorEvents.length > 1 ||
+        Boolean(toneFilter) ||
         Boolean(baseCp.colorRate && baseCp.colorRate > 0) ||
         Boolean(baseCp.bright && baseCp.bright > 0) ||
         Boolean(baseCp.addR || baseCp.addG || baseCp.addB) ||
@@ -4111,6 +4245,7 @@ export class SiglusDisplay {
           element.style.filter = [staticColorFilter(object.colorProps), toneFilter].filter(Boolean).join(' ');
         } else {
           let mounted = false;
+          let unmountedTicks = 0;
           const cleanup = () => filterEl.remove();
           const tick = () => {
             if (this.signal.aborted) {
@@ -4118,7 +4253,7 @@ export class SiglusDisplay {
               return;
             }
             if (element.isConnected) mounted = true;
-            else if (mounted) {
+            else if (mounted || ++unmountedTicks > 8) {
               cleanup();
               return;
             }
@@ -4134,11 +4269,19 @@ export class SiglusDisplay {
           requestAnimationFrame(tick);
         }
       } else {
-        // Pure CSS-filter-only color animation (dark / mono / reverse) via GPU-composited WAAPI.
+        // Pure CSS-filter-only single color animation (dark / mono / reverse) via GPU-composited WAAPI.
+        // Emit all active filter functions in consistent order at both endpoints to avoid discrete 50% snaps.
         const [prop, ev] = activeColorEvents[0]!;
         const buildFilter = (val: number) => {
           const cur = {...baseCp, [prop]: val};
-          return [staticColorFilter(cur), toneFilter].filter(Boolean).join(' ') || 'none';
+          const parts: string[] = [];
+          if (prop === 'mono' || (cur.mono && cur.mono > 0))
+            parts.push(`grayscale(${Math.max(0, Math.min(1, (cur.mono ?? 0) / 255)).toFixed(3)})`);
+          if (prop === 'reverse' || (cur.reverse && cur.reverse > 0))
+            parts.push(`invert(${Math.max(0, Math.min(1, (cur.reverse ?? 0) / 255)).toFixed(3)})`);
+          if (prop === 'dark' || (cur.dark && cur.dark > 0))
+            parts.push(`brightness(${Math.max(0, 1 - (cur.dark ?? 0) / 255).toFixed(3)})`);
+          return parts.join(' ') || 'none';
         };
         const endFilter = buildFilter(ev.target);
         element.style.filter = endFilter === 'none' ? '' : endFilter;
@@ -4207,6 +4350,16 @@ export class SiglusDisplay {
   }
 
   finishWipe(): boolean {
+    let finished = false;
+    if (this.wipeAnimations.length) {
+      for (const anim of this.wipeAnimations) {
+        if (anim.playState === 'running') {
+          anim.finish();
+          finished = true;
+        }
+      }
+      if (finished) return true;
+    }
     if (this.wipe?.playState !== 'running') return false;
     this.wipe.finish();
     return true;
@@ -4305,6 +4458,7 @@ export class SiglusDisplay {
     // from the softness and 16.16 time progress.
     const slope = 255 - 254 * fan.softness;
     alpha.setAttribute('slope', String(slope));
+    image.setAttribute('preserveAspectRatio', 'none');
     image.setAttribute('href', maskHref);
     image.setAttribute('filter', `url(#${filter.id})`);
     transfer.append(alpha);
@@ -4567,19 +4721,28 @@ export class SiglusDisplay {
     const count = Math.max(1, Math.min(48, params[0] ?? 16));
     const layer = document.createElement('div');
     layer.dataset.siglusWeather = object.name;
-    layer.style.cssText = 'position:absolute;inset:0;pointer-events:none;overflow:hidden';
+    layer.style.cssText = `position:absolute;left:0;top:0;width:${this.width}px;height:${this.height}px;pointer-events:none;overflow:hidden`;
     const elapsed = Math.max(0, performance.now() - weather.started);
     const speedX = weather.mode === 1 ? (params[1] ?? 0) : (params[5] ?? 0);
     const speedY = weather.mode === 1 ? (params[2] ?? 120) : (params[7] ?? 60);
+    const upward = speedY < 0;
     const baseDuration = Math.max(1200, Math.min(18000, Math.round(1200000 / Math.max(40, Math.hypot(speedX, speedY)))));
     for (let i = 0; i < count; i++) {
       // Deterministic pseudo-random spread per particle index (no layout thrash on re-render)
       const h1 = ((i * 2654435761) >>> 0) / 4294967296;
       const h2 = (((i + 17) * 2246822519) >>> 0) / 4294967296;
       const startX = Math.round(h1 * this.width);
-      const startY = weather.mode === 1 ? -graphic.height : Math.round(h2 * this.height);
+      const startY =
+        weather.mode === 1
+          ? upward
+            ? this.height + graphic.height
+            : -graphic.height
+          : Math.round(h2 * this.height);
       const dx = weather.mode === 1 ? Math.round((speedX / Math.max(1, Math.abs(speedY) || 100)) * this.height) : Math.round((h2 - 0.5) * 240);
-      const dy = weather.mode === 1 ? this.height + graphic.height * 2 : Math.round((h1 - 0.5) * 180);
+      const dy =
+        weather.mode === 1
+          ? (upward ? -1 : 1) * (this.height + graphic.height * 2)
+          : Math.round((h1 - 0.5) * 180);
       const dur = Math.round(baseDuration * (0.7 + h2 * 0.6));
       const node = this.node({...graphic, x: startX, y: startY});
       node.style.pointerEvents = 'none';
@@ -4943,6 +5106,8 @@ export class SiglusDisplay {
     {
       animation: Animation;
       duration: number;
+      infinite: boolean;
+      hasDisplacement: boolean;
       displacement: (elapsed: number) => readonly [number, number];
     }
   >();
@@ -4961,7 +5126,7 @@ export class SiglusDisplay {
       return {offset, translate: `${x}px ${y}px`, easing: 'steps(1, end)'};
     });
     const animation = this.sceneLayers.animate(keyframes, {duration, composite: 'add'});
-    this.quakes.set(slot, {animation, duration, displacement});
+    this.quakes.set(slot, {animation, duration, infinite: false, hasDisplacement: true, displacement});
     animation.onfinish = () => {
       if (this.quakes.get(slot)?.animation === animation) this.quakes.delete(slot);
     };
@@ -5015,7 +5180,7 @@ export class SiglusDisplay {
       iterations: infinite ? Infinity : 1,
       composite: 'add',
     });
-    this.quakes.set(slot, {animation, duration, displacement});
+    this.quakes.set(slot, {animation, duration, infinite, hasDisplacement: true, displacement});
     animation.onfinish = () => {
       if (this.quakes.get(slot)?.animation === animation) this.quakes.delete(slot);
     };
@@ -5056,7 +5221,13 @@ export class SiglusDisplay {
       duration,
       iterations: infinite ? Infinity : 1,
     });
-    this.quakes.set(slot, {animation, duration, displacement: () => [0, 0]});
+    this.quakes.set(slot, {
+      animation,
+      duration,
+      infinite,
+      hasDisplacement: false,
+      displacement: () => [0, 0],
+    });
     animation.onfinish = () => {
       if (this.quakes.get(slot)?.animation === animation) this.quakes.delete(slot);
     };
@@ -5078,7 +5249,13 @@ export class SiglusDisplay {
     }
     keyframes.push({offset: 1, translate: '0px 0px', easing: 'steps(1, end)'});
     const animation = this.sceneLayers.animate(keyframes, {duration, iterations: 1, composite: 'add'});
-    this.quakes.set(slot, {animation, duration, displacement: () => [0, 0]});
+    this.quakes.set(slot, {
+      animation,
+      duration,
+      infinite: false,
+      hasDisplacement: false,
+      displacement: () => [0, 0],
+    });
     animation.onfinish = () => {
       if (this.quakes.get(slot)?.animation === animation) this.quakes.delete(slot);
     };
@@ -5093,6 +5270,7 @@ export class SiglusDisplay {
   quakeRemainingMs(slot: number): number {
     const q = this.quakes.get(slot);
     if (!q || q.animation.playState !== 'running') return 0;
+    if (q.infinite) return Number.POSITIVE_INFINITY;
     const elapsed = Number(q.animation.currentTime ?? 0);
     return Math.max(0, Math.ceil(q.duration - elapsed));
   }
@@ -5102,14 +5280,16 @@ export class SiglusDisplay {
     if (quake) {
       const {animation, displacement} = quake;
       const elapsed = Math.floor(Number(animation.currentTime ?? 0));
-      const remaining = Math.min(quake.duration - elapsed, duration);
+      const remaining = quake.infinite
+        ? Math.max(0, duration)
+        : Math.min(quake.duration - elapsed, duration);
       const paused = animation.playState === 'paused';
       animation.cancel();
       this.quakes.delete(slot);
-      if (remaining > 0) {
+      if (remaining > 0 && quake.hasDisplacement) {
         this.animateQuake(slot, remaining, (time) => {
           const [x, y] = displacement(elapsed + time);
-          const factor = 1 - time / duration;
+          const factor = 1 - time / Math.max(1, duration);
           return [Math.trunc(x * factor), Math.trunc(y * factor)];
         });
         if (paused) this.quakes.get(slot)?.animation.pause();
@@ -5154,7 +5334,9 @@ export class SiglusDisplay {
 
   repPosition(x: number, y: number): void {
     this.messagePosition = x || y ? [x, y] : undefined;
-    this.message.style.translate = `${x}px ${y}px`;
+    const translate = `${x}px ${y}px`;
+    this.message.style.translate = translate;
+    if (this.controls?.style) this.controls.style.translate = translate;
   }
 
   async face(code: string, costume = '01'): Promise<void> {
@@ -5360,24 +5542,11 @@ export class SiglusDisplay {
     addG: number;
     addB: number;
   }): void {
-    const filters: string[] = [];
-    if (state.mono > 0) filters.push(`grayscale(${Math.min(1, state.mono / 255).toFixed(3)})`);
-    if (state.reverse > 0) filters.push(`invert(${Math.min(1, state.reverse / 255).toFixed(3)})`);
-    const brightness = Math.max(0, 1 + state.bright / 255 - state.dark / 255);
-    if (Math.abs(brightness - 1) > 0.002) filters.push(`brightness(${brightness.toFixed(3)})`);
-    this.sceneLayers.style.filter = filters.join(' ');
-    if (state.colorRate > 0) {
-      const alpha = Math.min(1, state.colorRate / 255);
-      this.effectTint.style.display = '';
-      this.effectTint.style.mixBlendMode = 'normal';
-      this.effectTint.style.background = `rgba(${state.colorR & 255}, ${state.colorG & 255}, ${state.colorB & 255}, ${alpha.toFixed(3)})`;
-    } else if (state.addR > 0 || state.addG > 0 || state.addB > 0) {
-      this.effectTint.style.display = '';
-      this.effectTint.style.mixBlendMode = 'screen';
-      this.effectTint.style.background = `rgb(${Math.min(255, state.addR)}, ${Math.min(255, state.addG)}, ${Math.min(255, state.addB)})`;
-    } else {
-      this.effectTint.style.display = 'none';
-    }
+    this.effectTint.style.display = 'none';
+    const matrix = computeColorMatrix(state);
+    this.sceneLayers.style.filter = matrix
+      ? this.colorFilterUrl(matrix, (filter) => this.appendColorMatrix(filter, matrix))
+      : '';
   }
 
   closeMessage(): void {
@@ -5935,7 +6104,15 @@ export class SiglusDisplay {
     this.updateWaitIcon(Boolean(activate) && !this.message.hidden);
     this.controls.hidden =
       !activate || this.frameIndex < 0 || !this.activeFrameActions.length || this.message.hidden;
-    if (this.controls.hidden) return;
+    if (this.controls.hidden) {
+      for (const entry of this.activeFrameActions) {
+        if (entry.pointerState !== 'normal') {
+          entry.pointerState = 'normal';
+          entry.refresh();
+        }
+      }
+      return;
+    }
     for (const entry of this.activeFrameActions) {
       if (entry.decorative) {
         entry.refresh();

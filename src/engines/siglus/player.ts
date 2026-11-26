@@ -46,7 +46,7 @@ import {
   type SiglusHistoryEntry,
   type WipeSpec,
 } from './display.js';
-import {parseSelbtnArgs} from './selbtn.js';
+import {parseSelbtnArgs, selbtnPresentation} from './selbtn.js';
 import {eventEasing, timetable} from './timing.js';
 import {proceduralWipeMask, selectPcmEventIndex, wipeSoftness} from './wipe.js';
 import {
@@ -225,6 +225,7 @@ interface PlayerSave {
   bgmLevel?: number;
   pcmPlayback?: SiglusPcmCheckpoint[];
   voiceLevel?: number;
+  seLevel?: number;
   cast: string[];
   castCostumes?: (string | null)[];
   gan?: SiglusGanCheckpoint;
@@ -246,6 +247,9 @@ interface PlayerSave {
   history?: SiglusHistoryEntry[];
   historyPoints?: [number, HistoryPoint][];
   messageFaces?: [number, [number, SerializedDrawObject][]][];
+  messageObjects?: [number, [number, SerializedDrawObject][]][];
+  messageOpenAnimations?: [number, {type?: number; time?: number}][];
+  messageCloseAnimations?: [number, {type?: number; time?: number}][];
   controls?: {
     systemMenu: boolean;
     messageButtons: boolean;
@@ -273,6 +277,8 @@ interface PlayerSave {
     mouseCursorNo?: number;
     scriptFont?: ScriptFontOverride;
     backButtonGroups?: [number, boolean][];
+    systemSkipDisabled?: boolean;
+    quakeStopped?: boolean;
   };
   stageObjects?: [[number, SerializedDrawObject][], [number, SerializedDrawObject][]];
   stageEffects?: [string, [number, number][]][];
@@ -281,6 +287,7 @@ interface PlayerSave {
   pcmEvents?: [
     number,
     {
+      mode?: 'oneshot' | 'loop' | 'random';
       pcmchNo: number;
       entries: {file: string; minTime: number; maxTime: number; probability: number}[];
       options: {volumeType?: number; bgmFadeTarget?: boolean; character?: number};
@@ -435,9 +442,9 @@ export class SiglusPlayer {
   private joypadDirectionState(direction: number, command: number): number | undefined {
     const config = this.game.config;
     const mode = (key: string): number => {
-      const normal = Number(config.get(`JOYPAD.${key}`) ?? 0);
+      const normal = Number(config.get(`JOYPAD.${key}`) ?? 1);
       const history = Number(config.get(`JOYPAD.MSGBK_${key}`) ?? -1);
-      return (this.historyOpen && !this.systemCallActive && history !== -1 ? history : normal) || 1;
+      return this.historyOpen && !this.systemCallActive && history !== -1 ? history : normal;
     };
     // The virtual arrow group adds these inputs only in mode 1 (0x645be2–0x645d68).
     const dpad = mode('DPAD_CONTROL_MODE') === 1;
@@ -528,6 +535,7 @@ export class SiglusPlayer {
     {
       cancel: () => void;
       config: {
+        mode: 'oneshot' | 'loop' | 'random';
         pcmchNo: number;
         entries: {file: string; minTime: number; maxTime: number; probability: number}[];
         options: {volumeType?: number; bgmFadeTarget?: boolean; character?: number};
@@ -1015,6 +1023,7 @@ export class SiglusPlayer {
   }
 
   private joypadShortcut(): string | undefined {
+    if (this.shortcutDisabled) return undefined;
     const config = this.game.config;
     // 1.1.141.3 at 0x632e24 selects a press or a completed click by condition.
     const count = Number(config.get('JOYPAD.SHORTCUT.CNT') ?? 0);
@@ -1131,8 +1140,11 @@ export class SiglusPlayer {
         this.lastInputSampleAt = -Infinity;
         this.lastInputSampleScene = undefined;
         this.display.clearSystemFrontObjects();
-        for (const [key, action] of this.frameActions)
-          if (action.modalFront) this.frameActions.delete(key);
+        for (const [key, action] of [...this.frameActions])
+          if (action.modalFront) {
+            this.frameActions.delete(key);
+            this.frameActionCounters.delete(key);
+          }
         this.releaseSystemObjects();
         this.display.clearEdits();
         this.display.setSystemInput(false);
@@ -1237,7 +1249,7 @@ export class SiglusPlayer {
         counters.set(id, {
           start: now,
           from: Number(args[0] ?? 0) | 0,
-          ...(counter?.pausedAt !== undefined ? {pausedAt: now} : {}),
+          ...(!counter || counter.pausedAt !== undefined ? {pausedAt: now} : {}),
         });
         return 0;
       case 1: {
@@ -1314,8 +1326,12 @@ export class SiglusPlayer {
         this.decisions.delete(group);
       }
     }
+    for (const key of [...this.groupProps.keys()]) {
+      if (key.startsWith('65.')) this.groupProps.delete(key);
+    }
     this.display.clearSystemObjects();
     this.display.syncObjectButtonGroups(this.activeGroups);
+    this.releaseUnusedObjectMovies();
   }
 
   private objectAddress(
@@ -1879,7 +1895,11 @@ export class SiglusPlayer {
       this.msgAsyncMode = false;
       this.msgAsyncModeOnce = false;
     }
-    if (!this.systemOption('KOE_DONT_STOP_ONOFF')) this.audio.stop('voice');
+    if (!this.systemOption('KOE_DONT_STOP_ONOFF')) {
+      this.replayGeneration++;
+      this.audio.stop('voice');
+      this.audio.stop('history-voice');
+    }
     // The next page can set its face before its first name or text command.
     this.messageFaces.delete(messageWindow);
     this.pendingText = false;
@@ -1914,12 +1934,26 @@ export class SiglusPlayer {
     this.revealWholePage = false;
   }
 
+  private queueMessageAction(action: () => void): void {
+    const previous = this.asyncReveal;
+    if (!previous) {
+      action();
+      return;
+    }
+    const task = previous.then(() => {
+      action();
+    });
+    this.asyncReveal = task.finally(() => {
+      if (this.asyncReveal === task) this.asyncReveal = undefined;
+    });
+  }
+
   private print(value: string): void | Promise<void> {
     const characters = Array.from(value);
     this.pageCharacters += characters.length;
     const speed = this.speed !== -1 ? this.speed : (this.playback.messageNowait ? 0 : this.playback.messageSpeed);
     if (this.scriptMessageNowait || speed <= 0 || !characters.length || this.skipping || this.revealWholePage) {
-      this.display.append(value);
+      this.queueMessageAction(() => this.display.append(value));
       return;
     }
     if (this.msgAsyncMode) {
@@ -2008,7 +2042,7 @@ export class SiglusPlayer {
 
   private revealMessage(): void {
     this.setUserMessageHidden(false);
-    this.wait?.(4);
+    if (this.waitingForPage) this.wait?.(4);
   }
 
   private tracePage(): void {
@@ -2021,6 +2055,7 @@ export class SiglusPlayer {
     if (hidden) this.readSkipEnabled = this.autoEnabled = false;
     this.userMessageHidden = hidden;
     this.display.setMessageDisplayed(!hidden && !this.messageHidden);
+    if (hidden && this.waitingForPage) this.wait?.(4);
   }
 
   private frameActionState(
@@ -2227,7 +2262,26 @@ export class SiglusPlayer {
         });
       else if (type === 'save') await this.callSystemScene('SAVE_SCENE');
       else if (type === 'load') await this.callSystemScene('LOAD_SCENE');
-      else if (type === 'config') await this.callSystemScene('CONFIG_SCENE');
+      else if (type === 'qsave') {
+        if (this.saveEnabled && this.savePoint && this.saveStore) {
+          const snapshot: PlayerSave = {
+            ...this.attachHistoryToSave(this.savePoint),
+            timestamp: Date.now(),
+            thumbnail: this.display.captureThumbnail(),
+          };
+          await this.updateSlots(this.quickSaves, [[0, snapshot]]);
+          await this.playSystemSound(4);
+        }
+      } else if (type === 'qload') {
+        if (this.loadEnabled) {
+          const slot = this.newestSlot(this.quickSaves);
+          const target = slot >= 0 ? this.quickSaves.get(slot) : undefined;
+          if (target) {
+            this.pendingLoadSound = true;
+            this.loadSave(target);
+          }
+        }
+      } else if (type === 'config') await this.callSystemScene('CONFIG_SCENE');
       else if (type === 'auto_mode') this.autoEnabled = !this.autoEnabled;
       else if (type === 'read_skip') this.readSkipEnabled = !this.readSkipEnabled;
       else if (type === 'return_sel') {
@@ -2277,11 +2331,23 @@ export class SiglusPlayer {
       vm: this.vm.checkpoint(commandResult),
       stage: [...this.stageProperties],
       message: this.display.saveMessage(),
-      messageFaces: this.messageFaces.size
+      messageFaces: this.messageFaces?.size
         ? [...this.messageFaces].map(([window, faces]) => [
             window,
             [...faces].map(([id, face]) => [id, serializeDrawObject(face, now)]),
           ])
+        : undefined,
+      messageObjects: this.messageObjects?.size
+        ? [...this.messageObjects].map(([window, objects]) => [
+            window,
+            [...objects].map(([id, obj]) => [id, serializeDrawObject(obj, now)]),
+          ])
+        : undefined,
+      messageOpenAnimations: this.messageOpenAnimations?.size
+        ? [...this.messageOpenAnimations].map(([k, v]) => [k, {...v}])
+        : undefined,
+      messageCloseAnimations: this.messageCloseAnimations?.size
+        ? [...this.messageCloseAnimations].map(([k, v]) => [k, {...v}])
         : undefined,
       background,
       bgm: bgmPlayback?.name,
@@ -2289,6 +2355,7 @@ export class SiglusPlayer {
       bgmLevel: this.audio.channelLevel('bgm'),
       pcmPlayback: this.audio.pcmCheckpoint(),
       voiceLevel: this.audio.channelLevel('voice'),
+      seLevel: this.audio.channelLevel('se'),
       cast: [...this.currentCast],
       castCostumes: [...this.currentCastCostumes],
       gans: this.display.saveGans(),
@@ -2327,6 +2394,8 @@ export class SiglusPlayer {
         scriptFont: this.scriptFont && {...this.scriptFont},
         backButtonGroups: this.backButtonGroups.size ? [...this.backButtonGroups] : undefined,
         messageSpeedOverride: this.speed !== -1 ? this.speed : undefined,
+        systemSkipDisabled: this.systemSkipDisabled || undefined,
+        quakeStopped: this.quakeStopped || undefined,
       },
       stageObjects:
         this.objects[0]!.size || this.objects[1]!.size
@@ -2348,6 +2417,7 @@ export class SiglusPlayer {
         ? [...this.pcmEvents].map(([slot, ev]) => [
             slot,
             {
+              mode: ev.config.mode,
               pcmchNo: ev.config.pcmchNo,
               entries: ev.config.entries.map((e) => ({...e})),
               options: {...ev.config.options},
@@ -2713,6 +2783,9 @@ export class SiglusPlayer {
     this.autoEnabled = false;
     // Native 0x6321f0 -> 0x5bb740: game load/reset reinitializes G_excall and modal state.
     this.releaseSystemObjects();
+    this.display.clearEdits?.();
+    if (this.selectionSaves) this.selectionSaves.length = 0;
+    this.stagedSelectionSave = undefined;
     this.activeGroups.clear();
     this.cancelGroups.clear();
     this.decisions.clear();
@@ -2720,6 +2793,8 @@ export class SiglusPlayer {
     this.timeStopped = false;
     this.userMessageHidden = false;
     this.messageHidden = false;
+    this.systemSkipDisabled = save.controls?.systemSkipDisabled ?? false;
+    this.quakeStopped = save.controls?.quakeStopped ?? false;
     this.display.setScenePaused(false);
     this.display.setMessageDisplayed(true);
     this.display.stage.style.cursor = '';
@@ -2845,6 +2920,21 @@ export class SiglusPlayer {
       }
       this.invalidateMainObjects();
     }
+    this.releaseUnusedObjectMovies?.();
+    this.messageObjects?.clear();
+    for (const [window, savedObjects] of save.messageObjects ?? []) {
+      const objs = new Map<number, DrawObject>();
+      for (const [id, obj] of savedObjects) objs.set(id, await this.deserializeDrawObject(obj));
+      this.messageObjects?.set(window, objs);
+    }
+    this.messageOpenAnimations?.clear();
+    for (const [window, cfg] of save.messageOpenAnimations ?? []) {
+      this.messageOpenAnimations?.set(window, {...cfg});
+    }
+    this.messageCloseAnimations?.clear();
+    for (const [window, cfg] of save.messageCloseAnimations ?? []) {
+      this.messageCloseAnimations?.set(window, {...cfg});
+    }
     this.audio.resetPlayback();
     if (this.pendingLoadSound) {
       this.pendingLoadSound = false;
@@ -2873,9 +2963,14 @@ export class SiglusPlayer {
     const music = save.bgmPlayback ?? (save.bgm ? {name: save.bgm, loop: true} : undefined);
     await this.audio.restoreBgm(music, save.bgmLevel);
     this.audio.setChannelLevel('voice', save.voiceLevel ?? 255, 0);
+    this.audio.setChannelLevel('se', save.seLevel ?? 255, 0);
     await this.audio.restorePcm(save.pcmPlayback ?? []);
     for (const [slot, ev] of save.pcmEvents ?? []) {
-      this.startPcmEventRandom(slot, ev.pcmchNo, ev.entries, ev.options);
+      if (ev.mode === 'oneshot' || ev.mode === 'loop') {
+        this.startPcmEventSequence(slot, ev.pcmchNo, ev.entries, ev.options, ev.mode === 'loop');
+      } else {
+        this.startPcmEventRandom(slot, ev.pcmchNo, ev.entries, ev.options);
+      }
     }
     this.speed = save.controls?.messageSpeedOverride ?? (save.speed || -1);
     this.saveTitle = save.title ?? '';
@@ -3120,18 +3215,26 @@ export class SiglusPlayer {
       }
       // Promote EXCALL back-stage object frame_actions (65.2.2.-1.<id>...) to front (65.1.2.-1.<id>...)
       if (this.frameActions.size) {
-        const promoted: [string, ActiveFrameAction][] = [];
+        const promoted: [string, ActiveFrameAction, RealCounter | undefined][] = [];
         for (const [key, action] of [...this.frameActions]) {
           if (action.path[0] === 65 && action.path[1] === 1 && action.path[2] === 2 && action.path[3] === -1) {
             const objId = action.path[4];
-            if (objId !== undefined && !copiedIds.has(objId)) this.frameActions.delete(key);
+            if (objId !== undefined && !copiedIds.has(objId)) {
+              this.frameActions.delete(key);
+              this.frameActionCounters.delete(key);
+            }
           } else if (action.path[0] === 65 && action.path[1] === 2 && action.path[2] === 2 && action.path[3] === -1) {
             this.frameActions.delete(key);
+            const counter = this.frameActionCounters.get(key);
+            this.frameActionCounters.delete(key);
             const frontPath = [65, 1, ...action.path.slice(2)];
-            promoted.push([frontPath.join('.'), {...action, path: frontPath}]);
+            promoted.push([frontPath.join('.'), {...action, path: frontPath}, counter]);
           }
         }
-        for (const [k, a] of promoted) this.frameActions.set(k, a);
+        for (const [k, a, c] of promoted) {
+          this.frameActions.set(k, a);
+          if (c) this.frameActionCounters.set(k, c);
+        }
       }
       await this.display.showSystemObjects(
         orderedObjects(this.systemObjects),
@@ -3175,19 +3278,27 @@ export class SiglusPlayer {
     // Promote back-stage object frame_actions (37.2.-1.<id>...) to front-stage (38.2.-1.<id>...)
     // and drop overwritten front-stage object frame_actions unless preserved via wipeCopy.
     if (this.frameActions.size) {
-      const promoted: [string, ActiveFrameAction][] = [];
+      const promoted: [string, ActiveFrameAction, RealCounter | undefined][] = [];
       for (const [key, action] of [...this.frameActions]) {
         if (action.modalFront) continue;
         if (action.path[0] === 38 && action.path[1] === 2 && action.path[2] === -1) {
           const objId = action.path[3];
-          if (objId !== undefined && !copiedIds.has(objId)) this.frameActions.delete(key);
+          if (objId !== undefined && !copiedIds.has(objId)) {
+            this.frameActions.delete(key);
+            this.frameActionCounters.delete(key);
+          }
         } else if (action.path[0] === 37 && action.path[1] === 2 && action.path[2] === -1) {
           this.frameActions.delete(key);
+          const counter = this.frameActionCounters.get(key);
+          this.frameActionCounters.delete(key);
           const frontPath = [38, ...action.path.slice(1)];
-          promoted.push([frontPath.join('.'), {...action, path: frontPath}]);
+          promoted.push([frontPath.join('.'), {...action, path: frontPath}, counter]);
         }
       }
-      for (const [k, a] of promoted) this.frameActions.set(k, a);
+      for (const [k, a, c] of promoted) {
+        this.frameActions.set(k, a);
+        if (c) this.frameActionCounters.set(k, c);
+      }
     }
     this.display.closeMessage();
     this.pageVoices = [];
@@ -3257,7 +3368,22 @@ export class SiglusPlayer {
     // Perfect Edition 0x65f5eb -> 0x6321a0 resets both native stage object lists
     // before the menu script builds the next page.
     this.display.finishWipe();
+    this.display.clearEdits?.();
     this.clearStageObjectPages();
+    this.messageObjects?.clear();
+    this.messageFaces?.clear();
+    this.messageOpenAnimations?.clear();
+    this.messageCloseAnimations?.clear();
+    if (this.selectionSaves) this.selectionSaves.length = 0;
+    this.stagedSelectionSave = undefined;
+    this.timeStopped = false;
+    this.systemSkipDisabled = false;
+    this.userMessageHidden = false;
+    this.messageHidden = false;
+    this.quakeStopped = false;
+    this.display.setScenePaused?.(false);
+    this.display.setMessageDisplayed?.(true);
+    if (this.display.stage?.style) this.display.stage.style.cursor = '';
     this.dayStage = false;
     for (const [key, action] of this.frameActions) {
       if (action.path[0] === 37 || action.path[0] === 38) {
@@ -3297,7 +3423,7 @@ export class SiglusPlayer {
   }
 
   private releaseUnusedObjectMovies(): void {
-    if (!this.objectMovies.size) return;
+    if (!this.objectMovies?.size) return;
     const used = new Set<SiglusOmvPlayback>();
     const visit = (page?: ReadonlyMap<number, DrawObject>) => {
       for (const object of page?.values() ?? []) {
@@ -3324,6 +3450,8 @@ export class SiglusPlayer {
     this.messageObjectsDirty = false;
     const objects = this.messageObjects.get(this.display.messageWindow);
     await this.display.showMessageObjects(objects ? orderedObjects(objects) : []);
+    const faces = this.messageFaces.get(this.display.messageWindow);
+    await this.display.showMessageFaces(faces?.size ? orderedObjects(faces) : []);
   }
 
   private copyObjects(objects: Map<number, DrawObject>): Map<number, DrawObject> {
@@ -3547,6 +3675,7 @@ export class SiglusPlayer {
 
   private async movie(name: string, skippable: boolean): Promise<number> {
     this.skip = false;
+    this.readSkipEnabled = false;
     this.movieError = undefined;
     this.root.dataset.movie = name;
     this.display.pageControls();
@@ -3825,6 +3954,7 @@ export class SiglusPlayer {
 
   private async replayHistoryVoice(entry?: SiglusHistoryEntry): Promise<void> {
     const generation = ++this.replayGeneration;
+    if (entry?.voices.length) this.audio.stop('voice');
     for (const {id, character} of entry?.voices ?? []) {
       if (generation !== this.replayGeneration) break;
       if (!(await this.playVoiceSafe(id, 'history-voice', character))) continue;
@@ -3870,9 +4000,16 @@ export class SiglusPlayer {
       const point = this.historyPoints.get(selected);
       if (!point) return;
       focus = selected;
+      const slicedHistory = this.backlog.slice(0, this.backlog.indexOf(selected) + 1);
+      const slicedPoints: [number, HistoryPoint][] = [];
+      for (const [index, entry] of slicedHistory.entries()) {
+        const entryPoint = this.historyPoints.get(entry);
+        if (entryPoint) slicedPoints.push([index, entryPoint]);
+      }
       this.historyTarget = {
         ...point,
-        history: this.backlog.slice(0, this.backlog.indexOf(selected) + 1),
+        history: slicedHistory,
+        historyPoints: slicedPoints,
       };
       try {
         await this.callSystemScene('MSGBK.LOAD_CALL');
@@ -3932,7 +4069,7 @@ export class SiglusPlayer {
 
   private async playBgm(name: string, fade = 0, crossfade = 0): Promise<void> {
     this.recordBgmListened(name);
-    if (this.root.dataset.bgm?.toLowerCase() === name.toLowerCase()) return;
+    if (this.audio.isLoopingBgm(name)) return;
     this.audio.bgmStart(name, true, fade, crossfade);
   }
 
@@ -4230,6 +4367,7 @@ export class SiglusPlayer {
     this.pcmEvents.set(slot, {
       cancel,
       config: {
+        mode: 'random',
         pcmchNo,
         entries: entries.map((e) => ({...e})),
         options: {...options},
@@ -4297,6 +4435,7 @@ export class SiglusPlayer {
     const entry = {
       cancel,
       config: {
+        mode: (loop ? 'loop' : 'oneshot') as 'loop' | 'oneshot',
         pcmchNo,
         entries: entries.map((e) => ({...e, probability: 1})),
         options: {...options},
@@ -4353,8 +4492,14 @@ export class SiglusPlayer {
 
   private async runSelbtn(command: SiglusCommand, cancelable: boolean): Promise<number> {
     await this.renderObjects();
-    const call = parseSelbtnArgs(command.args, command.named);
-    if (!call.items.some((item) => item.dispFlag !== 0)) return -1;
+    const rawCall = parseSelbtnArgs(command.args, command.named);
+    const call = {
+      ...rawCall,
+      items: rawCall.items.map((item) => ({...item, text: this.expandNamae(item.text)})),
+    };
+    const hasEnabled = call.items.some((item) => selbtnPresentation(item.dispFlag) === 'enabled');
+    const hasVisible = call.items.some((item) => selbtnPresentation(item.dispFlag) !== 'hidden');
+    if (!hasVisible || (!hasEnabled && !cancelable)) return -1;
     const signal = this.controller.signal;
     signal.throwIfAborted();
     this.skip = false;
@@ -4366,6 +4511,7 @@ export class SiglusPlayer {
         settled = true;
         signal.removeEventListener('abort', abort);
         window.removeEventListener('keydown', onKey);
+        this.display.stage.removeEventListener('contextmenu', onContextMenu, true);
       };
       const finish = (index: number): void => {
         if (settled) return;
@@ -4385,8 +4531,15 @@ export class SiglusPlayer {
           finish(-1);
         }
       };
+      const onContextMenu = (event: MouseEvent): void => {
+        if (!cancelable) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        finish(-1);
+      };
       signal.addEventListener('abort', abort, {once: true});
       window.addEventListener('keydown', onKey);
+      this.display.stage.addEventListener('contextmenu', onContextMenu, true);
       void this.display
         .showSelectionButtons(
           call,
@@ -4446,6 +4599,7 @@ export class SiglusPlayer {
       switch (root) {
         case 57: // The 1.1.141.3 MWND receiver closes the active message (0x5540df).
           this.display.closeMessage();
+          this.messageFaces.delete(this.display.messageWindow);
           this.pendingText = false;
           this.pageVoices = [];
           return 0;
@@ -4535,23 +4689,24 @@ export class SiglusPlayer {
           if (anime.type > 0 && anime.time > 0) {
             await this.display.closeMessageWithAnimation(anime);
           } else this.display.closeMessage();
+          this.messageFaces.delete(this.display.messageWindow);
           this.pageVoices = [];
           this.pendingText = false;
           break;
         }
         case 11: // clear
           this.display.clearText();
+          this.messageFaces.delete(this.display.messageWindow);
           this.pageVoices = [];
           this.pendingText = false;
           break;
         case 12:
-          if (command.readFlag !== undefined)
+          this.beginMessage();
+          if (command.readFlag !== undefined && command.readFlag >= 0) {
+            if (!this.readFlags.get(command.scene)?.has(command.readFlag) && !this.skipUnread)
+              this.readSkipEnabled = false;
             this.pageReadFlags.push({scene: command.scene, flag: command.readFlag});
-          if (!this.pendingText) {
-            this.pageCharacters = 0;
-            this.revealWholePage = false;
           }
-          this.pendingText = true;
           await this.printMessage(s(0));
           break;
         case 13:
@@ -4560,18 +4715,22 @@ export class SiglusPlayer {
           break;
         case 15:
         case 62:
-          this.display.newline();
+          this.queueMessageAction(() => this.display.newline());
           break;
         case 14:
           await this.pageInput();
           break;
-        case 16:
-          this.display.setTextSize(args.length ? n(0) : undefined);
+        case 16: {
+          const textSize = args.length ? n(0) : undefined;
+          this.queueMessageAction(() => this.display.setTextSize(textSize));
           break;
-        case 17:
+        }
+        case 17: {
           // Native 1.1.141.3 at 0x554d7a/0x554dcc stores the per-window glyph color override.
-          this.display.setMessageTextColor(args.length ? n(0) : -1);
+          const color = args.length ? n(0) : -1;
+          this.queueMessageAction(() => this.display.setMessageTextColor(color));
           break;
+        }
         case 18:
           this.pageVoices = [
             ...this.pageVoices,
@@ -4628,16 +4787,21 @@ export class SiglusPlayer {
         case 55:
           if (this.objectsDirty) await this.renderObjects();
           return this.delay(n(0), true);
-        case 61:
-          if (s(0)) this.beginMessage();
-          this.display.annotate(s(0));
+        case 61: {
+          const ruby = s(0);
+          if (ruby) this.beginMessage();
+          this.queueMessageAction(() => this.display.annotate(ruby));
           break;
+        }
         case 76:
         case 77:
           return this.runSelbtn(command, root === 77);
         case 90:
-          if (command.readFlag !== undefined)
+          if (command.readFlag !== undefined && command.readFlag >= 0) {
+            if (!this.readFlags.get(command.scene)?.has(command.readFlag) && !this.skipUnread)
+              this.readSkipEnabled = false;
             this.pageReadFlags.push({scene: command.scene, flag: command.readFlag});
+          }
           this.pageVoices = [
             ...this.pageVoices,
             {id: n(0), character: args.length > 1 ? n(1) : undefined},
@@ -4648,8 +4812,11 @@ export class SiglusPlayer {
           await this.waitAudio('voice', false);
           return 0;
         case 91:
-          if (command.readFlag !== undefined)
+          if (command.readFlag !== undefined && command.readFlag >= 0) {
+            if (!this.readFlags.get(command.scene)?.has(command.readFlag) && !this.skipUnread)
+              this.readSkipEnabled = false;
             this.pageReadFlags.push({scene: command.scene, flag: command.readFlag});
+          }
           this.pageVoices = [
             ...this.pageVoices,
             {id: n(0), character: args.length > 1 ? n(1) : undefined},
@@ -4674,6 +4841,7 @@ export class SiglusPlayer {
           object.visible = Boolean(name);
           if (name) object.frames[0] = await this.display.objectGraphic(name, 0);
           faces.set(slot, object);
+          await this.display.showMessageFaces?.(orderedObjects(faces));
           return 0;
         }
         case 68: // global.koe_stop (0x54d7c4)
@@ -4817,27 +4985,14 @@ export class SiglusPlayer {
         this.display.setMessageTextColor(args.length ? n(0) : -1, path[3]);
         return 0;
       }
-      if (
-        path.length === 9 &&
-        path[2] === -1 &&
-        path[4] === 32 &&
-        path[5] === -1 &&
-        (path[7] === 51 || path[7] === 64) &&
-        path[8] === 0
-      ) {
-        this.display.offsetMessageButton(path[3]!, path[6]!, path[7] === 51 ? 'x' : 'y', n(0), {
-          duration: n(1),
-          delay: n(2),
-          easing: eventEasing(n(3)),
-          fill: 'backwards',
-        });
-        return 0;
-      }
       if (path[2] === -1 && path.length === 5 && path[4] === 1) {
-        this.display.openMessage(this.messageAnimation('open', path[3]!));
+        if (path[3] === this.display.messageWindow)
+          this.display.openMessage(this.messageAnimation('open', path[3]!));
         return 0;
       }
       if (path[2] === -1 && path.length === 5 && path[4] === 2) {
+        this.messageFaces.delete(path[3]!);
+        if (path[3] !== this.display.messageWindow) return 0;
         const anime = this.messageAnimation('close', path[3]!);
         if (anime.type > 0 && anime.time > 0) {
           await this.display.closeMessageWithAnimation(anime);
@@ -4988,8 +5143,16 @@ export class SiglusPlayer {
             return font.shadow ?? -1;
         }
       }
-      if (member === 6 && path.length === 5 && path[2] === -1)
-        return this.counter(this.systemCounters, path[3]!, path[4]!, args);
+      if (member === 6 && path.length === 5 && path[2] === -1) {
+        const id = path[3]!;
+        const operation = path[4]!;
+        if (operation === 6 || operation === 8) {
+          await this.renderObjects();
+          const elapsed = this.counter(this.systemCounters, id, 1, []) ?? 0;
+          return this.delay(n(0) - Number(elapsed), operation === 8);
+        }
+        return this.counter(this.systemCounters, id, operation, args);
+      }
       if ((member === 1 || member === 2) && path[2] === 6 && path.length === 6 && path[3] === -1) {
         const group = 100_000 + path[4]!;
         if (path[5] === 0 || path[5] === 1) return this.selectGroup(group, path[5] === 1);
@@ -5168,7 +5331,7 @@ export class SiglusPlayer {
         return this.newestSlot(
           member === 79 ? this.saves : this.quickSaves,
           n(0),
-          args.length ? n(1) : Infinity,
+          args.length > 1 ? n(1) : Infinity,
         );
       if (member === 252) return Number(this.saveEnabled);
       // Siglus 1.1.102.1 0x634b90 also requires an available save checkpoint.
@@ -5902,6 +6065,8 @@ export class SiglusPlayer {
         const last = this.backlog.at(-1);
         if (last) {
           const mutable = {name: last.name, text: [...last.text], voices: [...last.voices]};
+          const point = this.historyPoints.get(last);
+          if (point) this.historyPoints.set(mutable, point);
           this.backlog[this.backlog.length - 1] = mutable;
           return mutable;
         }
@@ -6145,13 +6310,13 @@ export class SiglusPlayer {
         }
         return 0;
       }
-      if (member === 4) return this.cgTable.size;
+      if (member === 4) return new Set(this.cgTable.values()).size;
       if (member === 5) return this.cgFlags.size;
       if (member === 6) {
-        const total = this.cgTable.size;
+        const total = new Set(this.cgTable.values()).size;
         const look = this.cgFlags.size;
         if (!total || !look) return 0;
-        return Math.max(1, Math.trunc((look * 100) / total));
+        return Math.min(100, Math.max(1, Math.trunc((look * 100) / total)));
       }
       if (member === 7 || member === 8) return 0;
       if (member === 9) {
@@ -6224,8 +6389,10 @@ export class SiglusPlayer {
       }
       if (op === 5) return Number(this.pcmEvents.has(slot));
       if (op === 4 || op === 6) {
-        if (!this.skipping && this.pcmEvents.has(slot)) {
-          await this.delay(16, op === 6);
+        while (!this.skipping) {
+          const active = this.pcmEvents.get(slot);
+          if (!active || active.config.mode !== 'oneshot') break;
+          if (await this.delay(32, op === 6)) return 1;
         }
         return 0;
       }
@@ -6422,10 +6589,14 @@ export class SiglusPlayer {
         return 0;
       }
       if (member === 11 && command.named.every((id) => id === 0)) {
+        const name = this.audio.bgmName?.();
+        if (name) this.recordBgmListened(name);
         this.audio.resumeBgm(positional ? n(0) : 0, Number(named(0) ?? 0));
         return 0;
       }
       if (member === 12 && !command.named.length) {
+        const name = this.audio.bgmName?.();
+        if (name) this.recordBgmListened(name);
         this.audio.resumeBgm(positional ? Math.max(0, n(0)) : 0);
         return this.waitAudio('bgm', false);
       }
@@ -6551,6 +6722,7 @@ export class SiglusPlayer {
             bgmFadeSource: Boolean(namedNumber(11)),
           };
           const fade = Math.max(0, namedNumber(2) ?? (positional > 1 ? n(1) : 0));
+          if (bgmName && !isReady) this.recordBgmListened(bgmName);
           if (isReady) await this.audio.pcm(channel, pcmSource, true, fade);
           else this.audio.pcmStart(channel, pcmSource, false, fade);
           return 0;
@@ -6581,11 +6753,18 @@ export class SiglusPlayer {
       }
       if (member === 7) {
         // The parameterless overload of SE stop uses a 100 ms fade (0x538e2a).
-        this.audio.stop('se', args.length ? n(0) : 100);
+        this.audio.stop('se', args.length ? Math.max(0, n(0)) : 100);
         return 0;
       }
       if (member === 8 || member === 10) return this.waitAudio('se', member === 10);
       if (member === 11) return this.audio.channelState('se');
+    }
+    if (root === 31 && member === 10) {
+      if (this.system.size) {
+        this.system.clear();
+        localStorage.setItem(this.game.saveKey + ':system', '[]');
+      }
+      return 0;
     }
     if (root !== undefined && root >= 23 && root <= 28 && member === 10) return 0;
     this.recordUnhandled(this.unhandledCommands, path, command.scene, command.line);
@@ -6754,7 +6933,11 @@ export class SiglusPlayer {
       if (!readyOnly) movie.play();
       if (command === 122 || command === 143) {
         const result = await this.waitObjectMovie(movie, command === 143);
-        if (autoFree && page.get(id!) === object) page.delete(id!);
+        if (autoFree && page.get(id!) === object) {
+          page.delete(id!);
+          this.markObjectsDirty(path);
+          this.releaseUnusedObjectMovies();
+        }
         return result;
       }
       return 0;
@@ -7031,8 +7214,15 @@ export class SiglusPlayer {
     if (command === 127) return Number(object.movie?.active ?? false);
     if (object.movie) {
       if (command === 138) return Math.trunc(object.movie.elapsed);
-      if (command === 128 || command === 142)
-        return this.waitObjectMovie(object.movie, command === 142);
+      if (command === 128 || command === 142) {
+        const result = await this.waitObjectMovie(object.movie, command === 142);
+        if (object.movieMeta?.autoFree && page.get(id!) === object) {
+          page.delete(id!);
+          this.markObjectsDirty(path);
+          this.releaseUnusedObjectMovies();
+        }
+        return result;
+      }
       if (command === 125 || command === 126 || command === 137 || command === 171) {
         if (command === 125) object.movie.pause();
         if (command === 126) object.movie.play();
@@ -7463,7 +7653,7 @@ export class SiglusPlayer {
         const size = Math.max(0, n(0) | 0);
         object.frameActionChannelCount = size;
         const prefix = this.frameActionKey(path.slice(0, index + 3)) + '.-1.';
-        for (const key of this.frameActionCounters.keys()) {
+        for (const key of new Set([...this.frameActions.keys(), ...this.frameActionCounters.keys()])) {
           if (!key.startsWith(prefix)) continue;
           const ch = Number(key.slice(prefix.length));
           if (ch >= size) {

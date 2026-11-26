@@ -190,12 +190,22 @@ export function captureLayers(
           target.fillStyle = style.backgroundColor;
           target.fillRect(0, 0, width, height);
         }
-        if (element instanceof HTMLCanvasElement) target.drawImage(element, 0, 0, width, height);
+        if (element instanceof HTMLCanvasElement && element.width > 0 && element.height > 0)
+          target.drawImage(element, 0, 0, width, height);
         target.restore();
       }
-      if (!(element instanceof HTMLCanvasElement))
-        for (const child of element.children)
-          if (child instanceof HTMLElement) draw(target, child, axes);
+      if (!(element instanceof HTMLCanvasElement)) {
+        const children: {el: HTMLElement; z: number; order: number}[] = [];
+        let order = 0;
+        for (const child of element.children) {
+          if (!(child instanceof HTMLElement)) continue;
+          const rawZ = getComputedStyle(child).zIndex;
+          const z = rawZ === 'auto' || rawZ === '' ? 0 : Number(rawZ) || 0;
+          children.push({el: child, z, order: order++});
+        }
+        children.sort((a, b) => a.z - b.z || a.order - b.order);
+        for (const {el} of children) draw(target, el, axes);
+      }
     };
     if (opacity < 1 || blend !== 'source-over' || style.filter !== 'none') {
       const group = createSurface();

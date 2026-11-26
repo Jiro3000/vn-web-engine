@@ -43,6 +43,7 @@ export interface SiglusCheckpoint {
     localListSizes?: [number, number][];
     localListInitialSizes?: [number, number][];
     references?: [number, readonly number[]][];
+    pendingRetForm?: number;
   }[];
 }
 
@@ -145,6 +146,8 @@ function binary(op: number, a: Value, b: Value): Value {
 class Frame {
   pc: number;
   line = 0;
+  pendingRetForm?: number;
+  expectedRetForm?: number;
   readonly stack: Argument[] = [];
   readonly points: number[] = [];
   readonly locals = new Map<string, Value>();
@@ -255,25 +258,25 @@ export class SiglusVm {
 
   /** Capture the stack while a host command is waiting at a save point. */
   checkpoint(commandResult?: Value): SiglusCheckpoint {
-    const frames = this.frames.map((original) => {
-      const frame = this.sceneJumps.get(original) ?? original;
-      return {
-        scene: frame.scene.name,
-        pc: frame.pc,
-        line: frame.line,
-        stack: [...frame.stack],
-        points: [...frame.points],
-        locals: [...frame.locals],
-        declarations: [...frame.declarations],
-        localListSizes: frame.localListSizes.size ? [...frame.localListSizes] : undefined,
-        localListInitialSizes: frame.localListInitialSizes.size
-          ? [...frame.localListInitialSizes]
-          : undefined,
-        references: [...frame.references],
-      };
-    });
+    const activeFrames = this.frames.map((original) => this.sceneJumps.get(original) ?? original);
+    const frames = activeFrames.map((frame) => ({
+      scene: frame.scene.name,
+      pc: frame.pc,
+      line: frame.line,
+      stack: [...frame.stack],
+      points: [...frame.points],
+      locals: [...frame.locals],
+      declarations: [...frame.declarations],
+      localListSizes: frame.localListSizes.size ? [...frame.localListSizes] : undefined,
+      localListInitialSizes: frame.localListInitialSizes.size
+        ? [...frame.localListInitialSizes]
+        : undefined,
+      references: [...frame.references],
+      pendingRetForm: frame.pendingRetForm,
+    }));
     if (!frames.length) throw new Error('Siglus has no running frame');
-    if (commandResult !== undefined) frames.at(-1)!.stack.push(commandResult);
+    const topRetForm = activeFrames.at(-1)!.pendingRetForm;
+    if (commandResult !== undefined && topRetForm !== 0) frames.at(-1)!.stack.push(commandResult);
     return {
       globals: [...this.globals],
       declaredListSizes: this.declaredListSizes.size ? [...this.declaredListSizes] : undefined,
@@ -552,9 +555,14 @@ export class SiglusVm {
     throw new ReturnToMenu(scene, entry);
   }
 
+  private activeFrame(): Frame | undefined {
+    const raw = this.frames.at(-1);
+    return raw ? (this.sceneJumps.get(raw) ?? raw) : undefined;
+  }
+
   /** Write a value through an element-reference path (e.g. intref args for system.get_calendar). */
   assign(path: readonly number[], value: Value): void {
-    const frame = this.frames.at(-1);
+    const frame = this.activeFrame();
     if (!frame) throw new Error('Siglus has no running frame');
     const slot = path[1];
     const reference =
@@ -565,7 +573,7 @@ export class SiglusVm {
   }
 
   readIntList(path: readonly number[], start: number, count: number): number[] {
-    const frame = this.frames.at(-1);
+    const frame = this.activeFrame();
     if (!frame || count <= 0) return [];
     const slot = path[1];
     const reference =
@@ -581,7 +589,7 @@ export class SiglusVm {
   }
 
   writeIntList(path: readonly number[], start: number, values: readonly number[]): void {
-    const frame = this.frames.at(-1);
+    const frame = this.activeFrame();
     if (!frame) return;
     const slot = path[1];
     const reference =
@@ -617,6 +625,7 @@ export class SiglusVm {
       for (const [key, size] of saved.localListInitialSizes ?? saved.localListSizes ?? [])
         frame.localListInitialSizes.set(key, size);
       for (const [key, reference] of saved.references ?? []) frame.references.set(key, reference);
+      frame.pendingRetForm = saved.pendingRetForm;
       return frame;
     });
   }
@@ -629,9 +638,17 @@ export class SiglusVm {
     const frame = frames[index]!;
     this.frames.push(frame);
     try {
-      if (index + 1 < frames.length)
-        frame.stack.push(await this.resume(frames, beforeResume, index + 1));
-      else await beforeResume?.();
+      if (index + 1 < frames.length) {
+        const retForm = frame.pendingRetForm;
+        const child = frames[index + 1]!;
+        if (retForm !== undefined) child.expectedRetForm = retForm;
+        const result = await this.resume(frames, beforeResume, index + 1);
+        frame.pendingRetForm = undefined;
+        if (retForm !== 0) frame.stack.push(result);
+      } else {
+        frame.pendingRetForm = undefined;
+        await beforeResume?.();
+      }
       return await this.execute(frame, index);
     } finally {
       this.frames.pop();
@@ -726,7 +743,8 @@ export class SiglusVm {
       const offset = frame.pc;
       const position = () => ({scene: frame.scene.name, offset, line: frame.line});
       try {
-        switch (frame.byte()) {
+        const op = frame.byte();
+        switch (op) {
           case 0:
             break;
           case 1:
@@ -817,18 +835,23 @@ export class SiglusVm {
             const args = frame.args();
             const target = frame.scene.labels[label];
             if (target === undefined) throw new Error(`Invalid Siglus label ${label}`);
-            frame.stack.push(
-              await this.call(this.labelFrame(frame.scene, target, args), depth + 1),
-            );
+            const sub = this.labelFrame(frame.scene, target, args);
+            sub.expectedRetForm = op === 20 ? 20 : 10;
+            frame.pendingRetForm = sub.expectedRetForm;
+            try {
+              frame.stack.push(await this.call(sub, depth + 1));
+            } finally {
+              frame.pendingRetForm = undefined;
+            }
             break;
           }
           case 21: {
-            const value = frame.args()[0] ?? 0;
+            const value = frame.args()[0] ?? (frame.expectedRetForm === 20 ? '' : 0);
             if (typeof value === 'object') throw new Error('Unsupported Siglus reference return');
             return value;
           }
           case 22:
-            return 0;
+            return frame.expectedRetForm === 20 ? '' : 0;
           case 32: {
             frame.word();
             frame.word();
@@ -889,7 +912,7 @@ export class SiglusVm {
                 pushResult(0);
                 break;
               }
-              if (path[1] === 10) {
+              if (path[1] === 10 && path[0]! <= 30) {
                 for (const key of this.globals.keys()) {
                   if (key.startsWith(path[0] + '.')) this.globals.delete(key);
                 }
@@ -908,8 +931,30 @@ export class SiglusVm {
                 break;
               }
             }
+            if (path.length === 2 && (path[0] === 34 || path[0] === 35)) {
+              if (path[1] === 1 && args.length >= 1 && typeof args[0] === 'number') {
+                this.setList(frame, path.slice(0, 1), args, 21);
+                pushResult(0);
+                break;
+              }
+              if (path[1] === 3) {
+                for (const key of this.globals.keys()) {
+                  if (key.startsWith(path[0] + '.')) this.globals.delete(key);
+                }
+                pushResult(0);
+                break;
+              }
+            }
             if (path.length === 3 && path[0] === localRoot && path[1] === 0 && path[2] === 10) {
               const prefix = `${localRoot}.0.`;
+              for (const key of frame.locals.keys()) {
+                if (key.startsWith(prefix)) frame.locals.delete(key);
+              }
+              pushResult(0);
+              break;
+            }
+            if (path.length === 3 && path[0] === localRoot && path[1] === 1 && path[2] === 3) {
+              const prefix = `${localRoot}.1.`;
               for (const key of frame.locals.keys()) {
                 if (key.startsWith(prefix)) frame.locals.delete(key);
               }
@@ -926,10 +971,15 @@ export class SiglusVm {
               break;
             }
             if (id === 5) {
-              const value = await this.call(
-                this.entry(String(args[0]), Number(args[1] ?? 0), args.slice(2)),
-                depth + 1,
-              );
+              const sub = this.entry(String(args[0]), Number(args[1] ?? 0), args.slice(2));
+              sub.expectedRetForm = retForm;
+              frame.pendingRetForm = retForm;
+              let value: Value;
+              try {
+                value = await this.call(sub, depth + 1);
+              } finally {
+                frame.pendingRetForm = undefined;
+              }
               pushResult(value);
               break;
             }
@@ -1026,18 +1076,32 @@ export class SiglusVm {
               pushResult(0);
               break;
             }
+            const isStrListReceiver =
+              !receiverPath.includes(-1) &&
+              (form === 21 ||
+                (receiverPath.length === 1 && (receiverPath[0] === 34 || receiverPath[0] === 35)) ||
+                (receiverPath.length === 2 &&
+                  receiverPath[0] === localRoot &&
+                  receiverPath[1] === 1));
             const receiver =
               path.length > 1 &&
+              !isStrListReceiver &&
               (path[0] === localRoot ||
                 elementOwner(path[0]!) === userProperty ||
                 path[0] === 34 ||
                 path[0] === 35)
                 ? this.property(frame, receiverPath)
                 : undefined;
-            const result =
-              typeof receiver === 'string'
-                ? this.stringCommand(receiver, member, args)
-                : await this.services.command(command);
+            frame.pendingRetForm = retForm;
+            let result: Argument | undefined;
+            try {
+              result =
+                typeof receiver === 'string'
+                  ? this.stringCommand(receiver, member, args)
+                  : await this.services.command(command);
+            } finally {
+              frame.pendingRetForm = undefined;
+            }
             if (this.pendingLoad) throw this.pendingLoad.checkpoint;
             if (result !== undefined) pushResult(result);
             else if (include >= 0) {
@@ -1052,10 +1116,15 @@ export class SiglusVm {
                   : frame.scene.commands[include - count];
               if (target === undefined || entry === undefined)
                 throw new Error(`Unknown Siglus command ${id}`);
-              const value = await this.call(
-                new Frame(this.pack.scene(target), entry, args),
-                depth + 1,
-              );
+              const sub = new Frame(this.pack.scene(target), entry, args);
+              sub.expectedRetForm = retForm;
+              frame.pendingRetForm = retForm;
+              let value: Value;
+              try {
+                value = await this.call(sub, depth + 1);
+              } finally {
+                frame.pendingRetForm = undefined;
+              }
               pushResult(value);
             } else throw new Error(`Unsupported Siglus command ${path.join('.')}`);
             this.signal.throwIfAborted();

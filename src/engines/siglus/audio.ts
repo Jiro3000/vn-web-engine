@@ -145,6 +145,9 @@ export class SiglusAudio {
   private readonly voiceGroups = new Map<number, number>();
   private readonly characterLevels = new Map<number, number>();
   private readonly mutedCharacters = new Set<number>();
+  private readonly fading = new Map<string, Set<Playing>>();
+  private voiceDuckingActive = false;
+  private pendingBgmPaused = false;
 
   constructor(
     private readonly files: ReadonlyMap<string, ByteSource>,
@@ -384,16 +387,24 @@ export class SiglusAudio {
     if (this.closed) return;
     const request = {};
     this.preparedBgm = undefined;
+    this.pendingBgmPaused = false;
     this.pendingPlayback.set('bgm', request);
     this.pendingBgm = {name, loop};
     this.syncBgmName();
     const job = (async () => {
       const track = await this.loadBgm(name, loop, startSample, true);
       if (this.closed || this.pendingPlayback.get('bgm') !== request) return;
+      const paused = this.pendingBgmPaused;
+      this.pendingBgmPaused = false;
       this.pendingBgm = undefined;
       this.pendingPlayback.delete('bgm');
+      if (paused) {
+        this.preparedBgm = track;
+        this.syncBgmName();
+        return;
+      }
       this.stopActiveChannel('bgm', crossfade);
-      this.playBgmTrack(track, fade || crossfade, delay);
+      this.playBgmTrack(track, fade, delay);
     })();
     this.pendingPromises.set('bgm', job);
     try {
@@ -433,9 +444,14 @@ export class SiglusAudio {
     this.stop('bgm');
     const gain = this.context.createGain();
     const volume = this.playbackVolume('bgm', 'BGM');
-    const startsAt = this.context.currentTime + Math.max(75, delay) / 1000;
-    gain.gain.setValueAtTime(fade > 0 ? 0 : volume, startsAt);
-    if (fade > 0) gain.gain.linearRampToValueAtTime(volume, startsAt + fade / 1000);
+    const now = this.context.currentTime;
+    const startsAt = now + Math.max(75, delay) / 1000;
+    const initial = fade > 0 ? 0 : volume;
+    gain.gain.setValueAtTime(initial, now);
+    if (fade > 0) {
+      gain.gain.setValueAtTime(0, startsAt);
+      gain.gain.linearRampToValueAtTime(volume, startsAt + fade / 1000);
+    }
     gain.connect(this.context.destination);
 
     const {stream, sourceRate, name} = track;
@@ -477,6 +493,11 @@ export class SiglusAudio {
   }
 
   pauseBgm(fade: number): void {
+    if (this.pendingBgm) {
+      this.pendingBgmPaused = true;
+      this.stopActiveChannel('bgm', fade);
+      return;
+    }
     const playing = this.playing.get('bgm');
     const track = playing?.bgm;
     if (!track) return;
@@ -489,7 +510,15 @@ export class SiglusAudio {
   }
 
   resumeBgm(fade = 0, delay = 0): void {
+    this.pendingBgmPaused = false;
     if (this.preparedBgm) this.playBgmTrack(this.preparedBgm, fade, delay);
+  }
+
+  isLoopingBgm(name: string): boolean {
+    const lower = name.toLowerCase();
+    if (this.pendingBgm) return this.pendingBgm.name.toLowerCase() === lower && this.pendingBgm.loop;
+    const playing = this.playing.get('bgm')?.bgm;
+    return Boolean(playing && playing.name.toLowerCase() === lower && playing.loop);
   }
 
   bgmName(): string {
@@ -851,13 +880,19 @@ export class SiglusAudio {
     } = {},
   ): void {
     if (this.closed) return;
-    this.stop(channel);
+    const isDuckSource = channel === 'voice' || Boolean(bgmFadeSource);
+    this.stop(channel, 0, isDuckSource);
     const source = this.context.createBufferSource();
     const gain = this.context.createGain();
     const volume = this.playbackVolume(channel, kind, character, volumeType, bgmFadeTarget);
-    const startsAt = this.context.currentTime + Math.max(0, delay) / 1000;
-    gain.gain.setValueAtTime(fade > 0 ? 0 : volume, startsAt);
-    if (fade > 0) gain.gain.linearRampToValueAtTime(volume, startsAt + fade / 1000);
+    const now = this.context.currentTime;
+    const startsAt = now + Math.max(0, delay) / 1000;
+    const initial = fade > 0 ? 0 : volume;
+    gain.gain.setValueAtTime(initial, now);
+    if (fade > 0) {
+      if (startsAt > now) gain.gain.setValueAtTime(0, startsAt);
+      gain.gain.linearRampToValueAtTime(volume, startsAt + fade / 1000);
+    }
     source.buffer = buffer;
     source.loop = loop;
     source.loopStart = loopStart;
@@ -881,7 +916,7 @@ export class SiglusAudio {
     if (!loop && source.loopEnd < buffer.duration)
       source.start(startsAt, start, Math.max(0, source.loopEnd - start));
     else source.start(startsAt, start);
-    if (channel === 'voice' || bgmFadeSource) this.updateVoiceDuckGains(true);
+    if (isDuckSource) this.updateVoiceDuckGains(true);
     this.root.dataset.audioState = this.context.state;
     this.tracePlayback(buffer, {
       channel: channel.startsWith('se:') ? 'se' : channel, resource, volumeType, gain: volume,
@@ -903,13 +938,19 @@ export class SiglusAudio {
     this.active.add(playing);
     const ended = () => {
       this.active.delete(playing);
-      if (this.playing.get(channel) === playing) {
+      const fadingSet = this.fading.get(channel);
+      if (fadingSet) {
+        fadingSet.delete(playing);
+        if (!fadingSet.size) this.fading.delete(channel);
+      }
+      const wasCurrent = this.playing.get(channel) === playing;
+      if (wasCurrent) {
         this.playing.delete(channel);
         if (channel === 'bgm') this.syncBgmName();
       }
       source.disconnect();
       gain.disconnect();
-      if (channel === 'voice' || bgmFadeSource) this.updateVoiceDuckGains(false);
+      if (wasCurrent && (channel === 'voice' || bgmFadeSource)) this.updateVoiceDuckGains(false);
     };
     if (source instanceof ScheduledPcmRange) source.addEventListener('ended', ended, {once: true});
     else source.onended = ended;
@@ -965,14 +1006,14 @@ export class SiglusAudio {
   setCharacterLevel(group: number, level?: number): void {
     if (level === undefined) this.characterLevels.delete(group);
     else this.characterLevels.set(group, Math.max(0, Math.min(255, level)));
-    this.updateGains('KOE');
+    this.updateGains('ALL');
     this.saveMix();
   }
 
   setCharacterEnabled(group: number, enabled: boolean): void {
     if (enabled) this.mutedCharacters.delete(group);
     else this.mutedCharacters.add(group);
-    this.updateGains('KOE');
+    this.updateGains('ALL');
     this.saveMix();
   }
 
@@ -1033,6 +1074,16 @@ export class SiglusAudio {
     this.updateGains('ALL');
   }
 
+  private holdAndCancelGain(param: AudioParam, time: number): void {
+    if (typeof param.cancelAndHoldAtTime === 'function') {
+      param.cancelAndHoldAtTime(time);
+    } else {
+      const current = param.value;
+      param.cancelScheduledValues(time);
+      param.setValueAtTime(current, time);
+    }
+  }
+
   private playbackVolume(
     channel: string,
     kind: SiglusAudioKind,
@@ -1042,11 +1093,17 @@ export class SiglusAudio {
   ): number {
     const level = this.channelLevel(channel);
     const duck = kind !== 'BGM' && bgmFadeTarget && this.isVoiceDucking() ? this.voiceDuck : 1;
+    const individual =
+      character === undefined
+        ? 1
+        : this.characterEnabled(character)
+          ? this.characterLevel(character) / 255
+          : 0;
     const volume =
       volumeType === undefined || volumeType === 1
         ? this.volume(kind, character)
         : this.enabled('ALL')
-          ? (this.level('ALL') * this.soundLevel(volumeType)) / (255 * 255)
+          ? (this.level('ALL') * this.soundLevel(volumeType) * individual) / (255 * 255)
           : 0;
     return siglusVolumeGain((volume * duck * level) / 255);
   }
@@ -1067,7 +1124,7 @@ export class SiglusAudio {
     if (!playing) return;
     const {gain, kind, character, volumeType, bgmFadeTarget} = playing;
     const time = this.context.currentTime;
-    gain.gain.cancelAndHoldAtTime(time);
+    this.holdAndCancelGain(gain.gain, time);
     gain.gain.linearRampToValueAtTime(
       this.playbackVolume(channel, kind, character, volumeType, bgmFadeTarget),
       time + Math.max(0, fade) / 1000,
@@ -1075,8 +1132,10 @@ export class SiglusAudio {
   }
 
   private updateVoiceDuckGains(duckingStarted: boolean): void {
-    if (this.voiceDuck >= 1) return;
     const active = this.isVoiceDucking();
+    if (active === this.voiceDuckingActive) return;
+    this.voiceDuckingActive = active;
+    if (this.voiceDuck >= 1) return;
     const fade =
       duckingStarted && active
         ? {delay: this.bgmFadeInStart, duration: this.bgmFadeInLen}
@@ -1093,17 +1152,24 @@ export class SiglusAudio {
       if (kind !== 'ALL' && playingKind !== kind) continue;
       if (duckFade && playingKind !== 'BGM' && !bgmFadeTarget) continue;
       const target = this.playbackVolume(channel, playingKind, character, volumeType, bgmFadeTarget);
-      if (
-        duckFade &&
-        duckFade.duration > 0 &&
-        typeof gain.gain.cancelAndHoldAtTime === 'function'
-      ) {
-        gain.gain.cancelAndHoldAtTime(time);
+      if (duckFade && duckFade.duration > 0) {
+        this.holdAndCancelGain(gain.gain, time);
         if (duckFade.delay > 0) gain.gain.setValueAtTime(gain.gain.value, time + duckFade.delay);
         gain.gain.linearRampToValueAtTime(target, time + duckFade.delay + duckFade.duration);
       } else {
         gain.gain.cancelScheduledValues(time);
         gain.gain.setValueAtTime(target, time);
+      }
+    }
+    if (!duckFade) {
+      for (const [, set] of this.fading) {
+        for (const {gain, kind: playingKind} of set) {
+          if (kind !== 'ALL' && playingKind !== kind) continue;
+          if (!this.enabled('ALL') || !this.enabled(playingKind)) {
+            gain.gain.cancelScheduledValues(time);
+            gain.gain.setValueAtTime(0, time);
+          }
+        }
       }
     }
   }
@@ -1147,38 +1213,60 @@ export class SiglusAudio {
     return this.fadeRemaining(channel) > 0 ? 2 : 0;
   }
 
-  private stopActiveChannel(channel: string, fade = 0): void {
+  private stopActiveChannel(channel: string, fade = 0, skipDuckUpdate = false): void {
+    const time = this.context.currentTime;
+    const fadeSec = Math.max(0, fade) / 1000;
+    if (fadeSec === 0) {
+      this.fadeEnds.delete(channel);
+      const fadingSet = this.fading.get(channel);
+      if (fadingSet) {
+        this.fading.delete(channel);
+        for (const old of fadingSet) {
+          try {
+            old.source.stop(time);
+          } catch {
+            // Source already stopped.
+          }
+        }
+      }
+    }
     const playing = this.playing.get(channel);
     if (!playing) return;
     this.playing.delete(channel);
-    const time = this.context.currentTime;
-    if (fade > 0) {
-      this.fadeEnds.set(channel, time + fade / 1000);
-      playing.gain.gain.linearRampToValueAtTime(0, time + fade / 1000);
+    if (fadeSec > 0) {
+      this.fadeEnds.set(channel, time + fadeSec);
+      let set = this.fading.get(channel);
+      if (!set) this.fading.set(channel, (set = new Set()));
+      set.add(playing);
+      this.holdAndCancelGain(playing.gain.gain, time);
+      playing.gain.gain.linearRampToValueAtTime(0, time + fadeSec);
     } else this.fadeEnds.delete(channel);
-    playing.source.stop(time + fade / 1000);
-    if (channel === 'voice' || playing.bgmFadeSource) this.updateVoiceDuckGains(false);
+    playing.source.stop(time + fadeSec);
+    if (!skipDuckUpdate && (channel === 'voice' || playing.bgmFadeSource))
+      this.updateVoiceDuckGains(false);
   }
 
-  stop(channel: string, fade = 0): void {
+  stop(channel: string, fade = 0, skipDuckUpdate = false): void {
     if (channel === 'se') {
-      for (const voice of seVoices) this.stop(voice, fade);
+      for (const voice of seVoices) this.stop(voice, fade, skipDuckUpdate);
       return;
     }
     if (channel === 'bgm') {
       this.preparedBgm = undefined;
       this.pendingBgm = undefined;
+      this.pendingBgmPaused = false;
       delete this.root.dataset.bgm;
     }
     this.pendingPlayback.delete(channel);
     this.pendingPromises.delete(channel);
     this.preparedPcm.delete(channel);
-    this.stopActiveChannel(channel, fade);
+    this.stopActiveChannel(channel, fade, skipDuckUpdate);
   }
 
   stopPcmChannels(): void {
     for (const channel of new Set([
       ...this.playing.keys(),
+      ...this.fading.keys(),
       ...this.preparedPcm.keys(),
       ...this.pendingPlayback.keys(),
     ])) {
@@ -1189,7 +1277,11 @@ export class SiglusAudio {
   stopEffects(): void {
     this.stop('se');
     this.stopPcmChannels();
-    for (const channel of this.playing.keys()) {
+    for (const channel of new Set([
+      ...this.playing.keys(),
+      ...this.fading.keys(),
+      ...this.pendingPlayback.keys(),
+    ])) {
       if (channel !== 'bgm' && channel !== 'voice') this.stop(channel);
     }
   }
@@ -1198,11 +1290,15 @@ export class SiglusAudio {
     this.pendingPlayback.clear();
     this.pendingPromises.clear();
     this.pendingBgm = undefined;
+    this.pendingBgmPaused = false;
     this.preparedPcm.clear();
     this.preparedBgm = undefined;
     this.playing.clear();
+    this.fading.clear();
     this.fadeEnds.clear();
-    // A source in a fade-out is no longer addressable by its channel.
+    this.voiceDuckingActive = false;
+    this.channelLevels.delete('se');
+    this.channelLevels.delete('pcm');
     for (const {source} of this.active) source.stop();
     delete this.root.dataset.bgm;
     delete this.root.dataset.voice;

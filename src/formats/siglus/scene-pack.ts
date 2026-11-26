@@ -183,9 +183,8 @@ export class SiglusScenePack {
     }
     const names: string[] = [];
     const config = new SiglusGameConfig(names);
-    for (const match of utf16
-      .decode(unpackSiglusLz(payload))
-      .matchAll(/^#([\w.]+)\s*=([^\r\n]*)/gm)) {
+    const text = utf16.decode(unpackSiglusLz(payload)).replace(/^\uFEFF/, '');
+    for (const match of text.matchAll(/^[ \t]*#([\w.]+)\s*=([^\r\n]*)/gm)) {
       const key = match[1]!.toUpperCase();
       const value = match[2]!.trim();
       // NAMAE is repeatable. Keep the original map lookup and preserve each declaration.

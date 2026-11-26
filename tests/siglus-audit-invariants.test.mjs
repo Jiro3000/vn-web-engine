@@ -3046,3 +3046,194 @@ test('Transition smoothness: evalObjectIntEvent, non-blocking wipe preservation,
   assert.equal(srcObj.scaleEvents.y.started, 100);
   assert.equal(srcObj.horizontalMotion.started, 100);
 });
+
+test('Multi-subsystem audit regressions: audio Firefox/fade/duck, VM post-jump/lists/GOSUBSTR, CGTABLE CP932, Gameexe BOM, screen dialog 127, and player/display fixes', async () => {
+  const {SiglusAudio} = await import('../dist/engines/siglus/audio.js');
+  const {SiglusDisplay} = await import('../dist/engines/siglus/display.js');
+  const {SiglusPlayer} = await import('../dist/engines/siglus/player.js');
+  const {SiglusVm} = await import('../dist/engines/siglus/vm.js');
+  const {parseCgTable} = await import('../dist/formats/siglus/cgtable.js');
+  const {SiglusConfiguration} = await import('../dist/engines/siglus/configuration.js');
+  const {SiglusScenePack} = await import('../dist/formats/siglus/scene-pack.js');
+  const {encodeCp932} = await import('../dist/text/cp932.js');
+
+  // 1. CGTABLE: NUL-terminated magic (ignoring garbage after NUL) + CP932 Japanese CG name decoding
+  const cgm = new Uint8Array(32 + 36);
+  cgm.set(Buffer.from('CGTABLE\0JUNKDATA'), 0);
+  const cgmView = new DataView(cgm.buffer);
+  cgmView.setInt32(16, 1, true); // count = 1
+  cgmView.setInt32(20, 0, true); // unpacked
+  const jpNameBytes = encodeCp932('イベント01');
+  cgm.set(jpNameBytes, 32);
+  cgmView.setInt32(32 + 32, 7, true);
+  const parsedCgm = parseCgTable(cgm);
+  assert.equal(parsedCgm.version, 1);
+  assert.equal(parsedCgm.entries[0].name, 'イベント01');
+  assert.equal(parsedCgm.byName.get('イベント01'), 7);
+
+  // 2. SiglusAudio: Firefox fallback (no cancelAndHoldAtTime), anchored stopActiveChannel fade,
+  //    hard stop cancelling fading sources, and volumeType applying character voice mute/level.
+  const ops = [];
+  const fakeParam = {
+    value: 0.75,
+    cancelScheduledValues(t) {
+      ops.push(['cancelScheduled', t]);
+    },
+    setValueAtTime(v, t) {
+      ops.push(['set', v, t]);
+    },
+    linearRampToValueAtTime(v, t) {
+      ops.push(['ramp', v, t]);
+    },
+  };
+  let stoppedAt = [];
+  const fakeSource = {
+    stop(t) {
+      stoppedAt.push(t);
+    },
+  };
+  const audio = Object.assign(Object.create(SiglusAudio.prototype), {
+    context: {currentTime: 10},
+    playing: new Map([
+      [
+        'bgm',
+        {
+          source: fakeSource,
+          gain: {gain: fakeParam},
+          kind: 'BGM',
+          startsAt: 1,
+          duration: 100,
+          loop: true,
+        },
+      ],
+    ]),
+    fading: new Map(),
+    fadeEnds: new Map(),
+    channelLevels: new Map(),
+    levels: new Map(),
+    soundLevels: new Map(),
+    disabled: new Set(),
+    characterLevels: new Map([[3, 128]]),
+    mutedCharacters: new Set([4]),
+    config: new Map(),
+    voiceDuck: 1,
+    voiceDuckingActive: false,
+  });
+  audio.setChannelLevel('bgm', 128, 500);
+  assert.equal(ops[0][0], 'cancelScheduled', 'Firefox fallback must not require cancelAndHoldAtTime');
+  assert.equal(ops[1][0], 'set');
+  assert.equal(ops[2][0], 'ramp');
+  ops.length = 0;
+  audio.stopActiveChannel('bgm', 1000);
+  assert.equal(ops[0][0], 'cancelScheduled', 'fade-out must anchor at currentTime before ramping to 0');
+  assert.equal(ops[1][0], 'set');
+  assert.deepEqual(ops[2], ['ramp', 0, 11]);
+  assert.equal(audio.fading.get('bgm')?.size, 1);
+  // Hard stop(0) immediately stops fading-out source and clears fadeEnds
+  audio.stopActiveChannel('bgm', 0);
+  assert.equal(stoppedAt.at(-1), 10);
+  assert.equal(audio.fadeEnds.has('bgm'), false);
+  // Character mute/level applies even when volumeType !== 1
+  const volMuted = audio.playbackVolume('pcm0', 'PCM', 4, 2, false);
+  const volHalf = audio.playbackVolume('pcm0', 'PCM', 3, 2, false);
+  const volFull = audio.playbackVolume('pcm0', 'PCM', 5, 2, false);
+  assert.equal(volMuted, 0);
+  assert.ok(volHalf > 0 && volHalf < volFull);
+
+  // 3. SiglusDisplay: virtualKeyState(vk, 5) consumes vkReleased (not vkDown), editBox missing-id returns safe defaults,
+  //    and setScreenEffect uses SVG color matrix instead of effectTint.
+  let filterApplied = '';
+  const display = Object.assign(Object.create(SiglusDisplay.prototype), {
+    vkDown: new Set([38]),
+    vkPressed: new Set(),
+    vkReleased: new Set([40]),
+    edits: new Map(),
+    effectTint: {style: {display: ''}},
+    sceneLayers: {
+      style: {
+        get filter() {
+          return filterApplied;
+        },
+        set filter(v) {
+          filterApplied = v;
+        },
+      },
+    },
+    colorFilterUrl: (m) => `url(#cm:${m.slice(0, 8)})`,
+    appendColorMatrix: () => {},
+  });
+  assert.equal(display.virtualKeyState(38, 5), 0, 'held key without release must return 0 for command 5');
+  assert.equal(display.virtualKeyState(40, 5), 1, 'released key must return 1 once for command 5');
+  assert.equal(display.virtualKeyState(40, 5), 0);
+  assert.equal(display.editBox(99, 3, () => 0, () => ''), '');
+  assert.equal(display.editBox(99, 4, () => 0, () => ''), 0);
+  assert.equal(display.editBox(99, 5, () => 0, () => ''), 0);
+  display.setScreenEffect({mono: 0, reverse: 0, bright: 0, dark: 0, colorR: 0, colorG: 0, colorB: 0, colorRate: 0, addR: 40, addG: 20, addB: 0});
+  assert.equal(display.effectTint.style.display, 'none', 'setScreenEffect must not use isolated effectTint overlay');
+  assert.ok(filterApplied.startsWith('url(#cm:'), 'setScreenEffect must use SVG color matrix filter');
+
+  // 4. SiglusConfiguration: fallback screen dialog template (127) resolves without SiglusEngine.exe
+  const configUi = new SiglusConfiguration({}, undefined, new AbortController().signal);
+  const screenTpl = await configUi.template(127);
+  assert.ok(screenTpl.items.some((item) => item.id === 1166));
+  assert.ok(screenTpl.items.some((item) => item.id === 1036));
+
+  // 5. SiglusPlayer: counter.set preserves stopped state, cgtable counts unique flagNo,
+  //    get_save_new_no(start) works with 1 arg, and runSelbtn returns -1 when all items are disabled.
+  const player = Object.assign(Object.create(SiglusPlayer.prototype), {
+    sceneCounters: new Map(),
+    cgTable: new Map([
+      ['cg_01a', 1],
+      ['cg_01b', 1],
+      ['cg_02a', 2],
+    ]),
+    cgFlags: new Set([1, 2]),
+    saves: new Map([
+      [5, {timestamp: 100}],
+      [12, {timestamp: 200}],
+    ]),
+    quickSaves: new Map(),
+    namaeAliases: new Map(),
+    namaeIds: new Map(),
+    namaeValues: new Map(),
+    renderObjects: async () => {},
+    controller: new AbortController(),
+    system: new Map([[0, 1]]),
+    game: {saveKey: 'test-siglus', config: new Map()},
+  });
+  player.counter(player.sceneCounters, 0, 0, [500]);
+  assert.equal(player.counter(player.sceneCounters, 0, 14, []), 0, 'counter.set on unstarted counter must stay stopped');
+  assert.equal(player.counter(player.sceneCounters, 0, 1, []), 500);
+  assert.equal(player.newestSlot(player.saves, 5, Infinity), 12);
+  const selResult = await player.runSelbtn(
+    {
+      scene: 'test',
+      offset: 0,
+      line: 1,
+      path: [76],
+      args: [
+        ['Only disabled', 2, -1],
+        ['Hidden spacer', 3, -1],
+      ],
+      named: [],
+    },
+    false,
+  );
+  assert.equal(selResult, -1, 'non-cancelable selbtn with zero enabled items must return -1 instead of softlocking');
+
+  // 6. SiglusVm: activeFrame() resolves post-jump frame for assign/readIntList/writeIntList
+  const preJump = {scene: {name: 'boot', properties: []}, locals: new Map(), references: new Map(), declarations: new Map()};
+  const postJump = {scene: {name: 'story', properties: []}, locals: new Map(), references: new Map(), declarations: new Map()};
+  const vm = Object.assign(Object.create(SiglusVm.prototype), {
+    frames: [preJump],
+    sceneJumps: new WeakMap([[preJump, postJump]]),
+    globals: new Map(),
+    pack: {properties: []},
+    services: {property: () => undefined},
+  });
+  vm.assign([83, 0, -1, 2], 42);
+  assert.equal(postJump.locals.get('83.0.-1.2'), 42);
+  assert.equal(preJump.locals.get('83.0.-1.2'), undefined);
+  vm.writeIntList([83, 0], 5, [11, 22]);
+  assert.deepEqual(vm.readIntList([83, 0], 5, 2), [11, 22]);
+});

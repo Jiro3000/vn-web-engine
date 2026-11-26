@@ -1,4 +1,5 @@
 import {byteDataView} from '../../core/binary.js';
+import {decodeCp932} from '../../text/cp932.js';
 import {unpackSiglusLz, xorCycle} from './compression.js';
 import {cgmXor} from './tables.js';
 
@@ -54,7 +55,9 @@ function hasXorPackedLzHeader(bytes: Uint8Array, expectedOrgSize: number): boole
 
 export function parseCgTable(bytes: Uint8Array): SiglusCgTable {
   if (bytes.length < 32) throw new Error('Truncated Siglus CGTABLE header');
-  const magic = asciiDecoder.decode(bytes.subarray(0, 16)).replace(/\0+$/, '');
+  let magicEnd = 0;
+  while (magicEnd < 16 && bytes[magicEnd] !== 0) magicEnd++;
+  const magic = asciiDecoder.decode(bytes.subarray(0, magicEnd));
   let version: 1 | 2;
   let stride: number;
   if (magic === 'CGTABLE2') {
@@ -95,7 +98,7 @@ export function parseCgTable(bytes: Uint8Array): SiglusCgTable {
     const off = i * stride;
     let end = off;
     while (end < off + 32 && data[end] !== 0) end++;
-    const name = asciiDecoder.decode(data.subarray(off, end));
+    const name = decodeCp932(data.subarray(off, end));
     const flagNo = view.getInt32(off + 32, true);
     const codes: number[] = [];
     if (version === 2) {

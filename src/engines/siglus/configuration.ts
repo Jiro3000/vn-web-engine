@@ -169,6 +169,31 @@ const defaultDialogTemplates = new Map<number, DialogTemplate>([
       defaultDialogItem(1165, 128, 12, 84, 112, 10, 0x50010009, 'Windows Media Player （標準）'),
     ]),
   ],
+  [
+    screenDialogResource,
+    defaultDialog(300, 210, '画面モードの設定', [
+      defaultDialogItem(1166, 128, 12, 10, 80, 10, 0x50030009, 'フルスクリーン'),
+      defaultDialogItem(1167, 128, 100, 10, 80, 10, 0x50010009, 'ウィンドウ'),
+      defaultDialogItem(1170, 128, 12, 28, 46, 10, 0x50030009, '50%'),
+      defaultDialogItem(1171, 128, 62, 28, 46, 10, 0x50010009, '75%'),
+      defaultDialogItem(1172, 128, 112, 28, 52, 10, 0x50010009, '100%'),
+      defaultDialogItem(1173, 128, 168, 28, 52, 10, 0x50010009, '150%'),
+      defaultDialogItem(1174, 128, 224, 28, 52, 10, 0x50010009, '200%'),
+      defaultDialogItem(1155, 128, 12, 48, 86, 10, 0x50030009, '画面サイズに合わせる'),
+      defaultDialogItem(1156, 128, 104, 48, 86, 10, 0x50010009, 'アスペクト比固定'),
+      defaultDialogItem(1157, 128, 196, 48, 86, 10, 0x50010009, '横幅に合わせる'),
+      defaultDialogItem(1158, 128, 12, 62, 86, 10, 0x50010009, '縦幅に合わせる'),
+      defaultDialogItem(1159, 128, 104, 62, 86, 10, 0x50010009, '等倍表示'),
+      defaultDialogItem(1160, 128, 196, 62, 86, 10, 0x50010009, 'カスタム'),
+      defaultDialogItem(1047, 128, 12, 80, 140, 10, 0x50030003, '縦横比を連動させる'),
+      defaultDialogItem(1182, 'msctls_trackbar32', 12, 96, 276, 18, 0x50030005, null),
+      defaultDialogItem(1181, 'msctls_trackbar32', 12, 118, 276, 18, 0x50030005, null),
+      defaultDialogItem(1180, 'msctls_trackbar32', 12, 140, 276, 18, 0x50030005, null),
+      defaultDialogItem(1179, 'msctls_trackbar32', 12, 162, 276, 18, 0x50030005, null),
+      defaultDialogItem(1020, 128, 12, 188, 68, 14, 0x50030000, '初期状態に戻す'),
+      defaultDialogItem(1036, 128, 250, 188, 38, 14, 0x50030000, '閉じる'),
+    ]),
+  ],
 ]);
 
 export class SiglusConfiguration {
@@ -195,8 +220,11 @@ export class SiglusConfiguration {
         continue;
       }
       for (const {id, language, bytes} of resources) {
-        if (language === 1041 && typeof id === 'number' &&
-            (id === screenDialogResource || defaultDialogTemplates.has(id))) {
+        if (
+          typeof id === 'number' &&
+          defaultDialogTemplates.has(id) &&
+          (language === 1041 || !result.has(id))
+        ) {
           try {
             result.set(id, parseDialogTemplate(bytes, 0));
           } catch {

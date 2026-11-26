@@ -200,21 +200,22 @@ test('Phase 2D proceduralWipeMask supports all 21 verified SSR wipe types', () =
     assert.ok(mask.softness >= 0 && mask.softness <= 255, `Invalid softness ${mask.softness} for type ${type}`);
   }
 
-  // Directional check: type 100 dir=0 (left->right) vs dir=1 (right->left)
+  // Directional check (255 reveals first, matching fanWipeMask/animateFanWipe):
+  // type 100 dir=0 (left->right) vs dir=1 (right->left)
   const lr = proceduralWipeMask(100, 16, 8, [0, 0]);
   const rl = proceduralWipeMask(100, 16, 8, [0, 1]);
   assert.ok(lr && rl);
-  assert.equal(lr.values[0], 0);
-  assert.equal(lr.values[15], 255);
-  assert.equal(rl.values[0], 255);
-  assert.equal(rl.values[15], 0);
+  assert.equal(lr.values[0], 255);
+  assert.equal(lr.values[15], 0);
+  assert.equal(rl.values[0], 0);
+  assert.equal(rl.values[15], 255);
 
-  // Iris / box wipe (120): center < corner, reversed center > corner
+  // Iris / box wipe (120): center reveals first (255) > corner (0), reversed center (0) < corner (255)
   const iris = proceduralWipeMask(120, 17, 17, [0, 0]);
   const irisRev = proceduralWipeMask(120, 17, 17, [0, 1]);
   assert.ok(iris && irisRev);
-  assert.equal(iris.values[8 * 17 + 8], 0);
-  assert.equal(iris.values[0], 255);
-  assert.equal(irisRev.values[8 * 17 + 8], 255);
-  assert.equal(irisRev.values[0], 0);
+  assert.equal(iris.values[8 * 17 + 8], 255);
+  assert.equal(iris.values[0], 0);
+  assert.equal(irisRev.values[8 * 17 + 8], 0);
+  assert.equal(irisRev.values[0], 255);
 });

@@ -11,6 +11,11 @@ export class SiglusOmvPlayback {
     type: 'module',
   });
   private pending?: {resolve: (reply: OmvReply) => void; reject: (error: Error) => void};
+  private readonly queue: {
+    request: OmvRequest;
+    resolve: (reply: OmvReply) => void;
+    reject: (error: Error) => void;
+  }[] = [];
   private presented?: {index: number; image: ImageData};
   private paintedFrame = -1;
   private startedAt?: number;
@@ -30,11 +35,13 @@ export class SiglusOmvPlayback {
       this.pending = undefined;
       if ('error' in data) pending?.reject(new Error(data.error));
       else pending?.resolve(data);
+      this.pumpQueue();
     };
     this.worker.onerror = (event) => {
       this.error = new Error(event.message || 'Siglus OMV decoder failed');
       this.pending?.reject(this.error);
       this.pending = undefined;
+      while (this.queue.length) this.queue.shift()!.reject(this.error);
     };
   }
 
@@ -48,6 +55,7 @@ export class SiglusOmvPlayback {
     const movie = new SiglusOmvPlayback(signal, loop);
     try {
       movie.info = (await movie.request({source: descriptor})) as OmvInfo;
+      signal.throwIfAborted();
       await movie.decode(0);
       return movie;
     } catch (error) {
@@ -83,16 +91,27 @@ export class SiglusOmvPlayback {
     return this.paintedFrame;
   }
 
+  private pumpQueue(): void {
+    if (this.pending || this.disposed || this.error) return;
+    const next = this.queue.shift();
+    if (!next) return;
+    this.pending = {resolve: next.resolve, reject: next.reject};
+    this.worker.postMessage(next.request);
+  }
+
   private request(request: OmvRequest): Promise<OmvReply> {
+    if (this.disposed)
+      return Promise.reject(new DOMException('Siglus OMV playback closed', 'AbortError'));
+    if (this.error) return Promise.reject(this.error);
     return new Promise((resolve, reject) => {
-      this.pending = {resolve, reject};
-      this.worker.postMessage(request);
+      this.queue.push({request, resolve, reject});
+      this.pumpQueue();
     });
   }
 
   private async decode(index: number): Promise<void> {
-    const {pixels} = (await this.request({index})) as OmvFrame;
-    this.presented = {index, image: new ImageData(pixels, this.width, this.height)};
+    const reply = (await this.request({index})) as OmvFrame;
+    this.presented = {index: reply.index, image: new ImageData(reply.pixels, this.width, this.height)};
   }
 
   play(): void {
@@ -135,12 +154,14 @@ export class SiglusOmvPlayback {
     const context = canvas.getContext('2d')!;
     let painted = -1;
     let attached = false;
+    let unattachedTicks = 0;
     let frame: number | undefined;
     const wake = () => {
       frame ??= requestAnimationFrame(update);
     };
     const stop = () => {
       if (frame !== undefined) cancelAnimationFrame(frame);
+      frame = undefined;
       this.connections.delete(connection);
     };
     const connection = {wake, stop};
@@ -151,6 +172,10 @@ export class SiglusOmvPlayback {
         return;
       }
       if (!canvas.isConnected) {
+        if (++unattachedTicks > 8) {
+          stop();
+          return;
+        }
         wake();
         return;
       }
@@ -161,15 +186,17 @@ export class SiglusOmvPlayback {
         painted = this.presented.index;
         this.paintedFrame = painted;
       }
-      if (!this.error && !this.pending && index !== this.presented?.index)
+      if (!this.error && !this.pending && !this.queue.length && index !== this.presented?.index)
         void this.decode(index).catch((error) => {
           if (!this.disposed) this.error = error;
         });
-      if (!this.error && (this.playing || this.pending || painted !== index)) wake();
+      if (!this.error && (this.playing || this.pending || this.queue.length > 0 || painted !== index))
+        wake();
     };
     if (this.presented) {
       context.putImageData(this.presented.image, 0, 0);
       painted = this.presented.index;
+      this.paintedFrame = painted;
     }
     this.connections.add(connection);
     wake();
@@ -180,8 +207,10 @@ export class SiglusOmvPlayback {
     this.disposed = true;
     for (const {stop} of this.connections) stop();
     this.signal.removeEventListener('abort', this.close);
-    this.pending?.reject(new DOMException('Siglus OMV playback closed', 'AbortError'));
+    const abortError = new DOMException('Siglus OMV playback closed', 'AbortError');
+    this.pending?.reject(abortError);
     this.pending = undefined;
+    while (this.queue.length) this.queue.shift()!.reject(abortError);
     this.worker.terminate();
   };
 }

@@ -36,7 +36,7 @@ test('Tsukikana engine fixes: global 115, cgtable 78.*, pcmevent 52.* oneshot/lo
   assert.match(playerSrc, /if \(root === 78\)/);
   assert.match(playerSrc, /if \(member === 1\)/);
   assert.match(playerSrc, /if \(member === 3\)/);
-  assert.match(playerSrc, /if \(member === 4\) return this\.cgTable\.size;/);
+  assert.match(playerSrc, /if \(member === 4\) return new Set\(this\.cgTable\.values\(\)\)\.size;/);
   assert.match(playerSrc, /if \(member === 9\)/);
 
   // 3. Native 0x55fe50: pcmevent[slot] modes 0 (oneshot), 1 (loop), 4/6 (wait), 5 (check)

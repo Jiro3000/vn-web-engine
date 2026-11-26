@@ -91,7 +91,7 @@ export function proceduralWipeMask(
   switch (type) {
     case 10:
     case 11: {
-      // Raster / Mosaic mask (0x644f30 / 0x645000): tiled 1..128
+      // Raster / Mosaic mask (0x644f30 / 0x645000): tiled 1..128 (255 reveals first, matching fanWipeMask)
       const tile = Math.max(2, Math.min(128, opt(1, 16) || 16));
       const reverse = Boolean(opt(2, 0));
       for (let y = 0; y < height; y++) {
@@ -99,7 +99,7 @@ export function proceduralWipeMask(
           const tx = type === 11 ? y % tile : x % tile;
           const ty = type === 11 ? x % tile : y % tile;
           const v = clamp255(((tx + ty) / Math.max(1, (tile - 1) * 2)) * 255);
-          values[y * width + x] = reverse ? 255 - v : v;
+          values[y * width + x] = reverse ? v : 255 - v;
         }
       }
       return {softness, width, height, values};
@@ -158,14 +158,14 @@ export function proceduralWipeMask(
             t = (r * 0.75 + ((ang * 4) % 1) * 0.25);
           }
           const v = clamp255(t * 255);
-          values[y * width + x] = reverse ? 255 - v : v;
+          values[y * width + x] = reverse ? v : 255 - v;
         }
       }
       return {softness, width, height, values};
     }
     case 100:
     case 200: {
-      // 4-direction linear ramp (0x6492f0 / slide 0x61d040): dir 0..3
+      // 4-direction linear ramp (0x6492f0 / slide 0x61d040): dir 0..3 (255 reveals first)
       const dir = type === 200 ? opt(0, 0) & 3 : opt(1, 0) & 3;
       const effSoftness = type === 200 ? 0 : softness;
       for (let y = 0; y < height; y++) {
@@ -173,7 +173,7 @@ export function proceduralWipeMask(
         for (let x = 0; x < width; x++) {
           const nx = width > 1 ? x / (width - 1) : 0;
           const t = dir === 0 ? nx : dir === 1 ? 1 - nx : dir === 2 ? ny : 1 - ny;
-          values[y * width + x] = clamp255(t * 255);
+          values[y * width + x] = 255 - clamp255(t * 255);
         }
       }
       return {softness: effSoftness, width, height, values};
@@ -188,7 +188,7 @@ export function proceduralWipeMask(
         for (let x = 0; x < width; x++) {
           const nx = cx ? Math.abs(x - cx) / cx : 0;
           const v = clamp255((vertical ? ny : nx) * 255);
-          values[y * width + x] = reverse ? 255 - v : v;
+          values[y * width + x] = reverse ? v : 255 - v;
         }
       }
       return {softness, width, height, values};
@@ -201,7 +201,7 @@ export function proceduralWipeMask(
         for (let x = 0; x < width; x++) {
           const pos = dir < 2 ? (x % band) / (band - 1) : (y % band) / (band - 1);
           const t = (dir & 1) === 1 ? 1 - pos : pos;
-          values[y * width + x] = clamp255(t * 255);
+          values[y * width + x] = 255 - clamp255(t * 255);
         }
       }
       return {softness, width, height, values};
@@ -215,7 +215,7 @@ export function proceduralWipeMask(
           const nx = width > 1 ? x / (width - 1) : 0;
           const a = dir === 0 || dir === 2 ? nx : 1 - nx;
           const b = dir === 0 || dir === 1 ? ny : 1 - ny;
-          values[y * width + x] = clamp255(((a + b) / 2) * 255);
+          values[y * width + x] = 255 - clamp255(((a + b) / 2) * 255);
         }
       }
       return {softness, width, height, values};
@@ -228,7 +228,7 @@ export function proceduralWipeMask(
         for (let x = 0; x < width; x++) {
           const nx = cx ? Math.abs(x - cx) / cx : 0;
           const v = clamp255(Math.max(nx, ny) * 255);
-          values[y * width + x] = reverse ? 255 - v : v;
+          values[y * width + x] = reverse ? v : 255 - v;
         }
       }
       return {softness, width, height, values};
@@ -246,7 +246,7 @@ export function proceduralWipeMask(
           const parity = (tx + ty) & 1;
           const base = parity * 0.5 + ((lx + ly) / 2) * 0.5;
           const v = clamp255(base * 255);
-          values[y * width + x] = reverse ? 255 - v : v;
+          values[y * width + x] = reverse ? v : 255 - v;
         }
       }
       return {softness, width, height, values};
@@ -259,7 +259,7 @@ export function proceduralWipeMask(
         const shift = Math.sin(ny * Math.PI * 2 * waves) * 0.15;
         for (let x = 0; x < width; x++) {
           const nx = width > 1 ? x / (width - 1) : 0;
-          values[y * width + x] = clamp255((nx + shift) * 255);
+          values[y * width + x] = 255 - clamp255((nx + shift) * 255);
         }
       }
       return {softness: Math.max(0.25, softness), width, height, values};
