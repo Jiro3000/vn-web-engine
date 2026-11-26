@@ -457,6 +457,9 @@ try {
     };
     p.root.addEventListener('siglus-audio', ({detail}) => {
       if (detail.channel === 'se' && detail.frames > 0) window.__audit.effects.push(detail.resource);
+      if (detail.channel !== 'bgm' && detail.channel !== 'voice' && detail.frames > 0) {
+        (window.__audit.sfx ??= []).push({channel: detail.channel, resource: detail.resource});
+      }
       if (detail.channel === 'bgm') window.__audit.bgmPlayback = detail;
       if (detail.channel === 'voice' && detail.resource === auditedVoice) {
         window.__audit.voicePlayback = {...detail, latencyMs: performance.now() - window.__audit.voiceRequestedAt};
@@ -1497,6 +1500,30 @@ try {
       errors.push(`Never reached ${MENU_SCENE} (in ${titleState.scene}:${titleState.line}@${titleState.pc}, ${titleState.pages} pages)`);
     } else {
       await assertLayoutAndHitTests('title-menu');
+      const hoverBtn = matchControl(titleState, profileCfg.title?.startButton, true);
+      if (hoverBtn) {
+        await moveMouse(1, 1);
+        await delay(150);
+        const beforeHover = await evaluate('(window.__audit.sfx ?? []).length');
+        await moveMouse(hoverBtn.rect.cx, hoverBtn.rect.cy);
+        await delay(1000);
+        const afterHover = await evaluate(`(window.__audit.sfx ?? []).slice(${beforeHover})`);
+        if (afterHover.length > 1) {
+          errors.push(`[title-hover] Stationary hover over startButton fired ${afterHover.length} SFX sounds (${afterHover.map((e) => `${e.channel}:${e.resource}`).join(', ')})`);
+        }
+        await moveMouse(1, 1);
+        await delay(150);
+        const beforeRehover = await evaluate('(window.__audit.sfx ?? []).length');
+        await moveMouse(hoverBtn.rect.cx, hoverBtn.rect.cy);
+        await delay(300);
+        const afterRehover = await evaluate(`(window.__audit.sfx ?? []).slice(${beforeRehover})`);
+        if (afterHover.length === 1 && afterRehover.length !== 1) {
+          errors.push(`[title-hover] Re-hover over startButton fired ${afterRehover.length} SFX sounds (expected 1)`);
+        }
+        console.log('Title hover SE check:', {stationary1s: afterHover.length, rehover: afterRehover.length, sounds: afterHover});
+        await moveMouse(1, 1);
+        await delay(100);
+      }
       const bgmCheckName = profileCfg.title?.streamedBgm ?? profileCfg.title?.playedBgm;
       if (bgmCheckName) {
         const requireStream = Boolean(profileCfg.title?.streamedBgm);

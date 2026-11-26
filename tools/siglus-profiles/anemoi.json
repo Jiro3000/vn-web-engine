@@ -32,11 +32,11 @@
   },
   "gameplay": {
     "minPages": 5,
-    "requireSpeaker": false,
+    "requireSpeaker": true,
     "requireBgm": true,
     "minVisuals": 1,
     "mwndAutoHideBar": true,
-    "framing": {"object": "ef_bg05", "bounds": [0, 0, 1920, 1080]},
+    "framing": {"object": "bg008_07", "bounds": [0, 0, 1920, 1080]},
     "waitTimeoutMs": 180000,
     "voice": {"id": 100130, "maxLatencyMs": 250, "waitForPlayback": true},
     "bundledFonts": [

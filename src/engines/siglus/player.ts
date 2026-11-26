@@ -331,8 +331,18 @@ export class SiglusPlayer {
   private mwndBtnTouchEnabled = true;
   private endMsgByKeyDisabled = false;
   private scriptMessageNowait = false;
-  private skipTriggerPending = false;
+  private scriptMwndOpenAnimeForce = false;
+  private keyWaitDisabled = false;
+  private scriptFlag10 = false;
+  private skipTriggerArmed = false;
+  private skipTriggerFired = false;
+  private msgAsyncMode = false;
   private msgAsyncModeOnce = false;
+  private asyncReveal?: Promise<void>;
+  private finishAsyncReveal?: () => void;
+  private scriptAutoMode = false;
+  private scriptAutoModeMojiWait = -1;
+  private scriptAutoModeMinWait = -1;
   private captureBuffer?: Uint8Array;
   private captureSize?: readonly [number, number];
   private shareCapture?: Uint8Array;
@@ -530,11 +540,12 @@ export class SiglusPlayer {
   private stagedBackground?: SiglusBackground;
 
   private get skipping(): boolean {
-    return (
-      this.skipAllowed &&
-      !this.systemSkipDisabled &&
-      (this.skip || this.readSkipEnabled || this.skipTriggerPending)
-    );
+    // 1.1.141.3 0x62f0a0 (tnm_is_skipping): ctrl_disable (+0x351) blocks all skipping,
+    // Ctrl/ReadSkip bypass skip_disable (+0x350), and skip_trigger_fired (+0x1a5) only
+    // triggers when the user actually pressed advance while 64.48 (+0x378) was armed.
+    if (!this.skipAllowed) return false;
+    if (this.skip || this.readSkipEnabled) return true;
+    return !this.systemSkipDisabled && this.skipTriggerFired;
   }
 
   private get skipUnread(): boolean {
@@ -691,13 +702,33 @@ export class SiglusPlayer {
       () => {
         if (this.systemOption('SKIP_WIPE_ANIME_ONOFF') && this.display.finishWipe()) return;
         if (this.systemCallActive) return;
-        if (this.userMessageHidden) this.revealMessage();
-        else this.wait?.(1);
+        if (this.userMessageHidden) {
+          this.revealMessage();
+          return;
+        }
+        if (this.printing) {
+          // 1.1.141.3 0x67d3dc: script.set_key_disable (64.54, +0x353) blocks key/click reveal skip.
+          if (this.endMsgByKeyDisabled) return;
+          this.revealWholePage = true;
+          this.finishAsyncReveal?.();
+          this.wait?.(1);
+          return;
+        }
+        // 1.1.141.3 0x630392..0x630575: user advance input while 64.48 (+0x378) is armed
+        // sets skip_trigger_fired (+0x1a5) to fast-forward async animations before page wait.
+        if (this.skipTriggerArmed && !this.waitingForPage) {
+          this.skipTriggerFired = true;
+        }
+        this.wait?.(1);
       },
       windowOptions,
       (active) => {
         this.skip = active;
-        if (active && this.skipping && this.pendingText) this.wait?.(1);
+        if (active && this.skipping && this.pendingText) {
+          this.revealWholePage = true;
+          this.finishAsyncReveal?.();
+          this.wait?.(1);
+        }
       },
       () => {
         if (this.cancelGroups.size && (!this.waitingForPage || this.systemCallActive)) {
@@ -752,12 +783,19 @@ export class SiglusPlayer {
         if (
           event.deltaY <= 0 ||
           this.userMessageHidden ||
-          (!this.waitingForPage && !this.printing) ||
+          (!this.waitingForPage && !this.printing && !this.skipTriggerArmed) ||
           this.systemCallActive ||
           !this.systemOption('WHEEL_NEXT_MESSAGE_ONOFF')
         )
           return;
         event.preventDefault();
+        if (this.printing) {
+          if (this.endMsgByKeyDisabled) return;
+          this.revealWholePage = true;
+          this.finishAsyncReveal?.();
+        } else if (this.skipTriggerArmed && !this.waitingForPage) {
+          this.skipTriggerFired = true;
+        }
         this.wait?.(1);
       },
       {passive: false, signal: this.controller.signal},
@@ -1767,8 +1805,9 @@ export class SiglusPlayer {
   }
 
   private async pageInput(continuesMessage = false): Promise<void> {
-    // Native 0x650980 (global.p / CMD 14) & 0x650bd0 (global.k / CMD 115) always pause for key wait
-    // even when no MWND text was printed (e.g. stage-object UI such as smartphone chat in _00_mess).
+    // 0x67d6b7 disarms skip_trigger (+0x378); 0x650980/0x650bd0 always pause for key wait.
+    this.skipTriggerArmed = false;
+    if (this.asyncReveal) await this.asyncReveal;
     if (this.objectsDirty) await this.renderObjects();
     const messageWindow = this.display.messageWindow;
     const hadPendingText = this.pendingText;
@@ -1787,7 +1826,7 @@ export class SiglusPlayer {
           messagePause: {readFlags: [...this.pageReadFlags], voices: this.pageVoices},
         };
       }
-      await this.waitAtPage();
+      if (!this.keyWaitDisabled) await this.waitAtPage();
       this.autoModeMojiCnt = 0;
       return;
     }
@@ -1822,14 +1861,17 @@ export class SiglusPlayer {
       this.savePoint = this.attachHistoryToSave(baseSnapshot);
       if (this.trace) this.recordSaveHistory(baseSnapshot);
     }
-    if (this.msgAsyncModeOnce) {
-      this.msgAsyncModeOnce = false;
-    } else {
+    // 1.1.141.3 0x65c105 / 0x67d650: 64.51 (async_msg_mode_once) only makes text reveal
+    // non-blocking (0x65a79e); key-wait still runs unless 64.49 (+0x499) disabled it.
+    if (!this.keyWaitDisabled) {
       await this.waitAtPage();
     }
     this.autoModeMojiCnt = 0;
-    if (this.skipTriggerPending) {
-      this.skipTriggerPending = false;
+    // 1.1.141.3 0x554270 (mwnd.clear): clear skip_trigger_fired (+0x1a5) and one-shot async mode.
+    this.skipTriggerFired = false;
+    if (this.msgAsyncModeOnce) {
+      this.msgAsyncMode = false;
+      this.msgAsyncModeOnce = false;
     }
     if (!this.systemOption('KOE_DONT_STOP_ONOFF')) this.audio.stop('voice');
     // The next page can set its face before its first name or text command.
@@ -1841,10 +1883,11 @@ export class SiglusPlayer {
     kind: 'open' | 'close',
     index = this.display.messageWindow,
   ): MwndAnimation {
+    const forceOpen = kind === 'open' && this.scriptMwndOpenAnimeForce;
     if (
       this.skipping ||
-      this.scriptMessageAnimationsDisabled ||
-      this.systemOption('NO_MWND_ANIME_ONOFF')
+      (!forceOpen &&
+        (this.scriptMessageAnimationsDisabled || this.systemOption('NO_MWND_ANIME_ONOFF')))
     ) {
       return {type: 0, time: 0};
     }
@@ -1873,7 +1916,16 @@ export class SiglusPlayer {
       this.display.append(value);
       return;
     }
-    return this.revealRun(value, characters, speed);
+    if (this.msgAsyncMode) {
+      // 1.1.141.3 0x65a79e: async_msg_mode (+0x375) reveals text without blocking the VM.
+      const previous = this.asyncReveal;
+      const task = (previous ?? Promise.resolve()).then(() => this.revealRun(value, characters, speed, true));
+      this.asyncReveal = task.finally(() => {
+        if (this.asyncReveal === task) this.asyncReveal = undefined;
+      });
+      return;
+    }
+    return this.revealRun(value, characters, speed, false);
   }
 
   private async printMessage(value: string): Promise<void> {
@@ -1883,16 +1935,55 @@ export class SiglusPlayer {
     await this.print(this.expandNamae(value));
   }
 
-  private async revealRun(value: string, characters: string[], speed: number): Promise<void> {
+  private async revealRun(
+    value: string,
+    characters: string[],
+    speed: number,
+    asyncMode: boolean,
+  ): Promise<void> {
     const run = this.display.appendRun('');
     const started = performance.now();
     let visible = 0;
     this.printing = true;
     try {
       while (visible < characters.length) {
+        if (this.skipping || this.revealWholePage) {
+          this.revealWholePage = true;
+          run.reveal(value);
+          return;
+        }
         const next = run.ruby ? characters.length : visible + 1;
-        const remaining = next * speed - (performance.now() - started);
-        if (await this.delay(Math.max(remaining, 0), true)) {
+        const remaining = Math.max(next * speed - (performance.now() - started), 0);
+        if (asyncMode) {
+          const skipped = await new Promise<boolean>((resolve, reject) => {
+            const signal = this.controller.signal;
+            if (signal.aborted) {
+              reject(signal.reason);
+              return;
+            }
+            let cancelTimer: (() => void) | undefined;
+            const done = (instant: boolean): void => {
+              cancelTimer?.();
+              signal.removeEventListener('abort', onAbort);
+              if (this.finishAsyncReveal === wake) this.finishAsyncReveal = undefined;
+              resolve(instant);
+            };
+            const wake = (): void => done(true);
+            const onAbort = (): void => {
+              cancelTimer?.();
+              if (this.finishAsyncReveal === wake) this.finishAsyncReveal = undefined;
+              reject(signal.reason);
+            };
+            signal.addEventListener('abort', onAbort, {once: true});
+            this.finishAsyncReveal = wake;
+            cancelTimer = scheduleFrameDeadline(remaining, () => done(false));
+          });
+          if (skipped) {
+            this.revealWholePage = true;
+            run.reveal(value);
+            return;
+          }
+        } else if (await this.delay(remaining, true)) {
           this.revealWholePage = true;
           run.reveal(value);
           return;
@@ -2043,12 +2134,24 @@ export class SiglusPlayer {
       }
       let result = 1;
       try {
+        const autoActive = (this.autoEnabled || this.scriptAutoMode) && !this.userMessageHidden;
+        // 1.1.141.3 0x62f130 / 0x62f160: script auto mode overrides apply only while 64.0 (+0x355) is active.
+        const autoCharWait = autoActive
+          ? this.scriptAutoMode && this.scriptAutoModeMojiWait >= 0
+            ? this.scriptAutoModeMojiWait
+            : this.playback.autoCharacterWait
+          : 0;
+        const autoMinWait = autoActive
+          ? this.scriptAutoMode && this.scriptAutoModeMinWait >= 0
+            ? this.scriptAutoModeMinWait
+            : this.playback.autoMinimumWait
+          : 0;
         const autoChars = this.autoModeMojiCnt || this.pageCharacters;
-        const autoWait =
-          this.autoEnabled && !this.userMessageHidden
-            ? this.playback.autoMinimumWait + this.playback.autoCharacterWait * autoChars
-            : undefined;
-        const deadline = autoWait === undefined ? undefined : performance.now() + autoWait;
+        let waitingForVoice = autoActive && this.audio?.channelState?.('voice') === 1;
+        let deadline =
+          !autoActive || waitingForVoice
+            ? undefined
+            : performance.now() + autoMinWait + autoCharWait * autoChars;
         do {
           this.waitingForPage = false;
           if (this.frameActions.size && !this.skipping) {
@@ -2062,14 +2165,25 @@ export class SiglusPlayer {
             result = 1;
             break;
           }
+          // 1.1.141.3 0x67daa1..0x67daf2: auto mode waits for active voice playback to end
+          // before starting the minimum wait timer.
+          if (waitingForVoice && this.audio.channelState('voice') !== 1) {
+            waitingForVoice = false;
+            deadline = performance.now() + autoMinWait;
+          }
           // Give Read Skip a browser frame and keep its button between consecutive pages.
           result =
             readSkipping && showControls
               ? await this.delay(16, true, false)
               : await this.delay(
-                  deadline === undefined ? undefined : deadline - performance.now(),
+                  waitingForVoice
+                    ? 100
+                    : deadline === undefined
+                      ? undefined
+                      : deadline - performance.now(),
                   true,
                 );
+          if (result === 0 && waitingForVoice) result = 6;
         } while (result === 6);
       } finally {
         this.waitingForPage = false;
@@ -2644,6 +2758,15 @@ export class SiglusPlayer {
     this.mwndBtnTouchEnabled = save.controls?.mwndBtnTouchEnabled ?? true;
     this.endMsgByKeyDisabled = save.controls?.endMsgByKeyDisabled ?? false;
     this.scriptMessageNowait = save.controls?.scriptMessageNowait ?? false;
+    this.skipTriggerArmed = false;
+    this.skipTriggerFired = false;
+    this.msgAsyncMode = false;
+    this.msgAsyncModeOnce = false;
+    this.scriptAutoMode = false;
+    this.scriptAutoModeMojiWait = -1;
+    this.scriptAutoModeMinWait = -1;
+    this.scriptMwndOpenAnimeForce = false;
+    this.keyWaitDisabled = false;
     this.localExtraSwitches.clear();
     for (const [index, value] of save.controls?.localExtraSwitches ?? [])
       this.localExtraSwitches.set(index, value);
@@ -5498,7 +5621,55 @@ export class SiglusPlayer {
       }
     }
     if (root === 64 && (member === 0 || member === 1)) {
-      this.autoEnabled = member === 0;
+      // 1.1.141.3 0x563365/0x563376 & 0x62f100: script auto mode (+0x355) is independent of user autoEnabled (+0x141).
+      this.scriptAutoMode = member === 0;
+      return 0;
+    }
+    if (root === 64 && member !== undefined && member >= 60 && member <= 65) {
+      // 1.1.141.3 0x563387..0x5633fd & 0x62f130/0x62f160: script auto_mode_moji_wait (+0x358) & min_wait (+0x35c).
+      if (member === 60) this.scriptAutoModeMojiWait = n(0) | 0;
+      else if (member === 62) this.scriptAutoModeMojiWait = -1;
+      else if (member === 64) return this.scriptAutoModeMojiWait;
+      else if (member === 61) this.scriptAutoModeMinWait = n(0) | 0;
+      else if (member === 63) this.scriptAutoModeMinWait = -1;
+      else if (member === 65) return this.scriptAutoModeMinWait;
+      return 0;
+    }
+    if (root === 64 && (member === 4 || member === 16)) {
+      // 1.1.141.3 0x563692/0x5636ac & 0x5e9d8f: force MWND open animation (+0x37d).
+      if (member === 4) this.scriptMwndOpenAnimeForce = Boolean(n(0));
+      else return Number(this.scriptMwndOpenAnimeForce);
+      return 0;
+    }
+    if (root === 64 && (member === 10 || member === 24)) {
+      // 1.1.141.3 0x56380e/0x563828: script flag at +0x49a.
+      if (member === 10) this.scriptFlag10 = Boolean(n(0));
+      else return Number(this.scriptFlag10);
+      return 0;
+    }
+    if (root === 64 && (member === 49 || member === 50)) {
+      // 1.1.141.3 0x563853/0x563864 & 0x65c105: key-wait disable flag (+0x499).
+      this.keyWaitDisabled = member === 49;
+      return 0;
+    }
+    if (root === 64 && (member === 21 || member === 22)) {
+      // 1.1.141.3 0x563511/0x563537: start/end persistent async_msg_mode (+0x375/+0x376).
+      this.msgAsyncMode = member === 21;
+      this.msgAsyncModeOnce = false;
+      return 0;
+    }
+    if (root === 64 && member === 18) {
+      // 1.1.141.3 0x5632db -> 0x62f000: is_skipping excluding read_skip.
+      if (!this.skipAllowed) return 0;
+      if (this.skip) return 1;
+      return Number(!this.systemSkipDisabled && this.skipTriggerFired);
+    }
+    if (root === 64 && member !== undefined && member >= 83 && member <= 86) {
+      // 1.1.141.3 0x563251..0x5632c8: get/set skip_disable (+0x350) and ctrl_disable (+0x351).
+      if (member === 83) return Number(this.systemSkipDisabled);
+      if (member === 84) return Number(!this.skipAllowed);
+      if (member === 85) this.systemSkipDisabled = Boolean(n(0));
+      if (member === 86) this.skipAllowed = !Boolean(n(0));
       return 0;
     }
     if (root === 64 && (member === 34 || member === 35)) {
@@ -5638,10 +5809,14 @@ export class SiglusPlayer {
       if (member === 12 || member === 13) this.scriptMsgBackDisabled = member === 12;
       if (member === 32 || member === 33) this.shortcutDisabled = member === 32;
       if (member === 48) {
-        this.skipTriggerPending = true;
-        if (this.skipping && this.pendingText) this.wait?.(1);
+        // 1.1.141.3 0x563842: arms skip_trigger (+0x378); only user advance input fires it.
+        this.skipTriggerArmed = true;
       }
-      if (member === 51) this.msgAsyncModeOnce = true;
+      if (member === 51) {
+        // 1.1.141.3 0x563524: sets async_msg_mode (+0x375) and async_msg_mode_once (+0x376).
+        this.msgAsyncMode = true;
+        this.msgAsyncModeOnce = true;
+      }
       if (member === 54 || member === 55) this.endMsgByKeyDisabled = member === 54;
       return 0;
     }

@@ -734,7 +734,8 @@ export class SiglusDisplay {
     release: () => void;
   };
   private hovered?: {id: number; group: number};
-  private pointer = [0, 0];
+  private hoveredControlKey?: string;
+  private pointer: [number, number] = [-1, -1];
   private currentFace?: string;
   private currentFaceCostume?: string;
   private currentName = '';
@@ -925,6 +926,7 @@ export class SiglusDisplay {
     this.stage.addEventListener('pointerdown', (event) => this.trackPointer(event));
     this.stage.addEventListener('pointerleave', () => {
       this.hovered = undefined;
+      this.hoveredControlKey = undefined;
       this.pointer = [-1, -1];
     });
     for (const type of ['pointerup', 'pointercancel', 'lostpointercapture'] as const)
@@ -1018,10 +1020,49 @@ export class SiglusDisplay {
 
   private trackHoveredButton(target: Element | null): void {
     const button = target?.closest<HTMLButtonElement>('[data-siglus-button]');
-    this.hovered =
-      button && !button.disabled
-        ? {id: Number(button.dataset.siglusButton), group: Number(button.dataset.siglusGroup)}
-        : undefined;
+    const activeButton =
+      button && !button.disabled && !button.closest('[inert]') ? button : undefined;
+    this.hovered = activeButton
+      ? {id: Number(activeButton.dataset.siglusButton), group: Number(activeButton.dataset.siglusGroup)}
+      : undefined;
+    const wakuButton = activeButton
+      ? undefined
+      : target?.closest<HTMLButtonElement>('[data-siglus-waku-button]');
+    const activeWaku =
+      wakuButton && !wakuButton.disabled && !wakuButton.closest('[inert]') ? wakuButton : undefined;
+    const controlKey = activeButton?.dataset.siglusHoverKey ?? activeWaku?.dataset.siglusHoverKey;
+    if (!controlKey || (this.hoveredControlKey !== undefined && this.hoveredControlKey !== controlKey)) {
+      this.hoveredControlKey = undefined;
+    }
+  }
+
+  private enterButtonHover(key: string, seNo: number | undefined): void {
+    if (this.hoveredControlKey === key) return;
+    this.hoveredControlKey = key;
+    if (seNo !== undefined && seNo >= 0) this.onButtonSound?.(seNo, 'hit');
+  }
+
+  private leaveButtonHover(key: string, element: HTMLElement): void {
+    // Layer rebuilds mark the outgoing layer inert and detach old <button> nodes;
+    // ignore synthetic leave events from replaced nodes so stationary hover stays active.
+    if (!element.isConnected || element.closest('[inert]')) return;
+    if (this.hoveredControlKey === key) this.hoveredControlKey = undefined;
+  }
+
+  private syncHoverAfterDomUpdate(): void {
+    const [x, y] = this.pointer;
+    if (x < 0 || y < 0) {
+      this.hovered = undefined;
+      this.hoveredControlKey = undefined;
+      return;
+    }
+    const bounds = this.stage.getBoundingClientRect();
+    if (bounds.width <= 0 || bounds.height <= 0) return;
+    const target = this.stage.ownerDocument.elementFromPoint(
+      bounds.left + (x * bounds.width) / this.width,
+      bounds.top + (y * bounds.height) / this.height,
+    );
+    this.trackHoveredButton(target && this.stage.contains(target) ? target : null);
   }
 
   buttonState(group: number, pressed: boolean): number {
@@ -1033,6 +1074,11 @@ export class SiglusDisplay {
     this.objectButtonGroups = groups;
     for (const control of this.stage.querySelectorAll<HTMLButtonElement>('button[data-siglus-group]'))
       control.inert = !groups.has(Number(control.dataset.siglusGroup));
+    if (this.hovered && !groups.has(this.hovered.group)) {
+      this.hovered = undefined;
+      if (this.hoveredControlKey?.startsWith('obj:')) this.hoveredControlKey = undefined;
+    }
+    this.syncHoverAfterDomUpdate?.();
   }
 
   pointerPosition(axis: number): number {
@@ -1155,6 +1201,7 @@ export class SiglusDisplay {
     this.message.inert = active;
     this.controls.inert = active;
     this.stage.focus({preventScroll: true});
+    this.syncHoverAfterDomUpdate();
   }
 
   async showSystemObjects(
@@ -1166,7 +1213,7 @@ export class SiglusDisplay {
     const container = front ? this.systemFrontLayer : this.systemLayer;
     const draw = {};
     this.systemLayerDraws.set(container, draw);
-    const next = await this.drawObjects(objects, button);
+    const next = await this.drawObjects(objects, button, true, front ? 'systemFront' : 'system');
     this.signal.throwIfAborted();
     if (this.systemLayerDraws.get(container) !== draw) return;
     if (duration > 0 && typeof next.animate === 'function') {
@@ -1196,11 +1243,14 @@ export class SiglusDisplay {
       this.preserveStageFocus(() => {
         for (const child of previous) child.remove();
       });
+      this.syncHoverAfterDomUpdate();
       return;
     }
     this.preserveStageFocus(() => {
+      for (const child of container.children) (child as HTMLElement).inert = true;
       container.replaceChildren(next);
     });
+    this.syncHoverAfterDomUpdate();
   }
 
   editBox(
@@ -1266,11 +1316,13 @@ export class SiglusDisplay {
   clearSystemObjects(): void {
     this.systemLayerDraws.delete(this.systemLayer);
     this.preserveStageFocus(() => this.systemLayer.replaceChildren());
+    this.syncHoverAfterDomUpdate();
   }
 
   clearSystemFrontObjects(): void {
     this.systemLayerDraws.delete(this.systemFrontLayer);
     this.preserveStageFocus(() => this.systemFrontLayer.replaceChildren());
+    this.syncHoverAfterDomUpdate();
   }
 
   async prepare(): Promise<void> {
@@ -2908,10 +2960,11 @@ export class SiglusDisplay {
     objects: Iterable<DrawObject>,
     button: (target: NonNullable<DrawObject['button']>) => void,
     animate = true,
+    layerScope: 'stage' | 'system' | 'systemFront' = 'stage',
   ): Promise<HTMLElement> {
     const next = document.createElement('div');
     next.style.cssText = 'position:absolute;inset:0;pointer-events:none';
-    await this.appendObjects(next, objects, button, animate, [], true);
+    await this.appendObjects(next, objects, button, animate, [], true, [0, 0], layerScope);
     return next;
   }
 
@@ -2991,6 +3044,7 @@ export class SiglusDisplay {
     parentOpacity: readonly string[] = [],
     isRootStage = false,
     parentOrigin: readonly [number, number] = [0, 0],
+    layerScope: 'stage' | 'system' | 'systemFront' = 'stage',
   ): Promise<void> {
     const tagStageSlot = (el: HTMLElement, object: DrawObject) => {
       if (!isRootStage || object.slotId === undefined) return;
@@ -3060,7 +3114,15 @@ export class SiglusDisplay {
         tagStageSlot(clip?.viewport ?? text, object);
         targetParent.append(text);
         if (object.children)
-          await this.appendChildren(targetParent, object, button, animate, parentOpacity, parentOrigin);
+          await this.appendChildren(
+            targetParent,
+            object,
+            button,
+            animate,
+            parentOpacity,
+            parentOrigin,
+            layerScope,
+          );
         continue;
       }
       if (object.weather && object.weather.mode > 0) {
@@ -3071,7 +3133,15 @@ export class SiglusDisplay {
           targetParent.append(layer);
         }
         if (object.children)
-          await this.appendChildren(targetParent, object, button, animate, parentOpacity, parentOrigin);
+          await this.appendChildren(
+            targetParent,
+            object,
+            button,
+            animate,
+            parentOpacity,
+            parentOrigin,
+            layerScope,
+          );
         continue;
       }
       if (object.gan?.sequence !== undefined) {
@@ -3083,7 +3153,15 @@ export class SiglusDisplay {
           tagStageSlot(clip?.viewport ?? ganLayer, object);
           targetParent.append(ganLayer);
           if (object.children)
-            await this.appendChildren(targetParent, object, button, animate, parentOpacity, parentOrigin);
+            await this.appendChildren(
+              targetParent,
+              object,
+              button,
+              animate,
+              parentOpacity,
+              parentOrigin,
+              layerScope,
+            );
           continue;
         }
       }
@@ -3096,6 +3174,7 @@ export class SiglusDisplay {
             animate,
             parentOpacity,
             parentOrigin,
+            layerScope,
           );
           tagStageSlot(clip?.viewport ?? wrapper, object);
         }
@@ -3220,9 +3299,36 @@ export class SiglusDisplay {
         );
         content.dataset.siglusButton = String(target.id);
         content.dataset.siglusGroup = String(target.group);
+        const hoverKey = `obj:${layerScope}:${target.group}:${target.id}`;
+        content.dataset.siglusHoverKey = hoverKey;
         content.inert = this.objectButtonGroups?.has(target.group) === false;
         if (object.buttonState) content.dataset.siglusButtonState = object.buttonState;
         const isSelectState = object.buttonState === 'select';
+        const isHovered =
+          !content.disabled &&
+          !content.inert &&
+          this.hovered?.group === target.group &&
+          this.hovered?.id === target.id;
+        const isPressed =
+          isHovered &&
+          this.pressed?.group === target.group &&
+          this.pressed?.id === target.id;
+        const onEnter = () => {
+          if (content.disabled) return;
+          this.hovered = {id: target.id, group: target.group};
+          this.enterButtonHover(hoverKey, target.seNo);
+        };
+        const onLeave = () => {
+          this.leaveButtonHover(hoverKey, content);
+          if (
+            content.isConnected &&
+            !content.closest('[inert]') &&
+            this.hovered?.group === target.group &&
+            this.hovered?.id === target.id
+          ) {
+            this.hovered = undefined;
+          }
+        };
         if (target.actionNo !== undefined && target.actionNo >= 0 && object.name && 'image' in frame) {
           const actionStates = parseButtonActionStates(this.config, target.actionNo);
           const changesGraphic = ({cutOffset, dx, dy, alpha, bright, dark}: ButtonActionState) =>
@@ -3254,18 +3360,21 @@ export class SiglusDisplay {
                 : isSelectState
                   ? actionStates.select
                   : actionStates.normal;
-            const initial = restingState();
+            const initial = isPressed
+              ? actionStates.push
+              : isHovered
+                ? actionStates.hit
+                : restingState();
             if (changesGraphic(initial)) await applyBtnState(initial);
             content.addEventListener('pointerenter', () => {
-              if (!content.disabled) {
-                if (target.seNo !== undefined && target.seNo >= 0) {
-                  this.onButtonSound?.(target.seNo, 'hit');
-                }
-                void applyBtnState(actionStates.hit);
-              }
+              onEnter();
+              if (!content.disabled) void applyBtnState(actionStates.hit);
             });
             content.addEventListener('pointerleave', () => {
-              void applyBtnState(restingState());
+              onLeave();
+              if (content.isConnected && !content.closest('[inert]')) {
+                void applyBtnState(restingState());
+              }
             });
             content.addEventListener('pointerdown', (event) => {
               if (event.button === 0 && !content.disabled) {
@@ -3278,21 +3387,23 @@ export class SiglusDisplay {
             content.addEventListener('pointerup', () => {
               if (!content.disabled) void applyBtnState(actionStates.hit);
             });
-          } else if (target.seNo !== undefined && target.seNo >= 0) {
-            content.addEventListener('pointerenter', () => {
-              if (!content.disabled) this.onButtonSound?.(target.seNo!, 'hit');
-            });
+          } else {
+            content.addEventListener('pointerenter', onEnter);
+            content.addEventListener('pointerleave', onLeave);
+            if (target.seNo !== undefined && target.seNo >= 0) {
+              content.addEventListener('pointerdown', (event) => {
+                if (event.button === 0 && !content.disabled) this.onButtonSound?.(target.seNo!, 'push');
+              });
+            }
+          }
+        } else {
+          content.addEventListener('pointerenter', onEnter);
+          content.addEventListener('pointerleave', onLeave);
+          if (target.seNo !== undefined && target.seNo >= 0) {
             content.addEventListener('pointerdown', (event) => {
               if (event.button === 0 && !content.disabled) this.onButtonSound?.(target.seNo!, 'push');
             });
           }
-        } else if (target.seNo !== undefined && target.seNo >= 0) {
-          content.addEventListener('pointerenter', () => {
-            if (!content.disabled) this.onButtonSound?.(target.seNo!, 'hit');
-          });
-          content.addEventListener('pointerdown', (event) => {
-            if (event.button === 0 && !content.disabled) this.onButtonSound?.(target.seNo!, 'push');
-          });
         }
         content.addEventListener('click', (event) => {
           event.stopPropagation();
@@ -3340,7 +3451,15 @@ export class SiglusDisplay {
         );
       }
       if (object.children)
-        await this.appendChildren(targetParent, object, button, animate, parentOpacity, parentOrigin);
+        await this.appendChildren(
+          targetParent,
+          object,
+          button,
+          animate,
+          parentOpacity,
+          parentOrigin,
+          layerScope,
+        );
     }
   }
 
@@ -3455,6 +3574,7 @@ export class SiglusDisplay {
     animate: boolean,
     parentOpacity: readonly string[],
     parentOrigin: readonly [number, number] = [0, 0],
+    layerScope: 'stage' | 'system' | 'systemFront' = 'stage',
   ): Promise<HTMLElement> {
     // Applying the group alpha to its leaves keeps blending in the stage's backdrop.
     const children = document.createElement('div');
@@ -3483,6 +3603,7 @@ export class SiglusDisplay {
       parentOpacity,
       false,
       childOrigin,
+      layerScope,
     );
     return children;
   }
@@ -3676,6 +3797,7 @@ export class SiglusDisplay {
     this.preserveStageFocus(() => {
       for (const child of previous) child.remove();
     });
+    this.syncHoverAfterDomUpdate();
   }
 
   private async animateFanWipe(layer: HTMLElement, duration: number, fan: WipeSpec): Promise<void> {
@@ -4993,14 +5115,20 @@ export class SiglusDisplay {
       };
 
       if (button) {
+        const hoverKey = `waku:${wakuIndex}:${action.id}`;
+        button.dataset.siglusWakuButton = `${wakuIndex}:${action.id}`;
+        button.dataset.siglusHoverKey = hoverKey;
         button.addEventListener('pointerenter', () => {
           entry.pointerState = 'hit';
           entry.refresh();
-          if (!button.disabled && action.sound >= 0) this.onButtonSound?.(action.sound, 'hit');
+          if (!button.disabled) this.enterButtonHover(hoverKey, action.sound);
         });
         button.addEventListener('pointerleave', () => {
-          entry.pointerState = 'normal';
-          entry.refresh();
+          this.leaveButtonHover(hoverKey, button);
+          if (button.isConnected && !button.closest('[inert]')) {
+            entry.pointerState = 'normal';
+            entry.refresh();
+          }
         });
         button.addEventListener('pointerdown', (event) => {
           entry.pointerState = 'push';

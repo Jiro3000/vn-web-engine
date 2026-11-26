@@ -1812,8 +1812,8 @@ test('Full-route crawl regressions: frame_action owner ref, mask intevents, skip
   assert.match(playerSrc, /if \(member === 3 \|\| member === 14\) return this\.waitAudio\('bgm', member === 14\)/);
   assert.match(playerSrc, /if \(root === 64 && \(member === 0 \|\| member === 1\)\)/);
   assert.match(playerSrc, /if \(root === 64 && \(member === 34 \|\| member === 35\)\)/);
-  // 3. skipTriggerPending does not clobber physical Ctrl skip
-  assert.match(playerSrc, /this\.skip \|\| this\.readSkipEnabled \|\| this\.skipTriggerPending/);
+  // 3. Native 0x62f0a0: skip_trigger (64.48) arms input trigger without clobbering Ctrl/ReadSkip or auto-skipping
+  assert.match(playerSrc, /if \(!this\.skipAllowed\) return false;\s*if \(this\.skip \|\| this\.readSkipEnabled\) return true;\s*return !this\.systemSkipDisabled && this\.skipTriggerFired;/);
   // 4. input.next yields a frame even outside system scenes & keys record outside systemInput
   assert.match(playerSrc, /await this\.nextInput\(true\)/);
   assert.match(displaySrc, /const pushKey = \(index: number, down: boolean\): void =>/);
@@ -2818,5 +2818,146 @@ test('SiglusPlayer commits wait=0 wipe synchronously before async display, suppo
     ['waitAudio', 'pcm3', false],
     ['resumePcm', 3, 60],
     ['waitAudio', 'pcm3', false],
+  ]);
+});
+
+test('Native 1.1.141.3 dialogue wait (64.48/64.51/64.21/64.22), skip/auto flags (64.0..86), and hover-sound deduplication', async () => {
+  const {SiglusPlayer} = await import('../dist/engines/siglus/player.js');
+  const {SiglusDisplay} = await import('../dist/engines/siglus/display.js');
+
+  // 1. 64.51 (async_msg_mode_once) + 64.48 (set_skip_trigger) before dialogue MUST NOT skip waitAtPage()
+  let waitCount = 0;
+  const player = Object.assign(Object.create(SiglusPlayer.prototype), {
+    controller: new AbortController(),
+    root: {dataset: {}},
+    game: {config: new Map()},
+    display: {
+      messageWindow: 0,
+      finishMessageSlide: () => {},
+      saveMessage: () => ({index: 0, name: '麦', text: [{text: '「よし」'}], voices: []}),
+    },
+    audio: {stop: () => {}, channelState: () => 0},
+    readFlags: new Map(),
+    pageReadFlags: [],
+    pageVoices: [],
+    backlog: [],
+    historyPoints: new Map(),
+    messageFaces: new Map(),
+    unhandledCommands: new Map(),
+    objectsDirty: false,
+    pendingText: true,
+    pages: 0,
+    saveEnabled: false,
+    loadEnabled: false,
+    skip: false,
+    readSkipEnabled: false,
+    skipAllowed: true,
+    systemSkipDisabled: false,
+    skipTriggerArmed: false,
+    skipTriggerFired: false,
+    msgAsyncMode: false,
+    msgAsyncModeOnce: false,
+    keyWaitDisabled: false,
+    autoEnabled: true,
+    scriptAutoMode: false,
+    scriptAutoModeMojiWait: -1,
+    scriptAutoModeMinWait: -1,
+    scriptMwndOpenAnimeForce: false,
+    scriptFlag10: false,
+    endMsgByKeyDisabled: false,
+    autoModeMojiCnt: 0,
+    systemOption: () => false,
+    tracePage: () => {},
+    addHistory: () => {},
+    waitAtPage: async () => {
+      waitCount++;
+    },
+  });
+
+  await player.command({path: [64, 51], args: [], named: [], scene: '010', line: 126, pc: 0, name: ''});
+  await player.command({path: [64, 48], args: [], named: [], scene: '010', line: 126, pc: 0, name: ''});
+  assert.equal(player.msgAsyncMode, true);
+  assert.equal(player.msgAsyncModeOnce, true);
+  assert.equal(player.skipTriggerArmed, true);
+  assert.equal(player.skipTriggerFired, false);
+  assert.equal(player.skipping, false, '64.48 alone must NEVER enable fast-forward skip mode');
+  await player.pageInput(false);
+  assert.equal(waitCount, 1, '64.51 + 64.48 must still stop at waitAtPage() for user input');
+  assert.equal(player.skipTriggerArmed, false, 'entering key-wait disarms 64.48 (+0x378)');
+  assert.equal(player.msgAsyncMode, false, 'one-shot async_msg_mode clears on page end');
+  assert.equal(player.msgAsyncModeOnce, false);
+
+  // 2. Persistent async_msg_mode (64.21/64.22) survives page end until 64.22
+  await player.command({path: [64, 21], args: [], named: [], scene: '010', line: 127, pc: 0, name: ''});
+  await player.pageInput(false);
+  assert.equal(waitCount, 2);
+  assert.equal(player.msgAsyncMode, true);
+  await player.command({path: [64, 22], args: [], named: [], scene: '010', line: 128, pc: 0, name: ''});
+  assert.equal(player.msgAsyncMode, false);
+
+  // 3. 64.0/64.1 script auto mode does not clobber user autoEnabled; 64.60..65 manage script timings
+  await player.command({path: [64, 0], args: [], named: [], scene: '010', line: 130, pc: 0, name: ''});
+  assert.equal(player.scriptAutoMode, true);
+  assert.equal(player.autoEnabled, true);
+  await player.command({path: [64, 1], args: [], named: [], scene: '010', line: 131, pc: 0, name: ''});
+  assert.equal(player.scriptAutoMode, false);
+  assert.equal(player.autoEnabled, true, '64.1 must preserve user autoEnabled');
+  await player.command({path: [64, 60], args: [45], named: [], scene: '010', line: 132, pc: 0, name: ''});
+  await player.command({path: [64, 61], args: [800], named: [], scene: '010', line: 133, pc: 0, name: ''});
+  assert.equal(await player.command({path: [64, 64], args: [], named: [], scene: '010', line: 134, pc: 0, name: ''}), 45);
+  assert.equal(await player.command({path: [64, 65], args: [], named: [], scene: '010', line: 135, pc: 0, name: ''}), 800);
+  await player.command({path: [64, 62], args: [], named: [], scene: '010', line: 136, pc: 0, name: ''});
+  await player.command({path: [64, 63], args: [], named: [], scene: '010', line: 137, pc: 0, name: ''});
+  assert.equal(await player.command({path: [64, 64], args: [], named: [], scene: '010', line: 138, pc: 0, name: ''}), -1);
+  assert.equal(await player.command({path: [64, 65], args: [], named: [], scene: '010', line: 139, pc: 0, name: ''}), -1);
+
+  // 4. Native 0x62f0a0 / 0x62f000: skip_disable (64.2/5/83/85) blocks only skipTriggerFired, ctrl_disable (64.6/7/84/86) blocks all
+  player.skipTriggerFired = true;
+  assert.equal(player.skipping, true);
+  assert.equal(await player.command({path: [64, 18], args: [], named: [], scene: '010', line: 140, pc: 0, name: ''}), 1);
+  await player.command({path: [64, 2], args: [], named: [], scene: '010', line: 141, pc: 0, name: ''});
+  assert.equal(await player.command({path: [64, 83], args: [], named: [], scene: '010', line: 142, pc: 0, name: ''}), 1);
+  assert.equal(player.skipping, false, '64.2 blocks skipTriggerFired');
+  player.skip = true;
+  assert.equal(player.skipping, true, '64.2 does not block physical Ctrl skip');
+  await player.command({path: [64, 6], args: [], named: [], scene: '010', line: 143, pc: 0, name: ''});
+  assert.equal(await player.command({path: [64, 84], args: [], named: [], scene: '010', line: 144, pc: 0, name: ''}), 1);
+  assert.equal(player.skipping, false, '64.6 blocks Ctrl skip as well');
+  await player.command({path: [64, 4], args: [1], named: [], scene: '010', line: 145, pc: 0, name: ''});
+  assert.equal(await player.command({path: [64, 16], args: [], named: [], scene: '010', line: 146, pc: 0, name: ''}), 1);
+  await player.command({path: [64, 10], args: [1], named: [], scene: '010', line: 147, pc: 0, name: ''});
+  assert.equal(await player.command({path: [64, 24], args: [], named: [], scene: '010', line: 148, pc: 0, name: ''}), 1);
+  await player.command({path: [64, 49], args: [], named: [], scene: '010', line: 149, pc: 0, name: ''});
+  await player.pageInput(false);
+  assert.equal(waitCount, 2, '64.49 (+0x499) suppresses key-wait until 64.50 clears it');
+  await player.command({path: [64, 50], args: [], named: [], scene: '010', line: 150, pc: 0, name: ''});
+  assert.equal(player.unhandledCommands.size, 0);
+
+  // 5. SiglusDisplay hover-sound deduplication across DOM layer rebuilds
+  const sounds = [];
+  const display = Object.assign(Object.create(SiglusDisplay.prototype), {
+    hoveredControlKey: undefined,
+    onButtonSound: (seNo, kind) => sounds.push([seNo, kind]),
+  });
+  const inertBtn = {isConnected: true, closest: (sel) => (sel === '[inert]' ? {} : null)};
+  const detachedBtn = {isConnected: false, closest: () => null};
+  const liveBtn = {isConnected: true, closest: () => null};
+  // Initial hover plays once
+  display.enterButtonHover('obj:stage:0:1', 0);
+  // Layer rebuild marks old node inert and detaches it, then new node fires synthetic pointerenter
+  display.leaveButtonHover('obj:stage:0:1', inertBtn);
+  display.leaveButtonHover('obj:stage:0:1', detachedBtn);
+  display.enterButtonHover('obj:stage:0:1', 0);
+  display.enterButtonHover('obj:stage:0:1', 0);
+  assert.deepEqual(sounds, [[0, 'hit']], 'Stationary hover across DOM rebuilds must play hit sound once');
+  // Genuine pointerleave on live node clears key; re-entering plays hit sound once again
+  display.leaveButtonHover('obj:stage:0:1', liveBtn);
+  display.enterButtonHover('obj:stage:0:1', 0);
+  // Moving directly to another button plays its hit sound once
+  display.enterButtonHover('obj:stage:0:2', 1);
+  assert.deepEqual(sounds, [
+    [0, 'hit'],
+    [0, 'hit'],
+    [1, 'hit'],
   ]);
 });
