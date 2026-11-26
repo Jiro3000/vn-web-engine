@@ -7,6 +7,7 @@ import {
   parseButtonSe,
   parseMwndAnimation,
   parseMwndColors,
+  parseMwndLayout,
   parseSpaceHideObjectIds,
 } from '../dist/engines/siglus/mwnd.js';
 import {
@@ -15,6 +16,8 @@ import {
   selbtnPresentation,
 } from '../dist/engines/siglus/selbtn.js';
 import {layoutObjectText} from '../dist/engines/siglus/object-text.js';
+import {measureSiglusFlick, siglusFlickScene} from '../dist/engines/siglus/flick.js';
+import {SiglusJoypad} from '../dist/engines/siglus/joypad.js';
 import {SiglusConfiguration} from '../dist/engines/siglus/configuration.js';
 import {
   isSiglusInstallation,
@@ -48,6 +51,216 @@ const REPO_ROOT = path.resolve(import.meta.dirname, '..');
 const SIGLUS_DIR = path.join(REPO_ROOT, 'src/engines/siglus');
 const SSR_DIR = '/Users/paul/Torrents/Games/tsuki no kanata fan disk';
 const HAS_SSR = fs.existsSync(`${SSR_DIR}/Gameexe.dat`) && fs.existsSync(`${SSR_DIR}/Scene.pck`);
+
+test('Siglus flick dispatch uses the configured regions after the native velocity threshold', () => {
+  const config = new Map([['FLICK_SCENE.CNT', '4']]);
+  for (let index = 0; index < 4; index++) {
+    const prefix = `FLICK_SCENE.00${index}`;
+    config.set(`${prefix}.ANGLE`, String(5 + index));
+    config.set(`${prefix}.SCENE`, `"menu", ${index}`);
+  }
+  assert.equal(siglusFlickScene(config, measureSiglusFlick(0, -12, 10)), 'FLICK_SCENE.000.SCENE');
+  assert.equal(siglusFlickScene(config, measureSiglusFlick(0, 12, 10)), 'FLICK_SCENE.001.SCENE');
+  assert.equal(siglusFlickScene(config, measureSiglusFlick(12, 0, 10)), 'FLICK_SCENE.002.SCENE');
+  assert.equal(siglusFlickScene(config, measureSiglusFlick(-12, 0, 10)), 'FLICK_SCENE.003.SCENE');
+  assert.equal(siglusFlickScene(config, measureSiglusFlick(0, -4, 10)), undefined);
+});
+
+test('Siglus joypad commands report press, hold, and release in native button order', () => {
+  const joypad = new SiglusJoypad();
+  const buttons = Array.from({length: 16}, () => ({pressed: false, value: 0}));
+  const gamepad = {mapping: 'standard', buttons, axes: [0, 0, 0, 0]};
+  joypad.sample(gamepad);
+  assert.equal(joypad.active, false);
+  assert.equal(joypad.state(4, 7), 1);
+
+  buttons[0] = {pressed: true, value: 1};
+  buttons[12] = {pressed: true, value: 1};
+  gamepad.axes[2] = -0.7;
+  joypad.sample(gamepad);
+  assert.equal(joypad.active, true);
+  for (const index of [0, 4, 22]) {
+    assert.equal(joypad.state(index, 1), 1);
+    assert.equal(joypad.state(index, 6), 1);
+    assert.equal(joypad.state(index, 5), 0);
+  }
+
+  joypad.sample(gamepad);
+  assert.equal(joypad.state(4, 1), 0);
+  assert.equal(joypad.state(4, 6), 1);
+  joypad.sample(undefined);
+  assert.equal(joypad.state(4, 5), 1);
+  assert.equal(joypad.state(4, 7), 1);
+  assert.equal(joypad.active, false);
+
+  joypad.settings = {swapAB: true, swapXY: true};
+  buttons[2] = {pressed: true, value: 1};
+  joypad.sample(gamepad);
+  assert.equal(joypad.state(4, 6), 0);
+  assert.equal(joypad.state(5, 6), 1);
+  assert.equal(joypad.state(6, 6), 0);
+  assert.equal(joypad.state(7, 6), 1);
+});
+
+test('Siglus message text color commands address the active or explicitly indexed window', async () => {
+  const display = Object.assign(Object.create(SiglusDisplay.prototype), {
+    windowIndex: 2,
+    messageTextColors: new Map(),
+    currentText: [],
+  });
+  const player = Object.assign(Object.create(SiglusPlayer.prototype), {display});
+  const invoke = (path, ...args) => player.command({path, args, named: []});
+  await invoke([17], 4);
+  await invoke([38, 3, -1, 1, 8], 7);
+  const message = display.saveMessage();
+  assert.deepEqual(message.textColors, [[2, 4], [1, 7]]);
+  await invoke([17]);
+  assert.deepEqual(display.saveMessage().textColors, [[1, 7]]);
+  display.restoreMessageTextColors(message.textColors);
+  assert.deepEqual(display.saveMessage().textColors, message.textColors);
+});
+
+test('Siglus vertical text swaps the message inline and block extents', () => {
+  const config = new Map([
+    ['MWND.000.MOJI_CNT', '8, 3'],
+    ['MWND.000.MOJI_SIZE', '20'],
+    ['MWND.000.MOJI_SPACE', '1, 7'],
+  ]);
+  const horizontal = parseMwndLayout(config, 0);
+  assert.deepEqual([horizontal.vertical, horizontal.textWidth, horizontal.textHeight], [false, 168, 81]);
+  config.set('TATEYOKO_MODE', '1');
+  const vertical = parseMwndLayout(config, 0);
+  assert.deepEqual([vertical.vertical, vertical.textWidth, vertical.textHeight], [true, 81, 168]);
+});
+
+test('Siglus saves and copies an inner checkpoint within the configured slot count', async () => {
+  const original = {title: 'checkpoint'};
+  const player = Object.assign(Object.create(SiglusPlayer.prototype), {
+    game: {config: new Map([['INNER_SAVE.CNT', '2']])},
+    innerSaves: new Map(),
+    saves: new Map(),
+    quickSaves: new Map(),
+    savePoint: original,
+    loadEnabled: true,
+    loadSave: (save) => assert.deepEqual(save, {title: 'checkpoint'}),
+  });
+  const call = (member, ...args) => player.command({path: [63, member], args, named: []});
+  await call(272, 2);
+  assert.equal(await call(275, 2), 0);
+  await call(272, 0);
+  original.title = 'new checkpoint';
+  assert.equal(await call(275, 0), 1);
+  await call(274, 0, 1);
+  await call(276, 0);
+  assert.equal(await call(275, 0), 0);
+  assert.equal(await call(273, 1, 0, 1), 1);
+  assert.equal(player.pendingLoadSound, true);
+});
+
+test('Siglus resolves position events on message buttons and restores indexed object events', async () => {
+  const display = Object.assign(Object.create(SiglusDisplay.prototype), {
+    messageButtonStates: new Map(),
+    windowIndex: 0,
+    activeFrameActions: [],
+  });
+  const player = Object.assign(Object.create(SiglusPlayer.prototype), {display});
+  const button = [38, 3, -1, 0, 32, -1, 4];
+  const call = (path, ...args) => player.command({path: [...button, ...path], args, named: []});
+  await call([51, 7], 75, 500, 0, 0);
+  assert.equal(await call([51, 5]), 1);
+  assert.equal(player.property([...button, 3]), 75);
+  assert.equal(player.property([...button, 3], 40), 40);
+  assert.equal(await call([51, 5]), 0);
+
+  const time = {duration: 100, delay: 10, easing: 'linear'};
+  const original = {
+    name: '', frames: [], x: 0, y: 0, visible: false, pattern: 0,
+    offsetEvents: {x: new Map([[0, {from: 10, started: 40, time}]])},
+    offsetEventCounts: {x: 1}, positionOffsets: {x: [80]},
+  };
+  const saved = serializeDrawObject(original, 100);
+  assert.deepEqual(saved.offsetEvents, {x: [[0, {from: 10, elapsed: 60, time}]]});
+  const restored = await player.deserializeDrawObject(saved);
+  const event = restored.offsetEvents.x.get(0);
+  assert.equal(event.from, 10);
+  assert.deepEqual(event.time, time);
+  assert.deepEqual(restored.positionOffsets, {x: [80], y: undefined});
+  assert.equal(serializeDrawObject(restored, event.started + 110).offsetEvents, undefined);
+});
+
+test('Siglus reads the base button number from a restored child object', async () => {
+  const object = {name: '', frames: [], x: 0, y: 0, visible: false, pattern: 0};
+  const parent = {
+    ...object,
+    children: new Map([[2, {...object, button: {id: 37, group: 100_001}}]]),
+  };
+  const player = Object.create(SiglusPlayer.prototype);
+  player.systemObjects = new Map([[4, await player.deserializeDrawObject(serializeDrawObject(parent))]]);
+  const readNumber = (child) => player.command({
+    path: [65, 1, 2, -1, 4, 93, -1, child, 188], args: [], named: [],
+  });
+  assert.equal(await readNumber(2), 37);
+  assert.equal(await readNumber(3), 0);
+  assert.equal(player.systemObjectsDirty, undefined);
+});
+
+test('Siglus object.get_button_hit_state (123) reports normal, hover, and push without dirtying stage', async () => {
+  const active = {
+    name: '',
+    frames: [],
+    x: 0,
+    y: 0,
+    visible: true,
+    pattern: 0,
+    button: {id: 39, group: 100_001},
+  };
+  let hoveredId = -1;
+  let pressedId = -1;
+  const player = Object.assign(Object.create(SiglusPlayer.prototype), {
+    excallAllocated: true,
+    systemBackObjects: new Map([[39, active]]),
+    activeGroups: new Set([100_001]),
+    display: {
+      buttonState: (group, pressed) => (group === 100_001 ? (pressed ? pressedId : hoveredId) : -1),
+    },
+  });
+  const readHit = () => player.command({path: [65, 2, 2, -1, 39, 123], args: [], named: []});
+  assert.equal(await readHit(), 0);
+  hoveredId = 39;
+  assert.equal(await readHit(), 1);
+  pressedId = 39;
+  assert.equal(await readHit(), 2);
+  active.disabled = true;
+  assert.equal(await readHit(), 0);
+  active.disabled = false;
+  player.activeGroups.clear();
+  assert.equal(await readHit(), 0);
+  assert.equal(player.systemObjectsDirty, undefined);
+});
+
+test('Siglus story font overrides leave system-menu text on the configured font', async () => {
+  const displayed = [];
+  const player = Object.assign(Object.create(SiglusPlayer.prototype), {
+    display: {setMessageFont: (...values) => displayed.push(values)},
+    messageFont: {name: 'Default', bold: true, shadow: 2},
+    objects: [new Map(), new Map()],
+    systemObjects: new Map(),
+  });
+  const call = (path, ...args) => player.command({path, args, named: []});
+  await call([64, 87], 'Game font');
+  await call([64, 90], 0);
+  await call([64, 93], 1);
+  assert.deepEqual(displayed.at(-1), ['Game font', false, 1]);
+  assert.equal(await call([64, 88]), 'Game font');
+  await call([38, 2, -1, 0, 39], 'Story text');
+  await call([65, 1, 2, -1, 0, 39], 'Menu text');
+  assert.equal(player.objects[0].get(0).text.font, 'Game font');
+  assert.equal(player.systemObjects.get(0).text.font, 'Default');
+  await call([64, 89]);
+  await call([64, 91]);
+  await call([64, 94]);
+  assert.deepEqual(displayed.at(-1), ['Default', true, 2]);
+});
 
 test('the fixed Siglus viewport clips overflow without becoming a scroll container', () => {
   const display = fs.readFileSync(path.join(SIGLUS_DIR, 'display.ts'), 'utf8');
@@ -169,6 +382,7 @@ test('message position is restored from the checkpoint and defaults to zero for 
   const display = Object.assign(Object.create(SiglusDisplay.prototype), {
     message: {style: {}},
     currentText: [],
+    messageTextColors: new Map(),
     clearText() {},
     setMessageSlide() {},
     selectMessageWindow() {},
@@ -1849,6 +2063,7 @@ test('get_save_message strips newlines, messagePointerAction round-trips capture
       setMessageSlide: () => {},
       clearMessageFilterFiles: () => {},
       clearMessageFrameFiles: () => {},
+      restoreMessageTextColors: () => {},
       finishWipe: () => {},
       saveGans: () => [],
       saveMovieEffects: () => [],
@@ -1930,6 +2145,7 @@ test('get_save_message strips newlines, messagePointerAction round-trips capture
     applyMessageControls: () => {},
     deserializeDrawObject: async (o) => o,
     messagePointerAction: {channel: 0, scene: '_04mwbtn_hide', command: 't_mwnd_btn_check'},
+    backButtonGroups: new Map(),
   });
 
   // 1. syscom get_save_message / get_quick_save_message strip embedded newlines
@@ -1940,7 +2156,10 @@ test('get_save_message strips newlines, messagePointerAction round-trips capture
   player.messageFaces.set(0, new Map([[0, {name: 'portrait', visible: true}]]));
   player.objects[0].set(1, {name: 'saved stage', visible: true});
   player.messageButtonOffsets.set('0.1.54', [15, 5]);
+  await player.command({path: [37, 6, -1, 3, 2], args: [], named: []});
+  assert.equal(player.activeGroups.has(3), false);
   const captured = player.captureSave(false);
+  assert.deepEqual(captured.controls.backButtonGroups, [[3, false]]);
   assert.equal(captured.messageFaces[0][1][0][1].name, 'portrait');
   assert.deepEqual(captured.messagePointerAction, {
     channel: 0,
@@ -2385,10 +2604,12 @@ test('SiglusPlayer commits wait=0 wipe synchronously before async display, suppo
     transparency: 255,
     pattern: 0,
     wipeCopy: true,
+    button: {id: 1, group: 3},
     children: new Map([[0, childObj]]),
   };
   let releaseShow;
   let finishedWipe = false;
+  let renderedGroups;
   const audioLog = [];
   const unhandledProperties = new Map();
   const display = {
@@ -2396,6 +2617,7 @@ test('SiglusPlayer commits wait=0 wipe synchronously before async display, suppo
       finishedWipe = true;
     },
     closeMessage() {},
+    syncObjectButtonGroups: (groups) => (renderedGroups = [...groups]),
     show: () => new Promise((resolve) => { releaseShow = resolve; }),
   };
   const player = Object.assign(Object.create(SiglusPlayer.prototype), {
@@ -2404,8 +2626,10 @@ test('SiglusPlayer commits wait=0 wipe synchronously before async display, suppo
     usesWipeCopy: true,
     activeGroups: new Set(),
     cancelGroups: new Set(),
+    backButtonGroups: new Map(),
     decisions: new Map(),
     frameActions: new Map(),
+    frameActionCounters: new Map(),
     pendingButtonCalls: [],
     currentCast: [],
     currentCastCostumes: [],
@@ -2426,8 +2650,15 @@ test('SiglusPlayer commits wait=0 wipe synchronously before async display, suppo
   });
 
   // 1. wait=0 wipe (named=[8], args=[0, 250, 0]) commits front objects[0][12] and clears back immediately
+  await player.command({path: [37, 6, -1, 3, 2], args: [], named: []});
+  await player.command({path: [37, 2, -1, 12, 115, 1], args: [5], named: []});
+  assert.equal(player.activeGroups.has(3), false);
   await player.command({path: [7], args: [0, 250, 0], named: [8], scene: 't', line: 1, pc: 0, name: ''});
   assert.ok(finishedWipe);
+  assert.deepEqual(renderedGroups, [3]);
+  assert.equal(player.backButtonGroups.size, 0);
+  assert.equal(await player.command({path: [38, 2, -1, 12, 115, 2], args: [], named: []}), 5);
+  assert.equal(serializeDrawObject(player.objects[0].get(12)).frameActionChannelCount, 5);
   assert.equal(player.objects[1].size, 0);
   assert.equal(await player.objectCommand({path: [38, 2, -1, 12, 93, -1, 0, 62], args: [], named: []}), 'bs2_yr0101_01');
   // Calling wipe_end or resolving previous show does not clobber front[12]

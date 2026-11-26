@@ -15,6 +15,8 @@ import {
   type SiglusPcmCheckpoint,
 } from './audio.js';
 import {readCaptureBmpFlags} from './capture.js';
+import {measureSiglusFlick, siglusFlickScene} from './flick.js';
+import {SiglusJoypad} from './joypad.js';
 import {siglusCos, siglusSin, siglusTostrZen} from './math.js';
 import {
   parseButtonSe,
@@ -137,6 +139,12 @@ interface ActiveFrameAction {
   readonly modalFront: boolean;
 }
 
+interface ScriptFontOverride {
+  name?: string;
+  bold?: number;
+  shadow?: number;
+}
+
 const filterCommands = [
   [82, 83, 84],
   [85, 88, 91],
@@ -149,6 +157,7 @@ export interface SiglusGame {
   pack: SiglusScenePack;
   config: ReadonlyMap<string, string> & {readonly nameEntries?: readonly string[]};
   title: string;
+  gameId?: string;
   saveKey: string;
   appendDir?: string;
   appendName?: string;
@@ -189,6 +198,7 @@ export async function openSiglusGame(
   const pack = new SiglusScenePack(sceneBytes);
   const config = pack.configuration(await configuration.read(0, configuration.size));
   const title = config.get('GAMENAME')?.split('"')[1]?.normalize('NFKC') ?? 'SiglusEngine';
+  const gameId = config.get('GAMEID')?.split('"')[1];
   const selectSource = files.get('select.ini');
   const selectEntry = selectSource
     ? parseSelectIniEntry(await selectSource.read(0, selectSource.size), options?.appendDir)
@@ -199,7 +209,7 @@ export async function openSiglusGame(
   const saveKey =
     'siglus:' +
     Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, '0')).join('');
-  return {files, pack, config, title, saveKey, appendDir, appendName};
+  return {files, pack, config, title, gameId, saveKey, appendDir, appendName};
 }
 
 type HistoryPoint = Omit<PlayerSave, 'history' | 'historyPoints'>;
@@ -239,6 +249,7 @@ interface PlayerSave {
   controls?: {
     systemMenu: boolean;
     messageButtons: boolean;
+    returnMenu?: [enabled: boolean, visible: boolean];
     disabledButtons: number[];
     save: boolean;
     load: boolean;
@@ -257,6 +268,10 @@ interface PlayerSave {
     endMsgByKeyDisabled?: boolean;
     scriptMessageNowait?: boolean;
     messageSpeedOverride?: number;
+    joypadModeOverride?: number;
+    scriptFlag96?: boolean;
+    scriptFont?: ScriptFontOverride;
+    backButtonGroups?: [number, boolean][];
   };
   stageObjects?: [[number, SerializedDrawObject][], [number, SerializedDrawObject][]];
   stageEffects?: [string, [number, number][]][];
@@ -304,6 +319,7 @@ export class SiglusPlayer {
   private readonly excallFlags = new Map<number, number>();
   private readonly groupProps = new Map<string, number>();
   private readonly selectionSaves: PlayerSave[] = [];
+  private stagedSelectionSave?: PlayerSave;
   private selectionReturnFlags: [boolean, boolean] = [true, true];
   private msgBackEnabled = true;
   private scriptMsgBackDisabled = false;
@@ -326,9 +342,15 @@ export class SiglusPlayer {
   private systemFrontObjects?: Map<number, DrawObject>;
   private systemFrontObjectsDirty = false;
   private systemFont?: {name?: string; bold?: boolean; shadow?: number};
+  private scriptFont?: ScriptFontOverride;
   private messageHidden = false;
   private quakeStopped = false;
   private timeStopped = false;
+  private readonly joypad = new SiglusJoypad();
+  private joypadModeOverride = -1;
+  private excallJoypadModeOverride = -1;
+  private pendingSystemShortcut?: string;
+  private scriptFlag96 = false;
   private systemSkipDisabled = false;
   private systemCallDepth = 0;
   private get systemCallActive(): boolean {
@@ -366,9 +388,59 @@ export class SiglusPlayer {
   private inputSampled = false;
   private lastInputSampleAt = -Infinity;
   private lastInputSampleScene: string | undefined;
+  private readonly pointerFlicks = [undefined, undefined] as (ReturnType<typeof measureSiglusFlick> | undefined)[];
+  private readonly pointerFlickPending = [false, false];
+  private readonly pointerFlickActive = [false, false];
+
+  private sampleJoypad(): void {
+    const navigator = this.root.ownerDocument.defaultView?.navigator;
+    let gamepad: Gamepad | undefined;
+    try {
+      gamepad = navigator?.getGamepads?.().find((pad): pad is Gamepad =>
+        Boolean(pad?.connected && pad.mapping === 'standard'),
+      );
+    } catch {
+      // Gamepad access may be disabled by the document's permissions policy.
+    }
+    this.joypad.sample(gamepad);
+  }
+
+  private joypadModeActive(): boolean {
+    const config = this.game.config;
+    const defaultMode = Number(config.get('JOYPAD.ALLOW_JOYPAD_MODE') ?? 0);
+    const storyMode = this.joypadModeOverride;
+    const historyMode = Number(config.get('JOYPAD.MSGBK_ALLOW_JOYPAD_MODE') ?? -1);
+    const allowed = this.systemCallActive
+      ? this.excallJoypadModeOverride === 1
+      : this.historyOpen
+        ? (historyMode === -1 ? defaultMode : historyMode) !== 0
+        : storyMode === 1 || (storyMode !== 0 && defaultMode !== 0);
+    return allowed && this.joypad.active;
+  }
+
+  private joypadDirectionState(direction: number, command: number): number | undefined {
+    const config = this.game.config;
+    const mode = (key: string): number => {
+      const normal = Number(config.get(`JOYPAD.${key}`) ?? 0);
+      const history = Number(config.get(`JOYPAD.MSGBK_${key}`) ?? -1);
+      return (this.historyOpen && !this.systemCallActive && history !== -1 ? history : normal) || 1;
+    };
+    // The virtual arrow group adds these inputs only in mode 1 (0x645be2–0x645d68).
+    const dpad = mode('DPAD_CONTROL_MODE') === 1;
+    const stick = mode('LEFT_STICK_CONTROL_MODE') === 1;
+    if (!dpad && !stick) return undefined;
+    const states = [dpad ? this.joypad.state(direction, command) : undefined,
+      stick ? this.joypad.state(16 + direction, command) : undefined];
+    return command === 7 ? Number(states.every((state) => state !== 0)) : Number(states.includes(1));
+  }
 
   private sampleInputNow(): void {
     this.display.sampleInput();
+    this.sampleJoypad();
+    for (const button of [0, 1]) {
+      this.pointerFlickActive[button] = this.pointerFlickPending[button]!;
+      this.pointerFlickPending[button] = false;
+    }
     this.lastInputSampleAt = performance.now();
     this.lastInputSampleScene = this.vm.currentPosition()?.scene;
   }
@@ -377,6 +449,7 @@ export class SiglusPlayer {
   private wait?: (value: number) => void;
   private readonly activeGroups = new Set<number>();
   private readonly cancelGroups = new Set<number>();
+  private readonly backButtonGroups = new Map<number, boolean>();
   private readonly decisions = new Map<number, number>();
   private decisionReady?: () => void;
   private objectsDirty = false;
@@ -393,16 +466,19 @@ export class SiglusPlayer {
   private vm!: SiglusVm;
   private saveEnabled = true;
   private messageButtonsEnabled = true;
+  private returnMenuState?: [enabled: boolean, visible: boolean];
   private readonly disabledMessageButtons = new Set<number>();
   private loadEnabled = true;
   private saveStore?: IndexedDbStore;
   private readonly saves = new Map<number, PlayerSave>();
   private readonly quickSaves = new Map<number, PlayerSave>();
   private readonly endSaves = new Map<number, PlayerSave>();
+  private readonly innerSaves = new Map<number, PlayerSave>();
+  private readonly saveHistory: HistoryPoint[] = [];
+  private lastSaveHistoryTime = -Infinity;
   private savePoint?: PlayerSave;
   private dayStage = false;
   private selectedSave?: PlayerSave;
-  private endSaveEnabled = true;
   private lastSelectionMessage = '';
   private voiceSpeedSwitches: [boolean, boolean, boolean] = [false, false, false];
   private voiceSpeedRate = 100;
@@ -529,6 +605,10 @@ export class SiglusPlayer {
     if (savedOptions) {
       try {
         const values = JSON.parse(savedOptions);
+        this.joypad.settings = {
+          swapAB: values?.joypad?.swapAB === true,
+          swapXY: values?.joypad?.swapXY === true,
+        };
         const playback = values?.playback;
         for (const key of Object.keys(playbackLimits) as (keyof typeof playbackLimits)[]) {
           const value = playback?.[key];
@@ -689,6 +769,26 @@ export class SiglusPlayer {
     const frameInputOptions = {signal: this.controller.signal};
     for (const type of ['pointerenter', 'pointermove', 'pointerleave', 'pointerdown'] as const)
       this.display.stage.addEventListener(type, refreshFrameInput, frameInputOptions);
+    for (const type of ['pointerdown', 'keydown'] as const)
+      this.display.stage.addEventListener(type, () => (this.joypad.active = false), frameInputOptions);
+    if (config.has('X_MENU_SCENE') || config.has('JOYPAD.SHORTCUT.CNT')) {
+      const pollShortcuts = () => {
+        if (this.controller.signal.aborted) return;
+        if (this.waitingForPage && this.wait && !this.systemCallActive && !this.historyOpen) {
+          this.sampleJoypad();
+          if (this.systemMenuEnabled && !this.userMessageHidden && this.joypadModeActive()) {
+            const shortcut = this.joypadShortcut();
+            if (shortcut) {
+              this.pendingSystemShortcut = shortcut;
+              this.wait(7);
+            }
+          }
+        }
+        requestAnimationFrame(pollShortcuts);
+      };
+      requestAnimationFrame(pollShortcuts);
+    }
+    this.installFlickInput();
     const document = root.ownerDocument;
     for (const type of ['focus', 'blur'] as const)
       document.defaultView?.addEventListener(type, refreshFrameInput, frameInputOptions);
@@ -747,6 +847,7 @@ export class SiglusPlayer {
   private debugSnapshot(): Record<string, unknown> {
     const now = performance.now();
     return {
+      gameId: this.game.gameId,
       vm: this.vm.checkpoint(),
       mwnd: this.display.messageWindow,
       bgm: this.audio.bgmName(),
@@ -766,6 +867,10 @@ export class SiglusPlayer {
       cgFlags: [...this.cgFlags],
       systemFlags: [...this.system],
       galleryFlags: [...this.galleryFlags],
+      saveHistory: this.saveHistory.map(({vm}) => {
+        const frame = vm.frames.at(-1);
+        return frame && {scene: frame.scene, line: frame.line, pc: frame.pc};
+      }),
       usesWipeCopy: this.usesWipeCopy,
       unhandledCommands: [...this.unhandledCommands],
       unhandledProperties: [...this.unhandledProperties],
@@ -861,6 +966,89 @@ export class SiglusPlayer {
     await this.runSystemScene(name, label?.split('"')[1] ?? Number(label ?? 0));
   }
 
+  private joypadShortcut(): string | undefined {
+    const config = this.game.config;
+    // 1.1.141.3 at 0x632e24 selects a press or a completed click by condition.
+    const count = Number(config.get('JOYPAD.SHORTCUT.CNT') ?? 0);
+    for (let index = 0; index < Math.min(count, 256); index++) {
+      const prefix = `JOYPAD.SHORTCUT.${String(index).padStart(3, '0')}`;
+      const button = Number(config.get(`${prefix}.KEY`) ?? -1);
+      const condition = Number(config.get(`${prefix}.COND`) ?? 0);
+      const scene = `${prefix}.SCENE`;
+      if ((condition === 0 || condition === 1) && config.has(scene) &&
+          this.joypad.state(button, condition === 0 ? 1 : 5)) return scene;
+    }
+    // The standard X-button release calls the configured scene at 0x634037.
+    if (config.has('X_MENU_SCENE') && this.joypad.state(6, 5)) return 'X_MENU_SCENE';
+  }
+
+  private installFlickInput(): void {
+    const {stage} = this.display;
+    const {signal} = this.controller;
+    type Sample = {x: number; y: number; time: number};
+    let pointerId: number | undefined;
+    let buttonIndex: number | undefined;
+    let timer: ReturnType<typeof setInterval> | undefined;
+    let previous: Sample | undefined;
+    let latest: Sample | undefined;
+    let position: {x: number; y: number} | undefined;
+    let suppressClick = false;
+    const stop = () => {
+      clearInterval(timer);
+      timer = undefined;
+      pointerId = undefined;
+      buttonIndex = undefined;
+      previous = undefined;
+      latest = undefined;
+      position = undefined;
+    };
+    const sample = () => {
+      if (!position) return;
+      previous = latest;
+      latest = {...position, time: performance.now()};
+    };
+    stage.addEventListener('pointerdown', (event) => {
+      if (!event.isPrimary || (event.button !== 0 && event.button !== 2)) return;
+      stop();
+      pointerId = event.pointerId;
+      buttonIndex = event.button === 0 ? 0 : 1;
+      this.pointerFlicks[buttonIndex] = undefined;
+      position = {x: event.clientX, y: event.clientY};
+      sample();
+      timer = setInterval(sample, 10);
+    }, {signal});
+    stage.addEventListener('pointermove', (event) => {
+      if (event.pointerId === pointerId) position = {x: event.clientX, y: event.clientY};
+    }, {signal});
+    stage.addEventListener('pointercancel', stop, {signal});
+    stage.addEventListener('pointerleave', stop, {signal});
+    stage.addEventListener('pointerup', (event) => {
+      if (event.pointerId !== pointerId || buttonIndex === undefined) return;
+      const measurement = previous && latest && measureSiglusFlick(
+        latest.x - previous.x, latest.y - previous.y, latest.time - previous.time,
+      );
+      this.pointerFlicks[buttonIndex] = measurement;
+      this.pointerFlickPending[buttonIndex] = (measurement?.millimetresPerSecond ?? 0) >= 180;
+      const scene = buttonIndex === 0 && measurement && siglusFlickScene(this.game.config, measurement);
+      stop();
+      if (!scene || !this.waitingForPage || !this.wait || !this.systemMenuEnabled ||
+          this.systemCallActive || this.userMessageHidden ||
+          (event.target as Element).closest('button, input, textarea') ||
+          stage.ownerDocument.getSelection()?.isCollapsed === false) return;
+      suppressClick = true;
+      setTimeout(() => (suppressClick = false), 0);
+      this.pendingSystemShortcut = scene;
+      this.wait(7);
+    }, {signal});
+    stage.addEventListener('click', (event) => {
+      if (!suppressClick) return;
+      suppressClick = false;
+      event.stopImmediatePropagation();
+      event.preventDefault();
+    }, {capture: true, signal});
+    signal.addEventListener('abort', stop, {once: true});
+  }
+
   private async runSystemScene(
     scene: string,
     entry: number | string,
@@ -939,6 +1127,7 @@ export class SiglusPlayer {
         screen: this.screenSettings,
         moviePlayer: this.moviePlayer,
         playback: this.playback,
+        joypad: this.joypad.settings,
         filter: this.filterColor,
         voiceSpeedSwitches: this.voiceSpeedSwitches,
         voiceSpeedRate: this.voiceSpeedRate,
@@ -960,8 +1149,20 @@ export class SiglusPlayer {
   }
 
   private applyMessageFont(): void {
-    const {name, bold, shadow} = this.messageFont;
+    const {name, bold, shadow} = this.storyFont();
     this.display.setMessageFont(name, bold, shadow);
+  }
+
+  private storyFont(): SiglusFontSettings {
+    const overrides = this.scriptFont;
+    if (!overrides) return this.messageFont;
+    const {name, bold = -1, shadow = -1} = overrides;
+    return {
+      ...this.messageFont,
+      name: name || this.messageFont.name,
+      bold: bold >= 0 ? Boolean(bold) : this.messageFont.bold,
+      shadow: shadow >= 0 ? shadow : this.messageFont.shadow,
+    };
   }
 
   private applyScreenSettings(): void {
@@ -1047,6 +1248,7 @@ export class SiglusPlayer {
     this.excallFlags.clear();
     this.systemCounters.clear();
     this.systemFont = undefined;
+    this.excallJoypadModeOverride = -1;
     for (const [key, action] of [...this.frameActions]) {
       if (action.path[0] === 65) {
         this.frameActions.delete(key);
@@ -1206,6 +1408,14 @@ export class SiglusPlayer {
         this.persistGalleryFlags();
       return Number(Boolean((this.galleryFlags.get(bit >>> 5) ?? 0) & (1 << (bit & 31))));
     }
+    if (page === 32 && list === -1 && array !== undefined && path.length === 3) {
+      // Both G[] and the G bit view address the same list (1.1.141.3 at 0x54fe1f).
+      if (value !== undefined && this.galleryFlags.get(array) !== Number(value)) {
+        this.galleryFlags.set(array, Number(value) | 0);
+        this.persistGalleryFlags();
+      }
+      return this.galleryFlags.get(array);
+    }
     if (page === 31 && list === 3 && array === -1 && path[3] !== undefined && path[3] >= 0) {
       const bit = path[3];
       const index = Math.floor(bit / 32);
@@ -1240,7 +1450,7 @@ export class SiglusPlayer {
       }
     }
     // 1.1.102.1 MWND member 32 uses object properties (0x528e74 -> 0x52d600).
-    // Member 0 reads and writes the object's display flag (0x52d945).
+    // The entries expose the object's display flag, image pattern, and position.
     if (
       path.length === 8 &&
       path[0] === 38 &&
@@ -1248,7 +1458,7 @@ export class SiglusPlayer {
       path[2] === -1 &&
       path[4] === 32 &&
       path[5] === -1 &&
-      (path[7] === 0 || path[7] === 1 || path[7] === 4)
+      (path[7] === 0 || path[7] === 1 || path[7] === 3 || path[7] === 4)
     ) {
       return this.display.setMessageButtonProperty(
         path[3]!,
@@ -1492,8 +1702,7 @@ export class SiglusPlayer {
     const previous = this.galleryFlags.get(index) ?? 0;
     const next = value & 1 ? previous | mask : previous & ~mask;
     if (previous === next) return false;
-    if (next === 0) this.galleryFlags.delete(index);
-    else this.galleryFlags.set(index, next);
+    this.galleryFlags.set(index, next);
     return true;
   }
 
@@ -1603,6 +1812,7 @@ export class SiglusPlayer {
     this.tracePage();
     if (needSavePoint && baseSnapshot) {
       this.savePoint = this.attachHistoryToSave(baseSnapshot);
+      if (this.trace) this.recordSaveHistory(baseSnapshot);
     }
     if (this.msgAsyncModeOnce) {
       this.msgAsyncModeOnce = false;
@@ -1857,6 +2067,13 @@ export class SiglusPlayer {
         continue;
       }
       if (result === 4) continue;
+      if (result === 7) {
+        const shortcut = this.pendingSystemShortcut;
+        this.pendingSystemShortcut = undefined;
+        this.readSkipEnabled = this.autoEnabled = false;
+        if (shortcut) await this.callSystemScene(shortcut);
+        continue;
+      }
       if (result === 3) {
         this.readSkipEnabled = this.autoEnabled = false;
         await this.callSystemScene('CANCEL_SCENE');
@@ -1943,6 +2160,7 @@ export class SiglusPlayer {
       controls: {
         systemMenu: this.systemMenuEnabled,
         messageButtons: this.messageButtonsEnabled,
+        returnMenu: this.returnMenuState && [...this.returnMenuState],
         disabledButtons: [...this.disabledMessageButtons],
         save: this.saveEnabled,
         load: this.loadEnabled,
@@ -1960,6 +2178,10 @@ export class SiglusPlayer {
         mwndBtnTouchEnabled: this.mwndBtnTouchEnabled,
         endMsgByKeyDisabled: this.endMsgByKeyDisabled || undefined,
         scriptMessageNowait: this.scriptMessageNowait || undefined,
+        joypadModeOverride: this.joypadModeOverride === -1 ? undefined : this.joypadModeOverride,
+        scriptFlag96: this.scriptFlag96 || undefined,
+        scriptFont: this.scriptFont && {...this.scriptFont},
+        backButtonGroups: this.backButtonGroups.size ? [...this.backButtonGroups] : undefined,
         messageSpeedOverride: this.speed !== -1 ? this.speed : undefined,
       },
       stageObjects:
@@ -2009,6 +2231,18 @@ export class SiglusPlayer {
 
   private async deserializeDrawObject(saved: SerializedDrawObject): Promise<DrawObject> {
     const sourceClipBounds = saved.sourceClip ?? saved.sourceClipBounds;
+    const offsetEvents: NonNullable<DrawObject['offsetEvents']> = {};
+    if (saved.offsetEvents) {
+      const now = performance.now();
+      for (const axis of ['x', 'y'] as const) {
+        const events = saved.offsetEvents[axis];
+        if (events?.length) offsetEvents[axis] = new Map(events.map(([index, event]) => [index, {
+          from: event.from,
+          started: now - event.elapsed,
+          time: {...event.time},
+        }]));
+      }
+    }
     const object: DrawObject = {
       type: saved.type,
       name: saved.name,
@@ -2043,6 +2277,8 @@ export class SiglusPlayer {
           }
         : undefined,
       offsetEventCounts: saved.offsetEventCounts && {...saved.offsetEventCounts},
+      offsetEvents: offsetEvents.x || offsetEvents.y ? offsetEvents : undefined,
+      frameActionChannelCount: saved.frameActionChannelCount,
       button: saved.button ? {...saved.button} : undefined,
       buttonCall: saved.buttonCall ? {...saved.buttonCall} : undefined,
       childCount: saved.childCount,
@@ -2117,6 +2353,24 @@ export class SiglusPlayer {
     if (number >= count + quickCount && number < count + quickCount + endCount)
       return [this.endSaves, number - count - quickCount];
     return [this.saves, number];
+  }
+
+  private rememberSelection(save: PlayerSave): void {
+    // 1.1.141.3 evicts the oldest selection checkpoint at the configured limit (0x65caf5).
+    const count = Number(this.game.config.get('SEL_SAVE.CNT') ?? 32);
+    if (count <= 0) return;
+    this.selectionSaves.push(save);
+    this.selectionSaves.splice(0, Math.max(0, this.selectionSaves.length - count));
+  }
+
+  private recordSaveHistory(save: HistoryPoint): void {
+    // 0x666309–0x6663ec records debug checkpoints at least three seconds apart.
+    const capacity = Math.min(10_000, Number(this.game.config.get('SAVE_HISTORY.CNT') ?? 100));
+    const now = performance.now();
+    if (capacity < 1 || now - this.lastSaveHistoryTime < 3000) return;
+    this.lastSaveHistoryTime = now;
+    this.saveHistory.push(save);
+    if (this.saveHistory.length > capacity) this.saveHistory.shift();
   }
 
   private saveSlot(number: number): PlayerSave | undefined {
@@ -2339,6 +2593,7 @@ export class SiglusPlayer {
     this.revealWholePage = false;
     this.systemMenuEnabled = save.controls?.systemMenu ?? true;
     this.messageButtonsEnabled = save.controls?.messageButtons ?? true;
+    this.returnMenuState = save.controls?.returnMenu && [...save.controls.returnMenu];
     this.disabledMessageButtons.clear();
     for (const id of save.controls?.disabledButtons ?? []) this.disabledMessageButtons.add(id);
     this.saveEnabled = save.controls?.save ?? true;
@@ -2346,6 +2601,15 @@ export class SiglusPlayer {
     this.selectionReturnFlags = [...(save.controls?.selectionReturnFlags ?? [true, true])];
     this.skipAllowed = save.controls?.controlSkip ?? true;
     this.skipUnreadOverride = save.controls?.skipUnread;
+    this.joypadModeOverride = save.controls?.joypadModeOverride ?? -1;
+    this.scriptFlag96 = save.controls?.scriptFlag96 ?? false;
+    if (this.scriptFont || save.controls?.scriptFont) {
+      this.scriptFont = save.controls?.scriptFont && {...save.controls.scriptFont};
+      this.applyMessageFont();
+    }
+    this.backButtonGroups.clear();
+    for (const [group, cancel] of save.controls?.backButtonGroups ?? [])
+      this.backButtonGroups.set(group, cancel);
     this.scriptMessageAnimationsDisabled = save.controls?.messageAnimationsOff ?? false;
     this.msgBackEnabled = save.controls?.msgBackEnabled ?? true;
     this.scriptMsgBackDisabled = save.controls?.scriptMsgBackDisabled ?? false;
@@ -2485,6 +2749,7 @@ export class SiglusPlayer {
         this.pageReadFlags.every(({scene, flag}) => this.readFlags.get(scene)?.has(flag));
     } else {
       this.display.closeMessage();
+      this.display.restoreMessageTextColors(save.message.textColors);
       this.display.repPosition(...(save.message.position ?? [0, 0]));
       this.display.setMessageSlide(save.message.slideTime);
     }
@@ -2581,7 +2846,7 @@ export class SiglusPlayer {
 
   private async nextInput(forceYield = false): Promise<number> {
     if (this.pendingButtonCalls.length) await this.flushButtonCalls();
-    if ((!forceYield && !this.systemCallActive && !this.activeGroups.size) || this.decisions.size)
+    if (!forceYield && ((!this.systemCallActive && !this.activeGroups.size) || this.decisions.size))
       return 0;
     // The script polls group state, then calls input.next to yield between samples.
     // Wake on a decision or on the next frame so polling scripts can keep animating.
@@ -2710,7 +2975,16 @@ export class SiglusPlayer {
     if (this.usesWipeCopy) back.clear();
     this.objectsDirty = false;
     this.objectMoves = undefined;
+    const pendingGroups = this.backButtonGroups.size;
+    for (const [group, cancel] of this.backButtonGroups) {
+      this.activeGroups.add(group);
+      if (cancel) this.cancelGroups.add(group);
+      else this.cancelGroups.delete(group);
+      this.decisions.delete(group);
+    }
+    if (this.usesWipeCopy) this.backButtonGroups.clear();
     this.pruneDeadButtonGroups();
+    if (pendingGroups) this.display.syncObjectButtonGroups(this.activeGroups);
     // Promote back-stage object frame_actions (37.2.-1.<id>...) to front-stage (38.2.-1.<id>...)
     // and drop overwritten front-stage object frame_actions unless preserved via wipeCopy.
     if (this.frameActions.size) {
@@ -2774,6 +3048,7 @@ export class SiglusPlayer {
   private clearStageObjectPages(): void {
     this.objects[0]!.clear();
     this.objects[1]!.clear();
+    this.backButtonGroups.clear();
     this.objectsDirty = false;
     this.objectMoves = undefined;
     this.pruneDeadButtonGroups();
@@ -3328,6 +3603,7 @@ export class SiglusPlayer {
   private readonly backlog: SiglusHistoryEntry[] = [];
   private readonly historyPoints = new WeakMap<SiglusHistoryEntry, HistoryPoint>();
   private historyTarget?: PlayerSave;
+  private historyOpen = false;
   private pageVoices: SiglusHistoryEntry['voices'] = [];
 
   private addHistory(entry: SiglusHistoryEntry): void {
@@ -3371,6 +3647,7 @@ export class SiglusPlayer {
       this.display.stage.style.cursor = '';
       let selected: SiglusHistoryEntry | undefined;
       try {
+        this.historyOpen = true;
         selected = await this.display.showHistory(
           this.backlog,
           (entry, sound) => {
@@ -3385,6 +3662,7 @@ export class SiglusPlayer {
           focus,
         );
       } finally {
+        this.historyOpen = false;
         this.replayGeneration++;
         this.audio.stop('history-voice');
         this.display.stage.style.cursor = savedCursor;
@@ -3968,11 +4246,22 @@ export class SiglusPlayer {
     }
     if (path.length === 1) {
       switch (root) {
+        case 57: // The 1.1.141.3 MWND receiver closes the active message (0x5540df).
+          this.display.closeMessage();
+          this.pendingText = false;
+          this.pageVoices = [];
+          return 0;
+        case 60: // Native 1.1.141.3 dispatches directly to the success return at 0x551e30.
+          return 0;
         case 1: // global.selpoint (0x54cdbc)
-          if (this.saveEnabled) {
-            this.selectionSaves.push(this.captureSave());
-            if (this.selectionSaves.length > 32) this.selectionSaves.shift();
-          }
+          if (this.saveEnabled) this.rememberSelection(this.captureSave());
+          break;
+        case 149: // 1.1.141.3 at 0x550ec3 copies the current checkpoint to a temporary slot.
+          this.stagedSelectionSave = this.savePoint;
+          break;
+        case 150: // Commit the staged checkpoint to the selection history, then empty it.
+          if (this.stagedSelectionSave) this.rememberSelection(this.stagedSelectionSave);
+          this.stagedSelectionSave = undefined;
           break;
         case 80: // capture
           if (this.savePoint && !this.systemCallActive) {
@@ -4080,6 +4369,10 @@ export class SiglusPlayer {
         case 16:
           this.display.setTextSize(args.length ? n(0) : undefined);
           break;
+        case 17:
+          // Native 1.1.141.3 at 0x554d7a/0x554dcc stores the per-window glyph color override.
+          this.display.setMessageTextColor(args.length ? n(0) : -1);
+          break;
         case 18:
           this.pageVoices = [
             ...this.pageVoices,
@@ -4089,8 +4382,19 @@ export class SiglusPlayer {
             this.audio.voiceStart(n(0), 'voice', args.length > 1 ? n(1) : undefined);
           break;
         case 2: // global.owari: end script cleanly and return to title menu
-          this.vm.returnToMenu();
-        case 138: // global.del_call_stack
+          return this.vm.returnToMenu();
+        case 138: // 1.1.141.3 at 0x551aed removes entries from the end of message history.
+          if (n(0) > 0) this.backlog.length = Math.max(0, this.backlog.length - (n(0) | 0));
+          return 0;
+        case 139:
+          return this.backlog.length + 1;
+        case 140: {
+          const count = n(0) | 0;
+          if (count >= 1 && count <= this.backlog.length) this.backlog.length = count - 1;
+          return 0;
+        }
+        case 141: // 0x551ae1 invokes the same receiver with the initial count of one.
+          this.backlog.length = 0;
           return 0;
         case 22:
           this.display.setMessageFrame(n(0));
@@ -4247,6 +4551,7 @@ export class SiglusPlayer {
           return Number(this.selectionSaves.length > 0);
         case 111: // global.clear_selpoint (0x54cdcf)
           this.selectionSaves.length = 0;
+          this.stagedSelectionSave = undefined;
           break;
         case 144: {
           // 1.1.102.1 (0x52579b -> 0x635c10 -> 0x5e7ca0) renders through the
@@ -4309,6 +4614,10 @@ export class SiglusPlayer {
     }
     if ((root === 37 || root === 38) && member === 2) return this.objectCommand({...command, path});
     if (root === 38 && member === 3) {
+      if (path[2] === -1 && path.length === 5 && path[4] === 8) {
+        this.display.setMessageTextColor(args.length ? n(0) : -1, path[3]);
+        return 0;
+      }
       if (
         path.length === 9 &&
         path[2] === -1 &&
@@ -4352,8 +4661,9 @@ export class SiglusPlayer {
         else this.messageOpenAnimations.set(index, settings);
         return 0;
       }
-      if (path[2] === -1 && path.length === 5 && path[4] === 81) {
-        const file = s(0);
+      if (path[2] === -1 && path.length === 5 && (path[4] === 81 || path[4] === 82)) {
+        // 1.1.141.3 routes member 82 through the configured filter reset at 0x5f41d0.
+        const file = path[4] === 81 ? s(0) : '';
         if (file) this.messageFilterFiles.set(path[3]!, file);
         else this.messageFilterFiles.delete(path[3]!);
         await this.display.setMessageFilterFile(path[3]!, file);
@@ -4381,6 +4691,23 @@ export class SiglusPlayer {
       if (path[4] === 30 || path[4] === 53) return this.objectCommand(command);
       if (path.length === 8 && path[2] === -1 && path[4] === 32 && path[5] === -1 && path[7] === 124) {
         return this.display.messageButtonPointerState(path[3]!, path[6]!);
+      }
+      if (path.length === 9 && path[2] === -1 && path[4] === 32 && path[5] === -1 &&
+          (path[7] === 51 || path[7] === 64)) {
+        // The MWND button receiver delegates X/Y to object integer events (0x555122).
+        const window = path[3]!;
+        const button = path[6]!;
+        const axis = path[7] === 51 ? 'x' : 'y';
+        if (path[8] === 5) return Number(this.display.messageButtonPositionEventActive(window, button, axis));
+        if (path[8] === 0 || path[8] === 7) {
+          this.display.offsetMessageButton(window, button, axis, n(0), {
+            duration: Math.max(0, n(1)),
+            delay: Math.max(0, n(2)),
+            easing: eventEasing(n(3)),
+            fill: 'backwards',
+          });
+          return 0;
+        }
       }
       if (path.length === 9 && path[8] === 2) {
         const offsets = this.messageButtonList(path);
@@ -4419,6 +4746,13 @@ export class SiglusPlayer {
     }
     if (root === 65) {
       if (member === 13 && path.length === 3) {
+        const operation = path[2];
+        if (operation === 98 || operation === 99) {
+          // The EXCALL override belongs to its own native context (0x54d31e–0x54d348).
+          this.excallJoypadModeOverride = operation === 98 ? n(0) | 0 : -1;
+          return 0;
+        }
+        if (operation === 100) return this.excallJoypadModeOverride;
         // Native 0x55f290 (excall.script font overrides):
         // 0x57=set_font_name, 0x58=init_font_name, 0x59=get_font_name,
         // 0x5a=set_font_futoku, 0x5b=init_font_futoku, 0x5c=get_font_futoku,
@@ -4483,7 +4817,50 @@ export class SiglusPlayer {
       if (path[4] === 0 || path[4] === 1) return this.selectGroup(path[3]!, path[4] === 1);
       return this.groupCommand(path[3]!, path[4]!);
     }
+    if (root === 37 && member === 6 && path.length === 5 && path[2] === -1) {
+      // Both pages use 0x566580 and 0x5668e0. The back page has independent groups.
+      const group = path[3]!;
+      const operation = path[4];
+      if (operation === 2 || operation === 10) {
+        this.backButtonGroups.set(group, operation === 10);
+        return 0;
+      }
+      if (operation === 4 || operation === 5) {
+        this.backButtonGroups.delete(group);
+        return 0;
+      }
+      if (operation === 3) return -2;
+      if (operation === 6 || operation === 7) return -1;
+    }
     if (root === 63) {
+      // 1.1.141.3 reads the configured normal and quick slot counts directly.
+      if (member === 68) return Number(this.game.config.get('SAVE.CNT') ?? 0);
+      if (member === 168) return Number(this.game.config.get('QUICK_SAVE.CNT') ?? 0);
+      if (member === 208) return Number(this.autoSkipEnabled);
+      // Getter for the message-window hide permission set by syscom 223 (0x56a40a).
+      if (member === 224) return Number(this.hideMwndEnabled);
+      if (member !== undefined && member >= 237 && member <= 241) {
+        // Menu presence and availability are independent native flags (0x56a7fe–0x56a87d).
+        const [visible = '1', enabled = '1'] = this.game.config.get('SYSCOMMENU.RETURN_MENU')?.split(',') ?? [];
+        const flags = (this.returnMenuState ??= [Number(enabled) !== 0, Number(visible) !== 0]);
+        if (member === 241) return Number(flags[0] && flags[1]);
+        const index = member < 239 ? 0 : 1;
+        if (member === 238 || member === 240) return Number(flags[index]);
+        flags[index] = Boolean(n(0));
+        return 0;
+      }
+      if (member === 329) return Number(this.historyOpen);
+      // Native 0x62f510 tests the input mode in the current context.
+      if (member === 333) return Number(this.joypadModeActive());
+      if (member === 334) {
+        // 1.1.141.3 opens cfg_wnd_solo_joypad, resource 302 (0x56c1da, 0x54c760).
+        await this.configuration.joypad(this.joypad.settings, (settings) => {
+          this.joypad.settings = settings;
+          this.persistOptions();
+        });
+        this.display.stage.focus({preventScroll: true});
+        return 0;
+      }
       if (member === 300) {
         this.localExtraSwitches.set(n(0), Number(Boolean(n(1))));
         return 0;
@@ -4500,10 +4877,11 @@ export class SiglusPlayer {
             this.pendingFrameWatchers.add(watcher);
         return 0;
       }
-      if (member === 1 || member === 2 || member === 3) {
-        await this.callSystemScene(
-          member === 1 ? 'SAVE_SCENE' : member === 2 ? 'LOAD_SCENE' : 'CONFIG_SCENE',
-        );
+      const sceneKeys = ['CANCEL_SCENE', 'SAVE_SCENE', 'LOAD_SCENE', 'CONFIG_SCENE'] as const;
+      const sceneKey = member === undefined ? undefined : sceneKeys[member];
+      if (sceneKey && (member !== 0 || this.game.config.has(sceneKey))) {
+        // 1.1.141.3 system-menu dispatch reads CANCEL_SCENE at 0x66b719.
+        await this.callSystemScene(sceneKey);
         return 0;
       }
       if (member === 4 || member === 99) {
@@ -4930,33 +5308,60 @@ export class SiglusPlayer {
         this.persistOptions();
         return 0;
       }
-      if (member === 267) {
-        this.endSaveEnabled = true;
-        return 0;
-      }
-      if (member === 268) return Number(this.endSaveEnabled);
       if (member === 269) {
         const endCount = Number(this.game.config.get('END_SAVE.CNT') ?? 0);
         const endSave = endCount > 0 ? this.endSaves.get(0) : undefined;
         if (!endSave || !this.loadEnabled) return 0;
-        this.pendingLoadSound = Boolean(n(2));
+        // End-load takes warning, sound, and transition flags (1.1.141.3 at 0x66c480).
+        this.pendingLoadSound = Boolean(n(1));
         if (this.systemCallActive) {
           this.selectedSave = endSave;
           this.vm.returnFromHostScene();
         } else this.loadSave(endSave);
-        return 1;
+        return 0;
+      }
+      if (member === 270) {
+        const endCount = Number(this.game.config.get('END_SAVE.CNT') ?? 0);
+        const index = n(0) | 0;
+        return Number(index >= 0 && index < endCount && this.endSaves.has(index));
       }
       if (member === 271) {
         const endCount = Number(this.game.config.get('END_SAVE.CNT') ?? 0);
         if (endCount <= 0 || !this.saveEnabled || !this.savePoint) return 0;
         await this.writeSlot(this.endSaves, 0, {...this.savePoint, timestamp: Date.now()});
+        if (n(1)) await this.playSystemSound(4);
         return 1;
       }
-      if (member === 272) {
-        const endCount = Number(this.game.config.get('END_SAVE.CNT') ?? 0);
-        return Number(
-          endCount > 0 && Boolean(args.length ? this.saveSlot(n(0)) : this.endSaves.get(0)),
-        );
+      if (member !== undefined && member >= 272 && member <= 276) {
+        // The inner-save receiver uses a separate, in-memory array (0x56aeaf–0x56b08b).
+        const count = Number(this.game.config.get('INNER_SAVE.CNT') ?? 0);
+        const index = n(0) | 0;
+        const valid = index >= 0 && index < count;
+        const save = valid ? this.innerSaves.get(index) : undefined;
+        if (member === 272) {
+          if (valid && this.savePoint) this.innerSaves.set(index, {...this.savePoint});
+          return 1;
+        }
+        if (member === 273) {
+          if (!save || !this.loadEnabled) return 0;
+          this.pendingLoadSound = Boolean(n(2));
+          if (this.systemCallActive) {
+            this.selectedSave = save;
+            this.vm.returnFromHostScene();
+          } else this.loadSave(save);
+          return 1;
+        }
+        if (member === 274) {
+          const destination = n(1) | 0;
+          if (valid && destination >= 0 && destination < count) {
+            if (save) this.innerSaves.set(destination, save);
+            else this.innerSaves.delete(destination);
+          }
+          return 1;
+        }
+        if (member === 275) return Number(Boolean(save));
+        if (valid) this.innerSaves.delete(index);
+        return 1;
       }
       if (member === 242) {
         void this.dispose();
@@ -4975,6 +5380,7 @@ export class SiglusPlayer {
         this.releaseSystemObjects();
         this.activeGroups.clear();
         this.cancelGroups.clear();
+        this.backButtonGroups.clear();
         this.decisions.clear();
         this.display.syncObjectButtonGroups(this.activeGroups);
         this.timeStopped = false;
@@ -5073,6 +5479,53 @@ export class SiglusPlayer {
       this.display.setScenePaused(this.timeStopped);
       return 0;
     }
+    if (root === 64 && member === 67) return Number(this.timeStopped);
+    if (root === 64 && member !== undefined && member >= 87 && member <= 95) {
+      // These values belong to the story script. EXCALL resolves its own
+      // overrides against configured defaults in the native font resolver.
+      const font = (this.scriptFont ??= {});
+      switch (member) {
+        case 87: // 0x563971
+          font.name = s(0);
+          break;
+        case 88:
+          return font.name ?? '';
+        case 89:
+          font.name = undefined;
+          break;
+        case 90:
+          font.bold = n(0) | 0;
+          break;
+        case 91:
+          font.bold = undefined;
+          break;
+        case 92:
+          return font.bold ?? -1;
+        case 93:
+          font.shadow = n(0) | 0;
+          break;
+        case 94:
+          font.shadow = undefined;
+          break;
+        case 95:
+          return font.shadow ?? -1;
+      }
+      this.applyMessageFont();
+      return 0;
+    }
+    if (root === 64 && member === 96) {
+      // Native 0x5637c7 stores a boolean that member 97 reads at 0x5637d9.
+      this.scriptFlag96 = Boolean(n(0));
+      return 0;
+    }
+    if (root === 64 && member === 97) return Number(this.scriptFlag96);
+    if (root === 64 && (member === 98 || member === 99)) {
+      // 1.1.141.3 stores the override at 0x563a42 and resets it at 0x563a4f.
+      // The joypad mode resolver at 0x62f510 uses -1 to defer to Gameexe.dat.
+      this.joypadModeOverride = member === 98 ? n(0) | 0 : -1;
+      return 0;
+    }
+    if (root === 64 && member === 100) return this.joypadModeOverride;
     if (root === 64 && member === 17) return Number(this.messageHidden);
     if (root === 64 && member === 8) {
       this.messageHidden = Boolean(n(0));
@@ -5150,7 +5603,15 @@ export class SiglusPlayer {
     if (root === 24) {
       // keylist (0x54efb0 -> 0x54f1c0)
       if (member === -1 && path.length === 4) {
-        return this.display.virtualKeyState(path[2]!, path[3]!);
+        const key = path[2]!;
+        const operation = path[3]!;
+        if (key >= 0x402 && key <= 0x405) {
+          const direction = key - 0x402;
+          const keyboard = this.display.virtualKeyState([38, 40, 37, 39][direction]!, operation);
+          const controller = this.joypadDirectionState(direction, operation);
+          return controller === undefined ? keyboard : operation === 7 ? keyboard & controller : keyboard | controller;
+        }
+        return this.display.virtualKeyState(key, operation);
       }
       if (member === 0) {
         await this.waitAtPage();
@@ -5380,6 +5841,8 @@ export class SiglusPlayer {
       }
       return 0;
     }
+    // 1.1.141.3 converts FILETIME to Unix seconds at 0x763c74 and returns the low word.
+    if (root === 92 && member === 15) return Math.floor(Date.now() / 1000) | 0;
     if (root === 105 && member === -1 && path.length === 4) {
       const db = await this.loadDatabase(path[2]!);
       if (path[3] === 0) return db ? db.getNum(n(0), n(1)) : 0;
@@ -5440,6 +5903,19 @@ export class SiglusPlayer {
         const key = s(0).toLowerCase();
         if (n(1)) this.bgmListened.add(key);
         else this.bgmListened.delete(key);
+        localStorage.setItem(this.game.saveKey + ':bgmtable', JSON.stringify([...this.bgmListened]));
+        return 0;
+      }
+      if (member === 4) {
+        // 1.1.141.3 at 0x5501e6 applies the listened flag to all declared tracks.
+        const listened = Boolean(n(0));
+        for (const [key, value] of this.game.config) {
+          if (!/^BGM\.\d+$/.test(key)) continue;
+          const track = value.split('"')[1]?.toLowerCase();
+          if (!track) continue;
+          if (listened) this.bgmListened.add(track);
+          else this.bgmListened.delete(track);
+        }
         localStorage.setItem(this.game.saveKey + ':bgmtable', JSON.stringify([...this.bgmListened]));
         return 0;
       }
@@ -5602,13 +6078,30 @@ export class SiglusPlayer {
       }
       return 0;
     }
-    if (root === 46 && (member === 6 || member === 7) && path.length === 3)
-      return this.display.inputState(member === 6 ? 1 : 0, path[2]!);
+    if (root === 46 && (member === 6 || member === 7) && path.length === 3) {
+      const button = member === 6 ? 1 : 0;
+      const operation = path[2];
+      // 0x553389–0x5533fb exposes the sampled release gesture without consuming it.
+      const flick = this.pointerFlicks?.[button];
+      if (operation === 10) return Number(this.pointerFlickActive?.[button] ?? false);
+      if (operation === 0) return Math.trunc((1 - (flick?.angle ?? 0) / Math.fround(Math.PI)) * 10);
+      if (operation === 14) return Math.trunc(flick?.pixelsPerSecond ?? 0);
+      if (operation === 15) return Math.trunc(flick?.millimetresPerSecond ?? 0);
+      return this.display.inputState(button, operation!);
+    }
     if (root === 46 && (member === 4 || member === 8)) return 0;
+    if (root === 46 && member === 10) {
+      // 1.1.141.3 converts the requested logical coordinates to the native window's cursor position.
+      this.display.movePointer(n(0), n(1));
+      return 0;
+    }
+    if (root === 188 && member === 0 && path.length === 5 && path[2] === -1)
+      return this.joypad.state(path[3]!, path[4]!);
     if (root === 39 && member === 0)
       return n(0) + Math.floor(Math.random() * (Math.max(0, n(1) - n(0)) + 1));
     if (root === 39 && member === 1 && args.length === 1) return String(n(0));
     if (root === 39 && member === 3) return Math.max(n(0) | 0, n(1) | 0); // 1.1.102.1 0x532986
+    if (root === 39 && member === 4) return Math.min(n(0) | 0, n(1) | 0); // 1.1.141.3 at 0x55ef40
     if (root === 39 && member === 5) return Math.abs(n(0)) | 0;
     if (root === 39 && member === 2 && args.length >= 3) {
       const segments = args.slice(3);
@@ -5627,6 +6120,13 @@ export class SiglusPlayer {
     if (root === 39 && member === 6) return siglusSin(n(0), n(1));
     if (root === 39 && member === 7) return siglusCos(n(0), n(1));
     if (root === 39 && member === 12) return siglusTostrZen(n(0), args.length > 1 ? n(1) : 0);
+    if (root === 39 && member === 15) {
+      // 1.1.141.3 math dispatch at 0x55f26a squares signed int32 deltas before sqrt.
+      const dx = (n(2) - n(0)) | 0;
+      const dy = (n(3) - n(1)) | 0;
+      const squared = (Math.imul(dx, dx) + Math.imul(dy, dy)) | 0;
+      return squared < 0 ? -0x80000000 : Math.trunc(Math.sqrt(squared));
+    }
     if (root === 39 && member === 10) return Math.min(Math.max(n(1), n(0)), n(2));
     if (root === 42) {
       const positional = args.length - command.named.length;
@@ -5892,6 +6392,27 @@ export class SiglusPlayer {
         existing.text || existing.number || existing.movie || existing.frames.length || existing.name;
       return drawable ? 1 : 0;
     }
+    if (command === 123) {
+      // 1.1.141.3: 0x55c529 -> 0x689020 returns 0 (normal), 1 (hit/hover), or 2 (push/pressed).
+      const existing = page.get(id!);
+      const btn = existing?.button;
+      if (
+        !existing?.visible ||
+        !btn ||
+        btn.group < 0 ||
+        existing.disabled ||
+        !this.activeGroups.has(btn.group)
+      ) {
+        return 0;
+      }
+      if (this.display.buttonState(btn.group, true) === btn.id) return 2;
+      if (this.display.buttonState(btn.group, false) === btn.id) return 1;
+      return 0;
+    }
+    if (command === 188) {
+      // 1.1.141.3: 0x55c45b reads the base button number set by 0x602460.
+      return page.get(id!)?.button?.id ?? 0;
+    }
     if (command !== 175 && command !== 63 && command !== 48) this.markObjectsDirty(path);
     const n = (index: number) => Number(args[index] ?? 0);
     if (command === 35 || command === 36) {
@@ -5991,7 +6512,8 @@ export class SiglusPlayer {
       return 0;
     }
     if (command === 39) {
-      const excallFont = this.systemCallActive || path[0] === 65 ? this.systemFont : undefined;
+      const inExcall = this.systemCallActive || path[0] === 65;
+      const font = inExcall ? this.systemFont ?? this.messageFont : this.storyFont();
       page.set(id!, {
         name: '',
         frames: [],
@@ -6001,9 +6523,9 @@ export class SiglusPlayer {
         pattern: 0,
         text: {
           value: String(args[0]),
-          font: excallFont?.name ?? this.messageFont.name,
-          bold: excallFont?.bold ?? this.messageFont.bold,
-          shadow: excallFont?.shadow ?? this.messageFont.shadow,
+          font: font.name ?? this.messageFont.name,
+          bold: font.bold ?? this.messageFont.bold,
+          shadow: font.shadow ?? this.messageFont.shadow,
           size: 32,
         },
       });
@@ -6145,6 +6667,11 @@ export class SiglusPlayer {
       // 1.1.102.1 0x52eb8e returns the number of cels in a loaded G00 object.
       return object?.type === 2 ? this.display.graphicCutCount(object.name) : 0;
     }
+    if (command === 118) {
+      // 1.1.141.3 reads the script-set button state at 0x55c519.
+      if (object?.disabled || object?.buttonState === 'disable') return 4;
+      return object?.buttonState === 'select' ? 3 : 0;
+    }
     if (!object) throw new Error(`Missing Siglus object ${id}`);
     if (command === 26) {
       const cmdName = String(args[0] ?? '');
@@ -6253,7 +6780,7 @@ export class SiglusPlayer {
       return 0;
     }
     if (command === 91 && path.length === index + 4) {
-      // object.all_eve: 0=end, 1=wait (0x5553c0)
+      // object.all_eve: 0=end, 1=wait, 2=check (1.1.141.3 at 0x55a85f).
       const op = path[index + 3];
       if (op === 0) {
         object.positionEvents = undefined;
@@ -6266,8 +6793,8 @@ export class SiglusPlayer {
         object.intEvents?.clear();
         return 0;
       }
-      if (op === 1) {
-        await this.renderObjects();
+      if (op === 1 || op === 2) {
+        if (op === 1) await this.renderObjects();
         const now = performance.now();
         let maxRem = 0;
         const consider = (rem: number) => {
@@ -6299,7 +6826,9 @@ export class SiglusPlayer {
         }
         for (const ev of object.intEvents?.values() ?? []) {
           if (ev.mode === 0) consider(ev.endAt - now);
+          else if (op === 2) return 1;
         }
+        if (op === 2) return Number(maxRem > 0);
         if (maxRem > 0 && !this.skipping) await this.delay(maxRem, false);
         return 0;
       }
@@ -6345,9 +6874,20 @@ export class SiglusPlayer {
         },
       );
     }
+    if (command === 140 && path[index + 3] === 1 && path.length === index + 4) {
+      // 1.1.141.3 resizes the transparency event vector at 0x561640.
+      const count = Math.max(0, n(0) | 0);
+      (object.offsetEventCounts ??= {}).tr = count;
+      for (const key of object.intEvents?.keys() ?? []) {
+        if (key.startsWith('tr_rep:') && Number(key.slice(7)) >= count)
+          object.intEvents?.delete(key);
+      }
+      return 0;
+    }
     if (command === 140 && path[index + 3] === -1 && path.length === index + 6) {
       // object.tr_rep_eve[slot].<op> (0x5590e0)
       const slot = path[index + 4]!;
+      if (slot < 0 || slot >= (object.offsetEventCounts?.tr ?? Infinity)) return 0;
       const op = path[index + 5]!;
       const trs = (object.trOffsets ??= []);
       while (trs.length <= slot) trs.push(255);
@@ -6517,19 +7057,22 @@ export class SiglusPlayer {
       const indexInList = path[index + 4]!;
       if (indexInList < 0 || indexInList >= (object.offsetEventCounts?.[axis] ?? Infinity)) return 0;
       const operation = path[index + 5];
+      const event = object.offsetEvents?.[axis]?.get(indexInList);
+      const remaining = event
+        ? Number(event.time.duration ?? 0) + Number(event.time.delay ?? 0) -
+          (performance.now() - event.started)
+        : 0;
+      if (operation === 3) {
+        object.offsetEvents?.[axis]?.delete(indexInList);
+        return 0;
+      }
+      if (operation === 5) return Number(remaining > 0);
       if (operation === 4 || operation === 10) {
         await this.renderObjects();
-        const event = object.offsetEvents?.[axis]?.get(indexInList);
-        return event
-          ? this.delay(
-              Number(event.time.duration ?? 0) +
-                Number(event.time.delay ?? 0) -
-                (performance.now() - event.started),
-              operation === 10,
-            )
-          : 0;
+        return remaining > 0 ? this.delay(remaining, operation === 10) : 0;
       }
-      if (operation !== 0) return undefined;
+      // 1.1.141.3 dispatches indexed set and set_real through the same event receiver.
+      if (operation !== 0 && operation !== 7) return undefined;
       const offsets = ((object.positionOffsets ??= {})[axis] ??= []);
       const events = ((object.offsetEvents ??= {})[axis] ??= new Map());
       events.set(indexInList, {
@@ -6552,7 +7095,8 @@ export class SiglusPlayer {
     }
     if (command === 72 && path.length === index + 4) {
       const event = path[index + 3];
-      if (event === 0 && (args.length === 4 || (args.length === 5 && named[0] === 0))) {
+      if ((event === 0 || event === 7) &&
+          (args.length === 4 || (args.length === 5 && (named.length === 0 || named[0] === 0)))) {
         object.opacity = [
           n(0),
           n(1),
@@ -6601,9 +7145,10 @@ export class SiglusPlayer {
     if (command === 115) {
       // object.frame_action_ch (0x55b6d0): resize(1) or channel start(1)/end(2)/start_real(3)
       if (path.length === index + 4 && path[index + 3] === 1) {
-        const size = Math.max(0, n(0));
+        const size = Math.max(0, n(0) | 0);
+        object.frameActionChannelCount = size;
         const prefix = this.frameActionKey(path.slice(0, index + 3)) + '.-1.';
-        for (const key of this.frameActions.keys()) {
+        for (const key of this.frameActionCounters.keys()) {
           if (!key.startsWith(prefix)) continue;
           const ch = Number(key.slice(prefix.length));
           if (ch >= size) {
@@ -6613,7 +7158,13 @@ export class SiglusPlayer {
         }
         return 0;
       }
+      if (path.length === index + 4 && path[index + 3] === 2) {
+        // 1.1.141.3 reports allocated channels even when they have no running action (0x56051f).
+        return object.frameActionChannelCount ?? 0;
+      }
       if (path.length === index + 6 && path[index + 3] === -1) {
+        const channel = path[index + 4]!;
+        if (channel < 0 || channel >= (object.frameActionChannelCount ?? Infinity)) return 0;
         const faPath = path.slice(0, index + 5);
         const op = path[index + 5];
         if (op === 2) {

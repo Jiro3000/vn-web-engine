@@ -38,6 +38,7 @@ Zero setup. Visit the page and select your local game files, optionally install 
 | Sakura no Toki                                         | Artemis       | Route ending verified                       |
 | Sakura no Uta                                          | Artemis       | Route ending and save/load verified         |
 | Angel Beats! -1st beat-                                | SiglusEngine  | Title verified                              |
+| anemoi                                                 | SiglusEngine  | Title, voiced prologue, bundled fonts, Save/Load, backlog jump, System/Text/Sound settings, and unlocked CG/Sound navigation verified |
 | FORTUNE×WORLD                                          | SiglusEngine  | Full story verified                         |
 | Giniro, Haruka                                         | SiglusEngine  | Title verified                              |
 | Hoshi Ori Yume Mirai - Perfect Edition                 | SiglusEngine  | Title verified                              |

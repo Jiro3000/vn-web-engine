@@ -1,4 +1,5 @@
 import type {ByteSource} from '../../core/source.js';
+import type {SiglusJoypadSettings} from './joypad.js';
 import {
   parseDialogTemplate,
   type DialogItemTemplate,
@@ -18,6 +19,7 @@ import {
 const movieDialogResource = 124;
 const screenDialogResource = 127;
 const autoModeDialogResource = 115;
+const joypadDialogResource = 302;
 const sdWrapImageOffset = 0x1c000;
 const moviePlayers = new Map<number, SiglusMoviePlayer>([
   [1164, 'mci'],
@@ -108,6 +110,12 @@ function defaultDialog(
 }
 
 const defaultDialogTemplates = new Map<number, DialogTemplate>([
+  [joypadDialogResource, defaultDialog(285, 64, 'コントローラーの設定', [
+    defaultDialogItem(1038, 128, 244, 30, 34, 14, 0x50030000, '閉じる'),
+    defaultDialogItem(1282, 128, 7, 7, 271, 10, 0x50030003, '（仮）コントローラーの A / B を入れ替える。'),
+    defaultDialogItem(1283, 128, 7, 21, 271, 10, 0x50030003, '（仮）コントローラーの X / Y を入れ替える。'),
+    defaultDialogItem(1039, 128, 171, 30, 68, 14, 0x50030000, '初期状態に戻す'),
+  ])],
   [
     autoModeDialogResource,
     defaultDialog(284, 137, 'オートモード （文章の自動送り機能） の設定', [
@@ -187,7 +195,8 @@ export class SiglusConfiguration {
         continue;
       }
       for (const {id, language, bytes} of resources) {
-        if (language === 1041 && (id === movieDialogResource || id === screenDialogResource || id === autoModeDialogResource)) {
+        if (language === 1041 && typeof id === 'number' &&
+            (id === screenDialogResource || defaultDialogTemplates.has(id))) {
           try {
             result.set(id, parseDialogTemplate(bytes, 0));
           } catch {
@@ -240,6 +249,42 @@ export class SiglusConfiguration {
     await this.show(dialog);
     const selected = new FormData(form).get('method');
     return selected === 'mci' || selected === 'wmp' ? selected : current;
+  }
+
+  async joypad(current: SiglusJoypadSettings, apply: (settings: SiglusJoypadSettings) => void): Promise<void> {
+    const template = await this.template(joypadDialogResource);
+    const {dialog, place} = this.templateDialog('joypad', template);
+    const document = this.owner.ownerDocument;
+    const settings = {...current};
+    const checkboxes: HTMLInputElement[] = [];
+    for (const item of template.items) {
+      const title = String(item.title ?? '');
+      if (item.id === 1282 || item.id === 1283) {
+        const field = item.id === 1282 ? 'swapAB' : 'swapXY';
+        const label = document.createElement('label');
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.checked = settings[field];
+        checkbox.addEventListener('change', () => {
+          settings[field] = checkbox.checked;
+          apply({...settings});
+        });
+        label.append(checkbox, title);
+        checkboxes.push(checkbox);
+        place(item, label);
+      } else if (item.id === 1038 || item.id === 1039) {
+        const button = document.createElement('button');
+        button.type = item.id === 1038 ? 'submit' : 'button';
+        button.textContent = title;
+        if (item.id === 1039) button.addEventListener('click', () => {
+          for (const checkbox of checkboxes) checkbox.checked = false;
+          settings.swapAB = settings.swapXY = false;
+          apply({...settings});
+        });
+        place(item, button);
+      }
+    }
+    await this.show(dialog);
   }
 
   async autoMode(

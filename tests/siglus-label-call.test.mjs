@@ -133,6 +133,7 @@ test('entering the menu resets startup objects on both pages before the title wi
     cgTable: new Map(),
     activeGroups: new Set(),
     cancelGroups: new Set(),
+    backButtonGroups: new Map(),
     frameActions: new Map(),
     frameActionCounters: new Map(),
     objectMovies: new Set(),

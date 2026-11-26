@@ -62,9 +62,15 @@ const GRAPHIC_CACHE_MAX_ENTRIES = 256;
 const COMPOSITE_CACHE_MAX_BYTES = 128 * 1024 * 1024;
 const COMPOSITE_CACHE_MAX_ENTRIES = 96;
 
+interface SiglusTextFragment {
+  text: string;
+  ruby?: string;
+  color?: number;
+}
+
 export interface SiglusHistoryEntry {
   name: string;
-  text: readonly {text: string; ruby?: string}[];
+  text: readonly SiglusTextFragment[];
   voices: readonly {id: number; character?: number}[];
 }
 
@@ -75,6 +81,7 @@ interface SiglusMessageSnapshot extends Omit<SiglusHistoryEntry, 'voices'> {
   size?: number;
   slideTime?: number;
   position?: readonly [number, number];
+  textColors?: [number, number][];
 }
 
 export interface Graphic {
@@ -172,7 +179,8 @@ export interface DrawObject {
     >
   >;
   positionOffsets?: Partial<Record<'x' | 'y', number[]>>;
-  offsetEventCounts?: Partial<Record<'x' | 'y', number>>;
+  offsetEventCounts?: Partial<Record<'x' | 'y' | 'tr', number>>;
+  frameActionChannelCount?: number;
   offsetEvents?: Partial<
     Record<'x' | 'y', Map<number, {from: number; started: number; time: KeyframeAnimationOptions}>>
   >;
@@ -323,6 +331,12 @@ export interface SerializedDrawObject {
   rect?: DrawObject['rect'];
   positionOffsets?: DrawObject['positionOffsets'];
   offsetEventCounts?: DrawObject['offsetEventCounts'];
+  offsetEvents?: Partial<Record<'x' | 'y', [number, {
+    from: number;
+    elapsed: number;
+    time: KeyframeAnimationOptions;
+  }][]>>;
+  frameActionChannelCount?: number;
   button?: DrawObject['button'];
   buttonCall?: {scene: string; command: string};
   childCount?: number;
@@ -354,6 +368,16 @@ export function serializeDrawObject(
   const opacityElapsed = object.opacityStarted === undefined
     ? (object.opacityElapsed ?? 0)
     : Math.max(0, now - object.opacityStarted);
+  const offsetEvents: NonNullable<SerializedDrawObject['offsetEvents']> = {};
+  for (const axis of ['x', 'y'] as const) {
+    const events = object.offsetEvents?.[axis];
+    if (!events?.size) continue;
+    for (const [index, event] of events) {
+      const elapsed = Math.max(0, now - event.started);
+      if (elapsed >= Number(event.time.duration ?? 0) + Number(event.time.delay ?? 0)) continue;
+      (offsetEvents[axis] ??= []).push([index, {from: event.from, elapsed, time: {...event.time}}]);
+    }
+  }
   return {
     type: object.type,
     name: object.name,
@@ -389,6 +413,8 @@ export function serializeDrawObject(
         }
       : undefined,
     offsetEventCounts: object.offsetEventCounts && {...object.offsetEventCounts},
+    offsetEvents: offsetEvents.x || offsetEvents.y ? offsetEvents : undefined,
+    frameActionChannelCount: object.frameActionChannelCount,
     button: object.button ? {...object.button} : undefined,
     buttonCall: object.buttonCall ? {...object.buttonCall} : undefined,
     childCount: object.childCount,
@@ -606,7 +632,15 @@ export class SiglusDisplay {
   > = [];
   private readonly messageButtonStates = new Map<
     string,
-    {visible: boolean; posX: number; posY: number; repX: number; repY: number; patno: number}
+    {
+      visible: boolean;
+      posX: number;
+      posY: number;
+      repX: number;
+      repY: number;
+      patno: number;
+      positionEventEnds?: Partial<Record<'x' | 'y', number>>;
+    }
   >();
   private activateFrameAction?: (action: SiglusFrameAction) => void;
   private frameActionStateResolver?: (
@@ -704,7 +738,8 @@ export class SiglusDisplay {
   private currentFace?: string;
   private currentFaceCostume?: string;
   private currentName = '';
-  private currentText: {text: string; ruby?: string}[] = [];
+  private currentText: SiglusTextFragment[] = [];
+  private messageTextColors = new Map<number, number>();
   private messageVisibilityAnimation?: Animation;
   private pendingOpenAnimation?: MwndAnimation;
   private selectionTemplate?: SelbtnTemplate;
@@ -968,7 +1003,21 @@ export class SiglusDisplay {
       Math.trunc(((event.clientX - bounds.left) * this.width) / bounds.width),
       Math.trunc(((event.clientY - bounds.top) * this.height) / bounds.height),
     ];
-    const button = (event.target as Element).closest<HTMLButtonElement>('[data-siglus-button]');
+    this.trackHoveredButton(event.target as Element);
+  }
+
+  movePointer(x: number, y: number): void {
+    const bounds = this.stage.getBoundingClientRect();
+    this.pointer = [x | 0, y | 0];
+    const target = this.stage.ownerDocument.elementFromPoint(
+      bounds.left + x * bounds.width / this.width,
+      bounds.top + y * bounds.height / this.height,
+    );
+    this.trackHoveredButton(target && this.stage.contains(target) ? target : null);
+  }
+
+  private trackHoveredButton(target: Element | null): void {
+    const button = target?.closest<HTMLButtonElement>('[data-siglus-button]');
     this.hovered =
       button && !button.disabled
         ? {id: Number(button.dataset.siglusButton), group: Number(button.dataset.siglusGroup)}
@@ -1568,6 +1617,7 @@ export class SiglusDisplay {
     const scale = styled ? reader.scale : 1;
     const natural = styled && reader.layout === 'natural';
     const pitch = this.messageTextSize + this.textMetrics.lineSpace;
+    const vertical = Boolean(this.mwndLayout?.vertical);
     const outline = siglusFontShadow(this.messageShadow);
     this.message.classList.toggle('game-glyph-slots', this.textMode === 'dom');
     for (const [element, size] of [
@@ -1583,12 +1633,12 @@ export class SiglusDisplay {
     this.text.style.lineHeight = natural
       ? `${this.messageTextSize * scale + Math.max(0, this.textMetrics.lineSpace)}px`
       : `${pitch}px`;
-    this.text.style.height = natural && this.slideTime === undefined
+    this.text.style[vertical ? 'width' : 'height'] = natural && this.slideTime === undefined
       ? 'auto'
       : `${pitch * this.textMetrics.rows}px`;
     const fitClip = styled && !natural && this.slideTime === undefined;
     const rubyRoom = this.textMetrics.rubySize + this.textMetrics.rubySpace + 2;
-    this.text.style.clipPath = fitClip ? `inset(${-rubyRoom}px -8px 0 -8px)` : '';
+    this.text.style.clipPath = fitClip ? (vertical ? `inset(-8px ${-rubyRoom}px -8px 0)` : `inset(${-rubyRoom}px -8px 0 -8px)`) : '';
     this.text.style.setProperty('--siglus-ruby-size', `${this.textMetrics.rubySize * scale}px`);
     this.text.style.setProperty(
       '--siglus-ruby-offset',
@@ -1607,6 +1657,7 @@ export class SiglusDisplay {
       [this.text, this.textMetrics.y],
       [this.speaker, this.speakerMetrics.y],
     ] as const) {
+      if (element === this.text && this.mwndLayout?.vertical) continue;
       const {fontSize, fontWeight, fontFamily, lineHeight} = getComputedStyle(element);
       if (Number.parseFloat(fontSize) <= 0) continue;
       const font = `${fontWeight} ${fontSize} ${fontFamily}`;
@@ -1636,10 +1687,14 @@ export class SiglusDisplay {
   private paintMessageText(): void {
     if (this.textMode === 'dom') {
       if (this.slideTime === undefined) return;
-      const offset = this.updateSlide(this.text.scrollHeight - this.text.clientHeight);
-      this.text.style.translate = `0 ${-offset}px`;
+      const vertical = this.mwndLayout?.vertical;
+      const overflow = vertical ? this.text.scrollWidth - this.text.clientWidth : this.text.scrollHeight - this.text.clientHeight;
+      const offset = this.updateSlide(overflow);
+      this.text.style.translate = vertical ? `${offset}px 0` : `0 ${-offset}px`;
       const rubyRoom = this.textMetrics.rubySize + this.textMetrics.rubySpace + 2;
-      this.text.style.clipPath = `inset(${offset - rubyRoom}px -8px ${-offset}px -8px)`;
+      this.text.style.clipPath = vertical
+        ? `inset(-8px ${offset - rubyRoom}px -8px ${-offset}px)`
+        : `inset(${offset - rubyRoom}px -8px ${-offset}px -8px)`;
       return;
     }
     this.drawNativeMessage(this.nativeText);
@@ -1685,28 +1740,29 @@ export class SiglusDisplay {
     const size = this.messageTextSize;
     if (!size || !this.currentText.length) return;
     const {x, y, width, rows, spacing, lineSpace, rubySize, rubySpace} = this.textMetrics;
+    const vertical = Boolean(this.mwndLayout?.vertical);
     const advance = (character: string) => {
       const unit = character.codePointAt(0)!;
       return (unit <= 0x7f || (unit >= 0xff61 && unit <= 0xff9f) ? size / 2 : size) + spacing;
     };
-    const lines: {cells: {character: string; ruby?: string; width: number}[]; width: number}[] = [];
+    const lines: {cells: {character: string; ruby?: string; color?: number; width: number}[]; width: number}[] = [];
     let line: (typeof lines)[number] = {cells: [], width: 0};
     const nextLine = () => {
       lines.push(line);
       line = {cells: [], width: 0};
     };
-    const add = (character: string, ruby?: string) => {
+    const add = (character: string, ruby: string | undefined, color: number | undefined) => {
       const cellWidth = Array.from(character).reduce((total, unit) => total + advance(unit), 0);
       if (line.width && line.width + cellWidth > width) nextLine();
-      line.cells.push({character, ruby, width: cellWidth});
+      line.cells.push({character, ruby, color, width: cellWidth});
       line.width += cellWidth;
     };
-    for (const {text, ruby} of this.currentText) {
-      if (ruby) add(text, ruby);
+    for (const {text, ruby, color} of this.currentText) {
+      if (ruby) add(text, ruby, color);
       else
         for (const character of text) {
           if (character === '\n') nextLine();
-          else add(character);
+          else add(character, undefined, color);
         }
     }
     nextLine();
@@ -1715,31 +1771,47 @@ export class SiglusDisplay {
     if (this.slideTime !== undefined) {
       context.save();
       context.beginPath();
-      context.rect(
-        0,
-        y - this.nativeTextTop - rubySize - rubySpace - 2,
-        canvas.width,
-        pitch * rows + rubySize + rubySpace + 2,
-      );
+      if (vertical) context.rect(x, 0, pitch * rows + rubySize + rubySpace + 2, canvas.height);
+      else context.rect(0, y - this.nativeTextTop - rubySize - rubySpace - 2,
+        canvas.width, pitch * rows + rubySize + rubySpace + 2);
       context.clip();
     }
+    let previousColor: number | undefined;
     for (const [index, row] of lines.entries()) {
-      const rowY = y + index * pitch - offset;
-      let left = x + (this.text.style.textAlign === 'center' ? (width - row.width) / 2 : 0);
+      const block = index * pitch - offset;
+      const firstColumnX = x + pitch * (rows - 1);
+      const columnX = firstColumnX - block;
+      const rowY = y + block;
+      const indent = this.text.style.textAlign === 'center' ? (width - row.width) / 2 : 0;
+      let inline = indent;
       for (const cell of row.cells) {
+        if (cell.color !== previousColor) {
+          context.fillStyle = this.tableColor(cell.color ?? -1) ?? this.messageColors.text;
+          previousColor = cell.color;
+        }
         context.font = `${weight} ${size}px ${family}`;
-        let glyphX = left;
+        let glyph = inline;
         for (const character of cell.character) {
-          draw(character, glyphX, rowY);
-          glyphX += advance(character);
+          if (vertical) draw(character, columnX, y + glyph);
+          else draw(character, x + glyph, rowY);
+          glyph += advance(character);
         }
         if (cell.ruby) {
           context.font = `${weight} ${rubySize}px ${family}`;
-          context.textAlign = 'center';
-          draw(cell.ruby, left + cell.width / 2, rowY - rubySize - rubySpace);
-          context.textAlign = 'start';
+          if (vertical) {
+            const characters = Array.from(cell.ruby);
+            let top = y + inline + (cell.width - characters.length * rubySize) / 2;
+            for (const character of characters) {
+              draw(character, columnX + rubySize + rubySpace, top);
+              top += rubySize;
+            }
+          } else {
+            context.textAlign = 'center';
+            draw(cell.ruby, x + inline + cell.width / 2, rowY - rubySize - rubySpace);
+            context.textAlign = 'start';
+          }
         }
-        left += cell.width;
+        inline += cell.width;
       }
     }
     if (this.slideTime !== undefined) context.restore();
@@ -1764,7 +1836,7 @@ export class SiglusDisplay {
     this.textMetrics = {
       x: layout.textX,
       y: layout.textY,
-      width: layout.textWidth,
+      width: layout.vertical ? layout.textHeight : layout.textWidth,
       rows: layout.rows,
       spacing: layout.mojiSpace[0],
       lineSpace: layout.mojiSpace[1],
@@ -1778,6 +1850,7 @@ export class SiglusDisplay {
     this.nativeText.style.top = `${this.nativeTextTop}px`;
     this.nativeText.height = layout.windowSize[1] - this.nativeTextTop;
     place(this.text, [layout.textX, layout.textY], [layout.textWidth, layout.textHeight]);
+    this.text.style.writingMode = layout.vertical ? 'vertical-rl' : '';
     this.text.style.letterSpacing = `${layout.mojiSpace[0]}px`;
     this.text.dataset.siglusDialogue = '';
     this.speaker.dataset.siglusSpeaker = '';
@@ -1856,6 +1929,11 @@ export class SiglusDisplay {
     kind: 'pos' | 'rep' = 'pos',
   ): void {
     const state = this.messageButtonState(window, id);
+    if (kind === 'pos') {
+      const ends = (state.positionEventEnds ??= {});
+      if (timing) ends[axis] = performance.now() + Number(timing.duration ?? 0) + Number(timing.delay ?? 0);
+      else delete ends[axis];
+    }
     const field =
       kind === 'rep' ? (axis === 'x' ? 'repX' : 'repY') : axis === 'x' ? 'posX' : 'posY';
     if (state[field] === value) return;
@@ -1872,17 +1950,26 @@ export class SiglusDisplay {
       : undefined;
   }
 
-  setMessageButtonProperty(window: number, id: number, prop: 0 | 1 | 4, value?: number): number {
+  messageButtonPositionEventActive(window: number, id: number, axis: 'x' | 'y'): boolean {
+    return (this.messageButtonStates.get(`${window}.${id}`)?.positionEventEnds?.[axis] ?? 0) > performance.now();
+  }
+
+  setMessageButtonProperty(window: number, id: number, prop: 0 | 1 | 3 | 4, value?: number): number {
     const state = this.messageButtonState(window, id);
     if (value !== undefined) {
       const next = value | 0;
       if (prop === 0) state.visible = Boolean(next);
       else if (prop === 1) state.patno = next;
+      else if (prop === 3) state.posX = next;
       else state.posY = next;
+      if (state.positionEventEnds) {
+        if (prop === 3) delete state.positionEventEnds.x;
+        if (prop === 4) delete state.positionEventEnds.y;
+      }
       if (window === this.windowIndex) {
         const entry = this.activeFrameActions.find(({action}) => action.id === id);
         if (entry) {
-          if (prop === 4) {
+          if (prop === 3 || prop === 4) {
             entry.motion?.cancel();
             entry.motion = undefined;
             entry.element.style.translate = `${state.posX + state.repX}px ${state.posY + state.repY}px`;
@@ -1894,7 +1981,8 @@ export class SiglusDisplay {
       }
     }
     if (prop === 0) return Number(state.visible);
-    return prop === 1 ? state.patno : state.posY;
+    if (prop === 1) return state.patno;
+    return prop === 3 ? state.posX : state.posY;
   }
 
   private positionMessageButtons(): void {
@@ -4478,24 +4566,41 @@ export class SiglusDisplay {
     this.appendRun(value);
   }
 
-  appendRun(value: string) {
-    const fragment = {text: value, ruby: this.ruby || undefined};
+  setMessageTextColor(color: number, windowIndex = this.windowIndex): void {
+    if (color < 0) this.messageTextColors.delete(windowIndex);
+    else this.messageTextColors.set(windowIndex, color);
+  }
+
+  restoreMessageTextColors(colors: SiglusMessageSnapshot['textColors']): void {
+    this.messageTextColors = new Map(colors);
+  }
+
+  appendRun(value: string, color = this.messageTextColors.get(this.windowIndex) ?? -1) {
+    const fragment: SiglusTextFragment = {text: value, ruby: this.ruby || undefined};
+    if (color >= 0) fragment.color = color;
+    const colorCss = color >= 0 ? this.tableColor(color) : undefined;
     const node = document.createTextNode(value);
     let annotation: HTMLElement | undefined;
     this.currentText.push(fragment);
     if (fragment.ruby) {
       const ruby = document.createElement('ruby');
-      // Place the reading above its base without increasing the line box.
+      // Place the reading outside its base without increasing the line box.
       ruby.style.cssText = 'position:relative;display:inline-block;white-space:nowrap';
+      if (colorCss) ruby.style.color = colorCss;
       annotation = document.createElement('rt');
-      annotation.style.cssText =
-        'position:absolute;bottom:calc(50% + var(--siglus-ruby-offset));left:50%;' +
-        'transform:translateX(-50%);line-height:1;user-select:none';
+      annotation.style.cssText = this.mwndLayout?.vertical
+        ? 'position:absolute;top:50%;left:calc(50% + var(--siglus-ruby-offset));transform:translateY(-50%);line-height:1;user-select:none'
+        : 'position:absolute;bottom:calc(50% + var(--siglus-ruby-offset));left:50%;transform:translateX(-50%);line-height:1;user-select:none';
       annotation.style.fontSize = 'var(--siglus-ruby-size)';
       annotation.textContent = value ? fragment.ruby : '';
       ruby.append(node, annotation);
       this.text.append(ruby);
       this.ruby = '';
+    } else if (colorCss) {
+      const span = document.createElement('span');
+      span.style.color = colorCss;
+      span.append(node);
+      this.text.append(span);
     } else this.text.append(node);
     const wasHidden = this.message.hidden;
     this.message.hidden = false;
@@ -4693,20 +4798,22 @@ export class SiglusDisplay {
       size: this.messageTextSize,
       slideTime: this.slideTime,
       position: this.messagePosition,
+      textColors: this.messageTextColors.size ? [...this.messageTextColors] : undefined,
     };
   }
 
   async loadMessage(message: SiglusMessageSnapshot): Promise<void> {
     this.clearText();
+    this.restoreMessageTextColors(message.textColors);
     this.repPosition(...(message.position ?? [0, 0]));
     this.setMessageSlide(message.slideTime);
     this.selectMessageWindow(message.index);
     this.setTextSize(message.size);
     this.name(message.name, false);
     if (message.face) await this.face(message.face, message.faceCostume);
-    for (const {text, ruby} of message.text) {
+    for (const {text, ruby, color} of message.text) {
       if (ruby) this.annotate(ruby);
-      this.append(text);
+      this.appendRun(text, color ?? -1);
     }
     this.finishMessageSlide();
   }

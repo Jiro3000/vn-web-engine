@@ -43,6 +43,7 @@ export interface MwndLayout {
   textY: number;
   textWidth: number;
   textHeight: number;
+  vertical: boolean;
   rows: number;
   mojiSize: number;
   mojiSpace: [number, number];
@@ -152,8 +153,12 @@ export function parseMwndLayout(config: ReadonlyMap<string, string>, index: numb
   ];
   const textX = msgX + margin[0]!;
   const textY = msgY + margin[1]!;
-  const textWidth = columns * (mojiSize + spacing);
-  const textHeight = rows * (mojiSize + lineSpace);
+  // 1.1.141.3 uses mode 1 for vertical flow (0x5df63b, 0x5df83c).
+  const vertical = Number(config.get('TATEYOKO_MODE') ?? 0) === 1;
+  const inlineSize = columns * (mojiSize + spacing);
+  const blockSize = rows * (mojiSize + lineSpace);
+  const textWidth = vertical ? blockSize : inlineSize;
+  const textHeight = vertical ? inlineSize : blockSize;
 
   const wakuNo = Number(config.get(prefix + 'WAKU_NO') ?? -1);
   const nameWakuNo = Number(config.get(prefix + 'NAME_WAKU_NO') ?? -1);
@@ -219,6 +224,7 @@ export function parseMwndLayout(config: ReadonlyMap<string, string>, index: numb
     textY,
     textWidth,
     textHeight,
+    vertical,
     rows,
     mojiSize,
     mojiSpace: [spacing, lineSpace],

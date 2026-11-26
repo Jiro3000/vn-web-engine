@@ -1,0 +1,127 @@
+{
+  "name": "anemoi",
+  "gameDir": "/Volumes/Transcend/Torrents/1GAMES/anemoi",
+  "pointerPolledMenus": true,
+  "title": {
+    "scene": "__sys_menu",
+    "configScene": "__sys_config_system",
+    "configEntryScene": "__sys_config_mode_select",
+    "configTimeoutMs": 40000,
+    "configTabs": [
+      {"scene": "__sys_config_text", "button": {"objectName": "_config_header_text_btn"}},
+      {"scene": "__sys_config_sound", "button": {"objectName": "_config_header_sound_btn"}},
+      {"scene": "__sys_config_system", "button": {"objectName": "_config_header_system_btn"}}
+    ],
+    "galleryFlags": [[0, 1]],
+    "skipPrologue": true,
+    "prologueChoices": [
+      {"scene": "010_プロローグ0702", "line": 396, "index": 0},
+      {"scene": "010_プロローグ0703", "line": 214, "index": 0},
+      {"scene": "010_プロローグ0703", "line": 1020, "index": 1},
+      {"scene": "010_プロローグ0704", "line": 1517, "index": 1},
+      {"scene": "010_プロローグ0704", "line": 2278, "index": 1},
+      {"scene": "010_プロローグ0704", "line": 2444, "index": 0},
+      {"scene": "010_プロローグ0704", "line": 2680, "index": 1},
+      {"scene": "010_プロローグ0704", "line": 3057, "index": 1},
+      {"scene": "010_プロローグ0705", "line": 2134, "index": 1}
+    ],
+    "startButton": {"objectName": "_menu_start_btn"},
+    "configButton": {"objectName": "_menu_config_btn"},
+    "extraButton": {"objectName": "_menu_extra_btn"},
+    "playedBgm": "bgm27"
+  },
+  "gameplay": {
+    "minPages": 5,
+    "requireSpeaker": false,
+    "requireBgm": true,
+    "minVisuals": 1,
+    "mwndAutoHideBar": true,
+    "framing": {"object": "ef_bg05", "bounds": [0, 0, 1920, 1080]},
+    "waitTimeoutMs": 180000,
+    "voice": {"id": 100130, "maxLatencyMs": 250, "waitForPlayback": true},
+    "bundledFonts": [
+      {"file": "NotoSansCJKjp-DemiLight.otf", "name": "Noto Sans CJK JP DemiLight"},
+      {"file": "mplus-1mn-medium.ttf", "name": "M+ 1mn medium"},
+      {"file": "ZenMaruGothic-Black.ttf", "name": "Zen Maru Gothic Black"},
+      {"file": "NotoSansJP-Black.ttf", "name": "Noto Sans JP Black"}
+    ],
+    "backlogJump": {
+      "sound": true,
+      "confirmDialog": {
+        "scene": "__sys_dialog",
+        "yesButton": {"objectName": "_dialog_yes_btn"},
+        "noButton": {"objectName": "_dialog_no_btn"}
+      }
+    }
+  },
+  "quickMenu": {
+    "scene": "__sys_quick_menu",
+    "saveScene": "__sys_saveload",
+    "loadScene": "__sys_saveload",
+    "configScene": "__sys_config_system",
+    "saveButton": {"objectName": "_qmenu_save_btn"},
+    "loadButton": {"objectName": "_qmenu_load_btn"},
+    "configButton": {"objectName": "_qmenu_config_btn"},
+    "slotButton": {"objectName": "_save_thumbnail_btn01"},
+    "loadSlotButton": {"objectName": "_load_thumbnail_btn01"},
+    "confirmDialog": {
+      "objectName": "_dialog_yes_btn",
+      "yesButton": {"objectName": "_dialog_yes_btn"},
+      "noButton": {"objectName": "_dialog_no_btn"}
+    }
+  },
+  "movies": {
+    "wmv": ["anemoi_op"],
+    "omv": ["ef_film_noise", "ef_aurora_fast", "anemoi_ed01", "anemoi_ed02", "anemoi_ed03"]
+  },
+  "extras": {
+    "systemFlags": [[0, 1]],
+    "cgFlags": [0, 1, 2, 3],
+    "bgmListened": ["bgm01b", "bgm25", "bgm27", "bgm29", "bgm37", "bgm38"],
+    "entryScene": "__sys_extra_mode_select",
+    "expectedScene": "__sys_extra_cg",
+    "tabs": [
+      {
+        "objectName": "_extra_sound_player_list_btn",
+        "expectedScene": "__sys_extra_sound",
+        "playback": {"button": {"objectName": "_extra_sound_bgm_btn01"}, "resource": "bgm01b"},
+        "returnButton": {"objectName": "_extra_sound_player_list_btn"},
+        "returnToScene": "__sys_extra_cg"
+      }
+    ],
+    "exitButton": {"objectName": "_extra_header_title_btn"}
+  },
+  "crawlReplays": {
+    "config-volume-slider": {
+      "startButton": {"objectName": "_menu_config_btn"},
+      "interactions": [
+        {
+          "scene": "__sys_config_system",
+          "button": {"objectName": "_config_header_sound_btn"}
+        },
+        {
+          "scene": "__sys_config_sound",
+          "button": {"group": "100001", "id": "315"},
+          "volumeSlider": {"channel": "ALL", "deltaX": -160}
+        },
+        {
+          "scene": "__sys_config_sound",
+          "button": {"objectName": "_footer_config_back_btn"},
+          "nextScene": "__sys_menu"
+        }
+      ]
+    },
+    "config-voice": {
+      "galleryFlags": [[8, 3]],
+      "startButton": {"objectName": "_menu_config_btn"},
+      "interactions": [
+        {
+          "scene": "__sys_config_voice",
+          "activeGroup": 100001,
+          "rightClick": true,
+          "nextScene": "__sys_menu"
+        }
+      ]
+    }
+  }
+}
