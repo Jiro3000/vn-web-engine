@@ -59,9 +59,10 @@ test('Siglus flick dispatch uses the configured regions after the native velocit
     config.set(`${prefix}.ANGLE`, String(5 + index));
     config.set(`${prefix}.SCENE`, `"menu", ${index}`);
   }
+  // 1.1.141.3 0x633ec3–0x633f3b: 5=up, 6=right, 7=down, 8=left.
   assert.equal(siglusFlickScene(config, measureSiglusFlick(0, -12, 10)), 'FLICK_SCENE.000.SCENE');
-  assert.equal(siglusFlickScene(config, measureSiglusFlick(0, 12, 10)), 'FLICK_SCENE.001.SCENE');
-  assert.equal(siglusFlickScene(config, measureSiglusFlick(12, 0, 10)), 'FLICK_SCENE.002.SCENE');
+  assert.equal(siglusFlickScene(config, measureSiglusFlick(12, 0, 10)), 'FLICK_SCENE.001.SCENE');
+  assert.equal(siglusFlickScene(config, measureSiglusFlick(0, 12, 10)), 'FLICK_SCENE.002.SCENE');
   assert.equal(siglusFlickScene(config, measureSiglusFlick(-12, 0, 10)), 'FLICK_SCENE.003.SCENE');
   assert.equal(siglusFlickScene(config, measureSiglusFlick(0, -4, 10)), undefined);
 });
@@ -260,6 +261,132 @@ test('Siglus story font overrides leave system-menu text on the configured font'
   await call([64, 91]);
   await call([64, 94]);
   assert.deepEqual(displayed.at(-1), ['Default', true, 2]);
+});
+
+test('Siglus excall.script font overrides (65.13.87-95) match 1.1.141.3 jump table 0x54d42c', async () => {
+  const player = Object.assign(Object.create(SiglusPlayer.prototype), {
+    messageFont: {name: 'Default', bold: true, shadow: 2},
+    excallAllocated: true,
+    systemObjects: new Map(),
+  });
+  const call = (path, ...args) => player.command({path, args, named: []});
+  await call([65, 13, 87], 'MenuFont');
+  assert.equal(await call([65, 13, 88]), 'MenuFont');
+  await call([65, 13, 90], 0);
+  assert.equal(await call([65, 13, 92]), 0);
+  await call([65, 13, 93], 1);
+  assert.equal(await call([65, 13, 95]), 1);
+  await call([65, 1, 2, -1, 0, 39], 'Header');
+  assert.equal(player.systemObjects.get(0).text.font, 'MenuFont');
+  assert.equal(player.systemObjects.get(0).text.bold, false);
+  assert.equal(player.systemObjects.get(0).text.shadow, 1);
+  await call([65, 13, 89]);
+  await call([65, 13, 91]);
+  await call([65, 13, 94]);
+  assert.equal(await call([65, 13, 88]), '');
+  assert.equal(await call([65, 13, 92]), -1);
+  assert.equal(await call([65, 13, 95]), -1);
+});
+
+test('Siglus 1.1.141.3 EXCALL joypad fallback, MWND button count, return_sel, cursor_no, unified save copy/swap, and intEvent tracking', async () => {
+  // 1. EXCALL joypad mode falls back to JOYPAD.ALLOW_JOYPAD_MODE when override is -1 (0x62f510)
+  const joypad = Object.assign(new SiglusJoypad(), {active: true});
+  const config = new Map([
+    ['JOYPAD.ALLOW_JOYPAD_MODE', '1'],
+    ['SAVE.CNT', '10'],
+    ['QUICK_SAVE.CNT', '5'],
+    ['MWND.000.WAKU_NO', '0'],
+    ['WAKU.000.BTN.000.TYPE', '"save"'],
+    ['WAKU.000.BTN.001.TYPE', '"load"'],
+    ['WAKU.000.BTN.002.TYPE', '"return_sel"'],
+  ]);
+  const display = Object.assign(Object.create(SiglusDisplay.prototype), {
+    config,
+    frameActionsByWaku: new Map(),
+    buttonState: () => -1,
+  });
+  const saves = new Map([[1, {version: 1, title: 'S1'}]]);
+  const quickSaves = new Map([[2, {version: 1, title: 'Q2'}]]);
+  const player = Object.assign(Object.create(SiglusPlayer.prototype), {
+    game: {config},
+    display,
+    joypad,
+    systemCallDepth: 1,
+    excallJoypadModeOverride: -1,
+    joypadModeOverride: -1,
+    historyOpen: false,
+    mwndBtnTouchEnabled: true,
+    hideMwndEnabled: true,
+    disabledMessageButtons: new Set(),
+    selectionReturnFlags: [true, true],
+    selectionSaves: [],
+    mouseCursorNo: 0,
+    saves,
+    quickSaves,
+    endSaves: new Map(),
+    objects: [new Map([[0, {name: '', frames: [], x: 0, y: 0, visible: true, pattern: 0, transparency: 255}]]), new Map()],
+    systemObjects: new Map([[0, {name: '', frames: [], x: 0, y: 0, visible: true, pattern: 0, transparency: 255}]]),
+    excallAllocated: true,
+    activeGroups: new Set(),
+    writeSlot: async (map, idx, data) => { map.set(idx, data); },
+    updateSlots: async (map, entries) => {
+      for (const [idx, data] of entries) {
+        if (data === undefined) map.delete(idx);
+        else map.set(idx, data);
+      }
+    },
+  });
+  const call = (path, ...args) => player.command({path, args, named: []});
+
+  assert.equal(await call([63, 333]), 1);
+  await call([65, 13, 98], 0);
+  assert.equal(await call([63, 333]), 0);
+  await call([65, 13, 99]);
+  assert.equal(await call([63, 333]), 1);
+
+  // 2. MWND button count (38.3.-1.0.32.3 -> 0x555122 -> 0x559315)
+  assert.equal(await call([38, 3, -1, 0, 32, 3]), 3);
+
+  // 3. frameActionState for return_sel, hideMwndEnabled, and mwndBtnTouchEnabled
+  assert.equal(player.frameActionState({id: 2, type: 'return_sel'}, false), 'disabled');
+  player.selectionSaves.push({version: 1});
+  assert.equal(player.frameActionState({id: 2, type: 'return_sel'}, false), 'enabled');
+  player.hideMwndEnabled = false;
+  assert.equal(player.frameActionState({id: 14, type: 'close_mwnd'}, false), 'disabled');
+  player.mwndBtnTouchEnabled = false;
+  assert.equal(player.frameActionState({id: 2, type: 'return_sel'}, false), 'disabled');
+
+  // 4. script.set_mouse_cursor_no / get_mouse_cursor_no (64.52 / 64.53)
+  await call([64, 52], 3);
+  assert.equal(await call([64, 53]), 3);
+
+  // 5. Unified save copy (63.67) and cross-category swap (63.22)
+  assert.equal(await call([63, 67], 12, 3), 1); // quick slot 2 (abs 12) -> normal slot 3
+  assert.equal(saves.get(3)?.title, 'Q2');
+  assert.equal(await call([63, 67], 3, 3), 0); // same slot returns 0 (0x66255b)
+  assert.equal(await call([63, 22], 1, 12), 1); // swap normal slot 1 <-> quick slot 2
+  assert.equal(saves.get(1)?.title, 'Q2');
+  assert.equal(quickSaves.get(2)?.title, 'S1');
+
+  // 6. Object x_eve.set_real (51.7), EXCALL x_eve.check (51.5), tr_eve.check/end (72.5 / 72.3)
+  await call([38, 2, -1, 0, 51, 7], 200, 500, 0, 0);
+  assert.ok(player.objects[0].get(0).positionEvents?.x);
+  assert.equal(await call([38, 2, -1, 0, 51, 5]), 1);
+  await call([38, 2, -1, 0, 51, 3]);
+  assert.equal(player.objects[0].get(0).positionEvents?.x, undefined);
+  assert.equal(await call([38, 2, -1, 0, 51, 5]), 0);
+
+  await call([65, 1, 2, -1, 0, 51, 0], 150, 500, 0, 0);
+  assert.equal(await call([65, 1, 2, -1, 0, 51, 5]), 1);
+  await call([65, 1, 2, -1, 0, 72, 0], 0, 500, 0, 0);
+  assert.equal(await call([65, 1, 2, -1, 0, 72, 5]), 1);
+  await call([65, 1, 2, -1, 0, 72, 3]);
+  assert.equal(player.systemObjects.get(0).opacity, undefined);
+  assert.equal(await call([65, 1, 2, -1, 0, 72, 5]), 0);
+
+  // 7. excall[0] routes counter[] (6) and f[] (7) to story state (0x54d0cc/0x54d102)
+  assert.deepEqual(player.stagePath([65, -1, 0, 6, -1, 2, 1]), [40, -1, 2, 1]);
+  assert.deepEqual(player.stagePath([65, -1, 0, 7, -1, 5]), [29, -1, 5]);
 });
 
 test('the fixed Siglus viewport clips overflow without becoming a scroll container', () => {
@@ -1198,8 +1325,11 @@ test('message-window timing queries retain the configured defaults after runtime
 });
 
 test('camera input can stop and resume its EXCALL counter without resetting elapsed time', async () => {
-  const player = Object.assign(Object.create(SiglusPlayer.prototype), {systemCounters: new Map()});
-  const command = (member) => player.command({path: [65, -1, 0, 6, -1, 0, member], args: [], named: []});
+  const player = Object.assign(Object.create(SiglusPlayer.prototype), {
+    sceneCounters: new Map(),
+    systemCounters: new Map(),
+  });
+  const command = (member) => player.command({path: [65, -1, 1, 6, -1, 0, member], args: [], named: []});
   assert.equal(await command(9), 0);
   const counter = player.systemCounters.get(0);
   counter.start -= 500;
@@ -1712,9 +1842,9 @@ test('Native G_excall / excall_flag / G_syscom xref sweep invariants in player.t
   // 5. Native 0x56aba0 / 0x6a7e50 / 0x6a7ff0: wipe_end (33) and mask_wipe_all (50) handled
   assert.match(playerSrc, /case 33:[\s\S]*?this\.display\.finishWipe\(\);/);
   assert.match(playerSrc, /case 50:[\s\S]*?case 51:/);
-  // 6. Native 0x55f290: excall.script font overrides (0x57..0x5f = 87..95)
-  assert.match(playerSrc, /case 88:\s*font\.name = undefined;\s*return 0;\s*case 89:\s*return font\.name \?\? '';/);
-  assert.match(playerSrc, /case 92:\s*return font\.bold === undefined \? -1 : Number\(font\.bold\);/);
+  // 6. Native 1.1.141.3 0x54d24e (0x54d42c): excall.script font overrides (0x57..0x5f = 87..95)
+  assert.match(playerSrc, /case 88:\s*return font\.name \?\? '';\s*case 89:\s*font\.name = undefined;\s*return 0;/);
+  assert.match(playerSrc, /case 92:\s*return font\.bold \?\? -1;/);
   assert.match(playerSrc, /case 95:\s*return font\.shadow \?\? -1;/);
   // 7. Native 0x625960 / 0x624dd0 / 0x6614b0 / 0x6615a0: cancel skip & auto on right-click, hide, backlog
   assert.match(playerSrc, /if \(result === 3\) \{\s*this\.readSkipEnabled = this\.autoEnabled = false;/);

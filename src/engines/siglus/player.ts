@@ -270,6 +270,7 @@ interface PlayerSave {
     messageSpeedOverride?: number;
     joypadModeOverride?: number;
     scriptFlag96?: boolean;
+    mouseCursorNo?: number;
     scriptFont?: ScriptFontOverride;
     backButtonGroups?: [number, boolean][];
   };
@@ -341,7 +342,7 @@ export class SiglusPlayer {
   private pendingWipe?: Promise<void>;
   private systemFrontObjects?: Map<number, DrawObject>;
   private systemFrontObjectsDirty = false;
-  private systemFont?: {name?: string; bold?: boolean; shadow?: number};
+  private systemFont?: ScriptFontOverride;
   private scriptFont?: ScriptFontOverride;
   private messageHidden = false;
   private quakeStopped = false;
@@ -351,6 +352,7 @@ export class SiglusPlayer {
   private excallJoypadModeOverride = -1;
   private pendingSystemShortcut?: string;
   private scriptFlag96 = false;
+  private mouseCursorNo = 0;
   private systemSkipDisabled = false;
   private systemCallDepth = 0;
   private get systemCallActive(): boolean {
@@ -409,9 +411,11 @@ export class SiglusPlayer {
     const config = this.game.config;
     const defaultMode = Number(config.get('JOYPAD.ALLOW_JOYPAD_MODE') ?? 0);
     const storyMode = this.joypadModeOverride;
+    const excallMode = this.excallJoypadModeOverride;
     const historyMode = Number(config.get('JOYPAD.MSGBK_ALLOW_JOYPAD_MODE') ?? -1);
+    // 1.1.141.3 0x62f510–0x62f574: both EXCALL and story mode fall back to ALLOW_JOYPAD_MODE when override is -1.
     const allowed = this.systemCallActive
-      ? this.excallJoypadModeOverride === 1
+      ? excallMode === 1 || (excallMode !== 0 && defaultMode !== 0)
       : this.historyOpen
         ? (historyMode === -1 ? defaultMode : historyMode) !== 0
         : storyMode === 1 || (storyMode !== 0 && defaultMode !== 0);
@@ -1024,8 +1028,9 @@ export class SiglusPlayer {
     stage.addEventListener('pointerleave', stop, {signal});
     stage.addEventListener('pointerup', (event) => {
       if (event.pointerId !== pointerId || buttonIndex === undefined) return;
-      const measurement = previous && latest && measureSiglusFlick(
-        latest.x - previous.x, latest.y - previous.y, latest.time - previous.time,
+      const origin = previous ?? latest;
+      const measurement = origin && measureSiglusFlick(
+        event.clientX - origin.x, event.clientY - origin.y, performance.now() - origin.time,
       );
       this.pointerFlicks[buttonIndex] = measurement;
       this.pointerFlickPending[buttonIndex] = (measurement?.millimetresPerSecond ?? 0) >= 180;
@@ -1153,8 +1158,7 @@ export class SiglusPlayer {
     this.display.setMessageFont(name, bold, shadow);
   }
 
-  private storyFont(): SiglusFontSettings {
-    const overrides = this.scriptFont;
+  private resolveFont(overrides?: ScriptFontOverride): SiglusFontSettings {
     if (!overrides) return this.messageFont;
     const {name, bold = -1, shadow = -1} = overrides;
     return {
@@ -1163,6 +1167,10 @@ export class SiglusPlayer {
       bold: bold >= 0 ? Boolean(bold) : this.messageFont.bold,
       shadow: shadow >= 0 ? shadow : this.messageFont.shadow,
     };
+  }
+
+  private storyFont(): SiglusFontSettings {
+    return this.resolveFont(this.scriptFont);
   }
 
   private applyScreenSettings(): void {
@@ -1924,7 +1932,11 @@ export class SiglusPlayer {
     if (type === 'auto_mode' && state !== Number(this.autoEnabled)) return 'hidden';
     if (type === 'read_skip' && state !== Number(this.readSkipEnabled)) return 'hidden';
     if (slot !== undefined && state !== Number(this.globalExtraSwitch(slot))) return 'hidden';
-    if (this.disabledMessageButtons.has(id) || (readSkipping && type !== 'read_skip'))
+    if (
+      !this.mwndBtnTouchEnabled ||
+      this.disabledMessageButtons.has(id) ||
+      (readSkipping && type !== 'read_skip')
+    )
       return 'disabled';
     let enabled: boolean;
     switch (type) {
@@ -1949,7 +1961,10 @@ export class SiglusPlayer {
         enabled = Boolean(this.backlog.at(-1)?.voices.length);
         break;
       case 'close_mwnd':
-        enabled = true;
+        enabled = this.hideMwndEnabled;
+        break;
+      case 'return_sel':
+        enabled = this.selectionReturnFlags.every(Boolean) && this.selectionSaves.length > 0;
         break;
       case 'save':
       case 'qsave':
@@ -2094,6 +2109,13 @@ export class SiglusPlayer {
       else if (type === 'config') await this.callSystemScene('CONFIG_SCENE');
       else if (type === 'auto_mode') this.autoEnabled = !this.autoEnabled;
       else if (type === 'read_skip') this.readSkipEnabled = !this.readSkipEnabled;
+      else if (type === 'return_sel') {
+        const target = this.selectionSaves.pop();
+        if (target) {
+          await this.playSystemSound(7);
+          this.loadSave(target);
+        }
+      }
     }
   }
 
@@ -2180,6 +2202,7 @@ export class SiglusPlayer {
         scriptMessageNowait: this.scriptMessageNowait || undefined,
         joypadModeOverride: this.joypadModeOverride === -1 ? undefined : this.joypadModeOverride,
         scriptFlag96: this.scriptFlag96 || undefined,
+        mouseCursorNo: this.mouseCursorNo || undefined,
         scriptFont: this.scriptFont && {...this.scriptFont},
         backButtonGroups: this.backButtonGroups.size ? [...this.backButtonGroups] : undefined,
         messageSpeedOverride: this.speed !== -1 ? this.speed : undefined,
@@ -2603,6 +2626,7 @@ export class SiglusPlayer {
     this.skipUnreadOverride = save.controls?.skipUnread;
     this.joypadModeOverride = save.controls?.joypadModeOverride ?? -1;
     this.scriptFlag96 = save.controls?.scriptFlag96 ?? false;
+    this.mouseCursorNo = save.controls?.mouseCursorNo ?? 0;
     if (this.scriptFont || save.controls?.scriptFont) {
       this.scriptFont = save.controls?.scriptFont && {...save.controls.scriptFont};
       this.applyMessageFont();
@@ -4689,6 +4713,10 @@ export class SiglusPlayer {
         return 0;
       }
       if (path[4] === 30 || path[4] === 53) return this.objectCommand(command);
+      if (path.length === 6 && path[2] === -1 && path[4] === 32 && path[5] === 3) {
+        // 1.1.141.3 0x555122 -> 0x559200 @ 0x559315 returns the configured button count for this MWND.
+        return this.display.messageButtonCount(path[3]!);
+      }
       if (path.length === 8 && path[2] === -1 && path[4] === 32 && path[5] === -1 && path[7] === 124) {
         return this.display.messageButtonPointerState(path[3]!, path[6]!);
       }
@@ -4753,8 +4781,8 @@ export class SiglusPlayer {
           return 0;
         }
         if (operation === 100) return this.excallJoypadModeOverride;
-        // Native 0x55f290 (excall.script font overrides):
-        // 0x57=set_font_name, 0x58=init_font_name, 0x59=get_font_name,
+        // Native 1.1.141.3 0x54d24e (jump table 0x54d42c, excall.script font overrides):
+        // 0x57=set_font_name, 0x58=get_font_name, 0x59=init_font_name,
         // 0x5a=set_font_futoku, 0x5b=init_font_futoku, 0x5c=get_font_futoku,
         // 0x5d=set_font_shadow, 0x5e=init_font_shadow, 0x5f=get_font_shadow
         const font = (this.systemFont ??= {});
@@ -4763,20 +4791,20 @@ export class SiglusPlayer {
             font.name = s(0);
             return 0;
           case 88:
+            return font.name ?? '';
+          case 89:
             font.name = undefined;
             return 0;
-          case 89:
-            return font.name ?? '';
           case 90:
-            font.bold = Boolean(n(0));
+            font.bold = n(0) | 0;
             return 0;
           case 91:
             font.bold = undefined;
             return 0;
           case 92:
-            return font.bold === undefined ? -1 : Number(font.bold);
+            return font.bold ?? -1;
           case 93:
-            font.shadow = n(0);
+            font.shadow = n(0) | 0;
             return 0;
           case 94:
             font.shadow = undefined;
@@ -5016,25 +5044,36 @@ export class SiglusPlayer {
         return 1;
       }
       if (member === 22 || member === 66) {
+        // 1.1.141.3 0x56be3f -> 0x662780 swaps any two distinct indices in the unified slot space.
         const [slots, first] =
           member === 22 ? this.saveSlotAddress(n(0)) : ([this.quickSaves, n(0)] as const);
         const [other, second] =
           member === 22 ? this.saveSlotAddress(n(1)) : ([this.quickSaves, n(1)] as const);
-        if (slots !== other) return undefined;
+        if (slots === other && first === second) return 0;
         const source = slots.get(first);
-        const target = slots.get(second);
+        const target = other.get(second);
         if (!source && !target) return 0;
-        await this.updateSlots(slots, [
-          [first, target],
-          [second, source],
-        ]);
+        if (slots === other) {
+          await this.updateSlots(slots, [
+            [first, target],
+            [second, source],
+          ]);
+        } else {
+          await this.updateSlots(slots, [[first, target]]);
+          await this.updateSlots(other, [[second, source]]);
+        }
         return 1;
       }
       if (member === 67 || member === 128) {
-        const slots = member === 67 ? this.saves : this.quickSaves;
-        const save = slots.get(n(0));
+        // 1.1.141.3 0x56be21/0x56be75 -> 0x6624f0 copies across the unified slot space.
+        const [srcSlots, srcIndex] =
+          member === 67 ? this.saveSlotAddress(n(0)) : ([this.quickSaves, n(0)] as const);
+        const [dstSlots, dstIndex] =
+          member === 67 ? this.saveSlotAddress(n(1)) : ([this.quickSaves, n(1)] as const);
+        if (srcSlots === dstSlots && srcIndex === dstIndex) return 0;
+        const save = srcSlots.get(srcIndex);
         if (!save) return 0;
-        await this.writeSlot(slots, n(1), save);
+        await this.writeSlot(dstSlots, dstIndex, save);
         return 1;
       }
       if (member === 249 || member === 18) {
@@ -5386,6 +5425,8 @@ export class SiglusPlayer {
         this.timeStopped = false;
         this.userMessageHidden = false;
         this.messageHidden = false;
+        this.mwndBtnTouchEnabled = true;
+        this.mouseCursorNo = 0;
         this.display.setScenePaused(false);
         this.display.setMessageDisplayed(true);
         this.display.stage.style.cursor = '';
@@ -5587,6 +5628,12 @@ export class SiglusPlayer {
       this.display.setShortcutKeyDisabled(n(0), member === 40);
       return 0;
     }
+    if (root === 64 && member === 52) {
+      // 1.1.141.3 0x563875 stores script.cursor_no read by 0x68cf29.
+      this.mouseCursorNo = n(0) | 0;
+      return 0;
+    }
+    if (root === 64 && member === 53) return this.mouseCursorNo;
     if (root === 64 && scriptFlags.has(member!)) {
       if (member === 12 || member === 13) this.scriptMsgBackDisabled = member === 12;
       if (member === 32 || member === 33) this.shortcutDisabled = member === 32;
@@ -6341,6 +6388,9 @@ export class SiglusPlayer {
           }
           if (rest[0] === 1) return [38, ...rest.slice(1)];
           if (rest[0] === 2) return [37, ...rest.slice(1)];
+          // 1.1.141.3 0x54d0cc & 0x54d102: excall[0] routes f[] (7) and counter[] (6) to story state.
+          if (rest[0] === 6) return [40, ...rest.slice(1)];
+          if (rest[0] === 7) return [29, ...rest.slice(1)];
           return [65, ...rest];
         }
         return this.stagePath([65, ...rest]);
@@ -6513,7 +6563,7 @@ export class SiglusPlayer {
     }
     if (command === 39) {
       const inExcall = this.systemCallActive || path[0] === 65;
-      const font = inExcall ? this.systemFont ?? this.messageFont : this.storyFont();
+      const resolved = inExcall ? this.resolveFont(this.systemFont) : this.storyFont();
       page.set(id!, {
         name: '',
         frames: [],
@@ -6523,9 +6573,9 @@ export class SiglusPlayer {
         pattern: 0,
         text: {
           value: String(args[0]),
-          font: font.name ?? this.messageFont.name,
-          bold: font.bold ?? this.messageFont.bold,
-          shadow: font.shadow ?? this.messageFont.shadow,
+          font: resolved.name,
+          bold: resolved.bold,
+          shadow: resolved.shadow,
           size: 32,
         },
       });
@@ -6657,6 +6707,7 @@ export class SiglusPlayer {
         command === 124 ||
         command === 127 ||
         command === 140 ||
+        (command !== undefined && command >= 154 && command <= 157) ||
         command === 160 ||
         command === 161 ||
         command === 172 ||
@@ -6679,12 +6730,15 @@ export class SiglusPlayer {
       return 0;
     }
     if (command === 124) {
-      if (!object.visible || !object.button) return 0;
+      // 1.1.141.3 0x55c570 -> 0x602670: returns 0 if group < 0, 3/4 for select/disable,
+      // then gates live hit/push (1/2) on mwndBtnTouchEnabled (0x602815) and active group.
+      const btn = object.button;
+      if (!btn || btn.group < 0) return 0;
       if (object.buttonState === 'select') return 3;
       if (object.disabled || object.buttonState === 'disable') return 4;
-      const {id: btnId, group} = object.button;
-      if (this.display.buttonState(group, true) === btnId) return 2;
-      if (this.display.buttonState(group, false) === btnId) return 1;
+      if (!this.mwndBtnTouchEnabled || !object.visible || !this.activeGroups.has(btn.group)) return 0;
+      if (this.display.buttonState(btn.group, true) === btn.id) return 2;
+      if (this.display.buttonState(btn.group, false) === btn.id) return 1;
       return 0;
     }
     if (command === 172) {
@@ -6929,21 +6983,35 @@ export class SiglusPlayer {
       path.length === index + 4
     ) {
       const op = path[index + 3]!;
-      // Preserve specialized animated DOM events for 51/64/67/68 op=0
+      // Preserve specialized animated DOM events for 51/64/67/68 op=0 (set) and op=7 (set_real)
       if (
         (command === 51 || command === 64 || command === 67 || command === 68) &&
-        op === 0 &&
-        (args.length === 4 || (args.length === 5 && named[0] === 0))
+        (op === 0 || op === 7) &&
+        (args.length === 4 || (args.length === 5 && (named.length === 0 || named[0] === 0)))
       ) {
+        const started = performance.now();
+        const duration = Math.max(0, n(1));
+        const waitDelay = Math.max(0, n(2));
         if (path[0] === 65 && command === 51 && args.length >= 4) {
+          const from = args.length === 5 ? n(4) : object.x;
           object.horizontalMotion = {
-            from: args.length === 5 ? n(4) : object.x,
-            duration: n(1),
-            delay: n(2),
+            from,
+            duration,
+            delay: waitDelay,
             easing: n(3),
-            started: performance.now(),
+            started,
           };
           object.x = n(0);
+          (object.intEvents ??= new Map()).set(`ch:${command}`, {
+            mode: 0,
+            from,
+            target: n(0),
+            duration,
+            delay: waitDelay,
+            easing: n(3),
+            started,
+            endAt: started + duration + waitDelay,
+          });
           return 0;
         }
         const axis = command === 51 || command === 67 ? 'x' : 'y';
@@ -6952,10 +7020,10 @@ export class SiglusPlayer {
         const previousScale = object.scale ?? ([1000, 1000] as const);
         const event = {
           from: args.length === 5 ? n(4) : scale ? previousScale[axisIdx] : object[axis],
-          started: performance.now(),
+          started,
           time: {
-            duration: n(1),
-            delay: n(2),
+            duration,
+            delay: waitDelay,
             easing: eventEasing(n(3)),
             fill: 'backwards' as const,
           },
@@ -6967,18 +7035,25 @@ export class SiglusPlayer {
           object.positionEvents = {...object.positionEvents, [axis]: event};
           object[axis] = n(0);
         }
-        const endAt = performance.now() + Math.max(0, n(1)) + Math.max(0, n(2));
         (object.intEvents ??= new Map()).set(`ch:${command}`, {
           mode: 0,
           from: event.from,
           target: n(0),
-          duration: Math.max(0, n(1)),
-          delay: Math.max(0, n(2)),
+          duration,
+          delay: waitDelay,
           easing: n(3),
-          started: event.started,
-          endAt,
+          started,
+          endAt: started + duration + waitDelay,
         });
         return 0;
+      }
+      if (op === 3) {
+        if (command === 51) {
+          object.horizontalMotion = undefined;
+          if (object.positionEvents) delete object.positionEvents.x;
+        } else if (command === 64 && object.positionEvents) delete object.positionEvents.y;
+        else if (command === 67 && object.scaleEvents) delete object.scaleEvents.x;
+        else if (command === 68 && object.scaleEvents) delete object.scaleEvents.y;
       }
       const getVal = (): number => {
         if (command === 51) return object.x;
@@ -7097,17 +7172,30 @@ export class SiglusPlayer {
       const event = path[index + 3];
       if ((event === 0 || event === 7) &&
           (args.length === 4 || (args.length === 5 && (named.length === 0 || named[0] === 0)))) {
-        object.opacity = [
-          n(0),
-          n(1),
-          n(2),
-          n(3),
-          args.length === 5 ? n(4) : (object.transparency ?? 255),
-        ];
-        object.opacityStarted = performance.now();
+        const started = performance.now();
+        const duration = Math.max(0, n(1));
+        const waitDelay = Math.max(0, n(2));
+        const from = args.length === 5 ? n(4) : (object.transparency ?? 255);
+        object.opacity = [n(0), duration, waitDelay, n(3), from];
+        object.opacityStarted = started;
         object.opacityElapsed = undefined;
         object.transparency = n(0);
+        (object.intEvents ??= new Map()).set('ch:72', {
+          mode: 0,
+          from,
+          target: n(0),
+          duration,
+          delay: waitDelay,
+          easing: n(3),
+          started,
+          endAt: started + duration + waitDelay,
+        });
         return 0;
+      }
+      if (event === 3) {
+        object.opacity = undefined;
+        object.opacityStarted = undefined;
+        object.opacityElapsed = undefined;
       }
       if (event === 4 || event === 10) {
         await this.renderObjects();

@@ -1895,6 +1895,18 @@ export class SiglusDisplay {
     this.applyMessageFrame(index);
   }
 
+  messageButtonCount(window: number): number {
+    const {wakuNo} = parseMwndLayout(this.config, window);
+    if (wakuNo < 0) return 0;
+    const loaded = this.frameActionsByWaku.get(wakuNo);
+    if (loaded) return loaded.length;
+    const wakuTag = String(wakuNo).padStart(3, '0');
+    const patternRe = new RegExp(`^WAKU\\.${wakuTag}\\.BTN\\.(\\d+)\\.TYPE$`);
+    let count = 0;
+    for (const key of this.config.keys()) if (patternRe.test(key)) count++;
+    return count;
+  }
+
   messageButtonPointerState(window: number, buttonId: number): number {
     const {wakuNo} = parseMwndLayout(this.config, window);
     const entry = this.frameActionsByWaku.get(wakuNo)?.find((item) => item.action.id === buttonId);

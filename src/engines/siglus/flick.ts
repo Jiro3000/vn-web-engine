@@ -14,14 +14,15 @@ export function siglusFlickScene(
   const quarter = Math.fround(Math.PI / 4);
   const half = Math.fround(Math.PI / 2);
   const threeQuarters = Math.fround(3 * Math.PI / 4);
+  // 1.1.141.3 0x633e57–0x633f3b: 5=up, 6=right (+pi/4..+3pi/4), 7=down (-pi/4..+pi/4), 8=left.
   const regions: readonly (readonly [number, number, boolean?])[] = [
     [-half, half, true],
     [-half, half],
     [0, Infinity],
     [-Infinity, 0],
     [-threeQuarters, threeQuarters, true],
-    [-quarter, quarter],
     [quarter, threeQuarters],
+    [-quarter, quarter],
     [-threeQuarters, -quarter],
   ];
   const count = Number(config.get('FLICK_SCENE.CNT') ?? 0);
