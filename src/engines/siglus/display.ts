@@ -113,6 +113,36 @@ export interface ObjectIntEvent {
   endAt: number;
 }
 
+/** Evaluates a Siglus object intEvent at timestamp `now`, returning undefined once a one-shot event finishes. */
+export function evalObjectIntEvent(ev: ObjectIntEvent, now: number): number | undefined {
+  const elapsed = now - ev.started;
+  if (ev.duration <= 0) return elapsed < ev.delay ? ev.from : ev.mode === 0 ? undefined : ev.target;
+  if (elapsed < ev.delay) return ev.from;
+  const t = elapsed - ev.delay;
+  let p: number;
+  if (ev.mode === 0) {
+    if (t >= ev.duration) return undefined;
+    p = t / ev.duration;
+  } else if (ev.mode === 1) {
+    p = (t % ev.duration) / ev.duration;
+  } else {
+    const cycle = Math.floor(t / ev.duration);
+    const frac = (t % ev.duration) / ev.duration;
+    p = cycle & 1 ? 1 - frac : frac;
+  }
+  const eased =
+    ev.easing === 0
+      ? p
+      : ev.easing === 1
+        ? p * p
+        : ev.easing === 2
+          ? 1 - (1 - p) * (1 - p)
+          : p >= 1
+            ? 1
+            : 0;
+  return ev.from + (ev.target - ev.from) * eased;
+}
+
 interface ObjectGanCheckpoint {
   file: string;
   sequence?: number;
@@ -241,6 +271,7 @@ export interface DrawObject {
     started: number;
   };
   movement?: [target: number, duration: number, delay: number, easing: number, start: number];
+  movementStarted?: number;
 }
 
 export interface SiglusGanCheckpoint {
@@ -715,6 +746,10 @@ export class SiglusDisplay {
     originY: number;
   }>;
   private stageGeneration = 0;
+  private refreshGeneration = 0;
+  private activeWipeLayer?: HTMLElement;
+  private readonly wipeMaskUrlCache = new WeakMap<WipeSpec, string>();
+  private dynamicColorFilterId = 0;
   private readonly systemLayerDraws = new WeakMap<HTMLElement, object>();
   private wipe?: Animation;
   private systemInput = false;
@@ -1209,6 +1244,7 @@ export class SiglusDisplay {
     button: (target: NonNullable<DrawObject['button']>) => void,
     front = false,
     duration = 0,
+    speedMode = 0,
   ): Promise<void> {
     const container = front ? this.systemFrontLayer : this.systemLayer;
     const draw = {};
@@ -1217,6 +1253,7 @@ export class SiglusDisplay {
     this.signal.throwIfAborted();
     if (this.systemLayerDraws.get(container) !== draw) return;
     if (duration > 0 && typeof next.animate === 'function') {
+      const easing = eventEasing(speedMode);
       const previous = [...container.children] as HTMLElement[];
       this.preserveStageFocus(() => {
         for (const child of previous) child.inert = true;
@@ -1224,11 +1261,11 @@ export class SiglusDisplay {
       });
       const animations: Animation[] = [];
       if (next.childElementCount > 0) {
-        animations.push(next.animate({opacity: [0, 1]}, {duration}));
+        animations.push(next.animate({opacity: [0, 1]}, {duration, easing}));
       }
-      if (previous.length > 0 && next.childElementCount === 0) {
+      if (previous.length > 0) {
         for (const child of previous) {
-          animations.push(child.animate({opacity: [1, 0]}, {duration, fill: 'forwards'}));
+          animations.push(child.animate({opacity: [1, 0]}, {duration, easing, fill: 'forwards'}));
         }
       }
       if (animations.length > 0) {
@@ -2885,6 +2922,7 @@ export class SiglusDisplay {
     duration: number,
     button: (target: NonNullable<DrawObject['button']>) => void,
     fan?: WipeSpec,
+    speedMode = 0,
   ): Promise<void> {
     const generation = ++this.stageGeneration;
     await this.finishCastTransition();
@@ -2894,12 +2932,12 @@ export class SiglusDisplay {
     const title = next.querySelector('[aria-label="New Game"]');
     if (title) this.clearStageEffects();
     if (this.pendingEffects.size) {
-      await this.presentStage(next, [], duration, fan);
+      await this.presentStage(next, [], duration, fan, speedMode);
     } else {
       this.placeStageRectangles(next);
       if (fan && duration > 0) this.layers.append(this.cast);
       try {
-        await this.replaceLayer(next, duration, fan);
+        await this.replaceLayer(next, duration, fan, speedMode);
       } finally {
         if (fan && duration > 0 && generation === this.stageGeneration) {
           this.cast.inert = false;
@@ -2919,6 +2957,24 @@ export class SiglusDisplay {
     objects: Iterable<DrawObject>,
     button: (target: NonNullable<DrawObject['button']>) => void,
   ): Promise<void> {
+    const wipingLayer =
+      this.wipe?.playState === 'running' && this.activeWipeLayer?.isConnected
+        ? this.activeWipeLayer
+        : undefined;
+    if (wipingLayer) {
+      // Update the incoming wipe layer in place so non-blocking (wait=0) wipes
+      // keep running smoothly while front-stage objects animate.
+      const rGen = ++this.refreshGeneration;
+      const next = await this.drawObjects(objects, button, false);
+      if (rGen !== this.refreshGeneration || !wipingLayer.isConnected) return;
+      this.preserveStageFocus(() => {
+        for (const child of wipingLayer.children) (child as HTMLElement).inert = true;
+        wipingLayer.replaceChildren(...next.children);
+      });
+      this.objectLayer = wipingLayer;
+      this.syncHoverAfterDomUpdate();
+      return;
+    }
     const layer = this.objectLayer;
     if (!layer?.isConnected) return;
     const generation = ++this.stageGeneration;
@@ -2956,15 +3012,71 @@ export class SiglusDisplay {
     return true;
   }
 
+  private async preloadObjectGraphics(objects: Iterable<DrawObject>): Promise<void> {
+    const jobs: Promise<unknown>[] = [];
+    const now = performance.now();
+    const visit = (list: Iterable<DrawObject>) => {
+      for (const object of list) {
+        if (!object.visible) continue;
+        if (
+          !object.text &&
+          !(object.weather && object.weather.mode > 0) &&
+          object.gan?.sequence === undefined &&
+          !object.movie &&
+          object.name &&
+          object.type !== 11 &&
+          object.pattern >= 0
+        ) {
+          if (!object.frames[object.pattern]) {
+            const pat = object.pattern;
+            jobs.push(
+              this.objectGraphic(object.name, pat)
+                .then((g) => {
+                  if (g) object.frames[pat] = g;
+                })
+                .catch(() => {}),
+            );
+          }
+          const patEv = object.intEvents?.get('ch:90');
+          if (
+            patEv &&
+            patEv.duration > 0 &&
+            patEv.from !== patEv.target &&
+            (patEv.mode !== 0 || now < patEv.endAt)
+          ) {
+            const lo = Math.max(0, Math.min(patEv.from, patEv.target));
+            const hi = Math.min(lo + 64, Math.max(patEv.from, patEv.target));
+            for (let p = lo; p <= hi; p++) {
+              if (!object.frames[p]) {
+                jobs.push(
+                  this.objectGraphic(object.name, p)
+                    .then((g) => {
+                      if (g) object.frames[p] = g;
+                    })
+                    .catch(() => {}),
+                );
+              }
+            }
+          }
+        }
+        if (object.children) visit(object.children.values());
+      }
+    };
+    visit(objects);
+    if (jobs.length > 1) await Promise.all(jobs);
+  }
+
   private async drawObjects(
     objects: Iterable<DrawObject>,
     button: (target: NonNullable<DrawObject['button']>) => void,
     animate = true,
     layerScope: 'stage' | 'system' | 'systemFront' = 'stage',
   ): Promise<HTMLElement> {
+    const list = Array.isArray(objects) ? objects : [...objects];
+    await this.preloadObjectGraphics(list);
     const next = document.createElement('div');
     next.style.cssText = 'position:absolute;inset:0;pointer-events:none';
-    await this.appendObjects(next, objects, button, animate, [], true, [0, 0], layerScope);
+    await this.appendObjects(next, list, button, animate, [], true, [0, 0], layerScope);
     return next;
   }
 
@@ -3259,6 +3371,58 @@ export class SiglusDisplay {
           );
           animation.currentTime = elapsed + duration;
         }
+      } else if (!object.movie && object.name && object.intEvents?.has('ch:90')) {
+        const patEv = object.intEvents.get('ch:90')!;
+        const now = performance.now();
+        if (patEv.duration > 0 && patEv.from !== patEv.target && (patEv.mode !== 0 || now < patEv.endAt)) {
+          const step = patEv.target >= patEv.from ? 1 : -1;
+          const seq: number[] = [];
+          for (let p = patEv.from; seq.length < 64; p += step) {
+            if (p >= 0) seq.push(p);
+            if (p === patEv.target) break;
+          }
+          if (patEv.mode === 2 && seq.length > 2) {
+            for (let i = seq.length - 2; i >= 1; i--) seq.push(seq[i]!);
+          }
+          const totalDur = patEv.mode === 2 ? patEv.duration * 2 : patEv.duration;
+          const count = seq.length;
+          if (count > 1 && totalDur > 0) {
+            const elapsed = Math.max(0, now - patEv.started);
+            const seen = new Map<number, HTMLCanvasElement>();
+            for (const p of seq) {
+              if (seen.has(p)) continue;
+              const g = object.frames[p] ?? (await this.objectGraphic(object.name, p).catch(() => undefined));
+              if (!g) continue;
+              object.frames[p] = g;
+              const img = p === object.pattern ? canvas : this.node(g);
+              if (img !== canvas) {
+                img.style.left = '0';
+                img.style.top = '0';
+                img.style.pointerEvents = 'none';
+                content.append(img);
+              }
+              seen.set(p, img);
+            }
+            for (const [pat, img] of seen) {
+              const frames: Keyframe[] = [];
+              for (let idx = 0; idx < count; idx++) {
+                frames.push({
+                  offset: idx / count,
+                  opacity: seq[idx] === pat ? 1 : 0,
+                  easing: 'steps(1, end)',
+                });
+              }
+              frames.push({offset: 1, opacity: seq[count - 1] === pat ? 1 : 0});
+              const animation = img.animate(frames, {
+                duration: totalDur,
+                delay: patEv.delay,
+                iterations: patEv.mode === 0 ? 1 : Infinity,
+                fill: 'both',
+              });
+              animation.currentTime = elapsed;
+            }
+          }
+        }
       }
       targetParent.append(element);
       if (sourceBounds)
@@ -3440,15 +3604,20 @@ export class SiglusDisplay {
         }
       }
       this.applyLeafOpacity(element, object, animate, parentOpacity);
-      if (animate && object.movement) {
+      if (object.movement) {
         const [target, time, delay, mode, start] = object.movement;
-        element.animate(
-          [
-            {translate: `0px ${start}px`, composite: 'add'},
-            {translate: `0px ${target}px`, composite: 'add'},
-          ],
-          {duration: time, delay, easing: eventEasing(mode), fill: 'both'},
-        );
+        const elapsed =
+          object.movementStarted === undefined ? 0 : Math.max(0, performance.now() - object.movementStarted);
+        if ((animate || object.movementStarted !== undefined) && elapsed < time + delay) {
+          const animation = element.animate(
+            [
+              {translate: `0px ${start}px`, composite: 'add'},
+              {translate: `0px ${target}px`, composite: 'add'},
+            ],
+            {duration: time, delay, easing: eventEasing(mode), fill: 'both'},
+          );
+          animation.currentTime = elapsed;
+        }
       }
       if (object.children)
         await this.appendChildren(
@@ -3522,15 +3691,41 @@ export class SiglusDisplay {
       }
     }
     const baseOpacity = ((object.transparency ?? 255) / 255) * staticRepScale;
+    const trLoopEv = object.intEvents?.get('ch:72');
+    const hasTrLoop = Boolean(trLoopEv && trLoopEv.mode !== 0 && trLoopEv.duration > 0);
     const fadeElapsed =
-      object.opacityStarted === undefined ? 0 : now - object.opacityStarted;
+      object.opacityStarted === undefined ? 0 : Math.max(0, now - object.opacityStarted);
     const hasFade = Boolean(
-      object.opacity &&
+      !hasTrLoop &&
+        object.opacity &&
         (animate || object.opacityStarted !== undefined) &&
         object.opacity[1] + object.opacity[2] > fadeElapsed,
     );
     if (animatedFactors.length) {
-      if (hasFade && object.opacity) {
+      if (hasTrLoop && trLoopEv) {
+        const fadeProp = '--siglus-fade-opacity';
+        registerAnimatedNumber(fadeProp);
+        element.style.setProperty(fadeProp, String(Math.max(0, Math.min(255, trLoopEv.target)) / 255));
+        const animation = element.animate(
+          {
+            [fadeProp]: [
+              String(Math.max(0, Math.min(255, trLoopEv.from)) / 255),
+              String(Math.max(0, Math.min(255, trLoopEv.target)) / 255),
+            ],
+          },
+          {
+            duration: trLoopEv.duration,
+            delay: trLoopEv.delay,
+            easing: eventEasing(trLoopEv.easing),
+            fill: 'both',
+            iterations: Infinity,
+            direction: trLoopEv.mode === 2 ? 'alternate' : 'normal',
+          },
+        );
+        animation.currentTime = Math.max(0, now - trLoopEv.started);
+        animatedFactors.push(`var(${fadeProp})`);
+        if (staticRepScale !== 1) animatedFactors.push(String(staticRepScale));
+      } else if (hasFade && object.opacity) {
         const [target, duration, delay, mode, start] = object.opacity;
         const fadeProp = '--siglus-fade-opacity';
         registerAnimatedNumber(fadeProp);
@@ -3553,6 +3748,26 @@ export class SiglusDisplay {
     }
     if (object.transparency !== undefined || object.trOffsets?.length)
       element.style.setProperty(property, String(baseOpacity));
+    if (hasTrLoop && trLoopEv) {
+      const animation = element.animate(
+        {
+          [property]: [
+            String((Math.max(0, Math.min(255, trLoopEv.from)) / 255) * staticRepScale),
+            String((Math.max(0, Math.min(255, trLoopEv.target)) / 255) * staticRepScale),
+          ],
+        },
+        {
+          duration: trLoopEv.duration,
+          delay: trLoopEv.delay,
+          easing: eventEasing(trLoopEv.easing),
+          fill: 'both',
+          iterations: Infinity,
+          direction: trLoopEv.mode === 2 ? 'alternate' : 'normal',
+        },
+      );
+      animation.currentTime = Math.max(0, now - trLoopEv.started);
+      return;
+    }
     if (!hasFade || !object.opacity) return;
     const [target, duration, delay, mode, start] = object.opacity;
     const animation = element.animate(
@@ -3582,7 +3797,12 @@ export class SiglusDisplay {
     this.applyObjectPosition(children, object);
     const childPivot: [number, number] = [object.centerRep?.[0] ?? 0, object.centerRep?.[1] ?? 0];
     this.applyObjectScale(children, object, childPivot);
-    if ((object.transparency ?? 255) !== 255 || object.opacity || object.trOffsets?.length) {
+    if (
+      (object.transparency ?? 255) !== 255 ||
+      object.opacity ||
+      object.trOffsets?.length ||
+      object.intEvents?.has('ch:72')
+    ) {
       const property = '--siglus-group-opacity-' + parentOpacity.length;
       registerAnimatedNumber(property);
       this.applyObjectOpacity(children, object, animate, property);
@@ -3626,15 +3846,38 @@ export class SiglusDisplay {
       const baseOrigin = axis === 'x' ? originX : originY;
       const origin = baseOrigin + (offsets?.reduce((sum, value) => sum + value, 0) ?? 0);
       element.style[property] = `${object[axis] + origin}px`;
-      const event = object.positionEvents?.[axis];
-      if (event) {
+      const loopEv = object.intEvents?.get(axis === 'x' ? 'ch:51' : 'ch:64');
+      if (loopEv && loopEv.mode !== 0 && loopEv.duration > 0) {
         const animation = element.animate(
-          {[property]: [`${event.from + origin}px`, element.style[property]]},
-          event.time,
+          {[property]: [`${loopEv.from + origin}px`, `${loopEv.target + origin}px`]},
+          {
+            duration: loopEv.duration,
+            delay: loopEv.delay,
+            easing: eventEasing(loopEv.easing),
+            fill: 'both',
+            iterations: Infinity,
+            direction: loopEv.mode === 2 ? 'alternate' : 'normal',
+          },
         );
-        animation.currentTime = now - event.started;
+        animation.currentTime = Math.max(0, now - loopEv.started);
+      } else {
+        const event = object.positionEvents?.[axis];
+        if (event) {
+          const elapsed = Math.max(0, now - event.started);
+          const total = Number(event.time.duration ?? 0) + Number(event.time.delay ?? 0);
+          if (elapsed < total) {
+            const animation = element.animate(
+              {[property]: [`${event.from + origin}px`, element.style[property]]},
+              event.time,
+            );
+            animation.currentTime = elapsed;
+          }
+        }
       }
       for (const [index, offset] of object.offsetEvents?.[axis] ?? []) {
+        const elapsed = Math.max(0, now - offset.started);
+        const total = Number(offset.time.duration ?? 0) + Number(offset.time.delay ?? 0);
+        if (elapsed >= total) continue;
         const delta = offset.from - (offsets?.[index] ?? 0);
         const start = axis === 'x' ? `${delta}px 0px` : `0px ${delta}px`;
         const animation = element.animate(
@@ -3644,7 +3887,7 @@ export class SiglusDisplay {
           ],
           offset.time,
         );
-        animation.currentTime = now - offset.started;
+        animation.currentTime = elapsed;
       }
     }
   }
@@ -3706,63 +3949,259 @@ export class SiglusDisplay {
     object: DrawObject,
     origin: readonly [number, number],
   ): void {
+    const now = performance.now();
+    const activeEvent = (key: string): ObjectIntEvent | undefined => {
+      const ev = object.intEvents?.get(key);
+      return ev && ev.duration > 0 && (ev.mode !== 0 || now < ev.endAt) ? ev : undefined;
+    };
+    const rotXEv = activeEvent('ch:69');
+    const rotYEv = activeEvent('ch:70');
+    const rotZEv = activeEvent('ch:71');
+    const scaleXLoop = activeEvent('ch:67');
+    const scaleYLoop = activeEvent('ch:68');
     const hasTransform =
       Boolean(object.scale) ||
       Boolean(object.rotateX) ||
       Boolean(object.rotateY) ||
-      Boolean(object.rotateZ);
+      Boolean(object.rotateZ) ||
+      Boolean(rotXEv || rotYEv || rotZEv || scaleXLoop || scaleYLoop);
     if (hasTransform) element.style.transformOrigin = `${origin[0]}px ${origin[1]}px`;
-    if (object.rotateZ) element.style.rotate = `${object.rotateZ / 10}deg`;
-    if (object.rotateX || object.rotateY) {
+    if (rotZEv) {
+      element.style.rotate = `${rotZEv.target / 10}deg`;
+      const anim = element.animate(
+        {rotate: [`${rotZEv.from / 10}deg`, `${rotZEv.target / 10}deg`]},
+        {
+          duration: rotZEv.duration,
+          delay: rotZEv.delay,
+          easing: eventEasing(rotZEv.easing),
+          fill: 'both',
+          iterations: rotZEv.mode === 0 ? 1 : Infinity,
+          direction: rotZEv.mode === 2 ? 'alternate' : 'normal',
+        },
+      );
+      anim.currentTime = Math.max(0, now - rotZEv.started);
+    } else if (object.rotateZ) {
+      element.style.rotate = `${object.rotateZ / 10}deg`;
+    }
+    if (rotXEv || rotYEv) {
+      const parts: string[] = [];
+      for (const [ev, prop, fn, fallback] of [
+        [rotXEv, '--siglus-rot-x', 'rotateX', object.rotateX ?? 0],
+        [rotYEv, '--siglus-rot-y', 'rotateY', object.rotateY ?? 0],
+      ] as const) {
+        if (ev) {
+          registerAnimatedNumber(prop);
+          element.style.setProperty(prop, String(ev.target / 10));
+          const anim = element.animate(
+            {[prop]: [String(ev.from / 10), String(ev.target / 10)]},
+            {
+              duration: ev.duration,
+              delay: ev.delay,
+              easing: eventEasing(ev.easing),
+              fill: 'both',
+              iterations: ev.mode === 0 ? 1 : Infinity,
+              direction: ev.mode === 2 ? 'alternate' : 'normal',
+            },
+          );
+          anim.currentTime = Math.max(0, now - ev.started);
+          parts.push(`${fn}(calc(var(${prop}) * 1deg))`);
+        } else if (fallback) {
+          parts.push(`${fn}(${fallback / 10}deg)`);
+        }
+      }
+      if (parts.length) element.style.transform = parts.join(' ');
+    } else if (object.rotateX || object.rotateY) {
       const parts: string[] = [];
       if (object.rotateX) parts.push(`rotateX(${object.rotateX / 10}deg)`);
       if (object.rotateY) parts.push(`rotateY(${object.rotateY / 10}deg)`);
       element.style.transform = parts.join(' ');
     }
-    if (object.colorProps) {
-      const cp = object.colorProps;
+    const toneFilter =
+      object.tonecurveNo !== undefined ? this.toneCurveFilterUrl(object.tonecurveNo) : undefined;
+    const staticColorFilter = (cp: DrawObject['colorProps']): string => {
+      if (!cp) return '';
       const needsMatrix =
         Boolean(cp.colorRate && cp.colorRate > 0) ||
         Boolean(cp.bright && cp.bright > 0) ||
         Boolean(cp.addR || cp.addG || cp.addB);
       if (needsMatrix) {
         const matrix = computeColorMatrix(cp);
-        if (matrix)
-          element.style.filter = this.colorFilterUrl(matrix, (filter) => this.appendColorMatrix(filter, matrix));
-      } else {
-        const filters: string[] = [];
-        if (cp.mono && cp.mono > 0)
-          filters.push(`grayscale(${Math.min(1, cp.mono / 255).toFixed(3)})`);
-        if (cp.reverse && cp.reverse > 0)
-          filters.push(`invert(${Math.min(1, cp.reverse / 255).toFixed(3)})`);
-        if (cp.dark && cp.dark > 0)
-          filters.push(`brightness(${Math.max(0, 1 - cp.dark / 255).toFixed(3)})`);
-        if (filters.length) element.style.filter = filters.join(' ');
+        return matrix
+          ? this.colorFilterUrl(matrix, (filter) => this.appendColorMatrix(filter, matrix))
+          : '';
       }
+      const filters: string[] = [];
+      if (cp.mono && cp.mono > 0)
+        filters.push(`grayscale(${Math.min(1, cp.mono / 255).toFixed(3)})`);
+      if (cp.reverse && cp.reverse > 0)
+        filters.push(`invert(${Math.min(1, cp.reverse / 255).toFixed(3)})`);
+      if (cp.dark && cp.dark > 0)
+        filters.push(`brightness(${Math.max(0, 1 - cp.dark / 255).toFixed(3)})`);
+      return filters.join(' ');
+    };
+    const colorChannelMap: ReadonlyArray<[string, keyof NonNullable<DrawObject['colorProps']>]> = [
+      ['ch:73', 'mono'],
+      ['ch:74', 'reverse'],
+      ['ch:75', 'bright'],
+      ['ch:76', 'dark'],
+      ['ch:83', 'colorRate'],
+      ['ch:84', 'addR'],
+      ['ch:85', 'addG'],
+      ['ch:86', 'addB'],
+      ['ch:87', 'colorR'],
+      ['ch:88', 'colorG'],
+      ['ch:89', 'colorB'],
+    ];
+    const activeColorEvents = colorChannelMap.flatMap(([ch, prop]) => {
+      const ev = activeEvent(ch);
+      return ev ? [[prop, ev] as const] : [];
+    });
+    if (activeColorEvents.length) {
+      const baseCp = {...(object.colorProps ?? {})};
+      const needsAnimatedMatrix =
+        Boolean(baseCp.colorRate && baseCp.colorRate > 0) ||
+        Boolean(baseCp.bright && baseCp.bright > 0) ||
+        Boolean(baseCp.addR || baseCp.addG || baseCp.addB) ||
+        activeColorEvents.some(
+          ([prop]) =>
+            prop === 'bright' ||
+            prop === 'colorRate' ||
+            prop === 'addR' ||
+            prop === 'addG' ||
+            prop === 'addB' ||
+            prop === 'colorR' ||
+            prop === 'colorG' ||
+            prop === 'colorB',
+        );
+      if (needsAnimatedMatrix) {
+        if (!this.colorFilterSvg) {
+          const svg = document.createElementNS(svgNamespace, 'svg');
+          svg.style.cssText = 'position:absolute;width:0;height:0;pointer-events:none';
+          svg.append(document.createElementNS(svgNamespace, 'defs'));
+          this.stage.append(svg);
+          this.colorFilterSvg = svg;
+        }
+        const filterId = `siglus-cm-dyn-${++this.dynamicColorFilterId}`;
+        const filterEl = document.createElementNS(svgNamespace, 'filter');
+        filterEl.id = filterId;
+        filterEl.setAttribute('color-interpolation-filters', 'sRGB');
+        const matrixEl = document.createElementNS(svgNamespace, 'feColorMatrix');
+        matrixEl.setAttribute('type', 'matrix');
+        filterEl.append(matrixEl);
+        this.colorFilterSvg.firstElementChild!.append(filterEl);
+        const dynUrl = `url(#${filterId})`;
+        element.style.filter = [dynUrl, toneFilter].filter(Boolean).join(' ');
+        const identityMatrix = '1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 1 0';
+        const sample = (t: number): boolean => {
+          let running = false;
+          const cur = {...baseCp};
+          for (const [prop, ev] of activeColorEvents) {
+            const v = evalObjectIntEvent(ev, t);
+            if (v !== undefined) {
+              cur[prop] = v;
+              running = true;
+            }
+          }
+          matrixEl.setAttribute('values', computeColorMatrix(cur) ?? identityMatrix);
+          return running;
+        };
+        const stillRunning = sample(now);
+        if (!stillRunning) {
+          filterEl.remove();
+          element.style.filter = [staticColorFilter(object.colorProps), toneFilter].filter(Boolean).join(' ');
+        } else {
+          let mounted = false;
+          const cleanup = () => filterEl.remove();
+          const tick = () => {
+            if (this.signal.aborted) {
+              cleanup();
+              return;
+            }
+            if (element.isConnected) mounted = true;
+            else if (mounted) {
+              cleanup();
+              return;
+            }
+            if (!sample(performance.now())) {
+              cleanup();
+              element.style.filter = [staticColorFilter(object.colorProps), toneFilter]
+                .filter(Boolean)
+                .join(' ');
+              return;
+            }
+            requestAnimationFrame(tick);
+          };
+          requestAnimationFrame(tick);
+        }
+      } else {
+        // Pure CSS-filter-only color animation (dark / mono / reverse) via GPU-composited WAAPI.
+        const [prop, ev] = activeColorEvents[0]!;
+        const buildFilter = (val: number) => {
+          const cur = {...baseCp, [prop]: val};
+          return [staticColorFilter(cur), toneFilter].filter(Boolean).join(' ') || 'none';
+        };
+        const endFilter = buildFilter(ev.target);
+        element.style.filter = endFilter === 'none' ? '' : endFilter;
+        const anim = element.animate(
+          {filter: [buildFilter(ev.from), endFilter]},
+          {
+            duration: ev.duration,
+            delay: ev.delay,
+            easing: eventEasing(ev.easing),
+            fill: 'both',
+            iterations: ev.mode === 0 ? 1 : Infinity,
+            direction: ev.mode === 2 ? 'alternate' : 'normal',
+          },
+        );
+        anim.currentTime = Math.max(0, now - ev.started);
+      }
+    } else {
+      const staticFilter = [staticColorFilter(object.colorProps), toneFilter].filter(Boolean).join(' ');
+      if (staticFilter) element.style.filter = staticFilter;
     }
-    if (object.tonecurveNo !== undefined) {
-      const tone = this.toneCurveFilterUrl(object.tonecurveNo);
-      if (tone) element.style.filter = [element.style.filter, tone].filter(Boolean).join(' ');
-    }
-    if (!object.scale) return;
-    if (!object.scaleEvents) {
-      element.style.scale = object.scale.map((value) => value / 1000).join(' ');
+    const hasLoopScale = Boolean(
+      (scaleXLoop && scaleXLoop.mode !== 0) || (scaleYLoop && scaleYLoop.mode !== 0),
+    );
+    if (!object.scale && !hasLoopScale) return;
+    if (!object.scaleEvents && !hasLoopScale) {
+      element.style.scale = object.scale!.map((value) => value / 1000).join(' ');
       return;
     }
+    const scaleBase = object.scale ?? ([1000, 1000] as const);
     const properties = ['--siglus-scale-x', '--siglus-scale-y'] as const;
     element.style.scale = properties.map((property) => `var(${property})`).join(' ');
     for (const [index, axis] of (['x', 'y'] as const).entries()) {
       const property = properties[index]!;
       registerAnimatedNumber(property);
-      const to = String(object.scale[index]! / 1000);
+      const to = String(scaleBase[index]! / 1000);
       element.style.setProperty(property, to);
-      const event = object.scaleEvents[axis];
-      if (event) {
-        const animation = element.animate(
-          {[property]: [String(event.from / 1000), to]},
-          event.time,
+      const loopEv = axis === 'x' ? scaleXLoop : scaleYLoop;
+      if (loopEv && loopEv.mode !== 0) {
+        const anim = element.animate(
+          {[property]: [String(loopEv.from / 1000), String(loopEv.target / 1000)]},
+          {
+            duration: loopEv.duration,
+            delay: loopEv.delay,
+            easing: eventEasing(loopEv.easing),
+            fill: 'both',
+            iterations: Infinity,
+            direction: loopEv.mode === 2 ? 'alternate' : 'normal',
+          },
         );
-        animation.currentTime = performance.now() - event.started;
+        anim.currentTime = Math.max(0, now - loopEv.started);
+        continue;
+      }
+      const event = object.scaleEvents?.[axis];
+      if (event) {
+        const elapsed = Math.max(0, now - event.started);
+        const total = Number(event.time.duration ?? 0) + Number(event.time.delay ?? 0);
+        if (elapsed < total) {
+          const animation = element.animate(
+            {[property]: [String(event.from / 1000), to]},
+            event.time,
+          );
+          animation.currentTime = elapsed;
+        }
       }
     }
   }
@@ -3773,7 +4212,12 @@ export class SiglusDisplay {
     return true;
   }
 
-  private async replaceLayer(next: HTMLElement, duration: number, fan?: WipeSpec): Promise<void> {
+  private async replaceLayer(
+    next: HTMLElement,
+    duration: number,
+    fan?: WipeSpec,
+    speedMode = 0,
+  ): Promise<void> {
     this.signal.throwIfAborted();
     this.finishWipe();
     const previous = [...this.layers.children];
@@ -3783,15 +4227,29 @@ export class SiglusDisplay {
     });
     this.background = next;
     if (duration > 0) {
-      if (fan) await this.animateFanWipe(next, duration, fan);
-      else {
-        const animation = next.animate({opacity: [0, 1]}, {duration});
-        this.wipe = animation;
-        try {
-          await animation.finished;
-        } finally {
-          if (this.wipe === animation) this.wipe = undefined;
+      this.activeWipeLayer = next;
+      try {
+        if (fan) await this.animateFanWipe(next, duration, fan, speedMode);
+        else {
+          // Composite an opaque backdrop behind the incoming stage during crossfade so
+          // fading to black or removing sprites smoothly blends instead of popping at t=duration.
+          const hadBg = next.style.backgroundColor;
+          next.style.backgroundColor = hadBg || 'black';
+          next.style.isolation = 'isolate';
+          const animation = next.animate(
+            {opacity: [0, 1]},
+            {duration, easing: eventEasing(speedMode)},
+          );
+          this.wipe = animation;
+          try {
+            await animation.finished;
+          } finally {
+            if (this.wipe === animation) this.wipe = undefined;
+            if (!hadBg) next.style.removeProperty('background-color');
+          }
         }
+      } finally {
+        if (this.activeWipeLayer === next) this.activeWipeLayer = undefined;
       }
     }
     this.preserveStageFocus(() => {
@@ -3800,20 +4258,30 @@ export class SiglusDisplay {
     this.syncHoverAfterDomUpdate();
   }
 
-  private async animateFanWipe(layer: HTMLElement, duration: number, fan: WipeSpec): Promise<void> {
+  private async animateFanWipe(
+    layer: HTMLElement,
+    duration: number,
+    fan: WipeSpec,
+    speedMode = 0,
+  ): Promise<void> {
     const {width, height} = this;
-    const maskWidth = 'values' in fan ? fan.width : width;
-    const maskHeight = 'values' in fan ? fan.height : height;
-    const values = 'values' in fan ? fan.values : fanWipeMask(width, height, fan);
-    const canvas = document.createElement('canvas');
-    canvas.width = maskWidth;
-    canvas.height = maskHeight;
-    const context = canvas.getContext('2d')!;
-    const pixels = context.createImageData(maskWidth, maskHeight);
-    for (let index = 0; index < values.length; index++) {
-      pixels.data[index * 4 + 3] = values[index]!;
+    let maskHref = this.wipeMaskUrlCache.get(fan);
+    if (!maskHref) {
+      const maskWidth = 'values' in fan ? fan.width : width;
+      const maskHeight = 'values' in fan ? fan.height : height;
+      const values = 'values' in fan ? fan.values : fanWipeMask(width, height, fan);
+      const canvas = document.createElement('canvas');
+      canvas.width = maskWidth;
+      canvas.height = maskHeight;
+      const context = canvas.getContext('2d')!;
+      const pixels = context.createImageData(maskWidth, maskHeight);
+      for (let index = 0; index < values.length; index++) {
+        pixels.data[index * 4 + 3] = values[index]!;
+      }
+      context.putImageData(pixels, 0, 0);
+      maskHref = canvas.toDataURL();
+      this.wipeMaskUrlCache.set(fan, maskHref);
     }
-    context.putImageData(pixels, 0, 0);
     const svg = document.createElementNS(svgNamespace, 'svg');
     svg.style.cssText = 'position:absolute;width:0;height:0;pointer-events:none';
     const mask = document.createElementNS(svgNamespace, 'mask');
@@ -3837,14 +4305,15 @@ export class SiglusDisplay {
     // from the softness and 16.16 time progress.
     const slope = 255 - 254 * fan.softness;
     alpha.setAttribute('slope', String(slope));
-    image.setAttribute('href', canvas.toDataURL());
+    image.setAttribute('href', maskHref);
     image.setAttribute('filter', `url(#${filter.id})`);
     transfer.append(alpha);
     filter.append(transfer);
     mask.append(image);
     svg.append(filter, mask);
     this.stage.append(svg);
-    layer.style.backgroundColor = 'black';
+    const hadBg = layer.style.backgroundColor;
+    layer.style.backgroundColor = hadBg || 'black';
     layer.style.maskImage = `url(#${mask.id})`;
     const animation = layer.animate([], {duration, fill: 'both'});
     this.wipe = animation;
@@ -3853,7 +4322,9 @@ export class SiglusDisplay {
     let frame = 0;
     const render = () => {
       const time = Number(animation.currentTime ?? 0);
-      const progress = Math.min(65536, Math.floor((time * 65536) / duration)) / 65536;
+      const raw = Math.max(0, Math.min(1, Math.min(65536, Math.floor((time * 65536) / duration)) / 65536));
+      const progress =
+        speedMode === 1 ? raw * raw : speedMode === 2 ? 1 - (1 - raw) * (1 - raw) : raw;
       alpha.setAttribute('intercept', String((slope + 1) * progress - slope));
       frame = requestAnimationFrame(render);
     };
@@ -3864,6 +4335,7 @@ export class SiglusDisplay {
       cancelAnimationFrame(frame);
       this.signal.removeEventListener('abort', stop);
       layer.style.removeProperty('mask-image');
+      if (!hadBg) layer.style.removeProperty('background-color');
       svg.remove();
       if (this.wipe === animation) this.wipe = undefined;
     }
@@ -3974,6 +4446,30 @@ export class SiglusDisplay {
           if (this.castTransition === transition) this.castTransition = undefined;
         });
       if (backdrop) this.root.dataset.background = backdrop.name;
+    } else if (duration > 0 && this.cast.childElementCount > 0) {
+      const outgoing = document.createElement('div');
+      outgoing.style.cssText = 'position:absolute;inset:0;pointer-events:none';
+      outgoing.append(...this.cast.children);
+      const incoming = document.createElement('div');
+      incoming.style.cssText = 'position:absolute;inset:0;pointer-events:none';
+      incoming.append(...characters);
+      this.cast.replaceChildren(outgoing, incoming);
+      const outAnim = outgoing.animate({opacity: [1, 0]}, {duration, fill: 'forwards'});
+      const inAnim = characters.length
+        ? incoming.animate({opacity: [0, 1]}, {duration})
+        : undefined;
+      void Promise.all([outAnim.finished, inAnim?.finished].filter(Boolean))
+        .then(
+          () => {
+            if (outgoing.parentElement === this.cast) outgoing.remove();
+            if (incoming.parentElement === this.cast) {
+              this.cast.replaceChildren(...incoming.children);
+            }
+          },
+          () => {
+            if (outgoing.parentElement === this.cast) outgoing.remove();
+          },
+        );
     } else {
       this.cast.replaceChildren(...characters);
       if (duration > 0 && characters.length) this.cast.animate({opacity: [0, 1]}, {duration});
@@ -4407,6 +4903,7 @@ export class SiglusDisplay {
     characters: readonly Element[],
     duration: number,
     fan?: WipeSpec,
+    speedMode = 0,
   ): Promise<void> {
     const previous = this.background;
     const retired = [...this.pendingEffects.keys()].flatMap((slot) => this.activeEffects.get(slot) ?? []);
@@ -4427,7 +4924,7 @@ export class SiglusDisplay {
     this.applyStageEffectChanges(next, duration > 0 ? previous : undefined);
     this.placeStageRectangles(next, cast);
     try {
-      await this.replaceLayer(next, duration, fan);
+      await this.replaceLayer(next, duration, fan, speedMode);
     } finally {
       for (const gan of retired) this.removeStageEffect(gan);
       this.cast.replaceChildren(...cast.children);
@@ -4757,6 +5254,10 @@ export class SiglusDisplay {
     };
   }
 
+  get hasPendingRuby(): boolean {
+    return Boolean(this.ruby);
+  }
+
   annotate(value: string): void {
     this.ruby = value;
   }
@@ -4888,6 +5389,7 @@ export class SiglusDisplay {
   }
 
   async closeMessageWithAnimation(anime: MwndAnimation): Promise<void> {
+    this.pageControls();
     if (
       anime.type > 0 &&
       anime.time > 0 &&

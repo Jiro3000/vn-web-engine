@@ -607,9 +607,15 @@ export class SiglusPlayer {
     const color = config.get('CONFIG.FILTER_COLOR')?.split(',').map(Number) ?? [];
     this.filterDefaults = [color[0] ?? 0, color[1] ?? 0, color[2] ?? 0, color[3] ?? 255];
     this.filterColor = [...this.filterDefaults];
+    const configuredSpeed = Number(config.get('CONFIG.MESSAGE_SPEED'));
     this.playbackDefaults = {
-      messageSpeed: 30,
-      messageNowait: true,
+      messageSpeed:
+        config.has('CONFIG.MESSAGE_SPEED') && Number.isFinite(configuredSpeed)
+          ? Math.max(0, Math.min(playbackLimits.messageSpeed, Math.trunc(configuredSpeed)))
+          : 30,
+      messageNowait: config.has('CONFIG.MESSAGE_SPEED_NOWAIT.ONOFF')
+        ? config.get('CONFIG.MESSAGE_SPEED_NOWAIT.ONOFF') === '1'
+        : true,
       autoCharacterWait: 30,
       autoMinimumWait: 1000,
       voiceDuckLevel: Number(config.get('CONFIG.BGMFADE_VOLUME') ?? 255),
@@ -1941,9 +1947,10 @@ export class SiglusPlayer {
     speed: number,
     asyncMode: boolean,
   ): Promise<void> {
-    const run = this.display.appendRun('');
+    const first = characters.length > 0 && !this.display.hasPendingRuby ? characters[0]! : '';
+    const run = this.display.appendRun(first);
     const started = performance.now();
-    let visible = 0;
+    let visible = first && !run.ruby ? 1 : 0;
     this.printing = true;
     try {
       while (visible < characters.length) {
@@ -1953,7 +1960,7 @@ export class SiglusPlayer {
           return;
         }
         const next = run.ruby ? characters.length : visible + 1;
-        const remaining = Math.max(next * speed - (performance.now() - started), 0);
+        const remaining = Math.max((run.ruby ? 1 : visible) * speed - (performance.now() - started), 0);
         if (asyncMode) {
           const skipped = await new Promise<boolean>((resolve, reject) => {
             const signal = this.controller.signal;
@@ -1990,7 +1997,7 @@ export class SiglusPlayer {
         }
         visible = Math.min(
           characters.length,
-          Math.max(next, Math.floor((performance.now() - started) / speed)),
+          Math.max(next, 1 + Math.floor((performance.now() - started) / speed)),
         );
         run.reveal(visible === characters.length ? value : characters.slice(0, visible).join(''));
       }
@@ -3027,8 +3034,9 @@ export class SiglusPlayer {
     duration: number,
     spec: WipeSpec | undefined,
     waitFlag: boolean,
+    speedMode = 0,
   ): Promise<void> {
-    const run = this.wipe(duration, spec);
+    const run = this.wipe(duration, spec, speedMode);
     this.pendingWipe = run;
     if (waitFlag) {
       await run;
@@ -3044,9 +3052,34 @@ export class SiglusPlayer {
       });
   }
 
-  private async wipe(ms: number, fan?: WipeSpec): Promise<void> {
+  private reanchorObjectEvents(object: DrawObject, now: number): void {
+    if (object.opacityStarted !== undefined) object.opacityStarted = now;
+    if (object.movementStarted !== undefined) object.movementStarted = now;
+    if (object.horizontalMotion) object.horizontalMotion.started = now;
+    for (const ev of [
+      object.positionEvents?.x,
+      object.positionEvents?.y,
+      object.scaleEvents?.x,
+      object.scaleEvents?.y,
+    ]) {
+      if (ev) ev.started = now;
+    }
+    for (const map of [object.offsetEvents?.x, object.offsetEvents?.y]) {
+      for (const ev of map?.values() ?? []) ev.started = now;
+    }
+    for (const ev of object.intEvents?.values() ?? []) {
+      ev.started = now;
+      if (ev.mode === 0) ev.endAt = now + ev.duration + ev.delay;
+    }
+    if (object.children) {
+      for (const child of object.children.values()) this.reanchorObjectEvents(child, now);
+    }
+  }
+
+  private async wipe(ms: number, fan?: WipeSpec, speedMode = 0): Promise<void> {
     this.lastInputSampleAt = -Infinity;
     this.lastInputSampleScene = undefined;
+    const wipeNow = performance.now();
     if (this.excallAllocated && this.systemBackObjects) {
       // Native 0x6a7cd0 (C_tnm_wipe::start): when EXCALL is allocated (target=1),
       // wipe exclusively updates G_excall.m_stage_list (systemBackObjects -> systemObjects)
@@ -3062,6 +3095,9 @@ export class SiglusPlayer {
         }
       }
       this.systemObjects = this.copyObjects(back);
+      for (const [id, obj] of this.systemObjects) {
+        if (!copiedIds.has(id)) this.reanchorObjectEvents(obj, wipeNow);
+      }
       if (this.usesWipeCopy) back.clear();
       this.systemObjectsDirty = false;
       if (this.activeGroups.size || this.cancelGroups.size) {
@@ -3102,6 +3138,7 @@ export class SiglusPlayer {
         (button) => this.choose(button),
         false,
         this.wipeDuration(ms),
+        speedMode,
       );
       this.releaseUnusedObjectMovies();
       return;
@@ -3118,6 +3155,9 @@ export class SiglusPlayer {
     // Commit front/back swap and frame_action promotion atomically before yielding
     // so wait=0 wipes and subsequent restore/wipe calls never corrupt objects[0].
     const nextFront = this.copyObjects(back);
+    for (const [id, obj] of nextFront) {
+      if (!copiedIds.has(id)) this.reanchorObjectEvents(obj, wipeNow);
+    }
     this.objects[0] = nextFront;
     if (this.usesWipeCopy) back.clear();
     this.objectsDirty = false;
@@ -3168,6 +3208,7 @@ export class SiglusPlayer {
       this.wipeDuration(ms),
       (id) => this.choose(id),
       fan,
+      speedMode,
     );
     this.releaseUnusedObjectMovies();
   }
@@ -3315,9 +3356,19 @@ export class SiglusPlayer {
         y: object.positionOffsets.y?.slice(),
       },
       offsetEventCounts: object.offsetEventCounts && {...object.offsetEventCounts},
+      positionEvents: object.positionEvents && {
+        x: object.positionEvents.x && {...object.positionEvents.x, time: {...object.positionEvents.x.time}},
+        y: object.positionEvents.y && {...object.positionEvents.y, time: {...object.positionEvents.y.time}},
+      },
+      scaleEvents: object.scaleEvents && {
+        x: object.scaleEvents.x && {...object.scaleEvents.x, time: {...object.scaleEvents.x.time}},
+        y: object.scaleEvents.y && {...object.scaleEvents.y, time: {...object.scaleEvents.y.time}},
+      },
+      horizontalMotion: object.horizontalMotion && {...object.horizontalMotion},
+      movement: object.movement && ([...object.movement] as NonNullable<DrawObject['movement']>),
       offsetEvents: object.offsetEvents && {
-        x: object.offsetEvents.x && new Map(object.offsetEvents.x),
-        y: object.offsetEvents.y && new Map(object.offsetEvents.y),
+        x: object.offsetEvents.x && new Map([...object.offsetEvents.x].map(([k, v]) => [k, {...v, time: {...v.time}}])),
+        y: object.offsetEvents.y && new Map([...object.offsetEvents.y].map(([k, v]) => [k, {...v, time: {...v.time}}])),
       },
       children: object.children && this.copyObjects(object.children),
     };
@@ -4454,6 +4505,7 @@ export class SiglusPlayer {
           };
           const wipeType = Number(parameter(0) ?? 0);
           const duration = wipeType === 1 ? 0 : Number(parameter(1) ?? 0);
+          const speedMode = Number(parameter(2) ?? 0);
           const rawOptions = parameter(3);
           const options = Array.isArray(rawOptions) ? rawOptions.map((v) => Number(v)) : [];
           const waitFlag = parameter(8) === undefined ? true : Boolean(Number(parameter(8)));
@@ -4470,7 +4522,7 @@ export class SiglusPlayer {
           } else if (wipeType !== 0 && wipeType !== 1) {
             spec = proceduralWipeMask(wipeType, 256, 144, options);
           }
-          await this.runWipeCommand(duration, spec, waitFlag);
+          await this.runWipeCommand(duration, spec, waitFlag, speedMode);
           break;
         }
         case 8:
@@ -7506,8 +7558,14 @@ export class SiglusPlayer {
       object.buttonState = 'normal';
     } else if (path.at(-1) === 0 && args.length === 5) {
       const animation: NonNullable<DrawObject['opacity']> = [n(0), n(1), n(2), n(3), n(4)];
-      if (command === 72) object.opacity = animation;
-      else object.movement = animation;
+      if (command === 72) {
+        object.opacity = animation;
+        object.opacityStarted = performance.now();
+        object.opacityElapsed = undefined;
+      } else {
+        object.movement = animation;
+        object.movementStarted = performance.now();
+      }
     } else return undefined;
     return 0;
   }

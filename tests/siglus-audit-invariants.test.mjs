@@ -1575,6 +1575,7 @@ test('Audit B: DrawObject persistent field parity across SerializedDrawObject, s
     'opacityElapsed',
     'horizontalMotion',
     'movement',
+    'movementStarted',
   ]);
 
   const serFnStart = displaySrc.indexOf('export function serializeDrawObject(');
@@ -2960,4 +2961,88 @@ test('Native 1.1.141.3 dialogue wait (64.48/64.51/64.21/64.22), skip/auto flags 
     [0, 'hit'],
     [1, 'hit'],
   ]);
+});
+
+test('Transition smoothness: evalObjectIntEvent, non-blocking wipe preservation, back-stage re-anchoring, and copyObject cloning', async () => {
+  const {SiglusDisplay, evalObjectIntEvent} = await import('../dist/engines/siglus/display.js');
+  const {SiglusPlayer} = await import('../dist/engines/siglus/player.js');
+
+  // 1. evalObjectIntEvent: one-shot linear/ease-in/ease-out, delay, loop, and turn (ping-pong)
+  const oneShot = {mode: 0, from: 0, target: 100, duration: 200, delay: 50, easing: 0, started: 1000, endAt: 1250};
+  assert.equal(evalObjectIntEvent(oneShot, 1020), 0);
+  assert.equal(evalObjectIntEvent(oneShot, 1150), 50);
+  assert.equal(evalObjectIntEvent(oneShot, 1250), undefined);
+  const easeIn = {...oneShot, easing: 1};
+  assert.equal(evalObjectIntEvent(easeIn, 1150), 25);
+  const easeOut = {...oneShot, easing: 2};
+  assert.equal(evalObjectIntEvent(easeOut, 1150), 75);
+  const loopEv = {mode: 1, from: 10, target: 110, duration: 100, delay: 0, easing: 0, started: 0, endAt: Infinity};
+  assert.equal(evalObjectIntEvent(loopEv, 150), 60);
+  const turnEv = {mode: 2, from: 0, target: 100, duration: 100, delay: 0, easing: 0, started: 0, endAt: Infinity};
+  assert.equal(evalObjectIntEvent(turnEv, 50), 50);
+  assert.equal(evalObjectIntEvent(turnEv, 125), 75);
+  assert.equal(evalObjectIntEvent(turnEv, 175), 25);
+
+  // 2. refreshObjects() updates activeWipeLayer in place without aborting a running wait=0 wipe
+  let finishedWipe = false;
+  let replacedInPlace = null;
+  let syncedHover = false;
+  const oldChild = {inert: false};
+  const wipingLayer = {
+    isConnected: true,
+    children: [oldChild],
+    replaceChildren: (...nodes) => {
+      replacedInPlace = nodes;
+    },
+  };
+  const display = Object.assign(Object.create(SiglusDisplay.prototype), {
+    wipe: {playState: 'running', finish: () => (finishedWipe = true)},
+    activeWipeLayer: wipingLayer,
+    objectLayer: undefined,
+    stageGeneration: 7,
+    refreshGeneration: 0,
+    drawObjects: async () => ({children: ['updated-node']}),
+    preserveStageFocus: (fn) => fn(),
+    syncHoverAfterDomUpdate: () => (syncedHover = true),
+    replaceLayer: async () => {
+      throw new Error('refreshObjects must not call replaceLayer/finishWipe during an active wipe');
+    },
+  });
+  await display.refreshObjects([], () => {});
+  assert.equal(finishedWipe, false);
+  assert.equal(display.stageGeneration, 7, 'in-place wipe refresh must not invalidate show() stageGeneration');
+  assert.equal(oldChild.inert, true);
+  assert.deepEqual(replacedInPlace, ['updated-node']);
+  assert.equal(display.objectLayer, wipingLayer);
+  assert.equal(syncedHover, true);
+
+  // 3. copyObject deep-clones animation event objects & reanchorObjectEvents re-anchors back-stage timestamps
+  const player = Object.create(SiglusPlayer.prototype);
+  const srcObj = {
+    name: 'sprite',
+    frames: [],
+    x: 10,
+    y: 20,
+    visible: true,
+    pattern: 0,
+    opacityStarted: 100,
+    movement: [50, 200, 0, 2, 0],
+    movementStarted: 100,
+    horizontalMotion: {from: 0, duration: 200, delay: 0, easing: 0, started: 100},
+    positionEvents: {x: {from: 0, started: 100, time: {duration: 200, delay: 0}}},
+    scaleEvents: {y: {from: 500, started: 100, time: {duration: 300, delay: 0}}},
+    intEvents: new Map([['ch:75', {mode: 0, from: 0, target: 255, duration: 200, delay: 50, easing: 0, started: 100, endAt: 350}]]),
+  };
+  const cloned = player.copyObject(srcObj);
+  player.reanchorObjectEvents(cloned, 500);
+  assert.equal(cloned.opacityStarted, 500);
+  assert.equal(cloned.movementStarted, 500);
+  assert.equal(cloned.horizontalMotion.started, 500);
+  assert.equal(cloned.positionEvents.x.started, 500);
+  assert.equal(cloned.scaleEvents.y.started, 500);
+  assert.equal(cloned.intEvents.get('ch:75').started, 500);
+  assert.equal(cloned.intEvents.get('ch:75').endAt, 750);
+  assert.equal(srcObj.positionEvents.x.started, 100, 're-anchoring clone must not mutate source object');
+  assert.equal(srcObj.scaleEvents.y.started, 100);
+  assert.equal(srcObj.horizontalMotion.started, 100);
 });
