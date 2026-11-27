@@ -346,6 +346,10 @@ try {
     }))`);
   }
 
+  if (process.env.SIGLUS_OBSERVE_OUT) {
+    await evaluate(`window.__siglusObserve = {commands: new Set(), properties: new Set(), gameexe: new Set()};`);
+  }
+
   const playPt = await evaluate(`(() => {
     const r = document.getElementById('play').getBoundingClientRect();
     return {x: r.left + r.width / 2, y: r.top + r.height / 2};
@@ -2435,7 +2439,7 @@ try {
             const sequence = profileCfg.messageMenu ? [0, 3, 1, 2] : [0, 1, 2];
             const kind = sequence[chaosCount % sequence.length];
             chaosCount++;
-            if (kind === 0 && CANCEL_SCENE) {
+            if (kind === 0 && CANCEL_SCENE && profileCfg.quickMenu !== null) {
               await rightClickStage();
               const label = `chaos-${chaosCount}-rc`;
               await waitForModalCancel(label);
@@ -2458,7 +2462,7 @@ try {
                 await delay(250);
                 assertRoundTripClean(`chaos-${chaosCount}-backlog`, s0, await inspectState());
               }
-            } else {
+            } else if (kind === 3 && profileCfg.messageMenu) {
               await testQuickSaveLoad(profileCfg.messageMenu, `chaos-${chaosCount}-quick-save-load`);
             }
             nextChaos = (await inspectState()).pages + chaosEvery;
@@ -2572,6 +2576,51 @@ try {
     }
   }
 
+  if (process.env.SIGLUS_OBSERVE_OUT && errors.length === 0) {
+    try {
+      const obs = await evaluate(`(() => {
+        const o = window.__siglusObserve;
+        if (!o) return null;
+        return {
+          commands: [...o.commands].sort(),
+          properties: [...o.properties].sort(),
+          gameexe: [...o.gameexe].sort(),
+        };
+      })()`);
+      if (obs) {
+        const outPath = resolve(process.env.SIGLUS_OBSERVE_OUT);
+        const gameKey = PROFILE_PATH.replace(/^.*[\\/]/, '').replace(/\.json$/i, '');
+        const doc = fs.existsSync(outPath)
+          ? JSON.parse(fs.readFileSync(outPath, 'utf8'))
+          : {schema: 'siglus-browser-observed/v1', generatedAt: null, runs: {}, commands: {}, properties: {}, gameexe: {}};
+        doc.generatedAt = new Date().toISOString();
+        const runKey = `${gameKey}:${MODE}`;
+        doc.runs[runKey] = {
+          game: gameKey,
+          mode: MODE,
+          recordedAt: doc.generatedAt,
+          commandsCount: obs.commands.length,
+          propertiesCount: obs.properties.length,
+          gameexeCount: obs.gameexe.length,
+        };
+        const merge = (bucket, items) => {
+          for (const k of items) {
+            const set = new Set(bucket[k] ?? []);
+            set.add(gameKey);
+            bucket[k] = [...set].sort();
+          }
+        };
+        merge(doc.commands, obs.commands);
+        merge(doc.properties, obs.properties);
+        merge(doc.gameexe, obs.gameexe);
+        fs.mkdirSync(resolve(outPath, '..'), {recursive: true});
+        fs.writeFileSync(outPath, JSON.stringify(doc, null, 2) + '\n');
+        console.log(`[observe] Recorded ${obs.commands.length} cmds, ${obs.properties.length} props, ${obs.gameexe.length} gameexe keys -> ${process.env.SIGLUS_OBSERVE_OUT} (${runKey})`);
+      }
+    } catch (obsErr) {
+      console.warn('[observe] Failed to record telemetry:', obsErr instanceof Error ? obsErr.message : String(obsErr));
+    }
+  }
 } catch (error) {
   errors.push(error instanceof Error ? error.message : String(error));
 } finally {

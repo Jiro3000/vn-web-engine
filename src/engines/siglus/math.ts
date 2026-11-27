@@ -5,6 +5,14 @@
  */
 
 const PI_OVER_180_F32 = Math.fround(Math.PI / 180);
+const RAD_TO_DEG_F32 = Math.fround(180 / Math.PI);
+
+/** Native 1.1.141.3 0x55eea0: round-half-away-from-zero to int32. */
+function siglusRoundHalfAway(value: number): number {
+  if (value > 0) return Math.trunc(value + 0.5) | 0;
+  if (value < 0) return Math.trunc(value - 0.5) | 0;
+  return 0;
+}
 
 export function siglusSin(deg10: number, scale: number): number {
   const rad = Math.fround((Math.fround(deg10 | 0) * PI_OVER_180_F32) / 10);
@@ -20,6 +28,37 @@ export function siglusCos(deg10: number, scale: number): number {
 export function siglusTan(deg10: number, scale: number): number {
   const rad = Math.fround((Math.fround(deg10 | 0) * PI_OVER_180_F32) / 10);
   return Math.trunc(Math.fround(Math.tan(rad)) * Math.fround(scale | 0)) | 0;
+}
+
+/** Native 1.1.141.3 0x55f187 (math.asin): returns angle in tenths of a degree. */
+export function siglusAsin(num: number, den: number): number {
+  const d = den | 0;
+  if (d === 0) return 0;
+  const ratio = Math.max(-1, Math.min(1, (num | 0) / d));
+  return siglusRoundHalfAway(Math.asin(ratio) * RAD_TO_DEG_F32 * 10);
+}
+
+/** Native 1.1.141.3 0x55f1f7 (math.acos): returns angle in tenths of a degree. */
+export function siglusAcos(num: number, den: number): number {
+  const d = den | 0;
+  if (d === 0) return 0;
+  const ratio = Math.max(-1, Math.min(1, (num | 0) / d));
+  return siglusRoundHalfAway(Math.acos(ratio) * RAD_TO_DEG_F32 * 10);
+}
+
+/** Native 1.1.141.3 0x55f23a (math.atan): returns angle in tenths of a degree. */
+export function siglusAtan(num: number, den: number): number {
+  const d = den | 0;
+  if (d === 0) return 0;
+  return siglusRoundHalfAway(Math.atan((num | 0) / d) * RAD_TO_DEG_F32 * 10);
+}
+
+/** Native 1.1.141.3 0x55f2c0 (math.angle / atan2): returns [0..3599] tenths of a degree. */
+export function siglusAngle(x1: number, y1: number, x2: number, y2: number): number {
+  const dx = ((x2 | 0) - (x1 | 0)) | 0;
+  const dy = ((y2 | 0) - (y1 | 0)) | 0;
+  const rounded = siglusRoundHalfAway(Math.atan2(dy, dx) * RAD_TO_DEG_F32 * 10);
+  return ((rounded + 3600) % 3600) | 0;
 }
 
 /** Native 1.1.141.3 0x55e8a0: signed int32 formatted with leading padChar after '-' sign. */

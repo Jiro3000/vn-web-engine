@@ -17,7 +17,18 @@ import {
 import {readCaptureBmpFlags} from './capture.js';
 import {measureSiglusFlick, siglusFlickScene} from './flick.js';
 import {SiglusJoypad} from './joypad.js';
-import {siglusCos, siglusSin, siglusTan, siglusTostrPad, siglusTostrZen, siglusTostrZenZero} from './math.js';
+import {
+  siglusAcos,
+  siglusAngle,
+  siglusAsin,
+  siglusAtan,
+  siglusCos,
+  siglusSin,
+  siglusTan,
+  siglusTostrPad,
+  siglusTostrZen,
+  siglusTostrZenZero,
+} from './math.js';
 import {
   parseButtonSe,
   parseMwndAnimation,
@@ -57,6 +68,15 @@ import {
   type SiglusTag,
   type Value,
 } from './vm.js';
+
+// Native 1.1.141.3 0x55d587..0x55d629: 3=bit(1), 4=bit2(2), 5=bit4(4), 6=bit16(16), 7=bit8(8).
+const INTLIST_BIT_WIDTH: Readonly<Record<number, number>> = {3: 1, 4: 2, 5: 4, 6: 16, 7: 8};
+
+interface SiglusAuditObserver {
+  commands: Set<string>;
+  properties: Set<string>;
+  gameexe: Set<string>;
+}
 
 const fadeTimes = [
   250, 100, 500, 1000, 1500, 2000, 2500, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 12000,
@@ -515,6 +535,7 @@ export class SiglusPlayer {
   private readonly galleryFlags = new Map<number, number>();
   private readonly unhandledCommands = new Map<string, {count: number; scene: string; line: number}>();
   private readonly unhandledProperties = new Map<string, {count: number; scene: string; line: number}>();
+  private readonly auditObserve?: SiglusAuditObserver;
   private movieError?: Error;
   private skip = false;
   private skipAllowed = true;
@@ -577,6 +598,27 @@ export class SiglusPlayer {
     private readonly trace?: (tag: SiglusTag) => void,
   ) {
     const {files, config} = game;
+    const observe = (
+      root.ownerDocument?.defaultView as (Window & {__siglusObserve?: SiglusAuditObserver}) | null
+    )?.__siglusObserve;
+    if (observe) {
+      this.auditObserve = observe;
+      const rawConfig: unknown = config;
+      if (rawConfig instanceof Map) {
+        const cfgMap = rawConfig as Map<string, string>;
+        const origGet = cfgMap.get.bind(cfgMap);
+        const origHas = cfgMap.has.bind(cfgMap);
+        const normKey = (k: string) => k.replace(/\.\d+(?=\.|$)/g, '.NNN');
+        cfgMap.get = (k: string) => {
+          observe.gameexe.add(normKey(k));
+          return origGet(k);
+        };
+        cfgMap.has = (k: string) => {
+          observe.gameexe.add(normKey(k));
+          return origHas(k);
+        };
+      }
+    }
     const [width, height] = (config.get('SCREEN_SIZE') ?? '1920,1080').split(',').map(Number);
     if (
       !width ||
@@ -1000,7 +1042,18 @@ export class SiglusPlayer {
       {
         command: (command) => this.command(command),
         property: (path, value) => this.property(path, value),
-        trace: this.trace ?? (() => {}),
+        trace: (tag) => {
+          if (
+            this.auditObserve &&
+            tag.tag === 'command' &&
+            tag.path.length > 0 &&
+            tag.path[0]! >= 0 &&
+            tag.path[0]! < 0x10000
+          ) {
+            this.auditObserve.commands.add(this.normalizePathKey(tag.path));
+          }
+          this.trace?.(tag);
+        },
         resetStageForMenu: () => this.resetStageForMenu(),
         yieldDelay: () => (this.systemOption('SLEEP_ONOFF') ? 16 : 0),
         message: (tag) => {
@@ -1476,6 +1529,9 @@ export class SiglusPlayer {
   }
 
   private property(path: number[], value?: Value): Value | undefined {
+    if (this.auditObserve && path.length > 0 && path[0]! >= 0 && path[0]! < 0x10000) {
+      this.auditObserve.properties.add(this.normalizePathKey(path));
+    }
     path = this.stagePath(path);
     const [page, list, array] = path;
     if (page === 108 && list !== undefined && path.length === 2) {
@@ -1502,11 +1558,23 @@ export class SiglusPlayer {
       if (value !== undefined) this.excallFlags.set(slot, Number(value));
       return this.excallFlags.get(slot) ?? 0;
     }
-    if (page === 32 && list === 3 && array === -1 && path.length === 4) {
-      const bit = path[3]!;
-      if (value !== undefined && this.setGalleryFlag(bit, Number(value)))
-        this.persistGalleryFlags();
-      return Number(Boolean((this.galleryFlags.get(bit >>> 5) ?? 0) & (1 << (bit & 31))));
+    if (page === 32 && list !== undefined && INTLIST_BIT_WIDTH[list] && array === -1 && path[3] !== undefined && path[3] >= 0) {
+      // 1.1.141.3 0x55d587..0x55d629: G.bit/bit2/bit4/bit16(6)/bit8(7) views alias galleryFlags.
+      const width = INTLIST_BIT_WIDTH[list]!;
+      const mask = (1 << width) - 1;
+      const perWord = 32 / width;
+      const idx = path[3];
+      const wordIdx = Math.floor(idx / perWord);
+      const shift = (idx % perWord) * width;
+      if (value !== undefined) {
+        const cur = this.galleryFlags.get(wordIdx) ?? 0;
+        const next = (cur & ~(mask << shift)) | ((Number(value) & mask) << shift);
+        if (next !== cur) {
+          this.galleryFlags.set(wordIdx, next);
+          this.persistGalleryFlags();
+        }
+      }
+      return ((this.galleryFlags.get(wordIdx) ?? 0) >>> shift) & mask;
     }
     if (page === 32 && list === -1 && array !== undefined && path.length === 3) {
       // Both G[] and the G bit view address the same list (1.1.141.3 at 0x54fe1f).
@@ -1516,14 +1584,20 @@ export class SiglusPlayer {
       }
       return this.galleryFlags.get(array);
     }
-    if (page === 31 && list === 3 && array === -1 && path[3] !== undefined && path[3] >= 0) {
-      const bit = path[3];
-      const index = Math.floor(bit / 32);
-      const mask = 1 << (bit % 32);
-      const previous = this.system.get(index) ?? 0;
-      if (value !== undefined)
-        this.property([31, -1, index], Number(value) & 1 ? previous | mask : previous & ~mask);
-      return Number(Boolean((this.system.get(index) ?? 0) & mask));
+    if (page === 31 && list !== undefined && INTLIST_BIT_WIDTH[list] && array === -1 && path[3] !== undefined && path[3] >= 0) {
+      // 1.1.141.3 0x55d587..0x55d629: Z.bit/bit2/bit4/bit16(6)/bit8(7) views alias this.system.
+      const width = INTLIST_BIT_WIDTH[list]!;
+      const mask = (1 << width) - 1;
+      const perWord = 32 / width;
+      const idx = path[3];
+      const wordIdx = Math.floor(idx / perWord);
+      const shift = (idx % perWord) * width;
+      const previous = this.system.get(wordIdx) ?? 0;
+      if (value !== undefined) {
+        const next = (previous & ~(mask << shift)) | ((Number(value) & mask) << shift);
+        this.property([31, -1, wordIdx], next);
+      }
+      return ((this.system.get(wordIdx) ?? 0) >>> shift) & mask;
     }
     if (page === 31 && list === -1 && array !== undefined) {
       if (value !== undefined && this.system.get(array) !== Number(value)) {
@@ -1713,12 +1787,11 @@ export class SiglusPlayer {
     if (
       property === 111 &&
       path[address.index + 3] !== undefined &&
-      path[address.index + 3]! >= 3 &&
-      path[address.index + 3]! <= 7 &&
+      INTLIST_BIT_WIDTH[path[address.index + 3]!] &&
       path[address.index + 4] === -1
     ) {
-      // object.f.bit/bit2/bit4/bit8/bit16[idx] (0x55d3d0)
-      const width = 1 << (path[address.index + 3]! - 3);
+      // object.f.bit/bit2/bit4/bit16(6)/bit8(7)[idx] (0x55d587..0x55d629)
+      const width = INTLIST_BIT_WIDTH[path[address.index + 3]!]!;
       const mask = (1 << width) - 1;
       const perWord = 32 / width;
       const idx = path[address.index + 5]!;
@@ -6924,6 +6997,10 @@ export class SiglusPlayer {
       const squared = (Math.imul(dx, dx) + Math.imul(dy, dy)) | 0;
       return squared < 0 ? -0x80000000 : Math.trunc(Math.sqrt(squared));
     }
+    if (root === 39 && member === 16) return siglusAsin(n(0), n(1));
+    if (root === 39 && member === 17) return siglusAcos(n(0), n(1));
+    if (root === 39 && member === 18) return siglusAtan(n(0), n(1));
+    if (root === 39 && member === 22) return siglusAngle(n(0), n(1), n(2), n(3));
     if (root === 39 && member === 10) return Math.min(Math.max(n(1), n(0)), n(2));
     if (root === 42) {
       const positional = args.length - command.named.length;

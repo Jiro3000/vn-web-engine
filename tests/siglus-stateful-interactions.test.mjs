@@ -1460,3 +1460,64 @@ test('Phase 5 Batch 6+7 Ghidra fixes (disc-018..023): CONFIG.*.ONOFF dot keys, s
   assert.equal(vm.stringCommand('abcdef', 11, ['']), -1, 'str.search_last("") returns -1 in native');
   assert.equal(vm.stringCommand('ababa', 11, ['ba']), 3);
 });
+
+test('Final Audit Ghidra fixes (disc-024..025): math.angle/asin/acos/atan (39.16/17/18/22, 0x55f187..0x55f32e) and intlist bit16/bit8 mapping (6=16bit, 7=8bit, 0x55d587..0x55d629)', async () => {
+  const player = makeMockPlayer({
+    system: new Map(),
+    galleryFlags: new Map(),
+    persistGalleryFlags() {},
+  });
+  // Stub global localStorage for system (31) writes
+  const prevStorage = globalThis.localStorage;
+  const store = new Map();
+  globalThis.localStorage = {
+    getItem: (k) => store.get(k) ?? null,
+    setItem: (k, v) => store.set(k, String(v)),
+    removeItem: (k) => store.delete(k),
+  };
+  try {
+    const call = (path, ...args) => player.command({path, args, named: []});
+    // 1. disc-024: math.angle (39.22) returns [0..3599] tenths of a degree
+    assert.equal(await call([39, 22], 0, 0, 10, 0), 0);
+    assert.equal(await call([39, 22], 0, 0, 0, 10), 900);
+    assert.equal(await call([39, 22], 0, 0, -10, 0), 1800);
+    assert.equal(await call([39, 22], 0, 0, 0, -10), 2700);
+    assert.equal(await call([39, 22], 0, 0, 10, -10), 3150);
+    // Tier B: math.asin (16), math.acos (17), math.atan (18)
+    assert.equal(await call([39, 16], 1, 2), 300);
+    assert.equal(await call([39, 16], 1, 0), 0, 'asin div-by-zero returns 0');
+    assert.equal(await call([39, 17], 1, 2), 600);
+    assert.equal(await call([39, 17], 1, 0), 0, 'acos div-by-zero returns 0');
+    assert.equal(await call([39, 18], 1, 1), 450);
+    assert.equal(await call([39, 18], 1, 0), 0, 'atan div-by-zero returns 0');
+
+    // 2. disc-025: Native 0x55d587..0x55d629 maps 3->1bit, 4->2bit, 5->4bit, 6->16bit, 7->8bit!
+    // Z.bit16[0] & Z.bit16[1] (31.6.-1.*) MUST alias Z[0] (31.-1.0) and persist unsigned 16-bit!
+    player.property([31, 6, -1, 0], 0x1234);
+    player.property([31, 6, -1, 1], 0xabcd);
+    assert.equal(player.property([31, 6, -1, 0]), 0x1234);
+    assert.equal(player.property([31, 6, -1, 1]), 0xabcd, 'bit16 read must be unsigned (movzx)');
+    assert.equal(player.property([31, -1, 0]) | 0, (0xabcd1234 | 0), 'Z.bit16 must alias Z[0]');
+    assert.ok(store.has(player.game.saveKey + ':system'), 'Z.bit16 writes must persist to localStorage');
+
+    // Z.bit8[0..3] (31.7.-1.*) reads the 4 bytes of Z[0]
+    assert.equal(player.property([31, 7, -1, 0]), 0x34);
+    assert.equal(player.property([31, 7, -1, 1]), 0x12);
+    assert.equal(player.property([31, 7, -1, 2]), 0xcd);
+    assert.equal(player.property([31, 7, -1, 3]), 0xab);
+
+    // G.bit16 (32.6.-1.*) & G.bit8 (32.7.-1.*) alias G[0] (galleryFlags)
+    player.property([32, 6, -1, 1], 0x5678);
+    assert.equal(player.property([32, -1, 0]), 0x56780000);
+    assert.equal(player.property([32, 7, -1, 2]), 0x78);
+    assert.equal(player.property([32, 7, -1, 3]), 0x56);
+
+    // object.f bit views (111.6 = 16bit, 111.7 = 8bit) MUST NOT be swapped!
+    player.property([38, 2, -1, 5, 111, 6, -1, 1], 0xbeef);
+    assert.equal(player.property([38, 2, -1, 5, 111, -1, 0]) | 0, (0xbeef0000 | 0), 'object.f.bit16[1] shifts by 16 bits');
+    assert.equal(player.property([38, 2, -1, 5, 111, 7, -1, 2]), 0xef, 'object.f.bit8[2] reads byte 2');
+    assert.equal(player.property([38, 2, -1, 5, 111, 7, -1, 3]), 0xbe, 'object.f.bit8[3] reads byte 3');
+  } finally {
+    globalThis.localStorage = prevStorage;
+  }
+});

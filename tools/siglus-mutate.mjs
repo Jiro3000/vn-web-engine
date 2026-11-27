@@ -523,6 +523,31 @@ export const MUTATION_CATALOG = [
     target: '        return needle.length === 0 ? -1 : foldAscii(receiver).lastIndexOf(needle);',
     replacement: '        return foldAscii(receiver).lastIndexOf(needle);',
   },
+  // --- Final Audit: math.angle (39.22) & intlist bit16/bit8 mapping (0x55d587..0x55d629) ---
+  {
+    id: 'math.angle-quadrant-wrap',
+    file: 'src/engines/siglus/math.ts',
+    area: 'math',
+    description: 'Drop +3600 modulo wrap in siglusAngle (39.22, 0x55f2c0) so Q3/Q4 angles go negative',
+    target: '  return ((rounded + 3600) % 3600) | 0;',
+    replacement: '  return rounded | 0;',
+  },
+  {
+    id: 'player.intlist-bit16-vs-bit8',
+    file: 'src/engines/siglus/player.ts',
+    area: 'player/intlist',
+    description: 'Swap native 6=bit16 and 7=bit8 widths in INTLIST_BIT_WIDTH (0x55d5ed/0x55d60f)',
+    target: 'const INTLIST_BIT_WIDTH: Readonly<Record<number, number>> = {3: 1, 4: 2, 5: 4, 6: 16, 7: 8};',
+    replacement: 'const INTLIST_BIT_WIDTH: Readonly<Record<number, number>> = {3: 1, 4: 2, 5: 4, 6: 8, 7: 16};',
+  },
+  {
+    id: 'player.z-bit16-alias',
+    file: 'src/engines/siglus/player.ts',
+    area: 'player/intlist',
+    description: 'Restrict system (31) bit-view aliasing back to 1-bit (list===3) only, breaking Z.bit16 (31.6.-1.*)',
+    target: '    if (page === 31 && list !== undefined && INTLIST_BIT_WIDTH[list] && array === -1 && path[3] !== undefined && path[3] >= 0) {',
+    replacement: '    if (page === 31 && list === 3 && array === -1 && path[3] !== undefined && path[3] >= 0) {',
+  },
 ];
 
 function sha256(bufOrStr) {

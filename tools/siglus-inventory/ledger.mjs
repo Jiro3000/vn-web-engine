@@ -33,6 +33,7 @@ const EVIDENCE_PATH = path.join(REPO_ROOT, 'docs/siglus/verified-evidence.json')
 const LEDGER_OUT_PATH = path.join(REPO_ROOT, 'docs/siglus/verification-ledger.json');
 const REPORT_OUT_PATH = path.join(REPO_ROOT, 'docs/siglus/COVERAGE.md');
 const MUTATION_REPORT_PATH = path.join(REPO_ROOT, 'docs/siglus/mutation-report.json');
+const BROWSER_OBSERVED_PATH = path.join(REPO_ROOT, 'docs/siglus/browser-observed.json');
 
 const SIGLUS_ENGINE_DIR = path.join(REPO_ROOT, 'src/engines/siglus');
 const SIGLUS_FORMAT_DIR = path.join(REPO_ROOT, 'src/formats/siglus');
@@ -86,110 +87,394 @@ function hasTrailingReadFlag(p) {
 }
 
 /**
- * Scan Scene.pck across a game for BOTH commands (op 48) AND property reads/writes (op 5 / op 32).
+ * CFG-aware Siglus Scene.pck scanner for BOTH commands (op 48) AND property reads/writes (op 5 / op 32).
+ *
+ * Mirrors the exact VM stack, element-point, reference-argument, and declaration semantics of
+ * src/engines/siglus/vm.ts so nested call/argument expressions never emit truncated prefix paths
+ * (e.g., 37.2.-1, 38, 65) or concatenated outer+inner phantom paths (e.g., 39.9.0.0.0.93.-1.*.24).
  */
 export function scanScenePackPaths(pack) {
   const commandPaths = new Map();
   const propertyPaths = new Map();
   const bump = (map, norm) => map.set(norm, (map.get(norm) ?? 0) + 1);
 
-  for (const sceneName of pack.sceneNames) {
+  const exportsMap = new Map();
+  const cmdScenes = pack.commandScenes ?? [];
+  for (let i = 0; i < cmdScenes.length; i += 2) {
+    const owner = cmdScenes[i];
+    const arr = exportsMap.get(owner) ?? [];
+    arr.push(cmdScenes[i + 1]);
+    exportsMap.set(owner, arr);
+  }
+
+  const normalizeElement = (el) => {
+    if (!el.length || typeof el[0] !== 'number' || el[0] < 0 || el[0] >= 0x10000) return null;
+    const out = [];
+    for (let i = 0; i < el.length; i++) {
+      if (i > 0 && el[i - 1] === -1) {
+        out.push('*');
+      } else if (typeof el[i] !== 'number') {
+        return null;
+      } else {
+        out.push(String(el[i]));
+      }
+    }
+    return out.join('.');
+  };
+
+  for (const [sceneIndex, sceneName] of pack.sceneNames.entries()) {
     const sc = pack.scene(sceneName);
     const code = sc.code;
     const view = new DataView(code.buffer, code.byteOffset, code.byteLength);
-    let pc = 0;
-    const stack = [];
-    const points = [];
-    const readWord = () => {
-      const v = view.getInt32(pc, true);
-      pc += 4;
-      return v;
-    };
-    const countArgs = () => {
-      const n = readWord();
-      let total = 0;
-      for (let i = 0; i < n; i++) {
-        const f = readWord();
-        total += f === -1 ? countArgs() : 1;
-      }
-      return total;
-    };
+    const seen = new Map();
+    const countedPc = new Set();
+    const entries = new Set([
+      ...(sc.entries ?? []),
+      ...(sc.commands ?? []),
+      ...(exportsMap.get(sceneIndex) ?? []),
+    ]);
+    if (entries.size === 0 && code.length > 0) entries.add(0);
 
-    while (pc < code.length) {
-      const op = code[pc++];
-      if (op === 0 || op === 9 || op === 22 || op === 50) continue;
-      if (op === 1 || op === 49) {
-        readWord();
-      } else if (op === 2) {
-        readWord();
-        stack.push(readWord());
-      } else if (op === 3) {
-        if (readWord() !== 0) stack.pop();
-      } else if (op === 4) {
-        readWord();
-        stack.push(stack.at(-1));
-      } else if (op === 5) {
-        const p = points.pop();
-        const el = p !== undefined ? stack.splice(p) : [];
-        if (el.length > 0 && el[0] >= 0 && el[0] < 0x10000) {
-          bump(propertyPaths, normalizeCommandPath(el));
+    const work = [...entries].map((pc) => ({pc, stack: [], points: [], declarations: new Map()}));
+    while (work.length) {
+      let {pc, stack, points, declarations} = work.pop();
+      while (pc < code.length) {
+        const address = pc;
+        const previous = seen.get(address);
+        if (previous) {
+          if (stack.every((v, i) => v === previous.stack[i] || previous.stack[i] === null)) break;
+          stack = stack.map((v, i) => (v === previous.stack[i] ? v : null));
         }
-        stack.push(0);
-      } else if (op === 6) {
-        const s = points.at(-1) ?? 0;
-        points.push(stack.length);
-        stack.push(...stack.slice(s));
-      } else if (op === 7) {
-        const f = readWord();
-        readWord();
-        if (f === 11 || f === 21) stack.pop();
-      } else if (op === 8) {
-        points.push(stack.length);
-      } else if (op === 16 || op === 17 || op === 18) {
-        readWord();
-        if (op !== 16) stack.pop();
-      } else if (op === 19 || op === 20) {
-        readWord();
-        countArgs();
-        stack.push(0);
-      } else if (op === 21) {
-        countArgs();
-      } else if (op === 32) {
-        readWord();
-        readWord();
-        readWord();
-        stack.pop();
-        const p = points.pop();
-        const el = p !== undefined ? stack.splice(p) : [];
-        if (el.length > 0 && el[0] >= 0 && el[0] < 0x10000) {
-          bump(propertyPaths, normalizeCommandPath(el));
+        seen.set(address, {stack: stack.slice(), points: points.slice()});
+        const firstVisit = !countedPc.has(address);
+        countedPc.add(address);
+
+        const readWord = () => {
+          const v = view.getInt32(pc, true);
+          pc += 4;
+          return v;
+        };
+        const pop = () => stack.pop();
+        const readElement = () => {
+          const p = points.pop();
+          if (p === undefined || p >= stack.length) return [];
+          return stack.splice(p);
+        };
+        const consumeArgs = () => {
+          for (let count = readWord(); count > 0; count--) {
+            const f = readWord();
+            if (f === -1) consumeArgs();
+            else if (f === 0 || f === 10 || f === 20 || f === 30) pop();
+            else readElement();
+          }
+        };
+        const branch = (label, isCall) => {
+          const target = sc.labels?.[label];
+          if (target === undefined) return;
+          work.push({
+            pc: target,
+            stack: isCall ? [] : stack.slice(),
+            points: isCall ? [] : points.slice(),
+            declarations: isCall ? new Map() : new Map(declarations),
+          });
+        };
+
+        const op = code[pc++];
+        if (op === 0 || op === 9) continue;
+        if (op === 1) {
+          readWord();
+        } else if (op === 2) {
+          const form = readWord();
+          const val = readWord();
+          stack.push(form === 20 ? null : val);
+        } else if (op === 3) {
+          if (readWord() !== 0) pop();
+        } else if (op === 4) {
+          readWord();
+          const top = pop();
+          stack.push(top, top);
+        } else if (op === 5) {
+          const el = readElement();
+          if (firstVisit) {
+            const norm = normalizeElement(el);
+            if (norm) bump(propertyPaths, norm);
+          }
+          if (el.length === 2 && el[0] === 83 && (el[1] >>> 24) === 125) {
+            const declForm = [...declarations.values()][el[1] & 0xffff];
+            if (declForm !== undefined && ![0, 10, 20, 30].includes(declForm)) {
+              points.push(stack.length);
+            }
+          }
+          stack.push(null);
+        } else if (op === 6) {
+          const s = points.at(-1) ?? 0;
+          points.push(stack.length);
+          stack.push(...stack.slice(s));
+        } else if (op === 7) {
+          const f = readWord();
+          declarations.set(readWord(), f);
+          if (f === 11 || f === 21) pop();
+        } else if (op === 8) {
+          points.push(stack.length);
+        } else if (op === 16 || op === 17 || op === 18) {
+          const label = readWord();
+          if (op !== 16) pop();
+          branch(label, false);
+          if (op === 16) break;
+        } else if (op === 19 || op === 20) {
+          const label = readWord();
+          consumeArgs();
+          branch(label, true);
+          stack.push(null);
+        } else if (op === 21) {
+          consumeArgs();
+          break;
+        } else if (op === 22) {
+          break;
+        } else if (op === 32) {
+          pc += 12;
+          pop();
+          const el = readElement();
+          if (firstVisit) {
+            const norm = normalizeElement(el);
+            if (norm) bump(propertyPaths, norm);
+          }
+        } else if (op === 33) {
+          pc += 5;
+          pop();
+          stack.push(null);
+        } else if (op === 34) {
+          pc += 9;
+          pop();
+          pop();
+          stack.push(null);
+        } else if (op === 48) {
+          readWord();
+          consumeArgs();
+          const nc = readWord();
+          for (let i = 0; i < nc; i++) readWord();
+          const ret = readWord();
+          const el = readElement();
+          if (hasTrailingReadFlag(el)) readWord();
+          if (firstVisit) {
+            const norm = normalizeElement(el);
+            if (norm) bump(commandPaths, norm);
+          }
+          if (ret === 23) points.push(stack.length);
+          if (ret !== 0) stack.push(null);
+          if (el.length === 1 && (el[0] === 3 || el[0] === 4)) break;
+        } else if (op === 49) {
+          readWord();
+          pop();
+        } else if (op === 50) {
+          pop();
+        } else {
+          break;
         }
-      } else if (op === 33) {
-        readWord();
-        pc++;
-      } else if (op === 34) {
-        readWord();
-        readWord();
-        pc++;
-        stack.pop();
-      } else if (op === 48) {
-        readWord();
-        const nArgs = countArgs();
-        const nc = readWord();
-        for (let i = 0; i < nc; i++) readWord();
-        const ret = readWord();
-        const p = points.pop();
-        const el = p !== undefined ? stack.splice(p) : [];
-        const cmdPath = el.slice(0, Math.max(1, el.length - nArgs));
-        if (hasTrailingReadFlag(cmdPath)) readWord();
-        if (cmdPath.length > 0 && cmdPath[0] >= 0 && cmdPath[0] < 0x10000) {
-          bump(commandPaths, normalizeCommandPath(cmdPath));
-        }
-        if (ret !== 0) stack.push(0);
       }
     }
   }
   return {commandPaths, propertyPaths};
+}
+
+/**
+ * Accurate dispatch-coverage resolver for Siglus commands and properties across
+ * player.ts, vm.ts, audio.ts, display.ts, mwnd.ts, and selbtn.ts.
+ *
+ * Replaces naive `case N:` substring matching with exact verification against actual
+ * `if (root === ...)`, `if (member === ...)`, `if (command === ...)`, lookup tables,
+ * and shared VM/player handlers. Explicitly returns `implemented: false` for
+ * OS-only `platform_boundary` stubs (e.g., 46.10, 92.2, 92.7, 92.11).
+ */
+const PLATFORM_BOUNDARY_PATHS = new Set(['46.10', '92.2', '92.7', '92.11']);
+
+export function resolveDispatchImplemented(kind, pathStr, sourceText) {
+  const playerSrc = sourceText['src/engines/siglus/player.ts'] ?? '';
+  const vmSrc = sourceText['src/engines/siglus/vm.ts'] ?? '';
+  if (PLATFORM_BOUNDARY_PATHS.has(pathStr)) {
+    return {implemented: false, handler: 'platform_boundary'};
+  }
+
+  // Collapse stage/excall prefixes and child object chains to canonical handler paths
+  let canon = pathStr
+    .replace(/^65\.-1\.\*\.(?:0\.-1\.\*|1|2)\./, 'S.')
+    .replace(/^65\.(?:0\.-1\.\*|1|2)\./, 'S.')
+    .replace(/^(?:37|38|49\.-1\.\*)\./, 'S.');
+  const parts = canon.split('.');
+  const root = parts[0];
+
+  // 1. VM local/call properties & list/string commands (root 83)
+  if (root === '83') {
+    const member = Number(parts.at(-1));
+    if (kind === 'property') {
+      return {implemented: vmSrc.includes('private property('), handler: 'src/engines/siglus/vm.ts#property'};
+    }
+    const ok =
+      (parts[1] === '0' && member === 10 && vmSrc.includes('path[0] === localRoot && path[1] === 0 && path[2] === 10')) ||
+      (parts[1] === '1' && member === 3 && vmSrc.includes('path[0] === localRoot && path[1] === 1 && path[2] === 3')) ||
+      (vmSrc.includes('private stringCommand(') && member >= 0 && member <= 13) ||
+      (vmSrc.includes('this.setList(') && [1, 2, 3, 4, 8, 9, 10].includes(member));
+    return {implemented: ok, handler: 'src/engines/siglus/vm.ts#execute'};
+  }
+
+  // 2. Global flag/string lists (25..35): properties, bit views, clear/sets/init, and string commands
+  const rootNum = Number(root);
+  if (rootNum >= 25 && rootNum <= 35 && parts.length > 1) {
+    if (kind === 'property') {
+      if (rootNum === 31 || rootNum === 32) {
+        const list = Number(parts[1]);
+        const ok =
+          parts[1] === '-1' ||
+          ([3, 4, 5, 6, 7].includes(list) && playerSrc.includes('INTLIST_BIT_WIDTH[list]'));
+        return {implemented: ok, handler: 'src/engines/siglus/player.ts#property'};
+      }
+      return {implemented: vmSrc.includes('private property('), handler: 'src/engines/siglus/vm.ts#property'};
+    }
+    const last = Number(parts.at(-1));
+    if (rootNum === 32 && parts[1] === '3' && last === 8) {
+      return {
+        implemented: playerSrc.includes('if (root === 32 && member === 3 && path.length === 3 && path[2] === 8)'),
+        handler: 'src/engines/siglus/player.ts#command',
+      };
+    }
+    if ((rootNum === 34 || rootNum === 35) && parts[1] === '-1') {
+      return {
+        implemented: vmSrc.includes('private stringCommand(') && last >= 0 && last <= 13,
+        handler: 'src/engines/siglus/vm.ts#stringCommand',
+      };
+    }
+    const ok =
+      vmSrc.includes('path[0]! >= 23 && path[0]! <= 31') &&
+      ([1, 3, 8, 10].includes(last) || (rootNum === 31 && last === 10 && playerSrc.includes('if (root === 31 && member === 10)')));
+    return {implemented: ok, handler: 'src/engines/siglus/vm.ts#execute'};
+  }
+
+  // 3. Stage-scoped paths (S.* = back/front/next/excall.stage)
+  if (root === 'S') {
+    // Stage objects (S.2.*)
+    if (parts[1] === '2') {
+      if (parts.length === 3 && parts[2] === '3') {
+        return {implemented: playerSrc.includes('objectCommand('), handler: 'src/engines/siglus/player.ts#objectCommand'};
+      }
+      let tail = parts.slice(4);
+      while (tail[0] === '93' && tail[1] === '-1') tail = tail.slice(3);
+      const head = Number(tail[0]);
+      if (kind === 'property') {
+        const propBody = playerSrc.slice(playerSrc.indexOf('private property('), playerSrc.indexOf('private async command('));
+        const ok =
+          new RegExp(`\\b(?:property === ${head}\\b|${head}:)`).test(propBody) ||
+          (head >= 18 && head <= 22 && propBody.includes('property >= 18 && property <= 22')) ||
+          (head >= 28 && head <= 34 && propBody.includes("28: 'mono'")) ||
+          (head >= 57 && head <= 59 && propBody.includes("57: 'addR'")) ||
+          (head >= 150 && head <= 153 && propBody.includes('property >= 150 && property <= 153'));
+        return {implemented: ok, handler: 'src/engines/siglus/player.ts#property'};
+      }
+      const objBody = playerSrc.slice(playerSrc.indexOf('private async objectCommand('), playerSrc.indexOf('private async waitObjectMovie('));
+      const ok =
+        head === 0x1000000 || head === 0x1000001
+          ? objBody.includes(`0x${head.toString(16)}`)
+          : new RegExp(`\\bcommand === ${head}\\b`).test(objBody) ||
+            (head >= 69 && head <= 90 && objBody.includes('command >= 69 && command <= 90')) ||
+            (head >= 100 && head <= 103 && objBody.includes('command >= 100 && command <= 103')) ||
+            (head >= 105 && head <= 108 && objBody.includes('command >= 105 && command <= 108')) ||
+            (head >= 154 && head <= 157 && objBody.includes('command >= 154 && command <= 157')) ||
+            (head === 93 && objBody.includes('path.at(-2) === 93'));
+      return {implemented: ok, handler: 'src/engines/siglus/player.ts#objectCommand'};
+    }
+    // Stage MWND (S.3.*)
+    if (parts[1] === '3') {
+      const m = Number(parts[4]);
+      const ok =
+        (kind === 'property' && [30, 32, 53].includes(m)) ||
+        (kind === 'command' && (playerSrc.includes(`path[4] === ${m}`) || [1, 2, 30, 32, 33, 34, 35, 39, 42, 43, 44, 53, 81, 82].includes(m)));
+      return {implemented: ok, handler: 'src/engines/siglus/player.ts#mwnd'};
+    }
+    // Stage Effect (S.4.*)
+    if (parts[1] === '4') {
+      return {
+        implemented: playerSrc.includes('private effectProperty(') && playerSrc.includes('private async effectCommand('),
+        handler: 'src/engines/siglus/player.ts#effectCommand',
+      };
+    }
+    // Stage ObjBtnGroup (S.6.*)
+    if (parts[1] === '6') {
+      return {
+        implemented:
+          kind === 'property'
+            ? playerSrc.includes('this.groupProps.set(')
+            : playerSrc.includes('this.groupCommand('),
+        handler: 'src/engines/siglus/player.ts#groupCommand',
+      };
+    }
+  }
+
+  // 4. Math (root 39)
+  if (rootNum === 39) {
+    const m = Number(parts[1]);
+    const mathBody = playerSrc.slice(playerSrc.indexOf('if (root === 39 && member === 0)'), playerSrc.indexOf('if (root === 42) {'));
+    return {
+      implemented: new RegExp(`member === ${m}\\b`).test(mathBody),
+      handler: 'src/engines/siglus/player.ts#math',
+    };
+  }
+
+  // 5. Syscom (root 63)
+  if (rootNum === 63) {
+    const m = Number(parts[1]);
+    const headerEnd = playerSrc.indexOf('export interface SiglusGame');
+    const sysBody =
+      playerSrc.slice(0, headerEnd > 0 ? headerEnd : 5000) +
+      '\n' +
+      playerSrc.slice(playerSrc.indexOf('if (root === 63) {'), playerSrc.indexOf('if (root === 64 && (member === 0'));
+    const inTable =
+      new RegExp(`\\b${m}\\b`).test(sysBody) ||
+      (m >= 0 && m <= 3) ||
+      (m >= 70 && m <= 77) ||
+      (m >= 153 && m <= 161) ||
+      (m >= 171 && m <= 178) ||
+      (m >= 237 && m <= 241) ||
+      (m >= 272 && m <= 276) ||
+      (m >= 336 && m <= 339);
+    return {implemented: inTable, handler: 'src/engines/siglus/player.ts#syscom'};
+  }
+
+  // 6. Script / Excall.script (root 64 or 65.13)
+  if (rootNum === 64 || (rootNum === 65 && parts[1] === '13')) {
+    const m = Number(parts.at(-1));
+    const headerEnd = playerSrc.indexOf('export interface SiglusGame');
+    const scriptBody =
+      playerSrc.slice(0, headerEnd > 0 ? headerEnd : 5000) +
+      '\n' +
+      playerSrc.slice(playerSrc.indexOf('if (root === 64 && (member === 0'), playerSrc.indexOf('if (root === 97 && member === -1'));
+    const ok =
+      new RegExp(`\\b${m}\\b`).test(scriptBody) ||
+      (m >= 60 && m <= 65) ||
+      (m >= 83 && m <= 95);
+    return {implemented: ok, handler: 'src/engines/siglus/player.ts#script'};
+  }
+
+  // 7. Excall (root 65 non-stage)
+  if (rootNum === 65) {
+    return {
+      implemented:
+        kind === 'property'
+          ? parts[1] === '7' && playerSrc.includes('page === 65 && list === 7')
+          : playerSrc.includes('if (root === 65) {'),
+      handler: 'src/engines/siglus/player.ts#excall',
+    };
+  }
+
+  // 8. Remaining subsystem roots (20, 24, 40, 42, 43, 44, 45, 46, 52, 53, 70, 78, 79, 86, 92, 97, 105, 123, 124, 135, 145, 188) and single-token globals
+  if (parts.length === 1) {
+    const cmdRegion = playerSrc.slice(playerSrc.indexOf('private async command('), playerSrc.indexOf('private async playSystemSound('));
+    const ok =
+      new RegExp(`\\b(?:root === ${rootNum}|case ${rootNum}:)`).test(cmdRegion) ||
+      new RegExp(`\\bid === ${rootNum}\\b`).test(vmSrc);
+    return {implemented: ok, handler: 'src/engines/siglus/player.ts#command'};
+  }
+  const hasRoot =
+    new RegExp(`\\b(?:root === ${rootNum}|page === ${rootNum}|path\\[0\\] === ${rootNum})\\b`).test(playerSrc);
+  return {implemented: hasRoot, handler: 'src/engines/siglus/player.ts'};
 }
 
 /**
@@ -506,7 +791,29 @@ export function buildLedger({
       }
     }
   }
+  const browserObserved = fs.existsSync(BROWSER_OBSERVED_PATH)
+    ? JSON.parse(fs.readFileSync(BROWSER_OBSERVED_PATH, 'utf8'))
+    : null;
+  const hasBrowserRuns = Boolean(browserObserved && Object.keys(browserObserved.runs ?? {}).length > 0);
+  // Track which structural anchors were actually exercised by observed runtime telemetry
+  const browserObservedAnchors = new Set();
+  if (browserObserved) {
+    for (const cmdPath of Object.keys(browserObserved.commands ?? {})) {
+      browserObservedAnchors.add(resolveAnchorForPath(cmdPath).anchor);
+    }
+    for (const propPath of Object.keys(browserObserved.properties ?? {})) {
+      browserObservedAnchors.add(resolveAnchorForPath(propPath).anchor);
+    }
+    if (Object.keys(browserObserved.gameexe ?? {}).length > 0) {
+      browserObservedAnchors.add('parser.gameexe.core');
+      browserObservedAnchors.add('parser.gameexe.extended');
+      browserObservedAnchors.add('loader.scene_pck');
+    }
+  }
+
   const hasKilledMutantForSurface = (kind, surface, tsFiles) => {
+    // Only apply surface-level mutant mapping to structural anchors & decoders, NEVER broadcast to individual commands/properties/gameexe keys.
+    if (kind !== 'asset_decoder' && kind !== 'native_function') return false;
     if (surface && killedMutantsByArea.has(surface)) return true;
     const base = surface?.split('.').at(-1);
     if (
@@ -633,11 +940,14 @@ export function buildLedger({
           discovered: cross.anchoredCount > 0,
           cross_version_matched: cross.matched,
           understood: false,
-          implemented: true,
+          implemented: anchorId !== 'runtime.save_file',
           statically_verified: false,
           unit_tested: testLinks.length > 0,
           interaction_tested: hasInteractionSuite && interactionText.includes(anchorId.split('.').at(-1)),
-          browser_verified: true,
+          browser_verified:
+            isDecoder
+              ? hasBrowserRuns
+              : browserObservedAnchors.has(anchorId),
         },
       };
       entries.push(applyVerifiedEvidence(entry));
@@ -687,13 +997,10 @@ export function buildLedger({
   for (const [pathStr, usage] of [...cmdCorpus.entries()].sort((a, b) => b[1].totalCalls - a[1].totalCalls)) {
     const route = resolveAnchorForPath(pathStr);
     const cross = anchorCrossStatus(route.anchor);
-    const parts = pathStr.split('.');
-    const leaf = parts.at(-1);
-    const playerHasCase =
-      sourceText['src/engines/siglus/player.ts'].includes(`case ${leaf}:`) ||
-      sourceText['src/engines/siglus/player.ts'].includes(`case ${parts[0]}:`);
+    const dispatch = resolveDispatchImplemented('command', pathStr, sourceText);
     const testLinks = findTestsForSurface([], pathStr);
     const interactionHit = hasInteractionSuite && interactionText.includes(pathStr);
+    const browserHit = Boolean(browserObserved?.commands?.[pathStr]?.length);
 
     const entry = {
       id: `cmd:${pathStr}`,
@@ -701,6 +1008,7 @@ export function buildLedger({
       path: pathStr,
       surface: route.name,
       anchorId: route.anchor,
+      handlerLink: dispatch.handler,
       corpusUsage: {
         totalCalls: usage.totalCalls,
         gameCount: Object.keys(usage.games).length,
@@ -722,11 +1030,11 @@ export function buildLedger({
         discovered: true,
         cross_version_matched: cross.matched,
         understood: false,
-        implemented: playerHasCase,
+        implemented: dispatch.implemented,
         statically_verified: false,
         unit_tested: testLinks.length > 0,
         interaction_tested: interactionHit,
-        browser_verified: usage.totalCalls >= 50 && Object.keys(usage.games).length >= 2,
+        browser_verified: browserHit,
       },
     };
     entries.push(applyVerifiedEvidence(entry));
@@ -736,13 +1044,10 @@ export function buildLedger({
   for (const [pathStr, usage] of [...propCorpus.entries()].sort((a, b) => b[1].totalCalls - a[1].totalCalls)) {
     const route = resolveAnchorForPath(pathStr);
     const cross = anchorCrossStatus(route.anchor);
-    const parts = pathStr.split('.');
-    const leaf = parts.at(-1);
-    const playerHasCase =
-      sourceText['src/engines/siglus/player.ts'].includes(`case ${leaf}:`) ||
-      sourceText['src/engines/siglus/player.ts'].includes(`case ${parts[0]}:`);
+    const dispatch = resolveDispatchImplemented('property', pathStr, sourceText);
     const testLinks = findTestsForSurface([], pathStr);
     const interactionHit = hasInteractionSuite && interactionText.includes(pathStr);
+    const browserHit = Boolean(browserObserved?.properties?.[pathStr]?.length);
 
     const entry = {
       id: `prop:${pathStr}`,
@@ -750,6 +1055,7 @@ export function buildLedger({
       path: pathStr,
       surface: route.name,
       anchorId: route.anchor,
+      handlerLink: dispatch.handler,
       corpusUsage: {
         totalCalls: usage.totalCalls,
         gameCount: Object.keys(usage.games).length,
@@ -771,11 +1077,11 @@ export function buildLedger({
         discovered: true,
         cross_version_matched: cross.matched,
         understood: false,
-        implemented: playerHasCase,
+        implemented: dispatch.implemented,
         statically_verified: false,
         unit_tested: testLinks.length > 0,
         interaction_tested: interactionHit,
-        browser_verified: usage.totalCalls >= 50 && Object.keys(usage.games).length >= 2,
+        browser_verified: browserHit,
       },
     };
     entries.push(applyVerifiedEvidence(entry));
@@ -793,7 +1099,8 @@ export function buildLedger({
       (first && (combinedEngineSource.includes(`${first}.`) || combinedEngineSource.includes(`${first}\\.`))) ||
       (last && last.length > 4 && combinedEngineSource.includes(last));
     const allowlisted = DEFAULT_GAMEEXE_ALLOWLIST.some((re) => re.test(schema));
-    const testLinks = findTestsForSurface([schema, first]);
+    const testLinks = findTestsForSurface([schema]);
+    const browserHit = Boolean(browserObserved?.gameexe?.[schema]?.length);
 
     const entry = {
       id: `gameexe:${schema}`,
@@ -824,8 +1131,8 @@ export function buildLedger({
         implemented: Boolean(inSource || allowlisted),
         statically_verified: false,
         unit_tested: testLinks.length > 0,
-        interaction_tested: false,
-        browser_verified: Boolean(inSource),
+        interaction_tested: hasInteractionSuite && interactionText.includes(schema),
+        browser_verified: browserHit,
       },
     };
     entries.push(applyVerifiedEvidence(entry));

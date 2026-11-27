@@ -1,6 +1,6 @@
 # SiglusEngine Multi-Layer Verification Coverage
 
-Generated: `2026-11-27T14:44:35.343Z`
+Generated: `2026-11-27T16:46:47.377Z`
 
 > Coverage layers are strictly separate. Matching hashes, CFG shape, or passing browser smoke tests never count as `statically_verified` without pinned Ghidra evidence.
 
@@ -21,23 +21,48 @@ Generated: `2026-11-27T14:44:35.343Z`
 
 | Layer / Kind | total | discovered | cross_version_matched | understood | implemented | statically_verified | unit_tested | interaction_tested | mutation_tested | browser_verified | leaf_verified | wrapper_dispatch | platform_boundary | stale |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| **Overall** | 2,666 | 2,666 | 2,666 | 2,666 | 1,883 | 2,666 | 1,587 | 1,477 | 2,158 | 685 | 2,570 | 0 | 96 | 0 |
-| `asset_decoder` | 7 | 7 | 7 | 7 | 7 | 7 | 6 | 3 | 4 | 7 | 7 | 0 | 0 | 0 |
-| `native_function` | 48 | 48 | 48 | 48 | 48 | 48 | 43 | 39 | 14 | 48 | 47 | 0 | 1 | 0 |
-| `command` | 1,492 | 1,492 | 1,492 | 1,492 | 975 | 1,492 | 694 | 675 | 1,385 | 228 | 1,481 | 0 | 11 | 0 |
-| `property` | 749 | 749 | 749 | 749 | 484 | 749 | 474 | 473 | 739 | 112 | 748 | 0 | 1 | 0 |
-| `gameexe_key` | 370 | 370 | 370 | 370 | 369 | 370 | 370 | 287 | 16 | 290 | 287 | 0 | 83 | 0 |
+| **Overall** | 2,086 | 2,086 | 2,086 | 2,086 | 2,081 | 2,086 | 450 | 291 | 168 | 1,228 | 1,399 | 592 | 95 | 0 |
+| `asset_decoder` | 7 | 7 | 7 | 7 | 7 | 7 | 6 | 3 | 5 | 7 | 7 | 0 | 0 | 0 |
+| `native_function` | 48 | 48 | 48 | 48 | 47 | 48 | 35 | 30 | 19 | 30 | 47 | 0 | 1 | 0 |
+| `command` | 1,266 | 1,266 | 1,266 | 1,266 | 1,262 | 1,266 | 217 | 134 | 39 | 751 | 920 | 335 | 11 | 0 |
+| `property` | 395 | 395 | 395 | 395 | 395 | 395 | 112 | 100 | 94 | 271 | 253 | 142 | 0 | 0 |
+| `gameexe_key` | 370 | 370 | 370 | 370 | 370 | 370 | 80 | 24 | 11 | 169 | 172 | 115 | 83 | 0 |
 
 ## Targeted Mutation Testing Summary
 
-- Generated: `2026-11-27T14:42:21.616Z`
-- Total Mutants: **58** | Killed: **58** | Surviving: **0** | Equivalent: **0** | Invalid: **0** | Timed Out: **0**
+- Generated: `2026-11-27T15:47:59.314Z`
+- Total Mutants: **61** | Killed: **61** | Surviving: **0** | Equivalent: **0** | Invalid: **0** | Timed Out: **0**
 - Effective Kill Rate (killed / (killed + surviving + timed_out)): **100%**
 
 ## Top Priority Burn-Down Queue (Unverified / Stale / Modified in 1.1.141.3)
 
 | Priority | Entry ID | Kind | Surface | Calls (8 games) | Games | Modified in 1.1.141.3 | Stale |
 | ---: | --- | --- | --- | ---: | ---: | --- | --- |
+| 1058 | `cmd:84` | `command` | `sel_or_text` | 1,384,254 | 8 | yes | no |
+| 991 | `cmd:14` | `command` | `r` | 423,216 | 8 | yes | no |
+| 943 | `cmd:18` | `command` | `p` | 179,425 | 8 | yes | no |
+| 919 | `prop:83.0.-1.*` | `property` | `cur_call` | 117,821 | 8 | yes | no |
+| 874 | `cmd:62` | `command` | `namae` | 93,260 | 7 | yes | no |
+| 825 | `prop:83.2097152000` | `property` | `cur_call` | 22,256 | 8 | yes | no |
+| 817 | `cmd:10` | `command` | `wait` | 19,319 | 8 | yes | no |
+| 814 | `prop:31.-1.*` | `property` | `Z` | 18,260 | 8 | yes | no |
+| 807 | `prop:83.1.-1.*` | `property` | `cur_call` | 16,152 | 8 | yes | no |
+| 806 | `cmd:55` | `command` | `koekoe` | 15,937 | 8 | yes | no |
+| 803 | `prop:83.2097152001` | `property` | `cur_call` | 15,141 | 8 | yes | no |
+| 769 | `cmd:13` | `command` | `nl` | 14,524 | 7 | yes | no |
+| 761 | `prop:83.2097152002` | `property` | `cur_call` | 7,093 | 8 | yes | no |
+| 744 | `prop:83.2097152003` | `property` | `cur_call` | 5,269 | 8 | yes | no |
+| 708 | `prop:83.2097152004` | `property` | `cur_call` | 2,767 | 8 | yes | no |
+| 704 | `cmd:70.25.-1.*.0` | `command` | `screen` | 2,603 | 8 | yes | no |
+| 703 | `prop:83.2097152005` | `property` | `cur_call` | 2,565 | 8 | yes | no |
+| 686 | `cmd:61` | `command` | `root_61` | 1,872 | 8 | yes | no |
+| 686 | `prop:83.2097152006` | `property` | `cur_call` | 1,891 | 8 | yes | no |
+| 680 | `cmd:131` | `command` | `root_131` | 5,382 | 6 | yes | no |
+| 674 | `cmd:53.-1.*.1` | `command` | `frame_action_ch` | 1,518 | 8 | yes | no |
+| 674 | `prop:32.-1.*` | `property` | `S` | 48,278 | 2 | yes | no |
+| 672 | `prop:30.-1.*` | `property` | `G` | 8,301 | 5 | yes | no |
+| 667 | `prop:27.-1.*` | `property` | `root_27` | 7,601 | 5 | yes | no |
+| 666 | `cmd:54` | `command` | `frame_action` | 1,328 | 8 | yes | no |
 
 ## Tier C Cross-Version Semantic Verification Summary (8 Revisions)
 
@@ -88,3 +113,5 @@ Generated: `2026-11-27T14:44:35.343Z`
 - `disc-021` [fixed]: effect properties 3..13 now clamp strictly to [0, 255], props 31/32 normalize to boolean 0|1, and effect intevent channels 14..16 now map to x/y/z (props 0..2) in addition to 17..27.
 - `disc-022` [fixed]: pcmch.stop() (5) 0-arg overload now defaults fade to 100ms, added missing pcmch.pause() (10, 100ms default) + SiglusAudio.pausePcm(), pcmch.play now supports named(9) se_no and clamps named(3) volumeType to [-1..31] else 2, and bgm.play now supports named(2) wait_flag.
 - `disc-023` [fixed]: Fixed VM user-command (include >= 0) call unwinding when intermediate caller is pruned by del_call_stack/clear_call_stack, fixed str.mid negative start clamping end=clamp(rawStart+len, clampedStart, len), and fixed str.search_last("") returning native -1.
+- `disc-024` [fixed]: CFG scanner uncovered cmd:39.22 (math.angle / atan2(y2-y1, x2-x1) in [0..3599] tenths of a degree) called in fortune-world:__va_effect_ss_cmd_particle, which was missing in player.ts; also implemented Tier B math.asin (16), math.acos (17), and math.atan (18) with native round-half-away-from-zero (0x55eea0).
+- `disc-025` [fixed]: Native intlist dispatcher 0x55d3d0 maps member 6 to bit16 (16-bit unsigned) and member 7 to bit8 (8-bit unsigned), NOT 1<<(m-3). player.ts omitted 31.6.-1.* (Z.bit16, 30 occurrences across tsukikana & ssr) leaving it unaliased to this.system and unpersisted, and swapped 6/7 in object.f bit views. Fixed across Z (31), G (32), object.f (111), and VM A..F (25..30).

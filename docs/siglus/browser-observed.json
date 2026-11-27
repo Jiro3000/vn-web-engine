@@ -1,0 +1,7735 @@
+{
+  "schema": "siglus-browser-observed/v1",
+  "generatedAt": "2026-11-27T16:46:29.595Z",
+  "runs": {
+    "anemoi:systems": {
+      "game": "anemoi",
+      "mode": "systems",
+      "recordedAt": "2026-11-27T16:26:25.466Z",
+      "commandsCount": 383,
+      "propertiesCount": 152,
+      "gameexeCount": 143
+    },
+    "angel-beats:systems": {
+      "game": "angel-beats",
+      "mode": "systems",
+      "recordedAt": "2026-11-27T16:27:47.056Z",
+      "commandsCount": 202,
+      "propertiesCount": 68,
+      "gameexeCount": 150
+    },
+    "fortune-world:systems": {
+      "game": "fortune-world",
+      "mode": "systems",
+      "recordedAt": "2026-11-27T16:28:37.356Z",
+      "commandsCount": 116,
+      "propertiesCount": 18,
+      "gameexeCount": 141
+    },
+    "ginharu:systems": {
+      "game": "ginharu",
+      "mode": "systems",
+      "recordedAt": "2026-11-27T16:29:28.516Z",
+      "commandsCount": 190,
+      "propertiesCount": 54,
+      "gameexeCount": 163
+    },
+    "hoshiori-pe:systems": {
+      "game": "hoshiori-pe",
+      "mode": "systems",
+      "recordedAt": "2026-11-27T16:30:25.157Z",
+      "commandsCount": 203,
+      "propertiesCount": 56,
+      "gameexeCount": 148
+    },
+    "hoshiori-rikka:systems": {
+      "game": "hoshiori-rikka",
+      "mode": "systems",
+      "recordedAt": "2026-11-27T16:33:01.708Z",
+      "commandsCount": 223,
+      "propertiesCount": 69,
+      "gameexeCount": 157
+    },
+    "ssr:systems": {
+      "game": "ssr",
+      "mode": "systems",
+      "recordedAt": "2026-11-27T16:33:57.036Z",
+      "commandsCount": 196,
+      "propertiesCount": 53,
+      "gameexeCount": 143
+    },
+    "tsukikana:systems": {
+      "game": "tsukikana",
+      "mode": "systems",
+      "recordedAt": "2026-11-27T16:34:48.292Z",
+      "commandsCount": 167,
+      "propertiesCount": 46,
+      "gameexeCount": 143
+    },
+    "anemoi:extras": {
+      "game": "anemoi",
+      "mode": "extras",
+      "recordedAt": "2026-11-27T16:35:11.495Z",
+      "commandsCount": 204,
+      "propertiesCount": 103,
+      "gameexeCount": 89
+    },
+    "angel-beats:extras": {
+      "game": "angel-beats",
+      "mode": "extras",
+      "recordedAt": "2026-11-27T16:35:58.577Z",
+      "commandsCount": 160,
+      "propertiesCount": 48,
+      "gameexeCount": 98
+    },
+    "ginharu:extras": {
+      "game": "ginharu",
+      "mode": "extras",
+      "recordedAt": "2026-11-27T16:36:17.493Z",
+      "commandsCount": 70,
+      "propertiesCount": 35,
+      "gameexeCount": 88
+    },
+    "hoshiori-pe:extras": {
+      "game": "hoshiori-pe",
+      "mode": "extras",
+      "recordedAt": "2026-11-27T16:36:41.223Z",
+      "commandsCount": 97,
+      "propertiesCount": 55,
+      "gameexeCount": 92
+    },
+    "ssr:extras": {
+      "game": "ssr",
+      "mode": "extras",
+      "recordedAt": "2026-11-27T16:36:57.855Z",
+      "commandsCount": 87,
+      "propertiesCount": 38,
+      "gameexeCount": 91
+    },
+    "tsukikana:extras": {
+      "game": "tsukikana",
+      "mode": "extras",
+      "recordedAt": "2026-11-27T16:37:20.282Z",
+      "commandsCount": 73,
+      "propertiesCount": 36,
+      "gameexeCount": 91
+    },
+    "anemoi:crawl": {
+      "game": "anemoi",
+      "mode": "crawl",
+      "recordedAt": "2026-11-27T16:38:20.524Z",
+      "commandsCount": 152,
+      "propertiesCount": 84,
+      "gameexeCount": 93
+    },
+    "angel-beats:crawl": {
+      "game": "angel-beats",
+      "mode": "crawl",
+      "recordedAt": "2026-11-27T16:39:42.034Z",
+      "commandsCount": 260,
+      "propertiesCount": 104,
+      "gameexeCount": 126
+    },
+    "ginharu:crawl": {
+      "game": "ginharu",
+      "mode": "crawl",
+      "recordedAt": "2026-11-27T16:41:17.176Z",
+      "commandsCount": 254,
+      "propertiesCount": 115,
+      "gameexeCount": 123
+    },
+    "hoshiori-pe:crawl": {
+      "game": "hoshiori-pe",
+      "mode": "crawl",
+      "recordedAt": "2026-11-27T16:42:15.722Z",
+      "commandsCount": 301,
+      "propertiesCount": 110,
+      "gameexeCount": 125
+    },
+    "hoshiori-rikka:crawl": {
+      "game": "hoshiori-rikka",
+      "mode": "crawl",
+      "recordedAt": "2026-11-27T16:42:54.527Z",
+      "commandsCount": 187,
+      "propertiesCount": 67,
+      "gameexeCount": 122
+    },
+    "ssr:crawl": {
+      "game": "ssr",
+      "mode": "crawl",
+      "recordedAt": "2026-11-27T16:43:53.550Z",
+      "commandsCount": 264,
+      "propertiesCount": 111,
+      "gameexeCount": 158
+    },
+    "tsukikana:crawl": {
+      "game": "tsukikana",
+      "mode": "crawl",
+      "recordedAt": "2026-11-27T16:44:53.388Z",
+      "commandsCount": 265,
+      "propertiesCount": 131,
+      "gameexeCount": 158
+    },
+    "fortune-world:crawl": {
+      "game": "fortune-world",
+      "mode": "crawl",
+      "recordedAt": "2026-11-27T16:46:29.595Z",
+      "commandsCount": 117,
+      "propertiesCount": 19,
+      "gameexeCount": 138
+    }
+  },
+  "commands": {
+    "1": [
+      "ginharu",
+      "ssr",
+      "tsukikana"
+    ],
+    "3": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "4": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "5": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "6": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "7": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "8": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "10": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "11": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "13": [
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "tsukikana"
+    ],
+    "14": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "15": [
+      "ssr"
+    ],
+    "16": [
+      "angel-beats",
+      "fortune-world",
+      "hoshiori-pe"
+    ],
+    "18": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "22": [
+      "anemoi",
+      "fortune-world"
+    ],
+    "23": [
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "36": [
+      "anemoi",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "41": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "54": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "55": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "61": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "ssr",
+      "tsukikana"
+    ],
+    "62": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "68": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "72": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "74": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "76": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "80": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "81": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "84": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "87": [
+      "anemoi"
+    ],
+    "93": [
+      "ssr"
+    ],
+    "95": [
+      "ssr"
+    ],
+    "96": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "99": [
+      "anemoi",
+      "hoshiori-pe"
+    ],
+    "103": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "108": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "tsukikana"
+    ],
+    "112": [
+      "angel-beats",
+      "ssr",
+      "tsukikana"
+    ],
+    "113": [
+      "fortune-world"
+    ],
+    "114": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "116": [
+      "anemoi",
+      "ssr",
+      "tsukikana"
+    ],
+    "118": [
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "131": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "151": [
+      "fortune-world"
+    ],
+    "158": [
+      "ginharu",
+      "tsukikana"
+    ],
+    "162": [
+      "angel-beats"
+    ],
+    "164": [
+      "anemoi",
+      "ssr",
+      "tsukikana"
+    ],
+    "165": [
+      "anemoi",
+      "ssr",
+      "tsukikana"
+    ],
+    "135.-1.*.0": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "135.-1.*.1": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "145.2": [
+      "anemoi",
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "145.3": [
+      "anemoi",
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "145.4": [
+      "anemoi",
+      "hoshiori-pe"
+    ],
+    "188.0.-1.*.1": [
+      "anemoi"
+    ],
+    "188.0.-1.*.5": [
+      "anemoi"
+    ],
+    "188.0.-1.*.6": [
+      "anemoi"
+    ],
+    "37.2.-1.*.111.2": [
+      "anemoi"
+    ],
+    "37.2.-1.*.112.1": [
+      "anemoi"
+    ],
+    "37.2.-1.*.113.-1.*.7": [
+      "anemoi"
+    ],
+    "37.2.-1.*.113.1": [
+      "anemoi"
+    ],
+    "37.2.-1.*.120": [
+      "anemoi",
+      "angel-beats",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "37.2.-1.*.121": [
+      "anemoi",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "37.2.-1.*.124": [
+      "anemoi"
+    ],
+    "37.2.-1.*.126": [
+      "anemoi",
+      "angel-beats",
+      "ssr",
+      "tsukikana"
+    ],
+    "37.2.-1.*.140.-1.*.7": [
+      "anemoi"
+    ],
+    "37.2.-1.*.140.1": [
+      "anemoi"
+    ],
+    "37.2.-1.*.141.2": [
+      "anemoi",
+      "tsukikana"
+    ],
+    "37.2.-1.*.159": [
+      "anemoi",
+      "tsukikana"
+    ],
+    "37.2.-1.*.169": [
+      "anemoi"
+    ],
+    "37.2.-1.*.24": [
+      "anemoi",
+      "tsukikana"
+    ],
+    "37.2.-1.*.25": [
+      "anemoi",
+      "ssr",
+      "tsukikana"
+    ],
+    "37.2.-1.*.35": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "37.2.-1.*.38": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "37.2.-1.*.40": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "37.2.-1.*.41": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "37.2.-1.*.42": [
+      "anemoi",
+      "fortune-world"
+    ],
+    "37.2.-1.*.48": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "37.2.-1.*.49": [
+      "anemoi",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "37.2.-1.*.51.0": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "37.2.-1.*.52.3": [
+      "anemoi"
+    ],
+    "37.2.-1.*.53": [
+      "anemoi"
+    ],
+    "37.2.-1.*.54.2": [
+      "anemoi",
+      "angel-beats",
+      "ssr",
+      "tsukikana"
+    ],
+    "37.2.-1.*.62": [
+      "anemoi"
+    ],
+    "37.2.-1.*.63.2": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ssr",
+      "tsukikana"
+    ],
+    "37.2.-1.*.64.0": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "37.2.-1.*.64.7": [
+      "anemoi"
+    ],
+    "37.2.-1.*.67.7": [
+      "anemoi"
+    ],
+    "37.2.-1.*.68.7": [
+      "anemoi"
+    ],
+    "37.2.-1.*.72.7": [
+      "anemoi"
+    ],
+    "37.2.-1.*.75.7": [
+      "anemoi"
+    ],
+    "37.2.-1.*.93.-1.*.111.2": [
+      "anemoi"
+    ],
+    "37.2.-1.*.93.-1.*.35": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "37.2.-1.*.93.-1.*.38": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "37.2.-1.*.93.-1.*.40": [
+      "anemoi",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "37.2.-1.*.93.-1.*.52.1": [
+      "anemoi"
+    ],
+    "37.2.-1.*.93.-1.*.52.3": [
+      "anemoi"
+    ],
+    "37.2.-1.*.93.-1.*.93.-1.*.111.2": [
+      "anemoi"
+    ],
+    "37.2.-1.*.93.-1.*.93.-1.*.24": [
+      "anemoi"
+    ],
+    "37.2.-1.*.93.-1.*.93.-1.*.25": [
+      "anemoi",
+      "tsukikana"
+    ],
+    "37.2.-1.*.93.-1.*.93.-1.*.38": [
+      "anemoi",
+      "hoshiori-pe",
+      "tsukikana"
+    ],
+    "37.2.-1.*.93.-1.*.93.-1.*.54.2": [
+      "anemoi"
+    ],
+    "37.2.-1.*.93.-1.*.93.-1.*.63.2": [
+      "anemoi"
+    ],
+    "37.2.-1.*.93.-1.*.93.4": [
+      "anemoi",
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "37.2.-1.*.93.4": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "37.2.-1.*.97": [
+      "anemoi"
+    ],
+    "38.2.-1.*.111.2": [
+      "anemoi",
+      "angel-beats"
+    ],
+    "38.2.-1.*.111.9": [
+      "anemoi",
+      "angel-beats"
+    ],
+    "38.2.-1.*.118": [
+      "anemoi"
+    ],
+    "38.2.-1.*.126": [
+      "anemoi",
+      "hoshiori-pe"
+    ],
+    "38.2.-1.*.137": [
+      "anemoi"
+    ],
+    "38.2.-1.*.141.2": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "ssr"
+    ],
+    "38.2.-1.*.159": [
+      "anemoi",
+      "ssr"
+    ],
+    "38.2.-1.*.172": [
+      "anemoi"
+    ],
+    "38.2.-1.*.24": [
+      "anemoi",
+      "angel-beats",
+      "ssr"
+    ],
+    "38.2.-1.*.25": [
+      "anemoi",
+      "ssr"
+    ],
+    "38.2.-1.*.35": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "38.2.-1.*.38": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "38.2.-1.*.52.0.1": [
+      "anemoi",
+      "angel-beats",
+      "hoshiori-pe"
+    ],
+    "38.2.-1.*.54.2": [
+      "anemoi",
+      "angel-beats",
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "38.2.-1.*.62": [
+      "anemoi",
+      "angel-beats",
+      "ssr",
+      "tsukikana"
+    ],
+    "38.2.-1.*.72.0": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "38.2.-1.*.72.7": [
+      "anemoi",
+      "angel-beats"
+    ],
+    "38.2.-1.*.91.0": [
+      "anemoi",
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "38.2.-1.*.91.2": [
+      "anemoi"
+    ],
+    "38.2.-1.*.93.-1.*.104": [
+      "anemoi",
+      "angel-beats",
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "38.2.-1.*.93.-1.*.111.2": [
+      "anemoi"
+    ],
+    "38.2.-1.*.93.-1.*.39": [
+      "anemoi",
+      "angel-beats",
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "38.2.-1.*.93.-1.*.52.0.1": [
+      "anemoi"
+    ],
+    "38.2.-1.*.93.-1.*.52.2": [
+      "anemoi"
+    ],
+    "38.2.-1.*.93.-1.*.52.3": [
+      "anemoi"
+    ],
+    "38.2.-1.*.93.-1.*.54.2": [
+      "anemoi",
+      "angel-beats",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "38.2.-1.*.93.4": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "38.2.-1.*.96": [
+      "anemoi"
+    ],
+    "38.3.-1.*.32.-1.*.51.5": [
+      "anemoi"
+    ],
+    "38.3.-1.*.32.-1.*.64.5": [
+      "anemoi"
+    ],
+    "38.3.-1.*.32.-1.*.64.7": [
+      "anemoi"
+    ],
+    "38.3.-1.*.53.-1.*.49": [
+      "anemoi",
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "38.3.-1.*.53.-1.*.54.2": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "38.3.-1.*.53.-1.*.63.2": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "38.3.-1.*.82": [
+      "anemoi"
+    ],
+    "38.6.-1.*.10": [
+      "anemoi",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "38.6.-1.*.3": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "38.6.-1.*.6": [
+      "anemoi",
+      "fortune-world"
+    ],
+    "38.6.-1.*.7": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "39.0": [
+      "anemoi",
+      "ginharu",
+      "hoshiori-pe"
+    ],
+    "39.1": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "39.11": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "39.15": [
+      "anemoi"
+    ],
+    "39.2": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "39.4": [
+      "anemoi"
+    ],
+    "39.5": [
+      "anemoi",
+      "ginharu",
+      "ssr",
+      "tsukikana"
+    ],
+    "39.9": [
+      "anemoi",
+      "angel-beats"
+    ],
+    "40.-1.*.1": [
+      "anemoi",
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "40.-1.*.9": [
+      "anemoi",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "42.0": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "42.11": [
+      "anemoi"
+    ],
+    "42.16": [
+      "anemoi"
+    ],
+    "42.4": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "42.7": [
+      "anemoi"
+    ],
+    "44.-1.*.0": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "44.-1.*.14": [
+      "anemoi",
+      "ssr"
+    ],
+    "44.-1.*.4": [
+      "anemoi"
+    ],
+    "44.-1.*.5": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "45.9": [
+      "anemoi",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "46.2": [
+      "anemoi",
+      "ginharu",
+      "hoshiori-pe"
+    ],
+    "46.3": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "46.5": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "46.7.10": [
+      "anemoi"
+    ],
+    "49.-1.*.2.-1.*.51.0": [
+      "anemoi"
+    ],
+    "52.-1.*.5": [
+      "anemoi"
+    ],
+    "53.-1.*.1": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "53.-1.*.2": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "53.-1.*.3": [
+      "anemoi",
+      "angel-beats"
+    ],
+    "63.1": [
+      "anemoi"
+    ],
+    "63.112": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "63.121": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "63.124": [
+      "anemoi",
+      "angel-beats"
+    ],
+    "63.127": [
+      "anemoi",
+      "angel-beats",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "63.129": [
+      "anemoi",
+      "angel-beats",
+      "ssr",
+      "tsukikana"
+    ],
+    "63.131": [
+      "anemoi",
+      "angel-beats"
+    ],
+    "63.145": [
+      "anemoi",
+      "angel-beats"
+    ],
+    "63.168": [
+      "anemoi"
+    ],
+    "63.170": [
+      "anemoi",
+      "angel-beats",
+      "ssr",
+      "tsukikana"
+    ],
+    "63.183": [
+      "anemoi",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "63.188": [
+      "anemoi",
+      "angel-beats"
+    ],
+    "63.2": [
+      "anemoi"
+    ],
+    "63.206": [
+      "anemoi",
+      "angel-beats"
+    ],
+    "63.214": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "63.215": [
+      "anemoi",
+      "angel-beats",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "63.220": [
+      "anemoi",
+      "angel-beats"
+    ],
+    "63.223": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "63.224": [
+      "anemoi"
+    ],
+    "63.234": [
+      "anemoi",
+      "angel-beats"
+    ],
+    "63.236": [
+      "anemoi"
+    ],
+    "63.249": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "63.25": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "63.255": [
+      "anemoi",
+      "angel-beats"
+    ],
+    "63.256": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "63.262": [
+      "anemoi",
+      "angel-beats"
+    ],
+    "63.265": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world"
+    ],
+    "63.268": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world"
+    ],
+    "63.271": [
+      "anemoi"
+    ],
+    "63.28": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world"
+    ],
+    "63.284": [
+      "anemoi",
+      "angel-beats"
+    ],
+    "63.3": [
+      "anemoi",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "63.31": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world"
+    ],
+    "63.310": [
+      "anemoi",
+      "hoshiori-pe"
+    ],
+    "63.333": [
+      "anemoi"
+    ],
+    "63.34": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world"
+    ],
+    "63.41": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world"
+    ],
+    "63.42": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world"
+    ],
+    "63.43": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "hoshiori-pe"
+    ],
+    "63.44": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world"
+    ],
+    "63.45": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world"
+    ],
+    "63.48": [
+      "anemoi",
+      "angel-beats",
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "63.50": [
+      "anemoi",
+      "angel-beats",
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "63.53": [
+      "anemoi",
+      "angel-beats",
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "63.56": [
+      "anemoi",
+      "angel-beats",
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "63.6": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "63.61": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world"
+    ],
+    "63.68": [
+      "anemoi"
+    ],
+    "63.69": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "63.7": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "63.70": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "63.71": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "63.72": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "63.74": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "63.75": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "63.78": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "63.79": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ssr",
+      "tsukikana"
+    ],
+    "63.84": [
+      "anemoi",
+      "angel-beats"
+    ],
+    "63.9": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "63.91": [
+      "anemoi",
+      "angel-beats"
+    ],
+    "63.92": [
+      "anemoi",
+      "angel-beats"
+    ],
+    "63.93": [
+      "anemoi",
+      "angel-beats",
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "63.96": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world"
+    ],
+    "63.98": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world"
+    ],
+    "64.11": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "64.12": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "64.13": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "64.14": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "64.15": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "64.23": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "64.32": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "64.33": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "64.38": [
+      "anemoi",
+      "fortune-world"
+    ],
+    "64.39": [
+      "anemoi",
+      "fortune-world"
+    ],
+    "64.48": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "64.51": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "64.66": [
+      "anemoi",
+      "fortune-world",
+      "ssr",
+      "tsukikana"
+    ],
+    "64.67": [
+      "anemoi"
+    ],
+    "64.8": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "64.96": [
+      "anemoi"
+    ],
+    "64.97": [
+      "anemoi"
+    ],
+    "64.98": [
+      "anemoi"
+    ],
+    "64.99": [
+      "anemoi"
+    ],
+    "65.-1.*.1.2.-1.*.111.2": [
+      "anemoi"
+    ],
+    "65.-1.*.1.2.-1.*.111.9": [
+      "anemoi"
+    ],
+    "65.-1.*.1.2.-1.*.112.-1.*.0": [
+      "anemoi"
+    ],
+    "65.-1.*.1.2.-1.*.113.-1.*.0": [
+      "anemoi"
+    ],
+    "65.-1.*.1.2.-1.*.159": [
+      "anemoi"
+    ],
+    "65.-1.*.1.2.-1.*.24": [
+      "anemoi"
+    ],
+    "65.-1.*.1.2.-1.*.25": [
+      "anemoi"
+    ],
+    "65.-1.*.1.2.-1.*.35": [
+      "anemoi",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.-1.*.1.2.-1.*.38": [
+      "anemoi",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.-1.*.1.2.-1.*.42": [
+      "anemoi",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.-1.*.1.2.-1.*.54.2": [
+      "anemoi"
+    ],
+    "65.-1.*.1.2.-1.*.63.2": [
+      "anemoi"
+    ],
+    "65.-1.*.1.2.-1.*.67.0": [
+      "anemoi"
+    ],
+    "65.-1.*.1.2.-1.*.72.0": [
+      "anemoi",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.-1.*.1.2.-1.*.91.1": [
+      "anemoi"
+    ],
+    "65.-1.*.1.6.-1.*.10": [
+      "anemoi",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.-1.*.1.6.-1.*.3": [
+      "anemoi",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.-1.*.1.6.-1.*.6": [
+      "anemoi"
+    ],
+    "65.-1.*.1.6.-1.*.7": [
+      "anemoi"
+    ],
+    "65.-1.*.2.2.-1.*.111.2": [
+      "anemoi"
+    ],
+    "65.-1.*.2.2.-1.*.112.-1.*.0": [
+      "anemoi"
+    ],
+    "65.-1.*.2.2.-1.*.113.-1.*.0": [
+      "anemoi"
+    ],
+    "65.-1.*.2.2.-1.*.159": [
+      "anemoi"
+    ],
+    "65.-1.*.2.2.-1.*.24": [
+      "anemoi"
+    ],
+    "65.-1.*.2.2.-1.*.25": [
+      "anemoi"
+    ],
+    "65.-1.*.2.2.-1.*.38": [
+      "anemoi",
+      "ginharu",
+      "hoshiori-pe",
+      "tsukikana"
+    ],
+    "65.-1.*.2.2.-1.*.41": [
+      "anemoi"
+    ],
+    "65.-1.*.2.2.-1.*.42": [
+      "anemoi"
+    ],
+    "65.-1.*.2.2.-1.*.54.2": [
+      "anemoi"
+    ],
+    "65.-1.*.2.2.-1.*.63.2": [
+      "anemoi"
+    ],
+    "65.-1.*.2.2.-1.*.67.0": [
+      "anemoi"
+    ],
+    "65.-1.*.2.2.-1.*.72.0": [
+      "anemoi"
+    ],
+    "65.1.2.-1.*.111.9": [
+      "anemoi"
+    ],
+    "65.1.2.-1.*.112.-1.*.0": [
+      "anemoi"
+    ],
+    "65.1.2.-1.*.113.-1.*.0": [
+      "anemoi"
+    ],
+    "65.1.2.-1.*.123": [
+      "anemoi"
+    ],
+    "65.1.2.-1.*.124": [
+      "anemoi"
+    ],
+    "65.1.2.-1.*.188": [
+      "anemoi"
+    ],
+    "65.1.2.-1.*.54.2": [
+      "anemoi"
+    ],
+    "65.1.2.-1.*.63.2": [
+      "anemoi"
+    ],
+    "65.1.2.-1.*.72.0": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world"
+    ],
+    "65.1.2.-1.*.91.1": [
+      "anemoi"
+    ],
+    "65.1.2.-1.*.93.-1.*.124": [
+      "anemoi"
+    ],
+    "65.1.2.-1.*.93.-1.*.188": [
+      "anemoi"
+    ],
+    "65.1.2.-1.*.95": [
+      "anemoi"
+    ],
+    "65.1.2.-1.*.96": [
+      "anemoi"
+    ],
+    "65.1.2.-1.*.99": [
+      "anemoi"
+    ],
+    "65.1.6.-1.*.10": [
+      "anemoi",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.1.6.-1.*.3": [
+      "anemoi",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.1.6.-1.*.6": [
+      "anemoi",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.1.6.-1.*.7": [
+      "anemoi",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.12": [
+      "anemoi"
+    ],
+    "65.13.98": [
+      "anemoi"
+    ],
+    "65.13.99": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.104": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.111.2": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.111.9": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.112.-1.*.0": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.123": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.124": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.132": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.133": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.134": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.159": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.188": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.24": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.25": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.35": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.38": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.39": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.42": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.48": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.49": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.52.1": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.54.2": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.62": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.67.0": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.68.0": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.71.1": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.72.0": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.93.-1.*.104": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.93.-1.*.111.2": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.93.-1.*.111.9": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.93.-1.*.116": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.93.-1.*.124": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.93.-1.*.132": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.93.-1.*.133": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.93.-1.*.134": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.93.-1.*.159": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.93.-1.*.161": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.93.-1.*.188": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.93.-1.*.24": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.93.-1.*.25": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.93.-1.*.36": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.93.-1.*.38": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.93.-1.*.39": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.93.-1.*.42": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.93.-1.*.48": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.93.-1.*.49": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.93.-1.*.54.2": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.93.-1.*.63.2": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.93.-1.*.98": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.93.-1.*.99": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.93.3": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.93.4": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.95": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.96": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.97": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.99": [
+      "anemoi"
+    ],
+    "65.4": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.5": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.6.-1.*.1": [
+      "anemoi"
+    ],
+    "65.6.-1.*.3": [
+      "anemoi"
+    ],
+    "65.8": [
+      "anemoi",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "78.3": [
+      "anemoi"
+    ],
+    "83.1.-1.*.2": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ssr",
+      "tsukikana"
+    ],
+    "83.1.-1.*.3": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "83.1.-1.*.6": [
+      "anemoi",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "83.2097152000.10": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world"
+    ],
+    "83.2097152000.13": [
+      "anemoi"
+    ],
+    "83.2097152000.2": [
+      "anemoi",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "83.2097152000.3": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "83.2097152000.4": [
+      "anemoi",
+      "hoshiori-pe"
+    ],
+    "83.2097152000.5": [
+      "anemoi",
+      "ssr",
+      "tsukikana"
+    ],
+    "83.2097152000.6": [
+      "anemoi",
+      "fortune-world",
+      "ginharu",
+      "ssr",
+      "tsukikana"
+    ],
+    "83.2097152001.10": [
+      "anemoi"
+    ],
+    "83.2097152001.11": [
+      "anemoi",
+      "hoshiori-pe"
+    ],
+    "83.2097152001.12": [
+      "anemoi"
+    ],
+    "83.2097152001.2": [
+      "anemoi",
+      "ssr",
+      "tsukikana"
+    ],
+    "83.2097152001.5": [
+      "anemoi"
+    ],
+    "83.2097152001.6": [
+      "anemoi",
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "83.2097152002.1": [
+      "anemoi"
+    ],
+    "83.2097152002.12": [
+      "anemoi"
+    ],
+    "83.2097152002.4": [
+      "anemoi"
+    ],
+    "83.2097152002.9": [
+      "anemoi"
+    ],
+    "83.2097152003.1": [
+      "anemoi",
+      "ssr"
+    ],
+    "83.2097152003.2": [
+      "anemoi",
+      "ssr",
+      "tsukikana"
+    ],
+    "83.2097152003.9": [
+      "anemoi"
+    ],
+    "83.2097152004.1": [
+      "anemoi",
+      "ssr"
+    ],
+    "83.2097152004.2": [
+      "anemoi"
+    ],
+    "83.2097152007.4": [
+      "anemoi"
+    ],
+    "83.2097152008.12": [
+      "anemoi"
+    ],
+    "83.2097152008.4": [
+      "anemoi"
+    ],
+    "86.0.5": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "86.1.5": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ssr",
+      "tsukikana"
+    ],
+    "86.2": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "86.3": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "92.0": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "92.13": [
+      "anemoi",
+      "ssr",
+      "tsukikana"
+    ],
+    "92.14": [
+      "anemoi"
+    ],
+    "92.6": [
+      "anemoi",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "105.-1.*.0": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe"
+    ],
+    "105.-1.*.1": [
+      "angel-beats"
+    ],
+    "105.-1.*.3": [
+      "angel-beats"
+    ],
+    "123.2": [
+      "angel-beats"
+    ],
+    "37.2.-1.*.115.-1.*.0.1": [
+      "angel-beats"
+    ],
+    "37.2.-1.*.115.-1.*.1": [
+      "angel-beats"
+    ],
+    "37.2.-1.*.115.1": [
+      "angel-beats",
+      "tsukikana"
+    ],
+    "37.2.-1.*.93.-1.*.129": [
+      "angel-beats",
+      "ginharu"
+    ],
+    "37.2.-1.*.93.-1.*.130": [
+      "angel-beats",
+      "ginharu"
+    ],
+    "37.2.-1.*.93.-1.*.159": [
+      "angel-beats"
+    ],
+    "37.2.-1.*.93.-1.*.49": [
+      "angel-beats",
+      "ginharu",
+      "tsukikana"
+    ],
+    "38.2.-1.*.115.-1.*.0.1": [
+      "angel-beats"
+    ],
+    "38.2.-1.*.115.-1.*.1": [
+      "angel-beats"
+    ],
+    "38.2.-1.*.115.1": [
+      "angel-beats"
+    ],
+    "38.2.-1.*.48": [
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "tsukikana"
+    ],
+    "38.2.-1.*.93.-1.*.24": [
+      "angel-beats",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "38.2.-1.*.93.-1.*.25": [
+      "angel-beats"
+    ],
+    "38.2.-1.*.93.-1.*.35": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "38.2.-1.*.93.-1.*.38": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "38.2.-1.*.93.-1.*.49": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "38.2.-1.*.93.-1.*.67.0": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr"
+    ],
+    "38.2.-1.*.93.-1.*.68.0": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "38.2.-1.*.93.-1.*.72.0": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "38.2.-1.*.93.-1.*.72.4": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "38.2.-1.*.93.-1.*.91.0": [
+      "angel-beats",
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "38.3.-1.*.30.-1.*.174": [
+      "angel-beats"
+    ],
+    "38.3.-1.*.30.-1.*.35": [
+      "angel-beats",
+      "fortune-world"
+    ],
+    "38.3.-1.*.30.-1.*.38": [
+      "angel-beats",
+      "fortune-world"
+    ],
+    "38.3.-1.*.32.-1.*.113.-1.*.0": [
+      "angel-beats"
+    ],
+    "38.3.-1.*.32.-1.*.124": [
+      "angel-beats"
+    ],
+    "38.3.-1.*.32.-1.*.63.2": [
+      "angel-beats",
+      "fortune-world"
+    ],
+    "40.-1.*.2": [
+      "angel-beats"
+    ],
+    "40.-1.*.3": [
+      "angel-beats",
+      "ssr",
+      "tsukikana"
+    ],
+    "40.-1.*.8": [
+      "angel-beats",
+      "fortune-world"
+    ],
+    "44.-1.*.13": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "45.0": [
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "46.0": [
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "46.1": [
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "63.101": [
+      "angel-beats",
+      "fortune-world"
+    ],
+    "63.102": [
+      "angel-beats",
+      "fortune-world"
+    ],
+    "63.103": [
+      "angel-beats",
+      "fortune-world"
+    ],
+    "63.104": [
+      "angel-beats",
+      "fortune-world"
+    ],
+    "63.105": [
+      "angel-beats",
+      "fortune-world"
+    ],
+    "63.106": [
+      "angel-beats",
+      "fortune-world"
+    ],
+    "63.118": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "63.133": [
+      "angel-beats",
+      "fortune-world",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "63.134": [
+      "angel-beats",
+      "fortune-world",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "63.149": [
+      "angel-beats",
+      "fortune-world"
+    ],
+    "63.150": [
+      "angel-beats",
+      "fortune-world"
+    ],
+    "63.155": [
+      "angel-beats"
+    ],
+    "63.158": [
+      "angel-beats"
+    ],
+    "63.161": [
+      "angel-beats"
+    ],
+    "63.163": [
+      "angel-beats"
+    ],
+    "63.180": [
+      "angel-beats",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "63.200": [
+      "angel-beats"
+    ],
+    "63.213": [
+      "angel-beats"
+    ],
+    "63.227": [
+      "angel-beats"
+    ],
+    "63.24": [
+      "angel-beats",
+      "fortune-world"
+    ],
+    "63.243": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "63.252": [
+      "angel-beats",
+      "ssr",
+      "tsukikana"
+    ],
+    "63.259": [
+      "angel-beats",
+      "ssr",
+      "tsukikana"
+    ],
+    "63.264": [
+      "angel-beats",
+      "fortune-world"
+    ],
+    "63.267": [
+      "angel-beats",
+      "fortune-world"
+    ],
+    "63.27": [
+      "angel-beats",
+      "fortune-world"
+    ],
+    "63.30": [
+      "angel-beats",
+      "fortune-world"
+    ],
+    "63.320": [
+      "angel-beats"
+    ],
+    "63.33": [
+      "angel-beats",
+      "fortune-world"
+    ],
+    "63.40": [
+      "angel-beats",
+      "fortune-world"
+    ],
+    "63.73": [
+      "angel-beats"
+    ],
+    "63.76": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "63.77": [
+      "angel-beats"
+    ],
+    "63.81": [
+      "angel-beats"
+    ],
+    "63.95": [
+      "angel-beats",
+      "fortune-world",
+      "ssr",
+      "tsukikana"
+    ],
+    "64.17": [
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "64.2": [
+      "angel-beats",
+      "fortune-world"
+    ],
+    "64.3": [
+      "angel-beats"
+    ],
+    "64.5": [
+      "angel-beats"
+    ],
+    "64.54": [
+      "angel-beats",
+      "fortune-world",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "64.55": [
+      "angel-beats",
+      "fortune-world",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "64.6": [
+      "angel-beats",
+      "fortune-world"
+    ],
+    "64.7": [
+      "angel-beats",
+      "fortune-world",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.1.2.-1.*.111.2": [
+      "anemoi",
+      "angel-beats"
+    ],
+    "65.1.2.-1.*.35": [
+      "angel-beats",
+      "fortune-world"
+    ],
+    "65.1.2.-1.*.72.4": [
+      "angel-beats"
+    ],
+    "65.1.2.-1.*.93.-1.*.101": [
+      "angel-beats"
+    ],
+    "65.1.2.-1.*.93.-1.*.102": [
+      "angel-beats"
+    ],
+    "65.1.2.-1.*.93.-1.*.103": [
+      "angel-beats"
+    ],
+    "65.1.2.-1.*.93.-1.*.104": [
+      "angel-beats"
+    ],
+    "65.1.2.-1.*.93.-1.*.116": [
+      "angel-beats"
+    ],
+    "65.1.2.-1.*.93.-1.*.24": [
+      "angel-beats",
+      "fortune-world"
+    ],
+    "65.1.2.-1.*.93.-1.*.25": [
+      "angel-beats",
+      "fortune-world"
+    ],
+    "65.1.2.-1.*.93.-1.*.35": [
+      "angel-beats"
+    ],
+    "65.1.2.-1.*.93.-1.*.38": [
+      "angel-beats",
+      "fortune-world"
+    ],
+    "65.1.2.-1.*.93.-1.*.39": [
+      "angel-beats"
+    ],
+    "65.1.2.-1.*.93.-1.*.48": [
+      "angel-beats"
+    ],
+    "65.1.2.-1.*.93.-1.*.52.0.1": [
+      "angel-beats"
+    ],
+    "65.1.2.-1.*.93.-1.*.52.1": [
+      "angel-beats"
+    ],
+    "65.1.2.-1.*.93.-1.*.52.2": [
+      "angel-beats"
+    ],
+    "65.1.2.-1.*.93.-1.*.72.0": [
+      "angel-beats"
+    ],
+    "65.1.2.-1.*.93.-1.*.72.4": [
+      "angel-beats"
+    ],
+    "65.1.2.-1.*.93.4": [
+      "angel-beats",
+      "fortune-world"
+    ],
+    "86.0.6": [
+      "angel-beats",
+      "fortune-world"
+    ],
+    "86.0.7": [
+      "angel-beats",
+      "fortune-world"
+    ],
+    "92.2": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "37.2.-1.*.113.-1.*.0": [
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "37.2.-1.*.175": [
+      "fortune-world"
+    ],
+    "37.2.-1.*.72.0": [
+      "fortune-world"
+    ],
+    "38.3.-1.*.32.-1.*.54.2": [
+      "fortune-world"
+    ],
+    "63.109": [
+      "fortune-world"
+    ],
+    "63.11": [
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "63.117": [
+      "fortune-world"
+    ],
+    "63.12": [
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "63.251": [
+      "fortune-world"
+    ],
+    "63.258": [
+      "fortune-world"
+    ],
+    "64.25": [
+      "fortune-world",
+      "hoshiori-pe"
+    ],
+    "64.27": [
+      "fortune-world",
+      "hoshiori-pe"
+    ],
+    "64.30": [
+      "fortune-world"
+    ],
+    "20.3": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "29.10": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "37.2.-1.*.93.-1.*.131": [
+      "ginharu"
+    ],
+    "38.2.-1.*.42": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "ssr"
+    ],
+    "38.2.-1.*.72.4": [
+      "ginharu",
+      "ssr",
+      "tsukikana"
+    ],
+    "38.2.-1.*.93.-1.*.42": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr"
+    ],
+    "38.2.-1.*.93.-1.*.61": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "38.2.-1.*.93.-1.*.64.0": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "38.2.-1.*.93.-1.*.64.4": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "38.2.-1.*.93.-1.*.95": [
+      "ginharu",
+      "tsukikana"
+    ],
+    "38.2.-1.*.93.-1.*.98": [
+      "ginharu"
+    ],
+    "38.2.-1.*.93.-1.*.99": [
+      "ginharu"
+    ],
+    "38.2.-1.*.93.3": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "38.2.-1.*.95": [
+      "ginharu",
+      "hoshiori-pe"
+    ],
+    "38.2.-1.*.98": [
+      "ginharu",
+      "hoshiori-pe"
+    ],
+    "38.3.-1.*.32.-1.*.64.0": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "38.3.-1.*.33": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "38.3.-1.*.34": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "38.3.-1.*.35": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "38.3.-1.*.39": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "38.3.-1.*.42": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "38.3.-1.*.44": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "38.3.-1.*.53.-1.*.35": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "38.6.-1.*.0": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "38.6.-1.*.2": [
+      "angel-beats",
+      "ginharu"
+    ],
+    "38.6.-1.*.4": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "39.10": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "tsukikana"
+    ],
+    "39.12": [
+      "ginharu",
+      "hoshiori-pe"
+    ],
+    "42.18": [
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "44.-1.*.3": [
+      "ginharu"
+    ],
+    "45.7": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "49.-1.*.2.-1.*.35": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "49.-1.*.2.-1.*.38": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "49.-1.*.2.-1.*.93.-1.*.104": [
+      "ginharu"
+    ],
+    "49.-1.*.2.-1.*.93.-1.*.38": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "49.-1.*.2.-1.*.93.-1.*.39": [
+      "ginharu"
+    ],
+    "49.-1.*.2.-1.*.93.-1.*.42": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "49.-1.*.2.-1.*.93.-1.*.95": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "49.-1.*.2.-1.*.93.-1.*.97": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "tsukikana"
+    ],
+    "49.-1.*.2.-1.*.93.-1.*.98": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "49.-1.*.2.-1.*.93.4": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "63.182": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "63.300": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "63.39": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "64.1": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "64.34": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "64.35": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "65.-1.*.1.2.-1.*.72.4": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.-1.*.1.2.-1.*.93.-1.*.38": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.-1.*.1.2.-1.*.93.-1.*.40": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.-1.*.1.2.-1.*.93.-1.*.42": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.-1.*.1.2.-1.*.93.-1.*.95": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.-1.*.1.2.-1.*.93.4": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.-1.*.1.6.-1.*.4": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.0.-1.*.2.-1.*.35": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.0.-1.*.2.-1.*.38": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.0.-1.*.2.-1.*.72.0": [
+      "ginharu",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.0.-1.*.2.-1.*.72.4": [
+      "ginharu",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.0.-1.*.2.-1.*.93.-1.*.38": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.0.-1.*.2.-1.*.93.-1.*.40": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "65.0.-1.*.2.-1.*.93.-1.*.42": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.0.-1.*.2.-1.*.93.-1.*.63.2": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.0.-1.*.2.-1.*.93.-1.*.93.-1.*.104": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.0.-1.*.2.-1.*.93.-1.*.93.-1.*.116": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.0.-1.*.2.-1.*.93.-1.*.93.-1.*.38": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.0.-1.*.2.-1.*.93.-1.*.93.-1.*.39": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.0.-1.*.2.-1.*.93.-1.*.93.-1.*.40": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.0.-1.*.2.-1.*.93.-1.*.93.-1.*.42": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.0.-1.*.2.-1.*.93.-1.*.93.-1.*.99": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.0.-1.*.2.-1.*.93.-1.*.93.4": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.0.-1.*.2.-1.*.93.-1.*.95": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.0.-1.*.2.-1.*.93.-1.*.96": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.0.-1.*.2.-1.*.93.-1.*.98": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.0.-1.*.2.-1.*.93.4": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.0.-1.*.6.-1.*.1": [
+      "ginharu",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.0.-1.*.6.-1.*.4": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.1.6.-1.*.4": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.1.6.-1.*.5": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "79.2": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "83.1.-1.*.7": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "tsukikana"
+    ],
+    "97.-1.*.0": [
+      "ginharu"
+    ],
+    "97.-1.*.1": [
+      "ginharu"
+    ],
+    "97.-1.*.2": [
+      "ginharu"
+    ],
+    "97.-1.*.3": [
+      "ginharu"
+    ],
+    "97.-1.*.6": [
+      "ginharu"
+    ],
+    "97.-1.*.7": [
+      "ginharu"
+    ],
+    "145.5": [
+      "ginharu",
+      "hoshiori-pe",
+      "tsukikana"
+    ],
+    "37.2.-1.*.160": [
+      "hoshiori-pe"
+    ],
+    "37.2.-1.*.52.1": [
+      "angel-beats",
+      "hoshiori-pe"
+    ],
+    "38.2.-1.*.120": [
+      "angel-beats",
+      "hoshiori-pe"
+    ],
+    "44.-1.*.2": [
+      "ginharu",
+      "hoshiori-pe"
+    ],
+    "65.0.-1.*.2.-1.*.51.0": [
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "65.0.-1.*.2.-1.*.51.4": [
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "65.0.-1.*.2.-1.*.93.-1.*.35": [
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "65.0.-1.*.2.-1.*.93.-1.*.48": [
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "65.0.-1.*.2.-1.*.93.-1.*.54.2": [
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.0.-1.*.2.-1.*.93.-1.*.93.-1.*.132": [
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.0.-1.*.2.-1.*.93.-1.*.93.-1.*.133": [
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.0.-1.*.2.-1.*.93.-1.*.93.-1.*.134": [
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.0.-1.*.2.-1.*.93.-1.*.93.-1.*.49": [
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "65.0.-1.*.2.-1.*.93.-1.*.93.-1.*.63.2": [
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "65.0.-1.*.2.-1.*.93.-1.*.93.-1.*.93.-1.*.104": [
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "65.0.-1.*.2.-1.*.93.-1.*.93.-1.*.93.-1.*.116": [
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "65.0.-1.*.2.-1.*.93.-1.*.93.-1.*.93.-1.*.39": [
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "65.0.-1.*.2.-1.*.93.-1.*.93.-1.*.93.-1.*.99": [
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "65.0.-1.*.2.-1.*.93.-1.*.93.-1.*.93.4": [
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "65.1.2.-1.*.93.-1.*.93.-1.*.113.-1.*.0": [
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "65.1.2.-1.*.93.-1.*.93.-1.*.72.0": [
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "83.1.-1.*.12": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "83.1.-1.*.5": [
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "83.2097152000.9": [
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "38.2.-1.*.112.-1.*.0": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "38.2.-1.*.112.1": [
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "38.2.-1.*.64.0": [
+      "angel-beats",
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "38.2.-1.*.64.4": [
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "38.2.-1.*.93.-1.*.113.-1.*.0": [
+      "angel-beats",
+      "hoshiori-rikka"
+    ],
+    "38.2.-1.*.93.-1.*.113.1": [
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "38.2.-1.*.93.-1.*.120": [
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "38.2.-1.*.93.-1.*.159": [
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "38.2.-1.*.93.-1.*.63.2": [
+      "angel-beats",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "43.1": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "44.-1.*.7": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "tsukikana"
+    ],
+    "49.-1.*.2.-1.*.54.2": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "49.-1.*.2.-1.*.63.2": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "49.-1.*.2.-1.*.93.-1.*.35": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "83.2097152002.2": [
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "83.2097152002.3": [
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "32.3.8": [
+      "ssr"
+    ],
+    "37.2.-1.*.158": [
+      "ssr",
+      "tsukikana"
+    ],
+    "37.2.-1.*.67.0": [
+      "ssr",
+      "tsukikana"
+    ],
+    "37.2.-1.*.68.0": [
+      "ssr",
+      "tsukikana"
+    ],
+    "38.2.-1.*.51.0": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "38.6.-1.*.1": [
+      "ssr",
+      "tsukikana"
+    ],
+    "42.15": [
+      "angel-beats",
+      "ginharu",
+      "ssr",
+      "tsukikana"
+    ],
+    "49.-1.*.2.-1.*.158": [
+      "ginharu",
+      "ssr",
+      "tsukikana"
+    ],
+    "49.-1.*.2.-1.*.174": [
+      "ginharu",
+      "ssr",
+      "tsukikana"
+    ],
+    "49.-1.*.2.-1.*.25": [
+      "ssr",
+      "tsukikana"
+    ],
+    "49.-1.*.2.-1.*.72.0": [
+      "ssr",
+      "tsukikana"
+    ],
+    "49.-1.*.2.-1.*.72.4": [
+      "ssr",
+      "tsukikana"
+    ],
+    "49.-1.*.2.-1.*.93.-1.*.72.0": [
+      "ssr",
+      "tsukikana"
+    ],
+    "63.198": [
+      "ssr",
+      "tsukikana"
+    ],
+    "63.201": [
+      "ssr",
+      "tsukikana"
+    ],
+    "65.-1.*.1.2.-1.*.40": [
+      "ssr"
+    ],
+    "65.0.-1.*.2.-1.*.93.-1.*.93.-1.*.54.2": [
+      "ssr",
+      "tsukikana"
+    ],
+    "65.0.-1.*.2.-1.*.93.-1.*.97": [
+      "ssr",
+      "tsukikana"
+    ],
+    "31.8": [
+      "tsukikana"
+    ],
+    "123.1": [
+      "anemoi",
+      "angel-beats"
+    ],
+    "42.19": [
+      "anemoi"
+    ],
+    "65.1.2.-1.*.159": [
+      "anemoi"
+    ],
+    "65.1.2.-1.*.24": [
+      "anemoi"
+    ],
+    "65.1.2.-1.*.25": [
+      "anemoi"
+    ],
+    "65.1.2.-1.*.38": [
+      "anemoi"
+    ],
+    "65.1.2.-1.*.42": [
+      "anemoi"
+    ],
+    "65.1.2.-1.*.93.-1.*.42": [
+      "anemoi"
+    ],
+    "65.1.2.-1.*.97": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.141.2": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.53": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.93.-1.*.53": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.93.-1.*.62": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.93.-1.*.93.-1.*.132": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.93.-1.*.93.-1.*.133": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.93.-1.*.93.-1.*.134": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.93.-1.*.93.-1.*.38": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.93.-1.*.93.4": [
+      "anemoi"
+    ],
+    "78.2": [
+      "anemoi"
+    ],
+    "78.6": [
+      "anemoi"
+    ],
+    "83.2097152003.5": [
+      "anemoi",
+      "angel-beats"
+    ],
+    "83.2097152003.7": [
+      "anemoi"
+    ],
+    "38.2.-1.*.26": [
+      "angel-beats"
+    ],
+    "38.2.-1.*.72.10": [
+      "angel-beats"
+    ],
+    "38.2.-1.*.93.-1.*.124": [
+      "angel-beats"
+    ],
+    "38.2.-1.*.93.-1.*.160": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "ssr"
+    ],
+    "38.2.-1.*.93.-1.*.175": [
+      "angel-beats"
+    ],
+    "38.2.-1.*.93.-1.*.26": [
+      "angel-beats"
+    ],
+    "38.2.-1.*.93.-1.*.48": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "ssr"
+    ],
+    "38.2.-1.*.93.-1.*.72.10": [
+      "angel-beats"
+    ],
+    "38.2.-1.*.93.-1.*.93.-1.*.104": [
+      "angel-beats"
+    ],
+    "38.2.-1.*.93.-1.*.93.-1.*.124": [
+      "angel-beats"
+    ],
+    "38.2.-1.*.93.-1.*.93.-1.*.161": [
+      "angel-beats"
+    ],
+    "38.2.-1.*.93.-1.*.93.-1.*.175": [
+      "angel-beats"
+    ],
+    "38.2.-1.*.93.-1.*.93.-1.*.26": [
+      "angel-beats"
+    ],
+    "38.2.-1.*.93.-1.*.93.-1.*.35": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "ssr"
+    ],
+    "38.2.-1.*.93.-1.*.93.-1.*.38": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "ssr"
+    ],
+    "38.2.-1.*.93.-1.*.93.-1.*.39": [
+      "angel-beats"
+    ],
+    "38.2.-1.*.93.-1.*.93.-1.*.42": [
+      "angel-beats"
+    ],
+    "38.2.-1.*.93.-1.*.93.-1.*.48": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "ssr"
+    ],
+    "38.2.-1.*.93.-1.*.93.-1.*.62": [
+      "angel-beats",
+      "ssr"
+    ],
+    "38.2.-1.*.93.-1.*.93.-1.*.93.-1.*.26": [
+      "angel-beats"
+    ],
+    "38.2.-1.*.93.-1.*.93.-1.*.93.-1.*.35": [
+      "angel-beats"
+    ],
+    "38.2.-1.*.93.-1.*.93.-1.*.93.-1.*.38": [
+      "angel-beats",
+      "ssr"
+    ],
+    "38.2.-1.*.93.-1.*.93.-1.*.93.-1.*.42": [
+      "angel-beats"
+    ],
+    "38.2.-1.*.93.-1.*.93.-1.*.93.-1.*.48": [
+      "angel-beats"
+    ],
+    "38.2.-1.*.93.-1.*.93.-1.*.93.4": [
+      "angel-beats",
+      "ssr"
+    ],
+    "38.2.-1.*.93.-1.*.93.-1.*.98": [
+      "angel-beats"
+    ],
+    "38.2.-1.*.93.-1.*.93.3": [
+      "angel-beats"
+    ],
+    "38.2.-1.*.93.-1.*.93.4": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "ssr"
+    ],
+    "38.6.-1.*.5": [
+      "angel-beats"
+    ],
+    "46.6.5": [
+      "angel-beats"
+    ],
+    "46.7.1": [
+      "angel-beats"
+    ],
+    "46.7.5": [
+      "angel-beats"
+    ],
+    "46.7.6": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "53.-1.*.0.1": [
+      "angel-beats"
+    ],
+    "63.21": [
+      "angel-beats"
+    ],
+    "63.35": [
+      "angel-beats"
+    ],
+    "49.-1.*.2.-1.*.93.-1.*.161": [
+      "ginharu",
+      "ssr",
+      "tsukikana"
+    ],
+    "49.-1.*.2.-1.*.93.-1.*.40": [
+      "ginharu",
+      "ssr",
+      "tsukikana"
+    ],
+    "49.-1.*.2.-1.*.93.-1.*.54.2": [
+      "ginharu",
+      "ssr",
+      "tsukikana"
+    ],
+    "49.-1.*.2.-1.*.93.-1.*.93.-1.*.35": [
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "49.-1.*.2.-1.*.93.-1.*.93.-1.*.38": [
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "49.-1.*.2.-1.*.93.-1.*.93.-1.*.42": [
+      "ginharu",
+      "ssr",
+      "tsukikana"
+    ],
+    "49.-1.*.2.-1.*.93.-1.*.93.-1.*.48": [
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "49.-1.*.2.-1.*.93.-1.*.93.-1.*.95": [
+      "ginharu",
+      "ssr",
+      "tsukikana"
+    ],
+    "49.-1.*.2.-1.*.93.-1.*.93.-1.*.97": [
+      "ginharu"
+    ],
+    "49.-1.*.2.-1.*.93.-1.*.93.-1.*.98": [
+      "ginharu",
+      "ssr",
+      "tsukikana"
+    ],
+    "49.-1.*.2.-1.*.93.-1.*.93.4": [
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "49.-1.*.2.-1.*.93.-1.*.96": [
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "49.-1.*.2.-1.*.93.-1.*.99": [
+      "ginharu"
+    ],
+    "64.19": [
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "83.0.10": [
+      "ginharu"
+    ],
+    "37.2.-1.*.93.-1.*.160": [
+      "hoshiori-pe"
+    ],
+    "37.2.-1.*.93.-1.*.42": [
+      "hoshiori-pe"
+    ],
+    "37.2.-1.*.93.-1.*.54.2": [
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "37.2.-1.*.93.-1.*.63.2": [
+      "hoshiori-pe",
+      "ssr"
+    ],
+    "37.2.-1.*.93.-1.*.93.-1.*.42": [
+      "hoshiori-pe"
+    ],
+    "37.2.-1.*.93.-1.*.93.-1.*.95": [
+      "hoshiori-pe"
+    ],
+    "37.2.-1.*.93.-1.*.93.-1.*.97": [
+      "hoshiori-pe"
+    ],
+    "37.2.-1.*.93.-1.*.93.-1.*.98": [
+      "hoshiori-pe"
+    ],
+    "37.2.-1.*.93.-1.*.95": [
+      "hoshiori-pe"
+    ],
+    "37.2.-1.*.93.-1.*.96": [
+      "hoshiori-pe"
+    ],
+    "37.2.-1.*.93.-1.*.98": [
+      "hoshiori-pe"
+    ],
+    "42.13": [
+      "hoshiori-pe"
+    ],
+    "46.4": [
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "46.8": [
+      "hoshiori-pe"
+    ],
+    "49.-1.*.2.-1.*.93.-1.*.132": [
+      "hoshiori-pe"
+    ],
+    "49.-1.*.2.-1.*.93.-1.*.133": [
+      "hoshiori-pe"
+    ],
+    "49.-1.*.2.-1.*.93.-1.*.134": [
+      "hoshiori-pe"
+    ],
+    "49.-1.*.2.-1.*.93.-1.*.160": [
+      "hoshiori-pe"
+    ],
+    "49.-1.*.2.-1.*.93.-1.*.63.2": [
+      "hoshiori-pe"
+    ],
+    "49.-1.*.2.-1.*.93.-1.*.93.-1.*.96": [
+      "ssr",
+      "tsukikana"
+    ],
+    "83.0.1": [
+      "ssr",
+      "tsukikana"
+    ],
+    "135.-1.*.2.0": [
+      "angel-beats",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "37.2.-1.*.51.3": [
+      "angel-beats"
+    ],
+    "37.2.-1.*.93.-1.*.121": [
+      "angel-beats",
+      "ginharu"
+    ],
+    "37.2.-1.*.93.-1.*.93.-1.*.35": [
+      "angel-beats"
+    ],
+    "37.2.-1.*.93.-1.*.93.-1.*.41": [
+      "angel-beats"
+    ],
+    "37.2.-1.*.93.-1.*.93.-1.*.51.3": [
+      "angel-beats"
+    ],
+    "38.2.-1.*.140.-1.*.0": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "ssr"
+    ],
+    "38.2.-1.*.49": [
+      "angel-beats",
+      "hoshiori-pe"
+    ],
+    "38.2.-1.*.52.3": [
+      "angel-beats"
+    ],
+    "38.2.-1.*.63.2": [
+      "angel-beats"
+    ],
+    "38.2.-1.*.71.0": [
+      "angel-beats"
+    ],
+    "38.2.-1.*.93.-1.*.106.0": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "ssr"
+    ],
+    "38.2.-1.*.93.-1.*.108.0": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "ssr"
+    ],
+    "38.2.-1.*.93.-1.*.112.-1.*.0": [
+      "angel-beats"
+    ],
+    "38.2.-1.*.93.-1.*.51.0": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "38.2.-1.*.93.-1.*.62": [
+      "angel-beats"
+    ],
+    "38.2.-1.*.93.-1.*.71.0": [
+      "angel-beats"
+    ],
+    "38.2.-1.*.93.-1.*.83.2": [
+      "angel-beats"
+    ],
+    "38.2.-1.*.93.-1.*.83.3": [
+      "angel-beats"
+    ],
+    "38.2.-1.*.93.-1.*.93.-1.*.24": [
+      "angel-beats"
+    ],
+    "38.2.-1.*.93.-1.*.93.-1.*.41": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "ssr"
+    ],
+    "38.2.-1.*.93.-1.*.93.-1.*.49": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "ssr"
+    ],
+    "38.2.-1.*.93.-1.*.93.-1.*.51.0": [
+      "angel-beats"
+    ],
+    "38.2.-1.*.93.-1.*.93.-1.*.51.3": [
+      "angel-beats"
+    ],
+    "38.2.-1.*.93.-1.*.93.-1.*.67.0": [
+      "angel-beats"
+    ],
+    "38.2.-1.*.93.-1.*.93.-1.*.68.0": [
+      "angel-beats"
+    ],
+    "38.2.-1.*.93.-1.*.93.-1.*.72.0": [
+      "angel-beats"
+    ],
+    "38.4.-1.*.20.0": [
+      "angel-beats"
+    ],
+    "44.-1.*.1": [
+      "angel-beats"
+    ],
+    "44.-1.*.11": [
+      "angel-beats"
+    ],
+    "44.-1.*.9": [
+      "angel-beats"
+    ],
+    "70.25.-1.*.0": [
+      "angel-beats"
+    ],
+    "70.25.-1.*.4": [
+      "angel-beats",
+      "fortune-world",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "70.25.-1.*.5": [
+      "angel-beats",
+      "ssr"
+    ],
+    "70.25.-1.*.8": [
+      "angel-beats"
+    ],
+    "70.31.-1.*.24.0": [
+      "angel-beats"
+    ],
+    "70.31.-1.*.24.4": [
+      "angel-beats"
+    ],
+    "70.31.-1.*.30": [
+      "angel-beats"
+    ],
+    "83.1.-1.*.10": [
+      "angel-beats"
+    ],
+    "83.2097152002.5": [
+      "angel-beats"
+    ],
+    "83.2097152005.12": [
+      "angel-beats"
+    ],
+    "83.2097152008.-1.*.10": [
+      "angel-beats"
+    ],
+    "83.2097152008.-1.*.3": [
+      "angel-beats"
+    ],
+    "92.11": [
+      "angel-beats",
+      "hoshiori-pe"
+    ],
+    "34.-1.*.2": [
+      "ginharu",
+      "hoshiori-pe"
+    ],
+    "37.2.-1.*.112.-1.*.0": [
+      "ginharu",
+      "hoshiori-pe",
+      "tsukikana"
+    ],
+    "37.2.-1.*.93.-1.*.158": [
+      "ginharu",
+      "tsukikana"
+    ],
+    "37.2.-1.*.93.-1.*.48": [
+      "ginharu",
+      "tsukikana"
+    ],
+    "37.2.-1.*.93.-1.*.64.0": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "37.2.-1.*.93.-1.*.67.0": [
+      "ginharu",
+      "ssr",
+      "tsukikana"
+    ],
+    "37.2.-1.*.93.-1.*.68.0": [
+      "ginharu",
+      "tsukikana"
+    ],
+    "37.2.-1.*.93.-1.*.72.0": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "37.2.-1.*.93.3": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "38.2.-1.*.112.-1.*.4": [
+      "ginharu"
+    ],
+    "38.2.-1.*.113.-1.*.0": [
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "38.2.-1.*.113.-1.*.4": [
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "38.2.-1.*.40": [
+      "ginharu"
+    ],
+    "38.2.-1.*.51.4": [
+      "ginharu"
+    ],
+    "38.2.-1.*.75.0": [
+      "ginharu",
+      "hoshiori-pe"
+    ],
+    "38.2.-1.*.75.4": [
+      "ginharu",
+      "hoshiori-pe"
+    ],
+    "38.2.-1.*.93.-1.*.105.0": [
+      "ginharu",
+      "hoshiori-pe",
+      "ssr"
+    ],
+    "38.2.-1.*.93.-1.*.107.0": [
+      "ginharu",
+      "hoshiori-pe",
+      "ssr"
+    ],
+    "38.2.-1.*.93.-1.*.40": [
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "38.3.-1.*.1": [
+      "ginharu",
+      "tsukikana"
+    ],
+    "38.3.-1.*.2": [
+      "ginharu",
+      "tsukikana"
+    ],
+    "38.3.-1.*.53.-1.*.38": [
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "42.5": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "64.76": [
+      "ginharu",
+      "tsukikana"
+    ],
+    "65.-1.*.1.2.-1.*.93.-1.*.63.2": [
+      "ginharu",
+      "tsukikana"
+    ],
+    "65.-1.*.1.2.-1.*.93.-1.*.93.-1.*.48": [
+      "ginharu",
+      "tsukikana"
+    ],
+    "65.-1.*.1.2.-1.*.93.-1.*.93.-1.*.93.-1.*.159": [
+      "ginharu",
+      "tsukikana"
+    ],
+    "65.-1.*.1.2.-1.*.93.-1.*.93.-1.*.93.-1.*.38": [
+      "ginharu",
+      "tsukikana"
+    ],
+    "65.-1.*.1.2.-1.*.93.-1.*.93.-1.*.93.-1.*.67.0": [
+      "ginharu",
+      "tsukikana"
+    ],
+    "65.-1.*.1.2.-1.*.93.-1.*.93.-1.*.93.-1.*.68.0": [
+      "ginharu",
+      "tsukikana"
+    ],
+    "65.-1.*.1.2.-1.*.93.-1.*.93.-1.*.93.-1.*.72.0": [
+      "ginharu",
+      "tsukikana"
+    ],
+    "65.-1.*.1.2.-1.*.93.-1.*.93.-1.*.93.4": [
+      "ginharu",
+      "tsukikana"
+    ],
+    "65.-1.*.1.2.-1.*.93.-1.*.93.3": [
+      "ginharu",
+      "tsukikana"
+    ],
+    "65.-1.*.1.2.-1.*.93.-1.*.93.4": [
+      "ginharu",
+      "tsukikana"
+    ],
+    "65.-1.*.2.2.-1.*.35": [
+      "ginharu",
+      "hoshiori-pe",
+      "tsukikana"
+    ],
+    "65.-1.*.2.2.-1.*.48": [
+      "ginharu",
+      "hoshiori-pe",
+      "tsukikana"
+    ],
+    "65.-1.*.2.2.-1.*.93.-1.*.38": [
+      "ginharu",
+      "hoshiori-pe",
+      "tsukikana"
+    ],
+    "65.-1.*.2.2.-1.*.93.4": [
+      "ginharu",
+      "hoshiori-pe",
+      "tsukikana"
+    ],
+    "83.2097152001.3": [
+      "ginharu"
+    ],
+    "38.2.-1.*.105.0": [
+      "hoshiori-pe",
+      "tsukikana"
+    ],
+    "38.2.-1.*.107.0": [
+      "hoshiori-pe",
+      "tsukikana"
+    ],
+    "38.2.-1.*.158": [
+      "hoshiori-pe"
+    ],
+    "38.2.-1.*.160": [
+      "hoshiori-pe",
+      "tsukikana"
+    ],
+    "38.2.-1.*.64.10": [
+      "hoshiori-pe"
+    ],
+    "38.2.-1.*.93.-1.*.41": [
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "44.-1.*.6": [
+      "hoshiori-pe"
+    ],
+    "52.-1.*.3": [
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "65.-1.*.1.2.-1.*.51.0": [
+      "hoshiori-pe"
+    ],
+    "65.-1.*.1.2.-1.*.51.4": [
+      "hoshiori-pe"
+    ],
+    "65.-1.*.1.2.-1.*.64.0": [
+      "hoshiori-pe"
+    ],
+    "65.-1.*.1.2.-1.*.71.0": [
+      "hoshiori-pe"
+    ],
+    "65.-1.*.1.2.-1.*.93.-1.*.93.-1.*.38": [
+      "hoshiori-pe"
+    ],
+    "65.-1.*.1.6.-1.*.5": [
+      "hoshiori-pe"
+    ],
+    "65.-1.*.2.2.-1.*.93.-1.*.35": [
+      "hoshiori-pe"
+    ],
+    "65.-1.*.2.2.-1.*.93.-1.*.48": [
+      "hoshiori-pe"
+    ],
+    "65.-1.*.2.2.-1.*.93.-1.*.93.-1.*.16777216": [
+      "hoshiori-pe"
+    ],
+    "65.-1.*.2.2.-1.*.93.-1.*.93.-1.*.16777217": [
+      "hoshiori-pe"
+    ],
+    "65.-1.*.2.2.-1.*.93.-1.*.93.-1.*.38": [
+      "hoshiori-pe"
+    ],
+    "65.-1.*.2.2.-1.*.93.-1.*.93.4": [
+      "hoshiori-pe",
+      "tsukikana"
+    ],
+    "70.25.-1.*.10": [
+      "hoshiori-pe"
+    ],
+    "83.2097152001.4": [
+      "hoshiori-pe"
+    ],
+    "83.2097152009.6": [
+      "hoshiori-pe"
+    ],
+    "37.2.-1.*.64.2": [
+      "ssr"
+    ],
+    "37.2.-1.*.93.-1.*.115.-1.*.1": [
+      "ssr"
+    ],
+    "37.2.-1.*.93.-1.*.115.1": [
+      "ssr"
+    ],
+    "37.2.-1.*.93.-1.*.41": [
+      "ssr",
+      "tsukikana"
+    ],
+    "37.2.-1.*.93.-1.*.75.0": [
+      "ssr"
+    ],
+    "38.2.-1.*.52.1": [
+      "ssr"
+    ],
+    "38.2.-1.*.53": [
+      "ssr",
+      "tsukikana"
+    ],
+    "38.2.-1.*.67.0": [
+      "ssr"
+    ],
+    "38.2.-1.*.68.0": [
+      "ssr"
+    ],
+    "38.2.-1.*.69.0": [
+      "ssr"
+    ],
+    "38.2.-1.*.83.2": [
+      "ssr"
+    ],
+    "38.2.-1.*.93.-1.*.93.-1.*.53": [
+      "ssr"
+    ],
+    "38.2.-1.*.93.-1.*.93.-1.*.93.-1.*.25": [
+      "ssr"
+    ],
+    "38.2.-1.*.93.-1.*.93.-1.*.93.3": [
+      "ssr"
+    ],
+    "83.2097152003.10": [
+      "ssr",
+      "tsukikana"
+    ],
+    "83.2097152003.11": [
+      "ssr",
+      "tsukikana"
+    ],
+    "83.2097152003.3": [
+      "ssr",
+      "tsukikana"
+    ],
+    "83.2097152005.1": [
+      "ssr"
+    ],
+    "124.-1.*.0": [
+      "tsukikana"
+    ],
+    "124.-1.*.1": [
+      "tsukikana"
+    ],
+    "37.2.-1.*.115.-1.*.3": [
+      "tsukikana"
+    ],
+    "37.2.-1.*.16777216": [
+      "tsukikana"
+    ],
+    "37.2.-1.*.16777217": [
+      "tsukikana"
+    ],
+    "37.2.-1.*.93.-1.*.51.0": [
+      "tsukikana"
+    ],
+    "37.2.-1.*.93.-1.*.53": [
+      "tsukikana"
+    ],
+    "37.2.-1.*.93.-1.*.62": [
+      "tsukikana"
+    ],
+    "37.2.-1.*.93.-1.*.93.3": [
+      "tsukikana"
+    ],
+    "65.-1.*.1.2.-1.*.93.-1.*.113.-1.*.0": [
+      "tsukikana"
+    ],
+    "65.-1.*.1.2.-1.*.93.-1.*.113.-1.*.4": [
+      "tsukikana"
+    ],
+    "65.-1.*.2.2.-1.*.93.-1.*.63.2": [
+      "tsukikana"
+    ],
+    "65.-1.*.2.2.-1.*.93.-1.*.93.-1.*.48": [
+      "tsukikana"
+    ],
+    "65.-1.*.2.2.-1.*.93.-1.*.93.-1.*.93.-1.*.159": [
+      "tsukikana"
+    ],
+    "65.-1.*.2.2.-1.*.93.-1.*.93.-1.*.93.-1.*.38": [
+      "tsukikana"
+    ],
+    "65.-1.*.2.2.-1.*.93.-1.*.93.-1.*.93.4": [
+      "tsukikana"
+    ],
+    "65.-1.*.2.2.-1.*.93.-1.*.93.3": [
+      "tsukikana"
+    ],
+    "40.-1.*.6": [
+      "fortune-world"
+    ],
+    "63.67": [
+      "fortune-world"
+    ]
+  },
+  "properties": {
+    "25.-1.*": [
+      "anemoi",
+      "angel-beats"
+    ],
+    "26.-1.*": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "30.-1.*": [
+      "anemoi",
+      "angel-beats"
+    ],
+    "31.-1.*": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "32.-1.*": [
+      "anemoi",
+      "angel-beats"
+    ],
+    "37.2.-1.*.0": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "37.2.-1.*.1": [
+      "anemoi"
+    ],
+    "37.2.-1.*.109": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "37.2.-1.*.111.-1.*": [
+      "anemoi"
+    ],
+    "37.2.-1.*.141.-1.*": [
+      "anemoi",
+      "tsukikana"
+    ],
+    "37.2.-1.*.17": [
+      "anemoi",
+      "angel-beats"
+    ],
+    "37.2.-1.*.2": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "37.2.-1.*.27": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "tsukikana"
+    ],
+    "37.2.-1.*.3": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "tsukikana"
+    ],
+    "37.2.-1.*.30": [
+      "anemoi",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "37.2.-1.*.4": [
+      "anemoi",
+      "angel-beats",
+      "ginharu"
+    ],
+    "37.2.-1.*.46": [
+      "anemoi",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "37.2.-1.*.54.-1.*": [
+      "anemoi",
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "37.2.-1.*.56": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "37.2.-1.*.63.-1.*": [
+      "anemoi",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "37.2.-1.*.7": [
+      "anemoi"
+    ],
+    "37.2.-1.*.93.-1.*.0": [
+      "anemoi",
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "37.2.-1.*.93.-1.*.111.-1.*": [
+      "anemoi"
+    ],
+    "37.2.-1.*.93.-1.*.2": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "tsukikana"
+    ],
+    "37.2.-1.*.93.-1.*.27": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "37.2.-1.*.93.-1.*.30": [
+      "anemoi",
+      "ssr"
+    ],
+    "37.2.-1.*.93.-1.*.4": [
+      "anemoi",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "37.2.-1.*.93.-1.*.46": [
+      "anemoi",
+      "angel-beats",
+      "ginharu"
+    ],
+    "37.2.-1.*.93.-1.*.93.-1.*.1": [
+      "anemoi"
+    ],
+    "37.2.-1.*.93.-1.*.93.-1.*.111.-1.*": [
+      "anemoi"
+    ],
+    "37.2.-1.*.93.-1.*.93.-1.*.12": [
+      "anemoi"
+    ],
+    "37.2.-1.*.93.-1.*.93.-1.*.13": [
+      "anemoi"
+    ],
+    "37.2.-1.*.93.-1.*.93.-1.*.17": [
+      "anemoi"
+    ],
+    "37.2.-1.*.93.-1.*.93.-1.*.23": [
+      "anemoi"
+    ],
+    "37.2.-1.*.93.-1.*.93.-1.*.32": [
+      "anemoi"
+    ],
+    "37.2.-1.*.93.-1.*.93.-1.*.33": [
+      "anemoi"
+    ],
+    "37.2.-1.*.93.-1.*.93.-1.*.34": [
+      "anemoi"
+    ],
+    "37.2.-1.*.93.-1.*.93.-1.*.54.-1.*": [
+      "anemoi"
+    ],
+    "37.2.-1.*.93.-1.*.93.-1.*.6": [
+      "anemoi"
+    ],
+    "37.2.-1.*.93.-1.*.93.-1.*.63.-1.*": [
+      "anemoi"
+    ],
+    "37.2.-1.*.93.-1.*.93.-1.*.7": [
+      "anemoi"
+    ],
+    "38.2.-1.*.0": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "38.2.-1.*.1": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world"
+    ],
+    "38.2.-1.*.111.-1.*": [
+      "anemoi",
+      "angel-beats"
+    ],
+    "38.2.-1.*.141.-1.*": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "ssr"
+    ],
+    "38.2.-1.*.2": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "38.2.-1.*.3": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "38.2.-1.*.4": [
+      "anemoi",
+      "angel-beats",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "38.2.-1.*.55": [
+      "anemoi",
+      "ginharu",
+      "hoshiori-pe",
+      "tsukikana"
+    ],
+    "38.2.-1.*.56": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "38.2.-1.*.93.-1.*.111.-1.*": [
+      "anemoi"
+    ],
+    "38.2.-1.*.93.-1.*.3": [
+      "anemoi",
+      "angel-beats"
+    ],
+    "38.2.-1.*.93.-1.*.4": [
+      "anemoi",
+      "angel-beats",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "tsukikana"
+    ],
+    "38.2.-1.*.93.-1.*.56": [
+      "anemoi",
+      "angel-beats"
+    ],
+    "38.2.-1.*.93.-1.*.93.-1.*.0": [
+      "anemoi",
+      "angel-beats"
+    ],
+    "38.2.-1.*.93.-1.*.93.-1.*.111.-1.*": [
+      "anemoi"
+    ],
+    "38.2.-1.*.93.-1.*.93.-1.*.12": [
+      "anemoi"
+    ],
+    "38.2.-1.*.93.-1.*.93.-1.*.13": [
+      "anemoi"
+    ],
+    "38.2.-1.*.93.-1.*.93.-1.*.17": [
+      "anemoi"
+    ],
+    "38.2.-1.*.93.-1.*.93.-1.*.27": [
+      "anemoi",
+      "angel-beats"
+    ],
+    "38.2.-1.*.93.-1.*.93.-1.*.3": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "38.2.-1.*.93.-1.*.93.-1.*.4": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "38.3.-1.*.32.-1.*.1": [
+      "anemoi",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "38.3.-1.*.32.-1.*.3": [
+      "anemoi"
+    ],
+    "38.3.-1.*.32.-1.*.4": [
+      "anemoi",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "38.3.-1.*.53.-1.*.109": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe"
+    ],
+    "38.3.-1.*.53.-1.*.145": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "ssr",
+      "tsukikana"
+    ],
+    "38.3.-1.*.53.-1.*.54.-1.*": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "38.3.-1.*.53.-1.*.63.-1.*": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "49.-1.*.2.-1.*.0": [
+      "anemoi",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "49.-1.*.2.-1.*.3": [
+      "anemoi",
+      "ginharu",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.-1.*.1.2.-1.*.1": [
+      "anemoi"
+    ],
+    "65.-1.*.1.2.-1.*.111.-1.*": [
+      "anemoi"
+    ],
+    "65.-1.*.1.2.-1.*.12": [
+      "anemoi"
+    ],
+    "65.-1.*.1.2.-1.*.2": [
+      "anemoi",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.-1.*.1.2.-1.*.27": [
+      "anemoi",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.-1.*.1.2.-1.*.54.-1.*": [
+      "anemoi"
+    ],
+    "65.-1.*.1.2.-1.*.56": [
+      "anemoi",
+      "ginharu",
+      "tsukikana"
+    ],
+    "65.-1.*.1.2.-1.*.63.-1.*": [
+      "anemoi"
+    ],
+    "65.-1.*.1.2.-1.*.9": [
+      "anemoi",
+      "hoshiori-pe"
+    ],
+    "65.-1.*.2.2.-1.*.0": [
+      "anemoi",
+      "ginharu",
+      "hoshiori-pe",
+      "tsukikana"
+    ],
+    "65.-1.*.2.2.-1.*.1": [
+      "anemoi"
+    ],
+    "65.-1.*.2.2.-1.*.111.-1.*": [
+      "anemoi"
+    ],
+    "65.-1.*.2.2.-1.*.12": [
+      "anemoi"
+    ],
+    "65.-1.*.2.2.-1.*.2": [
+      "anemoi",
+      "ginharu",
+      "hoshiori-pe",
+      "tsukikana"
+    ],
+    "65.-1.*.2.2.-1.*.27": [
+      "anemoi",
+      "ginharu",
+      "hoshiori-pe",
+      "tsukikana"
+    ],
+    "65.-1.*.2.2.-1.*.3": [
+      "anemoi"
+    ],
+    "65.-1.*.2.2.-1.*.4": [
+      "anemoi"
+    ],
+    "65.-1.*.2.2.-1.*.54.-1.*": [
+      "anemoi"
+    ],
+    "65.-1.*.2.2.-1.*.56": [
+      "anemoi",
+      "ginharu",
+      "hoshiori-pe",
+      "tsukikana"
+    ],
+    "65.-1.*.2.2.-1.*.63.-1.*": [
+      "anemoi"
+    ],
+    "65.-1.*.2.2.-1.*.9": [
+      "anemoi"
+    ],
+    "65.1.2.-1.*.0": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world"
+    ],
+    "65.1.2.-1.*.1": [
+      "anemoi"
+    ],
+    "65.1.2.-1.*.111.-1.*": [
+      "anemoi",
+      "angel-beats"
+    ],
+    "65.1.2.-1.*.27": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world"
+    ],
+    "65.1.2.-1.*.54.-1.*": [
+      "anemoi"
+    ],
+    "65.1.2.-1.*.63.-1.*": [
+      "anemoi"
+    ],
+    "65.1.2.-1.*.93.-1.*.0": [
+      "anemoi",
+      "angel-beats"
+    ],
+    "65.1.2.-1.*.93.-1.*.1": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world"
+    ],
+    "65.1.2.-1.*.93.-1.*.111.-1.*": [
+      "anemoi"
+    ],
+    "65.1.2.-1.*.93.-1.*.30": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.0": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.1": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.111.-1.*": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.2": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.27": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.3": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.4": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.54.-1.*": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.56": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.57": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.58": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.59": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.93.-1.*.0": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.93.-1.*.1": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.93.-1.*.111.-1.*": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.93.-1.*.152": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.93.-1.*.3": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.93.-1.*.30": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.93.-1.*.4": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.93.-1.*.54.-1.*": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.93.-1.*.56": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.93.-1.*.63.-1.*": [
+      "anemoi"
+    ],
+    "83.0.-1.*": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "83.1.-1.*": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "83.2097152000": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "83.2097152001": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "83.2097152001.-1.*": [
+      "anemoi",
+      "ssr",
+      "tsukikana"
+    ],
+    "83.2097152002": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "83.2097152002.-1.*": [
+      "anemoi",
+      "angel-beats",
+      "ssr",
+      "tsukikana"
+    ],
+    "83.2097152003": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "83.2097152003.-1.*": [
+      "anemoi",
+      "angel-beats",
+      "ssr"
+    ],
+    "83.2097152004": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "83.2097152004.-1.*": [
+      "anemoi",
+      "ssr"
+    ],
+    "83.2097152005": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "83.2097152006": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "83.2097152007": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "83.2097152007.-1.*": [
+      "anemoi"
+    ],
+    "83.2097152008": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "83.2097152008.-1.*": [
+      "anemoi",
+      "angel-beats"
+    ],
+    "83.2097152009": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "83.2097152010": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "83.2097152011": [
+      "anemoi",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "83.2097152012": [
+      "anemoi",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "83.2097152013": [
+      "anemoi",
+      "ssr",
+      "tsukikana"
+    ],
+    "83.2097152014": [
+      "anemoi",
+      "ssr",
+      "tsukikana"
+    ],
+    "83.2097152015": [
+      "anemoi",
+      "ssr"
+    ],
+    "83.2097152016": [
+      "anemoi",
+      "ssr"
+    ],
+    "83.2097152017": [
+      "anemoi"
+    ],
+    "83.2097152018": [
+      "anemoi"
+    ],
+    "83.2097152019": [
+      "anemoi"
+    ],
+    "31.3.-1.*": [
+      "angel-beats"
+    ],
+    "37.2.-1.*.10": [
+      "angel-beats"
+    ],
+    "37.2.-1.*.12": [
+      "angel-beats"
+    ],
+    "37.2.-1.*.13": [
+      "angel-beats"
+    ],
+    "37.2.-1.*.9": [
+      "angel-beats"
+    ],
+    "37.2.-1.*.93.-1.*.1": [
+      "angel-beats",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "38.2.-1.*.10": [
+      "angel-beats"
+    ],
+    "38.2.-1.*.12": [
+      "angel-beats",
+      "ssr"
+    ],
+    "38.2.-1.*.13": [
+      "angel-beats",
+      "ssr"
+    ],
+    "38.2.-1.*.17": [
+      "angel-beats"
+    ],
+    "38.2.-1.*.27": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "38.2.-1.*.9": [
+      "angel-beats"
+    ],
+    "38.2.-1.*.93.-1.*.1": [
+      "angel-beats",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "38.2.-1.*.93.-1.*.2": [
+      "angel-beats",
+      "ssr",
+      "tsukikana"
+    ],
+    "38.2.-1.*.93.-1.*.27": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "38.3.-1.*.30.-1.*.1": [
+      "angel-beats"
+    ],
+    "38.3.-1.*.30.-1.*.2": [
+      "angel-beats",
+      "fortune-world"
+    ],
+    "38.3.-1.*.30.-1.*.27": [
+      "angel-beats",
+      "fortune-world"
+    ],
+    "38.3.-1.*.32.-1.*.63.-1.*": [
+      "angel-beats",
+      "fortune-world"
+    ],
+    "38.4.-1.*.31": [
+      "angel-beats",
+      "ginharu",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.1.2.-1.*.2": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world"
+    ],
+    "65.1.2.-1.*.93.-1.*.18": [
+      "angel-beats"
+    ],
+    "65.1.2.-1.*.93.-1.*.19": [
+      "angel-beats"
+    ],
+    "65.1.2.-1.*.93.-1.*.2": [
+      "angel-beats",
+      "fortune-world"
+    ],
+    "65.1.2.-1.*.93.-1.*.20": [
+      "angel-beats"
+    ],
+    "65.1.2.-1.*.93.-1.*.21": [
+      "angel-beats"
+    ],
+    "65.1.2.-1.*.93.-1.*.22": [
+      "angel-beats"
+    ],
+    "65.1.2.-1.*.93.-1.*.27": [
+      "anemoi",
+      "angel-beats"
+    ],
+    "65.1.2.-1.*.93.-1.*.3": [
+      "angel-beats",
+      "fortune-world"
+    ],
+    "65.1.2.-1.*.93.-1.*.4": [
+      "angel-beats",
+      "fortune-world"
+    ],
+    "65.7.-1.*": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "38.3.-1.*.32.-1.*.54.-1.*": [
+      "fortune-world"
+    ],
+    "65.1.2.-1.*.55": [
+      "fortune-world"
+    ],
+    "65.1.2.-1.*.93.-1.*.46": [
+      "fortune-world"
+    ],
+    "108.0": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "tsukikana"
+    ],
+    "108.1": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "tsukikana"
+    ],
+    "108.2": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "108.3": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "27.-1.*": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "28.-1.*": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "29.-1.*": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "35.-1.*": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "37.2.-1.*.28": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "38.2.-1.*.93.-1.*.12": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "38.2.-1.*.93.-1.*.13": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "49.-1.*.2.-1.*.2": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "49.-1.*.2.-1.*.93.-1.*.27": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.-1.*.1.2.-1.*.0": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.-1.*.1.2.-1.*.93.-1.*.1": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.0.-1.*.2.-1.*.0": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.0.-1.*.2.-1.*.27": [
+      "ginharu"
+    ],
+    "65.0.-1.*.2.-1.*.93.-1.*.0": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "65.0.-1.*.2.-1.*.93.-1.*.1": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.0.-1.*.2.-1.*.93.-1.*.27": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.0.-1.*.2.-1.*.93.-1.*.93.-1.*.0": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.0.-1.*.2.-1.*.3": [
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.0.-1.*.2.-1.*.93.-1.*.18": [
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "65.0.-1.*.2.-1.*.93.-1.*.19": [
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "65.0.-1.*.2.-1.*.93.-1.*.20": [
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "65.0.-1.*.2.-1.*.93.-1.*.21": [
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "65.0.-1.*.2.-1.*.93.-1.*.22": [
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "65.0.-1.*.2.-1.*.93.-1.*.54.-1.*": [
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "65.0.-1.*.2.-1.*.93.-1.*.93.-1.*.27": [
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "65.1.2.-1.*.93.-1.*.63.-1.*": [
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "65.1.2.-1.*.93.-1.*.93.-1.*.27": [
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "65.1.2.-1.*.93.-1.*.93.-1.*.63.-1.*": [
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "34.-1.*": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "tsukikana"
+    ],
+    "37.2.-1.*.31": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "38.2.-1.*.54.-1.*": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "tsukikana"
+    ],
+    "38.2.-1.*.93.-1.*.46": [
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "49.-1.*.2.-1.*.54.-1.*": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "49.-1.*.2.-1.*.63.-1.*": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "49.-1.*.2.-1.*.18": [
+      "ginharu",
+      "ssr",
+      "tsukikana"
+    ],
+    "49.-1.*.2.-1.*.27": [
+      "ssr",
+      "tsukikana"
+    ],
+    "49.-1.*.2.-1.*.56": [
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.0.-1.*.2.-1.*.93.-1.*.93.-1.*.6": [
+      "ssr",
+      "tsukikana"
+    ],
+    "31.6.-1.*": [
+      "tsukikana"
+    ],
+    "65.1.2.-1.*.56": [
+      "anemoi"
+    ],
+    "65.2.2.-1.*.93.-1.*.27": [
+      "anemoi"
+    ],
+    "38.2.-1.*.93.-1.*.0": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "ssr"
+    ],
+    "38.2.-1.*.93.-1.*.93.-1.*.1": [
+      "angel-beats"
+    ],
+    "38.2.-1.*.93.-1.*.93.-1.*.152": [
+      "angel-beats"
+    ],
+    "38.2.-1.*.93.-1.*.93.-1.*.2": [
+      "angel-beats"
+    ],
+    "38.2.-1.*.93.-1.*.93.-1.*.56": [
+      "angel-beats"
+    ],
+    "38.2.-1.*.93.-1.*.93.-1.*.93.-1.*.0": [
+      "angel-beats"
+    ],
+    "38.2.-1.*.93.-1.*.93.-1.*.93.-1.*.1": [
+      "angel-beats"
+    ],
+    "38.2.-1.*.93.-1.*.93.-1.*.93.-1.*.2": [
+      "angel-beats"
+    ],
+    "38.2.-1.*.93.-1.*.93.-1.*.93.-1.*.27": [
+      "angel-beats"
+    ],
+    "38.2.-1.*.93.-1.*.93.-1.*.93.-1.*.56": [
+      "angel-beats"
+    ],
+    "32.3.-1.*": [
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "49.-1.*.2.-1.*.93.-1.*.0": [
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "49.-1.*.2.-1.*.93.-1.*.1": [
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "49.-1.*.2.-1.*.93.-1.*.54.-1.*": [
+      "ginharu",
+      "ssr",
+      "tsukikana"
+    ],
+    "49.-1.*.2.-1.*.93.-1.*.93.-1.*.0": [
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "49.-1.*.2.-1.*.93.-1.*.93.-1.*.27": [
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "37.2.-1.*.93.-1.*.3": [
+      "hoshiori-pe"
+    ],
+    "37.2.-1.*.93.-1.*.54.-1.*": [
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "37.2.-1.*.93.-1.*.93.-1.*.27": [
+      "hoshiori-pe"
+    ],
+    "38.2.-1.*.93.-1.*.54.-1.*": [
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "38.2.-1.*.93.-1.*.63.-1.*": [
+      "angel-beats",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "49.-1.*.2.-1.*.93.-1.*.3": [
+      "hoshiori-pe"
+    ],
+    "49.-1.*.2.-1.*.93.-1.*.4": [
+      "hoshiori-pe"
+    ],
+    "49.-1.*.2.-1.*.93.-1.*.63.-1.*": [
+      "hoshiori-pe"
+    ],
+    "49.-1.*.2.-1.*.93.-1.*.9": [
+      "hoshiori-pe"
+    ],
+    "135.-1.*.4": [
+      "angel-beats",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "135.-1.*.5": [
+      "angel-beats"
+    ],
+    "37.2.-1.*.93.-1.*.109": [
+      "angel-beats"
+    ],
+    "37.4.-1.*.28": [
+      "angel-beats",
+      "ginharu",
+      "ssr",
+      "tsukikana"
+    ],
+    "37.4.-1.*.29": [
+      "angel-beats",
+      "ginharu",
+      "ssr",
+      "tsukikana"
+    ],
+    "37.4.-1.*.3": [
+      "angel-beats",
+      "ginharu",
+      "ssr",
+      "tsukikana"
+    ],
+    "37.4.-1.*.31": [
+      "angel-beats",
+      "ginharu",
+      "ssr",
+      "tsukikana"
+    ],
+    "38.2.-1.*.145": [
+      "angel-beats",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "38.2.-1.*.28": [
+      "angel-beats"
+    ],
+    "38.2.-1.*.46": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "tsukikana"
+    ],
+    "38.2.-1.*.93.-1.*.17": [
+      "angel-beats"
+    ],
+    "38.2.-1.*.93.-1.*.32": [
+      "angel-beats"
+    ],
+    "38.2.-1.*.93.-1.*.33": [
+      "angel-beats"
+    ],
+    "38.2.-1.*.93.-1.*.34": [
+      "angel-beats"
+    ],
+    "38.2.-1.*.93.-1.*.6": [
+      "angel-beats"
+    ],
+    "38.2.-1.*.93.-1.*.93.-1.*.145": [
+      "angel-beats"
+    ],
+    "38.3.-1.*.53.-1.*.2": [
+      "angel-beats"
+    ],
+    "38.4.-1.*.28": [
+      "angel-beats"
+    ],
+    "38.4.-1.*.29": [
+      "angel-beats"
+    ],
+    "38.4.-1.*.33": [
+      "angel-beats"
+    ],
+    "38.4.-1.*.34": [
+      "angel-beats"
+    ],
+    "70.31.-1.*.7": [
+      "angel-beats"
+    ],
+    "70.31.-1.*.8": [
+      "angel-beats"
+    ],
+    "70.31.-1.*.9": [
+      "angel-beats"
+    ],
+    "83.2097152009.-1.*": [
+      "angel-beats"
+    ],
+    "37.2.-1.*.93.-1.*.56": [
+      "ginharu"
+    ],
+    "37.4.-1.*.11": [
+      "ginharu",
+      "ssr",
+      "tsukikana"
+    ],
+    "37.4.-1.*.12": [
+      "ginharu",
+      "ssr",
+      "tsukikana"
+    ],
+    "37.4.-1.*.13": [
+      "ginharu",
+      "ssr",
+      "tsukikana"
+    ],
+    "37.4.-1.*.6": [
+      "ginharu",
+      "ssr",
+      "tsukikana"
+    ],
+    "38.3.-1.*.53.-1.*.0": [
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "38.3.-1.*.53.-1.*.3": [
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "38.3.-1.*.53.-1.*.4": [
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "49.-1.*.2.-1.*.4": [
+      "ginharu",
+      "ssr",
+      "tsukikana"
+    ],
+    "65.-1.*.1.2.-1.*.93.-1.*.0": [
+      "ginharu",
+      "tsukikana"
+    ],
+    "65.-1.*.1.2.-1.*.93.-1.*.63.-1.*": [
+      "ginharu",
+      "tsukikana"
+    ],
+    "65.-1.*.1.2.-1.*.93.-1.*.93.-1.*.0": [
+      "ginharu",
+      "tsukikana"
+    ],
+    "65.-1.*.1.2.-1.*.93.-1.*.93.-1.*.93.-1.*.12": [
+      "ginharu",
+      "tsukikana"
+    ],
+    "65.-1.*.1.2.-1.*.93.-1.*.93.-1.*.93.-1.*.13": [
+      "ginharu",
+      "tsukikana"
+    ],
+    "65.-1.*.1.2.-1.*.93.-1.*.93.-1.*.93.-1.*.27": [
+      "ginharu",
+      "tsukikana"
+    ],
+    "65.-1.*.2.2.-1.*.18": [
+      "ginharu",
+      "hoshiori-pe",
+      "tsukikana"
+    ],
+    "65.-1.*.2.2.-1.*.19": [
+      "ginharu",
+      "hoshiori-pe",
+      "tsukikana"
+    ],
+    "65.-1.*.2.2.-1.*.20": [
+      "ginharu",
+      "hoshiori-pe",
+      "tsukikana"
+    ],
+    "65.-1.*.2.2.-1.*.21": [
+      "ginharu",
+      "hoshiori-pe",
+      "tsukikana"
+    ],
+    "65.-1.*.2.2.-1.*.22": [
+      "ginharu",
+      "hoshiori-pe",
+      "tsukikana"
+    ],
+    "65.-1.*.2.2.-1.*.55": [
+      "ginharu",
+      "hoshiori-pe",
+      "tsukikana"
+    ],
+    "65.-1.*.2.2.-1.*.93.-1.*.0": [
+      "ginharu",
+      "hoshiori-pe",
+      "tsukikana"
+    ],
+    "65.-1.*.2.2.-1.*.93.-1.*.149": [
+      "ginharu",
+      "hoshiori-pe",
+      "tsukikana"
+    ],
+    "65.-1.*.2.2.-1.*.93.-1.*.150": [
+      "ginharu",
+      "hoshiori-pe",
+      "tsukikana"
+    ],
+    "65.-1.*.2.2.-1.*.93.-1.*.151": [
+      "ginharu",
+      "hoshiori-pe",
+      "tsukikana"
+    ],
+    "65.-1.*.2.2.-1.*.93.-1.*.152": [
+      "ginharu",
+      "hoshiori-pe",
+      "tsukikana"
+    ],
+    "65.-1.*.2.2.-1.*.93.-1.*.153": [
+      "ginharu",
+      "hoshiori-pe",
+      "tsukikana"
+    ],
+    "65.-1.*.2.2.-1.*.93.-1.*.27": [
+      "ginharu",
+      "hoshiori-pe",
+      "tsukikana"
+    ],
+    "65.-1.*.1.2.-1.*.10": [
+      "hoshiori-pe"
+    ],
+    "65.-1.*.1.2.-1.*.18": [
+      "hoshiori-pe"
+    ],
+    "65.-1.*.1.2.-1.*.93.-1.*.93.-1.*.1": [
+      "hoshiori-pe"
+    ],
+    "49.-1.*.2.-1.*.93.-1.*.46": [
+      "hoshiori-rikka"
+    ],
+    "37.2.-1.*.93.-1.*.12": [
+      "ssr"
+    ],
+    "38.2.-1.*.15": [
+      "ssr"
+    ],
+    "38.2.-1.*.32": [
+      "ssr"
+    ],
+    "38.2.-1.*.33": [
+      "ssr"
+    ],
+    "38.2.-1.*.34": [
+      "ssr"
+    ],
+    "38.2.-1.*.93.-1.*.93.-1.*.7": [
+      "ssr"
+    ],
+    "38.2.-1.*.93.-1.*.93.-1.*.93.-1.*.4": [
+      "ssr"
+    ],
+    "38.3.-1.*.53.-1.*.28": [
+      "ssr",
+      "tsukikana"
+    ],
+    "38.3.-1.*.53.-1.*.31": [
+      "ssr",
+      "tsukikana"
+    ],
+    "38.3.-1.*.53.-1.*.57": [
+      "ssr",
+      "tsukikana"
+    ],
+    "38.3.-1.*.53.-1.*.58": [
+      "ssr",
+      "tsukikana"
+    ],
+    "38.3.-1.*.53.-1.*.59": [
+      "ssr",
+      "tsukikana"
+    ],
+    "38.4.-1.*.11": [
+      "ssr",
+      "tsukikana"
+    ],
+    "38.4.-1.*.12": [
+      "ssr",
+      "tsukikana"
+    ],
+    "38.4.-1.*.13": [
+      "ssr",
+      "tsukikana"
+    ],
+    "38.4.-1.*.3": [
+      "ssr",
+      "tsukikana"
+    ],
+    "38.4.-1.*.6": [
+      "ssr",
+      "tsukikana"
+    ],
+    "49.-1.*.2.-1.*.28": [
+      "ssr",
+      "tsukikana"
+    ],
+    "49.-1.*.2.-1.*.30": [
+      "ssr",
+      "tsukikana"
+    ],
+    "49.-1.*.2.-1.*.31": [
+      "ssr",
+      "tsukikana"
+    ],
+    "83.2097152005.-1.*": [
+      "ssr"
+    ],
+    "83.2097152011.-1.*": [
+      "ssr",
+      "tsukikana"
+    ],
+    "83.2097152020": [
+      "ssr"
+    ],
+    "37.2.-1.*.93.-1.*.7": [
+      "tsukikana"
+    ],
+    "37.2.-1.*.93.-1.*.93.-1.*.4": [
+      "tsukikana"
+    ],
+    "65.-1.*.2.2.-1.*.93.-1.*.63.-1.*": [
+      "tsukikana"
+    ],
+    "65.-1.*.2.2.-1.*.93.-1.*.93.-1.*.0": [
+      "tsukikana"
+    ]
+  },
+  "gameexe": {
+    "BGMFADE2.IN_START_TIME": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "BGMFADE2.IN_TIME_LEN": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "BGMFADE2.OUT_START_TIME": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "BGMFADE2.OUT_TIME_LEN": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "BUTTON.ACTION.NNN.DISABLE": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "BUTTON.ACTION.NNN.HIT": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "BUTTON.ACTION.NNN.NORMAL": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "BUTTON.ACTION.NNN.PUSH": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "BUTTON.ACTION.NNN.SELECT": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "BUTTON.SE.NNN.DECIDE": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "BUTTON.SE.NNN.HIT": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "BUTTON.SE.NNN.PUSH": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "CANCEL_SCENE": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "CGTABLE_FILE": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "CGTABLE_FLAG_CNT": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "COLOR_TABLE.NNN": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "CONFIG.BGMFADE_ONOFF": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "CONFIG.BGMFADE_VOLUME": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "CONFIG.FILTER_COLOR": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "CONFIG.FONT.FUTOKU": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "CONFIG.FONT.NAME": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "CONFIG.FONT.SHADOW": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "CONFIG.KOE_DONT_STOP.ONOFF": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "CONFIG.MESSAGE_SPEED": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "CONFIG.MESSAGE_SPEED_NOWAIT.ONOFF": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "CONFIG.NO_MWND_ANIME.ONOFF": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "CONFIG.NO_WIPE_ANIME.ONOFF": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "CONFIG.SKIP_WIPE_ANIME.ONOFF": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "CONFIG.SLEEP.ONOFF": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "CONFIG.VOLUME.ALL": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "CONFIG.VOLUME.BGM": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "CONFIG.VOLUME.KOE": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "CONFIG.VOLUME.MOV": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "CONFIG.VOLUME.PCM": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "CONFIG.VOLUME.SE": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "CONFIG.WHEEL_NEXT_MESSAGE.ONOFF": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "CONFIG.WINDOW_MODE": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "CONFIG_SCENE": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "END_SAVE.CNT": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "ICON.NNN.CNT": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "ICON.NNN.FILE": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "ICON.NNN.SPEED": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "JOYPAD.ALLOW_JOYPAD_MODE": [
+      "anemoi"
+    ],
+    "JOYPAD.MSGBK_ALLOW_JOYPAD_MODE": [
+      "anemoi"
+    ],
+    "LOAD_AFTER_CALL": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "LOAD_SCENE": [
+      "anemoi",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "MENU_SCENE": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MESSAGE_BACK_SAVE.CNT": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MSGBK.ACTIVE_MOJI_COLOR": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MSGBK.BACK_FILE": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MSGBK.DISP_MARGIN": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MSGBK.FILTER_FILE": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MSGBK.HISTORY_CNT": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MSGBK.LOAD_CALL": [
+      "anemoi",
+      "hoshiori-pe"
+    ],
+    "MSGBK.MESSAGE_POS": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MSGBK.MOJI_CNT": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MSGBK.MOJI_COLOR": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MSGBK.MOJI_FUCHI_COLOR": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MSGBK.MOJI_SIZE": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MSGBK.MOJI_SPACE": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MSGBK.SEPARATOR_FILE": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MSGBK.WINDOW_POS": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MSGBK.WINDOW_SIZE": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MSGBK_ITEM.CLOSE_BTN.ACTION": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MSGBK_ITEM.CLOSE_BTN.FILE": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MSGBK_ITEM.CLOSE_BTN.POS": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MSGBK_ITEM.CLOSE_BTN.SE": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MSGBK_ITEM.KOE_BTN.ACTION": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MSGBK_ITEM.KOE_BTN.FILE": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MSGBK_ITEM.KOE_BTN.POS": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MSGBK_ITEM.KOE_BTN.SE": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MSGBK_ITEM.LOAD_BTN.ACTION": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "MSGBK_ITEM.LOAD_BTN.FILE": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MSGBK_ITEM.LOAD_BTN.POS": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "MSGBK_ITEM.LOAD_BTN.SE": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "ssr",
+      "tsukikana"
+    ],
+    "MSGBK_ITEM.MSG_DOWN_BTN.ACTION": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MSGBK_ITEM.MSG_DOWN_BTN.FILE": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MSGBK_ITEM.MSG_DOWN_BTN.POS": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MSGBK_ITEM.MSG_DOWN_BTN.SE": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MSGBK_ITEM.MSG_UP_BTN.ACTION": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MSGBK_ITEM.MSG_UP_BTN.FILE": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MSGBK_ITEM.MSG_UP_BTN.POS": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MSGBK_ITEM.MSG_UP_BTN.SE": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MSGBK_ITEM.SLIDER.FILE": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MSGBK_ITEM.SLIDER.POS": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MWND.NNN.CLOSE_ANIME_TIME": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MWND.NNN.CLOSE_ANIME_TYPE": [
+      "anemoi",
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MWND.NNN.EXTEND_TYPE": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MWND.NNN.FUCHI_COLOR": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MWND.NNN.MESSAGE_MARGIN": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MWND.NNN.MESSAGE_POS": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MWND.NNN.MOJI_CNT": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MWND.NNN.MOJI_COLOR": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MWND.NNN.MOJI_SIZE": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MWND.NNN.MOJI_SPACE": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MWND.NNN.NAME_BRACKET": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MWND.NNN.NAME_DISP_MODE": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MWND.NNN.NAME_EXTEND_TYPE": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MWND.NNN.NAME_MESSAGE_MARGIN": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MWND.NNN.NAME_MESSAGE_POS": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MWND.NNN.NAME_MESSAGE_POS_REP": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MWND.NNN.NAME_MOJI_CNT": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MWND.NNN.NAME_MOJI_SIZE": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MWND.NNN.NAME_MOJI_SPACE": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MWND.NNN.NAME_NEWLINE": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MWND.NNN.NAME_WAKU_NO": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MWND.NNN.NAME_WINDOW_ALIGN": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MWND.NNN.NAME_WINDOW_POS": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MWND.NNN.OPEN_ANIME_TIME": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MWND.NNN.OPEN_ANIME_TYPE": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MWND.NNN.RUBY_SIZE": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MWND.NNN.RUBY_SPACE": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MWND.NNN.SHADOW_COLOR": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MWND.NNN.WAKU_NO": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MWND.NNN.WINDOW_POS": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MWND.NNN.WINDOW_SIZE": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "QUICK_SAVE.CNT": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "SAVE.CNT": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "SAVE_HISTORY.CNT": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "SAVE_SCENE": [
+      "anemoi",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "SAVE_THUMB.SIZE": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "SAVE_THUMB.TYPE": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "SAVE_THUMB.USE": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "SCREEN_SIZE": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "SE.NNN": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "START_SCENE": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "TATEYOKO_MODE": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "TONECURVE_FILE": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "TWITTER.OVERLAP_IMAGE": [
+      "anemoi",
+      "ssr",
+      "tsukikana"
+    ],
+    "WAKU.NNN.BTN.NNN.ACTION": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "WAKU.NNN.BTN.NNN.CALL": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "WAKU.NNN.BTN.NNN.CUT_NO": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "WAKU.NNN.BTN.NNN.FILE": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "WAKU.NNN.BTN.NNN.POS": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "WAKU.NNN.BTN.NNN.SE": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "WAKU.NNN.FACE.NNN.POS": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "WAKU.NNN.FILTER_CONFIG_COLOR": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "WAKU.NNN.FILTER_CONFIG_TR": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "WAKU.NNN.FILTER_FILE": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "WAKU.NNN.ICON_NO": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "WAKU.NNN.ICON_POS": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "WAKU.NNN.WAKU_FILE": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "X_MENU_SCENE": [
+      "anemoi",
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "CONFIG.GLOBAL_EXTRA_SWITCH.NNN.ONOFF": [
+      "angel-beats"
+    ],
+    "CONFIG.KOE_DONT_STOP_ONOFF": [
+      "angel-beats",
+      "fortune-world"
+    ],
+    "CONFIG.NO_MWND_ANIME_ONOFF": [
+      "angel-beats",
+      "fortune-world"
+    ],
+    "CONFIG.NO_WIPE_ANIME_ONOFF": [
+      "angel-beats",
+      "fortune-world"
+    ],
+    "CONFIG.PLAY_SILENT_SOUND.ONOFF": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "CONFIG.PLAY_SILENT_SOUND_ONOFF": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka"
+    ],
+    "CONFIG.SKIP_UNREAD_MESSAGE.ONOFF": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "CONFIG.SKIP_UNREAD_MESSAGE_ONOFF": [
+      "angel-beats"
+    ],
+    "CONFIG.SKIP_WIPE_ANIME_ONOFF": [
+      "angel-beats",
+      "fortune-world"
+    ],
+    "CONFIG.SLEEP_ONOFF": [
+      "angel-beats",
+      "fortune-world"
+    ],
+    "CONFIG.WHEEL_NEXT_MESSAGE_ONOFF": [
+      "angel-beats"
+    ],
+    "DATABASE.NNN": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe"
+    ],
+    "JOYPAD.SHORTCUT.CNT": [
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MWND.FUCHI_COLOR": [
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MWND.MOJI_COLOR": [
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MWND.SHADOW_COLOR": [
+      "angel-beats",
+      "fortune-world",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "MSGBK.FILTER_COLOR": [
+      "ginharu",
+      "ssr",
+      "tsukikana"
+    ],
+    "SELBTN.NNN.ALIGN": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "SELBTN.NNN.BACK_FILE": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "SELBTN.NNN.BASE_FILE": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "SELBTN.NNN.BASE_POS": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "SELBTN.NNN.BTN_ACTION": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "SELBTN.NNN.CLOSE_ANIME": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "SELBTN.NNN.DECIDE_ANIME": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "SELBTN.NNN.MAX_Y_CNT": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "SELBTN.NNN.MOJI_ALIGN": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "SELBTN.NNN.MOJI_COLOR": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "SELBTN.NNN.MOJI_HIT_COLOR": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "SELBTN.NNN.MOJI_POS": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "SELBTN.NNN.MOJI_SIZE": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "SELBTN.NNN.OPEN_ANIME": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "SELBTN.NNN.REP_POS": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "SELBTN.NNN.X_REP": [
+      "angel-beats",
+      "ginharu",
+      "hoshiori-pe",
+      "hoshiori-rikka",
+      "ssr",
+      "tsukikana"
+    ],
+    "FLICK_SCENE.CNT": [
+      "hoshiori-pe"
+    ],
+    "SEL_SAVE.CNT": [
+      "ginharu",
+      "ssr",
+      "tsukikana"
+    ]
+  }
+}

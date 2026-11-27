@@ -1,6 +1,6 @@
 {
   "schema": "siglus-mutation-report/v1",
-  "generatedAt": "2026-11-27T14:42:21.616Z",
+  "generatedAt": "2026-11-27T15:47:59.314Z",
   "testSuites": [
     "tests/siglus-audit-invariants.test.mjs",
     "tests/siglus-stateful-interactions.test.mjs",
@@ -14,8 +14,8 @@
     "tests/siglus-timetable.test.mjs"
   ],
   "summary": {
-    "total": 58,
-    "killed": 58,
+    "total": 61,
+    "killed": 61,
     "surviving": 0,
     "equivalent": 0,
     "invalid": 0,
@@ -29,8 +29,8 @@
       "area": "vm",
       "description": "Drop division-by-zero guard in binary op 4 (returns Infinity/0 bug)",
       "status": "killed",
-      "durationMs": 516,
-      "killedBy": "✖ Stateful interaction: SiglusVm signed 32-bit math, div-by-zero, GOSUB/RETURN, and checkpoint restore (1.965791ms)"
+      "durationMs": 398,
+      "killedBy": "✖ Siglus resolves position events on message buttons and restores indexed object events (2.323375ms)"
     },
     {
       "id": "vm.mod-by-zero-guard",
@@ -38,8 +38,8 @@
       "area": "vm",
       "description": "Corrupt modulo-by-zero guard in binary op 5",
       "status": "killed",
-      "durationMs": 533,
-      "killedBy": "✖ Stateful interaction: SiglusVm signed 32-bit math, div-by-zero, GOSUB/RETURN, and checkpoint restore (2.068417ms)"
+      "durationMs": 378,
+      "killedBy": "✖ Stateful interaction: SiglusVm signed 32-bit math, div-by-zero, GOSUB/RETURN, and checkpoint restore (1.734334ms)"
     },
     {
       "id": "vm.imul-32bit-wrap",
@@ -47,8 +47,8 @@
       "area": "vm",
       "description": "Replace signed 32-bit Math.imul with JS float multiply",
       "status": "killed",
-      "durationMs": 520,
-      "killedBy": "✖ Stateful interaction: SiglusVm signed 32-bit math, div-by-zero, GOSUB/RETURN, and checkpoint restore (2.014833ms)"
+      "durationMs": 409,
+      "killedBy": "✖ Siglus resolves position events on message buttons and restores indexed object events (2.235791ms)"
     },
     {
       "id": "vm.read-args-reverse",
@@ -56,8 +56,8 @@
       "area": "vm",
       "description": "Omit stack-argument reversal in Frame.readArguments",
       "status": "killed",
-      "durationMs": 543,
-      "killedBy": "✖ SiglusVm dynamic list resize/clear/sets/init, checkpoints, and commandArity behave per native 1.1.80.8 (2.163208ms)"
+      "durationMs": 377,
+      "killedBy": "✖ SiglusVm dynamic list resize/clear/sets/init, checkpoints, and commandArity behave per native 1.1.80.8 (1.753875ms)"
     },
     {
       "id": "vm.checkpoint-active-frame",
@@ -65,8 +65,8 @@
       "area": "vm",
       "description": "Ignore sceneJumps activeFrame mapping in SiglusVm.checkpoint",
       "status": "killed",
-      "durationMs": 554,
-      "killedBy": "✖ Stateful interaction: SiglusVm signed 32-bit math, div-by-zero, GOSUB/RETURN, and checkpoint restore (2.416959ms)"
+      "durationMs": 401,
+      "killedBy": "✖ Stateful interaction: SiglusVm signed 32-bit math, div-by-zero, GOSUB/RETURN, and checkpoint restore (1.622625ms)"
     },
     {
       "id": "vm.trailing-read-flag-global",
@@ -74,8 +74,8 @@
       "area": "vm",
       "description": "Always return false for single-element global readFlag check",
       "status": "killed",
-      "durationMs": 535,
-      "killedBy": "✖ SiglusVm.peekUpcomingVoices extracts upcoming literal koe IDs without mutating VM state (3.018709ms)"
+      "durationMs": 383,
+      "killedBy": "✖ SiglusVm.peekUpcomingVoices extracts upcoming literal koe IDs without mutating VM state (0.903583ms)"
     },
     {
       "id": "player.dirty-guard-visible",
@@ -83,8 +83,8 @@
       "area": "player",
       "description": "Remove no-op write guard on object.visible (causes spurious DOM dirtying)",
       "status": "killed",
-      "durationMs": 514,
-      "killedBy": "✖ Stateful interaction: read-only queries and no-op writes NEVER trigger objectsDirty or systemObjectsDirty (1.051042ms)"
+      "durationMs": 386,
+      "killedBy": "✖ Siglus resolves position events on message buttons and restores indexed object events (2.422625ms)"
     },
     {
       "id": "player.counter-pause-retain",
@@ -92,8 +92,8 @@
       "area": "player",
       "description": "Skip setting pausedAt on counter.pause (member 4)",
       "status": "killed",
-      "durationMs": 523,
-      "killedBy": "✖ camera input can stop and resume its EXCALL counter without resetting elapsed time (1.04675ms)"
+      "durationMs": 397,
+      "killedBy": "✖ camera input can stop and resume its EXCALL counter without resetting elapsed time (0.612791ms)"
     },
     {
       "id": "player.counter-resume-offset",
@@ -101,8 +101,8 @@
       "area": "player",
       "description": "Fail to clear pausedAt on counter.resume (member 5)",
       "status": "killed",
-      "durationMs": 562,
-      "killedBy": "✖ camera input can stop and resume its EXCALL counter without resetting elapsed time (0.691334ms)"
+      "durationMs": 387,
+      "killedBy": "✖ camera input can stop and resume its EXCALL counter without resetting elapsed time (5.806209ms)"
     },
     {
       "id": "player.counter-check-active-paused",
@@ -110,8 +110,8 @@
       "area": "player",
       "description": "Ignore pausedAt === undefined in counter.check_active (member 14)",
       "status": "killed",
-      "durationMs": 538,
-      "killedBy": "✖ camera input can stop and resume its EXCALL counter without resetting elapsed time (0.665959ms)"
+      "durationMs": 412,
+      "killedBy": "✖ camera input can stop and resume its EXCALL counter without resetting elapsed time (0.576291ms)"
     },
     {
       "id": "player.excall-release-frameactions-scope",
@@ -119,8 +119,8 @@
       "area": "player",
       "description": "Delete story frameActions too on EXCALL releaseSystemObjects",
       "status": "killed",
-      "durationMs": 545,
-      "killedBy": "✖ Stateful interaction: EXCALL entry/exit isolates systemObjects, fonts, button groups, and frame_actions from story state (0.780125ms)"
+      "durationMs": 395,
+      "killedBy": "✖ Stateful interaction: EXCALL entry/exit isolates systemObjects, fonts, button groups, and frame_actions from story state (0.667959ms)"
     },
     {
       "id": "player.excall-release-groups-scope",
@@ -128,8 +128,8 @@
       "area": "player",
       "description": "Clear story button groups (< 100000) during EXCALL releaseSystemObjects",
       "status": "killed",
-      "durationMs": 579,
-      "killedBy": "✖ Stateful interaction: EXCALL entry/exit isolates systemObjects, fonts, button groups, and frame_actions from story state (0.99ms)"
+      "durationMs": 394,
+      "killedBy": "✖ Stateful interaction: EXCALL entry/exit isolates systemObjects, fonts, button groups, and frame_actions from story state (0.956334ms)"
     },
     {
       "id": "player.excall-joypad-fallback",
@@ -137,8 +137,8 @@
       "area": "player",
       "description": "Drop defaultMode fallback in EXCALL joypadModeActive",
       "status": "killed",
-      "durationMs": 578,
-      "killedBy": "✖ Siglus 1.1.141.3 EXCALL joypad fallback, MWND button count, return_sel, cursor_no, unified save copy/swap, and intEvent tracking (0.869208"
+      "durationMs": 474,
+      "killedBy": "✖ Siglus 1.1.141.3 EXCALL joypad fallback, MWND button count, return_sel, cursor_no, unified save copy/swap, and intEvent tracking (0.67325m"
     },
     {
       "id": "player.object-hit-state-disabled",
@@ -146,8 +146,8 @@
       "area": "player",
       "description": "Ignore disabled flag in object.get_button_hit_state (123)",
       "status": "killed",
-      "durationMs": 565,
-      "killedBy": "✖ Siglus resolves position events on message buttons and restores indexed object events (8.429667ms)"
+      "durationMs": 420,
+      "killedBy": "✖ Siglus object.get_button_hit_state (123) reports normal, hover, and push without dirtying stage (0.686333ms)"
     },
     {
       "id": "display.wheel-sign",
@@ -155,8 +155,8 @@
       "area": "display",
       "description": "Invert mouse.wheel delta sign (+Math.sign -> -Math.sign)",
       "status": "killed",
-      "durationMs": 539,
-      "killedBy": "✖ scrollview wheel sign, read-only object commands, no-op property writes, and system position fast-path (1.925583ms)"
+      "durationMs": 419,
+      "killedBy": "✖ scrollview wheel sign, read-only object commands, no-op property writes, and system position fast-path (1.247625ms)"
     },
     {
       "id": "display.hover-se-dedup",
@@ -164,8 +164,8 @@
       "area": "display",
       "description": "Drop hover SE deduplication guard in enterButtonHover",
       "status": "killed",
-      "durationMs": 537,
-      "killedBy": "✖ Native 1.1.141.3 dialogue wait (64.48/64.51/64.21/64.22), skip/auto flags (64.0..86), and hover-sound deduplication (1.248708ms)"
+      "durationMs": 402,
+      "killedBy": "✖ Native 1.1.141.3 dialogue wait (64.48/64.51/64.21/64.22), skip/auto flags (64.0..86), and hover-sound deduplication (0.982166ms)"
     },
     {
       "id": "display.leave-hover-inert-guard",
@@ -173,8 +173,8 @@
       "area": "display",
       "description": "Drop detached/inert node guard in leaveButtonHover",
       "status": "killed",
-      "durationMs": 612,
-      "killedBy": "✖ Native 1.1.141.3 dialogue wait (64.48/64.51/64.21/64.22), skip/auto flags (64.0..86), and hover-sound deduplication (1.580834ms)"
+      "durationMs": 384,
+      "killedBy": "✖ Native 1.1.141.3 dialogue wait (64.48/64.51/64.21/64.22), skip/auto flags (64.0..86), and hover-sound deduplication (0.91775ms)"
     },
     {
       "id": "display.button-hit-path-empty-bounds",
@@ -182,7 +182,7 @@
       "area": "display",
       "description": "Corrupt empty-bounds hit path in buttonHitPath",
       "status": "killed",
-      "durationMs": 550,
+      "durationMs": 382,
       "killedBy": "✖ Stateful interaction: display buttonHitPath empty bounds, numberGraphicCache LRU cap, G00 Type 2 negative dedup length, and Scene.pck stri"
     },
     {
@@ -191,7 +191,7 @@
       "area": "display",
       "description": "Disable LRU eviction cap (> 256) in numberGraphicCache",
       "status": "killed",
-      "durationMs": 554,
+      "durationMs": 404,
       "killedBy": "✖ Stateful interaction: display buttonHitPath empty bounds, numberGraphicCache LRU cap, G00 Type 2 negative dedup length, and Scene.pck stri"
     },
     {
@@ -200,8 +200,8 @@
       "area": "display",
       "description": "Always drop active opacity event in serializeDrawObject",
       "status": "killed",
-      "durationMs": 568,
-      "killedBy": "✖ nested stage objects retain child state through object copy and save restoration (3.145583ms)"
+      "durationMs": 389,
+      "killedBy": "✖ nested stage objects retain child state through object copy and save restoration (4.504ms)"
     },
     {
       "id": "display.serialize-offset-event-expiry",
@@ -209,8 +209,8 @@
       "area": "display",
       "description": "Invert offsetEvent expiry check (>= -> <) in serializeDrawObject",
       "status": "killed",
-      "durationMs": 588,
-      "killedBy": "✖ Siglus resolves position events on message buttons and restores indexed object events (3.054583ms)"
+      "durationMs": 403,
+      "killedBy": "✖ Siglus resolves position events on message buttons and restores indexed object events (1.913292ms)"
     },
     {
       "id": "mwnd.vertical-mode-flag",
@@ -218,8 +218,8 @@
       "area": "mwnd",
       "description": "Break vertical text mode detection (TATEYOKO_MODE === 1 -> === 2)",
       "status": "killed",
-      "durationMs": 560,
-      "killedBy": "✖ Siglus vertical text swaps the message inline and block extents (3.075625ms)"
+      "durationMs": 610,
+      "killedBy": "✖ Siglus vertical text swaps the message inline and block extents (0.890584ms)"
     },
     {
       "id": "mwnd.name-align-right-sign",
@@ -227,8 +227,8 @@
       "area": "mwnd",
       "description": "Add instead of subtract nameMsgX for NAME_WINDOW_ALIGN == 2",
       "status": "killed",
-      "durationMs": 542,
-      "killedBy": "✖ Stateful interaction: mwnd text color, vertical layout, wipe/audio curves, and format edge invariants (1.331125ms)"
+      "durationMs": 582,
+      "killedBy": "✖ Stateful interaction: mwnd text color, vertical layout, wipe/audio curves, and format edge invariants (1.027416ms)"
     },
     {
       "id": "wipe.softness-upper-clamp",
@@ -236,8 +236,8 @@
       "area": "wipe",
       "description": "Return 0 instead of 1 when wipe softness option exceeds table length",
       "status": "killed",
-      "durationMs": 531,
-      "killedBy": "✖ Stateful interaction: mwnd text color, vertical layout, wipe/audio curves, and format edge invariants (0.74475ms)"
+      "durationMs": 423,
+      "killedBy": "✖ Stateful interaction: mwnd text color, vertical layout, wipe/audio curves, and format edge invariants (0.649458ms)"
     },
     {
       "id": "wipe.g00-mask-reverse",
@@ -245,8 +245,8 @@
       "area": "wipe",
       "description": "Drop reverse polarity inversion in g00MaskValues",
       "status": "killed",
-      "durationMs": 687,
-      "killedBy": "✖ Stateful interaction: mwnd text color, vertical layout, wipe/audio curves, and format edge invariants (0.945375ms)"
+      "durationMs": 405,
+      "killedBy": "✖ Stateful interaction: mwnd text color, vertical layout, wipe/audio curves, and format edge invariants (0.758875ms)"
     },
     {
       "id": "wipe.pcm-event-2x-weight",
@@ -254,8 +254,8 @@
       "area": "wipe",
       "description": "Weight non-previous PCM event entries 1x instead of native 2x",
       "status": "killed",
-      "durationMs": 605,
-      "killedBy": "✖ Stateful interaction: mwnd text color, vertical layout, wipe/audio curves, and format edge invariants (0.859042ms)"
+      "durationMs": 385,
+      "killedBy": "✖ Stateful interaction: mwnd text color, vertical layout, wipe/audio curves, and format edge invariants (0.698917ms)"
     },
     {
       "id": "audio.dsound-volume-curve-scale",
@@ -263,8 +263,8 @@
       "area": "audio",
       "description": "Corrupt DirectSound log-dB scale factor (5000 -> 2000)",
       "status": "killed",
-      "durationMs": 594,
-      "killedBy": "✖ Stateful interaction: mwnd text color, vertical layout, wipe/audio curves, and format edge invariants (3.352625ms)"
+      "durationMs": 376,
+      "killedBy": "✖ Siglus resolves position events on message buttons and restores indexed object events (2.234292ms)"
     },
     {
       "id": "g00.type1-palette-bounds",
@@ -272,8 +272,8 @@
       "area": "formats/g00",
       "description": "Drop invalid palette index bounds check in G00 Type 1 decoder",
       "status": "killed",
-      "durationMs": 575,
-      "killedBy": "✖ G00 Type 1 expands palette indices with their stored alpha (2.303167ms)"
+      "durationMs": 410,
+      "killedBy": "✖ Siglus resolves position events on message buttons and restores indexed object events (2.206375ms)"
     },
     {
       "id": "g00.type2-negative-dedup-length",
@@ -281,7 +281,7 @@
       "area": "formats/g00",
       "description": "Drop Math.abs on deduplicated negative Type 2 cut length",
       "status": "killed",
-      "durationMs": 601,
+      "durationMs": 371,
       "killedBy": "✖ Stateful interaction: display buttonHitPath empty bounds, numberGraphicCache LRU cap, G00 Type 2 negative dedup length, and Scene.pck stri"
     },
     {
@@ -290,8 +290,8 @@
       "area": "formats/dbs",
       "description": "Drop type === \"V\" guard in SiglusDbs.getNum",
       "status": "killed",
-      "durationMs": 567,
-      "killedBy": "✖ Stateful interaction: mwnd text color, vertical layout, wipe/audio curves, and format edge invariants (3.259834ms)"
+      "durationMs": 384,
+      "killedBy": "✖ Stateful interaction: mwnd text color, vertical layout, wipe/audio curves, and format edge invariants (2.610917ms)"
     },
     {
       "id": "dbs.checkcolumn-code",
@@ -299,8 +299,8 @@
       "area": "formats/dbs",
       "description": "Swap int/string return codes (2 : 1 -> 1 : 2) in SiglusDbs.checkColumn",
       "status": "killed",
-      "durationMs": 593,
-      "killedBy": "✖ SiglusDbs supports hasRow, checkColumn, and typed linear-scan cell reads (1.724458ms)"
+      "durationMs": 403,
+      "killedBy": "✖ Siglus resolves position events on message buttons and restores indexed object events (2.251042ms)"
     },
     {
       "id": "dbs.findstr-case-sensitivity",
@@ -308,8 +308,8 @@
       "area": "formats/dbs",
       "description": "Always fold case in SiglusDbs.findStr (breaks find_str_real 105.-1.*.7)",
       "status": "killed",
-      "durationMs": 561,
-      "killedBy": "✖ Phase 5 Ghidra fix: database root 105 dispatch (0x55fb30) supports check_item_no=3, check_column_no=4, find_num=5, find_str=6, find_str_re"
+      "durationMs": 392,
+      "killedBy": "✖ Siglus resolves position events on message buttons and restores indexed object events (13.296959ms)"
     },
     {
       "id": "player.database-check-item-member",
@@ -317,7 +317,7 @@
       "area": "player/database",
       "description": "Reintroduce off-by-one member ID (3 -> 2) for database.check_item_no",
       "status": "killed",
-      "durationMs": 558,
+      "durationMs": 452,
       "killedBy": "✖ Phase 5 Ghidra fix: database root 105 dispatch (0x55fb30) supports check_item_no=3, check_column_no=4, find_num=5, find_str=6, find_str_re"
     },
     {
@@ -326,8 +326,8 @@
       "area": "player/cgtable",
       "description": "Drop cgTableDisabled guard in recordCgSeen (breaks cgtable.set_disable 78.7)",
       "status": "killed",
-      "durationMs": 583,
-      "killedBy": "✖ Phase 5 Ghidra fix: cgtable root 78 (0x55f780) supports set_disable=7, set_enable=8, and get_name_by_flag_no=10 (0.873583ms)"
+      "durationMs": 442,
+      "killedBy": "✖ Phase 5 Ghidra fix: cgtable root 78 (0x55f780) supports set_disable=7, set_enable=8, and get_name_by_flag_no=10 (1.177708ms)"
     },
     {
       "id": "player.math-sqrt-negative-clamp",
@@ -335,8 +335,8 @@
       "area": "player/math",
       "description": "Take sqrt(abs(v)) instead of clamping negative inputs to 0 in math.sqrt (39.14)",
       "status": "killed",
-      "durationMs": 540,
-      "killedBy": "✖ Phase 5 Ghidra fix: math root 39 (0x55eed0) supports tostr(val,width), tan=8, tostr_zen_zero=13, and sqrt=14 (0.802333ms)"
+      "durationMs": 384,
+      "killedBy": "✖ Phase 5 Ghidra fix: math root 39 (0x55eed0) supports tostr(val,width), tan=8, tostr_zen_zero=13, and sqrt=14 (0.628167ms)"
     },
     {
       "id": "player.pcmevent-random-prob-slot",
@@ -344,8 +344,8 @@
       "area": "player/pcmevent",
       "description": "Read probability from entry[3] instead of native entry[1] in pcmevent.start_random",
       "status": "killed",
-      "durationMs": 583,
-      "killedBy": "✖ Phase 5 Batch 2 Ghidra fix: pcmevent.start_random (52.-1.*.2, 0x5652f0) parses [file, prob, minTime, maxTime] and stop(stopSound) respects"
+      "durationMs": 393,
+      "killedBy": "✖ Siglus resolves position events on message buttons and restores indexed object events (2.250584ms)"
     },
     {
       "id": "vm.callstack-prune-propagate",
@@ -353,8 +353,8 @@
       "area": "vm/callstack",
       "description": "Skip pruned-frame propagation after farcall return (breaks del_call_stack 138)",
       "status": "killed",
-      "durationMs": 558,
-      "killedBy": "✖ Phase 5 Batch 2 Ghidra fix: global 138/139/140/141 (0x54fc20 -> 0x5c71f0) manipulate VM call stack without wiping backlog (2.25525ms)"
+      "durationMs": 375,
+      "killedBy": "✖ Phase 5 Batch 2 Ghidra fix: global 138/139/140/141 (0x54fc20 -> 0x5c71f0) manipulate VM call stack without wiping backlog (1.107292ms)"
     },
     {
       "id": "player.msgbk-clear-member",
@@ -362,8 +362,8 @@
       "area": "player/msgbk",
       "description": "No-op msgbk.clear (145.6) backlog clear",
       "status": "killed",
-      "durationMs": 568,
-      "killedBy": "✖ Phase 5 Batch 2 Ghidra fix: msgbk.clear (145.6, 0x555b20) clears backlog and database.cnt (105.1, 0x54fc20) returns database count (0.5527"
+      "durationMs": 412,
+      "killedBy": "✖ Phase 5 Batch 2 Ghidra fix: msgbk.clear (145.6, 0x555b20) clears backlog and database.cnt (105.1, 0x54fc20) returns database count (0.5111"
     },
     {
       "id": "cgtable.v2-stride",
@@ -371,8 +371,8 @@
       "area": "formats/cgtable",
       "description": "Use v1 stride (36) instead of v2 stride (60) for CGTABLE2",
       "status": "killed",
-      "durationMs": 558,
-      "killedBy": "✖ parseCgTable decodes CGTABLE2 with packedFlag=0 XOR+LZSS payloads and CGTABLE v1 (2.695167ms)"
+      "durationMs": 388,
+      "killedBy": "✖ parseCgTable decodes CGTABLE2 with packedFlag=0 XOR+LZSS payloads and CGTABLE v1 (1.652042ms)"
     },
     {
       "id": "compression.lzss-backref-count",
@@ -380,8 +380,8 @@
       "area": "formats/compression",
       "description": "Corrupt LZSS back-reference minimum match length (+ 2 -> + 3)",
       "status": "killed",
-      "durationMs": 553,
-      "killedBy": "✖ Optimized unpackSiglusLz, xorByteInPlace, and decodeOwp preserve exact byte parity across aligned/unaligned buffers (1.106542ms)"
+      "durationMs": 428,
+      "killedBy": "✖ Optimized unpackSiglusLz, xorByteInPlace, and decodeOwp preserve exact byte parity across aligned/unaligned buffers (0.964916ms)"
     },
     {
       "id": "compression.xor-unaligned-prefix",
@@ -389,8 +389,8 @@
       "area": "formats/compression",
       "description": "Skip unaligned prefix bytes in xorByteInPlace",
       "status": "killed",
-      "durationMs": 577,
-      "killedBy": "✖ Optimized unpackSiglusLz, xorByteInPlace, and decodeOwp preserve exact byte parity across aligned/unaligned buffers (1.320125ms)"
+      "durationMs": 400,
+      "killedBy": "✖ Optimized unpackSiglusLz, xorByteInPlace, and decodeOwp preserve exact byte parity across aligned/unaligned buffers (0.964125ms)"
     },
     {
       "id": "scene-pack.string-table-xor-key",
@@ -398,7 +398,7 @@
       "area": "formats/scene-pack",
       "description": "Corrupt Scene.pck UTF-16 string table XOR key mask",
       "status": "killed",
-      "durationMs": 767,
+      "durationMs": 398,
       "killedBy": "✖ Stateful interaction: display buttonHitPath empty bounds, numberGraphicCache LRU cap, G00 Type 2 negative dedup length, and Scene.pck stri"
     },
     {
@@ -407,7 +407,7 @@
       "area": "player/object",
       "description": "Revert 1-arg create_string (39) visible default from false back to true",
       "status": "killed",
-      "durationMs": 566,
+      "durationMs": 455,
       "killedBy": "✖ Phase 5 Batch 4 Ghidra fixes: object 1-arg disp defaults, color clamping [0..255], get_pixel_color default pat=0, init_param, getters, and"
     },
     {
@@ -416,7 +416,7 @@
       "area": "player/object",
       "description": "Drop [0, 255] clamping on object color properties (28..34, 57..59)",
       "status": "killed",
-      "durationMs": 574,
+      "durationMs": 386,
       "killedBy": "✖ Phase 5 Batch 4 Ghidra fixes: object 1-arg disp defaults, color clamping [0..255], get_pixel_color default pat=0, init_param, getters, and"
     },
     {
@@ -425,7 +425,7 @@
       "area": "player/object",
       "description": "Drop [0, 255] clamping on object transparency property (27)",
       "status": "killed",
-      "durationMs": 572,
+      "durationMs": 388,
       "killedBy": "✖ Phase 5 Batch 4 Ghidra fixes: object 1-arg disp defaults, color clamping [0..255], get_pixel_color default pat=0, init_param, getters, and"
     },
     {
@@ -434,8 +434,8 @@
       "area": "player/object",
       "description": "Use object.pattern instead of native pat=0 for 2-arg get_pixel_color (100..103)",
       "status": "killed",
-      "durationMs": 584,
-      "killedBy": "✖ Siglus resolves position events on message buttons and restores indexed object events (7.573208ms)"
+      "durationMs": 383,
+      "killedBy": "✖ Phase 5 Batch 4 Ghidra fixes: object 1-arg disp defaults, color clamping [0..255], get_pixel_color default pat=0, init_param, getters, and"
     },
     {
       "id": "player.object-init-param-world",
@@ -443,8 +443,8 @@
       "area": "player/object",
       "description": "Reset world to 0 instead of native -1 in object.init_param (37)",
       "status": "killed",
-      "durationMs": 570,
-      "killedBy": "✖ Phase 5 Batch 4 Ghidra fixes: object 1-arg disp defaults, color clamping [0..255], get_pixel_color default pat=0, init_param, getters, and"
+      "durationMs": 387,
+      "killedBy": "✖ Siglus resolves position events on message buttons and restores indexed object events (2.556125ms)"
     },
     {
       "id": "player.syscom-msg-speed-clamp",
@@ -452,7 +452,7 @@
       "area": "player/syscom",
       "description": "Revert syscom.set_message_speed (46) upper clamp from native 100 back to 255",
       "status": "killed",
-      "durationMs": 576,
+      "durationMs": 400,
       "killedBy": "✖ Phase 5 Batch 5 Ghidra fixes: syscom (0x569f60) message_speed [0..100], auto_min_wait [0..5000], koe_mode clamp, get_quick_save_value (184"
     },
     {
@@ -461,7 +461,7 @@
       "area": "player/syscom",
       "description": "Revert syscom.set_auto_mode_min_wait (54) upper clamp from native 5000 back to 10000",
       "status": "killed",
-      "durationMs": 567,
+      "durationMs": 413,
       "killedBy": "✖ Phase 5 Batch 5 Ghidra fixes: syscom (0x569f60) message_speed [0..100], auto_min_wait [0..5000], koe_mode clamp, get_quick_save_value (184"
     },
     {
@@ -470,7 +470,7 @@
       "area": "player/syscom",
       "description": "Drop {0,1,2} clamp in syscom.set_koe_mode (148)",
       "status": "killed",
-      "durationMs": 586,
+      "durationMs": 372,
       "killedBy": "✖ Phase 5 Batch 5 Ghidra fixes: syscom (0x569f60) message_speed [0..100], auto_min_wait [0..5000], koe_mode clamp, get_quick_save_value (184"
     },
     {
@@ -479,8 +479,8 @@
       "area": "player/syscom",
       "description": "Read normal slot instead of quick slot in syscom.get_quick_save_value (184)",
       "status": "killed",
-      "durationMs": 611,
-      "killedBy": "✖ Phase 5 Batch 5 Ghidra fixes: syscom (0x569f60) message_speed [0..100], auto_min_wait [0..5000], koe_mode clamp, get_quick_save_value (184"
+      "durationMs": 393,
+      "killedBy": "✖ Siglus resolves position events on message buttons and restores indexed object events (2.253625ms)"
     },
     {
       "id": "player.config-onoff-dot",
@@ -488,8 +488,8 @@
       "area": "player/config",
       "description": "Revert CONFIG.<NAME>.ONOFF dot normalization back to broken underscore lookup",
       "status": "killed",
-      "durationMs": 581,
-      "killedBy": "✖ Siglus resolves position events on message buttons and restores indexed object events (4.688375ms)"
+      "durationMs": 362,
+      "killedBy": "✖ Phase 5 Batch 6+7 Ghidra fixes (disc-018..023): CONFIG.*.ONOFF dot keys, syscom 330/331/164..166/189..191/311..319 defaults, effect clamps"
     },
     {
       "id": "player.syscom-extra-str-value",
@@ -497,8 +497,8 @@
       "area": "player/syscom",
       "description": "Drop CNT bounds check in syscom.get_system_extra_str_value (331)",
       "status": "killed",
-      "durationMs": 574,
-      "killedBy": "✖ Phase 5 Batch 6+7 Ghidra fixes (disc-018..023): CONFIG.*.ONOFF dot keys, syscom 330/331/164..166/189..191/311..319 defaults, effect clamps"
+      "durationMs": 390,
+      "killedBy": "✖ Siglus resolves position events on message buttons and restores indexed object events (2.41375ms)"
     },
     {
       "id": "player.syscom-mouse-cursor-hide-time",
@@ -506,8 +506,8 @@
       "area": "player/syscom",
       "description": "Ignore CONFIG.MOUSE_CURSOR_HIDE_TIME default in syscom 319",
       "status": "killed",
-      "durationMs": 634,
-      "killedBy": "✖ Siglus resolves position events on message buttons and restores indexed object events (6.094834ms)"
+      "durationMs": 395,
+      "killedBy": "✖ Siglus resolves position events on message buttons and restores indexed object events (2.221708ms)"
     },
     {
       "id": "player.effect-color-clamp",
@@ -515,7 +515,7 @@
       "area": "player/effect",
       "description": "Drop [0, 255] clamping on effect properties 3..13 (0x54e240)",
       "status": "killed",
-      "durationMs": 581,
+      "durationMs": 380,
       "killedBy": "✖ Phase 5 Batch 6+7 Ghidra fixes (disc-018..023): CONFIG.*.ONOFF dot keys, syscom 330/331/164..166/189..191/311..319 defaults, effect clamps"
     },
     {
@@ -524,7 +524,7 @@
       "area": "player/audio",
       "description": "Revert pcmch.stop() 0-arg default fade from 100ms back to 0ms",
       "status": "killed",
-      "durationMs": 586,
+      "durationMs": 369,
       "killedBy": "✖ Phase 5 Batch 6+7 Ghidra fixes (disc-018..023): CONFIG.*.ONOFF dot keys, syscom 330/331/164..166/189..191/311..319 defaults, effect clamps"
     },
     {
@@ -533,7 +533,7 @@
       "area": "vm/call-stack",
       "description": "Drop prunedFrames check after user-defined include command returns",
       "status": "killed",
-      "durationMs": 566,
+      "durationMs": 397,
       "killedBy": "✖ Phase 5 Batch 6+7 Ghidra fixes (disc-018..023): CONFIG.*.ONOFF dot keys, syscom 330/331/164..166/189..191/311..319 defaults, effect clamps"
     },
     {
@@ -542,8 +542,35 @@
       "area": "vm/string",
       "description": "Return receiver.length instead of native -1 for str.search_last(\"\")",
       "status": "killed",
-      "durationMs": 612,
+      "durationMs": 428,
       "killedBy": "✖ Phase 5 Batch 6+7 Ghidra fixes (disc-018..023): CONFIG.*.ONOFF dot keys, syscom 330/331/164..166/189..191/311..319 defaults, effect clamps"
+    },
+    {
+      "id": "math.angle-quadrant-wrap",
+      "file": "src/engines/siglus/math.ts",
+      "area": "math",
+      "description": "Drop +3600 modulo wrap in siglusAngle (39.22, 0x55f2c0) so Q3/Q4 angles go negative",
+      "status": "killed",
+      "durationMs": 374,
+      "killedBy": "✖ Final Audit Ghidra fixes (disc-024..025): math.angle/asin/acos/atan (39.16/17/18/22, 0x55f187..0x55f32e) and intlist bit16/bit8 mapping (6"
+    },
+    {
+      "id": "player.intlist-bit16-vs-bit8",
+      "file": "src/engines/siglus/player.ts",
+      "area": "player/intlist",
+      "description": "Swap native 6=bit16 and 7=bit8 widths in INTLIST_BIT_WIDTH (0x55d5ed/0x55d60f)",
+      "status": "killed",
+      "durationMs": 383,
+      "killedBy": "✖ Final Audit Ghidra fixes (disc-024..025): math.angle/asin/acos/atan (39.16/17/18/22, 0x55f187..0x55f32e) and intlist bit16/bit8 mapping (6"
+    },
+    {
+      "id": "player.z-bit16-alias",
+      "file": "src/engines/siglus/player.ts",
+      "area": "player/intlist",
+      "description": "Restrict system (31) bit-view aliasing back to 1-bit (list===3) only, breaking Z.bit16 (31.6.-1.*)",
+      "status": "killed",
+      "durationMs": 396,
+      "killedBy": "✖ Final Audit Ghidra fixes (disc-024..025): math.angle/asin/acos/atan (39.16/17/18/22, 0x55f187..0x55f32e) and intlist bit16/bit8 mapping (6"
     }
   ]
 }

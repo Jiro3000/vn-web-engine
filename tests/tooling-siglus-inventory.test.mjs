@@ -15,7 +15,13 @@ import {
   discoverAnchors,
   matchPair,
 } from '../tools/siglus-inventory/match.mjs';
-import {checkLedger, evaluateStaleness, hashSourceRegion} from '../tools/siglus-inventory/ledger.mjs';
+import {
+  checkLedger,
+  evaluateStaleness,
+  hashSourceRegion,
+  resolveDispatchImplemented,
+  scanScenePackPaths,
+} from '../tools/siglus-inventory/ledger.mjs';
 import {runSingleMutant} from '../tools/siglus-mutate.mjs';
 
 const H_A = 'a'.repeat(64);
@@ -388,4 +394,74 @@ test('Phase 3 region-scoped staleness invalidates only the edited handler region
   // Editing regionA invalidates ONLY entryA, leaving entryB fresh!
   assert.equal(evaluateStaleness(entryA, {}, {}, {'mock.ts': srcV2}).stale, true);
   assert.equal(evaluateStaleness(entryB, {}, {}, {'mock.ts': srcV2}).stale, false);
+});
+
+test('CFG Scene.pck scanner yields exact paths for nested expressions, reference args, and CD_TEXT without phantom/truncated artifacts', () => {
+  const w32 = (v) => [v & 0xff, (v >> 8) & 0xff, (v >> 16) & 0xff, (v >> 24) & 0xff];
+  const pushInt = (v) => [2, ...w32(10), ...w32(v)];
+  const pushStr = (idx) => [2, ...w32(20), ...w32(idx)];
+  // Build bytecode representing:
+  //   1) CD_TEXT("hello", readFlag=0) -> must pop string so it doesn't corrupt stack
+  //   2) math.linear(39.9)( front.object[0].get_size_x(38.2.-1.0.24), 0, 100, 0, 255 )
+  //      Nested inner command as arg0 of outer command!
+  //   3) syscom.get_save_value(63.183)( 0, ref(F = 29), 0, 3 )
+  //      Reference argument (form=11) pushed with its own ELM_POINT!
+  //   4) front.object[2].child[1].x (prop 38.2.-1.2.93.-1.1.3) = 42
+  const code = new Uint8Array([
+    // 1. CD_TEXT
+    ...pushStr(0),
+    49, ...w32(0),
+    // 2. Outer ELM_POINT + path [39, 9]
+    8, ...pushInt(39), ...pushInt(9),
+    //    arg0 = inner call 38.2.-1.0.24() returning int (retForm=10)
+    8, ...pushInt(38), ...pushInt(2), ...pushInt(-1), ...pushInt(0), ...pushInt(24),
+    48, ...w32(0), ...w32(0), ...w32(0), ...w32(10),
+    //    arg1..arg4 = 0, 100, 0, 255
+    ...pushInt(0), ...pushInt(100), ...pushInt(0), ...pushInt(255),
+    //    outer CD_COMMAND 39.9 with 5 scalar args, retForm=0
+    48, ...w32(0), ...w32(5), ...w32(10), ...w32(10), ...w32(10), ...w32(10), ...w32(10), ...w32(0), ...w32(0),
+    // 3. syscom.get_save_value(0, ref(29), 0, 3): outer ELM_POINT + [63, 183], then args
+    8, ...pushInt(63), ...pushInt(183),
+    ...pushInt(0),
+    8, ...pushInt(29),
+    ...pushInt(0), ...pushInt(3),
+    //    args table is reversed on stack (top-down): scalar(10), scalar(10), ref(11), scalar(10)
+    48, ...w32(0), ...w32(4), ...w32(10), ...w32(10), ...w32(11), ...w32(10), ...w32(0), ...w32(0),
+    // 4. Property write 38.2.-1.2.93.-1.1.3 = 42
+    8, ...pushInt(38), ...pushInt(2), ...pushInt(-1), ...pushInt(2), ...pushInt(93), ...pushInt(-1), ...pushInt(1), ...pushInt(3),
+    ...pushInt(42),
+    32, ...w32(10), ...w32(10), ...w32(1),
+    // CD_RETURN(0)
+    21, ...w32(0),
+  ]);
+  const syntheticPack = {
+    sceneNames: ['test_scene'],
+    commandScenes: [],
+    scene: () => ({code, entries: [0], commands: [], labels: [0]}),
+  };
+  const {commandPaths, propertyPaths} = scanScenePackPaths(syntheticPack);
+  assert.deepEqual([...commandPaths.keys()].sort(), [
+    '38.2.-1.*.24',
+    '39.9',
+    '63.183',
+  ]);
+  assert.deepEqual([...propertyPaths.keys()].sort(), [
+    '38.2.-1.*.93.-1.*.3',
+  ]);
+});
+
+test('Accurate dispatch-coverage resolver distinguishes implemented non-case handlers from platform_boundary and unimplemented paths', () => {
+  const sourceText = {
+    'src/engines/siglus/player.ts': fs.readFileSync(path.join(import.meta.dirname, '../src/engines/siglus/player.ts'), 'utf8'),
+    'src/engines/siglus/vm.ts': fs.readFileSync(path.join(import.meta.dirname, '../src/engines/siglus/vm.ts'), 'utf8'),
+  };
+  assert.equal(resolveDispatchImplemented('command', '39.22', sourceText).implemented, true);
+  assert.equal(resolveDispatchImplemented('property', '31.6.-1.*', sourceText).implemented, true);
+  assert.equal(resolveDispatchImplemented('command', '63.121', sourceText).implemented, true);
+  assert.equal(resolveDispatchImplemented('command', '38.2.-1.*.93.-1.*.38', sourceText).implemented, true);
+  assert.equal(resolveDispatchImplemented('command', '83.1.-1.*.2', sourceText).implemented, true);
+  // OS-only platform_boundary stubs and nonexistent opcodes MUST return implemented=false
+  assert.equal(resolveDispatchImplemented('command', '46.10', sourceText).implemented, false);
+  assert.equal(resolveDispatchImplemented('command', '92.7', sourceText).implemented, false);
+  assert.equal(resolveDispatchImplemented('command', '39.99', sourceText).implemented, false);
 });

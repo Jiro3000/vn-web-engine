@@ -744,7 +744,24 @@ export class SiglusVm {
   private property(frame: Frame, path: number[], value?: Value): Value {
     const owned = this.services.property(path, value);
     if (owned !== undefined) return owned;
-    const [root = 0] = path;
+    const [root = 0, list, sep, idx] = path;
+    // Native 0x55d587..0x55d629 intlist bit views on story flags A..F (25..30): 3=1, 4=2, 5=4, 6=16, 7=8.
+    const bitWidth =
+      root >= 25 && root <= 30 && sep === -1 && idx !== undefined && idx >= 0
+        ? list === 3 ? 1 : list === 4 ? 2 : list === 5 ? 4 : list === 6 ? 16 : list === 7 ? 8 : 0
+        : 0;
+    if (bitWidth > 0 && idx !== undefined) {
+      const mask = (1 << bitWidth) - 1;
+      const perWord = 32 / bitWidth;
+      const wordIdx = Math.floor(idx / perWord);
+      const shift = (idx % perWord) * bitWidth;
+      const wordKey = `${root}.-1.${wordIdx}`;
+      const cur = Number(this.globals.get(wordKey) ?? 0) | 0;
+      if (value !== undefined) {
+        this.globals.set(wordKey, (cur & ~(mask << shift)) | ((Number(value) & mask) << shift));
+      }
+      return ((Number(this.globals.get(wordKey) ?? 0) | 0) >>> shift) & mask;
+    }
     const index = elementIndex(root);
     const sceneProperty =
       elementOwner(root) === userProperty && index >= this.pack.properties.length / 2;
