@@ -17,7 +17,7 @@ import {
 import {readCaptureBmpFlags} from './capture.js';
 import {measureSiglusFlick, siglusFlickScene} from './flick.js';
 import {SiglusJoypad} from './joypad.js';
-import {siglusCos, siglusSin, siglusTostrZen} from './math.js';
+import {siglusCos, siglusSin, siglusTan, siglusTostrPad, siglusTostrZen, siglusTostrZenZero} from './math.js';
 import {
   parseButtonSe,
   parseMwndAnimation,
@@ -279,6 +279,7 @@ interface PlayerSave {
     backButtonGroups?: [number, boolean][];
     systemSkipDisabled?: boolean;
     quakeStopped?: boolean;
+    cgTableDisabled?: boolean;
   };
   stageObjects?: [[number, SerializedDrawObject][], [number, SerializedDrawObject][]];
   stageEffects?: [string, [number, number][]][];
@@ -518,9 +519,11 @@ export class SiglusPlayer {
   private readonly g00Buffers = new Map<number, unknown>();
   private readonly bgmListened = new Set<string>();
   private readonly cgTable = new Map<string, number>();
+  private readonly cgNameByFlag = new Map<number, string>();
   private readonly cgFlags = new Set<number>();
   private readonly cgFlagLimit: number;
   private cgTableLoaded = false;
+  private cgTableDisabled = false;
   private readonly noSaveObjectIds: ReadonlySet<number>;
   private readonly namaeIds = new Map<string, number>();
   private readonly namaeValues = new Map<number, string>();
@@ -1255,16 +1258,12 @@ export class SiglusPlayer {
         return 0;
       case 1: {
         // get
-        if (!counter) return 0;
-        const {from, range} = counter;
-        if (!range) return from + Math.trunc(elapsed);
-        if (range.loop) {
-          const duration = Math.max(1, range.duration);
-          const pos = ((elapsed % duration) + duration) % duration;
-          return from + Math.trunc(((range.to - from) * pos) / duration);
-        }
-        if (elapsed >= range.duration) return range.to;
-        return from + Math.trunc(((range.to - from) * elapsed) / range.duration);
+        return this.counterValue(counter, elapsed);
+      }
+      case 7: {
+        // 1.1.141.3 0x560090 case 7 (check_value): returns 1 iff current counter value >= target.
+        const target = Number(args[0] ?? 0) | 0;
+        return Number(this.counterValue(counter, elapsed) >= target);
       }
       case 2: // reset
         counters.delete(id);
@@ -1283,6 +1282,7 @@ export class SiglusPlayer {
           delete counter.pausedAt;
         }
         return 0;
+      case 10: // start_frame (1.1.141.3 0x560090 case 10)
       case 11: // start_frame_real
         counters.set(id, {
           start: now,
@@ -1290,6 +1290,7 @@ export class SiglusPlayer {
           range: {to: Number(args[1]), duration: Number(args[2])},
         });
         return 0;
+      case 12: // start_frame_loop (1.1.141.3 0x560090 case 12)
       case 13: // start_frame_loop_real
         counters.set(id, {
           start: now,
@@ -1303,6 +1304,19 @@ export class SiglusPlayer {
             (!counter.range || counter.range.loop || elapsed < counter.range.duration)),
         );
     }
+  }
+
+  private counterValue(counter: RealCounter | undefined, elapsed: number): number {
+    if (!counter) return 0;
+    const {from, range} = counter;
+    if (!range) return from + Math.trunc(elapsed);
+    if (range.loop) {
+      const duration = Math.max(1, range.duration);
+      const pos = ((elapsed % duration) + duration) % duration;
+      return from + Math.trunc(((range.to - from) * pos) / duration);
+    }
+    if (range.duration <= 0 || elapsed >= range.duration) return range.to;
+    return from + Math.trunc(((range.to - from) * elapsed) / range.duration);
   }
 
   private releaseSystemObjects(): void {
@@ -2419,6 +2433,7 @@ export class SiglusPlayer {
         messageSpeedOverride: this.speed !== -1 ? this.speed : undefined,
         systemSkipDisabled: this.systemSkipDisabled || undefined,
         quakeStopped: this.quakeStopped || undefined,
+        cgTableDisabled: this.cgTableDisabled || undefined,
       },
       stageObjects:
         this.objects[0]!.size || this.objects[1]!.size
@@ -2863,6 +2878,7 @@ export class SiglusPlayer {
     this.mwndBtnTouchEnabled = save.controls?.mwndBtnTouchEnabled ?? true;
     this.endMsgByKeyDisabled = save.controls?.endMsgByKeyDisabled ?? false;
     this.scriptMessageNowait = save.controls?.scriptMessageNowait ?? false;
+    this.cgTableDisabled = save.controls?.cgTableDisabled ?? false;
     this.skipTriggerArmed = false;
     this.skipTriggerFired = false;
     this.msgAsyncMode = false;
@@ -4063,15 +4079,20 @@ export class SiglusPlayer {
     const file = this.game.files.get(`dat/${lower}`) ?? this.game.files.get(lower);
     if (!file) return;
     const parsed = parseCgTable(new Uint8Array(await file.read(0, file.size)));
-    for (const [name, flagNo] of parsed.byName) {
-      if (flagNo >= 0 && (!this.cgFlagLimit || flagNo < this.cgFlagLimit)) {
-        this.cgTable.set(name, flagNo);
+    for (const entry of parsed.entries) {
+      if (entry.flagNo >= 0 && (!this.cgFlagLimit || entry.flagNo < this.cgFlagLimit)) {
+        if (entry.name) {
+          this.cgTable.set(entry.name.toLowerCase(), entry.flagNo);
+          if (!this.cgNameByFlag.has(entry.flagNo)) {
+            this.cgNameByFlag.set(entry.flagNo, entry.name);
+          }
+        }
       }
     }
   }
 
   private recordCgSeen(name: string): void {
-    if (!name || !this.cgTable.size) return;
+    if (this.cgTableDisabled || !name || !this.cgTable.size) return;
     let changed = false;
     const mark = (candidate: string) => {
       const flagNo = this.cgTable.get(candidate.toLowerCase());
@@ -5804,6 +5825,7 @@ export class SiglusPlayer {
         this.pendingText = false;
         this.readSkipEnabled = this.autoEnabled = false;
         this.scriptHistoryRecordingDisabled = this.scriptAutoSavePointDisabled = false;
+        this.cgTableDisabled = false;
         this.savePoint = undefined;
         this.sceneCounters.clear();
         this.vm.returnToMenu();
@@ -6310,15 +6332,20 @@ export class SiglusPlayer {
     }
     // 1.1.141.3 converts FILETIME to Unix seconds at 0x763c74 and returns the low word.
     if (root === 92 && member === 15) return Math.floor(Date.now() / 1000) | 0;
+    // 1.1.141.3 0x55fb30 (database[n]): 0=get_num, 1=get_str, 3=check_item_no,
+    // 4=check_column_no, 5=find_num, 6=find_str (case-insensitive), 7=find_str_real (exact).
     if (root === 105 && member === -1 && path.length === 4) {
       const db = await this.loadDatabase(path[2]!);
       if (path[3] === 0) return db ? db.getNum(n(0), n(1)) : 0;
       if (path[3] === 1) return db ? db.getStr(n(0), n(1)) : '';
-      if (path[3] === 2) return db ? Number(db.hasRow(n(0))) : 0;
-      if (path[3] === 3) return db ? db.checkColumn(n(0)) : 0;
+      if (path[3] === 3) return db ? Number(db.hasRow(n(0))) : 0;
+      if (path[3] === 4) return db ? db.checkColumn(n(0)) : 0;
+      if (path[3] === 5) return db ? db.findNum(n(0), n(1)) : -1;
+      if (path[3] === 6) return db ? db.findStr(n(0), s(1), false) : -1;
+      if (path[3] === 7) return db ? db.findStr(n(0), s(1), true) : -1;
     }
     if (root === 78) {
-      // cgtable (CGTABLE / CGTABLE2, native 0x559a80)
+      // cgtable (CGTABLE / CGTABLE2, native 1.1.141.3 0x55f780)
       await this.loadCgTable();
       if (member === 1) {
         return this.cgTable.get(s(0).toLowerCase()) ?? -1;
@@ -6329,7 +6356,7 @@ export class SiglusPlayer {
         return Number(this.cgFlags.has(flagNo));
       }
       if (member === 3) {
-        // cgtable.set_flag_value_by_name (0x67e980)
+        // cgtable.set_flag_value_by_name (0x67e980 / 0x6899b0)
         const flagNo = this.cgTable.get(s(0).toLowerCase());
         if (flagNo !== undefined) {
           if (n(1)) this.cgFlags.add(flagNo);
@@ -6346,7 +6373,16 @@ export class SiglusPlayer {
         if (!total || !look) return 0;
         return Math.min(100, Math.max(1, Math.trunc((look * 100) / total)));
       }
-      if (member === 7 || member === 8) return 0;
+      if (member === 7) {
+        // 1.1.141.3 0x55f780: cgtable.set_disable (+0x496 = 1)
+        this.cgTableDisabled = true;
+        return 0;
+      }
+      if (member === 8) {
+        // 1.1.141.3 0x55f780: cgtable.set_enable (+0x496 = 0)
+        this.cgTableDisabled = false;
+        return 0;
+      }
       if (member === 9) {
         if (n(0)) {
           for (const flagNo of this.cgTable.values()) this.cgFlags.add(flagNo);
@@ -6355,6 +6391,10 @@ export class SiglusPlayer {
         }
         localStorage.setItem(this.game.saveKey + ':cgtable', JSON.stringify([...this.cgFlags]));
         return 0;
+      }
+      if (member === 10) {
+        // 1.1.141.3 0x55f780: cgtable.get_name_by_flag_no
+        return this.cgNameByFlag.get(n(0)) ?? '';
       }
     }
     if (root === 123) {
@@ -6568,7 +6608,10 @@ export class SiglusPlayer {
       return this.joypad.state(path[3]!, path[4]!);
     if (root === 39 && member === 0)
       return n(0) + Math.floor(Math.random() * (Math.max(0, n(1) - n(0)) + 1));
-    if (root === 39 && member === 1 && args.length === 1) return String(n(0));
+    if (root === 39 && member === 1) {
+      if (args.length === 1) return String(n(0));
+      if (args.length === 2) return siglusTostrPad(n(0), n(1), ' ');
+    }
     if (root === 39 && member === 3) return Math.max(n(0) | 0, n(1) | 0); // 1.1.102.1 0x532986
     if (root === 39 && member === 4) return Math.min(n(0) | 0, n(1) | 0); // 1.1.141.3 at 0x55ef40
     if (root === 39 && member === 5) return Math.abs(n(0)) | 0;
@@ -6582,13 +6625,18 @@ export class SiglusPlayer {
         ? n(2)
         : Math.trunc(n(2) + ((n(0) - n(1)) * (n(4) - n(2))) / (n(3) - n(1)));
     if (root === 39 && member === 11) {
-      const value = n(0);
-      const sign = value < 0 ? '-' : '';
-      return sign + String(Math.abs(value)).padStart(Math.min(1024, n(1)) - sign.length, '0');
+      return siglusTostrPad(n(0), n(1), '0');
     }
     if (root === 39 && member === 6) return siglusSin(n(0), n(1));
     if (root === 39 && member === 7) return siglusCos(n(0), n(1));
+    if (root === 39 && member === 8) return siglusTan(n(0), n(1));
     if (root === 39 && member === 12) return siglusTostrZen(n(0), args.length > 1 ? n(1) : 0);
+    if (root === 39 && member === 13) return siglusTostrZenZero(n(0), n(1));
+    if (root === 39 && member === 14) {
+      // 1.1.141.3 0x55eed0 case 14 (math.sqrt): negative clamped to 0 before sqrt.
+      const v = n(0) | 0;
+      return v <= 0 ? 0 : Math.trunc(Math.sqrt(v)) | 0;
+    }
     if (root === 39 && member === 15) {
       // 1.1.141.3 math dispatch at 0x55f26a squares signed int32 deltas before sqrt.
       const dx = (n(2) - n(0)) | 0;

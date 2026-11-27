@@ -1,0 +1,134 @@
+{
+  "schema": "siglus-binary-corpus/v1",
+  "binaries": [
+    {
+      "id": "angel-beats",
+      "title": "Angel Beats! -1st beat-",
+      "fileVersion": "1.1.80.7",
+      "exePath": "/Volumes/Transcend/Torrents/1GAMES/Angel Beats! -1st beat-/SiglusEngine.exe",
+      "gameDir": "/Volumes/Transcend/Torrents/1GAMES/Angel Beats! -1st beat-",
+      "profile": "tools/siglus-profiles/angel-beats.json",
+      "size": 5644800,
+      "sha256": "c39fb9f8e9486d4fddf3085ee7934287abbff745be4033ef85662c7596c313e0",
+      "containerKind": "packed-pe",
+      "analyzedSha256": "c39fb9f8e9486d4fddf3085ee7934287abbff745be4033ef85662c7596c313e0",
+      "notes": "On-disk executable is statically packed (custom DRM/packer sections); analyzed statically as-is without execution or dynamic unpacking."
+    },
+    {
+      "id": "hoshiori-rikka",
+      "title": "Hoshi Ori Yume Mirai - Rikka to Anata",
+      "fileVersion": "1.1.80.8",
+      "exePath": "/Volumes/Transcend/Torrents/1GAMES/Hoshi Ori Yume Mirai - Rikka to Anata/SiglusEngine.exe",
+      "gameDir": "/Volumes/Transcend/Torrents/1GAMES/Hoshi Ori Yume Mirai - Rikka to Anata",
+      "profile": "tools/siglus-profiles/hoshiori-rikka.json",
+      "size": 7666688,
+      "sha256": "251c57cecde9613a5da9f3e9a99c23e1a47019f9efacbbf83e215dad829fa2f9",
+      "containerKind": "direct-pe",
+      "analyzedSha256": "251c57cecde9613a5da9f3e9a99c23e1a47019f9efacbbf83e215dad829fa2f9",
+      "existingGhidraProject": {
+        "dir": "targetgame/hoshiori-rikka-native/project",
+        "name": "HoshiOriRikka",
+        "program": "SiglusEngine.exe"
+      }
+    },
+    {
+      "id": "ginharu",
+      "title": "GinHaru",
+      "fileVersion": "1.1.102.1",
+      "exePath": "/Volumes/Transcend/Torrents/1GAMES/GinHaru/SiglusEngine.exe",
+      "gameDir": "/Volumes/Transcend/Torrents/1GAMES/GinHaru",
+      "profile": "tools/siglus-profiles/ginharu.json",
+      "size": 8549376,
+      "sha256": "da87e1ac7e7138de6ad92bad1b69036a8363ebd4974784ede7eff65a1dabd7d5",
+      "containerKind": "direct-pe",
+      "analyzedSha256": "da87e1ac7e7138de6ad92bad1b69036a8363ebd4974784ede7eff65a1dabd7d5",
+      "existingGhidraProject": {
+        "dir": "targetgame/ginharu-native/project",
+        "name": "GinHaru",
+        "program": "SiglusEngine.exe"
+      }
+    },
+    {
+      "id": "tsukikana",
+      "title": "Tsuki no Kanata de Aimashou",
+      "fileVersion": "1.1.134.0",
+      "exePath": "/Volumes/Transcend/Torrents/1GAMES/Tsuki no Kanata de Aimashou/SiglusEngine.exe",
+      "gameDir": "/Volumes/Transcend/Torrents/1GAMES/Tsuki no Kanata de Aimashou",
+      "profile": "tools/siglus-profiles/tsukikana.json",
+      "size": 9570304,
+      "sha256": "2fd87b8186d768492a840987427c1db299854587fa47f00095b140128dcd70fd",
+      "containerKind": "direct-pe",
+      "analyzedSha256": "2fd87b8186d768492a840987427c1db299854587fa47f00095b140128dcd70fd",
+      "existingGhidraProject": {
+        "dir": "targetgame/tsukikana-native/project",
+        "name": "TSUKIKANA",
+        "program": "SiglusEngine.exe"
+      }
+    },
+    {
+      "id": "ssr",
+      "title": "Tsuki no Kanata de Aimashou SweetSummerRainbow",
+      "fileVersion": "1.1.134.0",
+      "exePath": "/Users/paul/Torrents/Games/tsuki no kanata fan disk/SiglusEngine.exe",
+      "gameDir": "/Users/paul/Torrents/Games/tsuki no kanata fan disk",
+      "profile": "tools/siglus-profiles/ssr.json",
+      "size": 9607680,
+      "sha256": "5b1eb99e8bc9c2f17163636132ea46efce86e83ff962c66ab251850c11a63136",
+      "containerKind": "direct-pe",
+      "analyzedSha256": "5b1eb99e8bc9c2f17163636132ea46efce86e83ff962c66ab251850c11a63136",
+      "existingGhidraProject": {
+        "dir": "targetgame/ssr-native.dewOn1/project",
+        "name": "SSR",
+        "program": "SiglusEngine.exe"
+      }
+    },
+    {
+      "id": "hoshiori-pe",
+      "title": "Hoshi Ori Yume Mirai - Perfect Edition",
+      "fileVersion": "1.1.137.0",
+      "exePath": "/Volumes/Transcend/Torrents/1GAMES/Hoshi Ori Yume Mirai - Perfect Edition/SiglusEngine.exe",
+      "gameDir": "/Volumes/Transcend/Torrents/1GAMES/Hoshi Ori Yume Mirai - Perfect Edition",
+      "profile": "tools/siglus-profiles/hoshiori-pe.json",
+      "size": 9604608,
+      "sha256": "e34f5b020a85e2108b1b4dc6e253eebdd4148734326f4eeb5ce7f63bbf1d99dd",
+      "containerKind": "direct-pe",
+      "analyzedSha256": "e34f5b020a85e2108b1b4dc6e253eebdd4148734326f4eeb5ce7f63bbf1d99dd",
+      "existingGhidraProject": {
+        "dir": "targetgame/hoshiori-pe-native/project",
+        "name": "HoshioriPE",
+        "program": "SiglusEngine.exe"
+      }
+    },
+    {
+      "id": "fortune-world",
+      "title": "FORTUNE×WORLD",
+      "fileVersion": "1.1.137.0",
+      "exePath": "/Volumes/Transcend/Torrents/1GAMES/FORTUNE×WORLD/StartData/GameData/SiglusEngine.exe",
+      "gameDir": "/Volumes/Transcend/Torrents/1GAMES/FORTUNE×WORLD",
+      "profile": "tools/siglus-profiles/fortune-world.json",
+      "size": 9719296,
+      "sha256": "5a8d3539530e73ad10c07a3757d2081ccb9265cb08455df998ac2a66d3da18a2",
+      "containerKind": "sdwrap-embedded-pe",
+      "embeddedPeOffset": "0x1c000",
+      "analyzedSha256": "3b04dfc1d4b1e0abd6d1b526b82591acc5206c5054d0d07cfa2acb887092daf6",
+      "notes": "Outer PE is SdWrap stub; real SiglusEngine 1.1.137.0 PE32 payload resides statically at file offset 0x1c000..EOF (9604608 bytes)."
+    },
+    {
+      "id": "anemoi",
+      "title": "anemoi",
+      "fileVersion": "1.1.141.3",
+      "exePath": "/Volumes/Transcend/Torrents/1GAMES/anemoi/SiglusEngine.exe",
+      "gameDir": "/Volumes/Transcend/Torrents/1GAMES/anemoi",
+      "profile": "tools/siglus-profiles/anemoi.json",
+      "size": 8694784,
+      "sha256": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28",
+      "containerKind": "direct-pe",
+      "analyzedSha256": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28",
+      "existingGhidraProject": {
+        "dir": "targetgame/anemoi-native/project",
+        "name": "Anemoi",
+        "program": "SiglusEngine.exe"
+      }
+    }
+  ]
+}

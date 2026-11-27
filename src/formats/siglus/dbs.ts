@@ -97,6 +97,40 @@ export class SiglusDbs {
     const rIdx = this.rowIds.indexOf(rowId);
     const cIdx = this.columns.findIndex((c) => c.id === colId);
     if (rIdx < 0 || cIdx < 0 || this.columns[cIdx]!.type !== 'S') return '';
+    return this.readStrCell(rIdx, cIdx);
+  }
+
+  /** Native 0x55fb30 case 5 (database[n].find_num): first rowId where int column colId === value, else -1. */
+  findNum(colId: number, value: number): number {
+    const cIdx = this.columns.findIndex((c) => c.id === colId);
+    if (cIdx < 0 || this.columns[cIdx]!.type !== 'V') return -1;
+    const target = value | 0;
+    for (let r = 0; r < this.rowCount; r++) {
+      if (this.view.getInt32(this.dataOffset + (r * this.columnCount + cIdx) * 4, true) === target) {
+        return this.rowIds[r]!;
+      }
+    }
+    return -1;
+  }
+
+  /**
+   * Native 0x5ca130 (find_str, case-insensitive) / 0x5ca2d0 (find_str_real, case-sensitive):
+   * first rowId where string column colId matches value, else -1.
+   */
+  findStr(colId: number, value: string, caseSensitive = false): number {
+    const cIdx = this.columns.findIndex((c) => c.id === colId);
+    if (cIdx < 0 || this.columns[cIdx]!.type !== 'S') return -1;
+    const target = caseSensitive ? value : value.toLowerCase();
+    for (let r = 0; r < this.rowCount; r++) {
+      const cell = this.readStrCell(r, cIdx);
+      if ((caseSensitive ? cell : cell.toLowerCase()) === target) {
+        return this.rowIds[r]!;
+      }
+    }
+    return -1;
+  }
+
+  private readStrCell(rIdx: number, cIdx: number): string {
     const rel = this.view.getUint32(this.dataOffset + (rIdx * this.columnCount + cIdx) * 4, true);
     const start = this.stringOffset + rel;
     if (start >= this.bytes.length) return '';
