@@ -3237,3 +3237,157 @@ test('Multi-subsystem audit regressions: audio Firefox/fade/duck, VM post-jump/l
   vm.writeIntList([83, 0], 5, [11, 22]);
   assert.deepEqual(vm.readIntList([83, 0], 5, 2), [11, 22]);
 });
+
+test('scrollview wheel sign, read-only object commands, no-op property writes, and system position fast-path', async () => {
+  // 1. mouse.wheel (46.5) sign matches native Siglus: wheel-down (deltaY > 0) => positive, wheel-up (deltaY < 0) => negative
+  const wheelHandlers = [];
+  const makeEl = () => ({
+    style: {},
+    dataset: {},
+    classList: {add() {}, remove() {}, toggle() {}},
+    attributes: new Map(),
+    setAttribute(k, v) { this.attributes.set(k, v); },
+    append() {},
+    replaceChildren() {},
+    querySelectorAll: () => [],
+    addEventListener(type, fn) {
+      if (type === 'wheel') wheelHandlers.push(fn);
+    },
+    focus() {},
+    contains: () => false,
+    getBoundingClientRect: () => ({left: 0, top: 0, width: 1280, height: 720}),
+    ownerDocument: null,
+  });
+  const fakeWin = {
+    addEventListener() {},
+    removeEventListener() {},
+    matchMedia: () => ({matches: false, addEventListener() {}, removeEventListener() {}}),
+    innerWidth: 1280,
+    innerHeight: 720,
+    screen: {width: 1920, height: 1080},
+    devicePixelRatio: 1,
+  };
+  const fakeDoc = {
+    createElement: () => {
+      const el = makeEl();
+      el.ownerDocument = fakeDoc;
+      return el;
+    },
+    head: makeEl(),
+    getElementById: () => null,
+    addEventListener() {},
+    removeEventListener() {},
+    defaultView: fakeWin,
+    activeElement: null,
+    hasFocus: () => true,
+  };
+  const prevDoc = globalThis.document;
+  const prevWin = globalThis.window;
+  globalThis.document = fakeDoc;
+  globalThis.window = fakeWin;
+  try {
+    const root = fakeDoc.createElement('div');
+    const display = new SiglusDisplay(
+      root,
+      new Map(),
+      new Map(),
+      1280,
+      720,
+      new AbortController().signal,
+      () => {},
+      {root, changed() {}, report() {}},
+      () => {},
+      () => false,
+    );
+    assert.equal(wheelHandlers.length, 1);
+    display.setSystemInput(true);
+    let prevented = 0;
+    wheelHandlers[0]({deltaY: 120, preventDefault: () => { prevented++; }});
+    display.sampleInput();
+    assert.equal(display.inputWheel(), 1, 'wheel-down (deltaY > 0) must yield positive mouse.wheel');
+    assert.equal(prevented, 1);
+
+    wheelHandlers[0]({deltaY: -120, preventDefault: () => { prevented++; }});
+    display.sampleInput();
+    assert.equal(display.inputWheel(), -1, 'wheel-up (deltaY < 0) must yield negative mouse.wheel');
+
+    // Main-stage interactive menus with active button groups also receive wheel input
+    display.setSystemInput(false);
+    display.syncObjectButtonGroups(new Set([0]));
+    wheelHandlers[0]({deltaY: 120, preventDefault: () => { prevented++; }});
+    display.sampleInput();
+    assert.equal(display.inputWheel(), 1, 'active main-stage button groups must receive wheel input');
+    assert.equal(prevented, 3);
+  } finally {
+    globalThis.document = prevDoc;
+    globalThis.window = prevWin;
+  }
+
+  // 2. Read-only objectCommand queries & no-op property writes must NOT mark objects dirty
+  const obj = {
+    type: 2,
+    name: 'btn',
+    frames: [{width: 64, height: 32, x: 0, y: 0}],
+    x: 100,
+    y: 200,
+    visible: true,
+    pattern: 0,
+    positionOffsets: {x: [0], y: [50]},
+    flags: [1, 2],
+    scale: [1000, 1000],
+    trOffsets: [255],
+    button: {id: 1, group: 100001},
+    intEvents: new Map(),
+  };
+  const page = new Map([[5, obj]]);
+  const dirtyCalls = [];
+  const player = Object.assign(Object.create(SiglusPlayer.prototype), {
+    objectAddress: () => ({page, index: 2}),
+    markObjectsDirty: (path, moved) => dirtyCalls.push({path, moved}),
+    activeGroups: new Set([100001]),
+    mwndBtnTouchEnabled: true,
+    display: {
+      buttonState: () => -1,
+      graphicCutCount: () => 3,
+      objectGraphic: async () => obj.frames[0],
+      numberGraphic: async () => obj.frames[0],
+    },
+    frameActions: new Map(),
+    frameActionCounters: new Map(),
+    startFrameAction: () => {},
+    endFrameAction: () => {},
+  });
+  const callObj = (tail, args = []) =>
+    SiglusPlayer.prototype.objectCommand.call(player, {
+      path: [65, 1, -1, 5, ...tail],
+      args,
+      named: [],
+      scene: '__ui_scrollview',
+    });
+
+  // Read-only commands: get_size_x (24), get_size_y (25), get_file_name (62), get_pat_cnt (169),
+  // get_button_state (118), get_button_hit_state_ex (124), f.get_size (111.9),
+  // frame_action_ch.get_size (115.2), intEvent.check (72.5), set_pos same coords (48)
+  assert.equal(await callObj([24]), 64);
+  assert.equal(await callObj([25]), 32);
+  assert.equal(await callObj([62]), 'btn');
+  assert.equal(await callObj([169]), 3);
+  assert.equal(await callObj([118]), 0);
+  assert.equal(await callObj([124]), 0);
+  assert.equal(await callObj([111, 9]), 2);
+  assert.equal(await callObj([115, 2]), 0);
+  assert.equal(await callObj([72, 5]), 0);
+  assert.equal(await callObj([48], [100, 200]), 0);
+  assert.equal(dirtyCalls.length, 0, 'read-only queries and no-op set_pos must not mark objects dirty');
+
+  // No-op property writes: y_rep[0] = 50, tr_rep[0] = 255, scale_x = 1000
+  SiglusPlayer.prototype.property.call(player, [65, 1, -1, 5, 63, -1, 0], 50);
+  SiglusPlayer.prototype.property.call(player, [65, 1, -1, 5, 141, -1, 0], 255);
+  SiglusPlayer.prototype.property.call(player, [65, 1, -1, 5, 12], 1000);
+  assert.equal(dirtyCalls.length, 0, 'no-op property writes must not mark objects dirty');
+
+  // Actual position change marks dirty with the moved object for fast-path positioning
+  SiglusPlayer.prototype.property.call(player, [65, 1, -1, 5, 63, -1, 0], 80);
+  assert.equal(dirtyCalls.length, 1);
+  assert.equal(dirtyCalls[0].moved, obj);
+});

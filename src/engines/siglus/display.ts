@@ -731,6 +731,7 @@ export class SiglusDisplay {
   private g00Worker?: WorkerPool<WorkerSource, G00Resource>;
   private readonly graphicCache = new Map<string, {graphic: Graphic; bytes: number}>();
   private graphicCacheBytes = 0;
+  private readonly numberGraphicCache = new Map<string, Graphic>();
   private readonly inFlightGraphics = new Map<string, Promise<Graphic>>();
   private readonly compositeCache = new Map<string, {graphic: Graphic; bytes: number}>();
   private compositeCacheBytes = 0;
@@ -1022,9 +1023,12 @@ export class SiglusDisplay {
     this.stage.addEventListener(
       'wheel',
       (event) => {
-        if (!this.systemInput || !event.deltaY) return;
+        if (!event.deltaY) return;
+        if (!this.systemInput && !this.objectButtonGroups?.size) return;
         event.preventDefault();
-        this.wheelDelta -= Math.sign(event.deltaY);
+        // Native Siglus mouse.wheel (46.5) is positive on wheel-down (next page / scroll down)
+        // and negative on wheel-up (prev page / scroll up), matching DOM deltaY sign.
+        this.wheelDelta += Math.sign(event.deltaY);
       },
       {passive: false},
     );
@@ -2494,6 +2498,13 @@ export class SiglusDisplay {
     spec: NonNullable<DrawObject['number']>,
   ): Promise<Graphic | undefined> {
     if (!name) return undefined;
+    const cacheKey = `${name.toLowerCase()}:${Math.trunc(spec.value)}:${spec.ketaMax}:${spec.dispZero}:${spec.dispSign}:${spec.tumeruSign}:${spec.spaceMod}:${spec.space}`;
+    const cached = this.numberGraphicCache.get(cacheKey);
+    if (cached) {
+      this.numberGraphicCache.delete(cacheKey);
+      this.numberGraphicCache.set(cacheKey, cached);
+      return cached;
+    }
     const baseDigit = await this.objectGraphic(name, 0);
     if (!baseDigit) return undefined;
     const abs = Math.abs(Math.trunc(spec.value));
@@ -2523,7 +2534,7 @@ export class SiglusDisplay {
       const g = glyphs[i];
       if (g) context.drawImage(g.image, i * stride, 0);
     }
-    return {
+    const graphic: Graphic = {
       image,
       width,
       height,
@@ -2532,6 +2543,10 @@ export class SiglusDisplay {
       centerX: baseDigit.centerX,
       centerY: baseDigit.centerY,
     };
+    this.numberGraphicCache.set(cacheKey, graphic);
+    if (this.numberGraphicCache.size > 256)
+      this.numberGraphicCache.delete(this.numberGraphicCache.keys().next().value!);
+    return graphic;
   }
 
   rectangle(
@@ -3062,8 +3077,22 @@ export class SiglusDisplay {
   }
 
   updateStageObjectPositions(moved: ReadonlySet<DrawObject>): boolean {
-    const layer = this.objectLayer;
-    if (!layer?.isConnected || this.wipe || this.castTransition || !this.positionTargets) return false;
+    if (this.wipe || this.castTransition) return false;
+    return this.updateLayerObjectPositions(this.objectLayer, moved);
+  }
+
+  updateSystemObjectPositions(moved: ReadonlySet<DrawObject>, front = false): boolean {
+    if (this.wipe) return false;
+    const container = front ? this.systemFrontLayer : this.systemLayer;
+    if (container.childElementCount !== 1) return false;
+    return this.updateLayerObjectPositions(container.firstElementChild as HTMLElement | null, moved);
+  }
+
+  private updateLayerObjectPositions(
+    layer: HTMLElement | null | undefined,
+    moved: ReadonlySet<DrawObject>,
+  ): boolean {
+    if (!layer?.isConnected || !this.positionTargets) return false;
     const unmatched = new Set<DrawObject>();
     for (const object of moved) {
       if (

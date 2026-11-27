@@ -323,6 +323,7 @@ export class SiglusPlayer {
   private systemObjects?: Map<number, DrawObject>;
   private systemBackObjects?: Map<number, DrawObject>;
   private systemObjectsDirty = false;
+  private systemObjectMoves?: Set<DrawObject>;
   private excallAllocated = false;
   private readonly excallFlags = new Map<number, number>();
   private readonly groupProps = new Map<string, number>();
@@ -1309,6 +1310,7 @@ export class SiglusPlayer {
     this.systemObjects = undefined;
     this.systemBackObjects = undefined;
     this.systemObjectsDirty = false;
+    this.systemObjectMoves = undefined;
     this.excallFlags.clear();
     this.systemCounters.clear();
     this.systemFont = undefined;
@@ -1392,7 +1394,12 @@ export class SiglusPlayer {
       else this.objectMoves?.add(moved);
       this.objectsDirty = true;
     }
-    if (root === 65 && member === 1) this.systemObjectsDirty = true;
+    if (root === 65 && member === 1) {
+      if (!moved) this.systemObjectMoves = undefined;
+      else if (!this.systemObjectsDirty) this.systemObjectMoves = new Set([moved]);
+      else this.systemObjectMoves?.add(moved);
+      this.systemObjectsDirty = true;
+    }
   }
 
   private invalidateMainObjects(): void {
@@ -1591,8 +1598,9 @@ export class SiglusPlayer {
       return Number(Boolean(object.wipeCopy));
     }
     if (property === 145) {
-      if (value !== undefined) {
-        object.mask = Number(value);
+      const next = Number(value);
+      if (value !== undefined && object.mask !== next) {
+        object.mask = next;
         this.markObjectsDirty(path);
       }
       return object.mask ?? -1;
@@ -1610,8 +1618,11 @@ export class SiglusPlayer {
       const trs = (object.trOffsets ??= []);
       if (value !== undefined && idx >= 0) {
         while (trs.length <= idx) trs.push(255);
-        trs[idx] = Number(value) | 0;
-        this.markObjectsDirty(path);
+        const next = Number(value) | 0;
+        if (trs[idx] !== next) {
+          trs[idx] = next;
+          this.markObjectsDirty(path);
+        }
       }
       return trs[idx] ?? 255;
     }
@@ -1619,8 +1630,10 @@ export class SiglusPlayer {
       const cur = object.scale ?? [1000, 1000];
       if (value !== undefined) {
         const next = Number(value) | 0;
-        object.scale = property === 12 ? [next, cur[1]] : [cur[0], next];
-        this.markObjectsDirty(path);
+        if (cur[property === 12 ? 0 : 1] !== next) {
+          object.scale = property === 12 ? [next, cur[1]] : [cur[0], next];
+          this.markObjectsDirty(path);
+        }
       }
       return (object.scale ?? [1000, 1000])[property === 12 ? 0 : 1];
     }
@@ -1644,8 +1657,10 @@ export class SiglusPlayer {
       const cur = object.center ?? [0, 0];
       if (value !== undefined) {
         const next = Number(value) | 0;
-        object.center = property === 6 ? [next, cur[1]] : [cur[0], next];
-        this.markObjectsDirty(path);
+        if (cur[property === 6 ? 0 : 1] !== next) {
+          object.center = property === 6 ? [next, cur[1]] : [cur[0], next];
+          this.markObjectsDirty(path);
+        }
       }
       return (object.center ?? [0, 0])[property === 6 ? 0 : 1];
     }
@@ -1654,8 +1669,10 @@ export class SiglusPlayer {
       const cur = object.centerRep ?? [0, 0];
       if (value !== undefined) {
         const next = Number(value) | 0;
-        object.centerRep = property === 9 ? [next, cur[1]] : [cur[0], next];
-        this.markObjectsDirty(path);
+        if (cur[property === 9 ? 0 : 1] !== next) {
+          object.centerRep = property === 9 ? [next, cur[1]] : [cur[0], next];
+          this.markObjectsDirty(path);
+        }
       }
       return (object.centerRep ?? [0, 0])[property === 9 ? 0 : 1];
     }
@@ -1677,7 +1694,7 @@ export class SiglusPlayer {
       return object.tonecurveNo ?? -1;
     }
     if (property === 149) {
-      if (value !== undefined) {
+      if (value !== undefined && Boolean(object.sourceClipEnabled) !== Boolean(value)) {
         object.sourceClipEnabled = Boolean(value);
         this.markObjectsDirty(path);
       }
@@ -1709,8 +1726,11 @@ export class SiglusPlayer {
       const k = map[property];
       if (k) {
         if (value !== undefined) {
-          cp[k] = Number(value) | 0;
-          this.markObjectsDirty(path);
+          const next = Number(value) | 0;
+          if ((cp[k] ?? 0) !== next) {
+            cp[k] = next;
+            this.markObjectsDirty(path);
+          }
         }
         return cp[k] ?? 0;
       }
@@ -1720,9 +1740,12 @@ export class SiglusPlayer {
       const index = path[address.index + 4]!;
       const offsets = object.positionOffsets?.[axis];
       if (value !== undefined && offsets && index >= 0 && index < offsets.length) {
-        offsets[index] = Number(value);
-        object.offsetEvents?.[axis]?.delete(index);
-        this.markObjectsDirty(path, object);
+        const next = Number(value);
+        const hadEvent = Boolean(object.offsetEvents?.[axis]?.delete(index));
+        if ((offsets[index] ?? 0) !== next || hadEvent) {
+          offsets[index] = next;
+          this.markObjectsDirty(path, object);
+        }
       }
       return offsets?.[index] ?? 0;
     }
@@ -3195,6 +3218,7 @@ export class SiglusPlayer {
       }
       if (this.usesWipeCopy) back.clear();
       this.systemObjectsDirty = false;
+    this.systemObjectMoves = undefined;
       if (this.activeGroups.size || this.cancelGroups.size) {
         const liveGroups = new Set<number>();
         const collectGroups = (map?: ReadonlyMap<number, DrawObject>) => {
@@ -3311,6 +3335,7 @@ export class SiglusPlayer {
             this.systemBackObjects.set(id, this.copyObject(object));
       this.systemObjects = this.copyObjects(this.systemBackObjects);
       if (this.usesWipeCopy) this.systemBackObjects.clear();
+      this.systemObjectMoves = undefined;
       this.systemObjectsDirty = true;
       await this.renderObjects();
     }
@@ -3405,10 +3430,13 @@ export class SiglusPlayer {
       );
     }
     if (this.systemObjectsDirty && this.systemObjects) {
+      const moved = this.systemObjectMoves;
+      this.systemObjectMoves = undefined;
       this.systemObjectsDirty = false;
-      await this.display.showSystemObjects(orderedObjects(this.systemObjects), (button) =>
-        this.choose(button),
-      );
+      if (!moved || !this.display.updateSystemObjectPositions(moved))
+        await this.display.showSystemObjects(orderedObjects(this.systemObjects), (button) =>
+          this.choose(button),
+        );
     }
     if (this.objectsDirty && !this.timeStopped) {
       const moved = this.objectMoves;
@@ -6869,7 +6897,37 @@ export class SiglusPlayer {
       // 1.1.141.3: 0x55c45b reads the base button number set by 0x602460.
       return page.get(id!)?.button?.id ?? 0;
     }
-    if (command !== 175 && command !== 63 && command !== 48) this.markObjectsDirty(path);
+    const isReadOnlyObjectCommand =
+      command === 24 ||
+      command === 25 ||
+      command === 52 ||
+      command === 62 ||
+      command === 100 ||
+      command === 101 ||
+      command === 102 ||
+      command === 103 ||
+      command === 111 ||
+      command === 115 ||
+      command === 118 ||
+      command === 124 ||
+      command === 127 ||
+      command === 133 ||
+      command === 134 ||
+      command === 138 ||
+      command === 169 ||
+      (command === 91 && (path[index + 3] === 1 || path[index + 3] === 2)) ||
+      ((command === 51 ||
+        command === 64 ||
+        command === 72 ||
+        (command !== undefined && command >= 67 && command <= 90) ||
+        (command !== undefined && command >= 105 && command <= 108) ||
+        (command !== undefined && command >= 154 && command <= 157)) &&
+        (path[index + 3] === 4 || path[index + 3] === 5 || path[index + 3] === 10)) ||
+      ((command === 112 || command === 113 || command === 140) &&
+        path[index + 3] === -1 &&
+        (path[index + 5] === 4 || path[index + 5] === 5 || path[index + 5] === 10));
+    if (command !== 175 && command !== 63 && command !== 48 && !isReadOnlyObjectCommand)
+      this.markObjectsDirty(path);
     const n = (index: number) => Number(args[index] ?? 0);
     if (command === 35 || command === 36) {
       page.delete(id!);
@@ -7185,6 +7243,7 @@ export class SiglusPlayer {
     }
     if (command === 133 || command === 134) {
       // object.set_number (133) / object.set_number_param (134) (0x5f5b60)
+      const hadSpec = Boolean(object.number);
       const spec =
         object.number ??
         (object.number = {
@@ -7196,19 +7255,43 @@ export class SiglusPlayer {
           spaceMod: 0,
           space: 0,
         });
+      let changed = !hadSpec || !object.frames.length || object.pattern !== 0;
       if (command === 133) {
-        spec.value = n(0) | 0;
+        const nextVal = n(0) | 0;
+        if (spec.value !== nextVal) {
+          spec.value = nextVal;
+          changed = true;
+        }
       } else {
-        spec.ketaMax = n(0) | 0;
-        spec.dispZero = n(1) | 0;
-        spec.dispSign = n(2) | 0;
-        spec.tumeruSign = n(3) | 0;
-        spec.spaceMod = n(4) | 0;
-        spec.space = n(5) | 0;
+        const nextKeta = n(0) | 0;
+        const nextZero = n(1) | 0;
+        const nextSign = n(2) | 0;
+        const nextTumeru = n(3) | 0;
+        const nextMod = n(4) | 0;
+        const nextSpace = n(5) | 0;
+        if (
+          spec.ketaMax !== nextKeta ||
+          spec.dispZero !== nextZero ||
+          spec.dispSign !== nextSign ||
+          spec.tumeruSign !== nextTumeru ||
+          spec.spaceMod !== nextMod ||
+          spec.space !== nextSpace
+        ) {
+          spec.ketaMax = nextKeta;
+          spec.dispZero = nextZero;
+          spec.dispSign = nextSign;
+          spec.tumeruSign = nextTumeru;
+          spec.spaceMod = nextMod;
+          spec.space = nextSpace;
+          changed = true;
+        }
       }
-      const frame = await this.display.numberGraphic(object.name, spec);
-      object.frames = frame ? [frame] : [];
-      object.pattern = 0;
+      if (changed) {
+        const frame = await this.display.numberGraphic(object.name, spec);
+        object.frames = frame ? [frame] : [];
+        object.pattern = 0;
+        this.markObjectsDirty(path);
+      }
       return 0;
     }
     if (command === 127) return Number(object.movie?.active ?? false);
@@ -7688,6 +7771,7 @@ export class SiglusPlayer {
       const op = path[index + 3];
       if (op === 1 && args[1] === '$sys_change_mark') {
         object.patternCycle = {count: 11, duration: 1000, started: performance.now()};
+        this.markObjectsDirty(path);
         return 0;
       }
       if (op === 2) {
@@ -7733,9 +7817,13 @@ export class SiglusPlayer {
       object.sourceClipEnabled = Boolean(n(0));
       object.sourceClipBounds = [n(1), n(2), n(3), n(4)];
     } else if (command === 48) {
-      object.x = n(0);
-      object.y = n(1);
-      this.markObjectsDirty(path, object);
+      const nextX = n(0);
+      const nextY = n(1);
+      if (object.x !== nextX || object.y !== nextY) {
+        object.x = nextX;
+        object.y = nextY;
+        this.markObjectsDirty(path, object);
+      }
     } else if (command === 49) object.scale = [n(0), n(1)];
     else if (command === 97) {
       object.disabled = true;
