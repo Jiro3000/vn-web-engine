@@ -112,9 +112,10 @@ const systemOptions = [
 type SystemOption = (typeof systemOptions)[number][0];
 
 const playbackLimits = {
-  messageSpeed: 255,
+  // 1.1.141.3 syscom 0x569f60 clamps: case 46 [0..100], case 51 [0..500], case 54 [0..5000], case 94 [0..255].
+  messageSpeed: 100,
   autoCharacterWait: 500,
-  autoMinimumWait: 10000,
+  autoMinimumWait: 5000,
   voiceDuckLevel: 255,
 } as const;
 const playbackSwitches = ['messageNowait', 'voiceDuckEnabled'] as const;
@@ -505,6 +506,10 @@ export class SiglusPlayer {
   private lastSelectionMessage = '';
   private voiceSpeedSwitches: [boolean, boolean, boolean] = [false, false, false];
   private voiceSpeedRate = 100;
+  private localExtraModes?: Map<number, number>;
+  private autoModeWaitEnabled = true;
+  private mwndFilterMode = 0;
+  private dialogConfirmEnabled = true;
   private readonly system = new Map<number, number>();
   private readonly galleryFlags = new Map<number, number>();
   private readonly unhandledCommands = new Map<string, {count: number; scene: string; line: number}>();
@@ -5485,7 +5490,28 @@ export class SiglusPlayer {
         this.persistOptions();
         return 0;
       }
+      if (member === 326) {
+        // 1.1.141.3 0x56d34b: init_font_name resets font name to Gameexe default.
+        this.messageFont.name = this.defaultMessageFont.name;
+        this.applyMessageFont();
+        this.persistOptions();
+        return 0;
+      }
       if (member === 284) return this.messageFont.name;
+      if (member === 296) {
+        // 1.1.141.3 0x56d3eb: set_font_bold (+0x134).
+        this.messageFont.bold = Boolean(n(0));
+        this.applyMessageFont();
+        this.persistOptions();
+        return 0;
+      }
+      if (member === 297) {
+        // 1.1.141.3 0x56d43a: set_font_shadow (+0x138).
+        this.messageFont.shadow = n(0) | 0;
+        this.applyMessageFont();
+        this.persistOptions();
+        return 0;
+      }
       if (member === 298) {
         this.messageFont.bold = this.defaultMessageFont.bold;
         this.applyMessageFont();
@@ -5497,6 +5523,57 @@ export class SiglusPlayer {
         this.applyMessageFont();
         this.persistOptions();
         return 0;
+      }
+      if (member === 307) return Number(this.messageFont.bold);
+      if (member === 308) return this.messageFont.shadow;
+      if (member === 10) return Number(this.dialogConfirmEnabled);
+      if (member === 80 || member === 108) {
+        // 1.1.141.3 0x56d073/0x56d08d: set/init confirmation dialog flag (+0x19b).
+        this.dialogConfirmEnabled = member === 80 ? Boolean(n(0)) : true;
+        return 0;
+      }
+      if (member === 189 || member === 190 || member === 191) {
+        // 1.1.141.3 0x56ce7b..0x56cefc: set/init/get local extra switch (+0x170).
+        const idx = n(0) | 0;
+        const map = this.localExtraSwitches;
+        if (member === 191) return idx >= 0 ? (map.get(idx) ?? 0) : 0;
+        if (idx >= 0) {
+          if (member === 189) map.set(idx, Number(Boolean(n(1))));
+          else map.delete(idx);
+        }
+        return 0;
+      }
+      if (member === 164 || member === 165 || member === 166) {
+        // 1.1.141.3 0x56cfba..0x56d03a: set/init/get local extra mode (+0x188).
+        const idx = n(0) | 0;
+        const map = (this.localExtraModes ??= new Map());
+        if (member === 166) return idx >= 0 ? (map.get(idx) ?? 0) : 0;
+        if (idx >= 0) {
+          if (member === 164) map.set(idx, n(1) | 0);
+          else map.delete(idx);
+        }
+        return 0;
+      }
+      if (member === 311 || member === 312 || member === 313) {
+        // 1.1.141.3 0x56cc89..0x56ccbe: set/init/get auto_mode_wait_onoff (+0x14c).
+        if (member === 313) return Number(this.autoModeWaitEnabled);
+        this.autoModeWaitEnabled = member === 311 ? Boolean(n(0)) : true;
+        return 0;
+      }
+      if (member === 317 || member === 318 || member === 319) {
+        // 1.1.141.3 0x56ccd8..0x56cd09: set/init/get mwnd_filter_mode (+0x150).
+        if (member === 319) return this.mwndFilterMode;
+        this.mwndFilterMode = member === 317 ? n(0) | 0 : 0;
+        return 0;
+      }
+      if (member !== undefined && member >= 336 && member <= 339) {
+        // 1.1.141.3 0x56bef2..0x56c017: msg_back entry namae(336), msg(337), has_koe(338), has_load(339).
+        const idx = n(0) | 0;
+        const entry = idx >= 0 ? this.backlog[idx] : undefined;
+        if (member === 336) return entry?.name ?? '';
+        if (member === 337) return entry ? entry.text.map((f) => f.text).join('') : '';
+        if (member === 338) return Number(Boolean(entry && entry.voices.length > 0));
+        return Number(Boolean(entry && this.historyPoints.has(entry)));
       }
       if (member === 69 || member === 169)
         return Number(Boolean(member === 69 ? this.saveSlot(n(0)) : this.quickSaves.get(n(0))));
@@ -5684,13 +5761,14 @@ export class SiglusPlayer {
         }
         return 0;
       }
-      if (member === 183) {
-        // Native 0x567f2e leaves the destination alone if the slot header could not be read.
+      if (member === 183 || member === 184) {
+        // Native 0x56b57e (save) / 0x56bba5 (quick_save): leaves destination alone if slot missing.
         const listRef = args[1];
         const ofs = Math.max(0, n(2));
         const cnt = Math.max(0, Math.min(256, n(3)));
-        if (slot && Array.isArray(listRef)) {
-          const custom = slot.customValues ?? [];
+        const targetSave = member === 183 ? slot : quick;
+        if (targetSave && Array.isArray(listRef)) {
+          const custom = targetSave.customValues ?? [];
           const out = Array.from({length: cnt}, (_, i) => custom[i] ?? 0);
           this.vm.writeIntList(listRef as readonly number[], ofs, out);
         }
@@ -5780,7 +5858,9 @@ export class SiglusPlayer {
       }
       if (member === 222) return Number(this.userMessageHidden);
       if (member === 148 || member === 149) {
-        this.voiceMode = member === 148 ? n(0) : 0;
+        // 1.1.141.3 0x56c7fd: set_koe_mode clamps any value outside {0, 1, 2} to 0.
+        const mode = member === 148 ? n(0) | 0 : 0;
+        this.voiceMode = mode === 0 || mode === 1 || mode === 2 ? mode : 0;
         return 0;
       }
       if (member === 150) return this.voiceMode;
@@ -5789,6 +5869,12 @@ export class SiglusPlayer {
         return 0;
       }
       if (member === 279) return this.audio.soundLevel(n(0));
+      if (member === 280 || member === 281) {
+        // 1.1.141.3 0x56c454/0x56c5d1: set/init sound_onoff(ch) for 0 <= ch < 32.
+        this.audio.setSoundEnabled(n(0), member === 280 ? Boolean(n(1)) : true);
+        return 0;
+      }
+      if (member === 282) return Number(this.audio.soundEnabled(n(0)));
       if (member === 145) return Number(this.audio.characterEnabled(n(0)));
       if (member === 188) return this.audio.characterLevel(n(0));
       if (member === 143 || member === 144) {

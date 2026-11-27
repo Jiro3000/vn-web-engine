@@ -1,6 +1,6 @@
 # SiglusEngine Multi-Layer Verification Coverage
 
-Generated: `2026-11-27T14:09:44.178Z`
+Generated: `2026-11-27T14:19:52.767Z`
 
 > Coverage layers are strictly separate. Matching hashes, CFG shape, or passing browser smoke tests never count as `statically_verified` without pinned Ghidra evidence.
 
@@ -21,17 +21,17 @@ Generated: `2026-11-27T14:09:44.178Z`
 
 | Layer / Kind | total | discovered | cross_version_matched | understood | implemented | statically_verified | unit_tested | interaction_tested | mutation_tested | browser_verified | leaf_verified | wrapper_dispatch | platform_boundary | stale |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| **Overall** | 2,666 | 2,666 | 2,666 | 967 | 1,883 | 967 | 488 | 125 | 963 | 683 | 967 | 0 | 0 | 0 |
+| **Overall** | 2,666 | 2,666 | 2,666 | 1,162 | 1,883 | 1,162 | 488 | 132 | 1,158 | 683 | 1,155 | 0 | 7 | 0 |
 | `asset_decoder` | 7 | 7 | 7 | 7 | 7 | 7 | 6 | 3 | 4 | 7 | 7 | 0 | 0 | 0 |
-| `native_function` | 48 | 48 | 48 | 36 | 48 | 36 | 35 | 26 | 7 | 48 | 36 | 0 | 0 | 0 |
-| `command` | 1,492 | 1,492 | 1,492 | 650 | 975 | 650 | 106 | 85 | 641 | 228 | 650 | 0 | 0 | 0 |
-| `property` | 749 | 749 | 749 | 274 | 484 | 274 | 8 | 11 | 311 | 112 | 274 | 0 | 0 | 0 |
+| `native_function` | 48 | 48 | 48 | 37 | 48 | 37 | 35 | 28 | 8 | 48 | 37 | 0 | 0 | 0 |
+| `command` | 1,492 | 1,492 | 1,492 | 843 | 975 | 843 | 106 | 90 | 834 | 228 | 836 | 0 | 7 | 0 |
+| `property` | 749 | 749 | 749 | 275 | 484 | 275 | 8 | 11 | 312 | 112 | 275 | 0 | 0 | 0 |
 | `gameexe_key` | 370 | 370 | 370 | 0 | 369 | 0 | 333 | 0 | 0 | 288 | 0 | 0 | 0 | 0 |
 
 ## Targeted Mutation Testing Summary
 
-- Generated: `2026-11-27T14:06:48.297Z`
-- Total Mutants: **47** | Killed: **47** | Surviving: **0** | Equivalent: **0** | Invalid: **0** | Timed Out: **0**
+- Generated: `2026-11-27T14:15:15.658Z`
+- Total Mutants: **51** | Killed: **51** | Surviving: **0** | Equivalent: **0** | Invalid: **0** | Timed Out: **0**
 - Effective Kill Rate (killed / (killed + surviving + timed_out)): **100%**
 
 ## Top Priority Burn-Down Queue (Unverified / Stale / Modified in 1.1.141.3)
@@ -46,7 +46,6 @@ Generated: `2026-11-27T14:09:44.178Z`
 | 1055 | `prop:83.2097152006` | `property` | `cur_call` | 1,872 | 8 | yes | no |
 | 1050 | `cmd:83.1.-1.*.3` | `command` | `cur_call` | 1,762 | 8 | yes | no |
 | 1046 | `cmd:131` | `command` | `root_131` | 5,382 | 6 | yes | no |
-| 1045 | `cmd:63.95` | `command` | `syscom` | 1,678 | 8 | yes | no |
 | 1037 | `cmd:53.-1.*.1` | `command` | `frame_action_ch` | 1,518 | 8 | yes | no |
 | 1037 | `prop:32.-1.*` | `property` | `S` | 48,301 | 2 | yes | no |
 | 1034 | `prop:30.-1.*` | `property` | `G` | 8,302 | 5 | yes | no |
@@ -63,6 +62,7 @@ Generated: `2026-11-27T14:09:44.178Z`
 | 977 | `cmd:39.0` | `command` | `math` | 756 | 8 | yes | no |
 | 975 | `cmd:7` | `command` | `root_7` | 741 | 8 | yes | no |
 | 972 | `cmd:74` | `command` | `root_74` | 1,275 | 7 | yes | no |
+| 970 | `prop:25.-1.*` | `property` | `root_25` | 22,300 | 2 | yes | no |
 
 ## Unresolved Coverage Gaps & Indirect-Call Frontiers
 
@@ -96,3 +96,7 @@ Generated: `2026-11-27T14:09:44.178Z`
 - `disc-011` [fixed]: All 12 object color/transparency setters (27, 28..34, 23, 57..59) clamp strictly to [0, 255] via FUN_00558ad0..FUN_00558ce0.
 - `disc-012` [fixed]: Added native object.init_param (37, FUN_005f5730(1)), get_string (135), get_number (136), clear_button_call (60), set_rotate (50), 3-arg z overloads, get_button_group/action/se/push_keep/alpha_test (189/190/191/119/176), get_size_z (47), child_sort_type (166/167).
 - `disc-013` [fixed]: Added object 3D/flag properties (5/8/11/14/44/92/139/144/146/147/148/168/186/187), missing intevent channels (65/66/79/82/114), object.f sets/clear/init/bit-views (111), and x_rep/y_rep/z_rep/tr_rep clear (8).
+- `disc-014` [fixed]: syscom message_speed upper clamp was 255 instead of native 100 (0x64), and auto_minimum_wait upper clamp was 10000 instead of native 5000 (0x1388).
+- `disc-015` [fixed]: syscom set_koe_mode (148) did not clamp values outside {0, 1, 2} to 0 as native 0x56c7fd does.
+- `disc-016` [fixed]: syscom get_quick_save_value (184) was missing from player.ts.
+- `disc-017` [fixed]: Added uncalled Tier B syscom handlers: sound_onoff (280..282 with 0..31 bounds and playbackVolume gating), font_bold/shadow/init_font_name, local_extra_switch/mode, auto_mode_wait_onoff, mwnd_filter_mode, dialog confirm toggle, and msg_back getters.

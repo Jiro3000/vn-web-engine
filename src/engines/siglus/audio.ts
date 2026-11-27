@@ -107,6 +107,7 @@ export class SiglusAudio {
   private readonly context = new AudioContext({latencyHint: 'interactive'});
   private readonly host = new BrowserAudioContextHost(this.context, document);
   private readonly soundLevels = new Map<number, number>();
+  private readonly soundDisabled = new Set<number>();
   private readonly pendingPlayback = new Map<
     string,
     {pcm?: {source: SiglusPcmSource; ready: boolean}}
@@ -1065,12 +1066,26 @@ export class SiglusAudio {
   }
 
   soundLevel(type: number): number {
+    if (type < 0 || type >= 32) return 255;
     return this.soundLevels.get(type) ?? 255;
   }
 
   setSoundLevel(type: number, level?: number): void {
+    if (type < 0 || type >= 32) return;
     if (level === undefined) this.soundLevels.delete(type);
     else this.soundLevels.set(type, Math.max(0, Math.min(255, level)));
+    this.updateGains('ALL');
+  }
+
+  soundEnabled(type: number): boolean {
+    if (type < 0 || type >= 32) return true;
+    return !(this.soundDisabled?.has(type) ?? false);
+  }
+
+  setSoundEnabled(type: number, enabled?: boolean): void {
+    if (type < 0 || type >= 32) return;
+    if (enabled === undefined || enabled) this.soundDisabled.delete(type);
+    else this.soundDisabled.add(type);
     this.updateGains('ALL');
   }
 
@@ -1102,7 +1117,7 @@ export class SiglusAudio {
     const volume =
       volumeType === undefined || volumeType === 1
         ? this.volume(kind, character)
-        : this.enabled('ALL')
+        : this.enabled('ALL') && this.soundEnabled(volumeType)
           ? (this.level('ALL') * this.soundLevel(volumeType) * individual) / (255 * 255)
           : 0;
     return siglusVolumeGain((volume * duck * level) / 255);

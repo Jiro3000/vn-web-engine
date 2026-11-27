@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {siglusVolumeGain} from '../dist/engines/siglus/audio.js';
+import {SiglusAudio, siglusVolumeGain} from '../dist/engines/siglus/audio.js';
 import {SiglusDisplay, serializeDrawObject} from '../dist/engines/siglus/display.js';
 import {parseMwndLayout, computeWakuButtonOrigin} from '../dist/engines/siglus/mwnd.js';
 import {SiglusPlayer} from '../dist/engines/siglus/player.js';
@@ -1199,4 +1199,79 @@ test('Phase 5 Batch 4 Ghidra fixes: object 1-arg disp defaults, color clamping [
   assert.deepEqual([prop(6, [54, -1, 0]), prop(6, [54, -1, 1]), prop(6, [54, -1, 2])], [55, 55, 55]);
   await cmd(6, [65, 0], [300, 0, 0, 0]); // z_eve.set
   assert.equal(prop(6, [5]), 300);
+});
+
+test('Phase 5 Batch 5 Ghidra fixes: syscom (0x569f60) message_speed [0..100], auto_min_wait [0..5000], koe_mode clamp, get_quick_save_value (184), sound_onoff (280..282), font/extra/msg_back getters', async () => {
+  const written = [];
+  const audio = Object.assign(Object.create(SiglusAudio.prototype), {
+    levels: new Map(),
+    disabled: new Set(),
+    soundLevels: new Map(),
+    soundDisabled: new Set(),
+    updateGains() {},
+  });
+  const player = makeMockPlayer({
+    audio,
+    playback: {messageSpeed: 50, autoCharacterWait: 100, autoMinimumWait: 1000, voiceDuckLevel: 128, messageNowait: false, voiceDuckEnabled: true},
+    playbackDefaults: {messageSpeed: 50, autoCharacterWait: 100, autoMinimumWait: 1000, voiceDuckLevel: 128, messageNowait: false, voiceDuckEnabled: true},
+    messageFont: {name: 'CustomFont', bold: false, shadow: 0},
+    defaultMessageFont: {name: 'DefaultFont', bold: false, shadow: 1},
+    applyMessageFont() {},
+    persistOptions() {},
+    quickSaves: new Map([[0, {customValues: [11, 22, 33]}]]),
+    localExtraSwitches: new Map(),
+    backlog: [{name: 'Alice', text: [{text: 'Hello'}, {text: ' world'}], voices: [{id: 500}]}],
+    historyPoints: new WeakMap(),
+    vm: {
+      readIntList: () => [],
+      writeIntList: (_ref, _ofs, out) => written.push(...out),
+    },
+  });
+  const call = (member, ...args) => player.command({path: [63, member], args, named: []});
+
+  // 1. disc-014: messageSpeed clamps to [0, 100] (0x56cb52) and autoMinimumWait clamps to [0, 5000] (0x56cc3f)
+  await call(46, 200);
+  assert.equal(await call(48), 100, 'syscom.set_message_speed (46) must clamp to 100');
+  await call(54, 9999);
+  assert.equal(await call(56), 5000, 'syscom.set_auto_mode_min_wait (54) must clamp to 5000');
+
+  // 2. disc-015: set_koe_mode (148, 0x56c7fd) resets invalid values outside {0,1,2} to 0
+  await call(148, 2);
+  assert.equal(await call(150), 2);
+  await call(148, 99);
+  assert.equal(await call(150), 0, 'syscom.set_koe_mode (148) must clamp invalid values to 0');
+
+  // 3. disc-016: get_quick_save_value (184, 0x56bba5) reads quick-save customValues into VM intlist
+  await call(184, 0, [30], 0, 3);
+  assert.deepEqual(written, [11, 22, 33], 'syscom.get_quick_save_value (184) must populate intlist');
+
+  // 4. disc-017: sound_onoff (280/281/282), font bold/shadow/reset (296/297/307/308/326), local extra switch/mode (189..191, 164..166), msg_back (336..339)
+  assert.equal(await call(282, 5), 1);
+  await call(280, 5, 0);
+  assert.equal(await call(282, 5), 0);
+  await call(281, 5);
+  assert.equal(await call(282, 5), 1);
+  assert.equal(await call(282, 99), 1, 'OOB sound_onoff returns 1');
+
+  await call(296, 1);
+  assert.equal(await call(307), 1);
+  await call(297, 2);
+  assert.equal(await call(308), 2);
+  await call(326);
+  assert.equal(await call(284), 'DefaultFont');
+
+  await call(189, 2, 1);
+  assert.equal(await call(191, 2), 1);
+  await call(190, 2);
+  assert.equal(await call(191, 2), 0);
+
+  await call(164, 1, 3);
+  assert.equal(await call(166, 1), 3);
+  await call(165, 1);
+  assert.equal(await call(166, 1), 0);
+
+  assert.equal(await call(336, 0), 'Alice');
+  assert.equal(await call(337, 0), 'Hello world');
+  assert.equal(await call(338, 0), 1);
+  assert.equal(await call(339, 0), 0);
 });

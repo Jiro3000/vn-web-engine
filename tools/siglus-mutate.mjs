@@ -433,6 +433,39 @@ export const MUTATION_CATALOG = [
     target: '        existing.layer = 0;\n        existing.world = -1;',
     replacement: '        existing.layer = 0;\n        existing.world = 0;',
   },
+  // --- Phase 5 Batch 5: dispatcher.syscom (0x569f60) ---
+  {
+    id: 'player.syscom-msg-speed-clamp',
+    file: 'src/engines/siglus/player.ts',
+    area: 'player/syscom',
+    description: 'Revert syscom.set_message_speed (46) upper clamp from native 100 back to 255',
+    target: '  messageSpeed: 100,\n  autoCharacterWait: 500,\n  autoMinimumWait: 5000,',
+    replacement: '  messageSpeed: 255,\n  autoCharacterWait: 500,\n  autoMinimumWait: 5000,',
+  },
+  {
+    id: 'player.syscom-auto-min-wait-clamp',
+    file: 'src/engines/siglus/player.ts',
+    area: 'player/syscom',
+    description: 'Revert syscom.set_auto_mode_min_wait (54) upper clamp from native 5000 back to 10000',
+    target: '  autoCharacterWait: 500,\n  autoMinimumWait: 5000,\n  voiceDuckLevel: 255,',
+    replacement: '  autoCharacterWait: 500,\n  autoMinimumWait: 10000,\n  voiceDuckLevel: 255,',
+  },
+  {
+    id: 'player.syscom-koe-mode-clamp',
+    file: 'src/engines/siglus/player.ts',
+    area: 'player/syscom',
+    description: 'Drop {0,1,2} clamp in syscom.set_koe_mode (148)',
+    target: '        this.voiceMode = mode === 0 || mode === 1 || mode === 2 ? mode : 0;',
+    replacement: '        this.voiceMode = mode;',
+  },
+  {
+    id: 'player.syscom-quick-save-value-get',
+    file: 'src/engines/siglus/player.ts',
+    area: 'player/syscom',
+    description: 'Read normal slot instead of quick slot in syscom.get_quick_save_value (184)',
+    target: '        const targetSave = member === 183 ? slot : quick;',
+    replacement: '        const targetSave = slot;',
+  },
 ];
 
 function sha256(bufOrStr) {
