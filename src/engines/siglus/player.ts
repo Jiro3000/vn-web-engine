@@ -1611,6 +1611,79 @@ export class SiglusPlayer {
       }
       return Number(Boolean(object.wipeCopy));
     }
+    if (property === 92) {
+      // object.wipe_erase (+0x1b4, 0x5594b6)
+      if (value !== undefined) object.wipeErase = Boolean(value);
+      return Number(Boolean(object.wipeErase));
+    }
+    if (property === 139) {
+      // object.click_disable (+0x1b8, 0x5594ef)
+      if (value !== undefined) object.clickDisable = Boolean(value);
+      return Number(Boolean(object.clickDisable));
+    }
+    if (property === 44) {
+      // object.world (+0x3a4, default -1, 0x559596)
+      if (value !== undefined && object.world !== (Number(value) | 0)) {
+        object.world = Number(value) | 0;
+        this.markObjectsDirty(path);
+      }
+      return object.world ?? -1;
+    }
+    if (property === 5) {
+      // object.z (+0x408, 0x55969a)
+      if (value !== undefined) object.z = Number(value) | 0;
+      return object.z ?? 0;
+    }
+    if (property === 8) {
+      // object.center_z (+0x48c, 0x5597f5)
+      if (value !== undefined) object.centerZ = Number(value) | 0;
+      return object.centerZ ?? 0;
+    }
+    if (property === 11) {
+      // object.center_rep_z (+0x510, 0x5598f3)
+      if (value !== undefined) object.centerRepZ = Number(value) | 0;
+      return object.centerRepZ ?? 0;
+    }
+    if (property === 14) {
+      // object.scale_z (+0x594, default 1000, 0x5599f1)
+      if (value !== undefined) object.scaleZ = Number(value) | 0;
+      return object.scaleZ ?? 1000;
+    }
+    if (property === 144) {
+      // object.fog_use (+0x9c4, 0x55a25e)
+      if (value !== undefined) object.fogUse = Boolean(value);
+      return Number(Boolean(object.fogUse));
+    }
+    if (property === 146) {
+      // object.culling (+0x9c8, 0x55a14a)
+      if (value !== undefined) object.culling = Boolean(value);
+      return Number(Boolean(object.culling));
+    }
+    if (property === 147) {
+      // object.alpha_test (+0x9cc, default 1, 0x55a183)
+      if (value !== undefined) object.alphaTest3d = Boolean(value);
+      return Number(object.alphaTest3d ?? true);
+    }
+    if (property === 148) {
+      // object.alpha_blend (+0x9d0, default 1, 0x55a1bc)
+      if (value !== undefined) object.alphaBlend3d = Boolean(value);
+      return Number(object.alphaBlend3d ?? true);
+    }
+    if (property === 168) {
+      // object.light_no (+0x9c0, default -1, 0x55a22a)
+      if (value !== undefined) object.lightNo = Number(value) | 0;
+      return object.lightNo ?? -1;
+    }
+    if (property === 186) {
+      // object.emote_rep_x (+0x294, default -1, 0x55c83e)
+      if (value !== undefined) object.emoteRepX = Number(value) | 0;
+      return object.emoteRepX ?? -1;
+    }
+    if (property === 187) {
+      // object.emote_rep_y (+0x298, default 0, 0x55c872)
+      if (value !== undefined) object.emoteRepY = Number(value) | 0;
+      return object.emoteRepY ?? 0;
+    }
     if (property === 145) {
       const next = Number(value);
       if (value !== undefined && object.mask !== next) {
@@ -1620,11 +1693,33 @@ export class SiglusPlayer {
       return object.mask ?? -1;
     }
     if (property === 111 && path[address.index + 3] === -1) {
-      // object.f[] (0x5553c0): per-object intlist
+      // object.f[] (0x55ab9e -> 0x55d3d0): per-object intlist
       const idx = path[address.index + 4]!;
       const flags = (object.flags ??= []);
       if (value !== undefined && idx >= 0) flags[idx] = Number(value) | 0;
       return flags[idx] ?? 0;
+    }
+    if (
+      property === 111 &&
+      path[address.index + 3] !== undefined &&
+      path[address.index + 3]! >= 3 &&
+      path[address.index + 3]! <= 7 &&
+      path[address.index + 4] === -1
+    ) {
+      // object.f.bit/bit2/bit4/bit8/bit16[idx] (0x55d3d0)
+      const width = 1 << (path[address.index + 3]! - 3);
+      const mask = (1 << width) - 1;
+      const perWord = 32 / width;
+      const idx = path[address.index + 5]!;
+      if (idx < 0) return 0;
+      const wordIdx = Math.floor(idx / perWord);
+      const shift = (idx % perWord) * width;
+      const flags = (object.flags ??= []);
+      const cur = flags[wordIdx] ?? 0;
+      if (value !== undefined) {
+        flags[wordIdx] = (cur & ~(mask << shift)) | ((Number(value) & mask) << shift);
+      }
+      return ((flags[wordIdx] ?? 0) >>> shift) & mask;
     }
     if (property === 141 && path[address.index + 3] === -1) {
       // object.tr_rep[] (0x5553c0): per-object multiplicative transparency offsets (default 255)
@@ -1691,11 +1786,14 @@ export class SiglusPlayer {
       return (object.centerRep ?? [0, 0])[property === 9 ? 0 : 1];
     }
     if (property === 23) {
-      // object.color_rate (0x5553c0)
+      // object.color_rate (0x55a00e -> FUN_00558c50: clamps [0, 255])
       const cp = (object.colorProps ??= {});
-      if (value !== undefined && cp.colorRate !== (Number(value) | 0)) {
-        cp.colorRate = Number(value) | 0;
-        this.markObjectsDirty(path);
+      if (value !== undefined) {
+        const next = Math.min(255, Math.max(0, Number(value) | 0));
+        if ((cp.colorRate ?? 0) !== next) {
+          cp.colorRate = next;
+          this.markObjectsDirty(path);
+        }
       }
       return cp.colorRate ?? 0;
     }
@@ -1740,7 +1838,8 @@ export class SiglusPlayer {
       const k = map[property];
       if (k) {
         if (value !== undefined) {
-          const next = Number(value) | 0;
+          // Native FUN_00558b00..FUN_00558ce0 clamp all 10 color fields to [0, 255].
+          const next = Math.min(255, Math.max(0, Number(value) | 0));
           if ((cp[k] ?? 0) !== next) {
             cp[k] = next;
             this.markObjectsDirty(path);
@@ -1749,16 +1848,16 @@ export class SiglusPlayer {
         return cp[k] ?? 0;
       }
     }
-    if ((property === 54 || property === 63) && path[address.index + 3] === -1) {
-      const axis = property === 54 ? 'x' : 'y';
+    if ((property === 54 || property === 63 || property === 110) && path[address.index + 3] === -1) {
+      const axis = property === 54 ? 'x' : property === 63 ? 'y' : 'z';
       const index = path[address.index + 4]!;
       const offsets = object.positionOffsets?.[axis];
       if (value !== undefined && offsets && index >= 0 && index < offsets.length) {
         const next = Number(value);
-        const hadEvent = Boolean(object.offsetEvents?.[axis]?.delete(index));
+        const hadEvent = axis !== 'z' && Boolean(object.offsetEvents?.[axis]?.delete(index));
         if ((offsets[index] ?? 0) !== next || hadEvent) {
           offsets[index] = next;
-          this.markObjectsDirty(path, object);
+          if (axis !== 'z') this.markObjectsDirty(path, object);
         }
       }
       return offsets?.[index] ?? 0;
@@ -1791,7 +1890,13 @@ export class SiglusPlayer {
       return;
     }
     if (value !== undefined) {
-      const next = field === 'blend' ? Math.min(4, Math.max(0, Number(value))) : Number(value);
+      const raw = Number(value);
+      const next =
+        field === 'blend'
+          ? Math.min(4, Math.max(0, raw))
+          : field === 'transparency'
+            ? Math.min(255, Math.max(0, raw | 0))
+            : raw;
       if (object[field] !== next) {
         object[field] = next;
         this.markObjectsDirty(path, field === 'x' || field === 'y' ? object : undefined);
@@ -2501,9 +2606,11 @@ export class SiglusPlayer {
       frames: [],
       x: saved.x,
       y: saved.y,
+      z: saved.z,
       visible: saved.visible,
       layer: saved.layer,
       order: saved.order,
+      world: saved.world,
       transparency: saved.transparency,
       opacity: saved.opacity ? [...saved.opacity.values] : undefined,
       opacityElapsed: saved.opacity?.elapsed,
@@ -2511,21 +2618,35 @@ export class SiglusPlayer {
       flags: saved.flags?.slice(),
       pattern: saved.pattern,
       scale: saved.scale ? [saved.scale[0], saved.scale[1]] : undefined,
+      scaleZ: saved.scaleZ,
       rotateX: saved.rotateX,
       rotateY: saved.rotateY,
       rotateZ: saved.rotateZ,
       center: saved.center ? [saved.center[0], saved.center[1]] : undefined,
+      centerZ: saved.centerZ,
       centerRep: saved.centerRep ? [saved.centerRep[0], saved.centerRep[1]] : undefined,
+      centerRepZ: saved.centerRepZ,
       colorProps: saved.colorProps ? {...saved.colorProps} : undefined,
       mask: saved.mask,
       blend: saved.blend,
       tonecurveNo: saved.tonecurveNo,
       wipeCopy: saved.wipeCopy,
+      wipeErase: saved.wipeErase,
+      clickDisable: saved.clickDisable,
+      fogUse: saved.fogUse,
+      culling: saved.culling,
+      alphaTest3d: saved.alphaTest3d,
+      alphaBlend3d: saved.alphaBlend3d,
+      lightNo: saved.lightNo,
+      childSortType: saved.childSortType,
+      emoteRepX: saved.emoteRepX,
+      emoteRepY: saved.emoteRepY,
       rect: saved.rect ? {...saved.rect} : undefined,
       positionOffsets: saved.positionOffsets
         ? {
             x: saved.positionOffsets.x?.slice(),
             y: saved.positionOffsets.y?.slice(),
+            ...(saved.positionOffsets.z ? {z: saved.positionOffsets.z.slice()} : {}),
           }
         : undefined,
       offsetEventCounts: saved.offsetEventCounts && {...saved.offsetEventCounts},
@@ -3526,6 +3647,7 @@ export class SiglusPlayer {
       positionOffsets: object.positionOffsets && {
         x: object.positionOffsets.x?.slice(),
         y: object.positionOffsets.y?.slice(),
+        ...(object.positionOffsets.z ? {z: object.positionOffsets.z.slice()} : {}),
       },
       offsetEventCounts: object.offsetEventCounts && {...object.offsetEventCounts},
       positionEvents: object.positionEvents && {
@@ -6958,9 +7080,43 @@ export class SiglusPlayer {
       // 1.1.141.3: 0x55c45b reads the base button number set by 0x602460.
       return page.get(id!)?.button?.id ?? 0;
     }
+    if (command === 189) {
+      // 1.1.141.3: 0x55c46b -> 0x602570 returns button group_no or -1 if unset.
+      const btn = page.get(id!)?.button;
+      return btn ? btn.group % 100_000 : -1;
+    }
+    if (command === 190) {
+      // 1.1.141.3: 0x55c47e reads button action_no (+0x2bc, default -1 in 0x602380).
+      return page.get(id!)?.button?.actionNo ?? -1;
+    }
+    if (command === 191) {
+      // 1.1.141.3: 0x55c48e reads button se_no (+0x2c0, default -1 in 0x602380).
+      return page.get(id!)?.button?.seNo ?? -1;
+    }
+    if (command === 119) {
+      // 1.1.141.3: 0x55c4b5 reads button push_keep (+0x348).
+      return Number(Boolean(page.get(id!)?.pushKeep));
+    }
+    if (command === 176) {
+      // 1.1.141.3: 0x55c4dc reads button alpha_test (+0x368).
+      return Number(Boolean(page.get(id!)?.alphaTest));
+    }
+    if (command === 135) {
+      // 1.1.141.3: 0x55bb82 get_string (+0xd9c).
+      return page.get(id!)?.text?.value ?? '';
+    }
+    if (command === 136) {
+      // 1.1.141.3: 0x55bd4d get_number (+0x1f0).
+      return page.get(id!)?.number?.value ?? 0;
+    }
+    if (command === 47) {
+      // 1.1.141.3: 0x55aa1f -> 0x5ff7e0 get_size_z (0 for 2D object types).
+      return 0;
+    }
     const isReadOnlyObjectCommand =
       command === 24 ||
       command === 25 ||
+      command === 47 ||
       command === 52 ||
       command === 62 ||
       command === 100 ||
@@ -6970,12 +7126,19 @@ export class SiglusPlayer {
       command === 111 ||
       command === 115 ||
       command === 118 ||
+      command === 119 ||
       command === 124 ||
       command === 127 ||
       command === 133 ||
       command === 134 ||
+      command === 135 ||
+      command === 136 ||
       command === 138 ||
       command === 169 ||
+      command === 176 ||
+      command === 189 ||
+      command === 190 ||
+      command === 191 ||
       (command === 91 && (path[index + 3] === 1 || path[index + 3] === 2)) ||
       ((command === 51 ||
         command === 64 ||
@@ -6998,6 +7161,65 @@ export class SiglusPlayer {
           this.frameActions.delete(key);
           this.frameActionCounters.delete(key);
         }
+      }
+      return 0;
+    }
+    if (command === 37) {
+      // object.init_param (0x55abdf -> FUN_005f5730(1)): resets transform/color/clip/button/events
+      // WITHOUT freeing graphic/type/name/text/number/movie or wipeCopy/wipeErase.
+      const existing = page.get(id!);
+      if (existing) {
+        existing.visible = false;
+        existing.pattern = 0;
+        existing.order = 0;
+        existing.layer = 0;
+        existing.world = -1;
+        existing.x = 0;
+        existing.y = 0;
+        existing.z = 0;
+        existing.center = undefined;
+        existing.centerZ = undefined;
+        existing.centerRep = undefined;
+        existing.centerRepZ = undefined;
+        existing.scale = undefined;
+        existing.scaleZ = undefined;
+        existing.rotateX = undefined;
+        existing.rotateY = undefined;
+        existing.rotateZ = undefined;
+        existing.clip = undefined;
+        existing.sourceClipEnabled = undefined;
+        existing.sourceClipBounds = undefined;
+        existing.transparency = 255;
+        existing.opacity = undefined;
+        existing.opacityStarted = undefined;
+        existing.opacityElapsed = undefined;
+        existing.colorProps = undefined;
+        existing.mask = -1;
+        existing.tonecurveNo = -1;
+        existing.lightNo = -1;
+        existing.fogUse = false;
+        existing.culling = false;
+        existing.alphaTest3d = true;
+        existing.alphaBlend3d = true;
+        existing.blend = 0;
+        existing.clickDisable = false;
+        existing.childSortType = 0;
+        existing.positionOffsets = undefined;
+        existing.trOffsets = undefined;
+        existing.offsetEventCounts = undefined;
+        existing.positionEvents = undefined;
+        existing.scaleEvents = undefined;
+        existing.offsetEvents = undefined;
+        existing.horizontalMotion = undefined;
+        existing.movement = undefined;
+        existing.movementStarted = undefined;
+        existing.intEvents?.clear();
+        existing.button = undefined;
+        existing.buttonCall = undefined;
+        existing.buttonState = undefined;
+        existing.disabled = undefined;
+        existing.pushKeep = undefined;
+        existing.alphaTest = undefined;
       }
       return 0;
     }
@@ -7036,13 +7258,13 @@ export class SiglusPlayer {
       const positional = args.length - named.length;
       const autoFreeIdx = named.indexOf(0);
       const readyIdx = named.indexOf(2);
-      const autoFree = autoFreeIdx >= 0 ? Boolean(n(positional + autoFreeIdx)) : false;
+      const autoFree = autoFreeIdx >= 0 ? Boolean(n(positional + autoFreeIdx)) : true;
       const readyOnly = readyIdx >= 0 ? Boolean(n(positional + readyIdx)) : false;
       const object: DrawObject = {
         ...emptyDrawObject(),
-        type: 5,
+        type: 9,
         name,
-        visible: positional === 1 || Boolean(n(1)),
+        visible: positional >= 2 ? Boolean(n(1)) : false,
         x: positional >= 4 ? n(2) : 0,
         y: positional >= 4 ? n(3) : 0,
         movie,
@@ -7066,11 +7288,12 @@ export class SiglusPlayer {
       const thumbnail = save?.thumbnail;
       const frames = thumbnail ? [await this.display.savedThumbnail(thumbnail)] : [];
       page.set(id!, {
+        type: 10,
         name: '',
         frames,
         x: n(2),
         y: n(3),
-        visible: frames.length > 0 && (args.length === 1 || Boolean(n(1))),
+        visible: frames.length > 0 && args.length >= 2 && Boolean(n(1)),
         pattern: 0,
       });
       return 0;
@@ -7094,11 +7317,12 @@ export class SiglusPlayer {
       const inExcall = this.systemCallActive || path[0] === 65;
       const resolved = inExcall ? this.resolveFont(this.systemFont) : this.storyFont();
       page.set(id!, {
+        type: 3,
         name: '',
         frames: [],
         x: n(2),
         y: n(3),
-        visible: args.length === 1 || Boolean(n(1)),
+        visible: args.length >= 2 ? Boolean(n(1)) : false,
         pattern: 0,
         text: {
           value: String(args[0]),
@@ -7111,22 +7335,22 @@ export class SiglusPlayer {
       return 0;
     }
     if (command === 129) {
-      // object.create_weather (0x5f7ad0): type=4 weather particle object
+      // object.create_weather (0x55b03c -> 0x6055c0): type=4 weather particle object
       const name = String(args[0] ?? '');
       page.set(id!, {
         type: 4,
         name,
         frames: [],
-        x: 0,
-        y: 0,
-        visible: args.length === 1 || Boolean(n(1)),
+        x: n(2),
+        y: n(3),
+        visible: args.length >= 2 ? Boolean(n(1)) : false,
         pattern: 0,
         weather: {mode: 0, params: {}, started: performance.now()},
       });
       return 0;
     }
     if (command === 132) {
-      // object.create_number (0x5ebff0): bitmap-digit sprite sheet object
+      // object.create_number (0x55af3e -> 0x603940): type=5 bitmap-digit sprite sheet object
       const name = String(args[0]);
       const spec = {
         value: 0,
@@ -7139,11 +7363,12 @@ export class SiglusPlayer {
       };
       const frame = await this.display.numberGraphic(name, spec);
       page.set(id!, {
+        type: 5,
         name,
         frames: frame ? [frame] : [],
         x: n(2),
         y: n(3),
-        visible: args.length === 1 || Boolean(n(1)),
+        visible: args.length >= 2 ? Boolean(n(1)) : false,
         pattern: 0,
         number: spec,
       });
@@ -7184,7 +7409,10 @@ export class SiglusPlayer {
         command === 42 ||
         command === 48 ||
         command === 49 ||
+        command === 50 ||
+        command === 60 ||
         command === 99 ||
+        command === 110 ||
         command === 111 ||
         command === 130 ||
         command === 131 ||
@@ -7193,6 +7421,8 @@ export class SiglusPlayer {
         command === 141 ||
         command === 158 ||
         command === 159 ||
+        command === 166 ||
+        command === 167 ||
         command === 0x1000000 ||
         command === 0x1000001)
     ) {
@@ -7219,6 +7449,7 @@ export class SiglusPlayer {
         command === 54 ||
         command === 63 ||
         command === 64 ||
+        command === 65 ||
         command === 66 ||
         command === 67 ||
         command === 68 ||
@@ -7230,8 +7461,10 @@ export class SiglusPlayer {
         command === 98 ||
         (command !== undefined && command >= 100 && command <= 103) ||
         (command !== undefined && command >= 105 && command <= 108) ||
+        command === 110 ||
         command === 112 ||
         command === 113 ||
+        command === 114 ||
         command === 115 ||
         command === 124 ||
         command === 127 ||
@@ -7244,8 +7477,8 @@ export class SiglusPlayer {
     )
       return 0;
     if (command === 169) {
-      // 1.1.102.1 0x52eb8e returns the number of cels in a loaded G00 object.
-      return object?.type === 2 ? this.display.graphicCutCount(object.name) : 0;
+      // 1.1.141.3 0x55a94f returns the cut count for both PCT (type=2) and number (type=5) objects.
+      return object?.type === 2 || object?.type === 5 ? this.display.graphicCutCount(object.name) : 0;
     }
     if (command === 118) {
       // 1.1.141.3 reads the script-set button state at 0x55c519.
@@ -7375,23 +7608,57 @@ export class SiglusPlayer {
         return 0;
       }
     }
+    if (command === 111 && path[index + 3] === 1) {
+      // object.f.sets(start, v0, v1, ...) (0x55d3d0)
+      const flags = (object.flags ??= []);
+      const start = n(0) | 0;
+      for (let i = 1; i < args.length; i++) {
+        const idx = start + i - 1;
+        if (idx >= 0) flags[idx] = n(i) | 0;
+      }
+      return 0;
+    }
     if (command === 111 && path[index + 3] === 2) {
-      // object.f.resize(n) (0x558910)
+      // object.f.resize(n) (0x55d3d0)
       const flags = (object.flags ??= []);
       const size = Math.max(0, n(0));
       while (flags.length < size) flags.push(0);
       flags.length = size;
       return 0;
     }
+    if (command === 111 && path[index + 3] === 8) {
+      // object.f.clear(start, end[, value]) (0x55d3d0)
+      const flags = (object.flags ??= []);
+      const start = Math.max(0, n(0) | 0);
+      const end = args.length >= 2 ? Math.min(flags.length - 1, n(1) | 0) : flags.length - 1;
+      const fill = args.length >= 3 ? n(2) | 0 : 0;
+      for (let i = start; i <= end; i++) flags[i] = fill;
+      return 0;
+    }
     if (command === 111 && path[index + 3] === 9) {
       return (object.flags ?? []).length;
     }
+    if (command === 111 && path[index + 3] === 10) {
+      // object.f.init() (0x55d3d0): zero-fills all elements
+      const flags = (object.flags ??= []);
+      flags.fill(0);
+      return 0;
+    }
     if (command === 141 && path[index + 3] === 2) {
-      // object.tr_rep.resize(n) (0x558910)
+      // object.tr_rep.resize(n) (0x55d9f0)
       const trs = (object.trOffsets ??= []);
       const size = Math.max(0, n(0));
       while (trs.length < size) trs.push(255);
       trs.length = size;
+      return 0;
+    }
+    if (command === 141 && path[index + 3] === 8) {
+      // object.tr_rep.clear(start, end[, value]) (0x55d9f0)
+      const trs = (object.trOffsets ??= []);
+      const start = Math.max(0, n(0) | 0);
+      const end = Math.min(trs.length - 1, n(1) | 0);
+      const fill = args.length >= 3 ? n(2) | 0 : 0;
+      for (let i = start; i <= end; i++) trs[i] = fill;
       return 0;
     }
     if (command === 91 && path.length === index + 4) {
@@ -7455,10 +7722,15 @@ export class SiglusPlayer {
       return 0;
     }
     if (command === 158 || command === 159) {
-      // 1.1.102.1 0x52dbf8 and 0x52dcde write the same pairs as properties 6/7 and 9/10.
+      // 1.1.141.3 0x559829/0x559927: 2-arg (x, y) and 3-arg (x, y, z) overloads.
       const center: [number, number] = [n(0) | 0, n(1) | 0];
-      if (command === 158) object.center = center;
-      else object.centerRep = center;
+      if (command === 158) {
+        object.center = center;
+        if (args.length >= 3) object.centerZ = n(2) | 0;
+      } else {
+        object.centerRep = center;
+        if (args.length >= 3) object.centerRepZ = n(2) | 0;
+      }
       return 0;
     }
     if (command !== undefined && command >= 154 && command <= 157 && path.length === index + 4) {
@@ -7520,6 +7792,8 @@ export class SiglusPlayer {
     if (
       (command === 51 ||
         command === 64 ||
+        command === 65 ||
+        command === 66 ||
         command === 67 ||
         command === 68 ||
         command === 69 ||
@@ -7531,8 +7805,10 @@ export class SiglusPlayer {
         command === 76 ||
         command === 77 ||
         command === 78 ||
+        command === 79 ||
         command === 80 ||
         command === 81 ||
+        command === 82 ||
         command === 83 ||
         command === 84 ||
         command === 85 ||
@@ -7619,6 +7895,8 @@ export class SiglusPlayer {
       const getVal = (): number => {
         if (command === 51) return object.x;
         if (command === 64) return object.y;
+        if (command === 65) return object.z ?? 0;
+        if (command === 66) return object.scaleZ ?? 1000;
         if (command === 67) return (object.scale ?? [1000, 1000])[0];
         if (command === 68) return (object.scale ?? [1000, 1000])[1];
         if (command === 69) return object.rotateX ?? 0;
@@ -7630,8 +7908,10 @@ export class SiglusPlayer {
         if (command === 76) return object.colorProps?.dark ?? 0;
         if (command === 77) return (object.center ?? [0, 0])[0];
         if (command === 78) return (object.center ?? [0, 0])[1];
+        if (command === 79) return object.centerZ ?? 0;
         if (command === 80) return (object.centerRep ?? [0, 0])[0];
         if (command === 81) return (object.centerRep ?? [0, 0])[1];
+        if (command === 82) return object.centerRepZ ?? 0;
         if (command === 83) return object.colorProps?.colorRate ?? 0;
         if (command === 84) return object.colorProps?.addR ?? 0;
         if (command === 85) return object.colorProps?.addG ?? 0;
@@ -7645,6 +7925,8 @@ export class SiglusPlayer {
       const setVal = (v: number): void => {
         if (command === 51) object.x = v;
         else if (command === 64) object.y = v;
+        else if (command === 65) object.z = v;
+        else if (command === 66) object.scaleZ = v;
         else if (command === 67) object.scale = [v, (object.scale ?? [1000, 1000])[1]];
         else if (command === 68) object.scale = [(object.scale ?? [1000, 1000])[0], v];
         else if (command === 69) object.rotateX = v;
@@ -7656,8 +7938,10 @@ export class SiglusPlayer {
         else if (command === 76) (object.colorProps ??= {}).dark = v;
         else if (command === 77) object.center = [v, (object.center ?? [0, 0])[1]];
         else if (command === 78) object.center = [(object.center ?? [0, 0])[0], v];
+        else if (command === 79) object.centerZ = v;
         else if (command === 80) object.centerRep = [v, (object.centerRep ?? [0, 0])[1]];
         else if (command === 81) object.centerRep = [(object.centerRep ?? [0, 0])[0], v];
+        else if (command === 82) object.centerRepZ = v;
         else if (command === 83) (object.colorProps ??= {}).colorRate = v;
         else if (command === 84) (object.colorProps ??= {}).addR = v;
         else if (command === 85) (object.colorProps ??= {}).addG = v;
@@ -7669,13 +7953,47 @@ export class SiglusPlayer {
       };
       return this.runObjectIntEvent(object, `ch:${command}`, op, args, getVal, setVal);
     }
-    if ((command === 54 || command === 63) && path[index + 3] === 2) {
-      const axis = command === 54 ? 'x' : 'y';
+    if ((command === 54 || command === 63 || command === 110) && path[index + 3] === 2) {
+      const axis = command === 54 ? 'x' : command === 63 ? 'y' : 'z';
       const offsets = ((object.positionOffsets ??= {})[axis] ??= []);
       offsets.length = Math.max(0, n(0));
-      const events = object.offsetEvents?.[axis];
-      for (const index of events?.keys() ?? []) if (index >= offsets.length) events?.delete(index);
+      if (axis !== 'z') {
+        const events = object.offsetEvents?.[axis];
+        for (const index of events?.keys() ?? []) if (index >= offsets.length) events?.delete(index);
+      }
       return 0;
+    }
+    if ((command === 54 || command === 63 || command === 110) && path[index + 3] === 8) {
+      // x_rep/y_rep/z_rep.clear(start, end[, value]) (0x55d9f0)
+      const axis = command === 54 ? 'x' : command === 63 ? 'y' : 'z';
+      const offsets = ((object.positionOffsets ??= {})[axis] ??= []);
+      const start = Math.max(0, n(0) | 0);
+      const end = Math.min(offsets.length - 1, n(1) | 0);
+      const fill = args.length >= 3 ? n(2) | 0 : 0;
+      for (let i = start; i <= end; i++) offsets[i] = fill;
+      return 0;
+    }
+    if (command === 114 && path[index + 3] === 1 && path.length === index + 4) {
+      // object.z_rep_eve.resize(n) (0x55a375 -> 0x55dea0)
+      const count = Math.max(0, n(0) | 0);
+      (object.offsetEventCounts ??= {}).z = count;
+      return 0;
+    }
+    if (command === 114 && path[index + 3] === -1 && path.length === index + 6) {
+      const slot = path[index + 4]!;
+      if (slot < 0 || slot >= (object.offsetEventCounts?.z ?? Infinity)) return 0;
+      const op = path[index + 5]!;
+      const zs = ((object.positionOffsets ??= {}).z ??= []);
+      return this.runObjectIntEvent(
+        object,
+        `z_rep:${slot}`,
+        op,
+        args,
+        () => zs[slot] ?? 0,
+        (v) => {
+          zs[slot] = v;
+        },
+      );
     }
     if (command === 112 || command === 113) {
       const axis = command === 112 ? 'x' : 'y';
@@ -7720,7 +8038,8 @@ export class SiglusPlayer {
       return 0;
     }
     if (command !== undefined && command >= 100 && command <= 103) {
-      const pattern = args.length >= 3 ? n(2) : object.pattern;
+      // 1.1.141.3 0x55aa4b..0x55ab72: 2-arg overload always pushes pat=0 (NOT object.pattern).
+      const pattern = args.length >= 3 ? n(2) : 0;
       const frame =
         object.frames[pattern] ??
         (object.name
@@ -7855,6 +8174,9 @@ export class SiglusPlayer {
       if (args.length >= 6) object.text.shadowColor = n(5);
       if (args.length >= 7) object.text.outlineColor = n(6);
       if (args.length >= 8) object.text.shadowMode = n(7);
+    } else if (command === 60) {
+      // object.clear_button_call (0x55c5d9 -> 0x602590)
+      object.buttonCall = undefined;
     } else if (command === 61) {
       // Siglus 1.1.102.1 0x52fba4 -> 0x5ca740 resets the button fields on a live sprite.
       object.button = undefined;
@@ -7873,6 +8195,8 @@ export class SiglusPlayer {
       };
     else if (command === 175) object.alphaTest = Boolean(n(0));
     else if (command === 98) object.pushKeep = Boolean(n(0));
+    else if (command === 166) object.childSortType = 0;
+    else if (command === 167) object.childSortType = 1;
     else if (command === 161) {
       // Native 0x555d2a writes the same enable flag and LTRB bounds as properties 149–153.
       object.sourceClipEnabled = Boolean(n(0));
@@ -7880,12 +8204,21 @@ export class SiglusPlayer {
     } else if (command === 48) {
       const nextX = n(0);
       const nextY = n(1);
+      if (args.length >= 3) object.z = n(2) | 0;
       if (object.x !== nextX || object.y !== nextY) {
         object.x = nextX;
         object.y = nextY;
         this.markObjectsDirty(path, object);
       }
-    } else if (command === 49) object.scale = [n(0), n(1)];
+    } else if (command === 49) {
+      object.scale = [n(0), n(1)];
+      if (args.length >= 3) object.scaleZ = n(2) | 0;
+    } else if (command === 50) {
+      // object.set_rotate(rx, ry[, rz]) (0x559b23)
+      object.rotateX = n(0) | 0;
+      object.rotateY = n(1) | 0;
+      if (args.length >= 3) object.rotateZ = n(2) | 0;
+    }
     else if (command === 97) {
       object.disabled = true;
       object.buttonState = 'disable';

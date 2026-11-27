@@ -1067,3 +1067,136 @@ test('Phase 5 Batch 2 Ghidra fix: msgbk.clear (145.6, 0x555b20) clears backlog a
   assert.equal(player.backlog.length, 0);
   assert.equal(await call([105, 1]), 3);
 });
+
+test('Phase 5 Batch 4 Ghidra fixes: object 1-arg disp defaults, color clamping [0..255], get_pixel_color default pat=0, init_param, getters, and intlist/rep ops (0x5593a0)', async () => {
+  const pixelCalls = [];
+  const player = makeMockPlayer({
+    display: {
+      objectGraphic: async (name, pat) => ({
+        image: {},
+        width: 32,
+        height: 32,
+        x: 0,
+        y: 0,
+        centerX: 0,
+        centerY: 0,
+        tag: `${name}#${pat}`,
+      }),
+      numberGraphic: async (name, spec) => ({
+        image: {},
+        width: 16,
+        height: 16,
+        x: 0,
+        y: 0,
+        centerX: 0,
+        centerY: 0,
+      }),
+      graphicCutCount: () => 10,
+      graphicPixelChannel: (frame, x, y, ch) => {
+        pixelCalls.push({tag: frame.tag, x, y, ch});
+        return frame.tag.endsWith('#0') ? 100 + ch : 200 + ch;
+      },
+      savedThumbnail: async () => ({image: {}, width: 64, height: 36, x: 0, y: 0, centerX: 0, centerY: 0}),
+    },
+    saves: new Map([[0, {thumbnail: new Uint8Array([1])}]]),
+    cgTable: new Map(),
+    cgFlags: new Set(),
+    resolveFont: () => ({name: 'sans-serif', bold: false, shadow: 0}),
+    storyFont: () => ({name: 'sans-serif', bold: false, shadow: 0}),
+  });
+  const cmd = (id, tail, args = [], named = []) =>
+    player.objectCommand({path: [37, 2, -1, id, ...tail], args, named, scene: 's0'});
+  const prop = (id, tail, val) => player.property([37, 2, -1, id, ...tail], val);
+
+  // 1. disc-009: 1-arg create_string (39), create_number (132), create_weather (129), create_save_thumb (116)
+  // Native FUN_005f5010(1) -> FUN_005f5730(0) resets disp=0; overload 0 leaves disp=0!
+  await cmd(1, [39], ['hello']);
+  assert.equal(prop(1, [0]), 0, '1-arg create_string must default disp=0');
+  assert.equal(await cmd(1, [135]), 'hello', 'get_string (135) returns text value');
+  await cmd(2, [39], ['shown', 1]);
+  assert.equal(prop(2, [0]), 1, '2-arg create_string with disp=1 sets disp=1');
+
+  await cmd(3, [132], ['num_g00']);
+  assert.equal(prop(3, [0]), 0, '1-arg create_number must default disp=0');
+  await cmd(3, [133], [42]);
+  assert.equal(await cmd(3, [136]), 42, 'get_number (136) returns current number value');
+  assert.equal(await cmd(3, [169]), 10, 'get_pat_cnt (169) supports type=5 number objects');
+
+  await cmd(4, [129], ['snow']);
+  assert.equal(prop(4, [0]), 0, '1-arg create_weather must default disp=0');
+
+  await cmd(5, [116], [0]);
+  assert.equal(prop(5, [0]), 0, '1-arg create_save_thumb must default disp=0');
+
+  // 2. disc-010: get_pixel_color_a/r/g/b (100..103) with 2 args MUST query pattern 0, NOT object.pattern!
+  await cmd(6, [38], ['spr', 1, 0, 0, 2]); // pattern = 2
+  assert.equal(prop(6, [1]), 2);
+  assert.equal(await cmd(6, [101], [5, 6]), 100, 'get_pixel_color_r 2-arg must query pattern 0');
+  assert.equal(await cmd(6, [100], [5, 6, 2]), 203, 'get_pixel_color_a 3-arg queries explicit pattern 2');
+
+  // 3. disc-011: All 12 color/tr properties clamp strictly to [0, 255] (FUN_00558ad0..FUN_00558ce0)
+  for (const p of [27, 28, 29, 30, 31, 32, 33, 34, 23, 57, 58, 59]) {
+    prop(6, [p], -50);
+    assert.equal(prop(6, [p]), 0, `property ${p} must clamp negative to 0`);
+    prop(6, [p], 999);
+    assert.equal(prop(6, [p]), 255, `property ${p} must clamp >255 to 255`);
+    prop(6, [p], 128);
+    assert.equal(prop(6, [p]), 128);
+  }
+
+  // 4. disc-012: init_param (37) resets transform/color/visibility/button WITHOUT freeing graphic/name/type
+  prop(6, [3], 123);
+  prop(6, [4], 456);
+  prop(6, [5], 789);
+  prop(6, [44], 3);
+  prop(6, [92], 1);
+  prop(6, [139], 1);
+  await cmd(6, [50], [10, 20, 30]); // set_rotate(rx, ry, rz)
+  assert.deepEqual([prop(6, [15]), prop(6, [16]), prop(6, [17])], [10, 20, 30]);
+  await cmd(6, [42], [7, 2, 4, 9]); // set_button(id, group, actionNo, seNo)
+  await cmd(6, [26], ['on_btn']); // set_button_call
+  await cmd(6, [98], [1]); // set_button_push_keep
+  await cmd(6, [175], [1]); // set_button_alpha_test
+  assert.equal(await cmd(6, [188]), 7);
+  assert.equal(await cmd(6, [189]), 2);
+  assert.equal(await cmd(6, [190]), 4);
+  assert.equal(await cmd(6, [191]), 9);
+  assert.equal(await cmd(6, [119]), 1);
+  assert.equal(await cmd(6, [176]), 1);
+  await cmd(6, [60]); // clear_button_call
+  assert.equal(player.objects[1].get(6).buttonCall, undefined);
+
+  await cmd(6, [37]); // init_param!
+  assert.equal(await cmd(6, [62]), 'spr', 'init_param preserves file name');
+  assert.equal(await cmd(6, [174]), 1, 'init_param preserves object type');
+  assert.equal(prop(6, [0]), 0, 'init_param resets disp=0');
+  assert.equal(prop(6, [3]), 0, 'init_param resets x=0');
+  assert.equal(prop(6, [5]), 0, 'init_param resets z=0');
+  assert.equal(prop(6, [12]), 1000, 'init_param resets scale_x=1000');
+  assert.equal(prop(6, [14]), 1000, 'init_param resets scale_z=1000');
+  assert.equal(prop(6, [27]), 255, 'init_param resets tr=255');
+  assert.equal(prop(6, [44]), -1, 'init_param resets world=-1');
+  assert.equal(prop(6, [139]), 0, 'init_param resets click_disable=0');
+  assert.equal(prop(6, [92]), 1, 'init_param preserves wipe_erase (+0x1b4, only reset by init 35)');
+  assert.equal(await cmd(6, [189]), -1, 'init_param clears button -> group_no=-1');
+  assert.equal(await cmd(6, [190]), -1, 'init_param clears button -> action_no=-1');
+  assert.equal(await cmd(6, [191]), -1, 'init_param clears button -> se_no=-1');
+
+  // 5. disc-013: object.f (111) sets/clear/init & bit views + z_rep (110) / x_rep clear (8) + z_eve (65)
+  await cmd(6, [111, 2], [4]); // resize(4)
+  await cmd(6, [111, 1], [1, 10, 20, 30]); // sets(1, 10, 20, 30)
+  assert.deepEqual([prop(6, [111, -1, 0]), prop(6, [111, -1, 1]), prop(6, [111, -1, 2]), prop(6, [111, -1, 3])], [0, 10, 20, 30]);
+  await cmd(6, [111, 8], [1, 2, 77]); // clear(1, 2, 77)
+  assert.deepEqual([prop(6, [111, -1, 1]), prop(6, [111, -1, 2]), prop(6, [111, -1, 3])], [77, 77, 30]);
+  prop(6, [111, 3, -1, 0], 1); // bit[0] = 1
+  assert.equal(prop(6, [111, 3, -1, 0]), 1);
+  assert.equal(prop(6, [111, -1, 0]), 1);
+  await cmd(6, [111, 10]); // init
+  assert.deepEqual([prop(6, [111, -1, 0]), prop(6, [111, -1, 1])], [0, 0]);
+
+  await cmd(6, [54, 2], [3]); // x_rep.resize(3)
+  await cmd(6, [54, 8], [0, 2, 55]); // x_rep.clear(0, 2, 55)
+  assert.deepEqual([prop(6, [54, -1, 0]), prop(6, [54, -1, 1]), prop(6, [54, -1, 2])], [55, 55, 55]);
+  await cmd(6, [65, 0], [300, 0, 0, 0]); // z_eve.set
+  assert.equal(prop(6, [5]), 300);
+});

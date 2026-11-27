@@ -1,6 +1,6 @@
 # SiglusEngine Multi-Layer Verification Coverage
 
-Generated: `2026-11-27T13:58:16.800Z`
+Generated: `2026-11-27T14:09:44.178Z`
 
 > Coverage layers are strictly separate. Matching hashes, CFG shape, or passing browser smoke tests never count as `statically_verified` without pinned Ghidra evidence.
 
@@ -21,33 +21,26 @@ Generated: `2026-11-27T13:58:16.800Z`
 
 | Layer / Kind | total | discovered | cross_version_matched | understood | implemented | statically_verified | unit_tested | interaction_tested | mutation_tested | browser_verified | leaf_verified | wrapper_dispatch | platform_boundary | stale |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| **Overall** | 2,666 | 2,666 | 2,666 | 131 | 1,883 | 131 | 481 | 117 | 127 | 683 | 131 | 0 | 0 | 0 |
+| **Overall** | 2,666 | 2,666 | 2,666 | 967 | 1,883 | 967 | 488 | 125 | 963 | 683 | 967 | 0 | 0 | 0 |
 | `asset_decoder` | 7 | 7 | 7 | 7 | 7 | 7 | 6 | 3 | 4 | 7 | 7 | 0 | 0 | 0 |
-| `native_function` | 48 | 48 | 48 | 35 | 48 | 35 | 34 | 25 | 6 | 48 | 35 | 0 | 0 | 0 |
-| `command` | 1,492 | 1,492 | 1,492 | 82 | 975 | 82 | 102 | 79 | 73 | 228 | 82 | 0 | 0 | 0 |
-| `property` | 749 | 749 | 749 | 7 | 484 | 7 | 6 | 10 | 44 | 112 | 7 | 0 | 0 | 0 |
+| `native_function` | 48 | 48 | 48 | 36 | 48 | 36 | 35 | 26 | 7 | 48 | 36 | 0 | 0 | 0 |
+| `command` | 1,492 | 1,492 | 1,492 | 650 | 975 | 650 | 106 | 85 | 641 | 228 | 650 | 0 | 0 | 0 |
+| `property` | 749 | 749 | 749 | 274 | 484 | 274 | 8 | 11 | 311 | 112 | 274 | 0 | 0 | 0 |
 | `gameexe_key` | 370 | 370 | 370 | 0 | 369 | 0 | 333 | 0 | 0 | 288 | 0 | 0 | 0 | 0 |
 
 ## Targeted Mutation Testing Summary
 
-- Generated: `2026-11-27T13:50:16.766Z`
-- Total Mutants: **42** | Killed: **42** | Surviving: **0** | Equivalent: **0** | Invalid: **0** | Timed Out: **0**
+- Generated: `2026-11-27T14:06:48.297Z`
+- Total Mutants: **47** | Killed: **47** | Surviving: **0** | Equivalent: **0** | Invalid: **0** | Timed Out: **0**
 - Effective Kill Rate (killed / (killed + surviving + timed_out)): **100%**
 
 ## Top Priority Burn-Down Queue (Unverified / Stale / Modified in 1.1.141.3)
 
 | Priority | Entry ID | Kind | Surface | Calls (8 games) | Games | Modified in 1.1.141.3 | Stale |
 | ---: | --- | --- | --- | ---: | ---: | --- | --- |
-| 1266 | `cmd:37.2.-1` | `command` | `stage.object` | 21,251 | 8 | yes | no |
-| 1241 | `cmd:38.2.-1` | `command` | `stage.object` | 16,086 | 8 | yes | no |
-| 1122 | `prop:38.2.-1.*.56` | `property` | `stage.object` | 4,045 | 8 | yes | no |
-| 1121 | `cmd:37.2.-1.*.49` | `command` | `stage.object` | 4,033 | 8 | yes | no |
-| 1106 | `prop:37.2.-1.*.2` | `property` | `stage.object` | 3,391 | 8 | yes | no |
 | 1091 | `cmd:42.1` | `command` | `bgm` | 5,058 | 7 | yes | no |
 | 1087 | `prop:83.2097152004` | `property` | `cur_call` | 2,720 | 8 | yes | no |
-| 1084 | `cmd:38.2.-1.*.62` | `command` | `stage.object` | 2,607 | 8 | yes | no |
 | 1082 | `prop:83.2097152005` | `property` | `cur_call` | 2,550 | 8 | yes | no |
-| 1063 | `cmd:37.2.-1.*.48` | `command` | `stage.object` | 2,061 | 8 | yes | no |
 | 1059 | `cmd:42.5` | `command` | `bgm` | 3,483 | 7 | yes | no |
 | 1055 | `cmd:61` | `command` | `root_61` | 1,872 | 8 | yes | no |
 | 1055 | `prop:83.2097152006` | `property` | `cur_call` | 1,872 | 8 | yes | no |
@@ -57,12 +50,19 @@ Generated: `2026-11-27T13:58:16.800Z`
 | 1037 | `cmd:53.-1.*.1` | `command` | `frame_action_ch` | 1,518 | 8 | yes | no |
 | 1037 | `prop:32.-1.*` | `property` | `S` | 48,301 | 2 | yes | no |
 | 1034 | `prop:30.-1.*` | `property` | `G` | 8,302 | 5 | yes | no |
-| 1034 | `prop:37.2.-1.*.27` | `property` | `stage.object` | 1,463 | 8 | yes | no |
 | 1027 | `prop:27.-1.*` | `property` | `root_27` | 7,631 | 5 | yes | no |
 | 1025 | `cmd:54` | `command` | `frame_action` | 1,329 | 8 | yes | no |
 | 1012 | `cmd:158` | `command` | `root_158` | 3,618 | 6 | yes | no |
-| 1011 | `prop:37.2.-1.*.56` | `property` | `stage.object` | 1,120 | 8 | yes | no |
 | 999 | `cmd:46.1` | `command` | `mouse` | 1,752 | 7 | yes | no |
+| 997 | `cmd:83.1.-1.*.6` | `command` | `cur_call` | 1,715 | 7 | yes | no |
+| 990 | `prop:83.2097152007` | `property` | `cur_call` | 884 | 8 | yes | no |
+| 989 | `cmd:92.0` | `command` | `system` | 871 | 8 | yes | no |
+| 981 | `cmd:4` | `command` | `jump` | 797 | 8 | yes | no |
+| 979 | `cmd:37.6.-1.*.2` | `command` | `stage.objbtngroup` | 43,898 | 1 | yes | no |
+| 979 | `cmd:44.-1.*.7` | `command` | `pcmch` | 774 | 8 | yes | no |
+| 977 | `cmd:39.0` | `command` | `math` | 756 | 8 | yes | no |
+| 975 | `cmd:7` | `command` | `root_7` | 741 | 8 | yes | no |
+| 972 | `cmd:74` | `command` | `root_74` | 1,275 | 7 | yes | no |
 
 ## Unresolved Coverage Gaps & Indirect-Call Frontiers
 
@@ -91,3 +91,8 @@ Generated: `2026-11-27T13:58:16.800Z`
 - `disc-006-global-call-stack-vs-backlog` [fixed]: player.ts mapped global commands 138/139/140/141 (0x8a..0x8d -> 0x5c71f0 on DAT_00ae1a68 call_list) to message backlog mutations, wiping dialogue history on del_call_stack/clear_call_stack instead of pruning VM farcall frames.
 - `disc-007-msgbk-clear-member-6` [fixed]: msgbk dispatcher (root 145) omitted member 6 (msgbk.clear) which clears message history entries.
 - `disc-008-database-cnt-member-1` [fixed]: database root 105 omitted member 1 (database.cnt, 0x54fc20 case 0x69 member 1).
+- `disc-009` [fixed]: 1-arg create_string/create_number/create_weather/create_save_thumb/create_movie default disp=0 (FUN_005f5010->0x5f5730), create_movie auto_free defaults true (0x55b415), and create_number sets type=5 for get_pat_cnt (0x55a94f).
+- `disc-010` [fixed]: object.get_pixel_color_a/r/g/b (100..103, 0x55aa4b..0x55ab72) 2-arg overload pushes pat=0, not object.pattern.
+- `disc-011` [fixed]: All 12 object color/transparency setters (27, 28..34, 23, 57..59) clamp strictly to [0, 255] via FUN_00558ad0..FUN_00558ce0.
+- `disc-012` [fixed]: Added native object.init_param (37, FUN_005f5730(1)), get_string (135), get_number (136), clear_button_call (60), set_rotate (50), 3-arg z overloads, get_button_group/action/se/push_keep/alpha_test (189/190/191/119/176), get_size_z (47), child_sort_type (166/167).
+- `disc-013` [fixed]: Added object 3D/flag properties (5/8/11/14/44/92/139/144/146/147/148/168/186/187), missing intevent channels (65/66/79/82/114), object.f sets/clear/init/bit-views (111), and x_rep/y_rep/z_rep/tr_rep clear (8).

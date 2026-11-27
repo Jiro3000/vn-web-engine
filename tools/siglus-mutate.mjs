@@ -392,6 +392,47 @@ export const MUTATION_CATALOG = [
     target: 'const key = (i * multiplier) & 0xffff;',
     replacement: 'const key = ((i + 1) * multiplier) & 0xffff;',
   },
+  // --- Phase 5 Batch 4: dispatcher.object (0x5593a0) ---
+  {
+    id: 'player.object-create-string-disp',
+    file: 'src/engines/siglus/player.ts',
+    area: 'player/object',
+    description: 'Revert 1-arg create_string (39) visible default from false back to true',
+    target: '        type: 3,\n        name: \'\',\n        frames: [],\n        x: n(2),\n        y: n(3),\n        visible: args.length >= 2 ? Boolean(n(1)) : false,',
+    replacement: '        type: 3,\n        name: \'\',\n        frames: [],\n        x: n(2),\n        y: n(3),\n        visible: args.length === 1 || Boolean(n(1)),',
+  },
+  {
+    id: 'player.object-color-clamp',
+    file: 'src/engines/siglus/player.ts',
+    area: 'player/object',
+    description: 'Drop [0, 255] clamping on object color properties (28..34, 57..59)',
+    target: '          // Native FUN_00558b00..FUN_00558ce0 clamp all 10 color fields to [0, 255].\n          const next = Math.min(255, Math.max(0, Number(value) | 0));',
+    replacement: '          // Mutated: no clamp\n          const next = Number(value) | 0;',
+  },
+  {
+    id: 'player.object-tr-clamp',
+    file: 'src/engines/siglus/player.ts',
+    area: 'player/object',
+    description: 'Drop [0, 255] clamping on object transparency property (27)',
+    target: '          : field === \'transparency\'\n            ? Math.min(255, Math.max(0, raw | 0))',
+    replacement: '          : field === \'transparency\'\n            ? (raw | 0)',
+  },
+  {
+    id: 'player.object-pixel-default-pat0',
+    file: 'src/engines/siglus/player.ts',
+    area: 'player/object',
+    description: 'Use object.pattern instead of native pat=0 for 2-arg get_pixel_color (100..103)',
+    target: '      // 1.1.141.3 0x55aa4b..0x55ab72: 2-arg overload always pushes pat=0 (NOT object.pattern).\n      const pattern = args.length >= 3 ? n(2) : 0;',
+    replacement: '      // Mutated: use object.pattern\n      const pattern = args.length >= 3 ? n(2) : object.pattern;',
+  },
+  {
+    id: 'player.object-init-param-world',
+    file: 'src/engines/siglus/player.ts',
+    area: 'player/object',
+    description: 'Reset world to 0 instead of native -1 in object.init_param (37)',
+    target: '        existing.layer = 0;\n        existing.world = -1;',
+    replacement: '        existing.layer = 0;\n        existing.world = 0;',
+  },
 ];
 
 function sha256(bufOrStr) {

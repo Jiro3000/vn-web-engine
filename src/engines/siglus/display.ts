@@ -156,20 +156,25 @@ export interface DrawObject {
   frames: (Graphic | undefined)[];
   x: number;
   y: number;
+  z?: number;
   visible: boolean;
   layer?: number;
   order?: number;
+  world?: number;
   transparency?: number;
   trOffsets?: number[];
   flags?: number[];
   pattern: number;
   scale?: readonly [number, number];
+  scaleZ?: number;
   scaleEvents?: DrawObject['positionEvents'];
   rotateX?: number;
   rotateY?: number;
   rotateZ?: number;
   center?: readonly [number, number];
+  centerZ?: number;
   centerRep?: readonly [number, number];
+  centerRepZ?: number;
   colorProps?: {
     bright?: number;
     dark?: number;
@@ -188,6 +193,16 @@ export interface DrawObject {
   blend?: number;
   tonecurveNo?: number;
   wipeCopy?: boolean;
+  wipeErase?: boolean;
+  clickDisable?: boolean;
+  fogUse?: boolean;
+  culling?: boolean;
+  alphaTest3d?: boolean;
+  alphaBlend3d?: boolean;
+  lightNo?: number;
+  childSortType?: number;
+  emoteRepX?: number;
+  emoteRepY?: number;
   rect?: {
     left: number;
     top: number;
@@ -208,8 +223,8 @@ export interface DrawObject {
       }
     >
   >;
-  positionOffsets?: Partial<Record<'x' | 'y', number[]>>;
-  offsetEventCounts?: Partial<Record<'x' | 'y' | 'tr', number>>;
+  positionOffsets?: Partial<Record<'x' | 'y' | 'z', number[]>>;
+  offsetEventCounts?: Partial<Record<'x' | 'y' | 'z' | 'tr', number>>;
   frameActionChannelCount?: number;
   offsetEvents?: Partial<
     Record<'x' | 'y', Map<number, {from: number; started: number; time: KeyframeAnimationOptions}>>
@@ -340,25 +355,40 @@ export interface SerializedDrawObject {
   name: string;
   x: number;
   y: number;
+  z?: number;
   visible: boolean;
   layer?: number;
   order?: number;
+  world?: number;
   transparency?: number;
   opacity?: {values: NonNullable<DrawObject['opacity']>; elapsed: number};
   trOffsets?: number[];
   flags?: number[];
   pattern: number;
   scale?: [number, number];
+  scaleZ?: number;
   rotateX?: number;
   rotateY?: number;
   rotateZ?: number;
   center?: [number, number];
+  centerZ?: number;
   centerRep?: [number, number];
+  centerRepZ?: number;
   colorProps?: DrawObject['colorProps'];
   mask?: number;
   blend?: number;
   tonecurveNo?: number;
   wipeCopy?: boolean;
+  wipeErase?: boolean;
+  clickDisable?: boolean;
+  fogUse?: boolean;
+  culling?: boolean;
+  alphaTest3d?: boolean;
+  alphaBlend3d?: boolean;
+  lightNo?: number;
+  childSortType?: number;
+  emoteRepX?: number;
+  emoteRepY?: number;
   rect?: DrawObject['rect'];
   positionOffsets?: DrawObject['positionOffsets'];
   offsetEventCounts?: DrawObject['offsetEventCounts'];
@@ -414,9 +444,11 @@ export function serializeDrawObject(
     name: object.name,
     x: object.x,
     y: object.y,
+    z: object.z,
     visible: object.visible,
     layer: object.layer,
     order: object.order,
+    world: object.world,
     transparency: object.transparency,
     // 1.1.137.0 saves and restores the active transparency event at 0x5e90a2 and 0x5ea941.
     opacity: object.opacity && opacityElapsed < object.opacity[1] + object.opacity[2]
@@ -426,21 +458,35 @@ export function serializeDrawObject(
     flags: object.flags?.slice(),
     pattern: object.pattern,
     scale: object.scale ? [object.scale[0], object.scale[1]] : undefined,
+    scaleZ: object.scaleZ,
     rotateX: object.rotateX,
     rotateY: object.rotateY,
     rotateZ: object.rotateZ,
     center: object.center ? [object.center[0], object.center[1]] : undefined,
+    centerZ: object.centerZ,
     centerRep: object.centerRep ? [object.centerRep[0], object.centerRep[1]] : undefined,
+    centerRepZ: object.centerRepZ,
     colorProps: object.colorProps ? {...object.colorProps} : undefined,
     mask: object.mask,
     blend: object.blend,
     tonecurveNo: object.tonecurveNo,
     wipeCopy: object.wipeCopy,
+    wipeErase: object.wipeErase,
+    clickDisable: object.clickDisable,
+    fogUse: object.fogUse,
+    culling: object.culling,
+    alphaTest3d: object.alphaTest3d,
+    alphaBlend3d: object.alphaBlend3d,
+    lightNo: object.lightNo,
+    childSortType: object.childSortType,
+    emoteRepX: object.emoteRepX,
+    emoteRepY: object.emoteRepY,
     rect: object.rect ? {...object.rect} : undefined,
     positionOffsets: object.positionOffsets
       ? {
           x: object.positionOffsets.x?.slice(),
           y: object.positionOffsets.y?.slice(),
+          ...(object.positionOffsets.z ? {z: object.positionOffsets.z.slice()} : {}),
         }
       : undefined,
     offsetEventCounts: object.offsetEventCounts && {...object.offsetEventCounts},
