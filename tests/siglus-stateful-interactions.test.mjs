@@ -1275,3 +1275,188 @@ test('Phase 5 Batch 5 Ghidra fixes: syscom (0x569f60) message_speed [0..100], au
   assert.equal(await call(338, 0), 1);
   assert.equal(await call(339, 0), 0);
 });
+
+test('Phase 5 Batch 6+7 Ghidra fixes (disc-018..023): CONFIG.*.ONOFF dot keys, syscom 330/331/164..166/189..191/311..319 defaults, effect clamps+intevent 14..16, pcmch/bgm fades+pause+wait, vm include prune+str.mid/search_last', async () => {
+  // 1. disc-018, disc-019, disc-020: CONFIG.*.ONOFF dot lookup, syscom 330/331, Gameexe defaults for 164..166, 189..191, 311..313, 317..319
+  const stoppedAudio = [];
+  const pausedPcm = [];
+  const startedPcm = [];
+  const startedBgm = [];
+  let waitedBgm = 0;
+  const player = makeMockPlayer({
+    options: new Map(),
+    localExtraSwitches: new Map(),
+    stageEffects: new Map(),
+    bgmListened: new Set(),
+    recordBgmListened() {},
+    persistOptions() {},
+    applyScreenEffects() {},
+    waitAudio: async (ch, canSkip) => {
+      if (ch === 'bgm') waitedBgm++;
+      return 0;
+    },
+    audio: {
+      stop: (ch, fade) => stoppedAudio.push([ch, fade]),
+      pausePcm: (ch, fade) => pausedPcm.push([ch, fade]),
+      pcmStart: (ch, src, ready, fade) => startedPcm.push({ch, src, ready, fade}),
+      bgmStart: (name, loop, fadeIn, fadeOut, delay, start) =>
+        startedBgm.push({name, loop, fadeIn, fadeOut, delay, start}),
+      bgmName: () => 'bgm01',
+    },
+  });
+  // Native Gameexe keys use dots before ONOFF (0x699d00)
+  player.game.config.set('CONFIG.WHEEL_NEXT_MESSAGE.ONOFF', '1');
+  player.game.config.set('CONFIG.SKIP_WIPE_ANIME.ONOFF', '1');
+  player.game.config.set('SYSTEM.EXTRA_INT_VALUE.CNT', '2');
+  player.game.config.set('SYSTEM.EXTRA_INT_VALUE.000', '42');
+  player.game.config.set('SYSTEM.EXTRA_INT_VALUE.001', '-7');
+  player.game.config.set('SYSTEM.EXTRA_STR_VALUE.CNT', '2');
+  player.game.config.set('SYSTEM.EXTRA_STR_VALUE.000', '"BG"');
+  player.game.config.set('SYSTEM.EXTRA_STR_VALUE.001', '"TK"');
+  player.game.config.set('SYSTEM.EXTRA_STR_VALUE.002', '"OOB"');
+  player.game.config.set('CONFIG.GLOBAL_EXTRA_MODE.001.MODE', '4');
+  player.game.config.set('CONFIG.OBJECT_DISP.002.ONOFF', '1');
+  player.game.config.set('CONFIG.MOUSE_CURSOR_HIDE_ONOFF', '1');
+  player.game.config.set('CONFIG.MOUSE_CURSOR_HIDE_TIME', '5000');
+  player.game.config.set('SE.007', '"sys_click"');
+
+  const sys = (member, ...args) => player.command({path: [63, member], args, named: []});
+
+  // disc-018: CONFIG.WHEEL_NEXT_MESSAGE.ONOFF and CONFIG.SKIP_WIPE_ANIME.ONOFF read dot-form keys
+  assert.equal(await sys(121), 1, 'WHEEL_NEXT_MESSAGE_ONOFF must read CONFIG.WHEEL_NEXT_MESSAGE.ONOFF');
+  assert.equal(await sys(118), 1, 'SKIP_WIPE_ANIME_ONOFF must read CONFIG.SKIP_WIPE_ANIME.ONOFF');
+  await sys(119, 0);
+  assert.equal(await sys(121), 0);
+  await sys(120); // reset to Gameexe default
+  assert.equal(await sys(121), 1);
+
+  // disc-019: syscom 330 (get_system_extra_int_value) & 331 (get_system_extra_str_value)
+  assert.equal(await sys(330, 0), 42);
+  assert.equal(await sys(330, 1), -7);
+  assert.equal(await sys(330, 2), 0, 'OOB extra_int returns 0');
+  assert.equal(await sys(330, -1), 0);
+  assert.equal(await sys(331, 0), 'BG');
+  assert.equal(await sys(331, 1), 'TK');
+  assert.equal(await sys(331, 2), '', 'OOB extra_str returns empty string');
+  assert.equal(await sys(331, -1), '');
+
+  // disc-020: Gameexe defaults + reset for 164..166 (global_extra_mode), 189..191 (object_disp), 311..313 & 317..319 (mouse_cursor_hide)
+  assert.equal(await sys(166, 1), 4, 'global_extra_mode[1] defaults to CONFIG.GLOBAL_EXTRA_MODE.001.MODE');
+  await sys(164, 1, 9);
+  assert.equal(await sys(166, 1), 9);
+  await sys(165, 1);
+  assert.equal(await sys(166, 1), 4, 'global_extra_mode reset restores Gameexe default');
+
+  assert.equal(await sys(191, 2), 1, 'object_disp[2] defaults to CONFIG.OBJECT_DISP.002.ONOFF');
+  await sys(189, 2, 0);
+  assert.equal(await sys(191, 2), 0);
+  await sys(190, 2);
+  assert.equal(await sys(191, 2), 1, 'object_disp reset restores Gameexe default');
+  // local_extra_switch (300/301) remains completely independent from object_disp (189..191)
+  await sys(300, 2, 0);
+  assert.equal(await sys(301, 2), 0);
+  assert.equal(await sys(191, 2), 1, 'syscom 300 must not overwrite object_disp 191');
+
+  assert.equal(await sys(313), 1, 'mouse_cursor_hide_onoff defaults to CONFIG.MOUSE_CURSOR_HIDE_ONOFF');
+  await sys(311, 0);
+  assert.equal(await sys(313), 0);
+  await sys(312);
+  assert.equal(await sys(313), 1);
+
+  assert.equal(await sys(319), 5000, 'mouse_cursor_hide_time defaults to CONFIG.MOUSE_CURSOR_HIDE_TIME');
+  await sys(317, 1500);
+  assert.equal(await sys(319), 1500);
+  await sys(318);
+  assert.equal(await sys(319), 5000);
+
+  // 2. disc-021: effect property clamps [0..255] (props 3..13), bool 31/32, intevent channels 14..16 (x/y/z)
+  player.property([70, 31, -1, 0, 3], -20);
+  assert.equal(player.property([70, 31, -1, 0, 3]), 0, 'effect mono (prop 3) clamps <0 to 0');
+  player.property([70, 31, -1, 0, 10], 400);
+  assert.equal(player.property([70, 31, -1, 0, 10]), 255, 'effect color_rate (prop 10) clamps >255 to 255');
+  player.property([70, 31, -1, 0, 31], 5);
+  assert.equal(player.property([70, 31, -1, 0, 31]), 1, 'effect prop 31 normalizes to boolean 0|1');
+  await player.command({path: [70, 31, -1, 0, 14, 0], args: [120, 0, 0], named: []});
+  assert.equal(player.property([70, 31, -1, 0, 0]), 120, 'effect x_eve (channel 14) writes prop 0 (x)');
+  await player.command({path: [70, 31, -1, 0, 16, 0], args: [-45, 0, 0], named: []});
+  assert.equal(player.property([70, 31, -1, 0, 2]), -45, 'effect z_eve (channel 16) writes prop 2 (z)');
+
+  // 3. disc-022: pcmch.stop (5) 100ms 0-arg default, pcmch.pause (10), pcmch.play named(9) se_no + volumeType clamp, bgm.play named(2) wait_flag
+  await player.command({path: [44, -1, 2, 5], args: [], named: []});
+  assert.deepEqual(stoppedAudio, [['pcm2', 100]], 'pcmch.stop() with 0 args defaults fade to 100ms');
+  await player.command({path: [44, -1, 2, 10], args: [], named: []});
+  assert.deepEqual(pausedPcm, [[2, 100]], 'pcmch.pause() with 0 args defaults fade to 100ms');
+  await player.command({path: [44, -1, 2, 10], args: [250], named: []});
+  assert.deepEqual(pausedPcm[1], [2, 250], 'pcmch.pause(250) passes explicit fade');
+  await player.command({path: [44, -1, 1, 0], args: [7, 99], named: [9, 3]});
+  assert.equal(startedPcm.length, 1);
+  assert.equal(startedPcm[0].src.resource, 'sys_click', 'pcmch.play named(9) resolves SE.007');
+  assert.equal(startedPcm[0].src.volumeType, 2, 'pcmch.play clamps OOB volumeType >31 to 2');
+
+  await player.command({path: [42, 0], args: ['bgm01', 1], named: [2]});
+  assert.equal(waitedBgm, 1, 'bgm.play with named(2)=1 waits for bgm');
+
+  // 4. disc-023: vm.ts user command (include >= 0) pruned-frame unwinding + str.mid negative start + str.search_last("") === -1
+  const w32 = (v) => [v & 0xff, (v >> 8) & 0xff, (v >> 16) & 0xff, (v >> 24) & 0xff];
+  const pushInt = (v) => [2, ...w32(10), ...w32(v)];
+  const callCmd = (root, argSpecs, retForm = 0) => [
+    8,
+    ...pushInt(root),
+    ...argSpecs.flatMap((a) => pushInt(a)),
+    48,
+    ...w32(0),
+    ...w32(argSpecs.length),
+    ...argSpecs.map(() => w32(10)).flat(),
+    ...w32(0),
+    ...w32(retForm),
+  ];
+  const retVoid = [21, ...w32(0)];
+  const makeScene = (name, codeBytes, entries = [0], commands = []) => {
+    const code = new Uint8Array(codeBytes);
+    return {name, code, view: new DataView(code.buffer), labels: entries, entries, strings: [], properties: [], commands};
+  };
+  // User command ID = (0x7e << 24) | idx -> globalCommand include index -> scene u1/u2 entry 0
+  const USER_CMD_0 = (0x7e << 24) | 0;
+  const USER_CMD_1 = (0x7e << 24) | 1;
+  const u0 = makeScene('u0', [...callCmd(USER_CMD_0, []), ...callCmd(910, []), ...retVoid]);
+  const u1 = makeScene('u1', [...callCmd(USER_CMD_1, []), ...callCmd(911, []), ...retVoid]);
+  const u2 = makeScene('u2', [...callCmd(912, []), ...retVoid]);
+  const scenes = new Map([['u0', u0], ['u1', u1], ['u2', u2]]);
+  const pack = {
+    sceneNames: ['u0', 'u1', 'u2'],
+    commandNames: ['cmd0', 'cmd1'],
+    commandScenes: [1, 0, 2, 0],
+    properties: [],
+    scene: (name) => scenes.get(name),
+  };
+  const log = [];
+  const ctrl = new AbortController();
+  const vm = new SiglusVm(
+    pack,
+    {
+      trace() {},
+      property() { return undefined; },
+      async command(c) {
+        if (c.path[0] === 910 || c.path[0] === 911) {
+          log.push(`resumed:${c.path[0]}`);
+          return 0;
+        }
+        if (c.path[0] === 912) {
+          // Prune caller u1 (depth 1 below u2)
+          vm.delCallStack(1);
+          return 0;
+        }
+        return undefined;
+      },
+    },
+    ctrl.signal,
+  );
+  await vm.run('u0', 0);
+  assert.deepEqual(log, ['resumed:910'], 'pruned intermediate user-command frame u1 must NOT resume');
+
+  // str.mid negative start + str.search_last("") === -1
+  assert.equal(vm.stringCommand('abcdef', 3, [-2, 4]), 'ab', 'str.mid(-2, 4) matches native end=rawStart+len=2');
+  assert.equal(vm.stringCommand('abcdef', 3, [-5, 2]), '', 'str.mid(-5, 2) returns empty');
+  assert.equal(vm.stringCommand('abcdef', 11, ['']), -1, 'str.search_last("") returns -1 in native');
+  assert.equal(vm.stringCommand('ababa', 11, ['ba']), 3);
+});

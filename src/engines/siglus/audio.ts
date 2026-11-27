@@ -116,7 +116,7 @@ export class SiglusAudio {
   private pendingBgm?: {name: string; loop: boolean};
   private readonly preparedPcm = new Map<
     string,
-    {source: SiglusPcmSource; buffer: AudioBuffer; bgm?: BgmTrack}
+    {source: SiglusPcmSource; buffer: AudioBuffer; bgm?: BgmTrack; start?: number}
   >();
   private preparedBgm?: BgmTrack;
   private readonly bgmTable = new Map<string, string[]>();
@@ -769,6 +769,34 @@ export class SiglusAudio {
     }
   }
 
+  pausePcm(channel: number, fade = 100): void {
+    const key = `pcm${channel}`;
+    const playing = this.playing.get(key);
+    const pcm = playing?.pcm;
+    const buffer = playing && 'buffer' in playing.source ? playing.source.buffer : null;
+    if (!playing || !pcm || !buffer) {
+      this.stopActiveChannel(key, fade);
+      return;
+    }
+    const elapsed = this.context.currentTime - playing.startsAt + Math.max(0, fade) / 1000;
+    const prevStart = playing.bgm?.start ?? 0;
+    const loopStart = playing.bgm?.loopStart ?? 0;
+    const loopEnd = playing.bgm?.loopEnd ?? buffer.duration;
+    let start = prevStart + Math.max(0, elapsed);
+    if (playing.loop && loopEnd > loopStart && start >= loopEnd) {
+      start = loopStart + ((start - loopStart) % (loopEnd - loopStart));
+    }
+    this.stop(key, fade);
+    if (playing.loop || start < loopEnd) {
+      this.preparedPcm.set(key, {
+        source: pcm,
+        buffer,
+        bgm: playing.bgm ? {...playing.bgm, start} : undefined,
+        start,
+      });
+    }
+  }
+
   resumePcm(channel: number, fade = 0, delay = 0): void {
     const key = `pcm${channel}`;
     const prepared = this.preparedPcm.get(key);
@@ -780,7 +808,7 @@ export class SiglusAudio {
       loop,
       loopStart: bgm?.loopStart,
       loopEnd: bgm?.loopEnd,
-      start: bgm?.start,
+      start: prepared.start ?? bgm?.start,
       sourceRate: bgm?.sourceRate,
       fade,
       delay,

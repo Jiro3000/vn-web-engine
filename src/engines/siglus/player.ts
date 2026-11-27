@@ -507,8 +507,9 @@ export class SiglusPlayer {
   private voiceSpeedSwitches: [boolean, boolean, boolean] = [false, false, false];
   private voiceSpeedRate = 100;
   private localExtraModes?: Map<number, number>;
-  private autoModeWaitEnabled = true;
-  private mwndFilterMode = 0;
+  private objectDispFlags?: Map<number, number>;
+  private mouseCursorHideEnabled?: boolean;
+  private mouseCursorHideTime?: number;
   private dialogConfirmEnabled = true;
   private readonly system = new Map<number, number>();
   private readonly galleryFlags = new Map<number, number>();
@@ -1174,7 +1175,12 @@ export class SiglusPlayer {
   }
 
   private systemOption(option: SystemOption): boolean {
-    return this.options.get(option) ?? this.game.config.get('CONFIG.' + option) === '1';
+    // 1.1.141.3 0x699d00 & 0x6198b0: Gameexe.dat uses dot-form CONFIG.<NAME>.ONOFF.
+    const configKey = 'CONFIG.' + option.replace(/_ONOFF$/, '.ONOFF');
+    return (
+      this.options.get(option) ??
+      (this.game.config.get(configKey) ?? this.game.config.get('CONFIG.' + option)) === '1'
+    );
   }
 
   private setSystemOption(option: SystemOption, value?: boolean): void {
@@ -4359,7 +4365,15 @@ export class SiglusPlayer {
   private effectProperty(key: string, prop: number, value?: Value): number {
     const slot = this.effectSlot(key);
     if (value !== undefined) {
-      slot.props.set(prop, Number(value) | 0);
+      const raw = Number(value) | 0;
+      // 1.1.141.3 0x54e240 (FUN_0054d750..FUN_0054d930): props 3..13 clamp to [0, 255]; 31/32 are booleans.
+      const clamped =
+        prop >= 3 && prop <= 13
+          ? Math.min(255, Math.max(0, raw))
+          : prop === 31 || prop === 32
+            ? Number(Boolean(raw))
+            : raw;
+      slot.props.set(prop, clamped);
       this.applyScreenEffects();
     }
     return slot.props.get(prop) ?? 0;
@@ -4380,11 +4394,12 @@ export class SiglusPlayer {
     if (tail.length === 2) {
       const channel = tail[0]!;
       const op = tail[1]!;
-      // Map intevent channel 17..27 to property 3..13 (0x54a980)
-      const prop = channel >= 17 && channel <= 27 ? channel - 14 : -1;
+      // 1.1.141.3 0x54e240: intevent channels 14..27 (0xe..0x1b) map to props 0..13 (x/y/z + mono..add_b).
+      const prop = channel >= 14 && channel <= 27 ? channel - 14 : -1;
       if (prop < 0) return undefined;
       if (op === 0 || op === 7) {
-        const target = Number(args[0] ?? 0) | 0;
+        const rawTarget = Number(args[0] ?? 0) | 0;
+        const target = prop >= 3 && prop <= 13 ? Math.min(255, Math.max(0, rawTarget)) : rawTarget;
         const duration = Math.max(0, Number(args[1] ?? 0));
         const waitDelay = Math.max(0, Number(args[2] ?? 0));
         slot.props.set(prop, target);
@@ -5533,10 +5548,16 @@ export class SiglusPlayer {
         return 0;
       }
       if (member === 189 || member === 190 || member === 191) {
-        // 1.1.141.3 0x56ce7b..0x56cefc: set/init/get local extra switch (+0x170).
+        // 1.1.141.3 0x56ce7b..0x56cefc & 0x619820: object_disp_flag (+0x170), default CONFIG.OBJECT_DISP.%03d.ONOFF.
         const idx = n(0) | 0;
-        const map = this.localExtraSwitches;
-        if (member === 191) return idx >= 0 ? (map.get(idx) ?? 0) : 0;
+        const map = (this.objectDispFlags ??= new Map());
+        if (member === 191) {
+          if (idx < 0) return 0;
+          return (
+            map.get(idx) ??
+            Number(this.game.config.get(`CONFIG.OBJECT_DISP.${String(idx).padStart(3, '0')}.ONOFF`) === '1')
+          );
+        }
         if (idx >= 0) {
           if (member === 189) map.set(idx, Number(Boolean(n(1))));
           else map.delete(idx);
@@ -5544,10 +5565,16 @@ export class SiglusPlayer {
         return 0;
       }
       if (member === 164 || member === 165 || member === 166) {
-        // 1.1.141.3 0x56cfba..0x56d03a: set/init/get local extra mode (+0x188).
+        // 1.1.141.3 0x56cfba..0x56d03a & 0x619820: global_extra_mode (+0x188), default CONFIG.GLOBAL_EXTRA_MODE.%03d.MODE.
         const idx = n(0) | 0;
         const map = (this.localExtraModes ??= new Map());
-        if (member === 166) return idx >= 0 ? (map.get(idx) ?? 0) : 0;
+        if (member === 166) {
+          if (idx < 0) return 0;
+          const configured = this.game.config.get(
+            `CONFIG.GLOBAL_EXTRA_MODE.${String(idx).padStart(3, '0')}.MODE`,
+          );
+          return map.get(idx) ?? (Number.parseInt(configured ?? '0', 10) || 0);
+        }
         if (idx >= 0) {
           if (member === 164) map.set(idx, n(1) | 0);
           else map.delete(idx);
@@ -5555,16 +5582,48 @@ export class SiglusPlayer {
         return 0;
       }
       if (member === 311 || member === 312 || member === 313) {
-        // 1.1.141.3 0x56cc89..0x56ccbe: set/init/get auto_mode_wait_onoff (+0x14c).
-        if (member === 313) return Number(this.autoModeWaitEnabled);
-        this.autoModeWaitEnabled = member === 311 ? Boolean(n(0)) : true;
+        // 1.1.141.3 0x56cc89..0x56ccbe & 0x619720: mouse_cursor_hide_onoff (+0x14c), default CONFIG.MOUSE_CURSOR_HIDE_ONOFF.
+        if (member === 313) {
+          return Number(
+            this.mouseCursorHideEnabled ??
+              this.game.config.get('CONFIG.MOUSE_CURSOR_HIDE_ONOFF') === '1',
+          );
+        }
+        this.mouseCursorHideEnabled = member === 311 ? Boolean(n(0)) : undefined;
         return 0;
       }
       if (member === 317 || member === 318 || member === 319) {
-        // 1.1.141.3 0x56ccd8..0x56cd09: set/init/get mwnd_filter_mode (+0x150).
-        if (member === 319) return this.mwndFilterMode;
-        this.mwndFilterMode = member === 317 ? n(0) | 0 : 0;
+        // 1.1.141.3 0x56ccd8..0x56cd09 & 0x619720: mouse_cursor_hide_time (+0x150), default CONFIG.MOUSE_CURSOR_HIDE_TIME.
+        if (member === 319) {
+          return (
+            this.mouseCursorHideTime ??
+            (Number.parseInt(this.game.config.get('CONFIG.MOUSE_CURSOR_HIDE_TIME') ?? '0', 10) || 0)
+          );
+        }
+        this.mouseCursorHideTime = member === 317 ? n(0) | 0 : undefined;
         return 0;
+      }
+      if (member === 330) {
+        // 1.1.134.0 0x569351 / 1.1.141.3 0x56d9a5: get_system_extra_int_value(index).
+        const idx = n(0) | 0;
+        if (idx < 0) return 0;
+        const cntRaw = this.game.config.get('SYSTEM.EXTRA_INT_VALUE.CNT');
+        if (cntRaw !== undefined && idx >= (Number.parseInt(cntRaw, 10) || 0)) return 0;
+        return (
+          Number.parseInt(
+            this.game.config.get(`SYSTEM.EXTRA_INT_VALUE.${String(idx).padStart(3, '0')}`) ?? '0',
+            10,
+          ) || 0
+        );
+      }
+      if (member === 331) {
+        // 1.1.134.0 0x569381 / 1.1.141.3 0x56d9d6: get_system_extra_str_value(index).
+        const idx = n(0) | 0;
+        if (idx < 0) return '';
+        const cntRaw = this.game.config.get('SYSTEM.EXTRA_STR_VALUE.CNT');
+        if (cntRaw !== undefined && idx >= (Number.parseInt(cntRaw, 10) || 0)) return '';
+        const raw = this.game.config.get(`SYSTEM.EXTRA_STR_VALUE.${String(idx).padStart(3, '0')}`);
+        return raw?.match(/"([^"]*)"/)?.[1] ?? '';
       }
       if (member !== undefined && member >= 336 && member <= 339) {
         // 1.1.141.3 0x56bef2..0x56c017: msg_back entry namae(336), msg(337), has_koe(338), has_load(339).
@@ -6911,7 +6970,8 @@ export class SiglusPlayer {
       }
       if (member === 0 || member === 1 || member === 16 || member === 17) {
         const ready = member === 16 || member === 17;
-        if (command.named.every((id) => [0, 1, 3, 5, ...(ready ? [] : [4, 6])].includes(id))) {
+        // 1.1.141.3 0x563ce0: named arg 2 is wait_flag on bgm.play/play_oneshot.
+        if (command.named.every((id) => [0, 1, 3, 5, ...(ready ? [] : [2, 4, 6])].includes(id))) {
           const name = String(named(0) ?? s(0));
           const loop = Boolean(named(1) ?? (member === 0 || member === 16));
           const start = Number(named(3) ?? -1);
@@ -6924,6 +6984,7 @@ export class SiglusPlayer {
             const fadeIn = Math.max(0, Number(named(4) ?? (positional > 1 ? n(1) : 0)));
             this.recordBgmListened(name);
             this.audio.bgmStart(name, loop, fadeIn, fadeOut, Number(named(6) ?? 0), start);
+            if (Boolean(named(2))) return this.waitAudio('bgm', false);
           }
           return 0;
         }
@@ -6957,7 +7018,13 @@ export class SiglusPlayer {
       if (opcode === 7 || opcode === 8)
         return this.delay(this.audio.fadeRemaining(key), opcode === 7);
       if (opcode === 5) {
-        this.audio.stop(key, Math.max(0, n(0)));
+        // 1.1.141.3 0x5644d0: pcmch.stop() 0-arg overload defaults fade to 100ms.
+        this.audio.stop(key, args.length ? Math.max(0, n(0)) : 100);
+        return 0;
+      }
+      if (opcode === 10) {
+        // 1.1.141.3 0x5644d0: pcmch.pause([fade]) defaults fade to 100ms when 0 args.
+        this.audio.pausePcm(channel, args.length ? Math.max(0, n(0)) : 100);
         return 0;
       }
       if (opcode === 9 && command.named.every((id) => id === 0)) {
@@ -6990,7 +7057,7 @@ export class SiglusPlayer {
       }
       if (
         (opcode === 0 || opcode === 2 || opcode === 11 || opcode === 16) &&
-        command.named.every((id) => [0, 2, 3, 4, 6, 7, 8, 10, 11].includes(id))
+        command.named.every((id) => [0, 2, 3, 4, 6, 7, 8, 9, 10, 11].includes(id))
       ) {
         const positional = args.length - command.named.length;
         const namedNumber = (id: number): number | undefined => {
@@ -7002,18 +7069,31 @@ export class SiglusPlayer {
           return index < 0 ? undefined : args[positional + index];
         };
         const voice = namedNumber(8);
+        const seNo = namedNumber(9);
+        const seFile =
+          seNo !== undefined && seNo >= 0
+            ? this.game.config.get(`SE.${String(seNo | 0).padStart(3, '0')}`)?.split('"')[1]
+            : undefined;
         const bgmNameVal = namedValue(10);
         const bgmName = typeof bgmNameVal === 'string' ? bgmNameVal : undefined;
         const fileIndex = command.named.indexOf(7);
         const file = fileIndex < 0 ? args[0] : args[positional + fileIndex];
-        const resource = bgmName ?? voice ?? file;
+        const resource = bgmName ?? voice ?? seFile ?? file;
         if (typeof resource === 'string' || typeof resource === 'number') {
           const isReady = opcode === 11 || opcode === 16;
+          // 1.1.141.3 0x5644d0: clamp named(3) volumeType to [-1..31], else default 2.
+          const rawVolumeType = namedNumber(3);
+          const volumeType =
+            rawVolumeType === undefined
+              ? undefined
+              : rawVolumeType >= -1 && rawVolumeType <= 31
+                ? rawVolumeType | 0
+                : 2;
           const pcmSource = {
             resource,
             bgmName,
             loop: opcode === 2 || opcode === 16 || Boolean(namedNumber(0)),
-            volumeType: namedNumber(3),
+            volumeType,
             character: namedNumber(6),
             bgmFadeTarget: Boolean(namedNumber(4)),
             bgmFadeSource: Boolean(namedNumber(11)),

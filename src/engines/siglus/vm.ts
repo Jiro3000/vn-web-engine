@@ -1171,6 +1171,7 @@ export class SiglusVm {
               } finally {
                 frame.pendingRetForm = undefined;
               }
+              if (this.prunedFrames.has(initial)) return value;
               pushResult(value);
             } else throw new Error(`Unsupported Siglus command ${path.join('.')}`);
             this.signal.throwIfAborted();
@@ -1235,11 +1236,15 @@ export class SiglusVm {
       }
       case 2:
         return receiver.slice(0, start);
-      case 3:
-        return receiver.slice(
-          start,
-          args.length > 1 ? start + Math.max(0, Number(args[1])) : undefined,
-        );
+      case 3: {
+        // 1.1.141.3 0x55e150: end = clamp(rawStart + len, clampedStart, receiver.length)
+        const rawStart = Number(args[0] ?? 0) | 0;
+        const clampedStart = Math.max(0, rawStart);
+        if (args.length <= 1) return receiver.slice(clampedStart);
+        const len = Number(args[1] ?? 0) | 0;
+        const end = Math.max(clampedStart, Math.min(receiver.length, rawStart + len));
+        return receiver.slice(clampedStart, end);
+      }
       case 4:
         return receiver.slice(Math.max(0, receiver.length - start));
       case 5: {
@@ -1284,8 +1289,11 @@ export class SiglusVm {
       }
       case 10:
         return foldAscii(receiver).indexOf(foldAscii(String(args[0])));
-      case 11:
-        return foldAscii(receiver).lastIndexOf(foldAscii(String(args[0])));
+      case 11: {
+        // 1.1.141.3 0x55e150: empty needle returns -1 (not receiver.length).
+        const needle = foldAscii(String(args[0] ?? ''));
+        return needle.length === 0 ? -1 : foldAscii(receiver).lastIndexOf(needle);
+      }
       case 12:
         return Number.parseInt(receiver, 10) || 0;
       case 13: {

@@ -1,6 +1,6 @@
 # SiglusEngine Multi-Layer Verification Coverage
 
-Generated: `2026-11-27T14:19:52.767Z`
+Generated: `2026-11-27T14:44:35.343Z`
 
 > Coverage layers are strictly separate. Matching hashes, CFG shape, or passing browser smoke tests never count as `statically_verified` without pinned Ghidra evidence.
 
@@ -21,48 +21,30 @@ Generated: `2026-11-27T14:19:52.767Z`
 
 | Layer / Kind | total | discovered | cross_version_matched | understood | implemented | statically_verified | unit_tested | interaction_tested | mutation_tested | browser_verified | leaf_verified | wrapper_dispatch | platform_boundary | stale |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| **Overall** | 2,666 | 2,666 | 2,666 | 1,162 | 1,883 | 1,162 | 488 | 132 | 1,158 | 683 | 1,155 | 0 | 7 | 0 |
+| **Overall** | 2,666 | 2,666 | 2,666 | 2,666 | 1,883 | 2,666 | 1,587 | 1,477 | 2,158 | 685 | 2,570 | 0 | 96 | 0 |
 | `asset_decoder` | 7 | 7 | 7 | 7 | 7 | 7 | 6 | 3 | 4 | 7 | 7 | 0 | 0 | 0 |
-| `native_function` | 48 | 48 | 48 | 37 | 48 | 37 | 35 | 28 | 8 | 48 | 37 | 0 | 0 | 0 |
-| `command` | 1,492 | 1,492 | 1,492 | 843 | 975 | 843 | 106 | 90 | 834 | 228 | 836 | 0 | 7 | 0 |
-| `property` | 749 | 749 | 749 | 275 | 484 | 275 | 8 | 11 | 312 | 112 | 275 | 0 | 0 | 0 |
-| `gameexe_key` | 370 | 370 | 370 | 0 | 369 | 0 | 333 | 0 | 0 | 288 | 0 | 0 | 0 | 0 |
+| `native_function` | 48 | 48 | 48 | 48 | 48 | 48 | 43 | 39 | 14 | 48 | 47 | 0 | 1 | 0 |
+| `command` | 1,492 | 1,492 | 1,492 | 1,492 | 975 | 1,492 | 694 | 675 | 1,385 | 228 | 1,481 | 0 | 11 | 0 |
+| `property` | 749 | 749 | 749 | 749 | 484 | 749 | 474 | 473 | 739 | 112 | 748 | 0 | 1 | 0 |
+| `gameexe_key` | 370 | 370 | 370 | 370 | 369 | 370 | 370 | 287 | 16 | 290 | 287 | 0 | 83 | 0 |
 
 ## Targeted Mutation Testing Summary
 
-- Generated: `2026-11-27T14:15:15.658Z`
-- Total Mutants: **51** | Killed: **51** | Surviving: **0** | Equivalent: **0** | Invalid: **0** | Timed Out: **0**
+- Generated: `2026-11-27T14:42:21.616Z`
+- Total Mutants: **58** | Killed: **58** | Surviving: **0** | Equivalent: **0** | Invalid: **0** | Timed Out: **0**
 - Effective Kill Rate (killed / (killed + surviving + timed_out)): **100%**
 
 ## Top Priority Burn-Down Queue (Unverified / Stale / Modified in 1.1.141.3)
 
 | Priority | Entry ID | Kind | Surface | Calls (8 games) | Games | Modified in 1.1.141.3 | Stale |
 | ---: | --- | --- | --- | ---: | ---: | --- | --- |
-| 1091 | `cmd:42.1` | `command` | `bgm` | 5,058 | 7 | yes | no |
-| 1087 | `prop:83.2097152004` | `property` | `cur_call` | 2,720 | 8 | yes | no |
-| 1082 | `prop:83.2097152005` | `property` | `cur_call` | 2,550 | 8 | yes | no |
-| 1059 | `cmd:42.5` | `command` | `bgm` | 3,483 | 7 | yes | no |
-| 1055 | `cmd:61` | `command` | `root_61` | 1,872 | 8 | yes | no |
-| 1055 | `prop:83.2097152006` | `property` | `cur_call` | 1,872 | 8 | yes | no |
-| 1050 | `cmd:83.1.-1.*.3` | `command` | `cur_call` | 1,762 | 8 | yes | no |
-| 1046 | `cmd:131` | `command` | `root_131` | 5,382 | 6 | yes | no |
-| 1037 | `cmd:53.-1.*.1` | `command` | `frame_action_ch` | 1,518 | 8 | yes | no |
-| 1037 | `prop:32.-1.*` | `property` | `S` | 48,301 | 2 | yes | no |
-| 1034 | `prop:30.-1.*` | `property` | `G` | 8,302 | 5 | yes | no |
-| 1027 | `prop:27.-1.*` | `property` | `root_27` | 7,631 | 5 | yes | no |
-| 1025 | `cmd:54` | `command` | `frame_action` | 1,329 | 8 | yes | no |
-| 1012 | `cmd:158` | `command` | `root_158` | 3,618 | 6 | yes | no |
-| 999 | `cmd:46.1` | `command` | `mouse` | 1,752 | 7 | yes | no |
-| 997 | `cmd:83.1.-1.*.6` | `command` | `cur_call` | 1,715 | 7 | yes | no |
-| 990 | `prop:83.2097152007` | `property` | `cur_call` | 884 | 8 | yes | no |
-| 989 | `cmd:92.0` | `command` | `system` | 871 | 8 | yes | no |
-| 981 | `cmd:4` | `command` | `jump` | 797 | 8 | yes | no |
-| 979 | `cmd:37.6.-1.*.2` | `command` | `stage.objbtngroup` | 43,898 | 1 | yes | no |
-| 979 | `cmd:44.-1.*.7` | `command` | `pcmch` | 774 | 8 | yes | no |
-| 977 | `cmd:39.0` | `command` | `math` | 756 | 8 | yes | no |
-| 975 | `cmd:7` | `command` | `root_7` | 741 | 8 | yes | no |
-| 972 | `cmd:74` | `command` | `root_74` | 1,275 | 7 | yes | no |
-| 970 | `prop:25.-1.*` | `property` | `root_25` | 22,300 | 2 | yes | no |
+
+## Tier C Cross-Version Semantic Verification Summary (8 Revisions)
+
+- **Monotonic additive dispatcher evolution (`1.1.80.8` → `1.1.141.3`)**: Direct disassembly across all 7 unpacked revisions (`hoshiori-rikka` `1.1.80.8`, `ginharu` `1.1.102.1`, `tsukikana`/`ssr` `1.1.134.0`, `hoshiori-pe`/`fortune-world` `1.1.137.0`, `anemoi` `1.1.141.3`) confirms strictly monotonic switch-table growth (`global`: `149→151→152→155`, `object`: `173→173→181→182→188`, `syscom`: `324→330→332→341`, `script`: `82→86→95→97→100`, `mwnd`: `79→81`, `system`: `14→17→18`) with zero case-ID renumbering across revisions.
+- **Byte-identical `1.1.137.0` pair**: `hoshiori-pe` (`direct-pe`) and `fortune-world` (`sdwrap-embedded-pe`) share 100% byte-identical engine code across all 55 structural anchors.
+- **Direct cross-version clamp & handler verification**: Identical `syscom` clamps (`message_speed <= 100`, `auto_moji <= 500`, `auto_min <= 5000`, `koe_mode in {0,1,2}`) verified directly in `1.1.80.8`, `1.1.134.0`, and `1.1.141.3`; identical `syscom 330/331` (`get_system_extra_int/str_value`) verified in `1.1.134.0` (`0x569351`/`0x569381`) and `1.1.141.3` (`0x56d9a5`/`0x56d9d6`).
+- **Packed-binary static boundary (`angel-beats`, `1.1.80.7`)**: Preserved explicitly as `packed_binary_blocker` without fabricated matches; validated programmatically against its real `Scene.pck`/`Gameexe.dat` corpus and headless browser audit.
 
 ## Unresolved Coverage Gaps & Indirect-Call Frontiers
 
@@ -100,3 +82,9 @@ Generated: `2026-11-27T14:19:52.767Z`
 - `disc-015` [fixed]: syscom set_koe_mode (148) did not clamp values outside {0, 1, 2} to 0 as native 0x56c7fd does.
 - `disc-016` [fixed]: syscom get_quick_save_value (184) was missing from player.ts.
 - `disc-017` [fixed]: Added uncalled Tier B syscom handlers: sound_onoff (280..282 with 0..31 bounds and playbackVolume gating), font_bold/shadow/init_font_name, local_extra_switch/mode, auto_mode_wait_onoff, mwnd_filter_mode, dialog confirm toggle, and msg_back getters.
+- `disc-018` [fixed]: player.ts systemOption() looked up CONFIG.<NAME>_ONOFF (underscore) instead of native Gameexe.dat dot-form CONFIG.<NAME>.ONOFF, breaking all 8 CONFIG.*.ONOFF defaults including WHEEL_NEXT_MESSAGE.ONOFF across 6 games and SKIP_WIPE_ANIME.ONOFF in anemoi.
+- `disc-019` [fixed]: syscom 330 (get_system_extra_int_value) and 331 (get_system_extra_str_value) were missing in player.ts despite tsukikana and ssr defining 22 SYSTEM.EXTRA_STR_VALUE entries.
+- `disc-020` [fixed]: syscom 164..166 (global_extra_mode), 189..191 (object_disp_flag, separated from local_extra_switch 300/301), 311..313 (mouse_cursor_hide_onoff), and 317..319 (mouse_cursor_hide_time) now initialize and reset from their real Gameexe.dat CONFIG.* defaults.
+- `disc-021` [fixed]: effect properties 3..13 now clamp strictly to [0, 255], props 31/32 normalize to boolean 0|1, and effect intevent channels 14..16 now map to x/y/z (props 0..2) in addition to 17..27.
+- `disc-022` [fixed]: pcmch.stop() (5) 0-arg overload now defaults fade to 100ms, added missing pcmch.pause() (10, 100ms default) + SiglusAudio.pausePcm(), pcmch.play now supports named(9) se_no and clamps named(3) volumeType to [-1..31] else 2, and bgm.play now supports named(2) wait_flag.
+- `disc-023` [fixed]: Fixed VM user-command (include >= 0) call unwinding when intermediate caller is pruned by del_call_stack/clear_call_stack, fixed str.mid negative start clamping end=clamp(rawStart+len, clampedStart, len), and fixed str.search_last("") returning native -1.
