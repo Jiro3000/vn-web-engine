@@ -15,7 +15,7 @@ import {
   discoverAnchors,
   matchPair,
 } from '../tools/siglus-inventory/match.mjs';
-import {checkLedger, evaluateStaleness} from '../tools/siglus-inventory/ledger.mjs';
+import {checkLedger, evaluateStaleness, hashSourceRegion} from '../tools/siglus-inventory/ledger.mjs';
 import {runSingleMutant} from '../tools/siglus-mutate.mjs';
 
 const H_A = 'a'.repeat(64);
@@ -247,6 +247,7 @@ test('Phase 3 ledger rejects unpinned statically_verified claims and detects sta
     statically_verified: true,
     unit_tested: true,
     interaction_tested: false,
+    mutation_tested: false,
     browser_verified: false,
   };
 
@@ -367,4 +368,24 @@ test('Phase 4 mutation runner classifies syntax/compilation failures as invalid,
   );
   assert.equal(res.status, 'invalid');
   assert.match(res.reason, /Compilation error/);
+});
+
+test('Phase 3 region-scoped staleness invalidates only the edited handler region and validates verificationDepth/classification', () => {
+  const srcV1 = '// regionA\nfunction a() { return 1; }\n// endA\n// regionB\nfunction b() { return 2; }\n// endB\n';
+  const srcV2 = '// regionA\nfunction a() { return 999; }\n// endA\n// regionB\nfunction b() { return 2; }\n// endB\n';
+  const shaA = hashSourceRegion(srcV1, '// regionA', '// endA');
+  const shaB = hashSourceRegion(srcV1, '// regionB', '// endB');
+  assert.ok(shaA && shaB && shaA !== shaB);
+
+  const entryA = {
+    verifiedSnapshot: {sourceRegions: [{file: 'mock.ts', startMarker: '// regionA', endMarker: '// endA', sha256: shaA}]},
+  };
+  const entryB = {
+    verifiedSnapshot: {sourceRegions: [{file: 'mock.ts', startMarker: '// regionB', endMarker: '// endB', sha256: shaB}]},
+  };
+  assert.equal(evaluateStaleness(entryA, {}, {}, {'mock.ts': srcV1}).stale, false);
+  assert.equal(evaluateStaleness(entryB, {}, {}, {'mock.ts': srcV1}).stale, false);
+  // Editing regionA invalidates ONLY entryA, leaving entryB fresh!
+  assert.equal(evaluateStaleness(entryA, {}, {}, {'mock.ts': srcV2}).stale, true);
+  assert.equal(evaluateStaleness(entryB, {}, {}, {'mock.ts': srcV2}).stale, false);
 });

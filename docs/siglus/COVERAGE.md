@@ -1,6 +1,6 @@
 # SiglusEngine Multi-Layer Verification Coverage
 
-Generated: `2026-11-27T13:35:29.946Z`
+Generated: `2026-11-27T13:58:16.800Z`
 
 > Coverage layers are strictly separate. Matching hashes, CFG shape, or passing browser smoke tests never count as `statically_verified` without pinned Ghidra evidence.
 
@@ -19,14 +19,14 @@ Generated: `2026-11-27T13:35:29.946Z`
 
 ## Multi-Layer Coverage Summary
 
-| Layer / Kind | total | discovered | cross_version_matched | understood | implemented | statically_verified | unit_tested | interaction_tested | browser_verified | stale |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| **Overall** | 2,666 | 2,666 | 2,666 | 131 | 1,883 | 131 | 481 | 117 | 683 | 0 |
-| `asset_decoder` | 7 | 7 | 7 | 7 | 7 | 7 | 6 | 3 | 7 | 0 |
-| `native_function` | 48 | 48 | 48 | 35 | 48 | 35 | 34 | 25 | 48 | 0 |
-| `command` | 1,492 | 1,492 | 1,492 | 82 | 975 | 82 | 102 | 79 | 228 | 0 |
-| `property` | 749 | 749 | 749 | 7 | 484 | 7 | 6 | 10 | 112 | 0 |
-| `gameexe_key` | 370 | 370 | 370 | 0 | 369 | 0 | 333 | 0 | 288 | 0 |
+| Layer / Kind | total | discovered | cross_version_matched | understood | implemented | statically_verified | unit_tested | interaction_tested | mutation_tested | browser_verified | leaf_verified | wrapper_dispatch | platform_boundary | stale |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| **Overall** | 2,666 | 2,666 | 2,666 | 131 | 1,883 | 131 | 481 | 117 | 127 | 683 | 131 | 0 | 0 | 0 |
+| `asset_decoder` | 7 | 7 | 7 | 7 | 7 | 7 | 6 | 3 | 4 | 7 | 7 | 0 | 0 | 0 |
+| `native_function` | 48 | 48 | 48 | 35 | 48 | 35 | 34 | 25 | 6 | 48 | 35 | 0 | 0 | 0 |
+| `command` | 1,492 | 1,492 | 1,492 | 82 | 975 | 82 | 102 | 79 | 73 | 228 | 82 | 0 | 0 | 0 |
+| `property` | 749 | 749 | 749 | 7 | 484 | 7 | 6 | 10 | 44 | 112 | 7 | 0 | 0 | 0 |
+| `gameexe_key` | 370 | 370 | 370 | 0 | 369 | 0 | 333 | 0 | 0 | 288 | 0 | 0 | 0 | 0 |
 
 ## Targeted Mutation Testing Summary
 

@@ -48,8 +48,22 @@ export const VERIFICATION_METRIC_KEYS = [
   'statically_verified',
   'unit_tested',
   'interaction_tested',
+  'mutation_tested',
   'browser_verified',
 ];
+
+export const VERIFICATION_DEPTHS = new Set([
+  'unverified',
+  'wrapper_dispatch',
+  'leaf_verified',
+  'platform_boundary',
+]);
+
+export const ENTRY_CLASSIFICATIONS = new Set([
+  'engine_semantic',
+  'platform_boundary',
+  'packed_binary_blocker',
+]);
 
 function isObj(v) {
   return v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -266,6 +280,12 @@ export function validateVerificationLedger(ledger) {
       check(Array.isArray(e.staleReasons), `${prefix}.staleReasons must be array`);
       if (e.stale && e.status?.statically_verified) {
         errors.push(`${prefix} cannot remain statically_verified=true while stale=true`);
+      }
+      if (e.verificationDepth !== undefined && !VERIFICATION_DEPTHS.has(e.verificationDepth)) {
+        errors.push(`${prefix}.verificationDepth invalid: ${e.verificationDepth}`);
+      }
+      if (e.classification !== undefined && !ENTRY_CLASSIFICATIONS.has(e.classification)) {
+        errors.push(`${prefix}.classification invalid: ${e.classification}`);
       }
       check(Array.isArray(e.tsLinks), `${prefix}.tsLinks must be array`);
       check(Array.isArray(e.testLinks), `${prefix}.testLinks must be array`);

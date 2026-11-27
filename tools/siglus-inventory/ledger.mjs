@@ -351,10 +351,24 @@ function scanSiglusWorkspace() {
 }
 
 /**
- * Check whether an entry's verified snapshot is stale relative to current TS source hashes,
- * dependency hashes, or native binary identities.
+ * Hash a delimited slice of source text between startMarker and endMarker
+ * (inclusive) so region-scoped staleness checks only invalidate entries whose
+ * actual handler region changed.
  */
-export function evaluateStaleness(entry, currentSourcePins, currentBinaries) {
+export function hashSourceRegion(text, startMarker, endMarker) {
+  const start = text.indexOf(startMarker);
+  if (start < 0) return null;
+  const endIdx = endMarker ? text.indexOf(endMarker, start + startMarker.length) : text.length;
+  if (endIdx < 0) return null;
+  const slice = text.slice(start, endMarker ? endIdx + endMarker.length : endIdx);
+  return crypto.createHash('sha256').update(slice).digest('hex');
+}
+
+/**
+ * Check whether an entry's verified snapshot is stale relative to current TS source hashes,
+ * region-scoped source slices, dependency hashes, or native binary identities.
+ */
+export function evaluateStaleness(entry, currentSourcePins, currentBinaries, currentSourceText = null) {
   const staleReasons = [];
   const snap = entry.verifiedSnapshot;
   if (!snap) return {stale: false, staleReasons: []};
@@ -366,6 +380,22 @@ export function evaluateStaleness(entry, currentSourcePins, currentBinaries) {
         staleReasons.push(`missing-source:${relFile}`);
       } else if (actual !== pinnedSha) {
         staleReasons.push(`source-changed:${relFile} (pinned=${pinnedSha.slice(0, 12)} actual=${actual.slice(0, 12)})`);
+      }
+    }
+  }
+  if (Array.isArray(snap.sourceRegions)) {
+    for (const reg of snap.sourceRegions) {
+      const abs = path.join(REPO_ROOT, reg.file);
+      const text = currentSourceText?.[reg.file] ?? (fs.existsSync(abs) ? fs.readFileSync(abs, 'utf8') : null);
+      if (text === null) {
+        staleReasons.push(`missing-region-file:${reg.file}`);
+        continue;
+      }
+      const actual = hashSourceRegion(text, reg.startMarker, reg.endMarker);
+      if (!actual) {
+        staleReasons.push(`missing-region-marker:${reg.file}:${reg.startMarker.slice(0, 40)}`);
+      } else if (actual !== reg.sha256) {
+        staleReasons.push(`region-changed:${reg.file} (pinned=${reg.sha256.slice(0, 12)} actual=${actual.slice(0, 12)})`);
       }
     }
   }
@@ -455,6 +485,45 @@ export function buildLedger({
   const hasInteractionSuite = testFiles.includes('tests/siglus-stateful-interactions.test.mjs');
   const interactionText = hasInteractionSuite ? testContents['tests/siglus-stateful-interactions.test.mjs'] : '';
 
+  // Load killed mutants from mutation-report.json so mutation_tested reflects real killed mutants only
+  const killedMutantsByArea = new Map();
+  const killedMutantsByFile = new Map();
+  const killedMutantIds = new Set();
+  if (fs.existsSync(MUTATION_REPORT_PATH)) {
+    const mutDoc = JSON.parse(fs.readFileSync(MUTATION_REPORT_PATH, 'utf8'));
+    for (const m of mutDoc.results ?? []) {
+      if (m.status !== 'killed') continue;
+      killedMutantIds.add(m.id);
+      if (m.area) {
+        const arr = killedMutantsByArea.get(m.area) ?? [];
+        arr.push(m.id);
+        killedMutantsByArea.set(m.area, arr);
+      }
+      if (m.file) {
+        const arr = killedMutantsByFile.get(m.file) ?? [];
+        arr.push(m.id);
+        killedMutantsByFile.set(m.file, arr);
+      }
+    }
+  }
+  const hasKilledMutantForSurface = (kind, surface, tsFiles) => {
+    if (surface && killedMutantsByArea.has(surface)) return true;
+    const base = surface?.split('.').at(-1);
+    if (
+      base &&
+      (killedMutantsByArea.has(base) ||
+        killedMutantsByArea.has(`player/${base}`) ||
+        killedMutantsByArea.has(`formats/${base}`) ||
+        killedMutantsByArea.has(`vm/${base}`))
+    ) {
+      return true;
+    }
+    if (kind === 'asset_decoder') {
+      return (tsFiles ?? []).some((f) => killedMutantsByFile.has(f));
+    }
+    return false;
+  };
+
   const findTestsForSurface = (keywords, pathStr = null) => {
     const hits = [];
     for (const tf of testFiles) {
@@ -471,22 +540,39 @@ export function buildLedger({
   };
 
   const applyVerifiedEvidence = (entry) => {
+    entry.verificationDepth = 'unverified';
+    entry.classification = 'engine_semantic';
+    if (entry.status.mutation_tested === undefined) {
+      entry.status.mutation_tested = hasKilledMutantForSurface(
+        entry.kind,
+        entry.surface,
+        (entry.tsLinks ?? []).map((l) => l.file),
+      );
+    }
     const ev = evidenceById.get(entry.id);
     if (!ev) return entry;
     entry.nativeEvidence = ev.nativeEvidence ?? [];
     entry.verifiedSnapshot = ev.verifiedSnapshot ?? null;
     if (ev.notes) entry.notes = ev.notes;
+    if (ev.classification) entry.classification = ev.classification;
     if (ev.extraTestLinks?.length) {
       entry.testLinks = [...new Set([...entry.testLinks, ...ev.extraTestLinks])];
     }
-    const {stale, staleReasons} = evaluateStaleness(entry, sourcePins, binaries);
+    if (Array.isArray(ev.mutants) && ev.mutants.some((id) => killedMutantIds.has(id))) {
+      entry.status.mutation_tested = true;
+    }
+    const {stale, staleReasons} = evaluateStaleness(entry, sourcePins, binaries, sourceText);
     entry.stale = stale;
     entry.staleReasons = staleReasons;
     if (!stale && entry.nativeEvidence.length > 0) {
       entry.status.understood = true;
       entry.status.statically_verified = true;
+      entry.verificationDepth =
+        ev.verificationDepth ??
+        (entry.classification === 'platform_boundary' ? 'platform_boundary' : 'leaf_verified');
     } else if (stale) {
       entry.status.statically_verified = false;
+      entry.verificationDepth = 'unverified';
     }
     if (ev.unitTested) entry.status.unit_tested = true;
     if (ev.interactionTested) entry.status.interaction_tested = true;
@@ -786,21 +872,28 @@ export function buildLedger({
     }
   }
 
-  // Compute separate 8-layer coverage totals (overall & by kind)
-  const metrics = {overall: {}, byKind: {}};
+  // Compute separate 9-layer coverage totals + verificationDepth breakdown (overall & by kind)
+  const metrics = {
+    overall: {leaf_verified: 0, wrapper_dispatch: 0, platform_boundary: 0},
+    byKind: {},
+  };
   for (const k of VERIFICATION_METRIC_KEYS) metrics.overall[k] = 0;
   metrics.overall.total = entries.length;
   metrics.overall.stale = 0;
 
   for (const e of entries) {
     if (!metrics.byKind[e.kind]) {
-      metrics.byKind[e.kind] = {total: 0, stale: 0};
+      metrics.byKind[e.kind] = {total: 0, stale: 0, leaf_verified: 0, wrapper_dispatch: 0, platform_boundary: 0};
       for (const k of VERIFICATION_METRIC_KEYS) metrics.byKind[e.kind][k] = 0;
     }
     metrics.byKind[e.kind].total++;
     if (e.stale) {
       metrics.overall.stale++;
       metrics.byKind[e.kind].stale++;
+    }
+    if (e.verificationDepth === 'leaf_verified' || e.verificationDepth === 'wrapper_dispatch' || e.verificationDepth === 'platform_boundary') {
+      metrics.overall[e.verificationDepth]++;
+      metrics.byKind[e.kind][e.verificationDepth]++;
     }
     for (const k of VERIFICATION_METRIC_KEYS) {
       if (e.status[k]) {
@@ -810,21 +903,24 @@ export function buildLedger({
     }
   }
 
-  // Priority burn-down queue: unverified or stale, modified in 1.1.141.3, highest corpus frequency
+  // Priority burn-down queue: unverified, wrapper_dispatch, or stale (excluding verified platform_boundary)
   const burnDownQueue = entries
-    .filter((e) => !e.status.statically_verified || e.stale)
-    .filter((e) => e.kind === 'command' || e.kind === 'property' || e.kind === 'native_function')
+    .filter((e) => !e.status.statically_verified || e.verificationDepth === 'wrapper_dispatch' || e.stale)
+    .filter((e) => !(e.classification === 'platform_boundary' && e.status.statically_verified))
+    .filter((e) => e.kind === 'command' || e.kind === 'property' || e.kind === 'native_function' || e.kind === 'gameexe_key')
     .map((e) => {
       const freq = e.corpusUsage?.totalCalls ?? 0;
       const games = e.corpusUsage?.gameCount ?? 0;
       const modBoost = e.crossVersion?.modifiedInLatest ? 2.0 : e.crossVersion?.modifiedTransitions > 0 ? 1.3 : 1.0;
       const staleBoost = e.stale ? 3.0 : 1.0;
-      const score = Math.round(((Math.log10(freq + 10) * 100 + games * 25 + (e.kind === 'native_function' ? 120 : 0)) * modBoost * staleBoost));
+      const depthBoost = e.verificationDepth === 'wrapper_dispatch' ? 0.65 : 1.0;
+      const score = Math.round(((Math.log10(freq + 10) * 100 + games * 25 + (e.kind === 'native_function' ? 120 : 0)) * modBoost * staleBoost * depthBoost));
       return {
         id: e.id,
         kind: e.kind,
-        surface: e.surface,
+        surface: e.surface ?? e.keySchema,
         anchorId: e.anchorId ?? e.surface,
+        verificationDepth: e.verificationDepth,
         stale: e.stale,
         modifiedInLatest: Boolean(e.crossVersion?.modifiedInLatest),
         totalCalls: freq,
@@ -936,7 +1032,7 @@ export function renderCoverageMarkdown(ledger) {
 
   lines.push('## Multi-Layer Coverage Summary');
   lines.push('');
-  const cols = ['total', ...VERIFICATION_METRIC_KEYS, 'stale'];
+  const cols = ['total', ...VERIFICATION_METRIC_KEYS, 'leaf_verified', 'wrapper_dispatch', 'platform_boundary', 'stale'];
   lines.push(`| Layer / Kind | ${cols.join(' | ')} |`);
   lines.push(`| --- | ${cols.map(() => '---:').join(' | ')} |`);
   const fmtRow = (label, obj) => `| ${label} | ${cols.map((c) => (obj[c] ?? 0).toLocaleString()).join(' | ')} |`;
