@@ -537,7 +537,7 @@ export class SiglusPlayer {
   private readonly pcmEvents = new Map<
     number,
     {
-      cancel: () => void;
+      cancel: (stopSound?: boolean) => void;
       config: {
         mode: 'oneshot' | 'loop' | 'random';
         pcmchNo: number;
@@ -4389,10 +4389,10 @@ export class SiglusPlayer {
     }
   }
 
-  private stopPcmEvent(slot: number): void {
+  private stopPcmEvent(slot: number, stopSound = true): void {
     const active = this.pcmEvents.get(slot);
     if (active) {
-      active.cancel();
+      active.cancel(stopSound);
       this.pcmEvents.delete(slot);
     }
   }
@@ -4403,15 +4403,17 @@ export class SiglusPlayer {
     entries: readonly {file: string; minTime: number; maxTime: number; probability: number}[],
     options: {volumeType?: number; bgmFadeTarget?: boolean; character?: number},
   ): void {
-    this.stopPcmEvent(slot);
+    this.stopPcmEvent(slot, true);
     if (!entries.length) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let previousIndex = -1;
-    const cancel = (): void => {
+    const cancel = (stopSound = true): void => {
       cancelled = true;
       if (timer !== undefined) clearTimeout(timer);
-      if (pcmchNo >= 0) this.audio.stop(`pcm${pcmchNo}`);
+      if (stopSound) {
+        this.audio.stop(pcmchNo >= 0 ? `pcm${pcmchNo}` : 'se', 100);
+      }
     };
     this.pcmEvents.set(slot, {
       cancel,
@@ -4470,16 +4472,18 @@ export class SiglusPlayer {
     options: {volumeType?: number; bgmFadeTarget?: boolean; character?: number},
     loop: boolean,
   ): void {
-    // Native 0x55fe50 modes 0 (start_oneshot) and 1 (start_loop)
-    this.stopPcmEvent(slot);
+    // Native 0x5652f0 modes 0 (start_oneshot) and 1 (start_loop)
+    this.stopPcmEvent(slot, true);
     if (!entries.length) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let index = 0;
-    const cancel = (): void => {
+    const cancel = (stopSound = true): void => {
       cancelled = true;
       if (timer !== undefined) clearTimeout(timer);
-      if (pcmchNo >= 0) this.audio.stop(`pcm${pcmchNo}`);
+      if (stopSound) {
+        this.audio.stop(pcmchNo >= 0 ? `pcm${pcmchNo}` : 'se', 100);
+      }
     };
     const entry = {
       cancel,
@@ -4790,18 +4794,16 @@ export class SiglusPlayer {
           break;
         case 2: // global.owari: end script cleanly and return to title menu
           return this.vm.returnToMenu();
-        case 138: // 1.1.141.3 at 0x551aed removes entries from the end of message history.
-          if (n(0) > 0) this.backlog.length = Math.max(0, this.backlog.length - (n(0) | 0));
+        case 138: // 1.1.141.3 0x54fc20 case 0x8a -> 0x5c71f0: del_call_stack(n)
+          if (n(0) > 0) this.vm?.delCallStack(n(0) | 0);
           return 0;
-        case 139:
-          return this.backlog.length + 1;
-        case 140: {
-          const count = n(0) | 0;
-          if (count >= 1 && count <= this.backlog.length) this.backlog.length = count - 1;
+        case 139: // 1.1.141.3 0x54fc20 case 0x8b: get_call_stack_cnt()
+          return this.vm?.callStackCount() ?? 1;
+        case 140: // 1.1.141.3 0x54fc20 case 0x8c -> 0x5c71f0: set_call_stack_cnt(n)
+          this.vm?.setCallStackCount(n(0) | 0);
           return 0;
-        }
-        case 141: // 0x551ae1 invokes the same receiver with the initial count of one.
-          this.backlog.length = 0;
+        case 141: // 1.1.141.3 0x54fc20 case 0x8d -> 0x5c71f0(1): clear_call_stack()
+          this.vm?.clearCallStack();
           return 0;
         case 22:
           this.display.setMessageFrame(n(0));
@@ -6144,6 +6146,11 @@ export class SiglusPlayer {
         ensureLast().name = s(0);
         return 0;
       }
+      if (member === 6) {
+        // 1.1.141.3 0x555b20 case 6 (msgbk.clear): clears message history entries.
+        this.backlog.length = 0;
+        return 0;
+      }
     }
     if (root === 86 && member === 2) {
       this.display.clearInput();
@@ -6332,8 +6339,14 @@ export class SiglusPlayer {
     }
     // 1.1.141.3 converts FILETIME to Unix seconds at 0x763c74 and returns the low word.
     if (root === 92 && member === 15) return Math.floor(Date.now() / 1000) | 0;
-    // 1.1.141.3 0x55fb30 (database[n]): 0=get_num, 1=get_str, 3=check_item_no,
-    // 4=check_column_no, 5=find_num, 6=find_str (case-insensitive), 7=find_str_real (exact).
+    // 1.1.141.3 0x54fc20 case 0x69 member 1 (database.cnt) and 0x55fb30 (database[n]):
+    // 0=get_num, 1=get_str, 3=check_item_no, 4=check_column_no, 5=find_num,
+    // 6=find_str (case-insensitive), 7=find_str_real (exact).
+    if (root === 105 && member === 1 && path.length === 2) {
+      let count = 0;
+      for (const key of this.game.config.keys()) if (/^DATABASE\.\d+$/.test(key)) count++;
+      return count || Number(this.game.config.get('DATABASE.CNT') ?? 0);
+    }
     if (root === 105 && member === -1 && path.length === 4) {
       const db = await this.loadDatabase(path[2]!);
       if (path[3] === 0) return db ? db.getNum(n(0), n(1)) : 0;
@@ -6448,11 +6461,12 @@ export class SiglusPlayer {
       }
     }
     if (root === 52 && member === -1 && path.length === 4) {
-      // pcmevent[slot] (native 0x55fe50)
+      // pcmevent[slot] (native 1.1.141.3 0x5652f0)
       const slot = path[2]!;
       const op = path[3];
       if (op === 3) {
-        this.stopPcmEvent(slot);
+        // 1.1.141.3 0x5652f0 case 3: stop(wait_flag) fades out channel (100ms) only when arg0 != 0.
+        this.stopPcmEvent(slot, args.length > 0 ? Boolean(n(0)) : false);
         return 0;
       }
       if (op === 5) return Number(this.pcmEvents.has(slot));
@@ -6479,17 +6493,16 @@ export class SiglusPlayer {
           character: namedNumber(6),
         };
         if (op === 2) {
+          // 1.1.141.3 0x5652f0 lines 1288-1320: random tuple layout is [file, prob?, minTime?, maxTime?].
           const entries: {file: string; minTime: number; maxTime: number; probability: number}[] =
             [];
           for (let i = startIdx; i < positional; i++) {
             const entry = args[i];
             if (Array.isArray(entry) && typeof entry[0] === 'string') {
-              entries.push({
-                file: entry[0],
-                minTime: Number(entry[1] ?? 0),
-                maxTime: Number(entry[2] ?? 0),
-                probability: Number(entry[3] ?? 1),
-              });
+              const probability = entry.length >= 2 ? Number(entry[1] ?? 1) : 1;
+              const minTime = entry.length >= 3 ? Number(entry[2] ?? 0) : 0;
+              const maxTime = entry.length >= 4 ? Number(entry[3] ?? minTime) : minTime;
+              entries.push({file: entry[0], minTime, maxTime, probability});
             }
           }
           this.startPcmEventRandom(slot, pcmchNo, entries, opts);

@@ -223,6 +223,7 @@ export class SiglusVm {
   private readonly declaredListSizes = new Map<string, number>();
   private readonly frames: Frame[] = [];
   private readonly sceneJumps = new Map<Frame, Frame>();
+  private readonly prunedFrames = new WeakSet<Frame>();
   private pendingLoad?: {checkpoint: SiglusCheckpoint; beforeResume: () => Promise<void>};
 
   constructor(
@@ -258,7 +259,9 @@ export class SiglusVm {
 
   /** Capture the stack while a host command is waiting at a save point. */
   checkpoint(commandResult?: Value): SiglusCheckpoint {
-    const activeFrames = this.frames.map((original) => this.sceneJumps.get(original) ?? original);
+    const activeFrames = this.frames
+      .filter((original) => !this.prunedFrames.has(original))
+      .map((original) => this.sceneJumps.get(original) ?? original);
     const frames = activeFrames.map((frame) => ({
       scene: frame.scene.name,
       pc: frame.pc,
@@ -549,6 +552,43 @@ export class SiglusVm {
     return {scene: frame.scene.name, line: frame.line};
   }
 
+  /** Native 1.1.141.3 0x54fc20 case 0x8b (139): active call stack depth (DAT_00ae1a68+0xb8, >= 1). */
+  callStackCount(): number {
+    let count = 0;
+    for (const f of this.frames) {
+      if (!this.prunedFrames.has(f)) count++;
+    }
+    return Math.max(1, count);
+  }
+
+  /** Native 1.1.141.3 0x54fc20 case 0x8a (138) -> 0x5c71f0: drop up to `drop` caller frames, keeping >= 1. */
+  delCallStack(drop: number): void {
+    const n = drop | 0;
+    if (n <= 0) return;
+    this.setCallStackCount(Math.max(1, this.callStackCount() - n));
+  }
+
+  /** Native 1.1.141.3 0x54fc20 case 0x8c (140) -> 0x5c71f0: shrink active call stack to `target` (1 <= target < depth). */
+  setCallStackCount(target: number): void {
+    const desired = target | 0;
+    const current = this.callStackCount();
+    if (desired < 1 || desired >= current) return;
+    let toPrune = current - desired;
+    // Prune the most recent non-pruned caller frames immediately below the currently executing frame.
+    for (let i = this.frames.length - 2; i >= 0 && toPrune > 0; i--) {
+      const f = this.frames[i]!;
+      if (!this.prunedFrames.has(f)) {
+        this.prunedFrames.add(f);
+        toPrune--;
+      }
+    }
+  }
+
+  /** Native 1.1.141.3 0x54fc20 case 0x8d (141) -> 0x5c71f0(1): discard all pending caller frames. */
+  clearCallStack(): void {
+    this.setCallStackCount(1);
+  }
+
   returnToMenu(scene = this.menu?.scene, entry = this.menu?.entry): never {
     if (scene === undefined || entry === undefined)
       throw new Error('Siglus menu scene is undefined');
@@ -644,6 +684,7 @@ export class SiglusVm {
         if (retForm !== undefined) child.expectedRetForm = retForm;
         const result = await this.resume(frames, beforeResume, index + 1);
         frame.pendingRetForm = undefined;
+        if (this.prunedFrames.has(frame)) return result;
         if (retForm !== 0) frame.stack.push(result);
       } else {
         frame.pendingRetForm = undefined;
@@ -653,6 +694,7 @@ export class SiglusVm {
     } finally {
       this.frames.pop();
       this.sceneJumps.delete(frame);
+      this.prunedFrames.delete(frame);
     }
   }
 
@@ -663,6 +705,7 @@ export class SiglusVm {
     } finally {
       this.frames.pop();
       this.sceneJumps.delete(frame);
+      this.prunedFrames.delete(frame);
     }
   }
 
@@ -839,7 +882,9 @@ export class SiglusVm {
             sub.expectedRetForm = op === 20 ? 20 : 10;
             frame.pendingRetForm = sub.expectedRetForm;
             try {
-              frame.stack.push(await this.call(sub, depth + 1));
+              const value = await this.call(sub, depth + 1);
+              if (this.prunedFrames.has(initial)) return value;
+              frame.stack.push(value);
             } finally {
               frame.pendingRetForm = undefined;
             }
@@ -980,6 +1025,7 @@ export class SiglusVm {
               } finally {
                 frame.pendingRetForm = undefined;
               }
+              if (this.prunedFrames.has(initial)) return value;
               pushResult(value);
               break;
             }

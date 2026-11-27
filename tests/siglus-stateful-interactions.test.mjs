@@ -907,3 +907,163 @@ test('Phase 5 Ghidra fix: math root 39 (0x55eed0) supports tostr(val,width), tan
   assert.equal(await call([39, 14], 15), 3);
   assert.equal(await call([39, 14], 16), 4);
 });
+
+test('Phase 5 Batch 2 Ghidra fix: pcmevent.start_random (52.-1.*.2, 0x5652f0) parses [file, prob, minTime, maxTime] and stop(stopSound) respects arg0', async () => {
+  const stopped = [];
+  const player = makeMockPlayer({
+    controller: new AbortController(),
+    pcmEvents: new Map(),
+    audio: {
+      pcm: async () => {},
+      effect: async () => {},
+      effectDurationMs: async () => 50,
+      stop: (ch, fade) => stopped.push([ch, fade]),
+    },
+  });
+  const call = (path, ...args) => player.command({path, args, named: []});
+  try {
+    // Native 0x5652f0 lines 1288-1320:
+    // 1 arg: [file] -> prob=1, min=0, max=0
+    // 2 args: [file, prob] -> prob=arg1, min=0, max=0
+    // 3 args: [file, prob, time] -> prob=arg1, min=arg2, max=arg2
+    // 4 args: [file, prob, min, max] -> prob=arg1, min=arg2, max=arg3
+    await call([52, -1, 0, 2], 3, ['a'], ['b', 40], ['c', 60, 500], ['d', 80, 1000, 2000]);
+    const cfg = player.pcmEvents.get(0)?.config;
+    assert.ok(cfg, 'pcmevent slot 0 should be registered');
+    assert.equal(cfg.mode, 'random');
+    assert.equal(cfg.pcmchNo, 3);
+    assert.deepEqual(cfg.entries, [
+      {file: 'a', probability: 1, minTime: 0, maxTime: 0},
+      {file: 'b', probability: 40, minTime: 0, maxTime: 0},
+      {file: 'c', probability: 60, minTime: 500, maxTime: 500},
+      {file: 'd', probability: 80, minTime: 1000, maxTime: 2000},
+    ]);
+
+    // stop(0) cancels schedule without cutting off playing sound; stop(1) fades channel out with 100ms
+    await call([52, -1, 0, 3], 0);
+    assert.equal(player.pcmEvents.has(0), false);
+    assert.deepEqual(stopped, []);
+
+    await call([52, -1, 0, 2], 3, ['a', 50]);
+    await call([52, -1, 0, 3], 1);
+    assert.equal(player.pcmEvents.has(0), false);
+    assert.deepEqual(stopped, [['pcm3', 100]]);
+  } finally {
+    player.controller.abort();
+    for (const ev of player.pcmEvents.values()) ev.cancel(false);
+  }
+});
+
+test('Phase 5 Batch 2 Ghidra fix: global 138/139/140/141 (0x54fc20 -> 0x5c71f0) manipulate VM call stack without wiping backlog', async () => {
+  // Build a minimal 3-scene pack: s0 -> farcall s1 -> farcall s2
+  const makeCode = (bytes) => new Uint8Array(bytes);
+  const w32 = (n) => [n & 0xff, (n >> 8) & 0xff, (n >> 16) & 0xff, (n >> 24) & 0xff];
+  // Encode a scene that executes command(cmdId, args...) then RETURN(0)
+  const buildScene = (name, strings, codeBytes) => ({
+    name,
+    code: makeCode(codeBytes),
+    view: new DataView(makeCode(codeBytes).buffer),
+    labels: [0],
+    entries: [0],
+    strings,
+    properties: [],
+    commands: [],
+  });
+  // Helper: CD_PUSH(10, val), CD_PUSH(20, strIdx), CD_ELM_POINT(8), CD_PUSH(10, root), CD_COMMAND(48)
+  const pushInt = (v) => [2, ...w32(10), ...w32(v)];
+  const pushStr = (idx) => [2, ...w32(20), ...w32(idx)];
+  const callCmd = (root, argSpecs, retForm = 0) => [
+    8, // CD_ELM_POINT
+    ...pushInt(root),
+    ...argSpecs.flatMap((a) => (a.str !== undefined ? pushStr(a.str) : pushInt(a.int))),
+    48, // CD_COMMAND
+    ...w32(0), // overload
+    ...w32(argSpecs.length),
+    ...argSpecs.flatMap((a) => w32(a.str !== undefined ? 20 : 10)),
+    ...w32(0), // named count
+    ...w32(retForm),
+  ];
+  const retVoid = [21, ...w32(0)]; // CD_RETURN(0 args)
+
+  // s0: farcall("s1", 0), then callCmd(900) [marker: s0 resumed]
+  const s0 = buildScene('s0', ['s1'], [
+    ...callCmd(5, [{str: 0}, {int: 0}]),
+    ...callCmd(900, []),
+    ...retVoid,
+  ]);
+  // s1: farcall("s2", 0), then callCmd(901) [marker: s1 resumed]
+  const s1 = buildScene('s1', ['s2'], [
+    ...callCmd(5, [{str: 0}, {int: 0}]),
+    ...callCmd(901, []),
+    ...retVoid,
+  ]);
+  // s2: callCmd(902) [hook inside deepest frame], then RETURN
+  const s2 = buildScene('s2', [], [...callCmd(902, []), ...retVoid]);
+
+  const scenes = new Map([['s0', s0], ['s1', s1], ['s2', s2]]);
+  const pack = {
+    sceneNames: ['s0', 's1', 's2'],
+    commandNames: [],
+    commandScenes: [],
+    properties: [],
+    scene: (n) => scenes.get(n),
+  };
+
+  const log = [];
+  const controller = new AbortController();
+  let player;
+  const vm = new SiglusVm(
+    pack,
+    {
+      trace() {},
+      property() { return undefined; },
+      async command(cmd) {
+        if (cmd.path[0] === 900 || cmd.path[0] === 901) {
+          log.push(`resumed:${cmd.path[0]}`);
+          return 0;
+        }
+        if (cmd.path[0] === 902) {
+          // Inside s2: stack is [s0, s1, s2] => depth 3
+          const depthBefore = await player.command({path: [139], args: [], named: []});
+          log.push(`depthBefore:${depthBefore}`);
+          // del_call_stack(1) removes s1 (immediate caller), leaving [s0, s2] => depth 2!
+          await player.command({path: [138], args: [1], named: []});
+          const depthAfterDel = await player.command({path: [139], args: [], named: []});
+          log.push(`depthAfterDel:${depthAfterDel}`);
+          return 0;
+        }
+        return player.command(cmd);
+      },
+    },
+    controller.signal,
+  );
+  player = makeMockPlayer({
+    vm,
+    backlog: [{name: 'Hero', text: [{text: 'Line 1'}], voices: []}, {name: 'Hero', text: [{text: 'Line 2'}], voices: []}],
+    historyPoints: new WeakMap(),
+  });
+
+  await vm.run('s0', 0);
+  assert.deepEqual(log, ['depthBefore:3', 'depthAfterDel:2', 'resumed:900']);
+  // Dialogue backlog MUST be completely untouched by del_call_stack (138)!
+  assert.equal(player.backlog.length, 2);
+
+  // Also test clear_call_stack (141) does not wipe backlog
+  await player.command({path: [141], args: [], named: []});
+  assert.equal(player.backlog.length, 2);
+});
+
+test('Phase 5 Batch 2 Ghidra fix: msgbk.clear (145.6, 0x555b20) clears backlog and database.cnt (105.1, 0x54fc20) returns database count', async () => {
+  const player = makeMockPlayer({
+    backlog: [{name: 'A', text: [{text: 'hi'}], voices: []}],
+    historyPoints: new WeakMap(),
+  });
+  player.game.config.set('DATABASE.000', '"db0"');
+  player.game.config.set('DATABASE.001', '"db1"');
+  player.game.config.set('DATABASE.002', '"db2"');
+  const call = (path, ...args) => player.command({path, args, named: []});
+
+  assert.equal(await call([145, 6]), 0);
+  assert.equal(player.backlog.length, 0);
+  assert.equal(await call([105, 1]), 3);
+});

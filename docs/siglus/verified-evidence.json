@@ -37,14 +37,16 @@
       "verifiedSnapshot": {
         "verifiedAt": "2026-11-27",
         "sourceHashes": {
-          "src/engines/siglus/player.ts": "99e8443f62c5154cd4b8beb9edda0ffeab114415b52428da6be90119b53775fd",
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
           "src/formats/siglus/dbs.ts": "c8c19c7635c3c7687676c955badeab5cb215ce07c865f281bdfe7b2b97f1daa0"
         },
         "binaryHashes": {
           "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
         }
       },
-      "extraTestLinks": ["tests/siglus-stateful-interactions.test.mjs"],
+      "extraTestLinks": [
+        "tests/siglus-stateful-interactions.test.mjs"
+      ],
       "unitTested": true,
       "interactionTested": true
     },
@@ -65,14 +67,16 @@
       "verifiedSnapshot": {
         "verifiedAt": "2026-11-27",
         "sourceHashes": {
-          "src/engines/siglus/player.ts": "99e8443f62c5154cd4b8beb9edda0ffeab114415b52428da6be90119b53775fd",
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
           "src/formats/siglus/cgtable.ts": "51acccd0b48c1f59010a6aa46f8e436036d5bb3b911cefbb0d8a7854dce310fa"
         },
         "binaryHashes": {
           "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
         }
       },
-      "extraTestLinks": ["tests/siglus-stateful-interactions.test.mjs"],
+      "extraTestLinks": [
+        "tests/siglus-stateful-interactions.test.mjs"
+      ],
       "unitTested": true,
       "interactionTested": true
     },
@@ -93,13 +97,15 @@
       "verifiedSnapshot": {
         "verifiedAt": "2026-11-27",
         "sourceHashes": {
-          "src/engines/siglus/player.ts": "99e8443f62c5154cd4b8beb9edda0ffeab114415b52428da6be90119b53775fd"
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc"
         },
         "binaryHashes": {
           "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
         }
       },
-      "extraTestLinks": ["tests/siglus-stateful-interactions.test.mjs"],
+      "extraTestLinks": [
+        "tests/siglus-stateful-interactions.test.mjs"
+      ],
       "unitTested": true,
       "interactionTested": true
     },
@@ -138,14 +144,16 @@
       "verifiedSnapshot": {
         "verifiedAt": "2026-11-27",
         "sourceHashes": {
-          "src/engines/siglus/player.ts": "99e8443f62c5154cd4b8beb9edda0ffeab114415b52428da6be90119b53775fd",
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
           "src/engines/siglus/math.ts": "f5a441d38943deb3c3325c046c472c4be52ac3d8fdd01b9c49605fc550aa425e"
         },
         "binaryHashes": {
           "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
         }
       },
-      "extraTestLinks": ["tests/siglus-stateful-interactions.test.mjs"],
+      "extraTestLinks": [
+        "tests/siglus-stateful-interactions.test.mjs"
+      ],
       "unitTested": true,
       "interactionTested": true
     },
@@ -166,7 +174,7 @@
       "verifiedSnapshot": {
         "verifiedAt": "2026-11-27",
         "sourceHashes": {
-          "src/engines/siglus/player.ts": "99e8443f62c5154cd4b8beb9edda0ffeab114415b52428da6be90119b53775fd"
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc"
         },
         "binaryHashes": {
           "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
@@ -190,14 +198,16 @@
       "verifiedSnapshot": {
         "verifiedAt": "2026-11-27",
         "sourceHashes": {
-          "src/engines/siglus/player.ts": "99e8443f62c5154cd4b8beb9edda0ffeab114415b52428da6be90119b53775fd",
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
           "src/engines/siglus/display.ts": "58c9832299c966e6c97e16454e4e41869c0e8d8b24010d286f13bac215c11aef"
         },
         "binaryHashes": {
           "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
         }
       },
-      "extraTestLinks": ["tests/siglus-stateful-interactions.test.mjs"],
+      "extraTestLinks": [
+        "tests/siglus-stateful-interactions.test.mjs"
+      ],
       "interactionTested": true
     },
     {
@@ -217,7 +227,7 @@
       "verifiedSnapshot": {
         "verifiedAt": "2026-11-27",
         "sourceHashes": {
-          "src/engines/siglus/player.ts": "99e8443f62c5154cd4b8beb9edda0ffeab114415b52428da6be90119b53775fd",
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
           "src/engines/siglus/audio.ts": "0101f0016c8ea0c2ee5c4f0b526848c68a222f5e6c1c4288e2ecdebf62fc4650"
         },
         "binaryHashes": {
@@ -242,7 +252,7 @@
       "verifiedSnapshot": {
         "verifiedAt": "2026-11-27",
         "sourceHashes": {
-          "src/engines/siglus/player.ts": "99e8443f62c5154cd4b8beb9edda0ffeab114415b52428da6be90119b53775fd",
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
           "src/engines/siglus/audio.ts": "0101f0016c8ea0c2ee5c4f0b526848c68a222f5e6c1c4288e2ecdebf62fc4650"
         },
         "binaryHashes": {
@@ -267,7 +277,7 @@
       "verifiedSnapshot": {
         "verifiedAt": "2026-11-27",
         "sourceHashes": {
-          "src/engines/siglus/player.ts": "99e8443f62c5154cd4b8beb9edda0ffeab114415b52428da6be90119b53775fd",
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
           "src/engines/siglus/mwnd.ts": "00c46e6fbcc9c7c0988585b750fa95a9ddf23310c195636704489c5350cc04cf",
           "src/engines/siglus/display.ts": "58c9832299c966e6c97e16454e4e41869c0e8d8b24010d286f13bac215c11aef"
         },
@@ -293,7 +303,7 @@
       "verifiedSnapshot": {
         "verifiedAt": "2026-11-27",
         "sourceHashes": {
-          "src/engines/siglus/player.ts": "99e8443f62c5154cd4b8beb9edda0ffeab114415b52428da6be90119b53775fd",
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
           "src/engines/siglus/display.ts": "58c9832299c966e6c97e16454e4e41869c0e8d8b24010d286f13bac215c11aef"
         },
         "binaryHashes": {
@@ -318,7 +328,7 @@
       "verifiedSnapshot": {
         "verifiedAt": "2026-11-27",
         "sourceHashes": {
-          "src/engines/siglus/player.ts": "99e8443f62c5154cd4b8beb9edda0ffeab114415b52428da6be90119b53775fd",
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
           "src/engines/siglus/display.ts": "58c9832299c966e6c97e16454e4e41869c0e8d8b24010d286f13bac215c11aef"
         },
         "binaryHashes": {
@@ -343,14 +353,16 @@
       "verifiedSnapshot": {
         "verifiedAt": "2026-11-27",
         "sourceHashes": {
-          "src/engines/siglus/player.ts": "99e8443f62c5154cd4b8beb9edda0ffeab114415b52428da6be90119b53775fd",
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
           "src/engines/siglus/display.ts": "58c9832299c966e6c97e16454e4e41869c0e8d8b24010d286f13bac215c11aef"
         },
         "binaryHashes": {
           "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
         }
       },
-      "extraTestLinks": ["tests/siglus-stateful-interactions.test.mjs"],
+      "extraTestLinks": [
+        "tests/siglus-stateful-interactions.test.mjs"
+      ],
       "interactionTested": true
     },
     {
@@ -370,8 +382,8 @@
       "verifiedSnapshot": {
         "verifiedAt": "2026-11-27",
         "sourceHashes": {
-          "src/engines/siglus/player.ts": "99e8443f62c5154cd4b8beb9edda0ffeab114415b52428da6be90119b53775fd",
-          "src/engines/siglus/vm.ts": "0fae522663953464355f2edf9c917750b88e7d37a15f67f2dcc2e3dead101053"
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/vm.ts": "0dfadd17fdda9e09c28c153e3814863b6f92ab7c690735c375b64c022bd1d991"
         },
         "binaryHashes": {
           "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
@@ -395,7 +407,7 @@
       "verifiedSnapshot": {
         "verifiedAt": "2026-11-27",
         "sourceHashes": {
-          "src/engines/siglus/player.ts": "99e8443f62c5154cd4b8beb9edda0ffeab114415b52428da6be90119b53775fd",
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
           "src/engines/siglus/display.ts": "58c9832299c966e6c97e16454e4e41869c0e8d8b24010d286f13bac215c11aef"
         },
         "binaryHashes": {
@@ -406,217 +418,3001 @@
     {
       "entryId": "cmd:105.-1.*.0",
       "notes": "database[n].get_num (1.1.141.3 0x55fb30 case 0).",
-      "nativeEvidence": [{"binaryId": "anemoi", "fileVersion": "1.1.141.3", "va": "0x55fb30", "rva": "0x15fb30", "rawBytesSha256": "ee9f1e5e6484838ed7a06587ba3aed4dbf5769e2696a87a6209ba74b21ac094d", "normalizedInsnSha256": "5d1c2e27c3dbbda941a5c7b1fd451e1215ab7a24984cbd0f7b81e6f5ddfafbfc", "method": "ghidra-decompile"}],
-      "verifiedSnapshot": {"verifiedAt": "2026-11-27", "sourceHashes": {"src/engines/siglus/player.ts": "99e8443f62c5154cd4b8beb9edda0ffeab114415b52428da6be90119b53775fd", "src/formats/siglus/dbs.ts": "c8c19c7635c3c7687676c955badeab5cb215ce07c865f281bdfe7b2b97f1daa0"}, "binaryHashes": {"anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"}},
-      "extraTestLinks": ["tests/siglus-stateful-interactions.test.mjs"],
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x55fb30",
+          "rva": "0x15fb30",
+          "rawBytesSha256": "ee9f1e5e6484838ed7a06587ba3aed4dbf5769e2696a87a6209ba74b21ac094d",
+          "normalizedInsnSha256": "5d1c2e27c3dbbda941a5c7b1fd451e1215ab7a24984cbd0f7b81e6f5ddfafbfc",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/formats/siglus/dbs.ts": "c8c19c7635c3c7687676c955badeab5cb215ce07c865f281bdfe7b2b97f1daa0"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      },
+      "extraTestLinks": [
+        "tests/siglus-stateful-interactions.test.mjs"
+      ],
       "unitTested": true,
       "interactionTested": true
     },
     {
       "entryId": "cmd:105.-1.*.1",
       "notes": "database[n].get_str (1.1.141.3 0x55fb30 case 1).",
-      "nativeEvidence": [{"binaryId": "anemoi", "fileVersion": "1.1.141.3", "va": "0x55fb30", "rva": "0x15fb30", "rawBytesSha256": "ee9f1e5e6484838ed7a06587ba3aed4dbf5769e2696a87a6209ba74b21ac094d", "normalizedInsnSha256": "5d1c2e27c3dbbda941a5c7b1fd451e1215ab7a24984cbd0f7b81e6f5ddfafbfc", "method": "ghidra-decompile"}],
-      "verifiedSnapshot": {"verifiedAt": "2026-11-27", "sourceHashes": {"src/engines/siglus/player.ts": "99e8443f62c5154cd4b8beb9edda0ffeab114415b52428da6be90119b53775fd", "src/formats/siglus/dbs.ts": "c8c19c7635c3c7687676c955badeab5cb215ce07c865f281bdfe7b2b97f1daa0"}, "binaryHashes": {"anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"}},
-      "extraTestLinks": ["tests/siglus-stateful-interactions.test.mjs"],
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x55fb30",
+          "rva": "0x15fb30",
+          "rawBytesSha256": "ee9f1e5e6484838ed7a06587ba3aed4dbf5769e2696a87a6209ba74b21ac094d",
+          "normalizedInsnSha256": "5d1c2e27c3dbbda941a5c7b1fd451e1215ab7a24984cbd0f7b81e6f5ddfafbfc",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/formats/siglus/dbs.ts": "c8c19c7635c3c7687676c955badeab5cb215ce07c865f281bdfe7b2b97f1daa0"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      },
+      "extraTestLinks": [
+        "tests/siglus-stateful-interactions.test.mjs"
+      ],
       "unitTested": true,
       "interactionTested": true
     },
     {
       "entryId": "cmd:105.-1.*.3",
       "notes": "database[n].check_item_no (1.1.141.3 0x55fb30 case 3) — fixed off-by-one bug from path[3]===2.",
-      "nativeEvidence": [{"binaryId": "anemoi", "fileVersion": "1.1.141.3", "va": "0x55fb30", "rva": "0x15fb30", "rawBytesSha256": "ee9f1e5e6484838ed7a06587ba3aed4dbf5769e2696a87a6209ba74b21ac094d", "normalizedInsnSha256": "5d1c2e27c3dbbda941a5c7b1fd451e1215ab7a24984cbd0f7b81e6f5ddfafbfc", "method": "ghidra-decompile"}],
-      "verifiedSnapshot": {"verifiedAt": "2026-11-27", "sourceHashes": {"src/engines/siglus/player.ts": "99e8443f62c5154cd4b8beb9edda0ffeab114415b52428da6be90119b53775fd", "src/formats/siglus/dbs.ts": "c8c19c7635c3c7687676c955badeab5cb215ce07c865f281bdfe7b2b97f1daa0"}, "binaryHashes": {"anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"}},
-      "extraTestLinks": ["tests/siglus-stateful-interactions.test.mjs"],
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x55fb30",
+          "rva": "0x15fb30",
+          "rawBytesSha256": "ee9f1e5e6484838ed7a06587ba3aed4dbf5769e2696a87a6209ba74b21ac094d",
+          "normalizedInsnSha256": "5d1c2e27c3dbbda941a5c7b1fd451e1215ab7a24984cbd0f7b81e6f5ddfafbfc",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/formats/siglus/dbs.ts": "c8c19c7635c3c7687676c955badeab5cb215ce07c865f281bdfe7b2b97f1daa0"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      },
+      "extraTestLinks": [
+        "tests/siglus-stateful-interactions.test.mjs"
+      ],
       "unitTested": true,
       "interactionTested": true
     },
     {
       "entryId": "cmd:105.-1.*.6",
       "notes": "database[n].find_str case-insensitive (1.1.141.3 0x55fb30 case 6 -> 0x5ca130) — newly implemented.",
-      "nativeEvidence": [{"binaryId": "anemoi", "fileVersion": "1.1.141.3", "va": "0x5ca130", "rva": "0x1ca130", "rawBytesSha256": "9c5b4c4b9cf1265e31260f16b12cb47291a880bfba1069c842d723a9142cc49a", "normalizedInsnSha256": "1ee19783c6fa31f8bc96845e7b63cf21a7f92da20e94d39caf679158d5a64c03", "method": "ghidra-decompile"}],
-      "verifiedSnapshot": {"verifiedAt": "2026-11-27", "sourceHashes": {"src/engines/siglus/player.ts": "99e8443f62c5154cd4b8beb9edda0ffeab114415b52428da6be90119b53775fd", "src/formats/siglus/dbs.ts": "c8c19c7635c3c7687676c955badeab5cb215ce07c865f281bdfe7b2b97f1daa0"}, "binaryHashes": {"anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"}},
-      "extraTestLinks": ["tests/siglus-stateful-interactions.test.mjs"],
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x5ca130",
+          "rva": "0x1ca130",
+          "rawBytesSha256": "9c5b4c4b9cf1265e31260f16b12cb47291a880bfba1069c842d723a9142cc49a",
+          "normalizedInsnSha256": "1ee19783c6fa31f8bc96845e7b63cf21a7f92da20e94d39caf679158d5a64c03",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/formats/siglus/dbs.ts": "c8c19c7635c3c7687676c955badeab5cb215ce07c865f281bdfe7b2b97f1daa0"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      },
+      "extraTestLinks": [
+        "tests/siglus-stateful-interactions.test.mjs"
+      ],
       "unitTested": true,
       "interactionTested": true
     },
     {
       "entryId": "cmd:78.2",
       "notes": "cgtable.get_flag_value_by_name (1.1.141.3 0x55f780 member 2).",
-      "nativeEvidence": [{"binaryId": "anemoi", "fileVersion": "1.1.141.3", "va": "0x55f780", "rva": "0x15f780", "rawBytesSha256": "3084196d6c843022ffad44755527b5c6c1990420edea6eae467977f642bdbdfb", "normalizedInsnSha256": "c0ee9726f539cccacba679daf3521491cb59c1a5e330e8efe9b95a5f3b0481c3", "method": "ghidra-decompile"}],
-      "verifiedSnapshot": {"verifiedAt": "2026-11-27", "sourceHashes": {"src/engines/siglus/player.ts": "99e8443f62c5154cd4b8beb9edda0ffeab114415b52428da6be90119b53775fd", "src/formats/siglus/cgtable.ts": "51acccd0b48c1f59010a6aa46f8e436036d5bb3b911cefbb0d8a7854dce310fa"}, "binaryHashes": {"anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"}},
-      "extraTestLinks": ["tests/siglus-stateful-interactions.test.mjs"],
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x55f780",
+          "rva": "0x15f780",
+          "rawBytesSha256": "3084196d6c843022ffad44755527b5c6c1990420edea6eae467977f642bdbdfb",
+          "normalizedInsnSha256": "c0ee9726f539cccacba679daf3521491cb59c1a5e330e8efe9b95a5f3b0481c3",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/formats/siglus/cgtable.ts": "51acccd0b48c1f59010a6aa46f8e436036d5bb3b911cefbb0d8a7854dce310fa"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      },
+      "extraTestLinks": [
+        "tests/siglus-stateful-interactions.test.mjs"
+      ],
       "unitTested": true,
       "interactionTested": true
     },
     {
       "entryId": "cmd:78.3",
       "notes": "cgtable.set_flag_value_by_name (1.1.141.3 0x55f780 member 3 -> 0x6899b0).",
-      "nativeEvidence": [{"binaryId": "anemoi", "fileVersion": "1.1.141.3", "va": "0x55f780", "rva": "0x15f780", "rawBytesSha256": "3084196d6c843022ffad44755527b5c6c1990420edea6eae467977f642bdbdfb", "normalizedInsnSha256": "c0ee9726f539cccacba679daf3521491cb59c1a5e330e8efe9b95a5f3b0481c3", "method": "ghidra-decompile"}],
-      "verifiedSnapshot": {"verifiedAt": "2026-11-27", "sourceHashes": {"src/engines/siglus/player.ts": "99e8443f62c5154cd4b8beb9edda0ffeab114415b52428da6be90119b53775fd", "src/formats/siglus/cgtable.ts": "51acccd0b48c1f59010a6aa46f8e436036d5bb3b911cefbb0d8a7854dce310fa"}, "binaryHashes": {"anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"}},
-      "extraTestLinks": ["tests/siglus-stateful-interactions.test.mjs"],
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x55f780",
+          "rva": "0x15f780",
+          "rawBytesSha256": "3084196d6c843022ffad44755527b5c6c1990420edea6eae467977f642bdbdfb",
+          "normalizedInsnSha256": "c0ee9726f539cccacba679daf3521491cb59c1a5e330e8efe9b95a5f3b0481c3",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/formats/siglus/cgtable.ts": "51acccd0b48c1f59010a6aa46f8e436036d5bb3b911cefbb0d8a7854dce310fa"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      },
+      "extraTestLinks": [
+        "tests/siglus-stateful-interactions.test.mjs"
+      ],
       "unitTested": true
     },
     {
       "entryId": "cmd:78.6",
       "notes": "cgtable.get_look_percent (1.1.141.3 0x55f780 member 6).",
-      "nativeEvidence": [{"binaryId": "anemoi", "fileVersion": "1.1.141.3", "va": "0x55f780", "rva": "0x15f780", "rawBytesSha256": "3084196d6c843022ffad44755527b5c6c1990420edea6eae467977f642bdbdfb", "normalizedInsnSha256": "c0ee9726f539cccacba679daf3521491cb59c1a5e330e8efe9b95a5f3b0481c3", "method": "ghidra-decompile"}],
-      "verifiedSnapshot": {"verifiedAt": "2026-11-27", "sourceHashes": {"src/engines/siglus/player.ts": "99e8443f62c5154cd4b8beb9edda0ffeab114415b52428da6be90119b53775fd", "src/formats/siglus/cgtable.ts": "51acccd0b48c1f59010a6aa46f8e436036d5bb3b911cefbb0d8a7854dce310fa"}, "binaryHashes": {"anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"}},
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x55f780",
+          "rva": "0x15f780",
+          "rawBytesSha256": "3084196d6c843022ffad44755527b5c6c1990420edea6eae467977f642bdbdfb",
+          "normalizedInsnSha256": "c0ee9726f539cccacba679daf3521491cb59c1a5e330e8efe9b95a5f3b0481c3",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/formats/siglus/cgtable.ts": "51acccd0b48c1f59010a6aa46f8e436036d5bb3b911cefbb0d8a7854dce310fa"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      },
       "unitTested": true
     },
     {
       "entryId": "cmd:78.9",
       "notes": "cgtable.set_all_flag_value (1.1.141.3 0x55f780 member 9).",
-      "nativeEvidence": [{"binaryId": "anemoi", "fileVersion": "1.1.141.3", "va": "0x55f780", "rva": "0x15f780", "rawBytesSha256": "3084196d6c843022ffad44755527b5c6c1990420edea6eae467977f642bdbdfb", "normalizedInsnSha256": "c0ee9726f539cccacba679daf3521491cb59c1a5e330e8efe9b95a5f3b0481c3", "method": "ghidra-decompile"}],
-      "verifiedSnapshot": {"verifiedAt": "2026-11-27", "sourceHashes": {"src/engines/siglus/player.ts": "99e8443f62c5154cd4b8beb9edda0ffeab114415b52428da6be90119b53775fd", "src/formats/siglus/cgtable.ts": "51acccd0b48c1f59010a6aa46f8e436036d5bb3b911cefbb0d8a7854dce310fa"}, "binaryHashes": {"anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"}},
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x55f780",
+          "rva": "0x15f780",
+          "rawBytesSha256": "3084196d6c843022ffad44755527b5c6c1990420edea6eae467977f642bdbdfb",
+          "normalizedInsnSha256": "c0ee9726f539cccacba679daf3521491cb59c1a5e330e8efe9b95a5f3b0481c3",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/formats/siglus/cgtable.ts": "51acccd0b48c1f59010a6aa46f8e436036d5bb3b911cefbb0d8a7854dce310fa"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      },
       "unitTested": true
     },
     {
       "entryId": "cmd:40.-1.*.1",
       "notes": "counter.get (1.1.141.3 0x560090 case 1).",
-      "nativeEvidence": [{"binaryId": "anemoi", "fileVersion": "1.1.141.3", "va": "0x560090", "rva": "0x160090", "rawBytesSha256": "e7551b83cbba974652c888a062c60b47ea60eee55fdc48b6ed71f7a6d0f56a09", "normalizedInsnSha256": "47c42dd531953247f66f48353c57bdc3cf96ed9c9f10ac945655d35ed0ef24d1", "method": "ghidra-decompile+disasm"}],
-      "verifiedSnapshot": {"verifiedAt": "2026-11-27", "sourceHashes": {"src/engines/siglus/player.ts": "99e8443f62c5154cd4b8beb9edda0ffeab114415b52428da6be90119b53775fd"}, "binaryHashes": {"anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"}},
-      "extraTestLinks": ["tests/siglus-stateful-interactions.test.mjs"],
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x560090",
+          "rva": "0x160090",
+          "rawBytesSha256": "e7551b83cbba974652c888a062c60b47ea60eee55fdc48b6ed71f7a6d0f56a09",
+          "normalizedInsnSha256": "47c42dd531953247f66f48353c57bdc3cf96ed9c9f10ac945655d35ed0ef24d1",
+          "method": "ghidra-decompile+disasm"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      },
+      "extraTestLinks": [
+        "tests/siglus-stateful-interactions.test.mjs"
+      ],
       "unitTested": true,
       "interactionTested": true
     },
     {
       "entryId": "cmd:40.-1.*.2",
       "notes": "counter.reset (1.1.141.3 0x560090 case 2).",
-      "nativeEvidence": [{"binaryId": "anemoi", "fileVersion": "1.1.141.3", "va": "0x560090", "rva": "0x160090", "rawBytesSha256": "e7551b83cbba974652c888a062c60b47ea60eee55fdc48b6ed71f7a6d0f56a09", "normalizedInsnSha256": "47c42dd531953247f66f48353c57bdc3cf96ed9c9f10ac945655d35ed0ef24d1", "method": "ghidra-decompile"}],
-      "verifiedSnapshot": {"verifiedAt": "2026-11-27", "sourceHashes": {"src/engines/siglus/player.ts": "99e8443f62c5154cd4b8beb9edda0ffeab114415b52428da6be90119b53775fd"}, "binaryHashes": {"anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"}},
-      "extraTestLinks": ["tests/siglus-stateful-interactions.test.mjs"],
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x560090",
+          "rva": "0x160090",
+          "rawBytesSha256": "e7551b83cbba974652c888a062c60b47ea60eee55fdc48b6ed71f7a6d0f56a09",
+          "normalizedInsnSha256": "47c42dd531953247f66f48353c57bdc3cf96ed9c9f10ac945655d35ed0ef24d1",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      },
+      "extraTestLinks": [
+        "tests/siglus-stateful-interactions.test.mjs"
+      ],
       "unitTested": true,
       "interactionTested": true
     },
     {
       "entryId": "cmd:40.-1.*.3",
       "notes": "counter.start (1.1.141.3 0x560090 case 3).",
-      "nativeEvidence": [{"binaryId": "anemoi", "fileVersion": "1.1.141.3", "va": "0x560090", "rva": "0x160090", "rawBytesSha256": "e7551b83cbba974652c888a062c60b47ea60eee55fdc48b6ed71f7a6d0f56a09", "normalizedInsnSha256": "47c42dd531953247f66f48353c57bdc3cf96ed9c9f10ac945655d35ed0ef24d1", "method": "ghidra-decompile"}],
-      "verifiedSnapshot": {"verifiedAt": "2026-11-27", "sourceHashes": {"src/engines/siglus/player.ts": "99e8443f62c5154cd4b8beb9edda0ffeab114415b52428da6be90119b53775fd"}, "binaryHashes": {"anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"}},
-      "extraTestLinks": ["tests/siglus-stateful-interactions.test.mjs"],
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x560090",
+          "rva": "0x160090",
+          "rawBytesSha256": "e7551b83cbba974652c888a062c60b47ea60eee55fdc48b6ed71f7a6d0f56a09",
+          "normalizedInsnSha256": "47c42dd531953247f66f48353c57bdc3cf96ed9c9f10ac945655d35ed0ef24d1",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      },
+      "extraTestLinks": [
+        "tests/siglus-stateful-interactions.test.mjs"
+      ],
       "unitTested": true,
       "interactionTested": true
     },
     {
       "entryId": "cmd:40.-1.*.4",
       "notes": "counter.stop/pause (1.1.141.3 0x560090 case 4).",
-      "nativeEvidence": [{"binaryId": "anemoi", "fileVersion": "1.1.141.3", "va": "0x560090", "rva": "0x160090", "rawBytesSha256": "e7551b83cbba974652c888a062c60b47ea60eee55fdc48b6ed71f7a6d0f56a09", "normalizedInsnSha256": "47c42dd531953247f66f48353c57bdc3cf96ed9c9f10ac945655d35ed0ef24d1", "method": "ghidra-decompile"}],
-      "verifiedSnapshot": {"verifiedAt": "2026-11-27", "sourceHashes": {"src/engines/siglus/player.ts": "99e8443f62c5154cd4b8beb9edda0ffeab114415b52428da6be90119b53775fd"}, "binaryHashes": {"anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"}},
-      "extraTestLinks": ["tests/siglus-stateful-interactions.test.mjs"],
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x560090",
+          "rva": "0x160090",
+          "rawBytesSha256": "e7551b83cbba974652c888a062c60b47ea60eee55fdc48b6ed71f7a6d0f56a09",
+          "normalizedInsnSha256": "47c42dd531953247f66f48353c57bdc3cf96ed9c9f10ac945655d35ed0ef24d1",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      },
+      "extraTestLinks": [
+        "tests/siglus-stateful-interactions.test.mjs"
+      ],
       "unitTested": true,
       "interactionTested": true
     },
     {
       "entryId": "cmd:40.-1.*.5",
       "notes": "counter.resume (1.1.141.3 0x560090 case 5).",
-      "nativeEvidence": [{"binaryId": "anemoi", "fileVersion": "1.1.141.3", "va": "0x560090", "rva": "0x160090", "rawBytesSha256": "e7551b83cbba974652c888a062c60b47ea60eee55fdc48b6ed71f7a6d0f56a09", "normalizedInsnSha256": "47c42dd531953247f66f48353c57bdc3cf96ed9c9f10ac945655d35ed0ef24d1", "method": "ghidra-decompile"}],
-      "verifiedSnapshot": {"verifiedAt": "2026-11-27", "sourceHashes": {"src/engines/siglus/player.ts": "99e8443f62c5154cd4b8beb9edda0ffeab114415b52428da6be90119b53775fd"}, "binaryHashes": {"anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"}},
-      "extraTestLinks": ["tests/siglus-stateful-interactions.test.mjs"],
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x560090",
+          "rva": "0x160090",
+          "rawBytesSha256": "e7551b83cbba974652c888a062c60b47ea60eee55fdc48b6ed71f7a6d0f56a09",
+          "normalizedInsnSha256": "47c42dd531953247f66f48353c57bdc3cf96ed9c9f10ac945655d35ed0ef24d1",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      },
+      "extraTestLinks": [
+        "tests/siglus-stateful-interactions.test.mjs"
+      ],
       "unitTested": true,
       "interactionTested": true
     },
     {
       "entryId": "cmd:40.-1.*.9",
       "notes": "counter.start_real (1.1.141.3 0x560090 case 9).",
-      "nativeEvidence": [{"binaryId": "anemoi", "fileVersion": "1.1.141.3", "va": "0x560090", "rva": "0x160090", "rawBytesSha256": "e7551b83cbba974652c888a062c60b47ea60eee55fdc48b6ed71f7a6d0f56a09", "normalizedInsnSha256": "47c42dd531953247f66f48353c57bdc3cf96ed9c9f10ac945655d35ed0ef24d1", "method": "ghidra-decompile"}],
-      "verifiedSnapshot": {"verifiedAt": "2026-11-27", "sourceHashes": {"src/engines/siglus/player.ts": "99e8443f62c5154cd4b8beb9edda0ffeab114415b52428da6be90119b53775fd"}, "binaryHashes": {"anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"}},
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x560090",
+          "rva": "0x160090",
+          "rawBytesSha256": "e7551b83cbba974652c888a062c60b47ea60eee55fdc48b6ed71f7a6d0f56a09",
+          "normalizedInsnSha256": "47c42dd531953247f66f48353c57bdc3cf96ed9c9f10ac945655d35ed0ef24d1",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      },
       "unitTested": true
     },
     {
       "entryId": "cmd:40.-1.*.11",
       "notes": "counter.start_frame_real (1.1.141.3 0x560090 case 11).",
-      "nativeEvidence": [{"binaryId": "anemoi", "fileVersion": "1.1.141.3", "va": "0x560090", "rva": "0x160090", "rawBytesSha256": "e7551b83cbba974652c888a062c60b47ea60eee55fdc48b6ed71f7a6d0f56a09", "normalizedInsnSha256": "47c42dd531953247f66f48353c57bdc3cf96ed9c9f10ac945655d35ed0ef24d1", "method": "ghidra-decompile"}],
-      "verifiedSnapshot": {"verifiedAt": "2026-11-27", "sourceHashes": {"src/engines/siglus/player.ts": "99e8443f62c5154cd4b8beb9edda0ffeab114415b52428da6be90119b53775fd"}, "binaryHashes": {"anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"}},
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x560090",
+          "rva": "0x160090",
+          "rawBytesSha256": "e7551b83cbba974652c888a062c60b47ea60eee55fdc48b6ed71f7a6d0f56a09",
+          "normalizedInsnSha256": "47c42dd531953247f66f48353c57bdc3cf96ed9c9f10ac945655d35ed0ef24d1",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      },
       "unitTested": true
     },
     {
       "entryId": "cmd:40.-1.*.13",
       "notes": "counter.start_frame_loop_real (1.1.141.3 0x560090 case 13).",
-      "nativeEvidence": [{"binaryId": "anemoi", "fileVersion": "1.1.141.3", "va": "0x560090", "rva": "0x160090", "rawBytesSha256": "e7551b83cbba974652c888a062c60b47ea60eee55fdc48b6ed71f7a6d0f56a09", "normalizedInsnSha256": "47c42dd531953247f66f48353c57bdc3cf96ed9c9f10ac945655d35ed0ef24d1", "method": "ghidra-decompile"}],
-      "verifiedSnapshot": {"verifiedAt": "2026-11-27", "sourceHashes": {"src/engines/siglus/player.ts": "99e8443f62c5154cd4b8beb9edda0ffeab114415b52428da6be90119b53775fd"}, "binaryHashes": {"anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"}},
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x560090",
+          "rva": "0x160090",
+          "rawBytesSha256": "e7551b83cbba974652c888a062c60b47ea60eee55fdc48b6ed71f7a6d0f56a09",
+          "normalizedInsnSha256": "47c42dd531953247f66f48353c57bdc3cf96ed9c9f10ac945655d35ed0ef24d1",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      },
       "unitTested": true
     },
     {
       "entryId": "cmd:40.-1.*.14",
       "notes": "counter.check_active (1.1.141.3 0x560090 case 14).",
-      "nativeEvidence": [{"binaryId": "anemoi", "fileVersion": "1.1.141.3", "va": "0x560090", "rva": "0x160090", "rawBytesSha256": "e7551b83cbba974652c888a062c60b47ea60eee55fdc48b6ed71f7a6d0f56a09", "normalizedInsnSha256": "47c42dd531953247f66f48353c57bdc3cf96ed9c9f10ac945655d35ed0ef24d1", "method": "ghidra-decompile+disasm"}],
-      "verifiedSnapshot": {"verifiedAt": "2026-11-27", "sourceHashes": {"src/engines/siglus/player.ts": "99e8443f62c5154cd4b8beb9edda0ffeab114415b52428da6be90119b53775fd"}, "binaryHashes": {"anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"}},
-      "extraTestLinks": ["tests/siglus-stateful-interactions.test.mjs"],
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x560090",
+          "rva": "0x160090",
+          "rawBytesSha256": "e7551b83cbba974652c888a062c60b47ea60eee55fdc48b6ed71f7a6d0f56a09",
+          "normalizedInsnSha256": "47c42dd531953247f66f48353c57bdc3cf96ed9c9f10ac945655d35ed0ef24d1",
+          "method": "ghidra-decompile+disasm"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      },
+      "extraTestLinks": [
+        "tests/siglus-stateful-interactions.test.mjs"
+      ],
       "unitTested": true,
       "interactionTested": true
     },
     {
       "entryId": "cmd:39.1",
       "notes": "math.tostr(val[,width]) (1.1.141.3 0x55eed0 case 1 -> 0x55e8a0).",
-      "nativeEvidence": [{"binaryId": "anemoi", "fileVersion": "1.1.141.3", "va": "0x55eed0", "rva": "0x15eed0", "rawBytesSha256": "6cb2aff823e7bbedaa843e15cdfab26c80a9454ead1097ea031ff06e1aa6f13e", "normalizedInsnSha256": "638135a78225732980583ff779eeac651faa83a1eee75957550b8d5ae5f4abd1", "method": "ghidra-decompile"}],
-      "verifiedSnapshot": {"verifiedAt": "2026-11-27", "sourceHashes": {"src/engines/siglus/player.ts": "99e8443f62c5154cd4b8beb9edda0ffeab114415b52428da6be90119b53775fd", "src/engines/siglus/math.ts": "f5a441d38943deb3c3325c046c472c4be52ac3d8fdd01b9c49605fc550aa425e"}, "binaryHashes": {"anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"}},
-      "extraTestLinks": ["tests/siglus-stateful-interactions.test.mjs"],
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x55eed0",
+          "rva": "0x15eed0",
+          "rawBytesSha256": "6cb2aff823e7bbedaa843e15cdfab26c80a9454ead1097ea031ff06e1aa6f13e",
+          "normalizedInsnSha256": "638135a78225732980583ff779eeac651faa83a1eee75957550b8d5ae5f4abd1",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/math.ts": "f5a441d38943deb3c3325c046c472c4be52ac3d8fdd01b9c49605fc550aa425e"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      },
+      "extraTestLinks": [
+        "tests/siglus-stateful-interactions.test.mjs"
+      ],
       "unitTested": true,
       "interactionTested": true
     },
     {
       "entryId": "cmd:39.3",
       "notes": "math.max (1.1.141.3 0x55eed0 case 3).",
-      "nativeEvidence": [{"binaryId": "anemoi", "fileVersion": "1.1.141.3", "va": "0x55eed0", "rva": "0x15eed0", "rawBytesSha256": "6cb2aff823e7bbedaa843e15cdfab26c80a9454ead1097ea031ff06e1aa6f13e", "normalizedInsnSha256": "638135a78225732980583ff779eeac651faa83a1eee75957550b8d5ae5f4abd1", "method": "ghidra-decompile"}],
-      "verifiedSnapshot": {"verifiedAt": "2026-11-27", "sourceHashes": {"src/engines/siglus/player.ts": "99e8443f62c5154cd4b8beb9edda0ffeab114415b52428da6be90119b53775fd"}, "binaryHashes": {"anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"}}
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x55eed0",
+          "rva": "0x15eed0",
+          "rawBytesSha256": "6cb2aff823e7bbedaa843e15cdfab26c80a9454ead1097ea031ff06e1aa6f13e",
+          "normalizedInsnSha256": "638135a78225732980583ff779eeac651faa83a1eee75957550b8d5ae5f4abd1",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
     },
     {
       "entryId": "cmd:39.4",
       "notes": "math.min (1.1.141.3 0x55eed0 case 4).",
-      "nativeEvidence": [{"binaryId": "anemoi", "fileVersion": "1.1.141.3", "va": "0x55eed0", "rva": "0x15eed0", "rawBytesSha256": "6cb2aff823e7bbedaa843e15cdfab26c80a9454ead1097ea031ff06e1aa6f13e", "normalizedInsnSha256": "638135a78225732980583ff779eeac651faa83a1eee75957550b8d5ae5f4abd1", "method": "ghidra-decompile"}],
-      "verifiedSnapshot": {"verifiedAt": "2026-11-27", "sourceHashes": {"src/engines/siglus/player.ts": "99e8443f62c5154cd4b8beb9edda0ffeab114415b52428da6be90119b53775fd"}, "binaryHashes": {"anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"}}
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x55eed0",
+          "rva": "0x15eed0",
+          "rawBytesSha256": "6cb2aff823e7bbedaa843e15cdfab26c80a9454ead1097ea031ff06e1aa6f13e",
+          "normalizedInsnSha256": "638135a78225732980583ff779eeac651faa83a1eee75957550b8d5ae5f4abd1",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
     },
     {
       "entryId": "cmd:39.5",
       "notes": "math.abs (1.1.141.3 0x55eed0 case 5).",
-      "nativeEvidence": [{"binaryId": "anemoi", "fileVersion": "1.1.141.3", "va": "0x55eed0", "rva": "0x15eed0", "rawBytesSha256": "6cb2aff823e7bbedaa843e15cdfab26c80a9454ead1097ea031ff06e1aa6f13e", "normalizedInsnSha256": "638135a78225732980583ff779eeac651faa83a1eee75957550b8d5ae5f4abd1", "method": "ghidra-decompile"}],
-      "verifiedSnapshot": {"verifiedAt": "2026-11-27", "sourceHashes": {"src/engines/siglus/player.ts": "99e8443f62c5154cd4b8beb9edda0ffeab114415b52428da6be90119b53775fd"}, "binaryHashes": {"anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"}}
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x55eed0",
+          "rva": "0x15eed0",
+          "rawBytesSha256": "6cb2aff823e7bbedaa843e15cdfab26c80a9454ead1097ea031ff06e1aa6f13e",
+          "normalizedInsnSha256": "638135a78225732980583ff779eeac651faa83a1eee75957550b8d5ae5f4abd1",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
     },
     {
       "entryId": "cmd:39.6",
       "notes": "math.sin (1.1.141.3 0x55eed0 case 6 -> 0x562ef0).",
-      "nativeEvidence": [{"binaryId": "anemoi", "fileVersion": "1.1.141.3", "va": "0x55eed0", "rva": "0x15eed0", "rawBytesSha256": "6cb2aff823e7bbedaa843e15cdfab26c80a9454ead1097ea031ff06e1aa6f13e", "normalizedInsnSha256": "638135a78225732980583ff779eeac651faa83a1eee75957550b8d5ae5f4abd1", "method": "ghidra-decompile+disasm"}],
-      "verifiedSnapshot": {"verifiedAt": "2026-11-27", "sourceHashes": {"src/engines/siglus/player.ts": "99e8443f62c5154cd4b8beb9edda0ffeab114415b52428da6be90119b53775fd", "src/engines/siglus/math.ts": "f5a441d38943deb3c3325c046c472c4be52ac3d8fdd01b9c49605fc550aa425e"}, "binaryHashes": {"anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"}},
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x55eed0",
+          "rva": "0x15eed0",
+          "rawBytesSha256": "6cb2aff823e7bbedaa843e15cdfab26c80a9454ead1097ea031ff06e1aa6f13e",
+          "normalizedInsnSha256": "638135a78225732980583ff779eeac651faa83a1eee75957550b8d5ae5f4abd1",
+          "method": "ghidra-decompile+disasm"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/math.ts": "f5a441d38943deb3c3325c046c472c4be52ac3d8fdd01b9c49605fc550aa425e"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      },
       "unitTested": true
     },
     {
       "entryId": "cmd:39.7",
       "notes": "math.cos (1.1.141.3 0x55eed0 case 7 -> 0x562ed0).",
-      "nativeEvidence": [{"binaryId": "anemoi", "fileVersion": "1.1.141.3", "va": "0x55eed0", "rva": "0x15eed0", "rawBytesSha256": "6cb2aff823e7bbedaa843e15cdfab26c80a9454ead1097ea031ff06e1aa6f13e", "normalizedInsnSha256": "638135a78225732980583ff779eeac651faa83a1eee75957550b8d5ae5f4abd1", "method": "ghidra-decompile+disasm"}],
-      "verifiedSnapshot": {"verifiedAt": "2026-11-27", "sourceHashes": {"src/engines/siglus/player.ts": "99e8443f62c5154cd4b8beb9edda0ffeab114415b52428da6be90119b53775fd", "src/engines/siglus/math.ts": "f5a441d38943deb3c3325c046c472c4be52ac3d8fdd01b9c49605fc550aa425e"}, "binaryHashes": {"anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"}},
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x55eed0",
+          "rva": "0x15eed0",
+          "rawBytesSha256": "6cb2aff823e7bbedaa843e15cdfab26c80a9454ead1097ea031ff06e1aa6f13e",
+          "normalizedInsnSha256": "638135a78225732980583ff779eeac651faa83a1eee75957550b8d5ae5f4abd1",
+          "method": "ghidra-decompile+disasm"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/math.ts": "f5a441d38943deb3c3325c046c472c4be52ac3d8fdd01b9c49605fc550aa425e"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      },
       "unitTested": true
     },
     {
       "entryId": "cmd:39.11",
       "notes": "math.tostr_zero (1.1.141.3 0x55eed0 case 11 -> 0x55e8a0).",
-      "nativeEvidence": [{"binaryId": "anemoi", "fileVersion": "1.1.141.3", "va": "0x55e8a0", "rva": "0x15e8a0", "rawBytesSha256": "8744a5a35311472cea4a7e97a9c94b12e2abff9ebc9f3eb064da5aa96dabc42c", "normalizedInsnSha256": "d05dc8afd5b0df484f37df03e7cd7d0492f96f1c62d4e201b5079ddb35288ada", "method": "ghidra-decompile"}],
-      "verifiedSnapshot": {"verifiedAt": "2026-11-27", "sourceHashes": {"src/engines/siglus/player.ts": "99e8443f62c5154cd4b8beb9edda0ffeab114415b52428da6be90119b53775fd", "src/engines/siglus/math.ts": "f5a441d38943deb3c3325c046c472c4be52ac3d8fdd01b9c49605fc550aa425e"}, "binaryHashes": {"anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"}},
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x55e8a0",
+          "rva": "0x15e8a0",
+          "rawBytesSha256": "8744a5a35311472cea4a7e97a9c94b12e2abff9ebc9f3eb064da5aa96dabc42c",
+          "normalizedInsnSha256": "d05dc8afd5b0df484f37df03e7cd7d0492f96f1c62d4e201b5079ddb35288ada",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/math.ts": "f5a441d38943deb3c3325c046c472c4be52ac3d8fdd01b9c49605fc550aa425e"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      },
       "unitTested": true
     },
     {
       "entryId": "cmd:39.12",
       "notes": "math.tostr_zen (1.1.141.3 0x55eed0 case 12).",
-      "nativeEvidence": [{"binaryId": "anemoi", "fileVersion": "1.1.141.3", "va": "0x55eed0", "rva": "0x15eed0", "rawBytesSha256": "6cb2aff823e7bbedaa843e15cdfab26c80a9454ead1097ea031ff06e1aa6f13e", "normalizedInsnSha256": "638135a78225732980583ff779eeac651faa83a1eee75957550b8d5ae5f4abd1", "method": "ghidra-decompile"}],
-      "verifiedSnapshot": {"verifiedAt": "2026-11-27", "sourceHashes": {"src/engines/siglus/player.ts": "99e8443f62c5154cd4b8beb9edda0ffeab114415b52428da6be90119b53775fd", "src/engines/siglus/math.ts": "f5a441d38943deb3c3325c046c472c4be52ac3d8fdd01b9c49605fc550aa425e"}, "binaryHashes": {"anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"}},
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x55eed0",
+          "rva": "0x15eed0",
+          "rawBytesSha256": "6cb2aff823e7bbedaa843e15cdfab26c80a9454ead1097ea031ff06e1aa6f13e",
+          "normalizedInsnSha256": "638135a78225732980583ff779eeac651faa83a1eee75957550b8d5ae5f4abd1",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/math.ts": "f5a441d38943deb3c3325c046c472c4be52ac3d8fdd01b9c49605fc550aa425e"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      },
       "unitTested": true
     },
     {
       "entryId": "cmd:39.15",
       "notes": "math.hypot/distance (1.1.141.3 0x55f26a signed int32 squared deltas + sqrt).",
-      "nativeEvidence": [{"binaryId": "anemoi", "fileVersion": "1.1.141.3", "va": "0x55eed0", "rva": "0x15eed0", "rawBytesSha256": "6cb2aff823e7bbedaa843e15cdfab26c80a9454ead1097ea031ff06e1aa6f13e", "normalizedInsnSha256": "638135a78225732980583ff779eeac651faa83a1eee75957550b8d5ae5f4abd1", "method": "ghidra-decompile+disasm"}],
-      "verifiedSnapshot": {"verifiedAt": "2026-11-27", "sourceHashes": {"src/engines/siglus/player.ts": "99e8443f62c5154cd4b8beb9edda0ffeab114415b52428da6be90119b53775fd"}, "binaryHashes": {"anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"}}
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x55eed0",
+          "rva": "0x15eed0",
+          "rawBytesSha256": "6cb2aff823e7bbedaa843e15cdfab26c80a9454ead1097ea031ff06e1aa6f13e",
+          "normalizedInsnSha256": "638135a78225732980583ff779eeac651faa83a1eee75957550b8d5ae5f4abd1",
+          "method": "ghidra-decompile+disasm"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
     },
     {
       "entryId": "cmd:64.48",
       "notes": "script.set_key_wait_enable (1.1.141.3 0x5631d0).",
-      "nativeEvidence": [{"binaryId": "anemoi", "fileVersion": "1.1.141.3", "va": "0x5631d0", "rva": "0x1631d0", "rawBytesSha256": "0721ecde9f121321979de40ef903d32126a489743562a1907919c3ae6a2640f3", "normalizedInsnSha256": "a499fa0ff5176adbd1d2e10cda9a404ec3516c761513ad200b509ba587db17a7", "method": "ghidra-decompile"}],
-      "verifiedSnapshot": {"verifiedAt": "2026-11-27", "sourceHashes": {"src/engines/siglus/player.ts": "99e8443f62c5154cd4b8beb9edda0ffeab114415b52428da6be90119b53775fd"}, "binaryHashes": {"anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"}}
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x5631d0",
+          "rva": "0x1631d0",
+          "rawBytesSha256": "0721ecde9f121321979de40ef903d32126a489743562a1907919c3ae6a2640f3",
+          "normalizedInsnSha256": "a499fa0ff5176adbd1d2e10cda9a404ec3516c761513ad200b509ba587db17a7",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
     },
     {
       "entryId": "cmd:64.51",
       "notes": "script.start_async_msg_mode_once (1.1.141.3 0x5631d0).",
-      "nativeEvidence": [{"binaryId": "anemoi", "fileVersion": "1.1.141.3", "va": "0x5631d0", "rva": "0x1631d0", "rawBytesSha256": "0721ecde9f121321979de40ef903d32126a489743562a1907919c3ae6a2640f3", "normalizedInsnSha256": "a499fa0ff5176adbd1d2e10cda9a404ec3516c761513ad200b509ba587db17a7", "method": "ghidra-decompile"}],
-      "verifiedSnapshot": {"verifiedAt": "2026-11-27", "sourceHashes": {"src/engines/siglus/player.ts": "99e8443f62c5154cd4b8beb9edda0ffeab114415b52428da6be90119b53775fd"}, "binaryHashes": {"anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"}}
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x5631d0",
+          "rva": "0x1631d0",
+          "rawBytesSha256": "0721ecde9f121321979de40ef903d32126a489743562a1907919c3ae6a2640f3",
+          "normalizedInsnSha256": "a499fa0ff5176adbd1d2e10cda9a404ec3516c761513ad200b509ba587db17a7",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "anchor:decoder.cgtable",
+      "notes": "Verified 1.1.141.3 0x689e70: CGTABLE (stride 36) & CGTABLE2 (stride 60) unconditional XOR+LZSS decode.",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x689e70",
+          "rva": "0x289e70",
+          "rawBytesSha256": "71c8ceceaf052b842839dbda7a7f3d2100f21daafca6dd541ff940a8a871111c",
+          "normalizedInsnSha256": "befa44c33273905c787664b99fb18ba9d9002dfce06010fb7f1290ac521226c4",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/formats/siglus/cgtable.ts": "51acccd0b48c1f59010a6aa46f8e436036d5bb3b911cefbb0d8a7854dce310fa"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "anchor:decoder.dbs",
+      "notes": "Verified 1.1.141.3 0x5c9be0: .dbs header layout (rowCount/colCount/offsets/encodingType).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x5c9be0",
+          "rva": "0x1c9be0",
+          "rawBytesSha256": "8ee3c871464f00204387986c2d57c3c6067019663678cdcbb5932f49fbafa800",
+          "normalizedInsnSha256": "8a4063e0c699e20d064f051cd559732c0e52d78f9d69110773ecb9d2b1833e80",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/formats/siglus/dbs.ts": "c8c19c7635c3c7687676c955badeab5cb215ce07c865f281bdfe7b2b97f1daa0"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "anchor:decoder.g00",
+      "notes": "Verified 1.1.141.3 0x636220: single & pipe-composite G00 loader + CG auto-record gate (+0x496).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x636220",
+          "rva": "0x236220",
+          "rawBytesSha256": "79df21a6ec9b61a6c5a98f728f2dda394409deb60765466e9bba23fab7d5bb14",
+          "normalizedInsnSha256": "80d3842cbb407277c54b3a8e0ee9ef06fb70fcb16e02bf35af6dbb0d76d0c858",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/formats/siglus/g00.ts": "0f41e0704490fa702507e99796b06b13a7fce05cc8c625e0ec10d0e3e64ae047",
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "anchor:decoder.g00_loader",
+      "notes": "Verified 1.1.141.3 0x61b1f0: G00 graphic file resolution order across configured search paths.",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x61b1f0",
+          "rva": "0x21b1f0",
+          "rawBytesSha256": "3619c749c124104181b8e88d98d61bec3b1158e82fd5d75ee2ef57e49530ce70",
+          "normalizedInsnSha256": "c845cb6a6d92c15536e1b68b7658167364f64ffa9e5f36277272b12e26714f4e",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/formats/siglus/g00.ts": "0f41e0704490fa702507e99796b06b13a7fce05cc8c625e0ec10d0e3e64ae047"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "anchor:decoder.omv",
+      "notes": "Verified 1.1.141.3 0x602de0: OMV video stream loader & frame-texture binding.",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x602de0",
+          "rva": "0x202de0",
+          "rawBytesSha256": "b12d24c579480035c4a727985345754e4e0be72def0aca3a3798c794a9c57e30",
+          "normalizedInsnSha256": "a7650c466fda4a4dec981af4cf49dd119982ee8189cd2ea12b91638a419faf5f",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/formats/siglus/omv.ts": "8e913b7333e05eec5ecc97648346b8144f3e916508329b015a83ab22bb5fe6ec"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "anchor:decoder.owp",
+      "notes": "Verified 1.1.141.3 0x61c580: OWP/audio track probe order across BGM/WAV/append paths.",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x61c580",
+          "rva": "0x21c580",
+          "rawBytesSha256": "532bc7b16d6794e1c092dcb9261354b5e1796933a496646c2f5053495c292bdb",
+          "normalizedInsnSha256": "2ca8a6797068cf93161087b94a4e0b6a37f4085cb0822f04213d73f451aa2c4c",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/formats/siglus/sound.ts": "ecbb81577a834a3b6c8892b9bffbc9bf043546c30a7f00b33d684fb99196a5d7"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "anchor:decoder.ovk",
+      "notes": "Verified 1.1.141.3 0x61cee0: loose koe/%04d/z%09d vs packed z%04d.ovk voice bank probe order.",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x61cee0",
+          "rva": "0x21cee0",
+          "rawBytesSha256": "b7ee613ab9e7a162833dac13edd301563db11c55d31b00898a93e23a6b7a534e",
+          "normalizedInsnSha256": "62b8a6defa30d1bc0efdfc98c79699808d4cebad7ad8995b16315383e4dcc0be",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/formats/siglus/sound.ts": "ecbb81577a834a3b6c8892b9bffbc9bf043546c30a7f00b33d684fb99196a5d7"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "anchor:dispatcher.global",
+      "notes": "Verified 1.1.141.3 0x54fc20 global root dispatch table (farcall/jump/r/p/wait/bgmtable/koe/pcm/call_stack 138-141/database.cnt 105.1/msgbk 145).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x54fc20",
+          "rva": "0x14fc20",
+          "rawBytesSha256": "e8b03b4f77c488bf8d4134c1ea09826fe54c53307456d7b29fea261a5422b404",
+          "normalizedInsnSha256": "2688c0f06b9f9f6771c7d1b68f38fe847c56881a1c79446ed648ccc81f780f8b",
+          "method": "ghidra-decompile+disasm"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/vm.ts": "0dfadd17fdda9e09c28c153e3814863b6f92ab7c690735c375b64c022bd1d991"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "anchor:dispatcher.bgmtable",
+      "notes": "Verified 1.1.141.3 0x54fc20 case 0x7b (inlined): bgmtable 0=cnt, 1=get_listened, 2=set_listened, 4=set_all.",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x54fc20",
+          "rva": "0x14fc20",
+          "rawBytesSha256": "e8b03b4f77c488bf8d4134c1ea09826fe54c53307456d7b29fea261a5422b404",
+          "normalizedInsnSha256": "2688c0f06b9f9f6771c7d1b68f38fe847c56881a1c79446ed648ccc81f780f8b",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "anchor:dispatcher.calllist",
+      "notes": "Verified 1.1.141.3 0x54fc20 cases 0x62, 0x8a..0x8d (inlined): call stack indexing and del/get/set/clear_call_stack.",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x54fc20",
+          "rva": "0x14fc20",
+          "rawBytesSha256": "e8b03b4f77c488bf8d4134c1ea09826fe54c53307456d7b29fea261a5422b404",
+          "normalizedInsnSha256": "2688c0f06b9f9f6771c7d1b68f38fe847c56881a1c79446ed648ccc81f780f8b",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/vm.ts": "0dfadd17fdda9e09c28c153e3814863b6f92ab7c690735c375b64c022bd1d991",
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "anchor:dispatcher.koe",
+      "notes": "Verified 1.1.141.3 0x54fc20 cases 0x57..0x59, 0x44, 0x45, 0x63, 0x98..0x9b (inlined): koe play/wait/stop/volume.",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x54fc20",
+          "rva": "0x14fc20",
+          "rawBytesSha256": "e8b03b4f77c488bf8d4134c1ea09826fe54c53307456d7b29fea261a5422b404",
+          "normalizedInsnSha256": "2688c0f06b9f9f6771c7d1b68f38fe847c56881a1c79446ed648ccc81f780f8b",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/audio.ts": "0101f0016c8ea0c2ee5c4f0b526848c68a222f5e6c1c4288e2ecdebf62fc4650"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "anchor:dispatcher.pcm",
+      "notes": "Verified 1.1.141.3 0x54fc20 case 0x2b (inlined): pcm play/stop (100ms default fade).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x54fc20",
+          "rva": "0x14fc20",
+          "rawBytesSha256": "e8b03b4f77c488bf8d4134c1ea09826fe54c53307456d7b29fea261a5422b404",
+          "normalizedInsnSha256": "2688c0f06b9f9f6771c7d1b68f38fe847c56881a1c79446ed648ccc81f780f8b",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/audio.ts": "0101f0016c8ea0c2ee5c4f0b526848c68a222f5e6c1c4288e2ecdebf62fc4650"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "anchor:dispatcher.pcmchlist",
+      "notes": "Verified 1.1.141.3 0x54fc20 case 0x2c (inlined): pcmch[] indexed dispatch to 0x5644d0.",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x54fc20",
+          "rva": "0x14fc20",
+          "rawBytesSha256": "e8b03b4f77c488bf8d4134c1ea09826fe54c53307456d7b29fea261a5422b404",
+          "normalizedInsnSha256": "2688c0f06b9f9f6771c7d1b68f38fe847c56881a1c79446ed648ccc81f780f8b",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/audio.ts": "0101f0016c8ea0c2ee5c4f0b526848c68a222f5e6c1c4288e2ecdebf62fc4650"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "anchor:dispatcher.call",
+      "notes": "Verified 1.1.141.3 0x54ce20: cur_call L[] (0), K[] (1), and call-local properties (0x7d000000).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x54ce20",
+          "rva": "0x14ce20",
+          "rawBytesSha256": "f01422b75a52e7ae2730b8e17b283d8823ba1b15fb3947c62420a6c4aaf3ab7a",
+          "normalizedInsnSha256": "4aefddb7c207fd5227328e5e2718ca231b9f903330e1c3dc3e4ab5cb11e0fb0f",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/vm.ts": "0dfadd17fdda9e09c28c153e3814863b6f92ab7c690735c375b64c022bd1d991"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "anchor:dispatcher.input",
+      "notes": "Verified 1.1.141.3 0x552c40: input decide/cancel/clear/next/wait/directions (root 86).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x552c40",
+          "rva": "0x152c40",
+          "rawBytesSha256": "79d9c422ad57cebe3e20859c2cabaa6d718199af6650ab6a01881d8b1002ad38",
+          "normalizedInsnSha256": "1e7acfdd73d922ff60fbc701ee3b2668920d7d36ee788a46452821d4747180aa",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/display.ts": "58c9832299c966e6c97e16454e4e41869c0e8d8b24010d286f13bac215c11aef"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "anchor:dispatcher.mouse",
+      "notes": "Verified 1.1.141.3 0x552e20: mouse pos_x/y, clear, wheel, left/right, next, get_pos, set_pos (root 46).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x552e20",
+          "rva": "0x152e20",
+          "rawBytesSha256": "8c5d50ab202eb4637da8dda5e506a7068f06e473e5006fab67c8c4c8a4694a1f",
+          "normalizedInsnSha256": "46bf004eee4d6a83aafe1904b8dd8ce1518f0a012895fb38eec3784b6d0507a3",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/display.ts": "58c9832299c966e6c97e16454e4e41869c0e8d8b24010d286f13bac215c11aef"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "anchor:dispatcher.keylist",
+      "notes": "Verified 1.1.141.3 0x552ff0: key[vk] (<0x100), wait, wait_force_skip, clear, next (root 24).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x552ff0",
+          "rva": "0x152ff0",
+          "rawBytesSha256": "af4f864883597758567ff9bfce78b5d4dcd8906c59862339a6a9189339489c50",
+          "normalizedInsnSha256": "32d8819b66ab11ac243eb6f5fc1af6631890b9a68c550ac2b529e46db6e25d8e",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/display.ts": "58c9832299c966e6c97e16454e4e41869c0e8d8b24010d286f13bac215c11aef"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "anchor:dispatcher.key",
+      "notes": "Verified 1.1.141.3 0x553230: per-key press/hold/release/flick state queries.",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x553230",
+          "rva": "0x153230",
+          "rawBytesSha256": "718f6bebe2b73aacf9939531e85d157e859ea83ea68212602ba1fbe224ef348f",
+          "normalizedInsnSha256": "45a6e772193012e440106065fa74d89b69857477aaf8007265d38c8682bb81a4",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/display.ts": "58c9832299c966e6c97e16454e4e41869c0e8d8b24010d286f13bac215c11aef"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "anchor:dispatcher.group",
+      "notes": "Verified 1.1.141.3 0x553d50: mwnd/stage group container dispatch.",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x553d50",
+          "rva": "0x153d50",
+          "rawBytesSha256": "ac24326fac6828b94cff96fe1adc7e4d0f587f7a43a8e1c406b5ab4eac2ae0bb",
+          "normalizedInsnSha256": "8da4d776e6d2fc6ca21e2bf8809c2c003cd61d22d197f809faa054c2e7ae1cb6",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/display.ts": "58c9832299c966e6c97e16454e4e41869c0e8d8b24010d286f13bac215c11aef"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "anchor:dispatcher.msgbk",
+      "notes": "Verified 1.1.141.3 0x555b20: msgbk 1=insert_msg, 2=go_next_msg, 3=add_msg, 4=add_koe, 5=add_namae, 6=clear (added in Batch 2).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x555b20",
+          "rva": "0x155b20",
+          "rawBytesSha256": "9e205120f134c903b49b1bdb11a771d7cb851bf3ee8ad3dd734589a4548bd564",
+          "normalizedInsnSha256": "2f2705ce0efbf21a33b7baecbd490453768f2d0f7a852d9f34b2fb2364a283de",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      },
+      "extraTestLinks": [
+        "tests/siglus-stateful-interactions.test.mjs"
+      ],
+      "unitTested": true,
+      "interactionTested": true
+    },
+    {
+      "entryId": "anchor:dispatcher.se",
+      "notes": "Verified 1.1.141.3 0x564e00: SE play/play_by_file/play_koe/stop(100ms default)/wait/volume/check (root 45).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x564e00",
+          "rva": "0x164e00",
+          "rawBytesSha256": "d2b1bf22b8075ab203b98dbda4a065f90b28de6ce076eadecdf1aad7ba4f7fb0",
+          "normalizedInsnSha256": "b440719dbd48b3b29dcd1bdddc60c38fb6d4d243bb7c9610b867b4847e32f718",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/audio.ts": "0101f0016c8ea0c2ee5c4f0b526848c68a222f5e6c1c4288e2ecdebf62fc4650"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "anchor:dispatcher.mov",
+      "notes": "Verified 1.1.141.3 0x565100: fullscreen mov play/stop/play_wait/play_wait_key (root 20).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x565100",
+          "rva": "0x165100",
+          "rawBytesSha256": "b400ba2d81a77fc3cd9158f08d217a374a4d2d3814179e2a0b2e1db1ea7e470d",
+          "normalizedInsnSha256": "f8a03583f3f965d54bee4d5a7fa1d30451403718d2cdb896e31bbe8a28793a09",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/display.ts": "58c9832299c966e6c97e16454e4e41869c0e8d8b24010d286f13bac215c11aef"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "anchor:dispatcher.pcmevent",
+      "notes": "Verified 1.1.141.3 0x5652f0: pcmevent oneshot/loop/random([file,prob,min,max])/stop(stopSound)/wait/check. Fixed random tuple layout & stop arg0.",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x5652f0",
+          "rva": "0x1652f0",
+          "rawBytesSha256": "816c5662f7a41e5a81ae7fc05eec1b08739bec543f54802fa461d516e469baa9",
+          "normalizedInsnSha256": "ec9ccf2fe14d96402e3a317fcf1b3a0fc9e538316018ca680c43615014d3b982",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/audio.ts": "0101f0016c8ea0c2ee5c4f0b526848c68a222f5e6c1c4288e2ecdebf62fc4650"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      },
+      "extraTestLinks": [
+        "tests/siglus-stateful-interactions.test.mjs"
+      ],
+      "unitTested": true,
+      "interactionTested": true
+    },
+    {
+      "entryId": "anchor:dispatcher.quake",
+      "notes": "Verified 1.1.141.3 0x54ea00: screen.quake start(vec/dir/zoom, wait/key flags), end, check, wait, wait_key.",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x54ea00",
+          "rva": "0x14ea00",
+          "rawBytesSha256": "ec6585af821f5437388b896aacf536fab2f1023514798c4f01b24677b486c0d5",
+          "normalizedInsnSha256": "2a11fa006840c6bd5d253a7b047ab93501f994263217ba838809db2244551171",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/display.ts": "58c9832299c966e6c97e16454e4e41869c0e8d8b24010d286f13bac215c11aef"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "anchor:dispatcher.stage",
+      "notes": "Verified 1.1.141.3 0x566580: stage sub-dispatch (2=object, 3=mwnd, 4=effect, 5=btnsel, 6=group, 7=quake, 8=world).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x566580",
+          "rva": "0x166580",
+          "rawBytesSha256": "f1feaf37fe181f281eeca5981ca184ed2434e359e2bc8451e7b325785a010661",
+          "normalizedInsnSha256": "0bf069fd7085e4be2e0ad25ca5eb6cd2e141cddfc5cb6d3dc628df4d2c68c59e",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/display.ts": "58c9832299c966e6c97e16454e4e41869c0e8d8b24010d286f13bac215c11aef"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "anchor:dispatcher.objectlist",
+      "notes": "Verified 1.1.141.3 0x559200: object list index (-1), resize (4), get_size (3).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x559200",
+          "rva": "0x159200",
+          "rawBytesSha256": "fae6b0ff40decd401599833d5556cb65e2fd07ca7207134942b4aeb17aae15a3",
+          "normalizedInsnSha256": "7a77f623d60da9cb64300a72f5ed83ffa54851dca9566da5fda09cb59f9b32c8",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/display.ts": "58c9832299c966e6c97e16454e4e41869c0e8d8b24010d286f13bac215c11aef"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "anchor:dispatcher.intlist_event",
+      "notes": "Verified 1.1.141.3 0x55d3d0: intlist bit views (1/2/4/8/16/32), sets (1), resize (2), clear (8), get_size (9), init (10).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x55d3d0",
+          "rva": "0x15d3d0",
+          "rawBytesSha256": "1f3f6c11ab4c837767e5f5e740cd4ed8a7fa46e2a4796695c76762580d7ec40e",
+          "normalizedInsnSha256": "f095d1d17c70701a3fcca77804796b30fdb10223b16bb4d1192984ba04337c50",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/vm.ts": "0dfadd17fdda9e09c28c153e3814863b6f92ab7c690735c375b64c022bd1d991",
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "anchor:dispatcher.system",
+      "notes": "Verified 1.1.141.3 0x5692e0: system check_file_exist, get_calendar (14), get_unix_time (15), debug/messagebox helpers (root 92).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x5692e0",
+          "rva": "0x1692e0",
+          "rawBytesSha256": "1cdb8f8dd02995bf876c499593edce62b803b076eaf9487e91e18e86d1142e87",
+          "normalizedInsnSha256": "61d238e2170d1a9350ddfda2f688f322109ea24ac54dd56c25016ed22d5db01b",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "cmd:84",
+      "notes": "global text/selection dispatch (0x54fc20).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x54fc20",
+          "rva": "0x14fc20",
+          "rawBytesSha256": "e8b03b4f77c488bf8d4134c1ea09826fe54c53307456d7b29fea261a5422b404",
+          "normalizedInsnSha256": "2688c0f06b9f9f6771c7d1b68f38fe847c56881a1c79446ed648ccc81f780f8b",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/selbtn.ts": "20289743ee3b2a80c287bcd48782d4f8635bafb2ad04e7670147aa924ffa8a02"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "cmd:14",
+      "notes": "global r/newline wait via mwnd (0x54fc20 case 0xe -> 0x553e80).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x54fc20",
+          "rva": "0x14fc20",
+          "rawBytesSha256": "e8b03b4f77c488bf8d4134c1ea09826fe54c53307456d7b29fea261a5422b404",
+          "normalizedInsnSha256": "2688c0f06b9f9f6771c7d1b68f38fe847c56881a1c79446ed648ccc81f780f8b",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "cmd:5",
+      "notes": "global farcall scene invocation & arg binding into call_list (0x54fc20 case 5).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x54fc20",
+          "rva": "0x14fc20",
+          "rawBytesSha256": "e8b03b4f77c488bf8d4134c1ea09826fe54c53307456d7b29fea261a5422b404",
+          "normalizedInsnSha256": "2688c0f06b9f9f6771c7d1b68f38fe847c56881a1c79446ed648ccc81f780f8b",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/vm.ts": "0dfadd17fdda9e09c28c153e3814863b6f92ab7c690735c375b64c022bd1d991",
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "cmd:18",
+      "notes": "global p/page voice & wait dispatch (0x54fc20 case 0x12).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x54fc20",
+          "rva": "0x14fc20",
+          "rawBytesSha256": "e8b03b4f77c488bf8d4134c1ea09826fe54c53307456d7b29fea261a5422b404",
+          "normalizedInsnSha256": "2688c0f06b9f9f6771c7d1b68f38fe847c56881a1c79446ed648ccc81f780f8b",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "cmd:62",
+      "notes": "global namae speaker dispatch (0x54fc20 case 0x3e -> 0x553e80).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x54fc20",
+          "rva": "0x14fc20",
+          "rawBytesSha256": "e8b03b4f77c488bf8d4134c1ea09826fe54c53307456d7b29fea261a5422b404",
+          "normalizedInsnSha256": "2688c0f06b9f9f6771c7d1b68f38fe847c56881a1c79446ed648ccc81f780f8b",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "cmd:10",
+      "notes": "global wait/key dispatch (0x54fc20 case 0xa -> 0x553e80).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x54fc20",
+          "rva": "0x14fc20",
+          "rawBytesSha256": "e8b03b4f77c488bf8d4134c1ea09826fe54c53307456d7b29fea261a5422b404",
+          "normalizedInsnSha256": "2688c0f06b9f9f6771c7d1b68f38fe847c56881a1c79446ed648ccc81f780f8b",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "cmd:13",
+      "notes": "global nl/newline dispatch (0x54fc20 case 0xd -> 0x553e80).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x54fc20",
+          "rva": "0x14fc20",
+          "rawBytesSha256": "e8b03b4f77c488bf8d4134c1ea09826fe54c53307456d7b29fea261a5422b404",
+          "normalizedInsnSha256": "2688c0f06b9f9f6771c7d1b68f38fe847c56881a1c79446ed648ccc81f780f8b",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "cmd:55",
+      "notes": "global timewait_key (0x54fc20 case 0x37).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x54fc20",
+          "rva": "0x14fc20",
+          "rawBytesSha256": "e8b03b4f77c488bf8d4134c1ea09826fe54c53307456d7b29fea261a5422b404",
+          "normalizedInsnSha256": "2688c0f06b9f9f6771c7d1b68f38fe847c56881a1c79446ed648ccc81f780f8b",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/audio.ts": "0101f0016c8ea0c2ee5c4f0b526848c68a222f5e6c1c4288e2ecdebf62fc4650"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "cmd:42.0",
+      "notes": "bgm.play (0x563ce0).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x563ce0",
+          "rva": "0x163ce0",
+          "rawBytesSha256": "c9e0993585755240d8538f23bd9e6b8034196715f358aeda4a18df87824c229d",
+          "normalizedInsnSha256": "d0201da5001f6c701d6dca5625f5865ca1acd553a948261fec0285aa1b5f0b27",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/audio.ts": "0101f0016c8ea0c2ee5c4f0b526848c68a222f5e6c1c4288e2ecdebf62fc4650"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "cmd:42.4",
+      "notes": "bgm.stop (0x563ce0, 100ms default fade).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x563ce0",
+          "rva": "0x163ce0",
+          "rawBytesSha256": "c9e0993585755240d8538f23bd9e6b8034196715f358aeda4a18df87824c229d",
+          "normalizedInsnSha256": "d0201da5001f6c701d6dca5625f5865ca1acd553a948261fec0285aa1b5f0b27",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/audio.ts": "0101f0016c8ea0c2ee5c4f0b526848c68a222f5e6c1c4288e2ecdebf62fc4650"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "cmd:44.-1.*.0",
+      "notes": "pcmch[n].play (0x5644d0).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x5644d0",
+          "rva": "0x1644d0",
+          "rawBytesSha256": "93ed69421cf746c8d31c933ed829601f016c9c88d60ed5745a4ffb3a7628a679",
+          "normalizedInsnSha256": "94467f61a4183597032a21092da8e09ba9fbb244ac0d4fd50c38eadaa2e46a62",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/audio.ts": "0101f0016c8ea0c2ee5c4f0b526848c68a222f5e6c1c4288e2ecdebf62fc4650"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "cmd:44.-1.*.5",
+      "notes": "pcmch[n].stop (0x5644d0).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x5644d0",
+          "rva": "0x1644d0",
+          "rawBytesSha256": "93ed69421cf746c8d31c933ed829601f016c9c88d60ed5745a4ffb3a7628a679",
+          "normalizedInsnSha256": "94467f61a4183597032a21092da8e09ba9fbb244ac0d4fd50c38eadaa2e46a62",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/audio.ts": "0101f0016c8ea0c2ee5c4f0b526848c68a222f5e6c1c4288e2ecdebf62fc4650"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "cmd:45.0",
+      "notes": "se.play (0x564e00 case 0).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x564e00",
+          "rva": "0x164e00",
+          "rawBytesSha256": "d2b1bf22b8075ab203b98dbda4a065f90b28de6ce076eadecdf1aad7ba4f7fb0",
+          "normalizedInsnSha256": "b440719dbd48b3b29dcd1bdddc60c38fb6d4d243bb7c9610b867b4847e32f718",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/audio.ts": "0101f0016c8ea0c2ee5c4f0b526848c68a222f5e6c1c4288e2ecdebf62fc4650"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "cmd:45.1",
+      "notes": "se.set_volume (0x564e00 case 1).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x564e00",
+          "rva": "0x164e00",
+          "rawBytesSha256": "d2b1bf22b8075ab203b98dbda4a065f90b28de6ce076eadecdf1aad7ba4f7fb0",
+          "normalizedInsnSha256": "b440719dbd48b3b29dcd1bdddc60c38fb6d4d243bb7c9610b867b4847e32f718",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/audio.ts": "0101f0016c8ea0c2ee5c4f0b526848c68a222f5e6c1c4288e2ecdebf62fc4650"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "cmd:45.2",
+      "notes": "se.set_volume_max (0x564e00 case 2).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x564e00",
+          "rva": "0x164e00",
+          "rawBytesSha256": "d2b1bf22b8075ab203b98dbda4a065f90b28de6ce076eadecdf1aad7ba4f7fb0",
+          "normalizedInsnSha256": "b440719dbd48b3b29dcd1bdddc60c38fb6d4d243bb7c9610b867b4847e32f718",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/audio.ts": "0101f0016c8ea0c2ee5c4f0b526848c68a222f5e6c1c4288e2ecdebf62fc4650"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "cmd:45.3",
+      "notes": "se.set_volume_min (0x564e00 case 3).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x564e00",
+          "rva": "0x164e00",
+          "rawBytesSha256": "d2b1bf22b8075ab203b98dbda4a065f90b28de6ce076eadecdf1aad7ba4f7fb0",
+          "normalizedInsnSha256": "b440719dbd48b3b29dcd1bdddc60c38fb6d4d243bb7c9610b867b4847e32f718",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/audio.ts": "0101f0016c8ea0c2ee5c4f0b526848c68a222f5e6c1c4288e2ecdebf62fc4650"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "cmd:45.4",
+      "notes": "se.get_volume (0x564e00 case 4).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x564e00",
+          "rva": "0x164e00",
+          "rawBytesSha256": "d2b1bf22b8075ab203b98dbda4a065f90b28de6ce076eadecdf1aad7ba4f7fb0",
+          "normalizedInsnSha256": "b440719dbd48b3b29dcd1bdddc60c38fb6d4d243bb7c9610b867b4847e32f718",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/audio.ts": "0101f0016c8ea0c2ee5c4f0b526848c68a222f5e6c1c4288e2ecdebf62fc4650"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "cmd:45.5",
+      "notes": "se.play_by_file_name (0x564e00 case 5).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x564e00",
+          "rva": "0x164e00",
+          "rawBytesSha256": "d2b1bf22b8075ab203b98dbda4a065f90b28de6ce076eadecdf1aad7ba4f7fb0",
+          "normalizedInsnSha256": "b440719dbd48b3b29dcd1bdddc60c38fb6d4d243bb7c9610b867b4847e32f718",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/audio.ts": "0101f0016c8ea0c2ee5c4f0b526848c68a222f5e6c1c4288e2ecdebf62fc4650"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "cmd:45.6",
+      "notes": "se.play_koe (0x564e00 case 6).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x564e00",
+          "rva": "0x164e00",
+          "rawBytesSha256": "d2b1bf22b8075ab203b98dbda4a065f90b28de6ce076eadecdf1aad7ba4f7fb0",
+          "normalizedInsnSha256": "b440719dbd48b3b29dcd1bdddc60c38fb6d4d243bb7c9610b867b4847e32f718",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/audio.ts": "0101f0016c8ea0c2ee5c4f0b526848c68a222f5e6c1c4288e2ecdebf62fc4650"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "cmd:45.7",
+      "notes": "se.stop (0x564e00 case 7, 100ms default).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x564e00",
+          "rva": "0x164e00",
+          "rawBytesSha256": "d2b1bf22b8075ab203b98dbda4a065f90b28de6ce076eadecdf1aad7ba4f7fb0",
+          "normalizedInsnSha256": "b440719dbd48b3b29dcd1bdddc60c38fb6d4d243bb7c9610b867b4847e32f718",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/audio.ts": "0101f0016c8ea0c2ee5c4f0b526848c68a222f5e6c1c4288e2ecdebf62fc4650"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "cmd:45.8",
+      "notes": "se.wait (0x564e00 case 8).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x564e00",
+          "rva": "0x164e00",
+          "rawBytesSha256": "d2b1bf22b8075ab203b98dbda4a065f90b28de6ce076eadecdf1aad7ba4f7fb0",
+          "normalizedInsnSha256": "b440719dbd48b3b29dcd1bdddc60c38fb6d4d243bb7c9610b867b4847e32f718",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/audio.ts": "0101f0016c8ea0c2ee5c4f0b526848c68a222f5e6c1c4288e2ecdebf62fc4650"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "cmd:45.9",
+      "notes": "se.play_wait (0x564e00 case 9).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x564e00",
+          "rva": "0x164e00",
+          "rawBytesSha256": "d2b1bf22b8075ab203b98dbda4a065f90b28de6ce076eadecdf1aad7ba4f7fb0",
+          "normalizedInsnSha256": "b440719dbd48b3b29dcd1bdddc60c38fb6d4d243bb7c9610b867b4847e32f718",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/audio.ts": "0101f0016c8ea0c2ee5c4f0b526848c68a222f5e6c1c4288e2ecdebf62fc4650"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "cmd:45.10",
+      "notes": "se.wait_key (0x564e00 case 10).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x564e00",
+          "rva": "0x164e00",
+          "rawBytesSha256": "d2b1bf22b8075ab203b98dbda4a065f90b28de6ce076eadecdf1aad7ba4f7fb0",
+          "normalizedInsnSha256": "b440719dbd48b3b29dcd1bdddc60c38fb6d4d243bb7c9610b867b4847e32f718",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/audio.ts": "0101f0016c8ea0c2ee5c4f0b526848c68a222f5e6c1c4288e2ecdebf62fc4650"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "cmd:45.11",
+      "notes": "se.check (0x564e00 case 11).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x564e00",
+          "rva": "0x164e00",
+          "rawBytesSha256": "d2b1bf22b8075ab203b98dbda4a065f90b28de6ce076eadecdf1aad7ba4f7fb0",
+          "normalizedInsnSha256": "b440719dbd48b3b29dcd1bdddc60c38fb6d4d243bb7c9610b867b4847e32f718",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/audio.ts": "0101f0016c8ea0c2ee5c4f0b526848c68a222f5e6c1c4288e2ecdebf62fc4650"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "cmd:46.0",
+      "notes": "mouse.pos_x (0x552e20 case 0).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x552e20",
+          "rva": "0x152e20",
+          "rawBytesSha256": "8c5d50ab202eb4637da8dda5e506a7068f06e473e5006fab67c8c4c8a4694a1f",
+          "normalizedInsnSha256": "46bf004eee4d6a83aafe1904b8dd8ce1518f0a012895fb38eec3784b6d0507a3",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/display.ts": "58c9832299c966e6c97e16454e4e41869c0e8d8b24010d286f13bac215c11aef"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "cmd:52.-1.*.0",
+      "notes": "pcmevent[n].start_oneshot (0x5652f0 case 0).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x5652f0",
+          "rva": "0x1652f0",
+          "rawBytesSha256": "816c5662f7a41e5a81ae7fc05eec1b08739bec543f54802fa461d516e469baa9",
+          "normalizedInsnSha256": "ec9ccf2fe14d96402e3a317fcf1b3a0fc9e538316018ca680c43615014d3b982",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/audio.ts": "0101f0016c8ea0c2ee5c4f0b526848c68a222f5e6c1c4288e2ecdebf62fc4650"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "cmd:52.-1.*.2",
+      "notes": "pcmevent[n].start_random (0x5652f0 case 2) — fixed [file,prob,min,max] tuple layout.",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x5652f0",
+          "rva": "0x1652f0",
+          "rawBytesSha256": "816c5662f7a41e5a81ae7fc05eec1b08739bec543f54802fa461d516e469baa9",
+          "normalizedInsnSha256": "ec9ccf2fe14d96402e3a317fcf1b3a0fc9e538316018ca680c43615014d3b982",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/audio.ts": "0101f0016c8ea0c2ee5c4f0b526848c68a222f5e6c1c4288e2ecdebf62fc4650"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "cmd:52.-1.*.3",
+      "notes": "pcmevent[n].stop(stopSound) (0x5652f0 case 3) — fixed arg0 gating 100ms fade.",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x5652f0",
+          "rva": "0x1652f0",
+          "rawBytesSha256": "816c5662f7a41e5a81ae7fc05eec1b08739bec543f54802fa461d516e469baa9",
+          "normalizedInsnSha256": "ec9ccf2fe14d96402e3a317fcf1b3a0fc9e538316018ca680c43615014d3b982",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/audio.ts": "0101f0016c8ea0c2ee5c4f0b526848c68a222f5e6c1c4288e2ecdebf62fc4650"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "cmd:52.-1.*.5",
+      "notes": "pcmevent[n].check (0x5652f0 case 5).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x5652f0",
+          "rva": "0x1652f0",
+          "rawBytesSha256": "816c5662f7a41e5a81ae7fc05eec1b08739bec543f54802fa461d516e469baa9",
+          "normalizedInsnSha256": "ec9ccf2fe14d96402e3a317fcf1b3a0fc9e538316018ca680c43615014d3b982",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/audio.ts": "0101f0016c8ea0c2ee5c4f0b526848c68a222f5e6c1c4288e2ecdebf62fc4650"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "cmd:123.1",
+      "notes": "bgmtable.get_listened (0x54fc20 case 0x7b member 1).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x54fc20",
+          "rva": "0x14fc20",
+          "rawBytesSha256": "e8b03b4f77c488bf8d4134c1ea09826fe54c53307456d7b29fea261a5422b404",
+          "normalizedInsnSha256": "2688c0f06b9f9f6771c7d1b68f38fe847c56881a1c79446ed648ccc81f780f8b",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "cmd:123.2",
+      "notes": "bgmtable.set_listened (0x54fc20 case 0x7b member 2).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x54fc20",
+          "rva": "0x14fc20",
+          "rawBytesSha256": "e8b03b4f77c488bf8d4134c1ea09826fe54c53307456d7b29fea261a5422b404",
+          "normalizedInsnSha256": "2688c0f06b9f9f6771c7d1b68f38fe847c56881a1c79446ed648ccc81f780f8b",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "cmd:123.4",
+      "notes": "bgmtable.set_all (0x54fc20 case 0x7b member 4).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x54fc20",
+          "rva": "0x14fc20",
+          "rawBytesSha256": "e8b03b4f77c488bf8d4134c1ea09826fe54c53307456d7b29fea261a5422b404",
+          "normalizedInsnSha256": "2688c0f06b9f9f6771c7d1b68f38fe847c56881a1c79446ed648ccc81f780f8b",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "cmd:138",
+      "notes": "del_call_stack (0x54fc20 case 0x8a -> 0x5c71f0) — fixed from backlog bug to VM call stack.",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x54fc20",
+          "rva": "0x14fc20",
+          "rawBytesSha256": "e8b03b4f77c488bf8d4134c1ea09826fe54c53307456d7b29fea261a5422b404",
+          "normalizedInsnSha256": "2688c0f06b9f9f6771c7d1b68f38fe847c56881a1c79446ed648ccc81f780f8b",
+          "method": "ghidra-decompile+disasm"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/vm.ts": "0dfadd17fdda9e09c28c153e3814863b6f92ab7c690735c375b64c022bd1d991"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "cmd:141",
+      "notes": "clear_call_stack (0x54fc20 case 0x8d -> 0x5c71f0(1)) — fixed from backlog bug to VM call stack.",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x54fc20",
+          "rva": "0x14fc20",
+          "rawBytesSha256": "e8b03b4f77c488bf8d4134c1ea09826fe54c53307456d7b29fea261a5422b404",
+          "normalizedInsnSha256": "2688c0f06b9f9f6771c7d1b68f38fe847c56881a1c79446ed648ccc81f780f8b",
+          "method": "ghidra-decompile+disasm"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/vm.ts": "0dfadd17fdda9e09c28c153e3814863b6f92ab7c690735c375b64c022bd1d991"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "cmd:145.1",
+      "notes": "msgbk.insert_msg (0x555b20 case 1).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x555b20",
+          "rva": "0x155b20",
+          "rawBytesSha256": "9e205120f134c903b49b1bdb11a771d7cb851bf3ee8ad3dd734589a4548bd564",
+          "normalizedInsnSha256": "2f2705ce0efbf21a33b7baecbd490453768f2d0f7a852d9f34b2fb2364a283de",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "cmd:145.2",
+      "notes": "msgbk.go_next_msg (0x555b20 case 2).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x555b20",
+          "rva": "0x155b20",
+          "rawBytesSha256": "9e205120f134c903b49b1bdb11a771d7cb851bf3ee8ad3dd734589a4548bd564",
+          "normalizedInsnSha256": "2f2705ce0efbf21a33b7baecbd490453768f2d0f7a852d9f34b2fb2364a283de",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "cmd:145.3",
+      "notes": "msgbk.add_msg (0x555b20 case 3).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x555b20",
+          "rva": "0x155b20",
+          "rawBytesSha256": "9e205120f134c903b49b1bdb11a771d7cb851bf3ee8ad3dd734589a4548bd564",
+          "normalizedInsnSha256": "2f2705ce0efbf21a33b7baecbd490453768f2d0f7a852d9f34b2fb2364a283de",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "cmd:145.4",
+      "notes": "msgbk.add_koe (0x555b20 case 4).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x555b20",
+          "rva": "0x155b20",
+          "rawBytesSha256": "9e205120f134c903b49b1bdb11a771d7cb851bf3ee8ad3dd734589a4548bd564",
+          "normalizedInsnSha256": "2f2705ce0efbf21a33b7baecbd490453768f2d0f7a852d9f34b2fb2364a283de",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "cmd:145.5",
+      "notes": "msgbk.add_namae (0x555b20 case 5).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x555b20",
+          "rva": "0x155b20",
+          "rawBytesSha256": "9e205120f134c903b49b1bdb11a771d7cb851bf3ee8ad3dd734589a4548bd564",
+          "normalizedInsnSha256": "2f2705ce0efbf21a33b7baecbd490453768f2d0f7a852d9f34b2fb2364a283de",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "cmd:20.2",
+      "notes": "mov.play_wait (0x565100 case 2).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x565100",
+          "rva": "0x165100",
+          "rawBytesSha256": "b400ba2d81a77fc3cd9158f08d217a374a4d2d3814179e2a0b2e1db1ea7e470d",
+          "normalizedInsnSha256": "f8a03583f3f965d54bee4d5a7fa1d30451403718d2cdb896e31bbe8a28793a09",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/display.ts": "58c9832299c966e6c97e16454e4e41869c0e8d8b24010d286f13bac215c11aef"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "cmd:20.3",
+      "notes": "mov.play_wait_key (0x565100 case 3).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x565100",
+          "rva": "0x165100",
+          "rawBytesSha256": "b400ba2d81a77fc3cd9158f08d217a374a4d2d3814179e2a0b2e1db1ea7e470d",
+          "normalizedInsnSha256": "f8a03583f3f965d54bee4d5a7fa1d30451403718d2cdb896e31bbe8a28793a09",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/display.ts": "58c9832299c966e6c97e16454e4e41869c0e8d8b24010d286f13bac215c11aef"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "cmd:70.9",
+      "notes": "screen.shake (0x54d970).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x54d970",
+          "rva": "0x14d970",
+          "rawBytesSha256": "85114acfbe166f3654c0a4f3f4549b37e03f3b9c8aeb1d3d6a204dfe9502f973",
+          "normalizedInsnSha256": "1a4ef197612b34b7d5528351117452b629127613d454aede2b0a51b7089ec6dd",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/display.ts": "58c9832299c966e6c97e16454e4e41869c0e8d8b24010d286f13bac215c11aef"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "cmd:70.25.-1.*.0",
+      "notes": "screen.quake[n].start (0x54ea00 case 0).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x54ea00",
+          "rva": "0x14ea00",
+          "rawBytesSha256": "ec6585af821f5437388b896aacf536fab2f1023514798c4f01b24677b486c0d5",
+          "normalizedInsnSha256": "2a11fa006840c6bd5d253a7b047ab93501f994263217ba838809db2244551171",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/display.ts": "58c9832299c966e6c97e16454e4e41869c0e8d8b24010d286f13bac215c11aef"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "cmd:70.25.-1.*.1",
+      "notes": "screen.quake[n].start_wait (0x54ea00 case 1).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x54ea00",
+          "rva": "0x14ea00",
+          "rawBytesSha256": "ec6585af821f5437388b896aacf536fab2f1023514798c4f01b24677b486c0d5",
+          "normalizedInsnSha256": "2a11fa006840c6bd5d253a7b047ab93501f994263217ba838809db2244551171",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/display.ts": "58c9832299c966e6c97e16454e4e41869c0e8d8b24010d286f13bac215c11aef"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "cmd:70.25.-1.*.2",
+      "notes": "screen.quake[n].start_wait_key (0x54ea00 case 2).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x54ea00",
+          "rva": "0x14ea00",
+          "rawBytesSha256": "ec6585af821f5437388b896aacf536fab2f1023514798c4f01b24677b486c0d5",
+          "normalizedInsnSha256": "2a11fa006840c6bd5d253a7b047ab93501f994263217ba838809db2244551171",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/display.ts": "58c9832299c966e6c97e16454e4e41869c0e8d8b24010d286f13bac215c11aef"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "cmd:70.25.-1.*.4",
+      "notes": "screen.quake[n].start_all (0x54ea00 case 4).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x54ea00",
+          "rva": "0x14ea00",
+          "rawBytesSha256": "ec6585af821f5437388b896aacf536fab2f1023514798c4f01b24677b486c0d5",
+          "normalizedInsnSha256": "2a11fa006840c6bd5d253a7b047ab93501f994263217ba838809db2244551171",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/display.ts": "58c9832299c966e6c97e16454e4e41869c0e8d8b24010d286f13bac215c11aef"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "cmd:70.25.-1.*.5",
+      "notes": "screen.quake[n].start_all_wait (0x54ea00 case 5).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x54ea00",
+          "rva": "0x14ea00",
+          "rawBytesSha256": "ec6585af821f5437388b896aacf536fab2f1023514798c4f01b24677b486c0d5",
+          "normalizedInsnSha256": "2a11fa006840c6bd5d253a7b047ab93501f994263217ba838809db2244551171",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/display.ts": "58c9832299c966e6c97e16454e4e41869c0e8d8b24010d286f13bac215c11aef"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "cmd:70.25.-1.*.8",
+      "notes": "screen.quake[n].end (0x54ea00 case 8).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x54ea00",
+          "rva": "0x14ea00",
+          "rawBytesSha256": "ec6585af821f5437388b896aacf536fab2f1023514798c4f01b24677b486c0d5",
+          "normalizedInsnSha256": "2a11fa006840c6bd5d253a7b047ab93501f994263217ba838809db2244551171",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/display.ts": "58c9832299c966e6c97e16454e4e41869c0e8d8b24010d286f13bac215c11aef"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "cmd:70.25.-1.*.10",
+      "notes": "screen.quake[n].wait (0x54ea00 case 10).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x54ea00",
+          "rva": "0x14ea00",
+          "rawBytesSha256": "ec6585af821f5437388b896aacf536fab2f1023514798c4f01b24677b486c0d5",
+          "normalizedInsnSha256": "2a11fa006840c6bd5d253a7b047ab93501f994263217ba838809db2244551171",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/display.ts": "58c9832299c966e6c97e16454e4e41869c0e8d8b24010d286f13bac215c11aef"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "cmd:86.2",
+      "notes": "input.clear (0x552c40 case 2).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x552c40",
+          "rva": "0x152c40",
+          "rawBytesSha256": "79d9c422ad57cebe3e20859c2cabaa6d718199af6650ab6a01881d8b1002ad38",
+          "normalizedInsnSha256": "1e7acfdd73d922ff60fbc701ee3b2668920d7d36ee788a46452821d4747180aa",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/display.ts": "58c9832299c966e6c97e16454e4e41869c0e8d8b24010d286f13bac215c11aef"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "cmd:86.3",
+      "notes": "input.next (0x552c40 case 3).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x552c40",
+          "rva": "0x152c40",
+          "rawBytesSha256": "79d9c422ad57cebe3e20859c2cabaa6d718199af6650ab6a01881d8b1002ad38",
+          "normalizedInsnSha256": "1e7acfdd73d922ff60fbc701ee3b2668920d7d36ee788a46452821d4747180aa",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/display.ts": "58c9832299c966e6c97e16454e4e41869c0e8d8b24010d286f13bac215c11aef"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "cmd:86.0.1",
+      "notes": "input.decide.on_down (0x552c40 -> 0x553230).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x552c40",
+          "rva": "0x152c40",
+          "rawBytesSha256": "79d9c422ad57cebe3e20859c2cabaa6d718199af6650ab6a01881d8b1002ad38",
+          "normalizedInsnSha256": "1e7acfdd73d922ff60fbc701ee3b2668920d7d36ee788a46452821d4747180aa",
+          "method": "ghidra-decompile"
+        },
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x553230",
+          "rva": "0x153230",
+          "rawBytesSha256": "718f6bebe2b73aacf9939531e85d157e859ea83ea68212602ba1fbe224ef348f",
+          "normalizedInsnSha256": "45a6e772193012e440106065fa74d89b69857477aaf8007265d38c8682bb81a4",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/display.ts": "58c9832299c966e6c97e16454e4e41869c0e8d8b24010d286f13bac215c11aef"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "cmd:86.1.1",
+      "notes": "input.cancel.on_down (0x552c40 -> 0x553230).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x552c40",
+          "rva": "0x152c40",
+          "rawBytesSha256": "79d9c422ad57cebe3e20859c2cabaa6d718199af6650ab6a01881d8b1002ad38",
+          "normalizedInsnSha256": "1e7acfdd73d922ff60fbc701ee3b2668920d7d36ee788a46452821d4747180aa",
+          "method": "ghidra-decompile"
+        },
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x553230",
+          "rva": "0x153230",
+          "rawBytesSha256": "718f6bebe2b73aacf9939531e85d157e859ea83ea68212602ba1fbe224ef348f",
+          "normalizedInsnSha256": "45a6e772193012e440106065fa74d89b69857477aaf8007265d38c8682bb81a4",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc",
+          "src/engines/siglus/display.ts": "58c9832299c966e6c97e16454e4e41869c0e8d8b24010d286f13bac215c11aef"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "cmd:92.15",
+      "notes": "system.get_unix_time (0x5692e0 case 15).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x5692e0",
+          "rva": "0x1692e0",
+          "rawBytesSha256": "1cdb8f8dd02995bf876c499593edce62b803b076eaf9487e91e18e86d1142e87",
+          "normalizedInsnSha256": "61d238e2170d1a9350ddfda2f688f322109ea24ac54dd56c25016ed22d5db01b",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "prop:83.0.-1.*",
+      "notes": "cur_call.L[i] local int list (0x54ce20 case 0 -> 0x55d3d0).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x54ce20",
+          "rva": "0x14ce20",
+          "rawBytesSha256": "f01422b75a52e7ae2730b8e17b283d8823ba1b15fb3947c62420a6c4aaf3ab7a",
+          "normalizedInsnSha256": "4aefddb7c207fd5227328e5e2718ca231b9f903330e1c3dc3e4ab5cb11e0fb0f",
+          "method": "ghidra-decompile"
+        },
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x55d3d0",
+          "rva": "0x15d3d0",
+          "rawBytesSha256": "1f3f6c11ab4c837767e5f5e740cd4ed8a7fa46e2a4796695c76762580d7ec40e",
+          "normalizedInsnSha256": "f095d1d17c70701a3fcca77804796b30fdb10223b16bb4d1192984ba04337c50",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/vm.ts": "0dfadd17fdda9e09c28c153e3814863b6f92ab7c690735c375b64c022bd1d991"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "prop:83.1.-1.*",
+      "notes": "cur_call.K[i] local str list (0x54ce20 case 1).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x54ce20",
+          "rva": "0x14ce20",
+          "rawBytesSha256": "f01422b75a52e7ae2730b8e17b283d8823ba1b15fb3947c62420a6c4aaf3ab7a",
+          "normalizedInsnSha256": "4aefddb7c207fd5227328e5e2718ca231b9f903330e1c3dc3e4ab5cb11e0fb0f",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/vm.ts": "0dfadd17fdda9e09c28c153e3814863b6f92ab7c690735c375b64c022bd1d991"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "prop:83.2097152000",
+      "notes": "cur_call user call property slot 0 (0x54ce20 0x7d000000).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x54ce20",
+          "rva": "0x14ce20",
+          "rawBytesSha256": "f01422b75a52e7ae2730b8e17b283d8823ba1b15fb3947c62420a6c4aaf3ab7a",
+          "normalizedInsnSha256": "4aefddb7c207fd5227328e5e2718ca231b9f903330e1c3dc3e4ab5cb11e0fb0f",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/vm.ts": "0dfadd17fdda9e09c28c153e3814863b6f92ab7c690735c375b64c022bd1d991"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "prop:83.2097152001",
+      "notes": "cur_call user call property slot 1 (0x54ce20 0x7d000001).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x54ce20",
+          "rva": "0x14ce20",
+          "rawBytesSha256": "f01422b75a52e7ae2730b8e17b283d8823ba1b15fb3947c62420a6c4aaf3ab7a",
+          "normalizedInsnSha256": "4aefddb7c207fd5227328e5e2718ca231b9f903330e1c3dc3e4ab5cb11e0fb0f",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/vm.ts": "0dfadd17fdda9e09c28c153e3814863b6f92ab7c690735c375b64c022bd1d991"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "prop:83.2097152002",
+      "notes": "cur_call user call property slot 2 (0x54ce20 0x7d000002).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x54ce20",
+          "rva": "0x14ce20",
+          "rawBytesSha256": "f01422b75a52e7ae2730b8e17b283d8823ba1b15fb3947c62420a6c4aaf3ab7a",
+          "normalizedInsnSha256": "4aefddb7c207fd5227328e5e2718ca231b9f903330e1c3dc3e4ab5cb11e0fb0f",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/vm.ts": "0dfadd17fdda9e09c28c153e3814863b6f92ab7c690735c375b64c022bd1d991"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "prop:83.2097152003",
+      "notes": "cur_call user call property slot 3 (0x54ce20 0x7d000003).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x54ce20",
+          "rva": "0x14ce20",
+          "rawBytesSha256": "f01422b75a52e7ae2730b8e17b283d8823ba1b15fb3947c62420a6c4aaf3ab7a",
+          "normalizedInsnSha256": "4aefddb7c207fd5227328e5e2718ca231b9f903330e1c3dc3e4ab5cb11e0fb0f",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/vm.ts": "0dfadd17fdda9e09c28c153e3814863b6f92ab7c690735c375b64c022bd1d991"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
+    },
+    {
+      "entryId": "prop:31.-1.*",
+      "notes": "global Z[i] persistent system int list (0x54fc20 -> 0x55d3d0).",
+      "nativeEvidence": [
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x54fc20",
+          "rva": "0x14fc20",
+          "rawBytesSha256": "e8b03b4f77c488bf8d4134c1ea09826fe54c53307456d7b29fea261a5422b404",
+          "normalizedInsnSha256": "2688c0f06b9f9f6771c7d1b68f38fe847c56881a1c79446ed648ccc81f780f8b",
+          "method": "ghidra-decompile"
+        },
+        {
+          "binaryId": "anemoi",
+          "fileVersion": "1.1.141.3",
+          "va": "0x55d3d0",
+          "rva": "0x15d3d0",
+          "rawBytesSha256": "1f3f6c11ab4c837767e5f5e740cd4ed8a7fa46e2a4796695c76762580d7ec40e",
+          "normalizedInsnSha256": "f095d1d17c70701a3fcca77804796b30fdb10223b16bb4d1192984ba04337c50",
+          "method": "ghidra-decompile"
+        }
+      ],
+      "verifiedSnapshot": {
+        "verifiedAt": "2026-11-27",
+        "sourceHashes": {
+          "src/engines/siglus/vm.ts": "0dfadd17fdda9e09c28c153e3814863b6f92ab7c690735c375b64c022bd1d991",
+          "src/engines/siglus/player.ts": "61d70b77f937f0e8163cb14ad38254bbf2a87e7351f12531ee917e2f7b4915dc"
+        },
+        "binaryHashes": {
+          "anemoi": "778e27f4e629ce8b35498d4788aaa825b0635c344d4ed49af13e851509406d28"
+        }
+      }
     }
   ],
   "knownDiscrepancies": [
@@ -627,7 +3423,10 @@
       "nativeVa": "0x55fb30",
       "revision": "anemoi (1.1.141.3)",
       "summary": "player.ts dispatched database.check_item_no on member 2 and check_column_no on member 3, and omitted members 5 (find_num), 6 (find_str case-insensitive, 0x5ca130), and 7 (find_str_real case-sensitive, 0x5ca2d0). Native 0x55fb30 maps 3=check_item_no, 4=check_column_no, 5=find_num, 6=find_str, 7=find_str_real.",
-      "fixedIn": ["src/engines/siglus/player.ts", "src/formats/siglus/dbs.ts"],
+      "fixedIn": [
+        "src/engines/siglus/player.ts",
+        "src/formats/siglus/dbs.ts"
+      ],
       "regressionTest": "tests/siglus-stateful-interactions.test.mjs"
     },
     {
@@ -637,7 +3436,9 @@
       "nativeVa": "0x55f780",
       "revision": "anemoi (1.1.141.3)",
       "summary": "cgtable members 7 (set_disable) and 8 (set_enable) were no-ops instead of toggling automatic CG flag recording (+0x496), and member 10 (get_name_by_flag_no) was missing.",
-      "fixedIn": ["src/engines/siglus/player.ts"],
+      "fixedIn": [
+        "src/engines/siglus/player.ts"
+      ],
       "regressionTest": "tests/siglus-stateful-interactions.test.mjs"
     },
     {
@@ -647,7 +3448,9 @@
       "nativeVa": "0x560090",
       "revision": "anemoi (1.1.141.3)",
       "summary": "counter handler omitted cases 10 (start_frame), 12 (start_frame_loop), and 7 (check_value: returns 1 iff current counter value >= target).",
-      "fixedIn": ["src/engines/siglus/player.ts"],
+      "fixedIn": [
+        "src/engines/siglus/player.ts"
+      ],
       "regressionTest": "tests/siglus-stateful-interactions.test.mjs"
     },
     {
@@ -657,7 +3460,59 @@
       "nativeVa": "0x55eed0",
       "revision": "anemoi (1.1.141.3)",
       "summary": "math handler omitted 2-arg tostr(val, width) (0x55e8a0), tan (member 8 -> 0x562eb0), tostr_zen_zero (member 13), and sqrt (member 14, negative clamped to 0).",
-      "fixedIn": ["src/engines/siglus/player.ts", "src/engines/siglus/math.ts"],
+      "fixedIn": [
+        "src/engines/siglus/player.ts",
+        "src/engines/siglus/math.ts"
+      ],
+      "regressionTest": "tests/siglus-stateful-interactions.test.mjs"
+    },
+    {
+      "id": "disc-005-pcmevent-random-tuple-and-stop-arg",
+      "status": "fixed",
+      "anchor": "dispatcher.pcmevent",
+      "nativeVa": "0x5652f0",
+      "revision": "anemoi (1.1.141.3)",
+      "summary": "player.ts parsed pcmevent.start_random (52.-1.*.2, 258 calls across 5 games) as [file, minTime, maxTime, probability] instead of native [file, probability, minTime, maxTime], and unconditionally stopped audio on pcmevent.stop (52.-1.*.3) instead of gating the 100ms fade-stop on arg0 != 0.",
+      "fixedIn": [
+        "src/engines/siglus/player.ts"
+      ],
+      "regressionTest": "tests/siglus-stateful-interactions.test.mjs"
+    },
+    {
+      "id": "disc-006-global-call-stack-vs-backlog",
+      "status": "fixed",
+      "anchor": "dispatcher.global",
+      "nativeVa": "0x54fc20",
+      "revision": "anemoi (1.1.141.3)",
+      "summary": "player.ts mapped global commands 138/139/140/141 (0x8a..0x8d -> 0x5c71f0 on DAT_00ae1a68 call_list) to message backlog mutations, wiping dialogue history on del_call_stack/clear_call_stack instead of pruning VM farcall frames.",
+      "fixedIn": [
+        "src/engines/siglus/vm.ts",
+        "src/engines/siglus/player.ts"
+      ],
+      "regressionTest": "tests/siglus-stateful-interactions.test.mjs"
+    },
+    {
+      "id": "disc-007-msgbk-clear-member-6",
+      "status": "fixed",
+      "anchor": "dispatcher.msgbk",
+      "nativeVa": "0x555b20",
+      "revision": "anemoi (1.1.141.3)",
+      "summary": "msgbk dispatcher (root 145) omitted member 6 (msgbk.clear) which clears message history entries.",
+      "fixedIn": [
+        "src/engines/siglus/player.ts"
+      ],
+      "regressionTest": "tests/siglus-stateful-interactions.test.mjs"
+    },
+    {
+      "id": "disc-008-database-cnt-member-1",
+      "status": "fixed",
+      "anchor": "dispatcher.global",
+      "nativeVa": "0x54fc20",
+      "revision": "anemoi (1.1.141.3)",
+      "summary": "database root 105 omitted member 1 (database.cnt, 0x54fc20 case 0x69 member 1).",
+      "fixedIn": [
+        "src/engines/siglus/player.ts"
+      ],
       "regressionTest": "tests/siglus-stateful-interactions.test.mjs"
     }
   ]
